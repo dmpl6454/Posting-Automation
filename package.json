@@ -14,10 +14,10 @@
     "clean": "turbo clean && rm -rf node_modules"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "^3.0.0",
-    "turbo": "^2.4.0",
+    "@vitest/coverage-v8": "^4.0.18",
+    "turbo": "^2.8.15",
     "typescript": "^5.7.0",
-    "vitest": "^3.0.0"
+    "vitest": "^4.0.18"
   },
   "packageManager": "pnpm@9.15.0",
   "engines": {
