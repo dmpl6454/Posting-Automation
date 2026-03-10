@@ -152,8 +152,7 @@ services:
   migrate:
     build:
       context: .
-      dockerfile: docker/Dockerfile.web
-    command: npx prisma migrate deploy --schema=packages/db/prisma/schema.prisma
+      dockerfile: docker/Dockerfile.migrate
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postautomation}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-postautomation}
     depends_on:
