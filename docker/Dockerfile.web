@@ -32,6 +32,9 @@ COPY --from=deps /app/packages/logger/node_modules ./packages/logger/node_module
 COPY --from=deps /app/apps/web/node_modules ./apps/web/node_modules
 COPY . .
 RUN pnpm --filter @postautomation/db db:generate
+# Copy generated Prisma client to a known location for the runner stage
+RUN mkdir -p /prisma-client && \
+    cp -r $(find /app/node_modules -path "*/.prisma/client" -type d | head -1)/.. /prisma-client/
 RUN pnpm --filter @postautomation/web build
 
 # Production
@@ -46,8 +49,7 @@ COPY --from=builder /app/apps/web/.next/standalone ./
 COPY --from=builder /app/apps/web/.next/static ./apps/web/.next/static
 
 # Copy Prisma engine binaries for runtime
-COPY --from=builder /app/packages/db/node_modules/.prisma ./node_modules/.prisma
-COPY --from=builder /app/packages/db/node_modules/@prisma/client ./node_modules/@prisma/client
+COPY --from=builder /prisma-client/.prisma ./node_modules/.prisma
 
 USER nextjs
 EXPOSE 3000
