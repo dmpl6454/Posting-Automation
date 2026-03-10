@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pandoc \"/Users/sudhanshu6454/Downloads/Postiz_Deep_Dive_Report.docx\" -o /tmp/postiz_report.md)",
+      "Bash(python3 \"/Users/sudhanshu6454/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/b4ef1bf7-a820-475a-8836-c680a132ece2/3a6f14dd-dc0c-4477-91f6-b5d6fcd8965e/skills/docx/scripts/office/unpack.py\" \"/Users/sudhanshu6454/Downloads/Postiz_Deep_Dive_Report.docx\" /tmp/postiz_unpacked/)",
+      "Bash(pip3 install defusedxml)",
+      "Bash(python3 -c \":*)",
+      "WebFetch(domain:github.com)",
+      "Bash(pnpm --version)",
+      "Bash(npx prisma generate --schema=packages/db/prisma/schema.prisma)",
+      "Bash(pnpm --filter @postautomation/db exec prisma generate)",
+      "Bash(pnpm install)",
+      "Bash(ls -la /private/tmp/claude-502/-Users-sudhanshu6454-Posting-Automation/tasks/*.output)",
+      "Bash(git config user.name)",
+      "Bash(git config user.email)"
+    ]
+  }
+}

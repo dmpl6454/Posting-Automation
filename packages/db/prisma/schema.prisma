@@ -1,0 +1,541 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== AUTH & USERS ====================
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  password      String?
+
+  accounts    Account[]
+  sessions    Session[]
+  memberships OrganizationMember[]
+  auditLogs   AuditLog[]
+
+  passwordResetTokens     PasswordResetToken[]
+  emailVerificationTokens EmailVerificationToken[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
+model EmailVerificationToken {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
+// ==================== ORGANIZATIONS & TEAMS ====================
+
+model Organization {
+  id   String  @id @default(cuid())
+  name String
+  slug String  @unique
+  logo String?
+
+  stripeCustomerId     String? @unique
+  stripeSubscriptionId String? @unique
+  plan                 PlanType @default(FREE)
+  planExpiresAt        DateTime?
+
+  members   OrganizationMember[]
+  channels  Channel[]
+  posts     Post[]
+  media     Media[]
+  webhooks  Webhook[]
+  apiKeys   ApiKey[]
+  auditLogs AuditLog[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model OrganizationMember {
+  id             String     @id @default(cuid())
+  userId         String
+  organizationId String
+  role           MemberRole @default(MEMBER)
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+}
+
+enum MemberRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+enum PlanType {
+  FREE
+  STARTER
+  PROFESSIONAL
+  ENTERPRISE
+}
+
+// ==================== SOCIAL CHANNELS ====================
+
+model Channel {
+  id             String         @id @default(cuid())
+  organizationId String
+  platform       SocialPlatform
+  platformId     String
+  name           String
+  username       String?
+  avatar         String?
+  accessToken    String         @db.Text
+  refreshToken   String?        @db.Text
+  tokenExpiresAt DateTime?
+  scopes         String[]
+  metadata       Json?
+  isActive       Boolean        @default(true)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  postTargets  PostTarget[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, platform, platformId])
+  @@index([organizationId])
+}
+
+enum SocialPlatform {
+  TWITTER
+  INSTAGRAM
+  FACEBOOK
+  LINKEDIN
+  YOUTUBE
+  TIKTOK
+  REDDIT
+  PINTEREST
+  THREADS
+  TELEGRAM
+  DISCORD
+  SLACK
+  MASTODON
+  BLUESKY
+  MEDIUM
+  DEVTO
+}
+
+// ==================== POSTS & SCHEDULING ====================
+
+model Post {
+  id             String     @id @default(cuid())
+  organizationId String
+  createdById    String
+
+  content         String  @db.Text
+  contentVariants Json?
+
+  scheduledAt DateTime?
+  publishedAt DateTime?
+  status      PostStatus @default(DRAFT)
+
+  aiGenerated Boolean @default(false)
+  aiProvider  String?
+  aiPrompt    String? @db.Text
+
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  targets          PostTarget[]
+  mediaAttachments PostMedia[]
+  tags             PostTag[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId, status])
+  @@index([organizationId, scheduledAt])
+  @@index([status, scheduledAt])
+}
+
+model PostTarget {
+  id           String     @id @default(cuid())
+  postId       String
+  channelId    String
+  status       PostStatus @default(DRAFT)
+  publishedId  String?
+  publishedUrl String?
+  errorMessage String?    @db.Text
+  retryCount   Int        @default(0)
+  metadata     Json?
+
+  post    Post    @relation(fields: [postId], references: [id], onDelete: Cascade)
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  publishedAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([postId, channelId])
+  @@index([status, postId])
+}
+
+enum PostStatus {
+  DRAFT
+  SCHEDULED
+  PUBLISHING
+  PUBLISHED
+  FAILED
+  CANCELLED
+}
+
+// ==================== MEDIA ====================
+
+model Media {
+  id             String @id @default(cuid())
+  organizationId String
+  uploadedById   String
+
+  fileName     String
+  fileType     String
+  fileSize     Int
+  url          String
+  thumbnailUrl String?
+  width        Int?
+  height       Int?
+  duration     Int?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  postMedia    PostMedia[]
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId, createdAt])
+}
+
+model PostMedia {
+  id      String @id @default(cuid())
+  postId  String
+  mediaId String
+  order   Int    @default(0)
+
+  post  Post  @relation(fields: [postId], references: [id], onDelete: Cascade)
+  media Media @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, mediaId])
+  @@index([postId])
+}
+
+model PostTag {
+  id     String @id @default(cuid())
+  postId String
+  tag    String
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@index([tag])
+}
+
+// ==================== ANALYTICS ====================
+
+model AnalyticsSnapshot {
+  id             String         @id @default(cuid())
+  postTargetId   String
+  platform       SocialPlatform
+  impressions    Int            @default(0)
+  clicks         Int            @default(0)
+  likes          Int            @default(0)
+  shares         Int            @default(0)
+  comments       Int            @default(0)
+  reach          Int            @default(0)
+  engagementRate Float          @default(0)
+  metadata       Json?
+
+  snapshotAt DateTime @default(now())
+
+  @@index([postTargetId, snapshotAt])
+  @@index([platform])
+}
+
+// ==================== WEBHOOKS & API ====================
+
+model Webhook {
+  id             String  @id @default(cuid())
+  organizationId String
+  url            String
+  secret         String
+  events         String[]
+  isActive       Boolean @default(true)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  deliveries   WebhookDelivery[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model WebhookDelivery {
+  id          String   @id @default(cuid())
+  webhookId   String
+  webhook     Webhook  @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+  event       String
+  payload     Json
+  statusCode  Int?
+  response    String?  @db.Text
+  success     Boolean  @default(false)
+  attempts    Int      @default(1)
+  error       String?  @db.Text
+  deliveredAt DateTime @default(now())
+
+  @@index([webhookId])
+  @@index([deliveredAt])
+}
+
+model ApiKey {
+  id             String    @id @default(cuid())
+  organizationId String
+  name           String
+  keyHash        String    @unique
+  lastUsedAt     DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime  @default(now())
+  expiresAt DateTime?
+
+  @@index([organizationId])
+}
+
+// ==================== AUDIT LOGGING ====================
+
+model AuditLog {
+  id             String   @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId         String?
+  user           User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action         String   // e.g. "post.created", "channel.connected", "member.invited"
+  entityType     String   // e.g. "Post", "Channel", "OrganizationMember"
+  entityId       String?
+  metadata       Json?    // Additional context (before/after values, etc.)
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime @default(now())
+
+  @@index([organizationId, createdAt])
+  @@index([userId])
+  @@index([entityType, entityId])
+}
+
+// ==================== NOTIFICATIONS ====================
+
+model Notification {
+  id             String   @id @default(cuid())
+  organizationId String
+  userId         String
+  type           String   // e.g. "post.published", "post.failed", "approval.requested"
+  title          String
+  body           String   @db.Text
+  link           String?  // Deep link URL within the app
+  isRead         Boolean  @default(false)
+  metadata       Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, isRead, createdAt])
+  @@index([organizationId, createdAt])
+}
+
+// ==================== CONTENT APPROVAL WORKFLOWS ====================
+
+model ApprovalRequest {
+  id             String         @id @default(cuid())
+  organizationId String
+  postId         String
+  requestedById  String         // User who submitted for approval
+  status         ApprovalStatus @default(PENDING)
+  currentStep    Int            @default(1)
+  totalSteps     Int            @default(1)
+
+  steps ApprovalStep[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId, status])
+  @@index([postId])
+}
+
+model ApprovalStep {
+  id                String         @id @default(cuid())
+  approvalRequestId String
+  stepNumber        Int
+  reviewerId        String         // User who should review
+  status            ApprovalStatus @default(PENDING)
+  comment           String?        @db.Text
+  decidedAt         DateTime?
+
+  approvalRequest ApprovalRequest @relation(fields: [approvalRequestId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([approvalRequestId, stepNumber])
+  @@index([reviewerId, status])
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+// ==================== RSS FEEDS ====================
+
+model RssFeed {
+  id             String  @id @default(cuid())
+  organizationId String
+  name           String
+  url            String
+  isActive       Boolean @default(true)
+  checkInterval  Int     @default(60) // minutes between checks
+  lastCheckedAt  DateTime?
+
+  autoPost       Boolean  @default(false)
+  targetChannels String[] // Channel IDs to auto-post to
+  promptTemplate String?  @db.Text // AI prompt template for generating posts
+
+  entries RssFeedEntry[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([isActive, lastCheckedAt])
+}
+
+model RssFeedEntry {
+  id        String   @id @default(cuid())
+  feedId    String
+  guid      String   // Unique ID from RSS feed
+  title     String
+  link      String
+  summary   String?  @db.Text
+  published DateTime?
+  processed Boolean  @default(false)
+
+  feed RssFeed @relation(fields: [feedId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([feedId, guid])
+  @@index([feedId, processed])
+}
+
+// ==================== SHORT LINKS ====================
+
+model ShortLink {
+  id             String    @id @default(cuid())
+  organizationId String
+  code           String    @unique
+  originalUrl    String    @db.Text
+  postId         String?
+
+  clicks        Int       @default(0)
+  lastClickedAt DateTime?
+
+  clickEvents ShortLinkClick[]
+
+  createdAt DateTime  @default(now())
+  expiresAt DateTime?
+
+  @@index([organizationId])
+  @@index([code])
+}
+
+model ShortLinkClick {
+  id          String  @id @default(cuid())
+  shortLinkId String
+  ipAddress   String?
+  userAgent   String?
+  referer     String?
+  country     String?
+  city        String?
+
+  shortLink ShortLink @relation(fields: [shortLinkId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([shortLinkId, createdAt])
+}
+
+// ==================== ONBOARDING ====================
+
+model OnboardingProgress {
+  id             String   @id @default(cuid())
+  userId         String   @unique
+  completedSteps String[]
+  isComplete     Boolean  @default(false)
+  skippedAt      DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

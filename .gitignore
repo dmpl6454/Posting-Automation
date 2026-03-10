@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build
+dist/
+.next/
+.turbo/
+out/
+
+# Environment
+.env
+.env.local
+.env.*.local
+.env.production
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Claude Code
+.claude/settings.local.json
+.claude/plans/
+.claude/worktrees/
+
+# Testing
+coverage/
+/apps/web/test-results/
+/apps/web/playwright-report/
+/apps/web/blob-report/
+/apps/web/playwright/.cache/
+
+# Prisma
+packages/db/prisma/migrations/**/migration_lock.toml
+
+# Docker
+docker/data/
+
+# Debug
+npm-debug.log*
+pnpm-debug.log*

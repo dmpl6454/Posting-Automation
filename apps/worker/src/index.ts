@@ -1,0 +1,70 @@
+import { createPostPublishWorker } from "./workers/post-publish.worker";
+import { createTokenRefreshWorker } from "./workers/token-refresh.worker";
+import { createAnalyticsSyncWorker } from "./workers/analytics-sync.worker";
+import { createWebhookDeliveryWorker } from "./workers/webhook-delivery.worker";
+import { createMediaProcessWorker } from "./workers/media-process.worker";
+import { createRssSyncWorker } from "./workers/rss-sync.worker";
+import { startCronJobs } from "./scheduler/cron-jobs";
+import { registerWorker, markWorkerStopped, startHealthServer } from "./lib/health";
+
+console.log("=== Post Automation Worker Starting ===");
+
+// Register workers for health checks
+registerWorker("post-publish");
+registerWorker("token-refresh");
+registerWorker("analytics-sync");
+registerWorker("webhook-delivery");
+registerWorker("media-process");
+registerWorker("rss-sync");
+
+// Start workers
+const postPublishWorker = createPostPublishWorker();
+const tokenRefreshWorker = createTokenRefreshWorker();
+const analyticsSyncWorker = createAnalyticsSyncWorker();
+const webhookDeliveryWorker = createWebhookDeliveryWorker();
+const mediaProcessWorker = createMediaProcessWorker();
+const rssSyncWorker = createRssSyncWorker();
+
+// Start cron jobs
+startCronJobs();
+
+// Start health check HTTP server
+const healthServer = startHealthServer();
+
+console.log("=== Workers Running ===");
+console.log("  - Post Publish Worker");
+console.log("  - Token Refresh Worker");
+console.log("  - Analytics Sync Worker");
+console.log("  - Webhook Delivery Worker");
+console.log("  - Media Process Worker");
+console.log("  - RSS Sync Worker");
+console.log("  - Cron Jobs (token refresh: 30min, analytics: 6hr)");
+
+// Graceful shutdown
+async function shutdown() {
+  console.log("\nShutting down workers...");
+
+  // Mark all workers as stopped for health checks
+  markWorkerStopped("post-publish");
+  markWorkerStopped("token-refresh");
+  markWorkerStopped("analytics-sync");
+  markWorkerStopped("webhook-delivery");
+  markWorkerStopped("media-process");
+  markWorkerStopped("rss-sync");
+
+  await Promise.all([
+    postPublishWorker.close(),
+    tokenRefreshWorker.close(),
+    analyticsSyncWorker.close(),
+    webhookDeliveryWorker.close(),
+    mediaProcessWorker.close(),
+    rssSyncWorker.close(),
+  ]);
+
+  healthServer.close();
+  console.log("Workers stopped. Exiting.");
+  process.exit(0);
+}
+
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);

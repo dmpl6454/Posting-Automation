@@ -1,0 +1,293 @@
+import type { SocialPlatform } from "@postautomation/db";
+import { SocialProvider } from "../abstract/social.abstract";
+import type {
+  SocialPostPayload,
+  SocialPostResult,
+  SocialAnalytics,
+  OAuthTokens,
+  OAuthConfig,
+  SocialProfile,
+  PlatformConstraints,
+} from "../abstract/social.types";
+
+export class FacebookProvider extends SocialProvider {
+  readonly platform: SocialPlatform = "FACEBOOK";
+  readonly displayName = "Facebook";
+  readonly constraints: PlatformConstraints = {
+    maxContentLength: 63206,
+    supportedMediaTypes: ["image/jpeg", "image/png", "image/gif", "video/mp4"],
+    maxMediaCount: 10,
+    maxMediaSize: 10 * 1024 * 1024,
+  };
+
+  private readonly apiVersion = "v18.0";
+  private readonly graphBaseUrl = "https://graph.facebook.com";
+
+  getOAuthUrl(config: OAuthConfig, state: string): string {
+    const params = new URLSearchParams({
+      client_id: config.clientId,
+      redirect_uri: config.callbackUrl,
+      scope: config.scopes.join(","),
+      state,
+      response_type: "code",
+    });
+    return `https://www.facebook.com/${this.apiVersion}/dialog/oauth?${params.toString()}`;
+  }
+
+  async exchangeCodeForTokens(code: string, config: OAuthConfig): Promise<OAuthTokens> {
+    // Exchange authorization code for a short-lived token
+    const params = new URLSearchParams({
+      client_id: config.clientId,
+      client_secret: config.clientSecret,
+      redirect_uri: config.callbackUrl,
+      code,
+    });
+
+    const res = await fetch(
+      `${this.graphBaseUrl}/${this.apiVersion}/oauth/access_token?${params.toString()}`
+    );
+
+    const data: any = await res.json();
+    if (!res.ok) throw new Error(`Facebook token exchange failed: ${JSON.stringify(data)}`);
+
+    // Exchange short-lived token for a long-lived token
+    const longLivedTokens = await this.exchangeForLongLivedToken(
+      data.access_token,
+      config.clientId,
+      config.clientSecret
+    );
+
+    return longLivedTokens;
+  }
+
+  async refreshAccessToken(_refreshToken: string, config: OAuthConfig): Promise<OAuthTokens> {
+    // Facebook does not use traditional refresh tokens.
+    // Instead, exchange the existing long-lived token for a new long-lived token.
+    // The _refreshToken parameter here is actually the current long-lived access token.
+    const longLivedTokens = await this.exchangeForLongLivedToken(
+      _refreshToken,
+      config.clientId,
+      config.clientSecret
+    );
+
+    return longLivedTokens;
+  }
+
+  async publishPost(tokens: OAuthTokens, payload: SocialPostPayload): Promise<SocialPostResult> {
+    const pageId = (payload.metadata?.pageId as string) || "me";
+
+    // If media URLs are provided, publish with photos
+    if (payload.mediaUrls?.length) {
+      return this.publishPostWithMedia(tokens, payload, pageId);
+    }
+
+    // Text-only post
+    const res = await fetch(
+      `${this.graphBaseUrl}/${this.apiVersion}/${pageId}/feed`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: payload.content,
+          access_token: tokens.accessToken,
+        }),
+      }
+    );
+
+    const data: any = await res.json();
+    if (!res.ok) throw new Error(`Facebook post failed: ${JSON.stringify(data)}`);
+
+    return {
+      platformPostId: data.id,
+      url: `https://www.facebook.com/${data.id.replace("_", "/posts/")}`,
+      metadata: data,
+    };
+  }
+
+  async deletePost(tokens: OAuthTokens, platformPostId: string): Promise<void> {
+    const res = await fetch(
+      `${this.graphBaseUrl}/${this.apiVersion}/${platformPostId}?access_token=${tokens.accessToken}`,
+      { method: "DELETE" }
+    );
+
+    if (!res.ok) {
+      const data: any = await res.json();
+      throw new Error(`Facebook delete failed: ${JSON.stringify(data)}`);
+    }
+  }
+
+  async getProfile(tokens: OAuthTokens): Promise<SocialProfile> {
+    const res = await fetch(
+      `${this.graphBaseUrl}/${this.apiVersion}/me?fields=id,name,picture&access_token=${tokens.accessToken}`
+    );
+
+    const data: any = await res.json();
+    if (!res.ok) throw new Error(`Facebook profile fetch failed: ${JSON.stringify(data)}`);
+
+    return {
+      id: data.id,
+      name: data.name,
+      avatar: data.picture?.data?.url,
+    };
+  }
+
+  async getPostAnalytics(tokens: OAuthTokens, platformPostId: string): Promise<SocialAnalytics | null> {
+    const res = await fetch(
+      `${this.graphBaseUrl}/${this.apiVersion}/${platformPostId}/insights?metric=post_impressions,post_clicks,post_reactions_like_total,post_engaged_users&access_token=${tokens.accessToken}`
+    );
+
+    const data: any = await res.json();
+    if (!res.ok) return null;
+
+    const metrics: Record<string, number> = {};
+    if (data.data) {
+      for (const metric of data.data) {
+        metrics[metric.name] = metric.values?.[0]?.value || 0;
+      }
+    }
+
+    // Fetch basic engagement counts from the post itself
+    const postRes = await fetch(
+      `${this.graphBaseUrl}/${this.apiVersion}/${platformPostId}?fields=shares,comments.summary(true),reactions.summary(true)&access_token=${tokens.accessToken}`
+    );
+
+    const postData: any = await postRes.json();
+    const shares = postData.shares?.count || 0;
+    const comments = postData.comments?.summary?.total_count || 0;
+    const reactions = postData.reactions?.summary?.total_count || 0;
+
+    const impressions = metrics.post_impressions || 0;
+    const totalEngagement = reactions + shares + comments;
+    const engagementRate = impressions > 0 ? totalEngagement / impressions : 0;
+
+    return {
+      impressions,
+      clicks: metrics.post_clicks || 0,
+      likes: reactions,
+      shares,
+      comments,
+      reach: metrics.post_engaged_users || 0,
+      engagementRate,
+    };
+  }
+
+  /**
+   * Exchange a short-lived or existing long-lived token for a new long-lived token.
+   */
+  private async exchangeForLongLivedToken(
+    accessToken: string,
+    clientId: string,
+    clientSecret: string
+  ): Promise<OAuthTokens> {
+    const params = new URLSearchParams({
+      grant_type: "fb_exchange_token",
+      client_id: clientId,
+      client_secret: clientSecret,
+      fb_exchange_token: accessToken,
+    });
+
+    const res = await fetch(
+      `${this.graphBaseUrl}/${this.apiVersion}/oauth/access_token?${params.toString()}`
+    );
+
+    const data: any = await res.json();
+    if (!res.ok) throw new Error(`Facebook long-lived token exchange failed: ${JSON.stringify(data)}`);
+
+    return {
+      accessToken: data.access_token,
+      // Facebook long-lived tokens last ~60 days; store the token itself as the refreshToken
+      // so it can be exchanged again before expiry.
+      refreshToken: data.access_token,
+      expiresAt: data.expires_in
+        ? new Date(Date.now() + data.expires_in * 1000)
+        : undefined,
+      scopes: data.token_type ? [data.token_type] : undefined,
+    };
+  }
+
+  /**
+   * Publish a post with one or more photo attachments.
+   * For a single photo, posts directly to /{page-id}/photos.
+   * For multiple photos, uploads each as unpublished, then groups them in a feed post.
+   */
+  private async publishPostWithMedia(
+    tokens: OAuthTokens,
+    payload: SocialPostPayload,
+    pageId: string
+  ): Promise<SocialPostResult> {
+    const mediaUrls = payload.mediaUrls!;
+
+    if (mediaUrls.length === 1) {
+      // Single photo post
+      const res = await fetch(
+        `${this.graphBaseUrl}/${this.apiVersion}/${pageId}/photos`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            url: mediaUrls[0],
+            message: payload.content,
+            access_token: tokens.accessToken,
+          }),
+        }
+      );
+
+      const data: any = await res.json();
+      if (!res.ok) throw new Error(`Facebook photo post failed: ${JSON.stringify(data)}`);
+
+      return {
+        platformPostId: data.post_id || data.id,
+        url: `https://www.facebook.com/${(data.post_id || data.id).replace("_", "/posts/")}`,
+        metadata: data,
+      };
+    }
+
+    // Multi-photo post: upload each photo as unpublished, then create a feed post
+    const photoIds = await Promise.all(
+      mediaUrls.map(async (url) => {
+        const res = await fetch(
+          `${this.graphBaseUrl}/${this.apiVersion}/${pageId}/photos`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              url,
+              published: false,
+              access_token: tokens.accessToken,
+            }),
+          }
+        );
+
+        const data: any = await res.json();
+        if (!res.ok) throw new Error(`Facebook photo upload failed: ${JSON.stringify(data)}`);
+        return data.id;
+      })
+    );
+
+    // Create the multi-photo feed post
+    const attachedMedia = photoIds.map((id) => ({ media_fbid: id }));
+    const feedBody: Record<string, unknown> = {
+      message: payload.content,
+      access_token: tokens.accessToken,
+      attached_media: attachedMedia,
+    };
+
+    const res = await fetch(
+      `${this.graphBaseUrl}/${this.apiVersion}/${pageId}/feed`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(feedBody),
+      }
+    );
+
+    const data: any = await res.json();
+    if (!res.ok) throw new Error(`Facebook multi-photo post failed: ${JSON.stringify(data)}`);
+
+    return {
+      platformPostId: data.id,
+      url: `https://www.facebook.com/${data.id.replace("_", "/posts/")}`,
+      metadata: data,
+    };
+  }
+}

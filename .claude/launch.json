@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "web",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@postautomation/web", "dev"],
+      "port": 3000
+    },
+    {
+      "name": "worker",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@postautomation/worker", "dev"],
+      "port": 0
+    }
+  ]
+}

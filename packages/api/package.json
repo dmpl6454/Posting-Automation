@@ -1,0 +1,32 @@
+{
+  "name": "@postautomation/api",
+  "version": "0.0.1",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "clean": "rm -rf dist node_modules .turbo"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1005.0",
+    "@aws-sdk/s3-request-presigner": "^3.1005.0",
+    "@postautomation/ai": "workspace:*",
+    "@postautomation/billing": "workspace:*",
+    "@postautomation/db": "workspace:*",
+    "@postautomation/queue": "workspace:*",
+    "@postautomation/social": "workspace:*",
+    "@trpc/server": "^11.0.0-rc.0",
+    "superjson": "^2.2.1",
+    "bcryptjs": "^2.4.3",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/node": "^22.0.0",
+    "next-auth": "^5.0.0-beta.25",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
