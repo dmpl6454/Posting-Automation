@@ -46,10 +46,8 @@ COPY --from=builder /app/apps/web/.next/standalone ./
 COPY --from=builder /app/apps/web/.next/static ./apps/web/.next/static
 
 # Copy Prisma engine binaries for runtime
-COPY --from=builder /app/packages/db/node_modules/.prisma ./packages/db/node_modules/.prisma
-COPY --from=builder /app/packages/db/node_modules/@prisma ./packages/db/node_modules/@prisma
-COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
-COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
+COPY --from=builder /app/packages/db/node_modules/.prisma ./node_modules/.prisma
+COPY --from=builder /app/packages/db/node_modules/@prisma/client ./node_modules/@prisma/client
 
 USER nextjs
 EXPOSE 3000
