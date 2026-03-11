@@ -153,7 +153,7 @@ export const chatRouter = createRouter({
     .input(
       z.object({
         threadId: z.string(),
-        actionType: z.enum(["create_agent", "generate_content", "schedule_post", "update_agent"]),
+        actionType: z.enum(["create_agent", "generate_content", "schedule_post", "update_agent", "generate_news_image"]),
         payload: z.record(z.unknown()),
       })
     )
@@ -262,6 +262,79 @@ export const chatRouter = createRouter({
             },
           });
           return { type: "agent_updated", agentId: updated.id };
+        }
+
+        case "generate_news_image": {
+          const p = input.payload as any;
+
+          // Dynamically import to avoid loading puppeteer eagerly
+          const { generateNewsImage } = await import("@postautomation/ai");
+
+          const style = p.imageStyle === "ai_generated" ? "ai_generated" : "news_card";
+          const platform = (p.platform || "twitter").toLowerCase() as "instagram" | "twitter" | "linkedin" | "facebook";
+
+          // Get org logo if includeLogo is true and not explicitly provided
+          let logoUrl = p.logoUrl;
+          if (p.includeLogo !== false && !logoUrl) {
+            const org = await ctx.prisma.organization.findUnique({
+              where: { id: ctx.organizationId },
+              select: { logo: true },
+            });
+            logoUrl = org?.logo || undefined;
+          }
+
+          const imageResult = await generateNewsImage(style, {
+            headline: p.headline || "Trending News",
+            source: p.source || "News",
+            sourceUrl: p.sourceUrl,
+            logoUrl,
+            platform,
+          });
+
+          // Save image as Media
+          const imageBuffer = Buffer.from(imageResult.imageBase64, "base64");
+          const fileName = `news-${Date.now()}.png`;
+
+          const dataUrl = `data:${imageResult.mimeType};base64,${imageResult.imageBase64}`;
+
+          const media = await ctx.prisma.media.create({
+            data: {
+              organizationId: ctx.organizationId,
+              uploadedById: (ctx.session.user as any).id,
+              fileName,
+              fileType: imageResult.mimeType,
+              fileSize: imageBuffer.length,
+              url: dataUrl,
+              width: imageResult.width,
+              height: imageResult.height,
+            },
+          });
+
+          // Attach to a system message in the thread
+          await ctx.prisma.chatMessage.create({
+            data: {
+              threadId: input.threadId,
+              role: "system",
+              content: `News image generated (${style === "news_card" ? "branded card" : "AI illustration"}).`,
+              metadata: JSON.parse(JSON.stringify({
+                type: "news_image_generated",
+                mediaId: media.id,
+                style,
+                headline: p.headline,
+              })),
+              attachments: {
+                create: { mediaId: media.id },
+              },
+            },
+          });
+
+          return {
+            type: "news_image_generated",
+            mediaId: media.id,
+            imageUrl: dataUrl,
+            style,
+            content: p.content,
+          };
         }
 
         default:
