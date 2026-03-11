@@ -267,8 +267,8 @@ export const chatRouter = createRouter({
         case "generate_news_image": {
           const p = input.payload as any;
 
-          // Dynamically import to avoid loading puppeteer eagerly
-          const { generateNewsImage } = await import("@postautomation/ai");
+          // Dynamically import directly from the file to avoid pulling in LangChain + full AI package
+          const { generateNewsImage } = await import("@postautomation/ai/src/tools/news-image-generator");
 
           const style = p.imageStyle === "ai_generated" ? "ai_generated" : "news_card";
           const platform = (p.platform || "twitter").toLowerCase() as "instagram" | "twitter" | "linkedin" | "facebook";

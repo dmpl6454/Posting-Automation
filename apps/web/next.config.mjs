@@ -8,7 +8,12 @@ const nextConfig = {
   experimental: {
     serverComponentsExternalPackages: ["@prisma/client", "prisma", "puppeteer", "puppeteer-core"],
   },
-  serverExternalPackages: ["puppeteer", "puppeteer-core"],
+  webpack: (config, { isServer }) => {
+    if (isServer) {
+      config.externals = [...(config.externals || []), "puppeteer", "puppeteer-core"];
+    }
+    return config;
+  },
   // Security headers
   async headers() {
     return [
