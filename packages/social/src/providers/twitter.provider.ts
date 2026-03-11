@@ -1,5 +1,6 @@
 import type { SocialPlatform } from "@postautomation/db";
 import { SocialProvider } from "../abstract/social.abstract";
+import { generateCodeVerifier, generateCodeChallenge } from "../utils/oauth-helper";
 import type {
   SocialPostPayload,
   SocialPostResult,
@@ -21,32 +22,42 @@ export class TwitterProvider extends SocialProvider {
     supportsThreads: true,
   };
 
-  getOAuthUrl(config: OAuthConfig, state: string): string {
+  async getOAuthUrl(config: OAuthConfig, state: string): Promise<string> {
+    const codeVerifier = generateCodeVerifier();
+    const codeChallenge = await generateCodeChallenge(codeVerifier);
+
+    // Embed PKCE verifier in state so it survives the OAuth redirect roundtrip
+    const stateWithPkce = `${state}|pkce:${codeVerifier}`;
+
     const params = new URLSearchParams({
       response_type: "code",
       client_id: config.clientId,
       redirect_uri: config.callbackUrl,
       scope: config.scopes.join(" "),
-      state,
-      code_challenge: "challenge", // TODO: implement PKCE
+      state: stateWithPkce,
+      code_challenge: codeChallenge,
       code_challenge_method: "S256",
     });
     return `https://twitter.com/i/oauth2/authorize?${params.toString()}`;
   }
 
-  async exchangeCodeForTokens(code: string, config: OAuthConfig): Promise<OAuthTokens> {
+  async exchangeCodeForTokens(code: string, config: OAuthConfig, codeVerifier?: string): Promise<OAuthTokens> {
+    const bodyParams: Record<string, string> = {
+      code,
+      grant_type: "authorization_code",
+      redirect_uri: config.callbackUrl,
+    };
+    if (codeVerifier) {
+      bodyParams.code_verifier = codeVerifier;
+    }
+
     const res = await fetch("https://api.twitter.com/2/oauth2/token", {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
         Authorization: `Basic ${Buffer.from(`${config.clientId}:${config.clientSecret}`).toString("base64")}`,
       },
-      body: new URLSearchParams({
-        code,
-        grant_type: "authorization_code",
-        redirect_uri: config.callbackUrl,
-        code_verifier: "challenge", // TODO: implement PKCE
-      }),
+      body: new URLSearchParams(bodyParams),
     });
 
     const data: any = await res.json();

@@ -51,7 +51,7 @@ export const channelRouter = createRouter({
         scopes: getDefaultScopes(input.platform),
       };
 
-      const url = provider.getOAuthUrl(config, stateWithOrg);
+      const url = await provider.getOAuthUrl(config, stateWithOrg);
       return { url, state: stateWithOrg };
     }),
 

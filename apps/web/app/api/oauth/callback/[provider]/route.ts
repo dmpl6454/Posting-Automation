@@ -24,8 +24,19 @@ export async function GET(
   }
 
   try {
-    // Extract org ID from state
-    const organizationId = state.split(":")[1];
+    // Extract org ID and optional PKCE verifier from state
+    // State format: "randomhex:orgId" or "randomhex:orgId|pkce:verifier"
+    let codeVerifier: string | undefined;
+    let cleanState = state;
+
+    // Extract PKCE verifier if present (used by Twitter/X OAuth2)
+    const pkceIndex = state.indexOf("|pkce:");
+    if (pkceIndex !== -1) {
+      codeVerifier = state.slice(pkceIndex + 6);
+      cleanState = state.slice(0, pkceIndex);
+    }
+
+    const organizationId = cleanState.split(":")[1];
     if (!organizationId) {
       throw new Error("Invalid state: missing organization ID");
     }
@@ -41,8 +52,8 @@ export async function GET(
       scopes: [],
     };
 
-    // Exchange code for tokens
-    const tokens = await provider.exchangeCodeForTokens(code, config);
+    // Exchange code for tokens (pass PKCE verifier for Twitter)
+    const tokens = await provider.exchangeCodeForTokens(code, config, codeVerifier);
 
     // Get profile info
     const profile = await provider.getProfile(tokens);

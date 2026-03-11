@@ -15,8 +15,8 @@ export abstract class SocialProvider {
   abstract readonly constraints: PlatformConstraints;
 
   // OAuth flow
-  abstract getOAuthUrl(config: OAuthConfig, state: string): string;
-  abstract exchangeCodeForTokens(code: string, config: OAuthConfig): Promise<OAuthTokens>;
+  abstract getOAuthUrl(config: OAuthConfig, state: string): string | Promise<string>;
+  abstract exchangeCodeForTokens(code: string, config: OAuthConfig, codeVerifier?: string): Promise<OAuthTokens>;
   abstract refreshAccessToken(refreshToken: string, config: OAuthConfig): Promise<OAuthTokens>;
 
   // Posting
