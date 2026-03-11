@@ -24,12 +24,18 @@ export const userRouter = createRouter({
     }),
 
   createOrganization: protectedProcedure
-    .input(z.object({ name: z.string().min(1), slug: z.string().min(1).regex(/^[a-z0-9-]+$/) }))
+    .input(z.object({ name: z.string().min(1), slug: z.string().optional() }))
     .mutation(async ({ ctx, input }) => {
+      // Auto-generate a clean slug from name if not provided or invalid
+      const rawSlug = (input.slug?.trim() || input.name)
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "");
+      const slug = rawSlug || `org-${Date.now()}`;
       const org = await ctx.prisma.organization.create({
         data: {
           name: input.name,
-          slug: input.slug,
+          slug,
           members: {
             create: {
               userId: (ctx.session.user as any).id,
