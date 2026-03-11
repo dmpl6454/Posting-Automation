@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
-import { agentRunQueue } from "@postautomation/queue";
+import { agentRunQueue, postPublishQueue } from "@postautomation/queue";
 
 export const chatRouter = createRouter({
   listThreads: orgProcedure.query(async ({ ctx }) => {
@@ -153,7 +153,7 @@ export const chatRouter = createRouter({
     .input(
       z.object({
         threadId: z.string(),
-        actionType: z.enum(["create_agent", "generate_content", "schedule_post", "update_agent", "generate_news_image"]),
+        actionType: z.enum(["create_agent", "generate_content", "schedule_post", "publish_now", "update_agent", "generate_news_image"]),
         payload: z.record(z.unknown()),
       })
     )
@@ -243,6 +243,56 @@ export const chatRouter = createRouter({
           });
 
           return { type: "post_scheduled", postId: post.id };
+        }
+
+        case "publish_now": {
+          const p = input.payload as any;
+          const userId = (ctx.session.user as any).id;
+
+          // Create post and immediately queue for publishing
+          const post = await ctx.prisma.post.create({
+            data: {
+              organizationId: ctx.organizationId,
+              createdById: userId,
+              content: p.content,
+              status: "SCHEDULED",
+              scheduledAt: new Date(), // now
+              aiGenerated: true,
+              targets: {
+                create: (p.channelIds || []).map((channelId: string) => ({
+                  channelId,
+                  status: "PENDING",
+                })),
+              },
+            },
+            include: { targets: { include: { channel: true } } },
+          });
+
+          // Queue each target for immediate publishing
+          for (const target of post.targets) {
+            await postPublishQueue.add(
+              `chat-publish-${target.id}`,
+              {
+                postId: post.id,
+                postTargetId: target.id,
+                channelId: target.channelId,
+                platform: target.channel.platform,
+                organizationId: ctx.organizationId,
+              },
+              { delay: 0 }
+            );
+          }
+
+          await ctx.prisma.chatMessage.create({
+            data: {
+              threadId: input.threadId,
+              role: "system",
+              content: `Post published to ${post.targets.map((t) => t.channel.name || t.channel.platform).join(", ")}.`,
+              metadata: { type: "post_published", postId: post.id },
+            },
+          });
+
+          return { type: "post_published", postId: post.id };
         }
 
         case "update_agent": {

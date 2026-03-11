@@ -116,7 +116,7 @@ export function MessageBubble({ message, onExecuteAction, isExecuting }: Message
           <ContentActionBar
             content={action.payload.content as string}
             platform={action.payload.platform as string}
-            onPostNow={() => onExecuteAction?.({ ...action, type: "schedule_post" })}
+            onPostNow={() => onExecuteAction?.({ ...action, type: "publish_now" })}
             isExecuting={isExecuting}
           />
         )}

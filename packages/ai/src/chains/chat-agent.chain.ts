@@ -23,7 +23,7 @@ export interface ChatContext {
 }
 
 export interface ChatAgentAction {
-  type: "create_agent" | "generate_content" | "schedule_post" | "update_agent" | "generate_news_image";
+  type: "create_agent" | "generate_content" | "schedule_post" | "publish_now" | "update_agent" | "generate_news_image";
   payload: Record<string, unknown>;
 }
 
@@ -109,13 +109,18 @@ export async function* streamChatAgent(
   if (isLangChainProvider(provider)) {
     const model = getModel(provider, 0.7);
 
+    // Filter out system messages from history — the API only allows the
+    // system message as the very first message. DB system messages (e.g.
+    // "news image generated", action confirmations) are informational
+    // and should be presented as assistant context instead.
     const langchainMessages = [
       new SystemMessage(systemPrompt),
-      ...messages.map((m) => {
-        if (m.role === "user") return new HumanMessage(m.content);
-        if (m.role === "assistant") return new AIMessage(m.content);
-        return new SystemMessage(m.content);
-      }),
+      ...messages
+        .filter((m) => m.role !== "system")
+        .map((m) => {
+          if (m.role === "user") return new HumanMessage(m.content);
+          return new AIMessage(m.content);
+        }),
     ];
 
     const stream = await model.stream(langchainMessages);
