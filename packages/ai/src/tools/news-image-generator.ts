@@ -1,0 +1,93 @@
+import puppeteer from "puppeteer";
+import { generateNewsCardHtml, type NewsCardOptions } from "./news-card-template";
+import { generateImageDallE } from "../providers/dalle.provider";
+
+export interface NewsImageResult {
+  imageBase64: string;
+  mimeType: string;
+  width: number;
+  height: number;
+  style: "news_card" | "ai_generated";
+}
+
+export async function generateNewsCardImage(
+  options: NewsCardOptions
+): Promise<NewsImageResult> {
+  const html = generateNewsCardHtml(options);
+
+  const dimensions = options.platform === "instagram"
+    ? { width: 1080, height: 1080 }
+    : { width: 1200, height: 675 };
+
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+  });
+
+  try {
+    const page = await browser.newPage();
+    await page.setViewport(dimensions);
+    await page.setContent(html, { waitUntil: "networkidle0" });
+
+    const screenshotBuffer = await page.screenshot({
+      type: "png",
+      encoding: "base64",
+    });
+
+    return {
+      imageBase64: screenshotBuffer as string,
+      mimeType: "image/png",
+      width: dimensions.width,
+      height: dimensions.height,
+      style: "news_card",
+    };
+  } finally {
+    await browser.close();
+  }
+}
+
+export async function generateNewsAiImage(
+  headline: string,
+  source: string
+): Promise<NewsImageResult> {
+  const prompt = `Create a professional, visually striking editorial illustration for a news article titled: "${headline}". Modern, clean, digital art style suitable for social media. No text in the image.`;
+
+  const result = await generateImageDallE({
+    prompt,
+    size: "1024x1024",
+    quality: "standard",
+  });
+
+  return {
+    imageBase64: result.imageBase64,
+    mimeType: result.mimeType,
+    width: 1024,
+    height: 1024,
+    style: "ai_generated",
+  };
+}
+
+export async function generateNewsImage(
+  style: "news_card" | "ai_generated",
+  options: {
+    headline: string;
+    source: string;
+    sourceUrl?: string;
+    logoUrl?: string;
+    handle?: string;
+    platform: "instagram" | "twitter" | "linkedin" | "facebook";
+  }
+): Promise<NewsImageResult> {
+  if (style === "ai_generated") {
+    return generateNewsAiImage(options.headline, options.source);
+  }
+
+  return generateNewsCardImage({
+    headline: options.headline,
+    source: options.source,
+    sourceUrl: options.sourceUrl,
+    logoUrl: options.logoUrl,
+    handle: options.handle,
+    platform: options.platform,
+  });
+}
