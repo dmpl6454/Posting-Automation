@@ -184,7 +184,7 @@ export default function AgentsPage() {
                   <div className="rounded-lg bg-muted/50 p-2">
                     <Zap className="h-3.5 w-3.5 mx-auto text-muted-foreground mb-1" />
                     <p className="text-xs font-medium">
-                      {agent.postsPerRun ?? 1}/day
+                      {agent.postsPerDay ?? 1}/day
                     </p>
                   </div>
                   <div className="rounded-lg bg-muted/50 p-2">

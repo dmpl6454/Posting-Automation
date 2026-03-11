@@ -312,7 +312,7 @@ export default function AgentDetailPage() {
                 <Zap className="h-3.5 w-3.5" />
                 Posts Per Run
               </div>
-              <p className="text-sm font-medium">{agent.postsPerRun ?? 1}</p>
+              <p className="text-sm font-medium">{agent.postsPerDay ?? 1}</p>
             </div>
           </div>
 
@@ -331,7 +331,7 @@ export default function AgentDetailPage() {
               <div className="flex flex-wrap gap-1.5">
                 {agent.channels.map((ch: any) => (
                   <Badge key={ch.id} variant="outline" className="text-xs">
-                    {ch.name || ch.platformUsername} ({ch.platform?.charAt(0) + ch.platform?.slice(1).toLowerCase()})
+                    {ch.name || ch.username} ({ch.platform?.charAt(0) + ch.platform?.slice(1).toLowerCase()})
                   </Badge>
                 ))}
               </div>
@@ -365,9 +365,9 @@ export default function AgentDetailPage() {
                 {agent.runs.map((run: any) => (
                   <TableRow key={run.id}>
                     <TableCell className="text-sm">
-                      {new Date(run.createdAt).toLocaleDateString()}{" "}
+                      {new Date(run.startedAt).toLocaleDateString()}{" "}
                       <span className="text-muted-foreground">
-                        {new Date(run.createdAt).toLocaleTimeString([], {
+                        {new Date(run.startedAt).toLocaleTimeString([], {
                           hour: "2-digit",
                           minute: "2-digit",
                         })}
@@ -379,7 +379,11 @@ export default function AgentDetailPage() {
                       {run.topicUsed || "-"}
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">
-                      {formatDuration(run.durationSeconds)}
+                      {formatDuration(
+                        run.completedAt && run.startedAt
+                          ? Math.floor((new Date(run.completedAt).getTime() - new Date(run.startedAt).getTime()) / 1000)
+                          : null
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}

@@ -26,10 +26,18 @@ export const agentRouter = createRouter({
           },
         },
       });
+      // Resolve channel details from channelIds
+      let channels: any[] = [];
+      if (agent && agent.channelIds.length > 0) {
+        channels = await ctx.prisma.channel.findMany({
+          where: { id: { in: agent.channelIds } },
+          select: { id: true, name: true, platform: true, username: true },
+        });
+      }
       if (!agent) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Agent not found" });
       }
-      return agent;
+      return { ...agent, channels };
     }),
 
   create: orgProcedure
@@ -113,7 +121,7 @@ export const agentRouter = createRouter({
     }),
 
   toggle: orgProcedure
-    .input(z.object({ id: z.string() }))
+    .input(z.object({ id: z.string(), isActive: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
       const agent = await ctx.prisma.agent.findFirst({
         where: { id: input.id, organizationId: ctx.organizationId },
@@ -123,7 +131,7 @@ export const agentRouter = createRouter({
       }
       return ctx.prisma.agent.update({
         where: { id: input.id },
-        data: { isActive: !agent.isActive },
+        data: { isActive: input.isActive },
       });
     }),
 

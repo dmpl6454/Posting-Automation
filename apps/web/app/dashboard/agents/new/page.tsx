@@ -38,11 +38,11 @@ export default function NewAgentPage() {
   const { toast } = useToast();
 
   const [name, setName] = useState("");
-  const [aiProvider, setAiProvider] = useState<string>("openai");
+  const [aiProvider, setAiProvider] = useState<"openai" | "anthropic" | "gemini">("openai");
   const [niche, setNiche] = useState("");
   const [topicInput, setTopicInput] = useState("");
   const [topics, setTopics] = useState<string[]>([]);
-  const [tone, setTone] = useState<string>("professional");
+  const [tone, setTone] = useState<"professional" | "casual" | "humorous" | "formal" | "inspiring">("professional");
   const [customPrompt, setCustomPrompt] = useState("");
   const [frequency, setFrequency] = useState("daily");
   const [postsPerDay, setPostsPerDay] = useState(1);
@@ -106,7 +106,7 @@ export default function NewAgentPage() {
       tone,
       customPrompt: customPrompt.trim() || undefined,
       cronExpression,
-      postsPerRun: postsPerDay,
+      postsPerDay,
       channelIds: selectedChannels,
     });
   };
@@ -150,7 +150,7 @@ export default function NewAgentPage() {
 
             <div className="space-y-1.5">
               <Label>AI Provider</Label>
-              <Select value={aiProvider} onValueChange={setAiProvider}>
+              <Select value={aiProvider} onValueChange={(v) => setAiProvider(v as "openai" | "anthropic" | "gemini")}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
@@ -218,7 +218,7 @@ export default function NewAgentPage() {
 
             <div className="space-y-1.5">
               <Label>Tone</Label>
-              <Select value={tone} onValueChange={setTone}>
+              <Select value={tone} onValueChange={(v) => setTone(v as typeof tone)}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
@@ -309,7 +309,7 @@ export default function NewAgentPage() {
                     />
                     <div className="flex items-center gap-2 flex-1">
                       <span className="text-sm font-medium">
-                        {channel.name || channel.platformUsername}
+                        {channel.name || channel.username}
                       </span>
                       <Badge variant="outline" className="text-xs">
                         {platformLabel(channel.platform)}
