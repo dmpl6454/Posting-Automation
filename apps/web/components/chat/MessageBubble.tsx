@@ -38,6 +38,29 @@ export function MessageBubble({ message, onExecuteAction, isExecuting }: Message
   const isNewsImage = action?.type === "generate_news_image";
 
   if (isSystem) {
+    // Special rendering for system messages with generated news images
+    if (message.metadata?.type === "news_image_generated" && message.attachments?.[0]) {
+      return (
+        <div className="flex flex-col items-center gap-2 px-4 py-3">
+          <div className="flex items-center gap-2 rounded-full bg-muted/50 px-4 py-1.5 text-xs text-muted-foreground">
+            <ImageIcon className="h-3 w-3" />
+            {message.content}
+          </div>
+          <div className="max-w-md">
+            <img
+              src={message.attachments[0].media.url}
+              alt={message.metadata.headline || "News image"}
+              className="rounded-lg w-full shadow-md"
+              style={{ maxHeight: 400 }}
+            />
+            <p className="mt-1.5 text-center text-xs text-muted-foreground">
+              {message.metadata.headline}
+            </p>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="flex justify-center px-4 py-2">
         <div className="flex items-center gap-2 rounded-full bg-muted/50 px-4 py-1.5 text-xs text-muted-foreground">
