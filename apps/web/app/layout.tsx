@@ -7,6 +7,10 @@ const inter = Inter({ subsets: ["latin"] });
 export const metadata: Metadata = {
   title: "PostAutomation - AI-Powered Social Media Scheduling",
   description: "Schedule and automate your social media posts across 15+ platforms with AI-powered content generation.",
+  icons: {
+    icon: "/logo.png",
+    apple: "/logo.png",
+  },
 };
 
 export default function RootLayout({

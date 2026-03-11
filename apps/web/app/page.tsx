@@ -1,4 +1,5 @@
 import Link from "next/link";
+import Image from "next/image";
 
 export default function HomePage() {
   return (
@@ -6,7 +7,10 @@ export default function HomePage() {
       {/* Header */}
       <header className="border-b bg-white/80 backdrop-blur-sm">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
-          <h1 className="text-2xl font-bold text-primary">PostAutomation</h1>
+          <Link href="/" className="flex items-center gap-2">
+            <Image src="/logo.png" alt="PostAutomation" width={36} height={36} className="h-9 w-9" />
+            <h1 className="text-2xl font-bold text-primary">PostAutomation</h1>
+          </Link>
           <div className="flex gap-4">
             <Link
               href="/login"

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import NextImage from "next/image";
 import { usePathname } from "next/navigation";
 import { cn } from "~/lib/utils";
 import { OrgSwitcher } from "~/components/layout/org-switcher";
@@ -75,9 +76,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
       {/* Logo */}
       <div className="flex h-16 items-center justify-between border-b px-6">
         <Link href="/dashboard" className="flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-sm font-bold text-primary-foreground">
-            PA
-          </div>
+          <NextImage src="/logo.png" alt="PostAutomation" width={32} height={32} className="h-8 w-8" />
           <span className="text-lg font-bold">PostAutomation</span>
         </Link>
         {/* Close button — only visible on mobile */}

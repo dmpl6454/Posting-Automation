@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Image from "next/image";
 import Link from "next/link";
 
 export const metadata: Metadata = {
@@ -9,9 +10,13 @@ export const metadata: Metadata = {
 export default function PrivacyPolicyPage() {
   return (
     <div className="mx-auto max-w-3xl px-4 py-12 sm:px-6 lg:px-8">
-      <div className="mb-8">
+      <div className="mb-8 flex items-center justify-between">
         <Link href="/" className="text-sm text-blue-600 hover:underline">
           &larr; Back to Home
+        </Link>
+        <Link href="/" className="flex items-center gap-2">
+          <Image src="/logo.png" alt="PostAutomation" width={32} height={32} className="h-8 w-8" />
+          <span className="font-bold text-primary">PostAutomation</span>
         </Link>
       </div>
 
