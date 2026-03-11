@@ -95,7 +95,7 @@ function getDefaultScopes(platform: string): string[] {
   const scopeMap: Record<string, string[]> = {
     TWITTER: ["tweet.read", "tweet.write", "users.read", "offline.access"],
     LINKEDIN: ["openid", "profile", "w_member_social"],
-    FACEBOOK: ["pages_manage_posts", "pages_read_engagement"],
+    FACEBOOK: ["public_profile", "email", "pages_show_list", "pages_manage_posts", "pages_read_engagement"],
     INSTAGRAM: ["instagram_basic", "instagram_content_publish"],
     REDDIT: ["submit", "identity", "read"],
     YOUTUBE: ["https://www.googleapis.com/auth/youtube.upload"],
