@@ -1,6 +1,6 @@
 "use client";
 
-import { Bot, User, Info } from "lucide-react";
+import { Bot, User, Info, ImageIcon } from "lucide-react";
 import { ContentActionBar } from "./ContentActionBar";
 import { FileAttachmentList } from "./FileAttachment";
 import { cn } from "~/lib/utils";
@@ -35,6 +35,7 @@ export function MessageBubble({ message, onExecuteAction, isExecuting }: Message
   const isSystem = message.role === "system";
   const action = message.metadata?.action || null;
   const isContentDraft = action?.type === "generate_content";
+  const isNewsImage = action?.type === "generate_news_image";
 
   if (isSystem) {
     return (
@@ -107,6 +108,38 @@ export function MessageBubble({ message, onExecuteAction, isExecuting }: Message
             >
               {isExecuting ? "Creating..." : "✓ Create this agent"}
             </button>
+          </div>
+        )}
+
+        {/* News image generation */}
+        {!isUser && isNewsImage && action?.payload && (
+          <div className="mt-3 border-t pt-3 space-y-3">
+            <button
+              onClick={() => onExecuteAction?.(action)}
+              disabled={isExecuting}
+              className="flex items-center gap-2 rounded-lg bg-gradient-to-r from-rose-500 to-orange-500 px-4 py-2 text-sm font-medium text-white transition-all hover:from-rose-600 hover:to-orange-600 disabled:opacity-50"
+            >
+              <ImageIcon className="h-4 w-4" />
+              {isExecuting ? "Generating image..." : "Generate News Image"}
+            </button>
+            {action.payload.content && (
+              <p className="text-xs text-muted-foreground">
+                Platform: {(action.payload.platform as string) || "Not specified"} •
+                Style: {(action.payload.imageStyle as string) === "ai_generated" ? "AI Generated" : "News Card"}
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* Display attached news image (after generation) */}
+        {message.metadata?.type === "news_image_generated" && message.attachments?.[0] && (
+          <div className="mt-3">
+            <img
+              src={message.attachments[0].media.url}
+              alt={message.metadata.headline || "News image"}
+              className="rounded-lg max-w-full"
+              style={{ maxHeight: 400 }}
+            />
           </div>
         )}
       </div>
