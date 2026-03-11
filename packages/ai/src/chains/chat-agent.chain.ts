@@ -12,10 +12,18 @@ export interface ChatMessage {
 export interface ChatContext {
   channels: Array<{ id: string; name: string; platform: string }>;
   agents: Array<{ id: string; name: string; niche: string; isActive: boolean }>;
+  trendingNews?: Array<{
+    title: string;
+    source: string;
+    link: string;
+    summary: string;
+  }>;
+  orgLogo?: string;
+  orgName?: string;
 }
 
 export interface ChatAgentAction {
-  type: "create_agent" | "generate_content" | "schedule_post" | "update_agent";
+  type: "create_agent" | "generate_content" | "schedule_post" | "update_agent" | "generate_news_image";
   payload: Record<string, unknown>;
 }
 
@@ -62,6 +70,25 @@ function buildContextString(context: ChatContext): string {
     context.agents.forEach((a) => {
       parts.push(`  - ${a.name} (${a.niche}, ${a.isActive ? "active" : "paused"}, ID: ${a.id})`);
     });
+  }
+
+  if (context.trendingNews && context.trendingNews.length > 0) {
+    parts.push("\n## Trending News (fetched just now — present these to the user)");
+    context.trendingNews.forEach((article, i) => {
+      parts.push(`  ${i + 1}. "${article.title}" — ${article.source}`);
+      parts.push(`     Link: ${article.link}`);
+      if (article.summary) {
+        parts.push(`     Summary: ${article.summary.slice(0, 200)}`);
+      }
+    });
+    parts.push("\nBased on these headlines, present the top stories and draft a social media post from the most relevant one. Include a generate_news_image action block.");
+  }
+
+  if (context.orgLogo) {
+    parts.push(`\nOrganization logo URL: ${context.orgLogo}`);
+  }
+  if (context.orgName) {
+    parts.push(`Organization name: ${context.orgName}`);
   }
 
   return parts.join("\n");
