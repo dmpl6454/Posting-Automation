@@ -1,6 +1,6 @@
 import { Queue } from "bullmq";
 import { redisConnection } from "./connection";
-import type { PostPublishJobData, TokenRefreshJobData, AnalyticsSyncJobData, MediaProcessJobData, WebhookDeliveryJobData, RssSyncJobData, NotificationSendJobData } from "./types";
+import type { PostPublishJobData, TokenRefreshJobData, AnalyticsSyncJobData, MediaProcessJobData, WebhookDeliveryJobData, RssSyncJobData, NotificationSendJobData, AgentRunJobData } from "./types";
 
 export const QUEUE_NAMES = {
   POST_PUBLISH: "post-publish",
@@ -10,6 +10,7 @@ export const QUEUE_NAMES = {
   WEBHOOK_DELIVERY: "webhook-delivery",
   RSS_SYNC: "rss-sync",
   NOTIFICATION_SEND: "notification-send",
+  AGENT_RUN: "agent-run",
 } as const;
 
 export const postPublishQueue = new Queue<PostPublishJobData>(
@@ -44,5 +45,10 @@ export const rssSyncQueue = new Queue<RssSyncJobData>(
 
 export const notificationSendQueue = new Queue<NotificationSendJobData>(
   QUEUE_NAMES.NOTIFICATION_SEND,
+  { connection: redisConnection }
+);
+
+export const agentRunQueue = new Queue<AgentRunJobData>(
+  QUEUE_NAMES.AGENT_RUN,
   { connection: redisConnection }
 );

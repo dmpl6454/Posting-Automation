@@ -44,3 +44,8 @@ export interface NotificationSendJobData {
   organizationId: string;
   type: string;
 }
+
+export interface AgentRunJobData {
+  agentId: string;
+  organizationId: string;
+}

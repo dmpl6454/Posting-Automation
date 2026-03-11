@@ -21,6 +21,7 @@ import { shortlinkRouter } from "./routers/shortlink.router";
 import { repurposeRouter } from "./routers/repurpose.router";
 import { bulkRouter } from "./routers/bulk.router";
 import { orgRouter } from "./routers/org.router";
+import { agentRouter } from "./routers/agent.router";
 
 export const appRouter = createRouter({
   user: userRouter,
@@ -45,6 +46,7 @@ export const appRouter = createRouter({
   repurpose: repurposeRouter,
   bulk: bulkRouter,
   org: orgRouter,
+  agent: agentRouter,
 });
 
 export type AppRouter = typeof appRouter;

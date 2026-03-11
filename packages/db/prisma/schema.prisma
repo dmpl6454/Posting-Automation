@@ -105,6 +105,7 @@ model Organization {
   webhooks  Webhook[]
   apiKeys   ApiKey[]
   auditLogs AuditLog[]
+  agents    Agent[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -525,6 +526,62 @@ model ShortLinkClick {
   createdAt DateTime @default(now())
 
   @@index([shortLinkId, createdAt])
+}
+
+// ==================== AI AGENTS ====================
+
+model Agent {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String   @default("My AI Agent")
+  isActive       Boolean  @default(true)
+
+  // AI Config
+  aiProvider     String   @default("anthropic")
+  niche          String   @default("")
+  topics         String[]
+  tone           String   @default("professional")
+  language       String   @default("english")
+  customPrompt   String?  @db.Text
+
+  // Schedule Config
+  frequency      String   @default("daily")
+  postsPerDay    Int      @default(1)
+  cronExpression String   @default("0 9 * * *")
+
+  // Target Channels
+  channelIds     String[]
+
+  // Tracking
+  lastRunAt      DateTime?
+  totalPosts     Int      @default(0)
+  topicIndex     Int      @default(0)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  runs         AgentRun[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([isActive])
+}
+
+model AgentRun {
+  id           String    @id @default(cuid())
+  agentId      String
+  status       String    @default("RUNNING")
+  postsCreated Int       @default(0)
+  topicUsed    String?
+  contentPreview String? @db.Text
+  error        String?   @db.Text
+  startedAt    DateTime  @default(now())
+  completedAt  DateTime?
+
+  agent Agent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([agentId])
+  @@index([startedAt])
 }
 
 // ==================== ONBOARDING ====================
