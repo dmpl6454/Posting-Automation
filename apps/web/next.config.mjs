@@ -6,8 +6,9 @@ const nextConfig = {
     "@postautomation/auth",
   ],
   experimental: {
-    serverComponentsExternalPackages: ["@prisma/client", "prisma"],
+    serverComponentsExternalPackages: ["@prisma/client", "prisma", "puppeteer", "puppeteer-core"],
   },
+  serverExternalPackages: ["puppeteer", "puppeteer-core"],
   // Security headers
   async headers() {
     return [
