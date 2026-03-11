@@ -12,11 +12,15 @@ interface ChatMessageData {
   createdAt?: string | Date;
 }
 
+// Action types that should be auto-executed without user clicking a button
+const AUTO_EXECUTE_ACTIONS = new Set(["publish_now"]);
+
 export function useChatStream(threadId: string | null) {
   const [messages, setMessages] = useState<ChatMessageData[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
   const abortRef = useRef<AbortController | null>(null);
+  const executeActionRef = useRef<(action: any) => Promise<any>>();
 
   const utils = trpc.useUtils();
 
@@ -124,6 +128,12 @@ export function useChatStream(threadId: string | null) {
                 };
                 setMessages((prev) => [...prev, assistantMsg]);
                 setStreamingContent("");
+
+                // Auto-execute certain actions (like publish_now) without
+                // requiring the user to click a button
+                if (event.action && AUTO_EXECUTE_ACTIONS.has(event.action.type)) {
+                  executeActionRef.current?.(event.action);
+                }
               } else if (event.type === "error") {
                 const errorMsg: ChatMessageData = {
                   id: `error-${Date.now()}`,
@@ -187,6 +197,9 @@ export function useChatStream(threadId: string | null) {
     },
     [threadId, executeActionMutation, utils]
   );
+
+  // Keep ref in sync so the streaming callback can auto-execute actions
+  executeActionRef.current = executeAction;
 
   const stopStreaming = useCallback(() => {
     abortRef.current?.abort();
