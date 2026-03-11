@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.0",
+    "@postautomation/ai": "workspace:*",
     "@postautomation/api": "workspace:*",
     "@postautomation/auth": "workspace:*",
     "@postautomation/billing": "workspace:*",

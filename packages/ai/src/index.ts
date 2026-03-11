@@ -3,6 +3,8 @@ export { suggestHashtags } from "./chains/hashtag-suggestion.chain";
 export { optimizeContent } from "./chains/schedule-optimization.chain";
 export { repurposeContent } from "./chains/content-repurpose.chain";
 export type { RepurposeParams } from "./chains/content-repurpose.chain";
+export { streamChatAgent, chatAgent, parseActions, cleanResponseText } from "./chains/chat-agent.chain";
+export type { ChatMessage as AIChatMessage, ChatContext, ChatAgentAction } from "./chains/chat-agent.chain";
 export { getModel } from "./providers/provider.factory";
 export type { AIProvider, AIImageProvider, ContentGenerationParams, HashtagParams, OptimizeParams, ImageGenerationParams, ImageEditParams } from "./types";
 export { generateImage, editImage, NANO_BANANA_ASPECT_RATIOS, NANO_BANANA_SIZES, NANO_BANANA_MODELS } from "./providers/nano-banana.provider";

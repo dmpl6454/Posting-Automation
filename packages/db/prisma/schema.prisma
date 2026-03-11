@@ -105,7 +105,8 @@ model Organization {
   webhooks  Webhook[]
   apiKeys   ApiKey[]
   auditLogs AuditLog[]
-  agents    Agent[]
+  agents      Agent[]
+  chatThreads ChatThread[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -264,8 +265,9 @@ model Media {
   height       Int?
   duration     Int?
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  postMedia    PostMedia[]
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  postMedia       PostMedia[]
+  chatAttachments ChatAttachment[]
 
   createdAt DateTime @default(now())
 
@@ -559,6 +561,7 @@ model Agent {
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   runs         AgentRun[]
+  chatThreads  ChatThread[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -582,6 +585,52 @@ model AgentRun {
 
   @@index([agentId])
   @@index([startedAt])
+}
+
+// ==================== CHAT ====================
+
+model ChatThread {
+  id             String  @id @default(cuid())
+  organizationId String
+  agentId        String?
+  title          String?
+  createdById    String
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agent        Agent?        @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  messages     ChatMessage[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId, updatedAt])
+  @@index([agentId])
+}
+
+model ChatMessage {
+  id       String @id @default(cuid())
+  threadId String
+  role     String // "user" | "assistant" | "system"
+  content  String @db.Text
+  metadata Json?
+
+  attachments ChatAttachment[]
+  thread      ChatThread       @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([threadId, createdAt])
+}
+
+model ChatAttachment {
+  id        String @id @default(cuid())
+  messageId String
+  mediaId   String
+
+  message ChatMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  media   Media       @relation(fields: [mediaId], references: [id])
+
+  @@index([messageId])
 }
 
 // ==================== ONBOARDING ====================
