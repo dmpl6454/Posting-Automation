@@ -33,7 +33,7 @@ export function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    // Apply to all routes except static files and API
-    "/((?!_next/static|_next/image|favicon.ico).*)",
+    // Apply to all routes except static files, auth API, and favicon
+    "/((?!_next/static|_next/image|favicon.ico|api/auth).*)",
   ],
 };
