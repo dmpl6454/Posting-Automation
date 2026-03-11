@@ -1,6 +1,6 @@
 import { auth } from "~/lib/auth";
 import { prisma } from "@postautomation/db";
-import { streamChatAgent, parseActions, cleanResponseText } from "@postautomation/ai";
+import { streamChatAgent, parseActions, cleanResponseText, fetchTrendingNews, detectTrendingIntent } from "@postautomation/ai";
 import type { AIChatMessage, AIProvider } from "@postautomation/ai";
 
 export const dynamic = "force-dynamic";
@@ -72,6 +72,34 @@ export async function POST(req: Request) {
     }),
   ]);
 
+  // Load org info for branding
+  const org = await prisma.organization.findUnique({
+    where: { id: membership.organizationId },
+    select: { name: true, logo: true },
+  });
+
+  // Detect trending news intent from the last user message
+  const lastUserMessage = messages.filter((m) => m.role === "user").pop();
+  let trendingNews: Array<{ title: string; source: string; link: string; summary: string }> | undefined;
+
+  if (lastUserMessage) {
+    const trendingIntent = detectTrendingIntent(lastUserMessage.content);
+    if (trendingIntent) {
+      try {
+        const topic = typeof trendingIntent === "string" ? trendingIntent : undefined;
+        const headlines = await fetchTrendingNews(topic, 10);
+        trendingNews = headlines.map((h) => ({
+          title: h.title,
+          source: h.source,
+          link: h.link,
+          summary: h.summary,
+        }));
+      } catch (error) {
+        console.error("[Chat] Failed to fetch trending news:", error);
+      }
+    }
+  }
+
   const provider: AIProvider =
     body.provider || (thread.agent?.aiProvider as AIProvider) || "anthropic";
 
@@ -91,6 +119,9 @@ export async function POST(req: Request) {
           platform: ch.platform,
         })),
         agents,
+        trendingNews,
+        orgLogo: org?.logo || undefined,
+        orgName: org?.name || undefined,
       })) {
         fullResponse += chunk;
         const data = `data: ${JSON.stringify({ type: "chunk", content: chunk })}\n\n`;
