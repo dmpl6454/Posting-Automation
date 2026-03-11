@@ -11,3 +11,11 @@ export { generateImage, editImage, NANO_BANANA_ASPECT_RATIOS, NANO_BANANA_SIZES,
 export type { NanoBananaGenerateParams, NanoBananaEditParams, NanoBananaResult } from "./providers/nano-banana.provider";
 export { generateImageDallE, editImageDallE, DALLE_SIZES, DALLE_QUALITIES } from "./providers/dalle.provider";
 export type { DallEGenerateParams, DallEResult } from "./providers/dalle.provider";
+export { fetchTrendingNews, detectTrendingIntent } from "./tools/trending-news";
+export type { TrendingHeadline } from "./tools/trending-news";
+export { generateNewsCardImage, generateNewsAiImage, generateNewsImage } from "./tools/news-image-generator";
+export type { NewsImageResult } from "./tools/news-image-generator";
+export { generateNewsCardHtml } from "./tools/news-card-template";
+export type { NewsCardOptions } from "./tools/news-card-template";
+export { parseRssItems } from "./utils/rss-parser";
+export type { RssItem } from "./utils/rss-parser";
