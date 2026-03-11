@@ -13,13 +13,13 @@ export async function GET(
 
   if (error) {
     return NextResponse.redirect(
-      `${process.env.APP_URL}/channels?error=${encodeURIComponent(error)}`
+      `${process.env.APP_URL}/dashboard/channels?error=${encodeURIComponent(error)}`
     );
   }
 
   if (!code || !state) {
     return NextResponse.redirect(
-      `${process.env.APP_URL}/channels?error=missing_params`
+      `${process.env.APP_URL}/dashboard/channels?error=missing_params`
     );
   }
 
@@ -92,12 +92,12 @@ export async function GET(
     });
 
     return NextResponse.redirect(
-      `${process.env.APP_URL}/channels?success=connected&platform=${params.provider}`
+      `${process.env.APP_URL}/dashboard/channels?success=connected&platform=${params.provider}`
     );
   } catch (err: any) {
     console.error(`OAuth callback error for ${params.provider}:`, err);
     return NextResponse.redirect(
-      `${process.env.APP_URL}/channels?error=${encodeURIComponent(err.message)}`
+      `${process.env.APP_URL}/dashboard/channels?error=${encodeURIComponent(err.message)}`
     );
   }
 }
