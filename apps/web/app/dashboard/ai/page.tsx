@@ -36,8 +36,8 @@ export default function AIStudioPage() {
       setResult(data.content);
       toast({ title: "Content generated!", description: "Your AI content is ready." });
     },
-    onError: () => {
-      toast({ title: "Generation failed", description: "Please check your AI provider keys.", variant: "destructive" });
+    onError: (err) => {
+      toast({ title: "Generation failed", description: err.message || "Please check your AI provider keys.", variant: "destructive" });
     },
   });
 
