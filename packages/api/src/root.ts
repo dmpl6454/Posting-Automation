@@ -20,6 +20,7 @@ import { rssRouter } from "./routers/rss.router";
 import { shortlinkRouter } from "./routers/shortlink.router";
 import { repurposeRouter } from "./routers/repurpose.router";
 import { bulkRouter } from "./routers/bulk.router";
+import { orgRouter } from "./routers/org.router";
 
 export const appRouter = createRouter({
   user: userRouter,
@@ -43,6 +44,7 @@ export const appRouter = createRouter({
   shortlink: shortlinkRouter,
   repurpose: repurposeRouter,
   bulk: bulkRouter,
+  org: orgRouter,
 });
 
 export type AppRouter = typeof appRouter;

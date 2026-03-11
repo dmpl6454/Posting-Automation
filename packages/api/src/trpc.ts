@@ -52,19 +52,45 @@ export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
   });
 });
 
-// Require org membership
+// Require org membership — auto-resolves or creates a default org
 export const orgProcedure = protectedProcedure.use(async ({ ctx, next }) => {
-  if (!ctx.organizationId) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: "Organization ID required",
+  const userId = (ctx.session.user as any).id;
+  let organizationId = ctx.organizationId;
+
+  // If no org ID provided, find the user's first org or create one
+  if (!organizationId) {
+    const existingMembership = await ctx.prisma.organizationMember.findFirst({
+      where: { userId },
+      select: { organizationId: true },
     });
+
+    if (existingMembership) {
+      organizationId = existingMembership.organizationId;
+    } else {
+      // Auto-create a default organization for the user
+      const userEmail = (ctx.session.user as any).email || "user";
+      const orgName = `${userEmail.split("@")[0]}'s Workspace`;
+      const org = await ctx.prisma.organization.create({
+        data: {
+          name: orgName,
+          slug: `org-${userId.slice(0, 8)}-${Date.now()}`,
+          members: {
+            create: {
+              userId,
+              role: "OWNER",
+            },
+          },
+        },
+      });
+      organizationId = org.id;
+    }
   }
+
   const membership = await ctx.prisma.organizationMember.findUnique({
     where: {
       userId_organizationId: {
-        userId: (ctx.session.user as any).id,
-        organizationId: ctx.organizationId,
+        userId,
+        organizationId,
       },
     },
   });
@@ -74,7 +100,7 @@ export const orgProcedure = protectedProcedure.use(async ({ ctx, next }) => {
   return next({
     ctx: {
       ...ctx,
-      organizationId: ctx.organizationId,
+      organizationId,
       membership,
     },
   });
