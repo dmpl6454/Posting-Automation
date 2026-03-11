@@ -20,7 +20,7 @@ import { Sparkles, Copy, Check, Loader2, ArrowRight, Wand2 } from "lucide-react"
 
 const platforms = ["TWITTER", "LINKEDIN", "INSTAGRAM", "FACEBOOK", "REDDIT", "YOUTUBE"] as const;
 const tones = ["professional", "casual", "humorous", "formal", "inspiring"] as const;
-const providers = ["openai", "anthropic"] as const;
+const providers = ["openai", "anthropic", "gemini"] as const;
 
 export default function AIStudioPage() {
   const { toast } = useToast();
@@ -114,6 +114,7 @@ export default function AIStudioPage() {
                 <SelectContent>
                   <SelectItem value="openai">OpenAI (GPT-4)</SelectItem>
                   <SelectItem value="anthropic">Anthropic (Claude)</SelectItem>
+                  <SelectItem value="gemini">Google (Gemini)</SelectItem>
                 </SelectContent>
               </Select>
             </div>

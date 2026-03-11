@@ -41,7 +41,7 @@ const ALL_PLATFORMS = [
   "DEVTO",
 ] as const;
 
-const providers = ["openai", "anthropic"] as const;
+const providers = ["openai", "anthropic", "gemini"] as const;
 
 export default function RepurposePage() {
   const { toast } = useToast();
@@ -165,6 +165,7 @@ export default function RepurposePage() {
               <SelectContent>
                 <SelectItem value="openai">OpenAI (GPT-4)</SelectItem>
                 <SelectItem value="anthropic">Anthropic (Claude)</SelectItem>
+                <SelectItem value="gemini">Google (Gemini)</SelectItem>
               </SelectContent>
             </Select>
           </div>

@@ -1,6 +1,7 @@
 import { ChatPromptTemplate } from "@langchain/core/prompts";
 import { StringOutputParser } from "@langchain/core/output_parsers";
-import { getModel } from "../providers/provider.factory";
+import { getModel, isLangChainProvider } from "../providers/provider.factory";
+import { callGemini } from "../providers/gemini.provider";
 import { PLATFORM_CHAR_LIMITS, PLATFORM_TONES } from "../prompts/platform-specific.prompts";
 import type { AIProvider } from "../types";
 
@@ -47,9 +48,6 @@ export async function repurposeContent(
 ): Promise<Record<string, string>> {
   const { originalContent, targetPlatforms, provider } = params;
 
-  const model = getModel(provider);
-  const chain = repurposePrompt.pipe(model).pipe(new StringOutputParser());
-
   // Build platform details string
   const platformDetails = targetPlatforms
     .map((platform) => {
@@ -59,15 +57,47 @@ export async function repurposeContent(
     })
     .join("\n");
 
-  const response = await chain.invoke({
-    platforms: targetPlatforms.join(", "),
-    platformDetails,
-    originalContent: originalContent.slice(0, 8000), // Limit input size
-  });
+  let response: string;
+
+  if (isLangChainProvider(provider)) {
+    const model = getModel(provider);
+    const chain = repurposePrompt.pipe(model).pipe(new StringOutputParser());
+    response = await chain.invoke({
+      platforms: targetPlatforms.join(", "),
+      platformDetails,
+      originalContent: originalContent.slice(0, 8000),
+    });
+  } else {
+    const prompt = `You are an expert social media content strategist. Your job is to repurpose long-form content into platform-specific social media posts.
+
+For each target platform, create a post that:
+- Respects the platform's character limit
+- Uses the appropriate tone and style for that platform
+- Captures the key message from the original content
+- Is optimized for engagement on that specific platform
+- Includes relevant hashtags if appropriate for the platform
+
+You MUST respond in the following JSON format exactly:
+{
+  "PLATFORM_NAME": "generated content for that platform",
+  "ANOTHER_PLATFORM": "generated content for that platform"
+}
+
+Return ONLY the JSON object, no additional text or markdown formatting.
+
+Repurpose the following content for these platforms: ${targetPlatforms.join(", ")}
+
+Platform details:
+${platformDetails}
+
+Original content:
+${originalContent.slice(0, 8000)}`;
+
+    response = await callGemini(prompt);
+  }
 
   // Parse the JSON response
   try {
-    // Strip markdown code fences if present
     const cleaned = response
       .replace(/```json\s*/g, "")
       .replace(/```\s*/g, "")
@@ -75,7 +105,6 @@ export async function repurposeContent(
     const parsed = JSON.parse(cleaned) as Record<string, string>;
     return parsed;
   } catch {
-    // If JSON parsing fails, try to extract content for each platform
     const result: Record<string, string> = {};
     for (const platform of targetPlatforms) {
       const regex = new RegExp(

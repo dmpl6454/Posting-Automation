@@ -1,16 +1,28 @@
 import { StringOutputParser } from "@langchain/core/output_parsers";
-import { getModel } from "../providers/provider.factory";
+import { getModel, isLangChainProvider } from "../providers/provider.factory";
+import { callGemini } from "../providers/gemini.provider";
 import { hashtagSuggestionPrompt } from "../prompts/content.prompts";
 import type { HashtagParams } from "../types";
 
 export async function suggestHashtags(params: HashtagParams): Promise<string[]> {
-  const model = getModel(params.provider || "openai");
-  const chain = hashtagSuggestionPrompt.pipe(model).pipe(new StringOutputParser());
+  const provider = params.provider || "openai";
+  let result: string;
 
-  const result = await chain.invoke({
-    content: params.content,
-    platform: params.platform,
-  });
+  if (isLangChainProvider(provider)) {
+    const model = getModel(provider);
+    const chain = hashtagSuggestionPrompt.pipe(model).pipe(new StringOutputParser());
+    result = await chain.invoke({
+      content: params.content,
+      platform: params.platform,
+    });
+  } else {
+    const prompt = `You are a social media hashtag expert. Suggest relevant hashtags for the given content on ${params.platform}.
+Return only the hashtags separated by spaces, no explanations. Include a mix of popular and niche hashtags.
+Return 5-10 hashtags.
+
+Content: ${params.content}`;
+    result = await callGemini(prompt);
+  }
 
   return result
     .split(/\s+/)
