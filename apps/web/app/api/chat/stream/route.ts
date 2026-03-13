@@ -86,8 +86,7 @@ export async function POST(req: Request) {
     const trendingIntent = detectTrendingIntent(lastUserMessage.content);
     if (trendingIntent) {
       try {
-        const topic = typeof trendingIntent === "string" ? trendingIntent : undefined;
-        const headlines = await fetchTrendingNews(topic, 10);
+        const headlines = await fetchTrendingNews(trendingIntent.topic, 10, trendingIntent.region);
         trendingNews = headlines.map((h) => ({
           title: h.title,
           source: h.source,
