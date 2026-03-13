@@ -121,7 +121,7 @@ export const postRouter = createRouter({
               platform: target.channel.platform,
               organizationId: ctx.organizationId,
             },
-            { delay: Math.max(delay, 0) }
+            { delay: Math.max(delay, 0), attempts: 3, backoff: { type: "exponential", delay: 30000 } }
           );
         }
       }
@@ -234,7 +234,7 @@ export const postRouter = createRouter({
             platform: target.channel.platform,
             organizationId: ctx.organizationId,
           },
-          { delay: 0 }
+          { delay: 0, attempts: 3, backoff: { type: "exponential", delay: 30000 } }
         );
       }
 

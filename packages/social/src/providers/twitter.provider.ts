@@ -182,12 +182,12 @@ export class TwitterProvider extends SocialProvider {
     const mediaBuffer = Buffer.from(await mediaRes.arrayBuffer());
     const mediaType = mediaRes.headers.get("content-type") || "image/jpeg";
 
-    // Upload to Twitter media endpoint (v1.1 — still required for media uploads)
+    // Upload to Twitter v2 media endpoint (supports OAuth 2.0 Bearer tokens)
     const formData = new FormData();
     formData.append("media_data", mediaBuffer.toString("base64"));
     formData.append("media_category", mediaType.startsWith("video") ? "tweet_video" : "tweet_image");
 
-    const res = await fetch("https://upload.twitter.com/1.1/media/upload.json", {
+    const res = await fetch("https://api.twitter.com/2/media/upload", {
       method: "POST",
       headers: { Authorization: `Bearer ${tokens.accessToken}` },
       body: formData,
@@ -195,6 +195,6 @@ export class TwitterProvider extends SocialProvider {
 
     const data: any = await res.json();
     if (!res.ok) throw new Error(`Twitter media upload failed: ${JSON.stringify(data)}`);
-    return data.media_id_string;
+    return data.media_id_string || data.id;
   }
 }

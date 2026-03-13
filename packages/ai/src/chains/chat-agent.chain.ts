@@ -109,18 +109,20 @@ export async function* streamChatAgent(
   if (isLangChainProvider(provider)) {
     const model = getModel(provider, 0.7);
 
-    // Filter out system messages from history — the API only allows the
-    // system message as the very first message. DB system messages (e.g.
-    // "news image generated", action confirmations) are informational
-    // and should be presented as assistant context instead.
+    // The LLM API only allows a single system message as the very first
+    // message. DB-stored system messages (e.g. "news image generated",
+    // action confirmations) are informational — re-present them as
+    // AIMessages so the model retains context about performed actions
+    // without violating the API constraint.
     const langchainMessages = [
       new SystemMessage(systemPrompt),
-      ...messages
-        .filter((m) => m.role !== "system")
-        .map((m) => {
-          if (m.role === "user") return new HumanMessage(m.content);
-          return new AIMessage(m.content);
-        }),
+      ...messages.map((m) => {
+        if (m.role === "user") return new HumanMessage(m.content);
+        // Treat both "assistant" and "system" DB messages as AI messages
+        // so system notes (action confirmations, etc.) stay in context
+        // but never appear as a second SystemMessage.
+        return new AIMessage(m.content);
+      }),
     ];
 
     const stream = await model.stream(langchainMessages);
@@ -130,8 +132,14 @@ export async function* streamChatAgent(
     }
   } else {
     // Gemini: non-streaming fallback (generate full response)
+    // Map system messages to "System note" so the model knows they are
+    // not part of the user/assistant conversation but still has context.
     const formattedMessages = messages
-      .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`)
+      .map((m) => {
+        if (m.role === "user") return `User: ${m.content}`;
+        if (m.role === "system") return `System note: ${m.content}`;
+        return `Assistant: ${m.content}`;
+      })
       .join("\n\n");
 
     const fullPrompt = `${systemPrompt}\n\n${formattedMessages}\n\nAssistant:`;
