@@ -12,6 +12,7 @@
     "clean": "rm -rf .next node_modules .turbo"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1008.0",
     "@hookform/resolvers": "^3.9.0",
     "@postautomation/ai": "workspace:*",
     "@postautomation/api": "workspace:*",
