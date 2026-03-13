@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { trpc } from "~/lib/trpc/client";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "~/components/ui/card";
@@ -14,7 +14,15 @@ import { useToast } from "~/hooks/use-toast";
 import { Sparkles, Send, Clock, Loader2, Save, AlertCircle, CheckCircle2, Eye, ImagePlus, ChevronDown, ChevronUp, X } from "lucide-react";
 import { PostPreviewSwitcher } from "~/components/previews";
 
-export default function NewPostPage() {
+export default function NewPostPageWrapper() {
+  return (
+    <Suspense fallback={null}>
+      <NewPostPage />
+    </Suspense>
+  );
+}
+
+function NewPostPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { toast } = useToast();
