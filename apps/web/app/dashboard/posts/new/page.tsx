@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { trpc } from "~/lib/trpc/client";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
@@ -16,6 +16,7 @@ import { PostPreviewSwitcher } from "~/components/previews";
 
 export default function NewPostPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { toast } = useToast();
   const [content, setContent] = useState("");
   const [selectedChannels, setSelectedChannels] = useState<string[]>([]);
@@ -25,6 +26,18 @@ export default function NewPostPage() {
   const [aiImagePrompt, setAiImagePrompt] = useState("");
   const [aiGeneratedImage, setAiGeneratedImage] = useState<string | null>(null);
   const [postMedia, setPostMedia] = useState<string[]>([]);
+
+  // Pre-fill content and image from query params (e.g. from AI page or Image Studio)
+  useEffect(() => {
+    const contentParam = searchParams.get("content");
+    if (contentParam) {
+      setContent(contentParam);
+    }
+    const aiImageParam = searchParams.get("aiImage");
+    if (aiImageParam) {
+      setPostMedia((prev) => prev.length === 0 ? [aiImageParam] : prev);
+    }
+  }, [searchParams]);
 
   const { data: channels, isLoading: channelsLoading } = trpc.channel.list.useQuery();
   const createPost = trpc.post.create.useMutation({

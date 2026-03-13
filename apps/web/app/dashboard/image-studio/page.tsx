@@ -276,8 +276,28 @@ export default function ImageStudioPage() {
     });
   };
 
-  const handleUseInPost = () => {
-    router.push(`/dashboard/posts/new?aiImage=${encodeURIComponent(resultImage || "")}`);
+  const handleUseInPost = async () => {
+    if (!resultImage) return;
+    // Save to media library first to get a URL (base64 is too large for query params)
+    let imageBase64 = resultImage;
+    let mimeType = "image/png";
+    if (resultImage.startsWith("data:")) {
+      const match = resultImage.match(/^data:([^;]+);base64,(.+)$/);
+      if (match) {
+        mimeType = match[1] ?? "image/png";
+        imageBase64 = match[2] ?? "";
+      }
+    }
+    try {
+      const saved = await saveMutation.mutateAsync({
+        imageBase64,
+        mimeType,
+        fileName: `ai-image-${Date.now()}.png`,
+      });
+      router.push(`/dashboard/posts/new?aiImage=${encodeURIComponent(saved.url)}`);
+    } catch {
+      toast({ title: "Could not save image", description: "Please try again.", variant: "destructive" });
+    }
   };
 
   const handleEditThisImage = () => {
