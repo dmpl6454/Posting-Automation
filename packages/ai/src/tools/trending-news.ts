@@ -44,7 +44,7 @@ const REGIONS: Record<string, RegionConfig> = {
 };
 
 // Default to India since that's the primary user base
-const DEFAULT_REGION: RegionConfig = REGIONS.india;
+const DEFAULT_REGION: RegionConfig = { hl: "en-IN", gl: "IN", ceid: "IN:en" };
 
 function extractSource(title: string): { headline: string; source: string } {
   const lastDash = title.lastIndexOf(" - ");
@@ -59,9 +59,9 @@ function extractSource(title: string): { headline: string; source: string } {
 
 function detectRegion(message: string): RegionConfig {
   const lower = message.toLowerCase();
-  if (/\b(india|indian|hindi|bharati?|desi)\b/.test(lower)) return REGIONS.india;
-  if (/\b(us|usa|america|american|united states)\b/.test(lower)) return REGIONS.us;
-  if (/\b(uk|britain|british|england)\b/.test(lower)) return REGIONS.uk;
+  if (/\b(india|indian|hindi|bharati?|desi)\b/.test(lower)) return { hl: "en-IN", gl: "IN", ceid: "IN:en" };
+  if (/\b(us|usa|america|american|united states)\b/.test(lower)) return { hl: "en-US", gl: "US", ceid: "US:en" };
+  if (/\b(uk|britain|british|england)\b/.test(lower)) return { hl: "en-GB", gl: "GB", ceid: "GB:en" };
   return DEFAULT_REGION;
 }
 
@@ -82,10 +82,12 @@ export async function fetchTrendingNews(
     const isIndia = r.gl === "IN";
     const topicFeeds = isIndia ? INDIA_TOPIC_FEEDS : TOPIC_FEEDS;
 
-    if (topicFeeds[normalizedTopic]) {
-      feedUrl = topicFeeds[normalizedTopic]!;
-    } else if (TOPIC_FEEDS[normalizedTopic]) {
-      feedUrl = TOPIC_FEEDS[normalizedTopic]!;
+    const regionFeed = topicFeeds[normalizedTopic];
+    const globalFeed = TOPIC_FEEDS[normalizedTopic];
+    if (regionFeed) {
+      feedUrl = regionFeed;
+    } else if (globalFeed) {
+      feedUrl = globalFeed;
     } else {
       feedUrl = `${GOOGLE_NEWS_SEARCH}?q=${encodeURIComponent(topic)}&hl=${r.hl}&gl=${r.gl}&ceid=${r.ceid}`;
     }
