@@ -29,6 +29,11 @@ export const imageRouter = createRouter({
         aspectRatio: z.string().optional().default("1:1"),
         imageSize: z.string().optional().default("1K"),
         model: z.enum(["gemini-3.1-flash-image-preview", "gemini-3-pro-image-preview", "gemini-2.5-flash-image"]).optional(),
+        // Reference images (design references, logos, etc.)
+        referenceImages: z.array(z.object({
+          base64: z.string(),
+          mimeType: z.string().optional(),
+        })).optional(),
         // DALL-E options
         size: z.enum(["1024x1024", "1024x1792", "1792x1024"]).optional(),
         quality: z.enum(["standard", "hd"]).optional(),
@@ -62,6 +67,7 @@ export const imageRouter = createRouter({
           aspectRatio: input.aspectRatio,
           imageSize: input.imageSize,
           model,
+          referenceImages: input.referenceImages,
         });
 
         return {

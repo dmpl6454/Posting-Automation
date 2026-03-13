@@ -11,6 +11,7 @@ interface NanoBananaGenerateParams {
   aspectRatio?: string; // "1:1" | "16:9" | "9:16" | "4:3" | "3:4" | etc.
   imageSize?: string;   // "512" | "1K" | "2K" | "4K"
   model?: string;       // defaults to gemini-3.1-flash-image-preview
+  referenceImages?: Array<{ base64: string; mimeType?: string }>; // reference/logo images
 }
 
 interface NanoBananaEditParams {
@@ -43,10 +44,21 @@ export async function generateImage(params: NanoBananaGenerateParams): Promise<N
 
   const url = `${GEMINI_API_BASE}/models/${model}:generateContent`;
 
+  // Build parts: text prompt + any reference images (design references, logos, etc.)
+  const parts: any[] = [{ text: params.prompt }];
+  if (params.referenceImages && params.referenceImages.length > 0) {
+    for (const ref of params.referenceImages) {
+      parts.push({
+        inline_data: {
+          mime_type: ref.mimeType || "image/jpeg",
+          data: ref.base64,
+        },
+      });
+    }
+  }
+
   const body = {
-    contents: [{
-      parts: [{ text: params.prompt }]
-    }],
+    contents: [{ parts }],
     generationConfig: {
       responseModalities: ["TEXT", "IMAGE"],
       imageConfig: {

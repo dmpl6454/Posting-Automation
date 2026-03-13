@@ -94,6 +94,12 @@ export default function ImageStudioPage() {
   const [model, setModel] = useState(MODELS[0]?.value ?? "gemini-3.1-flash-image-preview");
   const [aspectRatio, setAspectRatio] = useState("1:1");
   const [imageSize, setImageSize] = useState("1K");
+  const [referenceImage, setReferenceImage] = useState<string | null>(null);
+  const [referenceFileName, setReferenceFileName] = useState("");
+  const [logoImage, setLogoImage] = useState<string | null>(null);
+  const [logoFileName, setLogoFileName] = useState("");
+  const referenceInputRef = useRef<HTMLInputElement>(null);
+  const logoInputRef = useRef<HTMLInputElement>(null);
 
   // -- Edit Mode State --
   const [editPrompt, setEditPrompt] = useState("");
@@ -176,12 +182,59 @@ export default function ImageStudioPage() {
 
   const handleGenerate = () => {
     if (!generatePrompt.trim()) return;
+
+    // Build reference images array from attached reference design and logo
+    const refs: Array<{ base64: string; mimeType?: string }> = [];
+    const extractBase64 = (dataUrl: string) => {
+      const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+      return match ? { base64: match[2]!, mimeType: match[1]! } : null;
+    };
+    if (referenceImage) {
+      const ref = extractBase64(referenceImage);
+      if (ref) refs.push(ref);
+    }
+    if (logoImage) {
+      const logo = extractBase64(logoImage);
+      if (logo) refs.push(logo);
+    }
+
+    // Build prompt with context about attached images
+    let fullPrompt = generatePrompt;
+    if (referenceImage && logoImage) {
+      fullPrompt = `${generatePrompt}\n\nI've attached a reference design image and a logo. Please use the reference as style/layout inspiration and incorporate the logo into the generated image.`;
+    } else if (referenceImage) {
+      fullPrompt = `${generatePrompt}\n\nI've attached a reference design image. Please use it as style/layout inspiration for the generated image.`;
+    } else if (logoImage) {
+      fullPrompt = `${generatePrompt}\n\nI've attached a logo image. Please incorporate this logo into the generated image.`;
+    }
+
     generateMutation.mutate({
-      prompt: generatePrompt,
+      prompt: fullPrompt,
       model: model as any,
       aspectRatio,
       imageSize,
+      ...(refs.length > 0 ? { referenceImages: refs } : {}),
     });
+  };
+
+  const handleReferenceSelect = async (file: File) => {
+    if (!file.type.startsWith("image/")) {
+      toast({ title: "Invalid file", description: "Please upload an image file.", variant: "destructive" });
+      return;
+    }
+    const dataUrl = await fileToBase64(file);
+    setReferenceImage(dataUrl);
+    setReferenceFileName(file.name);
+  };
+
+  const handleLogoSelect = async (file: File) => {
+    if (!file.type.startsWith("image/")) {
+      toast({ title: "Invalid file", description: "Please upload an image file.", variant: "destructive" });
+      return;
+    }
+    const dataUrl = await fileToBase64(file);
+    setLogoImage(dataUrl);
+    setLogoFileName(file.name);
   };
 
   const handleEdit = () => {
@@ -457,6 +510,91 @@ export default function ImageStudioPage() {
                         </button>
                       );
                     })}
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Reference Image & Logo */}
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">Attachments</CardTitle>
+                  <CardDescription>Add a reference design or logo (optional)</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-2 gap-3">
+                    {/* Reference Image */}
+                    <div>
+                      <input
+                        ref={referenceInputRef}
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (f) handleReferenceSelect(f);
+                          e.target.value = "";
+                        }}
+                      />
+                      {referenceImage ? (
+                        <div className="relative group rounded-lg border overflow-hidden">
+                          <img src={referenceImage} alt="Reference" className="w-full h-24 object-cover" />
+                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                            <button
+                              onClick={() => { setReferenceImage(null); setReferenceFileName(""); }}
+                              className="rounded-full bg-white/90 p-1.5"
+                            >
+                              <X className="h-3.5 w-3.5 text-black" />
+                            </button>
+                          </div>
+                          <p className="text-[10px] text-muted-foreground truncate px-2 py-1">{referenceFileName}</p>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => referenceInputRef.current?.click()}
+                          className="flex w-full flex-col items-center gap-1.5 rounded-lg border border-dashed p-4 text-xs text-muted-foreground hover:border-primary/50 hover:bg-muted/30 transition-colors"
+                        >
+                          <Upload className="h-5 w-5" />
+                          <span className="font-medium">Reference Design</span>
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Logo */}
+                    <div>
+                      <input
+                        ref={logoInputRef}
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (f) handleLogoSelect(f);
+                          e.target.value = "";
+                        }}
+                      />
+                      {logoImage ? (
+                        <div className="relative group rounded-lg border overflow-hidden">
+                          <img src={logoImage} alt="Logo" className="w-full h-24 object-contain bg-muted/30 p-2" />
+                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                            <button
+                              onClick={() => { setLogoImage(null); setLogoFileName(""); }}
+                              className="rounded-full bg-white/90 p-1.5"
+                            >
+                              <X className="h-3.5 w-3.5 text-black" />
+                            </button>
+                          </div>
+                          <p className="text-[10px] text-muted-foreground truncate px-2 py-1">{logoFileName}</p>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => logoInputRef.current?.click()}
+                          className="flex w-full flex-col items-center gap-1.5 rounded-lg border border-dashed p-4 text-xs text-muted-foreground hover:border-primary/50 hover:bg-muted/30 transition-colors"
+                        >
+                          <ImagePlus className="h-5 w-5" />
+                          <span className="font-medium">Add Logo</span>
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </CardContent>
               </Card>
