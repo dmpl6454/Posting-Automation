@@ -102,7 +102,7 @@ export default function AdminChannelsPage() {
             description={`This will permanently disconnect "${row.name}" and remove it. This cannot be undone.`}
             confirmLabel="Disconnect"
             variant="destructive"
-            onConfirm={() => disconnect.mutateAsync({ channelId: row.id })}
+            onConfirm={async () => { await disconnect.mutateAsync({ channelId: row.id }); }}
           />
         </div>
       ),

@@ -122,7 +122,7 @@ export default function AdminOrgsPage() {
             description={`This will permanently delete "${row.name}" and all associated data. This action cannot be undone.`}
             confirmLabel="Delete"
             variant="destructive"
-            onConfirm={() => deleteOrg.mutateAsync({ organizationId: row.id })}
+            onConfirm={async () => { await deleteOrg.mutateAsync({ organizationId: row.id }); }}
           />
         </div>
       ),

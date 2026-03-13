@@ -98,7 +98,7 @@ export default function AdminMediaPage() {
           description="This will permanently delete this media file from storage and the database. This action cannot be undone."
           confirmLabel="Delete"
           variant="destructive"
-          onConfirm={() => deleteMedia.mutateAsync({ mediaId: row.id })}
+          onConfirm={async () => { await deleteMedia.mutateAsync({ mediaId: row.id }); }}
         />
       ),
     },

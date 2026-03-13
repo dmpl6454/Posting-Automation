@@ -11,7 +11,8 @@ import { useToast } from "~/hooks/use-toast";
 type AgentRow = {
   id: string;
   name: string;
-  type: string;
+  niche: string;
+  aiProvider: string;
   isActive: boolean;
   createdAt: Date;
   organization: { id: string; name: string } | null;
@@ -54,8 +55,8 @@ export default function AdminAgentsPage() {
       ),
     },
     {
-      header: "Type",
-      accessorKey: "type",
+      header: "Niche",
+      accessorKey: "niche",
     },
     {
       header: "Active",
@@ -95,7 +96,7 @@ export default function AdminAgentsPage() {
             description={`This will permanently delete "${row.name}". This action cannot be undone.`}
             confirmLabel="Delete"
             variant="destructive"
-            onConfirm={() => deleteAgent.mutateAsync({ agentId: row.id })}
+            onConfirm={async () => { await deleteAgent.mutateAsync({ agentId: row.id }); }}
           />
         </div>
       ),

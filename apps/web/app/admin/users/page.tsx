@@ -147,7 +147,7 @@ export default function AdminUsersPage() {
             description="This will soft-delete the user and remove all their memberships. This action cannot be undone."
             confirmLabel="Delete"
             variant="destructive"
-            onConfirm={() => deleteUser.mutateAsync({ userId: row.id })}
+            onConfirm={async () => { await deleteUser.mutateAsync({ userId: row.id }); }}
           />
         </div>
       ),
