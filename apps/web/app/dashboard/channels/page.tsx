@@ -6,26 +6,8 @@ import { Button } from "~/components/ui/button";
 import { Badge } from "~/components/ui/badge";
 import { Skeleton } from "~/components/ui/skeleton";
 import { useToast } from "~/hooks/use-toast";
-import { Share2, Plus, Power, Trash2, ExternalLink } from "lucide-react";
-
-const platformColors: Record<string, string> = {
-  TWITTER: "bg-blue-400",
-  LINKEDIN: "bg-blue-700",
-  FACEBOOK: "bg-blue-600",
-  INSTAGRAM: "bg-gradient-to-r from-purple-500 to-pink-500",
-  YOUTUBE: "bg-red-600",
-  TIKTOK: "bg-black",
-  REDDIT: "bg-orange-500",
-  PINTEREST: "bg-red-500",
-  THREADS: "bg-black",
-  TELEGRAM: "bg-blue-500",
-  DISCORD: "bg-indigo-500",
-  SLACK: "bg-purple-600",
-  MASTODON: "bg-indigo-600",
-  BLUESKY: "bg-sky-500",
-  MEDIUM: "bg-black",
-  DEVTO: "bg-black",
-};
+import { Share2, Plus, Power, Trash2 } from "lucide-react";
+import { PlatformIcon } from "~/components/icons/platform-icons";
 
 export default function ChannelsPage() {
   const { toast } = useToast();
@@ -86,13 +68,7 @@ export default function ChannelsPage() {
               <Card key={channel.id} className="overflow-hidden">
                 <CardContent className="p-4">
                   <div className="flex items-center gap-3">
-                    <div
-                      className={`flex h-10 w-10 items-center justify-center rounded-lg text-xs font-bold text-white ${
-                        platformColors[channel.platform] || "bg-gray-400"
-                      }`}
-                    >
-                      {channel.platform.slice(0, 2)}
-                    </div>
+                    <PlatformIcon platform={channel.platform} size="md" />
                     <div className="min-w-0 flex-1">
                       <p className="truncate font-medium">{channel.name}</p>
                       <div className="flex items-center gap-1.5">
@@ -153,13 +129,7 @@ export default function ChannelsPage() {
               onClick={() => handleConnect(p.platform)}
               className="group flex items-center gap-3 rounded-xl border bg-card p-4 text-left shadow-sm transition-all hover:border-primary hover:bg-primary/5"
             >
-              <div
-                className={`flex h-10 w-10 items-center justify-center rounded-lg text-xs font-bold text-white ${
-                  platformColors[p.platform] || "bg-gray-400"
-                }`}
-              >
-                {p.platform.slice(0, 2)}
-              </div>
+              <PlatformIcon platform={p.platform} size="md" />
               <div className="flex-1">
                 <p className="font-medium">{p.displayName}</p>
                 <p className="text-xs text-muted-foreground">
