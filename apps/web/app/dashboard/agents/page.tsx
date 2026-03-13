@@ -1,7 +1,5 @@
-"use client";
+import { redirect } from "next/navigation";
 
-import { ChatLayout } from "~/components/chat/ChatLayout";
-
-export default function AgentsPage() {
-  return <ChatLayout />;
+export default function AgentsRedirect() {
+  redirect("/dashboard/content-agent?tab=chat");
 }

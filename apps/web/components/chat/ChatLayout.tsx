@@ -17,21 +17,21 @@ export function ChatLayout({ initialThreadId = null }: ChatLayoutProps) {
 
   const handleSelectThread = (threadId: string) => {
     setActiveThreadId(threadId);
-    router.push(`/dashboard/agents/${threadId}`, { scroll: false });
+    router.push(`/dashboard/content-agent/${threadId}`, { scroll: false });
   };
 
   const handleNewChat = () => {
     setActiveThreadId(null);
-    router.push("/dashboard/agents", { scroll: false });
+    router.push("/dashboard/content-agent", { scroll: false });
   };
 
   const handleThreadCreated = (threadId: string) => {
     setActiveThreadId(threadId);
-    router.push(`/dashboard/agents/${threadId}`, { scroll: false });
+    router.push(`/dashboard/content-agent/${threadId}`, { scroll: false });
   };
 
   return (
-    <div className="flex h-[calc(100vh-4rem)] overflow-hidden rounded-xl border bg-background shadow-sm">
+    <div className="flex h-full overflow-hidden rounded-xl border bg-background shadow-sm">
       <AgentSidebar
         activeThreadId={activeThreadId}
         onSelectThread={handleSelectThread}

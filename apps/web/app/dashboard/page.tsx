@@ -118,14 +118,14 @@ export default function DashboardPage() {
               </Link>
 
               <Link
-                href="/dashboard/ai"
+                href="/dashboard/content-agent"
                 className="group flex items-center gap-3 rounded-lg border p-4 transition-all hover:border-primary hover:bg-primary/5"
               >
                 <div className="rounded-lg bg-purple-100 p-2.5 text-purple-600 dark:bg-purple-950 dark:text-purple-400">
                   <Sparkles className="h-5 w-5" />
                 </div>
                 <div className="flex-1">
-                  <p className="font-medium">AI Studio</p>
+                  <p className="font-medium">Content Agent</p>
                   <p className="text-xs text-muted-foreground">Generate content with AI</p>
                 </div>
                 <ArrowRight className="h-4 w-4 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
