@@ -6,8 +6,10 @@ import GitHubProvider from "next-auth/providers/github";
 import CredentialsProvider from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
 
+const adapter = PrismaAdapter(prisma);
+
 export const authConfig: NextAuthConfig = {
-  adapter: PrismaAdapter(prisma),
+  adapter,
   providers: [
     GoogleProvider({
       clientId: process.env.AUTH_GOOGLE_ID!,
@@ -24,14 +26,12 @@ export const authConfig: NextAuthConfig = {
         password: { label: "Password", type: "password" },
       },
       async authorize(credentials) {
-        console.log("[admin-auth] authorize called with email:", credentials?.email);
-        if (!credentials?.email || !credentials?.password) {
-          console.log("[admin-auth] missing email or password");
-          return null;
-        }
+        if (!credentials?.email || !credentials?.password) return null;
 
-        const user = await prisma.user.findUnique({
-          where: { email: credentials.email as string },
+        const email = (credentials.email as string).toLowerCase().trim();
+
+        const user = await prisma.user.findFirst({
+          where: { email: { equals: email, mode: "insensitive" } },
           select: {
             id: true,
             email: true,
@@ -44,16 +44,12 @@ export const authConfig: NextAuthConfig = {
           },
         });
 
-        console.log("[admin-auth] user found:", !!user, "has password:", !!user?.password);
-
         if (!user?.password) return null;
 
         const isValid = await bcrypt.compare(
           credentials.password as string,
           user.password
         );
-
-        console.log("[admin-auth] password valid:", isValid);
 
         if (!isValid) return null;
 
@@ -76,7 +72,14 @@ export const authConfig: NextAuthConfig = {
     maxAge: 30 * 24 * 60 * 60, // 30 days
   },
   callbacks: {
-    async jwt({ token, user }) {
+    async signIn({ user, account }) {
+      // For credentials provider, skip adapter session creation
+      if (account?.provider === "credentials") {
+        return true;
+      }
+      return true;
+    },
+    async jwt({ token, user, account }) {
       if (user) {
         token.id = user.id;
         token.isSuperAdmin = (user as any).isSuperAdmin ?? false;
@@ -84,13 +87,15 @@ export const authConfig: NextAuthConfig = {
       }
 
       // Re-check from DB on every token refresh
-      const dbUser = await prisma.user.findUnique({
-        where: { id: token.id as string },
-        select: { isBanned: true, isSuperAdmin: true },
-      });
-      if (dbUser) {
-        token.isSuperAdmin = dbUser.isSuperAdmin;
-        token.isBanned = dbUser.isBanned;
+      if (token.id) {
+        const dbUser = await prisma.user.findUnique({
+          where: { id: token.id as string },
+          select: { isBanned: true, isSuperAdmin: true },
+        });
+        if (dbUser) {
+          token.isSuperAdmin = dbUser.isSuperAdmin;
+          token.isBanned = dbUser.isBanned;
+        }
       }
 
       return token;
