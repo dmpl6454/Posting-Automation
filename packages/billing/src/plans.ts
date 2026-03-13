@@ -15,12 +15,12 @@ export interface PlanConfig {
   features: string[];
 }
 
-export const PLANS: Record<string, PlanConfig> = {
+const PLAN_DATA: Record<string, Omit<PlanConfig, "stripePriceId"> & { envKey: string }> = {
   FREE: {
     name: "Free",
     type: "FREE",
     priceMonthly: 0,
-    stripePriceId: "",
+    envKey: "",
     limits: {
       channels: 3,
       postsPerMonth: 30,
@@ -34,7 +34,7 @@ export const PLANS: Record<string, PlanConfig> = {
     name: "Starter",
     type: "STARTER",
     priceMonthly: 29,
-    stripePriceId: process.env.STRIPE_STARTER_PRICE_ID || "",
+    envKey: "STRIPE_STARTER_PRICE_ID",
     limits: {
       channels: 10,
       postsPerMonth: 500,
@@ -54,7 +54,7 @@ export const PLANS: Record<string, PlanConfig> = {
     name: "Professional",
     type: "PROFESSIONAL",
     priceMonthly: 49,
-    stripePriceId: process.env.STRIPE_PRO_PRICE_ID || "",
+    envKey: "STRIPE_PRO_PRICE_ID",
     limits: {
       channels: 30,
       postsPerMonth: -1, // unlimited
@@ -75,7 +75,7 @@ export const PLANS: Record<string, PlanConfig> = {
     name: "Enterprise",
     type: "ENTERPRISE",
     priceMonthly: 99,
-    stripePriceId: process.env.STRIPE_ENTERPRISE_PRICE_ID || "",
+    envKey: "STRIPE_ENTERPRISE_PRICE_ID",
     limits: {
       channels: 100,
       postsPerMonth: -1,
@@ -92,6 +92,23 @@ export const PLANS: Record<string, PlanConfig> = {
     ],
   },
 };
+
+// Read env vars at runtime (not build time) to work inside Docker
+export const PLANS: Record<string, PlanConfig> = new Proxy({} as Record<string, PlanConfig>, {
+  get(_, key: string) {
+    const data = PLAN_DATA[key];
+    if (!data) return undefined;
+    const { envKey, ...rest } = data;
+    return { ...rest, stripePriceId: envKey ? process.env[envKey] || "" : "" };
+  },
+  ownKeys() {
+    return Object.keys(PLAN_DATA);
+  },
+  getOwnPropertyDescriptor(_, key: string) {
+    if (key in PLAN_DATA) return { configurable: true, enumerable: true, writable: true };
+    return undefined;
+  },
+});
 
 export function getPlanConfig(planType: PlanType): PlanConfig {
   const plan = PLANS[planType];
