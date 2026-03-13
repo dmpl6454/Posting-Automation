@@ -23,6 +23,7 @@ import { bulkRouter } from "./routers/bulk.router";
 import { orgRouter } from "./routers/org.router";
 import { agentRouter } from "./routers/agent.router";
 import { chatRouter } from "./routers/chat.router";
+import { adminRouter } from "./routers/admin";
 
 export const appRouter = createRouter({
   user: userRouter,
@@ -49,6 +50,7 @@ export const appRouter = createRouter({
   org: orgRouter,
   agent: agentRouter,
   chat: chatRouter,
+  admin: adminRouter,
 });
 
 export type AppRouter = typeof appRouter;
