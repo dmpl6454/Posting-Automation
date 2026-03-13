@@ -33,7 +33,7 @@ const PLAN_DATA: Record<string, Omit<PlanConfig, "stripePriceId"> & { envKey: st
   STARTER: {
     name: "Starter",
     type: "STARTER",
-    priceMonthly: 29,
+    priceMonthly: 20,
     envKey: "STRIPE_STARTER_PRICE_ID",
     limits: {
       channels: 10,
@@ -53,7 +53,7 @@ const PLAN_DATA: Record<string, Omit<PlanConfig, "stripePriceId"> & { envKey: st
   PROFESSIONAL: {
     name: "Professional",
     type: "PROFESSIONAL",
-    priceMonthly: 49,
+    priceMonthly: 40,
     envKey: "STRIPE_PRO_PRICE_ID",
     limits: {
       channels: 30,
@@ -74,7 +74,7 @@ const PLAN_DATA: Record<string, Omit<PlanConfig, "stripePriceId"> & { envKey: st
   ENTERPRISE: {
     name: "Enterprise",
     type: "ENTERPRISE",
-    priceMonthly: 99,
+    priceMonthly: 90,
     envKey: "STRIPE_ENTERPRISE_PRICE_ID",
     limits: {
       channels: 100,
