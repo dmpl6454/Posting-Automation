@@ -11,8 +11,8 @@ export function getS3Client(): S3Client {
     endpoint: process.env.S3_ENDPOINT || undefined,
     forcePathStyle: true, // Required for MinIO
     credentials: {
-      accessKeyId: process.env.S3_ACCESS_KEY_ID || "",
-      secretAccessKey: process.env.S3_SECRET_ACCESS_KEY || "",
+      accessKeyId: process.env.S3_ACCESS_KEY_ID || process.env.S3_ACCESS_KEY || "",
+      secretAccessKey: process.env.S3_SECRET_ACCESS_KEY || process.env.S3_SECRET_KEY || "",
     },
   });
 }
