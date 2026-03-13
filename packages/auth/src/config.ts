@@ -28,6 +28,16 @@ export const authConfig: NextAuthConfig = {
 
         const user = await prisma.user.findUnique({
           where: { email: credentials.email as string },
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            image: true,
+            password: true,
+            isSuperAdmin: true,
+            isBanned: true,
+            deletedAt: true,
+          },
         });
 
         if (!user?.password) return null;
@@ -39,12 +49,17 @@ export const authConfig: NextAuthConfig = {
 
         if (!isValid) return null;
 
+        if (user.isBanned) throw new Error("Account suspended");
+        if (user.deletedAt) throw new Error("Account no longer exists");
+
         return {
           id: user.id,
           email: user.email,
           name: user.name,
           image: user.image,
-        };
+          isSuperAdmin: user.isSuperAdmin,
+          isBanned: user.isBanned,
+        } as any;
       },
     }),
   ],
@@ -56,12 +71,27 @@ export const authConfig: NextAuthConfig = {
     async jwt({ token, user }) {
       if (user) {
         token.id = user.id;
+        token.isSuperAdmin = (user as any).isSuperAdmin ?? false;
+        token.isBanned = (user as any).isBanned ?? false;
       }
+
+      // Re-check from DB on every token refresh
+      const dbUser = await prisma.user.findUnique({
+        where: { id: token.id as string },
+        select: { isBanned: true, isSuperAdmin: true },
+      });
+      if (dbUser) {
+        token.isSuperAdmin = dbUser.isSuperAdmin;
+        token.isBanned = dbUser.isBanned;
+      }
+
       return token;
     },
     async session({ session, token }) {
       if (token && session.user) {
         session.user.id = token.id as string;
+        (session.user as any).isSuperAdmin = token.isSuperAdmin ?? false;
+        (session.user as any).isBanned = token.isBanned ?? false;
       }
       return session;
     },

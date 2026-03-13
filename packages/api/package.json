@@ -18,8 +18,9 @@
     "@postautomation/queue": "workspace:*",
     "@postautomation/social": "workspace:*",
     "@trpc/server": "^11.0.0-rc.0",
-    "superjson": "^2.2.1",
     "bcryptjs": "^2.4.3",
+    "jose": "^6.2.1",
+    "superjson": "^2.2.1",
     "zod": "^3.24.0"
   },
   "devDependencies": {

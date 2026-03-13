@@ -6,6 +6,16 @@ const handler = async (req: Request) => {
   const session = await auth();
   const orgId = req.headers.get("x-organization-id") || undefined;
 
+  // Read impersonation cookie for super admin user switching
+  const cookieHeader = req.headers.get("cookie") || "";
+  const impersonationToken = cookieHeader
+    .split(";")
+    .map((c) => c.trim())
+    .find((c) => c.startsWith("admin-impersonate="))
+    ?.split("=")
+    .slice(1)
+    .join("=") || undefined;
+
   return fetchRequestHandler({
     endpoint: "/api/trpc",
     req,
@@ -14,6 +24,7 @@ const handler = async (req: Request) => {
       createTRPCContext({
         session,
         organizationId: orgId,
+        impersonationToken,
       }),
   });
 };

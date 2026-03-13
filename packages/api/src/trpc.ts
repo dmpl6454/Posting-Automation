@@ -3,21 +3,27 @@ import type { Session } from "next-auth";
 import superjson from "superjson";
 import { ZodError } from "zod";
 import { prisma } from "@postautomation/db";
+import { jwtVerify } from "jose";
 
 export interface TRPCContext {
   prisma: typeof prisma;
   session: Session | null;
   organizationId?: string;
+  impersonationToken?: string;
+  isImpersonating?: boolean;
+  adminUserId?: string;
 }
 
 export const createTRPCContext = async (opts: {
   session: Session | null;
   organizationId?: string;
+  impersonationToken?: string;
 }): Promise<TRPCContext> => {
   return {
     prisma,
     session: opts.session,
     organizationId: opts.organizationId,
+    impersonationToken: opts.impersonationToken,
   };
 };
 
@@ -40,16 +46,66 @@ export const createCallerFactory = t.createCallerFactory;
 export const publicProcedure = t.procedure;
 
 // Require authenticated session
-export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
+export const protectedProcedure = t.procedure.use(async ({ ctx, next }) => {
   if (!ctx.session?.user) {
     throw new TRPCError({ code: "UNAUTHORIZED" });
   }
+
+  // Ban check
+  if ((ctx.session.user as any).isBanned) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Account suspended" });
+  }
+
+  let session = ctx.session as Session & { user: { id: string; email: string } };
+  let isImpersonating = false;
+  let adminUserId: string | undefined;
+
+  // Impersonation handling
+  if (ctx.impersonationToken) {
+    try {
+      const secret = new TextEncoder().encode(process.env.NEXTAUTH_SECRET);
+      const { payload } = await jwtVerify(ctx.impersonationToken, secret);
+
+      const impersonatedUser = await prisma.user.findUnique({
+        where: { id: payload.targetUserId as string },
+        select: { id: true, email: true, name: true, image: true },
+      });
+
+      if (impersonatedUser) {
+        adminUserId = (session.user as any).id;
+        isImpersonating = true;
+        session = {
+          ...session,
+          user: {
+            ...session.user,
+            id: impersonatedUser.id,
+            email: impersonatedUser.email!,
+            name: impersonatedUser.name,
+            image: impersonatedUser.image,
+          },
+        } as any;
+      }
+    } catch {
+      // Invalid impersonation token — ignore and continue with original session
+    }
+  }
+
   return next({
     ctx: {
       ...ctx,
-      session: ctx.session as Session & { user: { id: string; email: string } },
+      session,
+      isImpersonating,
+      adminUserId,
     },
   });
+});
+
+// Require super admin role
+export const superAdminProcedure = protectedProcedure.use(({ ctx, next }) => {
+  if ((ctx.session?.user as any)?.isSuperAdmin !== true) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Super admin access required" });
+  }
+  return next({ ctx });
 });
 
 // Require org membership — auto-resolves or creates a default org

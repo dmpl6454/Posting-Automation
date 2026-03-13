@@ -263,6 +263,9 @@ importers:
       bcryptjs:
         specifier: ^2.4.3
         version: 2.4.3
+      jose:
+        specifier: ^6.2.1
+        version: 6.2.1
       superjson:
         specifier: ^2.2.1
         version: 2.2.6
