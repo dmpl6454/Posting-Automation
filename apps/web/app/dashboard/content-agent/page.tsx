@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "~/components/ui/tabs";
 import { Bot, Sparkles, Repeat2, ImagePlus } from "lucide-react";
@@ -9,7 +9,7 @@ import { GenerateTab } from "~/components/content-agent/GenerateTab";
 import { RepurposeTab } from "~/components/content-agent/RepurposeTab";
 import { ImageTab } from "~/components/content-agent/ImageTab";
 
-export default function ContentAgentPage() {
+function ContentAgentInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const initialTab = searchParams.get("tab") || "chat";
@@ -90,5 +90,13 @@ export default function ContentAgentPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function ContentAgentPage() {
+  return (
+    <Suspense fallback={<div className="flex h-[calc(100vh-4rem)] items-center justify-center">Loading...</div>}>
+      <ContentAgentInner />
+    </Suspense>
   );
 }
