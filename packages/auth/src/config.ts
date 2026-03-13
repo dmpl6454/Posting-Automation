@@ -24,7 +24,11 @@ export const authConfig: NextAuthConfig = {
         password: { label: "Password", type: "password" },
       },
       async authorize(credentials) {
-        if (!credentials?.email || !credentials?.password) return null;
+        console.log("[admin-auth] authorize called with email:", credentials?.email);
+        if (!credentials?.email || !credentials?.password) {
+          console.log("[admin-auth] missing email or password");
+          return null;
+        }
 
         const user = await prisma.user.findUnique({
           where: { email: credentials.email as string },
@@ -40,12 +44,16 @@ export const authConfig: NextAuthConfig = {
           },
         });
 
+        console.log("[admin-auth] user found:", !!user, "has password:", !!user?.password);
+
         if (!user?.password) return null;
 
         const isValid = await bcrypt.compare(
           credentials.password as string,
           user.password
         );
+
+        console.log("[admin-auth] password valid:", isValid);
 
         if (!isValid) return null;
 
