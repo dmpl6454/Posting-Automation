@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useRouter } from "next/navigation";
 import {
   LayoutDashboard,
   Users,
@@ -13,6 +14,7 @@ import {
   Server,
   ScrollText,
   ArrowLeft,
+  LogOut,
 } from "lucide-react";
 import { cn } from "~/lib/utils";
 
@@ -30,6 +32,12 @@ const navItems = [
 
 export function AdminSidebar() {
   const pathname = usePathname();
+  const router = useRouter();
+
+  async function handleLogout() {
+    await fetch("/api/admin/logout", { method: "POST" });
+    router.replace("/admin/login");
+  }
 
   return (
     <aside className="flex h-screen w-60 flex-col bg-gray-950">
@@ -68,7 +76,7 @@ export function AdminSidebar() {
       </nav>
 
       {/* Bottom */}
-      <div className="border-t border-gray-800 p-3">
+      <div className="border-t border-gray-800 p-3 space-y-1">
         <Link
           href="/dashboard"
           className="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-gray-400 hover:bg-gray-900 hover:text-gray-200"
@@ -76,6 +84,13 @@ export function AdminSidebar() {
           <ArrowLeft className="h-4 w-4" />
           Back to Dashboard
         </Link>
+        <button
+          onClick={handleLogout}
+          className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-gray-400 hover:bg-gray-900 hover:text-gray-200"
+        >
+          <LogOut className="h-4 w-4" />
+          Logout
+        </button>
       </div>
     </aside>
   );

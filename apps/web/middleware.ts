@@ -1,23 +1,30 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { getToken } from "next-auth/jwt";
+import { jwtVerify } from "jose";
+
+const ADMIN_JWT_SECRET = new TextEncoder().encode(
+  process.env.ADMIN_JWT_SECRET || process.env.NEXTAUTH_SECRET || "admin-secret-key"
+);
+const ADMIN_COOKIE = "admin-token";
+
+async function verifyAdminToken(request: NextRequest) {
+  const token = request.cookies.get(ADMIN_COOKIE)?.value;
+  if (!token) return null;
+  try {
+    const { payload } = await jwtVerify(token, ADMIN_JWT_SECRET);
+    return payload.isSuperAdmin ? payload : null;
+  } catch {
+    return null;
+  }
+}
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Admin route guard
+  // Admin route guard — uses custom admin JWT cookie (bypasses NextAuth)
   if (pathname.startsWith("/admin") && pathname !== "/admin/login") {
-    const token = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET });
-
-    if (!token) {
-      // Not logged in — redirect to main login with callback to admin
-      const loginUrl = new URL("/login", request.url);
-      loginUrl.searchParams.set("callbackUrl", "/admin");
-      return NextResponse.redirect(loginUrl);
-    }
-
-    if (!token.isSuperAdmin) {
-      // Logged in but not admin — redirect to admin login page (shows access denied)
+    const admin = await verifyAdminToken(request);
+    if (!admin) {
       const loginUrl = new URL("/admin/login", request.url);
       return NextResponse.redirect(loginUrl);
     }
@@ -55,6 +62,6 @@ export async function middleware(request: NextRequest) {
 export const config = {
   matcher: [
     // Apply to all routes except static files, auth API, and favicon
-    "/((?!_next/static|_next/image|favicon.ico|api/auth).*)",
+    "/((?!_next/static|_next/image|favicon.ico|api/auth|api/admin).*)",
   ],
 };
