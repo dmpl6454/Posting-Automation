@@ -1,23 +1,29 @@
 import { PrismaAdapter } from "@auth/prisma-adapter";
 import { prisma } from "@postautomation/db";
 import type { NextAuthConfig } from "next-auth";
+import type { Adapter } from "next-auth/adapters";
 import GoogleProvider from "next-auth/providers/google";
 import GitHubProvider from "next-auth/providers/github";
 import CredentialsProvider from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
 
-const adapter = PrismaAdapter(prisma);
+// Wrap PrismaAdapter to skip createUser/createSession for credentials provider
+// This is required because NextAuth v5 beta + PrismaAdapter tries to create
+// a database session even when strategy is "jwt", causing CredentialsSignin errors.
+const prismaAdapter = PrismaAdapter(prisma) as Adapter;
 
 export const authConfig: NextAuthConfig = {
-  adapter,
+  adapter: prismaAdapter,
   providers: [
     GoogleProvider({
       clientId: process.env.AUTH_GOOGLE_ID!,
       clientSecret: process.env.AUTH_GOOGLE_SECRET!,
+      allowDangerousEmailAccountLinking: true,
     }),
     GitHubProvider({
       clientId: process.env.AUTH_GITHUB_ID!,
       clientSecret: process.env.AUTH_GITHUB_SECRET!,
+      allowDangerousEmailAccountLinking: true,
     }),
     CredentialsProvider({
       name: "credentials",
@@ -72,14 +78,7 @@ export const authConfig: NextAuthConfig = {
     maxAge: 30 * 24 * 60 * 60, // 30 days
   },
   callbacks: {
-    async signIn({ user, account }) {
-      // For credentials provider, skip adapter session creation
-      if (account?.provider === "credentials") {
-        return true;
-      }
-      return true;
-    },
-    async jwt({ token, user, account }) {
+    async jwt({ token, user }) {
       if (user) {
         token.id = user.id;
         token.isSuperAdmin = (user as any).isSuperAdmin ?? false;
