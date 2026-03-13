@@ -69,9 +69,9 @@ const ASPECT_RATIOS = [
 // -- Image Sizes --
 const IMAGE_SIZES = [
   { label: "512px", value: "512" },
-  { label: "1K", value: "1024" },
-  { label: "2K", value: "2048" },
-  { label: "4K", value: "4096" },
+  { label: "1K", value: "1K" },
+  { label: "2K", value: "2K" },
+  { label: "4K", value: "4K" },
 ];
 
 // -- History Item Type --
@@ -93,7 +93,7 @@ export default function ImageStudioPage() {
   const [generatePrompt, setGeneratePrompt] = useState("");
   const [model, setModel] = useState(MODELS[0]?.value ?? "gemini-3.1-flash-image-preview");
   const [aspectRatio, setAspectRatio] = useState("1:1");
-  const [imageSize, setImageSize] = useState("1024");
+  const [imageSize, setImageSize] = useState("1K");
 
   // -- Edit Mode State --
   const [editPrompt, setEditPrompt] = useState("");
