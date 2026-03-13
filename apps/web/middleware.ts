@@ -8,7 +8,16 @@ export async function middleware(request: NextRequest) {
   // Admin route guard
   if (pathname.startsWith("/admin") && pathname !== "/admin/login") {
     const token = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET });
-    if (!token?.isSuperAdmin) {
+
+    if (!token) {
+      // Not logged in — redirect to main login with callback to admin
+      const loginUrl = new URL("/login", request.url);
+      loginUrl.searchParams.set("callbackUrl", "/admin");
+      return NextResponse.redirect(loginUrl);
+    }
+
+    if (!token.isSuperAdmin) {
+      // Logged in but not admin — redirect to admin login page (shows access denied)
       const loginUrl = new URL("/admin/login", request.url);
       return NextResponse.redirect(loginUrl);
     }
