@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import { trpc } from "~/lib/trpc/client";
 import { useChatStream } from "~/hooks/use-chat-stream";
 import { MessageBubble } from "./MessageBubble";
@@ -43,6 +43,30 @@ export function ChatView({ threadId, onThreadCreated }: ChatViewProps) {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, streamingContent]);
+
+  const handleUploadFile = useCallback(async (file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      const res = await fetch("/api/upload", { method: "POST", body: formData });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: "Upload failed" }));
+        console.error("Upload failed:", err);
+        return null;
+      }
+      const data = await res.json();
+      return {
+        id: data.id,
+        url: data.url,
+        thumbnailUrl: data.url,
+        fileName: data.fileName,
+        fileType: data.fileType,
+      };
+    } catch (err) {
+      console.error("Upload error:", err);
+      return null;
+    }
+  }, []);
 
   const handleSend = async (content: string, attachmentMediaIds?: string[]) => {
     if (!threadId) {
@@ -92,7 +116,7 @@ export function ChatView({ threadId, onThreadCreated }: ChatViewProps) {
             ))}
           </div>
         </div>
-        <ChatInput onSend={handleSend} placeholder="Ask anything about social media..." />
+        <ChatInput onSend={handleSend} onUploadFile={handleUploadFile} placeholder="Ask anything about social media..." />
       </div>
     );
   }
@@ -138,6 +162,7 @@ export function ChatView({ threadId, onThreadCreated }: ChatViewProps) {
       {/* Input */}
       <ChatInput
         onSend={handleSend}
+        onUploadFile={handleUploadFile}
         disabled={isStreaming}
         placeholder={
           threadData?.agent

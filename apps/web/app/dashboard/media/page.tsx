@@ -1,15 +1,18 @@
 "use client";
 
+import { useRef, useState } from "react";
 import { trpc } from "~/lib/trpc/client";
 import { Card, CardContent } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
 import { Badge } from "~/components/ui/badge";
 import { Skeleton } from "~/components/ui/skeleton";
 import { useToast } from "~/hooks/use-toast";
-import { ImageIcon, Upload, Trash2 } from "lucide-react";
+import { ImageIcon, Upload, Trash2, Loader2 } from "lucide-react";
 
 export default function MediaPage() {
   const { toast } = useToast();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isUploading, setIsUploading] = useState(false);
   const { data, isLoading, refetch } = trpc.media.list.useQuery({ limit: 20 });
   const deleteMedia = trpc.media.delete.useMutation({
     onSuccess: () => {
@@ -18,6 +21,30 @@ export default function MediaPage() {
     },
   });
 
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+    setIsUploading(true);
+    for (const file of Array.from(files)) {
+      const formData = new FormData();
+      formData.append("file", file);
+      try {
+        const res = await fetch("/api/upload", { method: "POST", body: formData });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ error: "Upload failed" }));
+          toast({ title: "Upload failed", description: err.error, variant: "destructive" });
+        } else {
+          toast({ title: `Uploaded ${file.name}` });
+        }
+      } catch {
+        toast({ title: "Upload failed", variant: "destructive" });
+      }
+    }
+    setIsUploading(false);
+    refetch();
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -25,9 +52,17 @@ export default function MediaPage() {
           <h1 className="text-2xl font-bold tracking-tight">Media Library</h1>
           <p className="text-muted-foreground">Upload and manage your media files</p>
         </div>
-        <Button>
-          <Upload className="mr-2 h-4 w-4" />
-          Upload
+        <input
+          ref={fileInputRef}
+          type="file"
+          className="hidden"
+          accept="image/*,video/*"
+          multiple
+          onChange={handleUpload}
+        />
+        <Button onClick={() => fileInputRef.current?.click()} disabled={isUploading}>
+          {isUploading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
+          {isUploading ? "Uploading..." : "Upload"}
         </Button>
       </div>
 
@@ -45,7 +80,7 @@ export default function MediaPage() {
             <p className="mt-1 text-sm text-muted-foreground">
               Upload images and videos for your posts
             </p>
-            <Button variant="outline" className="mt-4">
+            <Button variant="outline" className="mt-4" onClick={() => fileInputRef.current?.click()}>
               <Upload className="mr-2 h-4 w-4" />
               Upload Files
             </Button>
