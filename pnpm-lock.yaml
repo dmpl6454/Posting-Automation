@@ -4,6 +4,11 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  '@auth/core@0.41.0':
+    hash: dpd2sbg4kt53by7persadpcbhm
+    path: patches/@auth__core@0.41.0.patch
+
 importers:
 
   .:
@@ -4076,7 +4081,7 @@ snapshots:
     optionalDependencies:
       zod: 3.25.76
 
-  '@auth/core@0.41.0':
+  '@auth/core@0.41.0(patch_hash=dpd2sbg4kt53by7persadpcbhm)':
     dependencies:
       '@panva/hkdf': 1.2.1
       jose: 6.2.1
@@ -6934,7 +6939,7 @@ snapshots:
 
   next-auth@5.0.0-beta.30(next@14.2.35(@playwright/test@1.58.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react@18.3.1):
     dependencies:
-      '@auth/core': 0.41.0
+      '@auth/core': 0.41.0(patch_hash=dpd2sbg4kt53by7persadpcbhm)
       next: 14.2.35(@playwright/test@1.58.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       react: 18.3.1
 

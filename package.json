@@ -22,5 +22,10 @@
   "packageManager": "pnpm@9.15.0",
   "engines": {
     "node": ">=20"
+  },
+  "pnpm": {
+    "patchedDependencies": {
+      "@auth/core@0.41.0": "patches/@auth__core@0.41.0.patch"
+    }
   }
 }
