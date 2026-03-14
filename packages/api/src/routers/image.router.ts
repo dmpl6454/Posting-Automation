@@ -76,6 +76,7 @@ export const imageRouter = createRouter({
           description: result.text,
         };
       } catch (error: any) {
+        console.error("[image.generate] Error:", error.message || error);
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: error.message || "Failed to generate image",
