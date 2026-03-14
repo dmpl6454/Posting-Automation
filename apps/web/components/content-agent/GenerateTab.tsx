@@ -164,7 +164,7 @@ export function GenerateTab() {
                 {result.length} characters
               </Badge>
               <Button asChild className="gap-2">
-                <Link href={`/dashboard/posts/new?content=${encodeURIComponent(result)}`}>
+                <Link href={`/dashboard/content-agent?tab=compose&content=${encodeURIComponent(result)}`}>
                   Use in Post
                   <ArrowRight className="h-4 w-4" />
                 </Link>

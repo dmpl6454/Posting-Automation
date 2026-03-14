@@ -176,7 +176,7 @@ export function RepurposeTab() {
                       size="sm"
                       className="gap-1.5 text-xs"
                       onClick={() => {
-                        window.location.href = `/dashboard/posts/new?content=${encodeURIComponent(content)}&platform=${platform}`;
+                        window.location.href = `/dashboard/content-agent?tab=compose&content=${encodeURIComponent(content)}`;
                       }}
                     >
                       <FileText className="h-3 w-3" />

@@ -9,8 +9,6 @@ import { X } from "lucide-react";
 import { Button } from "~/components/ui/button";
 import {
   LayoutDashboard,
-  PenSquare,
-  CalendarDays,
   Share2,
   Sparkles,
   Image,
@@ -24,22 +22,18 @@ import {
   Rss,
   Link2,
   CheckCircle,
-  Layers,
   BookOpen,
 } from "lucide-react";
 
 const navigation = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  { name: "Posts", href: "/dashboard/posts", icon: PenSquare },
-  { name: "Calendar", href: "/dashboard/calendar", icon: CalendarDays },
+  { name: "Content Studio", href: "/dashboard/content-agent", icon: Sparkles },
   { name: "Channels", href: "/dashboard/channels", icon: Share2 },
-  { name: "Content Agent", href: "/dashboard/content-agent", icon: Sparkles },
   { name: "Media", href: "/dashboard/media", icon: Image },
   { name: "Analytics", href: "/dashboard/analytics", icon: BarChart3 },
   { name: "RSS Feeds", href: "/dashboard/rss", icon: Rss },
   { name: "Short Links", href: "/dashboard/links", icon: Link2 },
   { name: "Approvals", href: "/dashboard/approvals", icon: CheckCircle },
-  { name: "Bulk Ops", href: "/dashboard/posts/bulk", icon: Layers },
   { name: "Team", href: "/dashboard/team", icon: Users },
 ];
 

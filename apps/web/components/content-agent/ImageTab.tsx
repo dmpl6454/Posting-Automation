@@ -222,7 +222,7 @@ export function ImageTab() {
     }
     try {
       const saved = await saveMutation.mutateAsync({ imageBase64, mimeType, fileName: `ai-image-${Date.now()}.png` });
-      router.push(`/dashboard/posts/new?aiImage=${encodeURIComponent(saved.url)}`);
+      router.push(`/dashboard/content-agent?tab=compose&aiImage=${encodeURIComponent(saved.url)}`);
     } catch { toast({ title: "Could not save image", description: "Please try again.", variant: "destructive" }); }
   };
 

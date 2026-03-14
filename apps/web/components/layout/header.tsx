@@ -48,7 +48,7 @@ export function Header({ onMenuClick }: HeaderProps) {
       <div className="flex items-center gap-1 sm:gap-3">
         {/* New Post Button */}
         <Button asChild size="sm">
-          <Link href="/dashboard/posts/new">
+          <Link href="/dashboard/content-agent?tab=compose">
             <Plus className="h-4 w-4" />
             <span className="hidden sm:inline">New Post</span>
           </Link>
