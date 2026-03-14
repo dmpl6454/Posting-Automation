@@ -20,8 +20,9 @@ import { useToast } from "~/hooks/use-toast";
 import {
   Wand2, Pencil, Loader2, Download, Save, ArrowRight, Upload, ImagePlus,
   Trash2, Square, RectangleHorizontal, RectangleVertical, Monitor, Smartphone,
-  X, Clock, Sparkles,
+  X, Clock, Sparkles, FolderOpen,
 } from "lucide-react";
+import { MediaPickerDialog } from "~/components/media-picker-dialog";
 
 const MODELS = [
   { label: "Nano Banana 2 (Fast)", value: "gemini-3.1-flash-image-preview", badge: "Fast" },
@@ -69,6 +70,10 @@ export function ImageTab() {
   const [logoFileName, setLogoFileName] = useState("");
   const referenceInputRef = useRef<HTMLInputElement>(null);
   const logoInputRef = useRef<HTMLInputElement>(null);
+
+  // Media Picker State
+  const [showReferencePicker, setShowReferencePicker] = useState(false);
+  const [showLogoPicker, setShowLogoPicker] = useState(false);
 
   // Edit Mode State
   const [editPrompt, setEditPrompt] = useState("");
@@ -167,6 +172,37 @@ export function ImageTab() {
     const dataUrl = await fileToBase64(file);
     setLogoImage(dataUrl);
     setLogoFileName(file.name);
+  };
+
+  const urlToBase64 = async (url: string): Promise<string> => {
+    const res = await fetch(url);
+    const blob = await res.blob();
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  };
+
+  const handleReferenceFromLibrary = async (url: string, fileName: string) => {
+    try {
+      const dataUrl = await urlToBase64(url);
+      setReferenceImage(dataUrl);
+      setReferenceFileName(fileName);
+    } catch {
+      toast({ title: "Failed to load image", description: "Could not load the selected image.", variant: "destructive" });
+    }
+  };
+
+  const handleLogoFromLibrary = async (url: string, fileName: string) => {
+    try {
+      const dataUrl = await urlToBase64(url);
+      setLogoImage(dataUrl);
+      setLogoFileName(fileName);
+    } catch {
+      toast({ title: "Failed to load image", description: "Could not load the selected image.", variant: "destructive" });
+    }
   };
 
   const handleEdit = () => {
@@ -318,7 +354,10 @@ export function ImageTab() {
                           <p className="text-[10px] text-muted-foreground truncate px-2 py-1">{referenceFileName}</p>
                         </div>
                       ) : (
-                        <button onClick={() => referenceInputRef.current?.click()} className="flex w-full flex-col items-center gap-1.5 rounded-lg border border-dashed p-4 text-xs text-muted-foreground hover:border-primary/50 hover:bg-muted/30 transition-colors"><Upload className="h-5 w-5" /><span className="font-medium">Reference Design</span></button>
+                        <div className="space-y-1.5">
+                          <button onClick={() => referenceInputRef.current?.click()} className="flex w-full flex-col items-center gap-1.5 rounded-lg border border-dashed p-3 text-xs text-muted-foreground hover:border-primary/50 hover:bg-muted/30 transition-colors"><Upload className="h-4 w-4" /><span className="font-medium">Upload Reference</span></button>
+                          <button onClick={() => setShowReferencePicker(true)} className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed p-2 text-xs text-muted-foreground hover:border-primary/50 hover:bg-muted/30 transition-colors"><FolderOpen className="h-3.5 w-3.5" /><span className="font-medium">From Library</span></button>
+                        </div>
                       )}
                     </div>
                     <div>
@@ -332,7 +371,10 @@ export function ImageTab() {
                           <p className="text-[10px] text-muted-foreground truncate px-2 py-1">{logoFileName}</p>
                         </div>
                       ) : (
-                        <button onClick={() => logoInputRef.current?.click()} className="flex w-full flex-col items-center gap-1.5 rounded-lg border border-dashed p-4 text-xs text-muted-foreground hover:border-primary/50 hover:bg-muted/30 transition-colors"><ImagePlus className="h-5 w-5" /><span className="font-medium">Add Logo</span></button>
+                        <div className="space-y-1.5">
+                          <button onClick={() => logoInputRef.current?.click()} className="flex w-full flex-col items-center gap-1.5 rounded-lg border border-dashed p-3 text-xs text-muted-foreground hover:border-primary/50 hover:bg-muted/30 transition-colors"><ImagePlus className="h-4 w-4" /><span className="font-medium">Upload Logo</span></button>
+                          <button onClick={() => setShowLogoPicker(true)} className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed p-2 text-xs text-muted-foreground hover:border-primary/50 hover:bg-muted/30 transition-colors"><FolderOpen className="h-3.5 w-3.5" /><span className="font-medium">From Library</span></button>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -430,6 +472,19 @@ export function ImageTab() {
           )}
         </div>
       </div>
+
+      <MediaPickerDialog
+        open={showReferencePicker}
+        onOpenChange={setShowReferencePicker}
+        onSelect={handleReferenceFromLibrary}
+        title="Choose Reference Design"
+      />
+      <MediaPickerDialog
+        open={showLogoPicker}
+        onOpenChange={setShowLogoPicker}
+        onSelect={handleLogoFromLibrary}
+        title="Choose Logo"
+      />
     </div>
   );
 }
