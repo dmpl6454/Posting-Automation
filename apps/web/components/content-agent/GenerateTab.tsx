@@ -20,7 +20,7 @@ import { Sparkles, Copy, Check, Loader2, ArrowRight, Wand2 } from "lucide-react"
 
 const platforms = ["TWITTER", "LINKEDIN", "INSTAGRAM", "FACEBOOK", "REDDIT", "YOUTUBE"] as const;
 const tones = ["professional", "casual", "humorous", "formal", "inspiring"] as const;
-const providers = ["openai", "anthropic", "gemini", "grok", "manus"] as const;
+const providers = ["openai", "anthropic", "gemini", "grok", "deepseek"] as const;
 
 export function GenerateTab() {
   const { toast } = useToast();
@@ -108,7 +108,7 @@ export function GenerateTab() {
                   <SelectItem value="anthropic">Anthropic (Claude)</SelectItem>
                   <SelectItem value="gemini">Google (Gemini)</SelectItem>
                   <SelectItem value="grok">xAI (Grok)</SelectItem>
-                  <SelectItem value="manus">Manus AI</SelectItem>
+                  <SelectItem value="deepseek">DeepSeek</SelectItem>
                 </SelectContent>
               </Select>
             </div>

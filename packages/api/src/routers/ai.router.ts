@@ -12,7 +12,7 @@ export const aiRouter = createRouter({
         prompt: z.string().min(1),
         platform: z.string().optional(),
         tone: z.enum(["professional", "casual", "humorous", "formal", "inspiring"]).default("professional"),
-        provider: z.enum(["openai", "anthropic", "gemini", "grok", "manus"]).default("openai"),
+        provider: z.enum(["openai", "anthropic", "gemini", "grok", "deepseek"]).default("openai"),
       })
     )
     .mutation(async ({ input }) => {

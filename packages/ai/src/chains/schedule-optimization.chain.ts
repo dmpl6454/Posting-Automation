@@ -1,7 +1,6 @@
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { getModel, isLangChainProvider } from "../providers/provider.factory";
 import { callGemini } from "../providers/gemini.provider";
-import { callManus } from "../providers/manus.provider";
 import { contentOptimizationPrompt } from "../prompts/content.prompts";
 import type { OptimizeParams } from "../types";
 
@@ -24,5 +23,5 @@ Return only the optimized content, no explanations.
 
 Original content: ${params.content}`;
 
-  return provider === "manus" ? callManus(prompt) : callGemini(prompt);
+  return callGemini(prompt);
 }

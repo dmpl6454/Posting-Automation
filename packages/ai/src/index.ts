@@ -7,7 +7,7 @@ export { streamChatAgent, chatAgent, parseActions, cleanResponseText } from "./c
 export type { ChatMessage as AIChatMessage, ChatContext, ChatAgentAction } from "./chains/chat-agent.chain";
 export { getModel, isLangChainProvider } from "./providers/provider.factory";
 export { getGrokModel } from "./providers/grok.provider";
-export { callManus, callManusChat, streamManus } from "./providers/manus.provider";
+export { getDeepSeekModel } from "./providers/deepseek.provider";
 export type { AIProvider, AIImageProvider, ContentGenerationParams, HashtagParams, OptimizeParams, ImageGenerationParams, ImageEditParams } from "./types";
 export { generateImage, editImage, NANO_BANANA_ASPECT_RATIOS, NANO_BANANA_SIZES, NANO_BANANA_MODELS } from "./providers/nano-banana.provider";
 export type { NanoBananaGenerateParams, NanoBananaEditParams, NanoBananaResult } from "./providers/nano-banana.provider";
