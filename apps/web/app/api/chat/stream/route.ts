@@ -1,6 +1,6 @@
 import { auth } from "~/lib/auth";
 import { prisma } from "@postautomation/db";
-import { streamChatAgent, parseActions, cleanResponseText, fetchTrendingNews, detectTrendingIntent } from "@postautomation/ai";
+import { streamChatAgent, parseActions, cleanResponseText, fetchTrendingNews, detectTrendingIntent, routeProvider } from "@postautomation/ai";
 import type { AIChatMessage, AIProvider } from "@postautomation/ai";
 
 export const dynamic = "force-dynamic";
@@ -39,7 +39,7 @@ export async function POST(req: Request) {
   const thread = await prisma.chatThread.findFirst({
     where: { id: body.threadId, organizationId: membership.organizationId },
     include: {
-      agent: { select: { aiProvider: true } },
+      agent: { select: { aiProvider: true, niche: true } },
     },
   });
 
@@ -52,7 +52,7 @@ export async function POST(req: Request) {
     where: { threadId: body.threadId },
     orderBy: { createdAt: "asc" },
     take: 50,
-    select: { role: true, content: true },
+    select: { role: true, content: true, metadata: true },
   });
 
   const messages: AIChatMessage[] = dbMessages.map((m) => ({
@@ -99,45 +99,101 @@ export async function POST(req: Request) {
     }
   }
 
-  const provider: AIProvider =
-    body.provider || (thread.agent?.aiProvider as AIProvider) || "anthropic";
+  // Provider priority: explicit client request > agent preference > smart router
+  let provider: AIProvider;
+  if (body.provider) {
+    provider = body.provider;
+  } else if (thread.agent?.aiProvider) {
+    provider = thread.agent.aiProvider as AIProvider;
+  } else {
+    const lastAssistantMsg = dbMessages
+      .filter((m) => m.role === "assistant")
+      .pop();
+    const lastMeta = lastAssistantMsg?.metadata as Record<string, unknown> | null;
+    provider = await routeProvider(
+      lastUserMessage?.content ?? "",
+      {
+        threadHistory: messages.slice(-6),
+        hasAttachments: false,
+        agentNiche: thread.agent?.niche || undefined,
+        lastProvider: (lastMeta?.provider as AIProvider) ?? undefined,
+      }
+    );
+    console.log(`[Chat] Smart router selected provider: ${provider}`);
+  }
 
   // Stream response
   const { readable, writable } = new TransformStream();
   const writer = writable.getWriter();
   const encoder = new TextEncoder();
 
+  // Ordered by reliability — only the first non-failed provider is tried (max 1 fallback)
+  const FALLBACK_PRIORITY: AIProvider[] = ["openai", "anthropic", "grok", "deepseek", "gemini"];
+
   const streamResponse = async () => {
     let fullResponse = "";
+    let usedProvider = provider;
+
+    const attemptStream = async (p: AIProvider): Promise<boolean> => {
+      try {
+        for await (const chunk of streamChatAgent(p, messages, {
+          channels: channels.map((ch) => ({
+            id: ch.id,
+            name: ch.name || ch.username || "Unknown",
+            platform: ch.platform,
+          })),
+          agents,
+          trendingNews,
+          orgLogo: org?.logo || undefined,
+          orgName: org?.name || undefined,
+        })) {
+          fullResponse += chunk;
+          const data = `data: ${JSON.stringify({ type: "chunk", content: chunk })}\n\n`;
+          await writer.write(encoder.encode(data));
+        }
+        usedProvider = p;
+        return true;
+      } catch (error: any) {
+        // If we already wrote chunks, this is a mid-stream failure — don't retry
+        if (fullResponse.length > 0) {
+          throw error;
+        }
+        console.error(`[Chat] Provider ${p} failed pre-stream:`, error.message);
+        return false;
+      }
+    };
 
     try {
-      for await (const chunk of streamChatAgent(provider, messages, {
-        channels: channels.map((ch) => ({
-          id: ch.id,
-          name: ch.name || ch.username || "Unknown",
-          platform: ch.platform,
-        })),
-        agents,
-        trendingNews,
-        orgLogo: org?.logo || undefined,
-        orgName: org?.name || undefined,
-      })) {
-        fullResponse += chunk;
-        const data = `data: ${JSON.stringify({ type: "chunk", content: chunk })}\n\n`;
-        await writer.write(encoder.encode(data));
+      // Try the routed provider first
+      let success = await attemptStream(provider);
+
+      // If pre-stream failure, try fallback (max 1 fallback)
+      if (!success) {
+        const fallback = FALLBACK_PRIORITY.find((p) => p !== provider);
+        if (fallback) {
+          console.log(`[Chat] Falling back from ${provider} to ${fallback}`);
+          success = await attemptStream(fallback);
+        }
+      }
+
+      if (!success) {
+        throw new Error("All providers failed");
       }
 
       // Parse any actions from the response
       const action = parseActions(fullResponse);
       const displayText = cleanResponseText(fullResponse);
 
-      // Save assistant message to DB
+      // Save assistant message to DB (include provider in metadata for thread continuity)
       await prisma.chatMessage.create({
         data: {
           threadId: body.threadId,
           role: "assistant",
           content: displayText,
-          metadata: action ? JSON.parse(JSON.stringify({ action })) : undefined,
+          metadata: {
+            ...(action ? { action } : {}),
+            provider: usedProvider,
+          },
         },
       });
 
