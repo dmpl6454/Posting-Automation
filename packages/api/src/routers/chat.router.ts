@@ -227,7 +227,7 @@ export const chatRouter = createRouter({
               targets: {
                 create: (p.channelIds || []).map((channelId: string) => ({
                   channelId,
-                  status: "PENDING",
+                  status: "SCHEDULED",
                 })),
               },
             },
@@ -261,7 +261,7 @@ export const chatRouter = createRouter({
               targets: {
                 create: (p.channelIds || []).map((channelId: string) => ({
                   channelId,
-                  status: "PENDING",
+                  status: "SCHEDULED",
                 })),
               },
             },
