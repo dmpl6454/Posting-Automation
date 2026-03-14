@@ -121,4 +121,25 @@ describe("Smart Router", () => {
       expect(result).toBe("openai");
     });
   });
+
+  describe("integration: route-style context", () => {
+    it("should handle full context object as stream route would pass", async () => {
+      const result = await routeProvider("Write me a creative brainstorm for content", {
+        threadHistory: [
+          { role: "user", content: "hi" },
+          { role: "assistant", content: "hello" },
+        ],
+        hasAttachments: false,
+        agentNiche: undefined,
+        lastProvider: undefined,
+      });
+      expect(result).toBe("anthropic");
+    });
+
+    it("should handle empty context gracefully", async () => {
+      mockedCallGemini.mockResolvedValueOnce("structured");
+      const result = await routeProvider("do something", {});
+      expect(result).toBe("openai"); // LLM returns "structured"
+    });
+  });
 });

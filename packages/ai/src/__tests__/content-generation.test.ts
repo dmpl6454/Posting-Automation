@@ -32,6 +32,8 @@ vi.mock("@langchain/core/output_parsers", () => ({
 const mockGetModel = vi.fn().mockReturnValue({});
 vi.mock("../providers/provider.factory", () => ({
   getModel: (...args: unknown[]) => mockGetModel(...args),
+  isLangChainProvider: (provider: string) =>
+    provider === "openai" || provider === "anthropic" || provider === "grok" || provider === "deepseek",
 }));
 
 // Import after mocking

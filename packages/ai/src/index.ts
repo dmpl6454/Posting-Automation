@@ -8,6 +8,8 @@ export type { ChatMessage as AIChatMessage, ChatContext, ChatAgentAction } from 
 export { getModel, isLangChainProvider } from "./providers/provider.factory";
 export { getGrokModel } from "./providers/grok.provider";
 export { getDeepSeekModel } from "./providers/deepseek.provider";
+export { routeProvider, ROUTING_RULES } from "./routing/smart-router";
+export type { RouterContext } from "./routing/smart-router";
 export type { AIProvider, AIImageProvider, ContentGenerationParams, HashtagParams, OptimizeParams, ImageGenerationParams, ImageEditParams } from "./types";
 export { generateImage, editImage, NANO_BANANA_ASPECT_RATIOS, NANO_BANANA_SIZES, NANO_BANANA_MODELS } from "./providers/nano-banana.provider";
 export type { NanoBananaGenerateParams, NanoBananaEditParams, NanoBananaResult } from "./providers/nano-banana.provider";
