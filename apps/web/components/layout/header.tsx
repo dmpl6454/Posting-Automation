@@ -30,26 +30,28 @@ export function Header({ onMenuClick }: HeaderProps) {
     .slice(0, 2) || "U";
 
   return (
-    <header className="flex h-16 items-center justify-between border-b bg-card px-4 sm:px-6">
-      <div className="flex items-center gap-4">
-        {/* Mobile hamburger menu button */}
+    <header className="flex h-14 items-center justify-between border-b border-border/40 bg-card/50 px-4 backdrop-blur-xl sm:px-6">
+      <div className="flex items-center gap-3">
         <Button
           variant="ghost"
           size="icon"
-          className="lg:hidden"
+          className="h-8 w-8 lg:hidden"
           onClick={onMenuClick}
         >
-          <Menu className="h-5 w-5" />
+          <Menu className="h-4 w-4" />
           <span className="sr-only">Toggle menu</span>
         </Button>
-        <h2 className="text-lg font-semibold">Dashboard</h2>
       </div>
 
-      <div className="flex items-center gap-1 sm:gap-3">
-        {/* New Post Button */}
-        <Button asChild size="sm">
+      <div className="flex items-center gap-1.5 sm:gap-2">
+        {/* New Post */}
+        <Button
+          asChild
+          size="sm"
+          className="h-8 rounded-lg bg-foreground px-3 text-xs font-medium text-background hover:bg-foreground/90"
+        >
           <Link href="/dashboard/content-agent?tab=compose">
-            <Plus className="h-4 w-4" />
+            <Plus className="mr-1.5 h-3.5 w-3.5" />
             <span className="hidden sm:inline">New Post</span>
           </Link>
         </Button>
@@ -63,35 +65,43 @@ export function Header({ onMenuClick }: HeaderProps) {
         {/* User menu */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" className="flex items-center gap-2 px-2">
-              <Avatar className="h-8 w-8">
+            <Button
+              variant="ghost"
+              className="flex items-center gap-2 rounded-lg px-1.5 hover:bg-foreground/[0.04]"
+            >
+              <Avatar className="h-7 w-7">
                 <AvatarImage src={session?.user?.image || undefined} />
-                <AvatarFallback className="text-xs">{initials}</AvatarFallback>
+                <AvatarFallback className="bg-foreground/[0.06] text-[10px] font-medium">
+                  {initials}
+                </AvatarFallback>
               </Avatar>
-              <span className="hidden max-w-[120px] truncate text-sm font-medium sm:inline">
+              <span className="hidden max-w-[100px] truncate text-[13px] font-medium sm:inline">
                 {session?.user?.name || "User"}
               </span>
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-48">
-            <DropdownMenuItem asChild>
+          <DropdownMenuContent
+            align="end"
+            className="w-48 rounded-xl border-border/40 bg-card/95 p-1 shadow-lg backdrop-blur-xl"
+          >
+            <DropdownMenuItem asChild className="rounded-lg">
               <Link href="/dashboard/settings" className="cursor-pointer">
-                <User className="mr-2 h-4 w-4" />
+                <User className="mr-2 h-3.5 w-3.5" />
                 Profile
               </Link>
             </DropdownMenuItem>
-            <DropdownMenuItem asChild>
+            <DropdownMenuItem asChild className="rounded-lg">
               <Link href="/dashboard/settings" className="cursor-pointer">
-                <Settings className="mr-2 h-4 w-4" />
+                <Settings className="mr-2 h-3.5 w-3.5" />
                 Settings
               </Link>
             </DropdownMenuItem>
-            <DropdownMenuSeparator />
+            <DropdownMenuSeparator className="bg-border/40" />
             <DropdownMenuItem
-              className="cursor-pointer text-destructive focus:text-destructive"
+              className="cursor-pointer rounded-lg text-destructive focus:text-destructive"
               onClick={() => signOut({ callbackUrl: "/" })}
             >
-              <LogOut className="mr-2 h-4 w-4" />
+              <LogOut className="mr-2 h-3.5 w-3.5" />
               Sign Out
             </DropdownMenuItem>
           </DropdownMenuContent>

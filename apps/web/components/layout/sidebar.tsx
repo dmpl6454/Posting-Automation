@@ -55,40 +55,44 @@ export function Sidebar({ open, onClose }: SidebarProps) {
   const pathname = usePathname();
 
   const handleNavClick = () => {
-    // Close the mobile sidebar when a navigation link is clicked
-    if (onClose) {
-      onClose();
-    }
+    if (onClose) onClose();
   };
 
   const sidebarContent = (
     <>
       {/* Logo */}
-      <div className="flex h-16 items-center justify-between border-b px-6">
-        <Link href="/dashboard" className="flex items-center gap-2">
-          <NextImage src="/logo.png" alt="PostAutomation" width={32} height={32} className="h-8 w-8" />
-          <span className="text-lg font-bold">PostAutomation</span>
+      <div className="flex h-16 items-center justify-between px-5">
+        <Link href="/dashboard" className="flex items-center gap-2.5">
+          <NextImage
+            src="/logo.png"
+            alt="PostAutomation"
+            width={28}
+            height={28}
+            className="h-7 w-7"
+          />
+          <span className="text-[15px] font-semibold tracking-tight">
+            PostAutomation
+          </span>
         </Link>
-        {/* Close button — only visible on mobile */}
         <Button
           variant="ghost"
           size="icon"
-          className="lg:hidden"
+          className="h-8 w-8 lg:hidden"
           onClick={onClose}
         >
-          <X className="h-5 w-5" />
+          <X className="h-4 w-4" />
           <span className="sr-only">Close sidebar</span>
         </Button>
       </div>
 
       {/* Organization Switcher */}
-      <div className="border-b px-3 py-3">
+      <div className="mx-3 mb-1 rounded-xl border border-border/40 bg-background/30 p-1.5">
         <OrgSwitcher />
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
-        <div className="mb-2 px-3 text-xs font-semibold uppercase text-muted-foreground">
+      <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 py-4">
+        <div className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
           Main
         </div>
         {navigation.map((item) => {
@@ -100,19 +104,26 @@ export function Sidebar({ open, onClose }: SidebarProps) {
               href={item.href}
               onClick={handleNavClick}
               className={cn(
-                "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                "group flex items-center gap-3 rounded-xl px-3 py-2 text-[13px] font-medium transition-all",
                 isActive
-                  ? "bg-primary/10 text-primary"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  ? "bg-foreground/[0.06] text-foreground shadow-sm"
+                  : "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground"
               )}
             >
-              <item.icon className="h-4 w-4" />
+              <item.icon
+                className={cn(
+                  "h-4 w-4 transition-colors",
+                  isActive
+                    ? "text-foreground"
+                    : "text-muted-foreground/70 group-hover:text-foreground"
+                )}
+              />
               {item.name}
             </Link>
           );
         })}
 
-        <div className="mb-2 mt-6 px-3 text-xs font-semibold uppercase text-muted-foreground">
+        <div className="mb-2 mt-6 px-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
           Settings
         </div>
         {settingsNav.map((item) => {
@@ -123,13 +134,20 @@ export function Sidebar({ open, onClose }: SidebarProps) {
               href={item.href}
               onClick={handleNavClick}
               className={cn(
-                "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                "group flex items-center gap-3 rounded-xl px-3 py-2 text-[13px] font-medium transition-all",
                 isActive
-                  ? "bg-primary/10 text-primary"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  ? "bg-foreground/[0.06] text-foreground shadow-sm"
+                  : "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground"
               )}
             >
-              <item.icon className="h-4 w-4" />
+              <item.icon
+                className={cn(
+                  "h-4 w-4 transition-colors",
+                  isActive
+                    ? "text-foreground"
+                    : "text-muted-foreground/70 group-hover:text-foreground"
+                )}
+              />
               {item.name}
             </Link>
           );
@@ -140,22 +158,20 @@ export function Sidebar({ open, onClose }: SidebarProps) {
 
   return (
     <>
-      {/* Desktop sidebar — always visible at lg and above */}
-      <aside className="hidden h-full w-64 flex-col border-r bg-card lg:flex">
+      {/* Desktop sidebar */}
+      <aside className="hidden h-full w-[260px] flex-col border-r border-border/40 bg-card/50 backdrop-blur-xl lg:flex">
         {sidebarContent}
       </aside>
 
       {/* Mobile sidebar overlay */}
       {open && (
         <div className="fixed inset-0 z-50 lg:hidden">
-          {/* Backdrop */}
           <div
-            className="fixed inset-0 bg-black/50"
+            className="fixed inset-0 bg-black/40 backdrop-blur-sm"
             onClick={onClose}
             aria-hidden="true"
           />
-          {/* Sidebar drawer */}
-          <aside className="fixed inset-y-0 left-0 z-50 flex w-64 flex-col bg-card shadow-xl">
+          <aside className="fixed inset-y-0 left-0 z-50 flex w-[260px] flex-col border-r border-border/40 bg-card shadow-2xl">
             {sidebarContent}
           </aside>
         </div>
