@@ -1,6 +1,7 @@
 import { HumanMessage, AIMessage, SystemMessage } from "@langchain/core/messages";
 import { getModel, isLangChainProvider } from "../providers/provider.factory";
 import { callGemini } from "../providers/gemini.provider";
+import { callManus, streamManus } from "../providers/manus.provider";
 import { CHAT_AGENT_SYSTEM_PROMPT } from "../prompts/chat-agent.prompt";
 import type { AIProvider } from "../types";
 
@@ -129,6 +130,30 @@ export async function* streamChatAgent(
     for await (const chunk of stream) {
       const text = typeof chunk.content === "string" ? chunk.content : "";
       if (text) yield text;
+    }
+  } else if (provider === "manus") {
+    // Manus: supports streaming via SSE
+    const manusMessages = [
+      { role: "system" as const, content: systemPrompt },
+      ...messages.map((m) => ({
+        role: (m.role === "system" ? "assistant" : m.role) as "system" | "user" | "assistant",
+        content: m.role === "system" ? `System note: ${m.content}` : m.content,
+      })),
+    ];
+
+    try {
+      for await (const chunk of streamManus(manusMessages)) {
+        yield chunk;
+      }
+    } catch {
+      // Fallback to non-streaming if streaming fails
+      const response = await callManus(
+        `${systemPrompt}\n\n${messages.map((m) => `${m.role === "user" ? "User" : m.role === "system" ? "System note" : "Assistant"}: ${m.content}`).join("\n\n")}\n\nAssistant:`
+      );
+      const words = response.split(" ");
+      for (let i = 0; i < words.length; i += 3) {
+        yield words.slice(i, i + 3).join(" ") + " ";
+      }
     }
   } else {
     // Gemini: non-streaming fallback (generate full response)

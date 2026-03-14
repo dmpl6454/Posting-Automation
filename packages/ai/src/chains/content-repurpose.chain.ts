@@ -2,6 +2,7 @@ import { ChatPromptTemplate } from "@langchain/core/prompts";
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { getModel, isLangChainProvider } from "../providers/provider.factory";
 import { callGemini } from "../providers/gemini.provider";
+import { callManus } from "../providers/manus.provider";
 import { PLATFORM_CHAR_LIMITS, PLATFORM_TONES } from "../prompts/platform-specific.prompts";
 import type { AIProvider } from "../types";
 
@@ -93,7 +94,7 @@ ${platformDetails}
 Original content:
 ${originalContent.slice(0, 8000)}`;
 
-    response = await callGemini(prompt);
+    response = provider === "manus" ? await callManus(prompt) : await callGemini(prompt);
   }
 
   // Parse the JSON response

@@ -30,7 +30,7 @@ const ALL_PLATFORMS = [
   "TIKTOK", "PINTEREST", "THREADS", "MASTODON", "BLUESKY", "MEDIUM", "DEVTO",
 ] as const;
 
-const providers = ["openai", "anthropic", "gemini"] as const;
+const providers = ["openai", "anthropic", "gemini", "grok", "manus"] as const;
 
 export function RepurposeTab() {
   const { toast } = useToast();
@@ -124,6 +124,8 @@ export function RepurposeTab() {
                 <SelectItem value="openai">OpenAI (GPT-4)</SelectItem>
                 <SelectItem value="anthropic">Anthropic (Claude)</SelectItem>
                 <SelectItem value="gemini">Google (Gemini)</SelectItem>
+                <SelectItem value="grok">xAI (Grok)</SelectItem>
+                <SelectItem value="manus">Manus AI</SelectItem>
               </SelectContent>
             </Select>
           </div>

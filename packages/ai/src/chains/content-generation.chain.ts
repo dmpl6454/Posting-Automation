@@ -1,6 +1,7 @@
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { getModel, isLangChainProvider } from "../providers/provider.factory";
 import { callGemini } from "../providers/gemini.provider";
+import { callManus } from "../providers/manus.provider";
 import { contentGenerationPrompt } from "../prompts/content.prompts";
 import { PLATFORM_CHAR_LIMITS, PLATFORM_TONES } from "../prompts/platform-specific.prompts";
 import type { ContentGenerationParams } from "../types";
@@ -9,6 +10,7 @@ export async function generateContent(params: ContentGenerationParams): Promise<
   const charLimit = params.charLimit || PLATFORM_CHAR_LIMITS[params.platform] || 280;
   const tone = params.tone || PLATFORM_TONES[params.platform] || "professional";
 
+  // LangChain providers: OpenAI, Anthropic, Grok
   if (isLangChainProvider(params.provider)) {
     const model = getModel(params.provider);
     const chain = contentGenerationPrompt.pipe(model).pipe(new StringOutputParser());
@@ -20,7 +22,7 @@ export async function generateContent(params: ContentGenerationParams): Promise<
     });
   }
 
-  // Gemini: format prompt manually
+  // Non-LangChain providers: Gemini, Manus — format prompt manually
   const prompt = `You are a social media content expert. Generate engaging content for ${params.platform}.
 Guidelines:
 - Character limit: ${charLimit}
@@ -32,5 +34,8 @@ Guidelines:
 
 User request: ${params.userPrompt}`;
 
+  if (params.provider === "manus") {
+    return callManus(prompt);
+  }
   return callGemini(prompt);
 }

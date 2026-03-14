@@ -7,7 +7,7 @@ export const repurposeRouter = createRouter({
       z.object({
         originalContent: z.string().min(1).max(50000),
         targetPlatforms: z.array(z.string()).min(1).max(16),
-        provider: z.enum(["openai", "anthropic", "gemini"]).default("openai"),
+        provider: z.enum(["openai", "anthropic", "gemini", "grok", "manus"]).default("openai"),
       })
     )
     .mutation(async ({ input }) => {

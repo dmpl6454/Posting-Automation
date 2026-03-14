@@ -24,7 +24,7 @@ const features = [
     icon: Sparkles,
     title: "AI Content Studio",
     description:
-      "Generate compelling content with GPT-4, Claude, and Gemini. Repurpose across platforms with a single click.",
+      "Generate compelling content with GPT-4, Claude, Gemini, Grok, and Manus AI. Repurpose across platforms with a single click.",
   },
   {
     icon: Calendar,
@@ -189,7 +189,7 @@ export default function HomePage() {
           {/* Badge */}
           <div className="fade-in-up mb-8 inline-flex items-center gap-2 rounded-full border bg-background/80 px-4 py-1.5 text-sm text-muted-foreground backdrop-blur-sm">
             <Zap className="h-3.5 w-3.5 text-amber-500" />
-            <span>Powered by AI — GPT-4, Claude & Gemini</span>
+            <span>Powered by AI — GPT-4, Claude, Gemini, Grok & Manus</span>
           </div>
 
           <h1 className="fade-in-up fade-in-up-delay-1 text-4xl font-bold tracking-tight sm:text-6xl lg:text-7xl">
