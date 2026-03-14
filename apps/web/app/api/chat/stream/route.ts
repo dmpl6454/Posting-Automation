@@ -190,10 +190,10 @@ export async function POST(req: Request) {
           threadId: body.threadId,
           role: "assistant",
           content: displayText,
-          metadata: {
+          metadata: JSON.parse(JSON.stringify({
             ...(action ? { action } : {}),
             provider: usedProvider,
-          },
+          })),
         },
       });
 
