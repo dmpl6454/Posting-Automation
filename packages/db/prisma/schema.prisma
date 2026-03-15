@@ -96,20 +96,24 @@ model Organization {
   slug String  @unique
   logo String?
 
-  stripeCustomerId     String? @unique
-  stripeSubscriptionId String? @unique
-  plan                 PlanType @default(FREE)
+  stripeCustomerId     String?   @unique
+  stripeSubscriptionId String?   @unique
+  plan                 PlanType  @default(FREE)
   planExpiresAt        DateTime?
 
-  members   OrganizationMember[]
-  channels  Channel[]
-  posts     Post[]
-  media     Media[]
-  webhooks  Webhook[]
-  apiKeys   ApiKey[]
-  auditLogs AuditLog[]
-  agents      Agent[]
-  chatThreads ChatThread[]
+  members        OrganizationMember[]
+  channels       Channel[]
+  posts          Post[]
+  media          Media[]
+  webhooks       Webhook[]
+  apiKeys        ApiKey[]
+  auditLogs      AuditLog[]
+  agents         Agent[]
+  chatThreads    ChatThread[]
+  trendingItems  TrendingItem[]
+  autopilotPosts AutopilotPost[]
+  accountGroups  AccountGroup[]
+  pipelineRuns   PipelineRun[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -193,11 +197,11 @@ enum SocialPlatform {
 // ==================== POSTS & SCHEDULING ====================
 
 model Post {
-  id             String     @id @default(cuid())
+  id             String @id @default(cuid())
   organizationId String
   createdById    String
 
-  content         String  @db.Text
+  content         String @db.Text
   contentVariants Json?
 
   scheduledAt DateTime?
@@ -208,10 +212,11 @@ model Post {
   aiProvider  String?
   aiPrompt    String? @db.Text
 
-  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization     Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   targets          PostTarget[]
   mediaAttachments PostMedia[]
   tags             PostTag[]
+  autopilotPost    AutopilotPost?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -236,8 +241,8 @@ model PostTarget {
   channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
 
   publishedAt DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   @@unique([postId, channelId])
   @@index([status, postId])
@@ -324,14 +329,14 @@ model AnalyticsSnapshot {
 // ==================== WEBHOOKS & API ====================
 
 model Webhook {
-  id             String  @id @default(cuid())
+  id             String   @id @default(cuid())
   organizationId String
   url            String
   secret         String
   events         String[]
-  isActive       Boolean @default(true)
+  isActive       Boolean  @default(true)
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   deliveries   WebhookDelivery[]
 
   createdAt DateTime @default(now())
@@ -373,18 +378,18 @@ model ApiKey {
 // ==================== AUDIT LOGGING ====================
 
 model AuditLog {
-  id             String   @id @default(cuid())
+  id             String        @id @default(cuid())
   organizationId String?
   organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   userId         String?
-  user           User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
-  action         String   // e.g. "post.created", "channel.connected", "member.invited"
-  entityType     String   // e.g. "Post", "Channel", "OrganizationMember"
+  user           User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action         String // e.g. "post.created", "channel.connected", "member.invited"
+  entityType     String // e.g. "Post", "Channel", "OrganizationMember"
   entityId       String?
-  metadata       Json?    // Additional context (before/after values, etc.)
+  metadata       Json? // Additional context (before/after values, etc.)
   ipAddress      String?
   userAgent      String?
-  createdAt      DateTime @default(now())
+  createdAt      DateTime      @default(now())
 
   @@index([organizationId, createdAt])
   @@index([userId])
@@ -394,14 +399,14 @@ model AuditLog {
 // ==================== NOTIFICATIONS ====================
 
 model Notification {
-  id             String   @id @default(cuid())
+  id             String  @id @default(cuid())
   organizationId String
   userId         String
-  type           String   // e.g. "post.published", "post.failed", "approval.requested"
+  type           String // e.g. "post.published", "post.failed", "approval.requested"
   title          String
-  body           String   @db.Text
-  link           String?  // Deep link URL within the app
-  isRead         Boolean  @default(false)
+  body           String  @db.Text
+  link           String? // Deep link URL within the app
+  isRead         Boolean @default(false)
   metadata       Json?
 
   createdAt DateTime @default(now())
@@ -416,7 +421,7 @@ model ApprovalRequest {
   id             String         @id @default(cuid())
   organizationId String
   postId         String
-  requestedById  String         // User who submitted for approval
+  requestedById  String // User who submitted for approval
   status         ApprovalStatus @default(PENDING)
   currentStep    Int            @default(1)
   totalSteps     Int            @default(1)
@@ -434,7 +439,7 @@ model ApprovalStep {
   id                String         @id @default(cuid())
   approvalRequestId String
   stepNumber        Int
-  reviewerId        String         // User who should review
+  reviewerId        String // User who should review
   status            ApprovalStatus @default(PENDING)
   comment           String?        @db.Text
   decidedAt         DateTime?
@@ -454,15 +459,54 @@ enum ApprovalStatus {
   CANCELLED
 }
 
+// ==================== AUTOPILOT PIPELINE ====================
+
+enum TrendingSource {
+  GOOGLE_NEWS
+  NEWSAPI
+  REDDIT
+  TWITTER
+  RSS
+}
+
+enum TrendingItemStatus {
+  NEW
+  SCORED
+  GENERATING
+  GENERATED
+  POSTED
+  EXPIRED
+  REJECTED
+}
+
+enum SensitivityLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum AutopilotPostStatus {
+  PENDING
+  GENERATING
+  GENERATED
+  REVIEWING
+  APPROVED
+  REJECTED
+  SCHEDULED
+  PUBLISHED
+  FAILED
+  EXPIRED
+}
+
 // ==================== RSS FEEDS ====================
 
 model RssFeed {
-  id             String  @id @default(cuid())
+  id             String    @id @default(cuid())
   organizationId String
   name           String
   url            String
-  isActive       Boolean @default(true)
-  checkInterval  Int     @default(60) // minutes between checks
+  isActive       Boolean   @default(true)
+  checkInterval  Int       @default(60) // minutes between checks
   lastCheckedAt  DateTime?
 
   autoPost       Boolean  @default(false)
@@ -479,14 +523,14 @@ model RssFeed {
 }
 
 model RssFeedEntry {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   feedId    String
-  guid      String   // Unique ID from RSS feed
+  guid      String // Unique ID from RSS feed
   title     String
   link      String
-  summary   String?  @db.Text
+  summary   String?   @db.Text
   published DateTime?
-  processed Boolean  @default(false)
+  processed Boolean   @default(false)
 
   feed RssFeed @relation(fields: [feedId], references: [id], onDelete: Cascade)
 
@@ -499,10 +543,10 @@ model RssFeedEntry {
 // ==================== SHORT LINKS ====================
 
 model ShortLink {
-  id             String    @id @default(cuid())
+  id             String  @id @default(cuid())
   organizationId String
-  code           String    @unique
-  originalUrl    String    @db.Text
+  code           String  @unique
+  originalUrl    String  @db.Text
   postId         String?
 
   clicks        Int       @default(0)
@@ -536,35 +580,40 @@ model ShortLinkClick {
 // ==================== AI AGENTS ====================
 
 model Agent {
-  id             String   @id @default(cuid())
+  id             String  @id @default(cuid())
   organizationId String
-  name           String   @default("My AI Agent")
-  isActive       Boolean  @default(true)
+  name           String  @default("My AI Agent")
+  isActive       Boolean @default(true)
 
   // AI Config
-  aiProvider     String   @default("anthropic")
-  niche          String   @default("")
-  topics         String[]
-  tone           String   @default("professional")
-  language       String   @default("english")
-  customPrompt   String?  @db.Text
+  aiProvider   String   @default("anthropic")
+  niche        String   @default("")
+  topics       String[]
+  tone         String   @default("professional")
+  language     String   @default("english")
+  customPrompt String?  @db.Text
 
   // Schedule Config
-  frequency      String   @default("daily")
-  postsPerDay    Int      @default(1)
-  cronExpression String   @default("0 9 * * *")
+  frequency      String @default("daily")
+  postsPerDay    Int    @default(1)
+  cronExpression String @default("0 9 * * *")
 
   // Target Channels
-  channelIds     String[]
+  channelIds String[]
 
   // Tracking
-  lastRunAt      DateTime?
-  totalPosts     Int      @default(0)
-  topicIndex     Int      @default(0)
+  lastRunAt  DateTime?
+  totalPosts Int       @default(0)
+  topicIndex Int       @default(0)
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  runs         AgentRun[]
-  chatThreads  ChatThread[]
+  referenceImageUrl String?
+  accountGroupId    String?
+
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  accountGroup   AccountGroup?   @relation(fields: [accountGroupId], references: [id])
+  runs           AgentRun[]
+  chatThreads    ChatThread[]
+  autopilotPosts AutopilotPost[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -574,15 +623,15 @@ model Agent {
 }
 
 model AgentRun {
-  id           String    @id @default(cuid())
-  agentId      String
-  status       String    @default("RUNNING")
-  postsCreated Int       @default(0)
-  topicUsed    String?
-  contentPreview String? @db.Text
-  error        String?   @db.Text
-  startedAt    DateTime  @default(now())
-  completedAt  DateTime?
+  id             String    @id @default(cuid())
+  agentId        String
+  status         String    @default("RUNNING")
+  postsCreated   Int       @default(0)
+  topicUsed      String?
+  contentPreview String?   @db.Text
+  error          String?   @db.Text
+  startedAt      DateTime  @default(now())
+  completedAt    DateTime?
 
   agent Agent @relation(fields: [agentId], references: [id], onDelete: Cascade)
 
@@ -636,13 +685,110 @@ model ChatAttachment {
   @@index([messageId])
 }
 
+// ==================== AUTOPILOT PIPELINE MODELS ====================
+
+model TrendingItem {
+  id             String             @id @default(cuid())
+  organizationId String
+  sourceType     TrendingSource
+  sourceId       String
+  titleHash      String
+  title          String
+  summary        String?            @db.Text
+  fullText       String?            @db.Text
+  imageUrl       String?
+  sourceUrl      String
+  sourceName     String
+  topics         String[]
+  region         String             @default("GLOBAL")
+  publishedAt    DateTime
+  trendScore     Float              @default(0)
+  viralSignal    Float?             @default(0)
+  status         TrendingItemStatus @default(NEW)
+  sensitivity    SensitivityLevel   @default(LOW)
+  expiresAt      DateTime
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  autopilotPosts AutopilotPost[]
+
+  @@unique([sourceId, organizationId])
+  @@index([titleHash, organizationId])
+  @@index([status, organizationId])
+  @@index([expiresAt])
+}
+
+model AccountGroup {
+  id                  String   @id @default(cuid())
+  organizationId      String
+  name                String
+  topics              String[]
+  trendScoreThreshold Float    @default(40)
+  skipReviewGate      Boolean  @default(false)
+  postsPerDay         Int      @default(3)
+  timezone            String   @default("UTC")
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agents       Agent[]
+
+  @@index([organizationId])
+}
+
+model AutopilotPost {
+  id             String              @id @default(cuid())
+  organizationId String
+  trendingItemId String
+  agentId        String
+  postId         String?             @unique
+  status         AutopilotPostStatus @default(PENDING)
+  sensitivity    SensitivityLevel
+  trendScore     Float
+  nicheAngle     String?
+  errorMessage   String?             @db.Text
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  trendingItem TrendingItem @relation(fields: [trendingItemId], references: [id], onDelete: Cascade)
+  agent        Agent        @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  post         Post?        @relation(fields: [postId], references: [id])
+
+  @@unique([trendingItemId, agentId])
+  @@index([agentId, status])
+  @@index([status, organizationId])
+  @@index([trendingItemId])
+}
+
+model PipelineRun {
+  id              String    @id @default(cuid())
+  organizationId  String
+  startedAt       DateTime  @default(now())
+  completedAt     DateTime?
+  status          String    @default("RUNNING")
+  itemsDiscovered Int       @default(0)
+  itemsScored     Int       @default(0)
+  postsGenerated  Int       @default(0)
+  postsApproved   Int       @default(0)
+  postsScheduled  Int       @default(0)
+  postsFailed     Int       @default(0)
+  errors          Json?
+  createdAt       DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, startedAt])
+}
+
 // ==================== ONBOARDING ====================
 
 model OnboardingProgress {
-  id             String   @id @default(cuid())
-  userId         String   @unique
+  id             String    @id @default(cuid())
+  userId         String    @unique
   completedSteps String[]
-  isComplete     Boolean  @default(false)
+  isComplete     Boolean   @default(false)
   skippedAt      DateTime?
 
   createdAt DateTime @default(now())
