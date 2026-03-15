@@ -23,3 +23,8 @@ export { generateNewsCardHtml } from "./tools/news-card-template";
 export type { NewsCardOptions } from "./tools/news-card-template";
 export { parseRssItems } from "./utils/rss-parser";
 export type { RssItem } from "./utils/rss-parser";
+export type { DiscoveredItem } from "./tools/trending-sources/index";
+export { fetchFromNewsApi } from "./tools/trending-sources/newsapi";
+export { fetchFromReddit } from "./tools/trending-sources/reddit";
+export { fetchFromTwitterTrends } from "./tools/trending-sources/twitter-trends";
+export { extractTopics, generateTitleHash } from "./tools/topic-extractor";
