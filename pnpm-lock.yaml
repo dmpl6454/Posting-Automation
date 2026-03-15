@@ -228,6 +228,9 @@ importers:
       '@langchain/openai':
         specifier: ^0.3.0
         version: 0.3.17(@langchain/core@0.3.80(openai@4.104.0(ws@8.19.0)(zod@3.25.76)))(ws@8.19.0)
+      ioredis:
+        specifier: ^5.9.3
+        version: 5.10.0
       langchain:
         specifier: ^0.3.0
         version: 0.3.37(@langchain/anthropic@0.3.34(@langchain/core@0.3.80(openai@4.104.0(ws@8.19.0)(zod@3.25.76)))(zod@3.25.76))(@langchain/core@0.3.80(openai@4.104.0(ws@8.19.0)(zod@3.25.76)))(@langchain/google-genai@0.1.0(@langchain/core@0.3.80(openai@4.104.0(ws@8.19.0)(zod@3.25.76)))(zod@3.25.76))(openai@4.104.0(ws@8.19.0)(zod@3.25.76))(ws@8.19.0)
