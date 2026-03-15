@@ -8,6 +8,7 @@ import { createAgentRunWorker } from "./workers/agent-run.worker";
 import { createTrendDiscoverWorker } from "./workers/trend-discover.worker";
 import { createTrendScoreWorker } from "./workers/trend-score.worker";
 import { createContentGenerateWorker } from "./workers/content-generate.worker";
+import { createAutopilotScheduleWorker } from "./workers/autopilot-schedule.worker";
 import { startCronJobs } from "./scheduler/cron-jobs";
 import { registerWorker, markWorkerStopped, startHealthServer } from "./lib/health";
 
@@ -24,6 +25,7 @@ registerWorker("agent-run");
 registerWorker("trend-discover");
 registerWorker("trend-score");
 registerWorker("content-generate");
+registerWorker("autopilot-schedule");
 
 // Start workers
 const postPublishWorker = createPostPublishWorker();
@@ -36,6 +38,7 @@ const agentRunWorker = createAgentRunWorker();
 const trendDiscoverWorker = createTrendDiscoverWorker();
 const trendScoreWorker = createTrendScoreWorker();
 const contentGenerateWorker = createContentGenerateWorker();
+const autopilotScheduleWorker = createAutopilotScheduleWorker();
 
 // Start cron jobs
 startCronJobs();
@@ -54,7 +57,8 @@ console.log("  - Agent Run Worker");
 console.log("  - Trend Discover Worker");
 console.log("  - Trend Score Worker");
 console.log("  - Content Generate Worker");
-console.log("  - Cron Jobs (token refresh: 30min, analytics: 6hr, agent runs: 1min)");
+console.log("  - Autopilot Schedule Worker");
+console.log("  - Cron Jobs (token refresh: 30min, analytics: 6hr, agent runs: 1min, cleanup: 1hr, pipeline: 15min)");
 
 // Graceful shutdown
 async function shutdown() {
@@ -71,6 +75,7 @@ async function shutdown() {
   markWorkerStopped("trend-discover");
   markWorkerStopped("trend-score");
   markWorkerStopped("content-generate");
+  markWorkerStopped("autopilot-schedule");
 
   await Promise.all([
     postPublishWorker.close(),
@@ -83,6 +88,7 @@ async function shutdown() {
     trendDiscoverWorker.close(),
     trendScoreWorker.close(),
     contentGenerateWorker.close(),
+    autopilotScheduleWorker.close(),
   ]);
 
   healthServer.close();

@@ -1,5 +1,5 @@
 import { prisma } from "@postautomation/db";
-import { tokenRefreshQueue, analyticsSyncQueue, agentRunQueue } from "@postautomation/queue";
+import { tokenRefreshQueue, analyticsSyncQueue, agentRunQueue, trendDiscoverQueue } from "@postautomation/queue";
 
 /**
  * Check for channels with expiring tokens and queue refresh jobs.
@@ -130,6 +130,101 @@ export async function scheduleAgentRuns() {
 }
 
 /**
+ * Autopilot cleanup: expire old trends, auto-reject stale reviews, complete stale pipeline runs.
+ * Run every hour.
+ */
+export async function runAutopilotCleanup() {
+  const now = new Date();
+
+  // 1. Expire old TrendingItems (expiresAt < now, status not EXPIRED/POSTED)
+  const expiredTrends = await prisma.trendingItem.updateMany({
+    where: {
+      expiresAt: { lt: now },
+      status: { notIn: ["EXPIRED", "POSTED"] },
+    },
+    data: { status: "EXPIRED" },
+  });
+
+  if (expiredTrends.count > 0) {
+    console.log(`[Cron:Cleanup] Expired ${expiredTrends.count} trending items`);
+  }
+
+  // 2. Auto-reject unreviewed AutopilotPosts (status REVIEWING, createdAt > 24h ago)
+  const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const expiredReviews = await prisma.autopilotPost.updateMany({
+    where: {
+      status: "REVIEWING",
+      createdAt: { lt: twentyFourHoursAgo },
+    },
+    data: { status: "EXPIRED" },
+  });
+
+  if (expiredReviews.count > 0) {
+    console.log(`[Cron:Cleanup] Auto-expired ${expiredReviews.count} unreviewed autopilot posts`);
+  }
+
+  // 3. Complete stale PipelineRuns (status RUNNING, startedAt > 1h ago)
+  const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+  const staleRuns = await prisma.pipelineRun.updateMany({
+    where: {
+      status: "RUNNING",
+      startedAt: { lt: oneHourAgo },
+    },
+    data: {
+      status: "COMPLETED",
+      completedAt: now,
+    },
+  });
+
+  if (staleRuns.count > 0) {
+    console.log(`[Cron:Cleanup] Completed ${staleRuns.count} stale pipeline runs`);
+  }
+}
+
+/**
+ * Trigger autopilot pipeline for all orgs with active agents.
+ * Run every 15 minutes.
+ */
+export async function triggerAutopilotPipeline() {
+  // 1. Find all orgs with at least one active agent
+  const orgsWithAgents = await prisma.agent.findMany({
+    where: { isActive: true },
+    select: { organizationId: true },
+    distinct: ["organizationId"],
+  });
+
+  let queued = 0;
+  for (const { organizationId } of orgsWithAgents) {
+    // 2. Create PipelineRun record
+    const pipelineRun = await prisma.pipelineRun.create({
+      data: {
+        organizationId,
+        status: "RUNNING",
+        startedAt: new Date(),
+      },
+    });
+
+    // 3. Queue TREND_DISCOVER job
+    await trendDiscoverQueue.add(
+      `trend-discover-${organizationId}-${pipelineRun.id}`,
+      {
+        organizationId,
+        pipelineRunId: pipelineRun.id,
+      },
+      {
+        removeOnComplete: true,
+        removeOnFail: 100,
+      },
+    );
+    queued++;
+  }
+
+  if (queued > 0) {
+    console.log(`[Cron:Pipeline] Triggered autopilot pipeline for ${queued} organizations`);
+  }
+}
+
+/**
  * Start all cron jobs
  */
 export function startCronJobs() {
@@ -146,8 +241,18 @@ export function startCronJobs() {
   setInterval(scheduleAgentRuns, 60 * 1000);
   scheduleAgentRuns(); // Run immediately on startup
 
+  // Autopilot cleanup every hour
+  setInterval(runAutopilotCleanup, 60 * 60 * 1000);
+  runAutopilotCleanup(); // Run immediately on startup
+
+  // Autopilot pipeline trigger every 15 minutes
+  setInterval(triggerAutopilotPipeline, 15 * 60 * 1000);
+  setTimeout(triggerAutopilotPipeline, 60 * 1000); // Start after 1 minute warmup
+
   console.log("[Cron] Cron jobs started");
   console.log("[Cron]   - Token refresh: every 30 min");
   console.log("[Cron]   - Analytics sync: every 6 hours");
   console.log("[Cron]   - Agent runs: every 1 min");
+  console.log("[Cron]   - Autopilot cleanup: every 1 hour");
+  console.log("[Cron]   - Autopilot pipeline: every 15 min");
 }
