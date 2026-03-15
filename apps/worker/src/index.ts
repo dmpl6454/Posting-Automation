@@ -7,6 +7,7 @@ import { createRssSyncWorker } from "./workers/rss-sync.worker";
 import { createAgentRunWorker } from "./workers/agent-run.worker";
 import { createTrendDiscoverWorker } from "./workers/trend-discover.worker";
 import { createTrendScoreWorker } from "./workers/trend-score.worker";
+import { createContentGenerateWorker } from "./workers/content-generate.worker";
 import { startCronJobs } from "./scheduler/cron-jobs";
 import { registerWorker, markWorkerStopped, startHealthServer } from "./lib/health";
 
@@ -22,6 +23,7 @@ registerWorker("rss-sync");
 registerWorker("agent-run");
 registerWorker("trend-discover");
 registerWorker("trend-score");
+registerWorker("content-generate");
 
 // Start workers
 const postPublishWorker = createPostPublishWorker();
@@ -33,6 +35,7 @@ const rssSyncWorker = createRssSyncWorker();
 const agentRunWorker = createAgentRunWorker();
 const trendDiscoverWorker = createTrendDiscoverWorker();
 const trendScoreWorker = createTrendScoreWorker();
+const contentGenerateWorker = createContentGenerateWorker();
 
 // Start cron jobs
 startCronJobs();
@@ -50,6 +53,7 @@ console.log("  - RSS Sync Worker");
 console.log("  - Agent Run Worker");
 console.log("  - Trend Discover Worker");
 console.log("  - Trend Score Worker");
+console.log("  - Content Generate Worker");
 console.log("  - Cron Jobs (token refresh: 30min, analytics: 6hr, agent runs: 1min)");
 
 // Graceful shutdown
@@ -66,6 +70,7 @@ async function shutdown() {
   markWorkerStopped("agent-run");
   markWorkerStopped("trend-discover");
   markWorkerStopped("trend-score");
+  markWorkerStopped("content-generate");
 
   await Promise.all([
     postPublishWorker.close(),
@@ -77,6 +82,7 @@ async function shutdown() {
     agentRunWorker.close(),
     trendDiscoverWorker.close(),
     trendScoreWorker.close(),
+    contentGenerateWorker.close(),
   ]);
 
   healthServer.close();
