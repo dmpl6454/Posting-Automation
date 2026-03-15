@@ -28,3 +28,4 @@ export { fetchFromNewsApi } from "./tools/trending-sources/newsapi";
 export { fetchFromReddit } from "./tools/trending-sources/reddit";
 export { fetchFromTwitterTrends } from "./tools/trending-sources/twitter-trends";
 export { extractTopics, generateTitleHash } from "./tools/topic-extractor";
+export { isSourceOpen, recordSourceFailure, recordSourceSuccess } from "./tools/trending-sources/circuit-breaker";
