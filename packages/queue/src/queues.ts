@@ -1,6 +1,6 @@
 import { Queue } from "bullmq";
 import { redisConnection } from "./connection";
-import type { PostPublishJobData, TokenRefreshJobData, AnalyticsSyncJobData, MediaProcessJobData, WebhookDeliveryJobData, RssSyncJobData, NotificationSendJobData, AgentRunJobData } from "./types";
+import type { PostPublishJobData, TokenRefreshJobData, AnalyticsSyncJobData, MediaProcessJobData, WebhookDeliveryJobData, RssSyncJobData, NotificationSendJobData, AgentRunJobData, TrendDiscoverJobData, TrendScoreJobData, ContentGenerateJobData, AutopilotScheduleJobData } from "./types";
 
 export const QUEUE_NAMES = {
   POST_PUBLISH: "post-publish",
@@ -11,6 +11,10 @@ export const QUEUE_NAMES = {
   RSS_SYNC: "rss-sync",
   NOTIFICATION_SEND: "notification-send",
   AGENT_RUN: "agent-run",
+  TREND_DISCOVER: "trend-discover",
+  TREND_SCORE: "trend-score",
+  CONTENT_GENERATE: "content-generate",
+  AUTOPILOT_SCHEDULE: "autopilot-schedule",
 } as const;
 
 export const postPublishQueue = new Queue<PostPublishJobData>(
@@ -50,5 +54,25 @@ export const notificationSendQueue = new Queue<NotificationSendJobData>(
 
 export const agentRunQueue = new Queue<AgentRunJobData>(
   QUEUE_NAMES.AGENT_RUN,
+  { connection: redisConnection }
+);
+
+export const trendDiscoverQueue = new Queue<TrendDiscoverJobData>(
+  QUEUE_NAMES.TREND_DISCOVER,
+  { connection: redisConnection }
+);
+
+export const trendScoreQueue = new Queue<TrendScoreJobData>(
+  QUEUE_NAMES.TREND_SCORE,
+  { connection: redisConnection }
+);
+
+export const contentGenerateQueue = new Queue<ContentGenerateJobData>(
+  QUEUE_NAMES.CONTENT_GENERATE,
+  { connection: redisConnection }
+);
+
+export const autopilotScheduleQueue = new Queue<AutopilotScheduleJobData>(
+  QUEUE_NAMES.AUTOPILOT_SCHEDULE,
   { connection: redisConnection }
 );

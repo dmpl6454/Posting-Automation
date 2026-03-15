@@ -49,3 +49,26 @@ export interface AgentRunJobData {
   agentId: string;
   organizationId: string;
 }
+
+export interface TrendDiscoverJobData {
+  organizationId: string;
+  pipelineRunId: string;
+}
+
+export interface TrendScoreJobData {
+  trendingItemId: string;
+  organizationId: string;
+  pipelineRunId: string;
+}
+
+export interface ContentGenerateJobData {
+  autopilotPostId: string;
+  organizationId: string;
+  pipelineRunId: string;
+}
+
+export interface AutopilotScheduleJobData {
+  autopilotPostId: string;
+  organizationId: string;
+  pipelineRunId: string;
+}
