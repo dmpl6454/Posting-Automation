@@ -23,6 +23,7 @@ import {
   Link2,
   CheckCircle,
   BookOpen,
+  Zap,
 } from "lucide-react";
 
 const navigation = [
@@ -33,6 +34,7 @@ const navigation = [
   { name: "Analytics", href: "/dashboard/analytics", icon: BarChart3 },
   { name: "RSS Feeds", href: "/dashboard/rss", icon: Rss },
   { name: "Short Links", href: "/dashboard/links", icon: Link2 },
+  { name: "Autopilot", href: "/dashboard/autopilot", icon: Zap },
   { name: "Approvals", href: "/dashboard/approvals", icon: CheckCircle },
   { name: "Team", href: "/dashboard/team", icon: Users },
 ];
