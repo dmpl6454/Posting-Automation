@@ -205,19 +205,27 @@ export class InstagramProvider extends SocialProvider {
    * Retrieve the Instagram Business Account ID connected to the user's Facebook Page.
    */
   private async getInstagramBusinessAccountId(tokens: OAuthTokens): Promise<string> {
-    // Get the list of Facebook Pages the user manages
-    const pagesRes = await fetch(
-      `${this.graphBaseUrl}/${this.apiVersion}/me/accounts?fields=instagram_business_account&access_token=${tokens.accessToken}`
-    );
+    // Get the list of Facebook Pages the user manages, with pagination
+    let url: string | null = `${this.graphBaseUrl}/${this.apiVersion}/me/accounts?fields=id,instagram_business_account&limit=25&access_token=${tokens.accessToken}`;
 
-    const pagesData: any = await pagesRes.json();
-    if (!pagesRes.ok) throw new Error(`Failed to fetch Facebook pages: ${JSON.stringify(pagesData)}`);
+    while (url) {
+      const pagesRes = await fetch(url);
+      const pagesData: any = await pagesRes.json();
 
-    // Find the first page with an Instagram Business Account linked
-    for (const page of pagesData.data || []) {
-      if (page.instagram_business_account?.id) {
-        return page.instagram_business_account.id;
+      if (!pagesRes.ok) {
+        console.error("Instagram: Failed to fetch Facebook pages:", JSON.stringify(pagesData));
+        throw new Error(`Failed to fetch Facebook pages: ${JSON.stringify(pagesData)}`);
       }
+
+      // Find the first page with an Instagram Business Account linked
+      for (const page of pagesData.data || []) {
+        if (page.instagram_business_account?.id) {
+          return page.instagram_business_account.id;
+        }
+      }
+
+      // Check next page
+      url = pagesData.paging?.next || null;
     }
 
     throw new Error(
