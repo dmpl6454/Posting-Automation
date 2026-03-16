@@ -47,6 +47,10 @@ export default function AccountGroupsPage() {
       setDialogOpen(false);
       setForm({ name: "", topics: "", postsPerDay: 3, skipReviewGate: false });
     },
+    onError: (error) => {
+      console.error("Create group error:", error);
+      alert(`Failed to create group: ${error.message}`);
+    },
   });
 
   const deleteMutation = trpc.accountGroup.delete.useMutation({
