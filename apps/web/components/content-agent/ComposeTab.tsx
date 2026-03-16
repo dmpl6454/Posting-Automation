@@ -53,16 +53,17 @@ export function ComposeTab({ initialContent, initialImage, onPostCreated }: Comp
   const [aiImageOpen, setAiImageOpen] = useState(false);
   const [aiImagePrompt, setAiImagePrompt] = useState("");
   const [aiGeneratedImage, setAiGeneratedImage] = useState<string | null>(null);
-  const [postMedia, setPostMedia] = useState<string[]>([]);
+  const [postMedia, setPostMedia] = useState<{ url: string; mediaId?: string; file?: File }[]>([]);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingImageIndex, setEditingImageIndex] = useState<number | null>(null);
   const [editorPreview, setEditorPreview] = useState<string | null>(null);
   const [showMediaPicker, setShowMediaPicker] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (initialContent) setContent(initialContent);
-    if (initialImage) setPostMedia((prev) => (prev.length === 0 ? [initialImage] : prev));
+    if (initialImage) setPostMedia((prev) => (prev.length === 0 ? [{ url: initialImage }] : prev));
   }, [initialContent, initialImage]);
 
   const { data: channels, isLoading: channelsLoading } = trpc.channel.list.useQuery();
@@ -79,6 +80,7 @@ export function ComposeTab({ initialContent, initialImage, onPostCreated }: Comp
       toast({ title: "Error", description: err.message, variant: "destructive" });
     },
   });
+  const getUploadUrl = trpc.media.getUploadUrl.useMutation();
   const generateAI = trpc.ai.generateContent.useMutation();
   const generateImage = trpc.image.generate.useMutation({
     onSuccess: (data: any) => {
@@ -102,7 +104,14 @@ export function ComposeTab({ initialContent, initialImage, onPostCreated }: Comp
 
   const handleAddImageToPost = () => {
     if (aiGeneratedImage) {
-      setPostMedia((prev) => [...prev, aiGeneratedImage]);
+      // Convert base64 to file for later upload
+      const byteString = atob(aiGeneratedImage.split(",")[1] || "");
+      const mimeType = aiGeneratedImage.split(":")[1]?.split(";")[0] || "image/png";
+      const ab = new ArrayBuffer(byteString.length);
+      const ia = new Uint8Array(ab);
+      for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
+      const file = new File([ab], `ai-image-${Date.now()}.png`, { type: mimeType });
+      setPostMedia((prev) => [...prev, { url: aiGeneratedImage, file }]);
       setAiGeneratedImage(null);
       setAiImagePrompt("");
       toast({ title: "Image added", description: "Image has been attached to your post." });
@@ -127,11 +136,15 @@ export function ComposeTab({ initialContent, initialImage, onPostCreated }: Comp
     setEditorOpen(true);
   };
 
-  const handleEditorApply = (blobUrl: string) => {
+  const handleEditorApply = async (blobUrl: string) => {
+    // Convert blob URL to File
+    const resp = await fetch(blobUrl);
+    const blob = await resp.blob();
+    const file = new File([blob], `design-${Date.now()}.png`, { type: "image/png" });
     if (editingImageIndex !== null) {
-      setPostMedia((prev) => prev.map((url, i) => (i === editingImageIndex ? blobUrl : url)));
+      setPostMedia((prev) => prev.map((item, i) => (i === editingImageIndex ? { url: blobUrl, file } : item)));
     } else {
-      setPostMedia((prev) => [...prev, blobUrl]);
+      setPostMedia((prev) => [...prev, { url: blobUrl, file }]);
     }
     setEditorOpen(false);
     setEditingImageIndex(null);
@@ -149,23 +162,32 @@ export function ComposeTab({ initialContent, initialImage, onPostCreated }: Comp
     if (!files) return;
     Array.from(files).forEach((file) => {
       if (!file.type.startsWith("image/")) return;
-      const reader = new FileReader();
-      reader.onload = () => {
-        if (reader.result) {
-          setPostMedia((prev) => [...prev, reader.result as string]);
-        }
-      };
-      reader.readAsDataURL(file);
+      const url = URL.createObjectURL(file);
+      setPostMedia((prev) => [...prev, { url, file }]);
     });
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
-  const handleMediaLibrarySelect = (url: string) => {
-    setPostMedia((prev) => [...prev, url]);
+  const handleMediaLibrarySelect = (url: string, _fileName: string, mediaId?: string) => {
+    setPostMedia((prev) => [...prev, { url, mediaId }]);
     setShowMediaPicker(false);
   };
 
-  const handleSubmit = (publishNow: boolean) => {
+  const uploadFileToS3 = async (file: File): Promise<string> => {
+    const { uploadUrl, mediaId } = await getUploadUrl.mutateAsync({
+      fileName: file.name,
+      fileType: file.type,
+      fileSize: file.size,
+    });
+    await fetch(uploadUrl, {
+      method: "PUT",
+      body: file,
+      headers: { "Content-Type": file.type },
+    });
+    return mediaId;
+  };
+
+  const handleSubmit = async (publishNow: boolean) => {
     if (!content || selectedChannels.length === 0) {
       toast({
         title: "Missing required fields",
@@ -174,11 +196,35 @@ export function ComposeTab({ initialContent, initialImage, onPostCreated }: Comp
       });
       return;
     }
-    createPost.mutate({
-      content,
-      channelIds: selectedChannels,
-      scheduledAt: publishNow ? new Date().toISOString() : scheduledAt || undefined,
-    });
+
+    try {
+      setIsUploading(true);
+      // Upload any files that don't have a mediaId yet
+      const mediaIds: string[] = [];
+      for (const item of postMedia) {
+        if (item.mediaId) {
+          mediaIds.push(item.mediaId);
+        } else if (item.file) {
+          const mediaId = await uploadFileToS3(item.file);
+          mediaIds.push(mediaId);
+        }
+      }
+
+      createPost.mutate({
+        content,
+        channelIds: selectedChannels,
+        scheduledAt: publishNow ? new Date().toISOString() : scheduledAt || undefined,
+        ...(mediaIds.length > 0 && { mediaIds }),
+      });
+    } catch (err: any) {
+      toast({
+        title: "Upload failed",
+        description: err.message || "Failed to upload images. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsUploading(false);
+    }
   };
 
   const charCount = content.length;
@@ -198,7 +244,7 @@ export function ComposeTab({ initialContent, initialImage, onPostCreated }: Comp
         <div className="space-y-6">
           {editorOpen ? (
             <MediaEditor
-              initialImage={editingImageIndex !== null ? postMedia[editingImageIndex] : undefined}
+              initialImage={editingImageIndex !== null ? postMedia[editingImageIndex]?.url : undefined}
               onApply={handleEditorApply}
               onCancel={handleEditorCancel}
               onPreviewUpdate={setEditorPreview}
@@ -371,10 +417,10 @@ export function ComposeTab({ initialContent, initialImage, onPostCreated }: Comp
                       Attached Images ({postMedia.length})
                     </p>
                     <div className="flex gap-2 overflow-x-auto">
-                      {postMedia.map((url, idx) => (
+                      {postMedia.map((item, idx) => (
                         <div key={idx} className="group relative flex-shrink-0">
                           <img
-                            src={url}
+                            src={item.url}
                             alt={`Attached ${idx + 1}`}
                             className="h-16 w-16 rounded-md border object-cover"
                           />
@@ -440,10 +486,10 @@ export function ComposeTab({ initialContent, initialImage, onPostCreated }: Comp
               </div>
               {postMedia.length > 0 && (
                 <div className="flex gap-2 overflow-x-auto">
-                  {postMedia.map((url, idx) => (
+                  {postMedia.map((item, idx) => (
                     <div key={idx} className="group relative flex-shrink-0">
                       <img
-                        src={url}
+                        src={item.url}
                         alt={`Attached ${idx + 1}`}
                         className="h-16 w-16 rounded-md border object-cover"
                       />
@@ -579,8 +625,26 @@ export function ComposeTab({ initialContent, initialImage, onPostCreated }: Comp
           <div className="flex justify-end gap-3 pb-8">
             <Button
               variant="outline"
-              onClick={() => createPost.mutate({ content, channelIds: selectedChannels })}
-              disabled={!content || createPost.isPending}
+              onClick={async () => {
+                try {
+                  setIsUploading(true);
+                  const mediaIds: string[] = [];
+                  for (const item of postMedia) {
+                    if (item.mediaId) mediaIds.push(item.mediaId);
+                    else if (item.file) mediaIds.push(await uploadFileToS3(item.file));
+                  }
+                  createPost.mutate({
+                    content,
+                    channelIds: selectedChannels.length > 0 ? selectedChannels : [],
+                    ...(mediaIds.length > 0 && { mediaIds }),
+                  });
+                } catch {
+                  toast({ title: "Upload failed", variant: "destructive" });
+                } finally {
+                  setIsUploading(false);
+                }
+              }}
+              disabled={!content || createPost.isPending || isUploading}
             >
               <Save className="mr-2 h-4 w-4" />
               Save as Draft
@@ -589,7 +653,7 @@ export function ComposeTab({ initialContent, initialImage, onPostCreated }: Comp
               variant="secondary"
               onClick={() => handleSubmit(false)}
               disabled={
-                !content || selectedChannels.length === 0 || !scheduledAt || createPost.isPending
+                !content || selectedChannels.length === 0 || !scheduledAt || createPost.isPending || isUploading
               }
             >
               <Clock className="mr-2 h-4 w-4" />
@@ -597,14 +661,14 @@ export function ComposeTab({ initialContent, initialImage, onPostCreated }: Comp
             </Button>
             <Button
               onClick={() => handleSubmit(true)}
-              disabled={!content || selectedChannels.length === 0 || createPost.isPending}
+              disabled={!content || selectedChannels.length === 0 || createPost.isPending || isUploading}
             >
-              {createPost.isPending ? (
+              {(createPost.isPending || isUploading) ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : (
                 <Send className="mr-2 h-4 w-4" />
               )}
-              Publish Now
+              {isUploading ? "Uploading..." : "Publish Now"}
             </Button>
           </div>
           </>
@@ -619,7 +683,7 @@ export function ComposeTab({ initialContent, initialImage, onPostCreated }: Comp
           </div>
           <PostPreviewSwitcher
             content={content}
-            mediaUrls={editorOpen && editorPreview ? [editorPreview] : postMedia.length > 0 ? postMedia : undefined}
+            mediaUrls={editorOpen && editorPreview ? [editorPreview] : postMedia.length > 0 ? postMedia.map(m => m.url) : undefined}
             platforms={selectedPlatforms.length > 0 ? selectedPlatforms : undefined}
             timestamp={scheduledAt ? new Date(scheduledAt) : new Date()}
           />

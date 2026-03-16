@@ -15,7 +15,7 @@ import { ImageIcon, Check } from "lucide-react";
 interface MediaPickerDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSelect: (url: string, fileName: string) => void;
+  onSelect: (url: string, fileName: string, mediaId?: string) => void;
   title?: string;
 }
 
@@ -38,7 +38,7 @@ export function MediaPickerDialog({
 
   const handleConfirm = () => {
     if (selectedUrl) {
-      onSelect(selectedUrl, selectedName);
+      onSelect(selectedUrl, selectedName, selectedId ?? undefined);
       onOpenChange(false);
       setSelectedId(null);
     }
