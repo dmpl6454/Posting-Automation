@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, Suspense } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "~/components/ui/tabs";
 import {
@@ -25,10 +25,14 @@ import { BulkTab } from "~/components/content-agent/BulkTab";
 function ContentStudioInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const initialTab = searchParams.get("tab") || "chat";
-  const [activeTab, setActiveTab] = useState(initialTab);
+  const tabParam = searchParams.get("tab") || "chat";
+  const [activeTab, setActiveTab] = useState(tabParam);
   const composeContent = searchParams.get("content") || undefined;
   const composeImage = searchParams.get("aiImage") || undefined;
+
+  useEffect(() => {
+    setActiveTab(tabParam);
+  }, [tabParam]);
 
   const handleTabChange = (tab: string) => {
     setActiveTab(tab);
