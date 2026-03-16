@@ -143,7 +143,7 @@ export class FacebookProvider extends SocialProvider {
     accessToken: string;
   }>> {
     const pages: Array<{ id: string; name: string; avatar?: string; accessToken: string }> = [];
-    let url = `${this.graphBaseUrl}/${this.apiVersion}/me/accounts?fields=id,name,picture,access_token&limit=100&access_token=${tokens.accessToken}`;
+    let url = `${this.graphBaseUrl}/${this.apiVersion}/me/accounts?fields=id,name,access_token&limit=25&access_token=${tokens.accessToken}`;
 
     while (url) {
       const res = await fetch(url);
@@ -155,7 +155,6 @@ export class FacebookProvider extends SocialProvider {
           pages.push({
             id: page.id,
             name: page.name,
-            avatar: page.picture?.data?.url,
             accessToken: page.access_token,
           });
         }
