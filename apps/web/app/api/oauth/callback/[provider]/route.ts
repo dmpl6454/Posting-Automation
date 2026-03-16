@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@postautomation/db";
-import { getSocialProvider } from "@postautomation/social";
+import { getSocialProvider, FacebookProvider } from "@postautomation/social";
 
 export async function GET(
   req: Request,
@@ -58,7 +58,87 @@ export async function GET(
     // Get profile info
     const profile = await provider.getProfile(tokens);
 
-    // Save or update channel
+    // For Facebook, fetch and save managed Pages instead of the user account
+    if (platform === "FACEBOOK" && provider instanceof FacebookProvider) {
+      const pages = await provider.getPages(tokens);
+
+      if (pages.length === 0) {
+        // No pages found — save user account as fallback
+        await prisma.channel.upsert({
+          where: {
+            organizationId_platform_platformId: {
+              organizationId,
+              platform: "FACEBOOK",
+              platformId: profile.id,
+            },
+          },
+          update: {
+            accessToken: tokens.accessToken,
+            refreshToken: tokens.refreshToken || null,
+            tokenExpiresAt: tokens.expiresAt || null,
+            scopes: tokens.scopes || [],
+            name: profile.name,
+            username: profile.username || null,
+            avatar: profile.avatar || null,
+            isActive: true,
+          },
+          create: {
+            organizationId,
+            platform: "FACEBOOK",
+            platformId: profile.id,
+            name: profile.name,
+            username: profile.username || null,
+            avatar: profile.avatar || null,
+            accessToken: tokens.accessToken,
+            refreshToken: tokens.refreshToken || null,
+            tokenExpiresAt: tokens.expiresAt || null,
+            scopes: tokens.scopes || [],
+          },
+        });
+      } else {
+        // Save each Facebook Page as a separate channel
+        for (const page of pages) {
+          await prisma.channel.upsert({
+            where: {
+              organizationId_platform_platformId: {
+                organizationId,
+                platform: "FACEBOOK",
+                platformId: page.id,
+              },
+            },
+            update: {
+              accessToken: page.accessToken,
+              refreshToken: page.accessToken, // Page tokens don't expire if user token is long-lived
+              tokenExpiresAt: null,
+              scopes: tokens.scopes || [],
+              name: page.name,
+              avatar: page.avatar || null,
+              isActive: true,
+              metadata: { pageId: page.id, userAccessToken: tokens.accessToken },
+            },
+            create: {
+              organizationId,
+              platform: "FACEBOOK",
+              platformId: page.id,
+              name: page.name,
+              avatar: page.avatar || null,
+              accessToken: page.accessToken,
+              refreshToken: page.accessToken,
+              tokenExpiresAt: null,
+              scopes: tokens.scopes || [],
+              metadata: { pageId: page.id, userAccessToken: tokens.accessToken },
+            },
+          });
+        }
+      }
+
+      const count = pages.length || 1;
+      return NextResponse.redirect(
+        `${process.env.APP_URL}/dashboard/channels?success=connected&platform=${params.provider}&pages=${count}`
+      );
+    }
+
+    // For all other platforms, save the single account
     await prisma.channel.upsert({
       where: {
         organizationId_platform_platformId: {

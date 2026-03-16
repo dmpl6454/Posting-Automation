@@ -74,7 +74,8 @@ export class FacebookProvider extends SocialProvider {
   }
 
   async publishPost(tokens: OAuthTokens, payload: SocialPostPayload): Promise<SocialPostResult> {
-    const pageId = (payload.metadata?.pageId as string) || "me";
+    // When a page channel is used, the platformId IS the pageId and tokens.accessToken is the page token
+    const pageId = (payload.metadata?.pageId as string) || (payload.metadata?.platformId as string) || "me";
 
     // If media URLs are provided, publish with photos
     if (payload.mediaUrls?.length) {
@@ -129,6 +130,42 @@ export class FacebookProvider extends SocialProvider {
       name: data.name,
       avatar: data.picture?.data?.url,
     };
+  }
+
+  /**
+   * Fetch all Facebook Pages the user manages.
+   * Returns page ID, name, picture, and the page-specific access token.
+   */
+  async getPages(tokens: OAuthTokens): Promise<Array<{
+    id: string;
+    name: string;
+    avatar?: string;
+    accessToken: string;
+  }>> {
+    const pages: Array<{ id: string; name: string; avatar?: string; accessToken: string }> = [];
+    let url = `${this.graphBaseUrl}/${this.apiVersion}/me/accounts?fields=id,name,picture,access_token&limit=100&access_token=${tokens.accessToken}`;
+
+    while (url) {
+      const res = await fetch(url);
+      const data: any = await res.json();
+      if (!res.ok) throw new Error(`Facebook pages fetch failed: ${JSON.stringify(data)}`);
+
+      if (data.data) {
+        for (const page of data.data) {
+          pages.push({
+            id: page.id,
+            name: page.name,
+            avatar: page.picture?.data?.url,
+            accessToken: page.access_token,
+          });
+        }
+      }
+
+      // Handle pagination
+      url = data.paging?.next || "";
+    }
+
+    return pages;
   }
 
   async getPostAnalytics(tokens: OAuthTokens, platformPostId: string): Promise<SocialAnalytics | null> {

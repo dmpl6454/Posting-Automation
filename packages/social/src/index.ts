@@ -1,5 +1,6 @@
 export { SocialProvider } from "./abstract/social.abstract";
 export { getSocialProvider, getSupportedPlatforms } from "./abstract/social.factory";
+export { FacebookProvider } from "./providers/facebook.provider";
 export type {
   SocialPostPayload,
   SocialPostResult,
