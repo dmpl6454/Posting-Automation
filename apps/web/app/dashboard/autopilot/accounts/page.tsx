@@ -26,10 +26,15 @@ import {
   Trash2,
   Users,
   Loader2,
+  UserPlus,
+  X,
 } from "lucide-react";
 
 export default function AccountGroupsPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [addAgentsDialogOpen, setAddAgentsDialogOpen] = useState(false);
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+  const [selectedAgentIds, setSelectedAgentIds] = useState<string[]>([]);
   const [form, setForm] = useState({
     name: "",
     topics: "",
@@ -40,6 +45,7 @@ export default function AccountGroupsPage() {
   const utils = trpc.useUtils();
 
   const { data, isLoading } = trpc.accountGroup.list.useQuery();
+  const { data: agentsData } = trpc.agent.list.useQuery();
 
   const createMutation = trpc.accountGroup.create.useMutation({
     onSuccess: () => {
@@ -59,7 +65,35 @@ export default function AccountGroupsPage() {
     },
   });
 
+  const addAgentsMutation = trpc.accountGroup.addAgents.useMutation({
+    onSuccess: () => {
+      utils.accountGroup.list.invalidate();
+      setAddAgentsDialogOpen(false);
+      setSelectedAgentIds([]);
+      setSelectedGroupId(null);
+    },
+    onError: (error) => {
+      alert(`Failed to add agents: ${error.message}`);
+    },
+  });
+
+  const removeAgentMutation = trpc.accountGroup.removeAgent.useMutation({
+    onSuccess: () => {
+      utils.accountGroup.list.invalidate();
+    },
+    onError: (error) => {
+      alert(`Failed to remove agent: ${error.message}`);
+    },
+  });
+
   const groups = (data as any[]) ?? [];
+  const agents = (agentsData as any[]) ?? [];
+
+  // Agents not in any group
+  const assignedAgentIds = new Set(
+    groups.flatMap((g: any) => (g.agents ?? []).map((a: any) => a.id))
+  );
+  const unassignedAgents = agents.filter((a: any) => !assignedAgentIds.has(a.id));
 
   const handleCreate = () => {
     createMutation.mutate({
@@ -71,6 +105,22 @@ export default function AccountGroupsPage() {
       postsPerDay: form.postsPerDay,
       skipReviewGate: form.skipReviewGate,
     } as any);
+  };
+
+  const handleAddAgents = () => {
+    if (!selectedGroupId || selectedAgentIds.length === 0) return;
+    addAgentsMutation.mutate({
+      groupId: selectedGroupId,
+      agentIds: selectedAgentIds,
+    } as any);
+  };
+
+  const toggleAgent = (agentId: string) => {
+    setSelectedAgentIds((prev) =>
+      prev.includes(agentId)
+        ? prev.filter((id) => id !== agentId)
+        : [...prev, agentId]
+    );
   };
 
   return (
@@ -114,21 +164,59 @@ export default function AccountGroupsPage() {
             <Card key={group.id}>
               <CardHeader className="flex flex-row items-start justify-between pb-2">
                 <CardTitle className="text-base">{group.name}</CardTitle>
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                  disabled={deleteMutation.isPending}
-                  onClick={() => deleteMutation.mutate({ id: group.id } as any)}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
+                <div className="flex gap-1">
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-8 w-8 text-muted-foreground hover:text-primary"
+                    onClick={() => {
+                      setSelectedGroupId(group.id);
+                      setSelectedAgentIds([]);
+                      setAddAgentsDialogOpen(true);
+                    }}
+                  >
+                    <UserPlus className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                    disabled={deleteMutation.isPending}
+                    onClick={() => deleteMutation.mutate({ id: group.id } as any)}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent className="space-y-3">
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Users className="h-3.5 w-3.5" />
-                  {group.agents?.length ?? 0} agent
-                  {(group.agents?.length ?? 0) !== 1 ? "s" : ""}
+                {/* Agents list */}
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Users className="h-3.5 w-3.5" />
+                    {group.agents?.length ?? 0} agent
+                    {(group.agents?.length ?? 0) !== 1 ? "s" : ""}
+                  </div>
+                  {group.agents?.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {group.agents.map((agent: any) => (
+                        <Badge
+                          key={agent.id}
+                          variant="outline"
+                          className="text-[10px] px-1.5 py-0 gap-1"
+                        >
+                          {agent.name}
+                          <button
+                            className="ml-0.5 hover:text-destructive"
+                            onClick={() =>
+                              removeAgentMutation.mutate({ agentId: agent.id } as any)
+                            }
+                          >
+                            <X className="h-2.5 w-2.5" />
+                          </button>
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {group.topics?.length > 0 && (
@@ -235,6 +323,59 @@ export default function AccountGroupsPage() {
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : null}
               Create Group
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add Agents Dialog */}
+      <Dialog open={addAgentsDialogOpen} onOpenChange={setAddAgentsDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add Agents to Group</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2 py-2 max-h-[400px] overflow-y-auto">
+            {unassignedAgents.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-4">
+                All agents are already assigned to groups.
+              </p>
+            ) : (
+              unassignedAgents.map((agent: any) => (
+                <label
+                  key={agent.id}
+                  className="flex items-center gap-3 p-2 rounded-md hover:bg-muted cursor-pointer"
+                >
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-gray-300"
+                    checked={selectedAgentIds.includes(agent.id)}
+                    onChange={() => toggleAgent(agent.id)}
+                  />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate">{agent.name}</p>
+                    {agent.platform && (
+                      <p className="text-xs text-muted-foreground">{agent.platform}</p>
+                    )}
+                  </div>
+                </label>
+              ))
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setAddAgentsDialogOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleAddAgents}
+              disabled={selectedAgentIds.length === 0 || addAgentsMutation.isPending}
+            >
+              {addAgentsMutation.isPending ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : null}
+              Add {selectedAgentIds.length > 0 ? `(${selectedAgentIds.length})` : ""}
             </Button>
           </DialogFooter>
         </DialogContent>
