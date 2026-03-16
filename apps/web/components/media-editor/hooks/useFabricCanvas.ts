@@ -46,6 +46,17 @@ export function useFabricCanvas(options: UseFabricCanvasOptions = {}) {
     canvas.on("selection:updated", (e) => setSelectedObject(e.selected?.[0] ?? null));
     canvas.on("selection:cleared", () => setSelectedObject(null));
 
+    // Scroll wheel zoom
+    canvas.on("mouse:wheel", (opt) => {
+      const delta = opt.e.deltaY;
+      let newZoom = canvas.getZoom() * (1 - delta / 500);
+      newZoom = Math.max(0.25, Math.min(4, newZoom));
+      canvas.zoomToPoint({ x: opt.e.offsetX, y: opt.e.offsetY }, newZoom);
+      setZoom(newZoom);
+      opt.e.preventDefault();
+      opt.e.stopPropagation();
+    });
+
     fabricRef.current = canvas;
     setIsReady(true);
 
