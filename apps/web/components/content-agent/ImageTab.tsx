@@ -257,9 +257,16 @@ export function ImageTab() {
       if (match) { mimeType = match[1] ?? "image/png"; imageBase64 = match[2] ?? ""; }
     }
     try {
+      toast({ title: "Saving image..." });
       const saved = await saveMutation.mutateAsync({ imageBase64, mimeType, fileName: `ai-image-${Date.now()}.png` });
-      router.push(`/dashboard/content-agent?tab=compose&aiImage=${encodeURIComponent(saved.url)}`);
-    } catch { toast({ title: "Could not save image", description: "Please try again.", variant: "destructive" }); }
+      if (saved?.url) {
+        router.push(`/dashboard/content-agent?tab=compose&aiImage=${encodeURIComponent(saved.url)}`);
+      } else {
+        toast({ title: "Save succeeded but no URL returned", variant: "destructive" });
+      }
+    } catch (err: any) {
+      toast({ title: "Could not save image", description: err?.message || "Please try again.", variant: "destructive" });
+    }
   };
 
   const handleEditThisImage = () => {
