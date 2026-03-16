@@ -15,6 +15,7 @@ import { TextPanel } from "./panels/TextPanel";
 import { UploadsPanel } from "./panels/UploadsPanel";
 import { DrawPanel } from "./panels/DrawPanel";
 import { AIPanel } from "./panels/AIPanel";
+import { EditorToolbar } from "./toolbars/EditorToolbar";
 
 interface MediaEditorProps {
   initialImage?: string;
@@ -143,6 +144,14 @@ export function MediaEditor({
           </Button>
         </div>
       </div>
+
+      {/* Contextual Toolbar */}
+      <EditorToolbar
+        canvas={canvas}
+        selectedObject={selectedObject}
+        canvasSize={canvasSize}
+        onResizeCanvas={resizeCanvas}
+      />
 
       <div className="flex flex-1 overflow-hidden">
         <EditorSidebar activePanel={activePanel} onPanelChange={setActivePanel}>
