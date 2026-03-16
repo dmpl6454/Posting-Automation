@@ -5,17 +5,17 @@ import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import sharp from "sharp";
 
 const s3 = new S3Client({
-  region: process.env.AWS_REGION || "us-east-1",
-  credentials: process.env.AWS_ACCESS_KEY_ID
-    ? {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || "",
-      }
-    : undefined,
+  region: process.env.S3_REGION || process.env.AWS_REGION || "us-east-1",
+  endpoint: process.env.S3_ENDPOINT || undefined,
+  forcePathStyle: !!process.env.S3_ENDPOINT, // Required for MinIO
+  credentials: {
+    accessKeyId: process.env.S3_ACCESS_KEY_ID || process.env.S3_ACCESS_KEY || process.env.AWS_ACCESS_KEY_ID || "",
+    secretAccessKey: process.env.S3_SECRET_ACCESS_KEY || process.env.S3_SECRET_KEY || process.env.AWS_SECRET_ACCESS_KEY || "",
+  },
 });
 
 const S3_BUCKET = process.env.S3_BUCKET || "postautomation-media";
-const S3_BASE_URL = process.env.S3_BASE_URL || `https://${S3_BUCKET}.s3.amazonaws.com`;
+const S3_BASE_URL = process.env.S3_PUBLIC_URL || process.env.S3_BASE_URL || `https://${S3_BUCKET}.s3.amazonaws.com`;
 
 async function downloadMedia(url: string): Promise<Buffer> {
   const response = await fetch(url, {
