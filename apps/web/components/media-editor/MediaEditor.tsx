@@ -9,6 +9,12 @@ import { BottomBar } from "./BottomBar";
 import { useFabricCanvas, CANVAS_PRESETS } from "./hooks/useFabricCanvas";
 import { useEditorHistory } from "./hooks/useEditorHistory";
 import { useCanvasExport } from "./hooks/useCanvasExport";
+import { EditorSidebar, type SidebarPanel } from "./EditorSidebar";
+import { ElementsPanel } from "./panels/ElementsPanel";
+import { TextPanel } from "./panels/TextPanel";
+import { UploadsPanel } from "./panels/UploadsPanel";
+import { DrawPanel } from "./panels/DrawPanel";
+import { AIPanel } from "./panels/AIPanel";
 
 interface MediaEditorProps {
   initialImage?: string;
@@ -28,6 +34,7 @@ export function MediaEditor({
   const { toast } = useToast();
   const [isDirty, setIsDirty] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [activePanel, setActivePanel] = useState<SidebarPanel>(null);
 
   const {
     canvasRef,
@@ -138,6 +145,19 @@ export function MediaEditor({
       </div>
 
       <div className="flex flex-1 overflow-hidden">
+        <EditorSidebar activePanel={activePanel} onPanelChange={setActivePanel}>
+          {activePanel === "elements" && <ElementsPanel canvas={canvas} />}
+          {activePanel === "text" && <TextPanel canvas={canvas} />}
+          {activePanel === "uploads" && <UploadsPanel canvas={canvas} />}
+          {activePanel === "draw" && <DrawPanel canvas={canvas} />}
+          {activePanel === "ai" && <AIPanel canvas={canvas} exportCanvasDataUrl={exportCanvas} />}
+          {activePanel === "templates" && (
+            <div className="py-8 text-center text-xs text-muted-foreground">
+              Templates coming soon
+            </div>
+          )}
+        </EditorSidebar>
+
         <FabricCanvas
           canvasRef={canvasRef}
           zoom={zoom}
