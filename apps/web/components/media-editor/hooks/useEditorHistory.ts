@@ -12,7 +12,7 @@ export function useEditorHistory(canvas: Canvas | null) {
 
   const saveState = useCallback(() => {
     if (!canvas || isUndoRedoRef.current) return;
-    const json = JSON.stringify(canvas.toJSON(["isPlaceholder", "placeholderKey"]));
+    const json = JSON.stringify((canvas as any).toJSON(["isPlaceholder", "placeholderKey"]));
     historyRef.current = historyRef.current.slice(0, currentIndexRef.current + 1);
     historyRef.current.push(json);
     if (historyRef.current.length > MAX_HISTORY) {

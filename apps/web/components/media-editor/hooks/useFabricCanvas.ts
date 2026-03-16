@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { Canvas, FabricImage } from "fabric";
+import { Canvas, FabricImage, Point } from "fabric";
 
 export interface CanvasSize {
   width: number;
@@ -51,7 +51,7 @@ export function useFabricCanvas(options: UseFabricCanvasOptions = {}) {
       const delta = opt.e.deltaY;
       let newZoom = canvas.getZoom() * (1 - delta / 500);
       newZoom = Math.max(0.25, Math.min(4, newZoom));
-      canvas.zoomToPoint({ x: opt.e.offsetX, y: opt.e.offsetY }, newZoom);
+      canvas.zoomToPoint(new Point(opt.e.offsetX, opt.e.offsetY), newZoom);
       setZoom(newZoom);
       opt.e.preventDefault();
       opt.e.stopPropagation();
@@ -110,7 +110,7 @@ export function useFabricCanvas(options: UseFabricCanvasOptions = {}) {
   const toJSON = useCallback(() => {
     const canvas = fabricRef.current;
     if (!canvas) return null;
-    return canvas.toJSON(["isPlaceholder", "placeholderKey"]);
+    return (canvas as any).toJSON(["isPlaceholder", "placeholderKey"]);
   }, []);
 
   const loadJSON = useCallback(async (json: any) => {

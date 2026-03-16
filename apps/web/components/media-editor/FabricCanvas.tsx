@@ -29,7 +29,7 @@ export function FabricCanvas({ canvasRef, zoom, canvasWidth, canvasHeight }: Fab
           backgroundPosition: "0 0, 0 10px, 10px -10px, -10px 0px",
         }}
       >
-        <canvas ref={canvasRef} />
+        <canvas ref={canvasRef as React.RefObject<HTMLCanvasElement>} />
       </div>
     </div>
   );

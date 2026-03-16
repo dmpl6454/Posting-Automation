@@ -31,10 +31,10 @@ export function TemplatePanel({
   const [saveCategory, setSaveCategory] = useState("custom");
   const [showSave, setShowSave] = useState(false);
 
+  const utils = trpc.useUtils();
   const { data: templates, isLoading, refetch } = trpc.designTemplate.list.useQuery(
     filterCategory ? { category: filterCategory } : undefined
   );
-  const getTemplate = trpc.designTemplate.getById.useMutation();
   const createTemplate = trpc.designTemplate.create.useMutation({
     onSuccess: () => {
       toast({ title: "Template saved!" });
@@ -64,8 +64,11 @@ export function TemplatePanel({
   const handleLoad = async (templateId: string) => {
     try {
       toast({ title: "Loading template..." });
-      // For simplicity, we'll need to fetch the full template with canvasJson
-      // The list query doesn't include canvasJson for performance
+      const template = await utils.designTemplate.getById.fetch({ id: templateId });
+      if (template?.canvasJson) {
+        await loadJson(template.canvasJson);
+        toast({ title: "Template loaded" });
+      }
     } catch {
       toast({ title: "Failed to load template", variant: "destructive" });
     }
