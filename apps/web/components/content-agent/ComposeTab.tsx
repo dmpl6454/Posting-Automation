@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { trpc } from "~/lib/trpc/client";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "~/components/ui/card";
@@ -25,9 +25,12 @@ import {
   ChevronUp,
   X,
   Paintbrush,
+  Upload,
+  FolderOpen,
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import { PostPreviewSwitcher } from "~/components/previews";
+import { MediaPickerDialog } from "~/components/media-picker-dialog";
 
 const MediaEditor = dynamic(
   () => import("~/components/media-editor/MediaEditor").then((m) => ({ default: m.MediaEditor })),
@@ -54,6 +57,8 @@ export function ComposeTab({ initialContent, initialImage, onPostCreated }: Comp
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingImageIndex, setEditingImageIndex] = useState<number | null>(null);
   const [editorPreview, setEditorPreview] = useState<string | null>(null);
+  const [showMediaPicker, setShowMediaPicker] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (initialContent) setContent(initialContent);
@@ -137,6 +142,27 @@ export function ComposeTab({ initialContent, initialImage, onPostCreated }: Comp
     setEditorOpen(false);
     setEditingImageIndex(null);
     setEditorPreview(null);
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+    Array.from(files).forEach((file) => {
+      if (!file.type.startsWith("image/")) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (reader.result) {
+          setPostMedia((prev) => [...prev, reader.result as string]);
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const handleMediaLibrarySelect = (url: string) => {
+    setPostMedia((prev) => [...prev, url]);
+    setShowMediaPicker(false);
   };
 
   const handleSubmit = (publishNow: boolean) => {
@@ -377,6 +403,71 @@ export function ComposeTab({ initialContent, initialImage, onPostCreated }: Comp
             )}
           </Card>
 
+          {/* Image Attachments */}
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Images</CardTitle>
+              <CardDescription>Attach images to your post</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex gap-2">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="hidden"
+                  onChange={handleFileUpload}
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="flex-1 gap-1.5"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <Upload className="h-3.5 w-3.5" />
+                  Upload
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="flex-1 gap-1.5"
+                  onClick={() => setShowMediaPicker(true)}
+                >
+                  <FolderOpen className="h-3.5 w-3.5" />
+                  Media Library
+                </Button>
+              </div>
+              {postMedia.length > 0 && (
+                <div className="flex gap-2 overflow-x-auto">
+                  {postMedia.map((url, idx) => (
+                    <div key={idx} className="group relative flex-shrink-0">
+                      <img
+                        src={url}
+                        alt={`Attached ${idx + 1}`}
+                        className="h-16 w-16 rounded-md border object-cover"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setPostMedia((prev) => prev.filter((_, i) => i !== idx))}
+                        className="absolute -right-1 -top-1 rounded-full bg-destructive p-0.5 text-destructive-foreground opacity-0 transition-opacity group-hover:opacity-100"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenEditor(idx)}
+                        className="absolute bottom-0 left-0 right-0 bg-black/50 py-0.5 text-center text-[10px] text-white opacity-0 transition-opacity group-hover:opacity-100"
+                      >
+                        Edit
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
           {/* Channel Selection */}
           <Card>
             <CardHeader className="pb-3">
@@ -539,6 +630,12 @@ export function ComposeTab({ initialContent, initialImage, onPostCreated }: Comp
           )}
         </div>
       </div>
+      <MediaPickerDialog
+        open={showMediaPicker}
+        onOpenChange={setShowMediaPicker}
+        onSelect={handleMediaLibrarySelect}
+        title="Attach Image from Library"
+      />
     </div>
   );
 }
