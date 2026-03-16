@@ -24,8 +24,15 @@ import {
   ChevronDown,
   ChevronUp,
   X,
+  Paintbrush,
 } from "lucide-react";
+import dynamic from "next/dynamic";
 import { PostPreviewSwitcher } from "~/components/previews";
+
+const MediaEditor = dynamic(
+  () => import("~/components/media-editor/MediaEditor").then((m) => ({ default: m.MediaEditor })),
+  { ssr: false }
+);
 
 interface ComposeTabProps {
   initialContent?: string;
@@ -44,6 +51,9 @@ export function ComposeTab({ initialContent, initialImage, onPostCreated }: Comp
   const [aiImagePrompt, setAiImagePrompt] = useState("");
   const [aiGeneratedImage, setAiGeneratedImage] = useState<string | null>(null);
   const [postMedia, setPostMedia] = useState<string[]>([]);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editingImageIndex, setEditingImageIndex] = useState<number | null>(null);
+  const [editorPreview, setEditorPreview] = useState<string | null>(null);
 
   useEffect(() => {
     if (initialContent) setContent(initialContent);
@@ -107,6 +117,28 @@ export function ComposeTab({ initialContent, initialImage, onPostCreated }: Comp
     setIsGenerating(false);
   };
 
+  const handleOpenEditor = (imageIndex?: number) => {
+    setEditingImageIndex(imageIndex ?? null);
+    setEditorOpen(true);
+  };
+
+  const handleEditorApply = (blobUrl: string) => {
+    if (editingImageIndex !== null) {
+      setPostMedia((prev) => prev.map((url, i) => (i === editingImageIndex ? blobUrl : url)));
+    } else {
+      setPostMedia((prev) => [...prev, blobUrl]);
+    }
+    setEditorOpen(false);
+    setEditingImageIndex(null);
+    setEditorPreview(null);
+  };
+
+  const handleEditorCancel = () => {
+    setEditorOpen(false);
+    setEditingImageIndex(null);
+    setEditorPreview(null);
+  };
+
   const handleSubmit = (publishNow: boolean) => {
     if (!content || selectedChannels.length === 0) {
       toast({
@@ -138,6 +170,25 @@ export function ComposeTab({ initialContent, initialImage, onPostCreated }: Comp
       <div className="grid gap-6 lg:grid-cols-[1fr,400px]">
         {/* Left column - Editor */}
         <div className="space-y-6">
+          {editorOpen ? (
+            <MediaEditor
+              initialImage={editingImageIndex !== null ? postMedia[editingImageIndex] : undefined}
+              onApply={handleEditorApply}
+              onCancel={handleEditorCancel}
+              onPreviewUpdate={setEditorPreview}
+            />
+          ) : (
+          <>
+          {/* Create Design Button */}
+          <Button
+            variant="outline"
+            onClick={() => handleOpenEditor()}
+            className="w-full gap-2"
+          >
+            <Paintbrush className="h-4 w-4" />
+            Create Design
+          </Button>
+
           {/* Content Editor */}
           <Card>
             <CardHeader className="pb-3">
@@ -271,6 +322,20 @@ export function ComposeTab({ initialContent, initialImage, onPostCreated }: Comp
                       <ImagePlus className="h-3.5 w-3.5" />
                       Add to Post
                     </Button>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => {
+                        if (aiGeneratedImage) {
+                          handleAddImageToPost();
+                        }
+                        handleOpenEditor(aiGeneratedImage ? postMedia.length : undefined);
+                      }}
+                      className="w-full gap-1.5"
+                    >
+                      <Paintbrush className="h-3.5 w-3.5" />
+                      Edit in Designer
+                    </Button>
                   </div>
                 )}
 
@@ -295,6 +360,13 @@ export function ComposeTab({ initialContent, initialImage, onPostCreated }: Comp
                             className="absolute -right-1 -top-1 rounded-full bg-destructive p-0.5 text-destructive-foreground opacity-0 transition-opacity group-hover:opacity-100"
                           >
                             <X className="h-3 w-3" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditor(idx)}
+                            className="absolute bottom-0 left-0 right-0 bg-black/50 py-0.5 text-center text-[10px] text-white opacity-0 transition-opacity group-hover:opacity-100"
+                          >
+                            Edit
                           </button>
                         </div>
                       ))}
@@ -444,6 +516,8 @@ export function ComposeTab({ initialContent, initialImage, onPostCreated }: Comp
               Publish Now
             </Button>
           </div>
+          </>
+          )}
         </div>
 
         {/* Right column - Preview Panel */}
@@ -454,6 +528,7 @@ export function ComposeTab({ initialContent, initialImage, onPostCreated }: Comp
           </div>
           <PostPreviewSwitcher
             content={content}
+            mediaUrls={editorOpen && editorPreview ? [editorPreview] : postMedia.length > 0 ? postMedia : undefined}
             platforms={selectedPlatforms.length > 0 ? selectedPlatforms : undefined}
             timestamp={scheduledAt ? new Date(scheduledAt) : new Date()}
           />
