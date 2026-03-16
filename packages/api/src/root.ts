@@ -26,6 +26,7 @@ import { chatRouter } from "./routers/chat.router";
 import { adminRouter } from "./routers/admin";
 import { autopilotRouter } from "./routers/autopilot.router";
 import { accountGroupRouter } from "./routers/account-group.router";
+import { designTemplateRouter } from "./routers/design-template.router";
 
 export const appRouter = createRouter({
   user: userRouter,
@@ -55,6 +56,7 @@ export const appRouter = createRouter({
   admin: adminRouter,
   autopilot: autopilotRouter,
   accountGroup: accountGroupRouter,
+  designTemplate: designTemplateRouter,
 });
 
 export type AppRouter = typeof appRouter;

@@ -23,7 +23,8 @@ model User {
   accounts    Account[]
   sessions    Session[]
   memberships OrganizationMember[]
-  auditLogs   AuditLog[]
+  auditLogs        AuditLog[]
+  designTemplates  DesignTemplate[]
 
   passwordResetTokens     PasswordResetToken[]
   emailVerificationTokens EmailVerificationToken[]
@@ -112,8 +113,9 @@ model Organization {
   chatThreads    ChatThread[]
   trendingItems  TrendingItem[]
   autopilotPosts AutopilotPost[]
-  accountGroups  AccountGroup[]
-  pipelineRuns   PipelineRun[]
+  accountGroups   AccountGroup[]
+  pipelineRuns    PipelineRun[]
+  designTemplates DesignTemplate[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -793,4 +795,27 @@ model OnboardingProgress {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// ==================== DESIGN TEMPLATES ====================
+
+model DesignTemplate {
+  id             String        @id @default(cuid())
+  name           String
+  category       String
+  thumbnail      String
+  canvasJson     Json
+  width          Int
+  height         Int
+  isGlobal       Boolean       @default(false)
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdById    String
+  createdBy      User          @relation(fields: [createdById], references: [id])
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([organizationId])
+  @@index([isGlobal])
+  @@index([category])
 }

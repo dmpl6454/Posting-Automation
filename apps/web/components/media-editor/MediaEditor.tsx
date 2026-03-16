@@ -16,6 +16,8 @@ import { UploadsPanel } from "./panels/UploadsPanel";
 import { DrawPanel } from "./panels/DrawPanel";
 import { AIPanel } from "./panels/AIPanel";
 import { EditorToolbar } from "./toolbars/EditorToolbar";
+import { TemplatePanel } from "./panels/TemplatePanel";
+import { LayerPanel } from "./LayerPanel";
 
 interface MediaEditorProps {
   initialImage?: string;
@@ -36,6 +38,7 @@ export function MediaEditor({
   const [isDirty, setIsDirty] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [activePanel, setActivePanel] = useState<SidebarPanel>(null);
+  const [layerPanelOpen, setLayerPanelOpen] = useState(false);
 
   const {
     canvasRef,
@@ -47,10 +50,12 @@ export function MediaEditor({
     resizeCanvas,
     setCanvasZoom,
     exportCanvas,
+    toJSON,
+    loadJSON,
   } = useFabricCanvas({ initialImage, initialSize: CANVAS_PRESETS[0] });
 
   const { undo, redo, canUndo, canRedo } = useEditorHistory(canvas);
-  const { exportBlobUrl, exportPreviewThumbnail } = useCanvasExport(canvas);
+  const { exportBlobUrl, exportPreviewThumbnail, exportTemplateThumbnail } = useCanvasExport(canvas);
 
   useEffect(() => {
     if (!canvas) return;
@@ -161,9 +166,14 @@ export function MediaEditor({
           {activePanel === "draw" && <DrawPanel canvas={canvas} />}
           {activePanel === "ai" && <AIPanel canvas={canvas} exportCanvasDataUrl={exportCanvas} />}
           {activePanel === "templates" && (
-            <div className="py-8 text-center text-xs text-muted-foreground">
-              Templates coming soon
-            </div>
+            <TemplatePanel
+              canvas={canvas}
+              canvasJson={toJSON}
+              loadJson={loadJSON}
+              exportThumbnail={exportTemplateThumbnail}
+              canvasWidth={canvasSize.width}
+              canvasHeight={canvasSize.height}
+            />
           )}
         </EditorSidebar>
 
@@ -172,6 +182,12 @@ export function MediaEditor({
           zoom={zoom}
           canvasWidth={canvasSize.width}
           canvasHeight={canvasSize.height}
+        />
+
+        <LayerPanel
+          canvas={canvas}
+          isOpen={layerPanelOpen}
+          onToggle={() => setLayerPanelOpen(!layerPanelOpen)}
         />
       </div>
 
