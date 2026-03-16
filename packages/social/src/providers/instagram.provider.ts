@@ -129,6 +129,52 @@ export class InstagramProvider extends SocialProvider {
     };
   }
 
+  /**
+   * Fetch ALL Instagram Business Accounts linked to the user's Facebook Pages.
+   * Returns an array of IG accounts with their profile info.
+   */
+  async getAllInstagramAccounts(tokens: OAuthTokens): Promise<Array<{
+    id: string;
+    name: string;
+    username?: string;
+    avatar?: string;
+  }>> {
+    const accounts: Array<{ id: string; name: string; username?: string; avatar?: string }> = [];
+    let url: string | null = `${this.graphBaseUrl}/${this.apiVersion}/me/accounts?fields=id,instagram_business_account&limit=25&access_token=${tokens.accessToken}`;
+
+    while (url) {
+      const pagesRes = await fetch(url);
+      const pagesData: any = await pagesRes.json();
+      if (!pagesRes.ok) break;
+
+      for (const page of pagesData.data || []) {
+        if (page.instagram_business_account?.id) {
+          // Fetch IG profile details
+          try {
+            const igRes = await fetch(
+              `${this.graphBaseUrl}/${this.apiVersion}/${page.instagram_business_account.id}?fields=id,username,profile_picture_url&access_token=${tokens.accessToken}`
+            );
+            const igData: any = await igRes.json();
+            if (igRes.ok) {
+              accounts.push({
+                id: igData.id,
+                name: igData.username || igData.id,
+                username: igData.username,
+                avatar: igData.profile_picture_url,
+              });
+            }
+          } catch {
+            // Skip this account if profile fetch fails
+          }
+        }
+      }
+
+      url = pagesData.paging?.next || null;
+    }
+
+    return accounts;
+  }
+
   async getPostAnalytics(tokens: OAuthTokens, platformPostId: string): Promise<SocialAnalytics | null> {
     const res = await fetch(
       `${this.graphBaseUrl}/${this.apiVersion}/${platformPostId}/insights?metric=impressions,reach,engagement&access_token=${tokens.accessToken}`

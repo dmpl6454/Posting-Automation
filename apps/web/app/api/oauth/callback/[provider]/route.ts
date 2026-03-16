@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@postautomation/db";
-import { getSocialProvider, FacebookProvider } from "@postautomation/social";
+import { getSocialProvider, FacebookProvider, InstagramProvider } from "@postautomation/social";
 
 export async function GET(
   req: Request,
@@ -135,6 +135,55 @@ export async function GET(
       const count = pages.length || 1;
       return NextResponse.redirect(
         `${process.env.APP_URL}/dashboard/channels?success=connected&platform=${params.provider}&pages=${count}`
+      );
+    }
+
+    // For Instagram, fetch and save ALL linked Instagram Business Accounts
+    if (platform === "INSTAGRAM" && provider instanceof InstagramProvider) {
+      const igAccounts = await provider.getAllInstagramAccounts(tokens);
+
+      if (igAccounts.length === 0) {
+        throw new Error("No Instagram Business Account found. Ensure a Facebook Page is connected to an Instagram Professional account.");
+      }
+
+      for (const ig of igAccounts) {
+        await prisma.channel.upsert({
+          where: {
+            organizationId_platform_platformId: {
+              organizationId,
+              platform: "INSTAGRAM",
+              platformId: ig.id,
+            },
+          },
+          update: {
+            accessToken: tokens.accessToken,
+            refreshToken: tokens.refreshToken || null,
+            tokenExpiresAt: tokens.expiresAt || null,
+            scopes: tokens.scopes || [],
+            name: ig.name,
+            username: ig.username || null,
+            avatar: ig.avatar || null,
+            isActive: true,
+            metadata: { igUserId: ig.id },
+          },
+          create: {
+            organizationId,
+            platform: "INSTAGRAM",
+            platformId: ig.id,
+            name: ig.name,
+            username: ig.username || null,
+            avatar: ig.avatar || null,
+            accessToken: tokens.accessToken,
+            refreshToken: tokens.refreshToken || null,
+            tokenExpiresAt: tokens.expiresAt || null,
+            scopes: tokens.scopes || [],
+            metadata: { igUserId: ig.id },
+          },
+        });
+      }
+
+      return NextResponse.redirect(
+        `${process.env.APP_URL}/dashboard/channels?success=connected&platform=${params.provider}&pages=${igAccounts.length}`
       );
     }
 
