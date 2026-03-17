@@ -10,25 +10,25 @@
     "clean": "rm -rf dist node_modules .turbo"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1005.0",
-    "@aws-sdk/s3-request-presigner": "^3.1005.0",
+    "@aws-sdk/client-s3": "^3.1010.0",
+    "@aws-sdk/s3-request-presigner": "^3.1010.0",
     "@postautomation/ai": "workspace:*",
     "@postautomation/billing": "workspace:*",
     "@postautomation/db": "workspace:*",
     "@postautomation/queue": "workspace:*",
     "@postautomation/social": "workspace:*",
-    "@trpc/server": "^11.0.0-rc.0",
-    "bcryptjs": "^2.4.3",
-    "bullmq": "^5.34.0",
+    "@trpc/server": "^11.13.4",
+    "bcryptjs": "^3.0.3",
+    "bullmq": "^5.71.0",
     "jose": "^6.2.1",
     "superjson": "^2.2.1",
-    "zod": "^3.24.0"
+    "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@types/bcryptjs": "^2.4.6",
-    "@types/node": "^22.0.0",
+    "@types/bcryptjs": "^3.0.0",
+    "@types/node": "^25.5.0",
     "next-auth": "^5.0.0-beta.25",
     "typescript": "^5.7.0",
-    "vitest": "^3.0.0"
+    "vitest": "^4.1.0"
   }
 }
