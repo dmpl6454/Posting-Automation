@@ -5,6 +5,7 @@ import {
   generateImage,
   editImage,
   generateImageDallE,
+  generateImageMeta,
 } from "@postautomation/ai";
 import { createRateLimitMiddleware } from "../middleware/rate-limit.middleware";
 import { aiRateLimiter } from "../middleware/rate-limit";
@@ -14,7 +15,7 @@ import { mediaProcessQueue } from "@postautomation/queue";
 const aiRateLimited = orgProcedure.use(createRateLimitMiddleware(aiRateLimiter));
 
 const imageProviderSchema = z
-  .enum(["nano-banana", "nano-banana-pro", "dall-e"])
+  .enum(["nano-banana", "nano-banana-pro", "dall-e", "meta-ai"])
   .optional()
   .default("nano-banana");
 
@@ -52,6 +53,18 @@ export const imageRouter = createRouter({
             imageBase64: result.imageBase64,
             mimeType: result.mimeType,
             description: result.text,
+          };
+        }
+
+        if (input.provider === "meta-ai") {
+          const result = await generateImageMeta({
+            prompt: input.prompt,
+            aspectRatio: input.aspectRatio,
+          });
+          return {
+            imageBase64: result.imageBase64,
+            mimeType: result.mimeType,
+            description: undefined,
           };
         }
 

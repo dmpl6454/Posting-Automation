@@ -61,6 +61,7 @@ export function ImageTab() {
 
   // Generate Mode State
   const [generatePrompt, setGeneratePrompt] = useState("");
+  const [imageProvider, setImageProvider] = useState<"nano-banana" | "nano-banana-pro" | "dall-e" | "meta-ai">("nano-banana");
   const [model, setModel] = useState(MODELS[0]?.value ?? "gemini-3.1-flash-image-preview");
   const [aspectRatio, setAspectRatio] = useState("1:1");
   const [imageSize, setImageSize] = useState("1K");
@@ -155,8 +156,13 @@ export function ImageTab() {
     else if (logoImage) fullPrompt = `${generatePrompt}\n\nI've attached a logo image. Please incorporate this logo into the generated image.`;
 
     generateMutation.mutate({
-      prompt: fullPrompt, model: model as any, aspectRatio, imageSize,
-      ...(refs.length > 0 ? { referenceImages: refs } : {}),
+      prompt: fullPrompt,
+      provider: imageProvider,
+      ...(imageProvider === "nano-banana" || imageProvider === "nano-banana-pro"
+        ? { model: model as any, aspectRatio, imageSize, ...(refs.length > 0 ? { referenceImages: refs } : {}) }
+        : imageProvider === "dall-e"
+        ? { aspectRatio }
+        : { aspectRatio }), // meta-ai
     });
   };
 
@@ -303,21 +309,53 @@ export function ImageTab() {
                 </CardContent>
               </Card>
 
+              {/* Provider selector */}
               <Card>
-                <CardHeader className="pb-3"><CardTitle className="text-base">Model</CardTitle></CardHeader>
+                <CardHeader className="pb-3"><CardTitle className="text-base">AI Provider</CardTitle></CardHeader>
                 <CardContent>
-                  <Select value={model} onValueChange={setModel}>
-                    <SelectTrigger><SelectValue placeholder="Select model" /></SelectTrigger>
-                    <SelectContent>
-                      {MODELS.map((m) => (
-                        <SelectItem key={m.value} value={m.value}>
-                          <span className="flex items-center gap-2">{m.label}{m.badge && <Badge variant="secondary" className="text-[10px]">{m.badge}</Badge>}</span>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    {[
+                      { value: "nano-banana", label: "Nano Banana", sub: "Gemini" },
+                      { value: "nano-banana-pro", label: "Nano Banana Pro", sub: "Gemini Pro" },
+                      { value: "dall-e", label: "DALL-E 3", sub: "OpenAI" },
+                      { value: "meta-ai", label: "Meta AI", sub: "FLUX.1" },
+                    ].map((p) => (
+                      <button
+                        key={p.value}
+                        type="button"
+                        onClick={() => setImageProvider(p.value as typeof imageProvider)}
+                        className={`flex flex-col items-center rounded-lg border px-3 py-2.5 text-xs transition-all ${
+                          imageProvider === p.value
+                            ? "border-primary bg-primary/5 text-primary ring-1 ring-primary"
+                            : "border-border text-muted-foreground hover:border-muted-foreground/50 hover:bg-muted/50"
+                        }`}
+                      >
+                        <span className="font-semibold">{p.label}</span>
+                        <span className="text-[10px] opacity-70">{p.sub}</span>
+                      </button>
+                    ))}
+                  </div>
                 </CardContent>
               </Card>
+
+              {/* Nano Banana model selector */}
+              {(imageProvider === "nano-banana" || imageProvider === "nano-banana-pro") && (
+                <Card>
+                  <CardHeader className="pb-3"><CardTitle className="text-base">Model</CardTitle></CardHeader>
+                  <CardContent>
+                    <Select value={model} onValueChange={setModel}>
+                      <SelectTrigger><SelectValue placeholder="Select model" /></SelectTrigger>
+                      <SelectContent>
+                        {MODELS.map((m) => (
+                          <SelectItem key={m.value} value={m.value}>
+                            <span className="flex items-center gap-2">{m.label}{m.badge && <Badge variant="secondary" className="text-[10px]">{m.badge}</Badge>}</span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </CardContent>
+                </Card>
+              )}
 
               <Card>
                 <CardHeader className="pb-3"><CardTitle className="text-base">Aspect Ratio</CardTitle></CardHeader>
@@ -335,16 +373,19 @@ export function ImageTab() {
                 </CardContent>
               </Card>
 
-              <Card>
-                <CardHeader className="pb-3"><CardTitle className="text-base">Image Size</CardTitle></CardHeader>
-                <CardContent>
-                  <div className="grid grid-cols-4 gap-2">
-                    {IMAGE_SIZES.map((size) => (
-                      <button key={size.value} onClick={() => setImageSize(size.value)} className={`rounded-lg border px-3 py-2 text-sm font-medium transition-all ${imageSize === size.value ? "border-primary bg-primary/5 text-primary ring-1 ring-primary" : "border-border text-muted-foreground hover:border-muted-foreground/50 hover:bg-muted/50"}`}>{size.label}</button>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
+              {/* Image size — only for Nano Banana */}
+              {(imageProvider === "nano-banana" || imageProvider === "nano-banana-pro") && (
+                <Card>
+                  <CardHeader className="pb-3"><CardTitle className="text-base">Image Size</CardTitle></CardHeader>
+                  <CardContent>
+                    <div className="grid grid-cols-4 gap-2">
+                      {IMAGE_SIZES.map((size) => (
+                        <button key={size.value} onClick={() => setImageSize(size.value)} className={`rounded-lg border px-3 py-2 text-sm font-medium transition-all ${imageSize === size.value ? "border-primary bg-primary/5 text-primary ring-1 ring-primary" : "border-border text-muted-foreground hover:border-muted-foreground/50 hover:bg-muted/50"}`}>{size.label}</button>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
 
               <Card>
                 <CardHeader className="pb-3"><CardTitle className="text-base">Attachments</CardTitle><CardDescription>Add a reference design or logo (optional)</CardDescription></CardHeader>

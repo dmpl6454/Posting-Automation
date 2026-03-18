@@ -15,6 +15,8 @@ export { generateImage, editImage, NANO_BANANA_ASPECT_RATIOS, NANO_BANANA_SIZES,
 export type { NanoBananaGenerateParams, NanoBananaEditParams, NanoBananaResult } from "./providers/nano-banana.provider";
 export { generateImageDallE, editImageDallE, DALLE_SIZES, DALLE_QUALITIES } from "./providers/dalle.provider";
 export type { DallEGenerateParams, DallEResult } from "./providers/dalle.provider";
+export { generateImageMeta } from "./providers/meta.provider";
+export type { MetaGenerateParams, MetaImageResult } from "./providers/meta.provider";
 export { fetchTrendingNews, detectTrendingIntent } from "./tools/trending-news";
 export type { TrendingHeadline } from "./tools/trending-news";
 export { generateNewsCardImage, generateNewsAiImage, generateNewsImage } from "./tools/news-image-generator";
