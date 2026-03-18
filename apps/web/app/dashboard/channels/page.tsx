@@ -403,7 +403,7 @@ export default function ChannelsPage() {
                     className={`h-5 w-5 rounded-full transition-transform ${
                       newGroupColor === color ? "scale-125 ring-2 ring-offset-1 ring-offset-background" : ""
                     }`}
-                    style={{ background: color, ringColor: color }}
+                    style={{ background: color }}
                   />
                 ))}
               </div>
