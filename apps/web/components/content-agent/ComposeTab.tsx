@@ -27,6 +27,9 @@ import {
   Paintbrush,
   Upload,
   FolderOpen,
+  Search,
+  Users,
+  Check,
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import { PostPreviewSwitcher } from "~/components/previews";
@@ -59,6 +62,8 @@ export function ComposeTab({ initialContent, initialImage, onPostCreated }: Comp
   const [editorPreview, setEditorPreview] = useState<string | null>(null);
   const [showMediaPicker, setShowMediaPicker] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [channelSearch, setChannelSearch] = useState("");
+  const [activeGroupTab, setActiveGroupTab] = useState<string>("all");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -67,6 +72,7 @@ export function ComposeTab({ initialContent, initialImage, onPostCreated }: Comp
   }, [initialContent, initialImage]);
 
   const { data: channels, isLoading: channelsLoading } = trpc.channel.list.useQuery();
+  const { data: channelGroups } = trpc.channelGroup.list.useQuery();
   const createPost = trpc.post.create.useMutation({
     onSuccess: () => {
       toast({ title: "Post created!", description: "Your post has been saved successfully." });
@@ -517,10 +523,17 @@ export function ComposeTab({ initialContent, initialImage, onPostCreated }: Comp
           {/* Channel Selection */}
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-base">Select Channels</CardTitle>
-              <CardDescription>Choose which platforms to publish to</CardDescription>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-base">Select Channels</CardTitle>
+                  <CardDescription>Choose which platforms to publish to</CardDescription>
+                </div>
+                {selectedChannels.length > 0 && (
+                  <Badge variant="secondary">{selectedChannels.length} selected</Badge>
+                )}
+              </div>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-3">
               {channelsLoading ? (
                 <div className="grid gap-2 sm:grid-cols-2">
                   {[1, 2].map((i) => (
@@ -539,49 +552,176 @@ export function ComposeTab({ initialContent, initialImage, onPostCreated }: Comp
                   </Button>
                 </div>
               ) : (
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {channels?.map((channel: any) => {
-                    const isSelected = selectedChannels.includes(channel.id);
-                    return (
-                      <label
-                        key={channel.id}
-                        className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 transition-all ${
-                          isSelected
-                            ? "border-primary bg-primary/5 ring-1 ring-primary"
-                            : "hover:border-muted-foreground/50 hover:bg-muted/50"
+                <>
+                  {/* Search */}
+                  <div className="relative">
+                    <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+                    <Input
+                      value={channelSearch}
+                      onChange={(e) => setChannelSearch(e.target.value)}
+                      placeholder="Search channels..."
+                      className="h-8 pl-8 text-sm"
+                    />
+                  </div>
+
+                  {/* Group tabs */}
+                  {channelGroups && channelGroups.length > 0 && (
+                    <div className="flex gap-1 overflow-x-auto pb-1">
+                      <button
+                        type="button"
+                        onClick={() => setActiveGroupTab("all")}
+                        className={`flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                          activeGroupTab === "all"
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-muted text-muted-foreground hover:text-foreground"
                         }`}
                       >
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setSelectedChannels([...selectedChannels, channel.id]);
+                        All
+                      </button>
+                      {channelGroups.map((group: any) => {
+                        const groupSelected = group.channels.every((c: any) =>
+                          selectedChannels.includes(c.id)
+                        );
+                        return (
+                          <button
+                            key={group.id}
+                            type="button"
+                            onClick={() => setActiveGroupTab(group.id)}
+                            className={`flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                              activeGroupTab === group.id
+                                ? "bg-primary text-primary-foreground"
+                                : "bg-muted text-muted-foreground hover:text-foreground"
+                            }`}
+                          >
+                            <span
+                              className="h-2 w-2 rounded-full"
+                              style={{ background: group.color }}
+                            />
+                            {group.name}
+                            {groupSelected && group.channels.length > 0 && (
+                              <Check className="h-3 w-3" />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* Select all in group */}
+                  {activeGroupTab !== "all" && channelGroups && (
+                    (() => {
+                      const group = channelGroups.find((g: any) => g.id === activeGroupTab);
+                      if (!group || group.channels.length === 0) return null;
+                      const groupIds = group.channels.map((c: any) => c.id);
+                      const allSelected = groupIds.every((id: string) => selectedChannels.includes(id));
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (allSelected) {
+                              setSelectedChannels(prev => prev.filter(id => !groupIds.includes(id)));
                             } else {
-                              setSelectedChannels(
-                                selectedChannels.filter((id) => id !== channel.id)
-                              );
+                              setSelectedChannels(prev => [...new Set([...prev, ...groupIds])]);
                             }
                           }}
-                          className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
-                        />
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-medium">{channel.name}</p>
-                          <div className="flex items-center gap-1.5">
-                            <Badge variant="outline" className="text-[10px]">
-                              {channel.platform}
-                            </Badge>
-                            {channel.username && (
-                              <span className="text-xs text-muted-foreground">
-                                @{channel.username}
-                              </span>
+                          className="text-xs text-primary hover:underline"
+                        >
+                          {allSelected ? "Deselect all in group" : `Select all in "${group.name}"`}
+                        </button>
+                      );
+                    })()
+                  )}
+
+                  {/* Channel list */}
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {channels
+                      ?.filter((channel: any) => {
+                        const matchesSearch =
+                          !channelSearch ||
+                          channel.name.toLowerCase().includes(channelSearch.toLowerCase()) ||
+                          channel.platform.toLowerCase().includes(channelSearch.toLowerCase()) ||
+                          (channel.username || "").toLowerCase().includes(channelSearch.toLowerCase());
+                        const matchesGroup =
+                          activeGroupTab === "all" ||
+                          channelGroups?.find((g: any) => g.id === activeGroupTab)
+                            ?.channels.some((c: any) => c.id === channel.id);
+                        return matchesSearch && matchesGroup;
+                      })
+                      .map((channel: any) => {
+                        const isSelected = selectedChannels.includes(channel.id);
+                        return (
+                          <label
+                            key={channel.id}
+                            className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 transition-all ${
+                              isSelected
+                                ? "border-primary bg-primary/5 ring-1 ring-primary"
+                                : "hover:border-muted-foreground/50 hover:bg-muted/50"
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setSelectedChannels([...selectedChannels, channel.id]);
+                                } else {
+                                  setSelectedChannels(selectedChannels.filter((id) => id !== channel.id));
+                                }
+                              }}
+                              className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                            />
+                            {channel.avatar ? (
+                              <img src={channel.avatar} alt={channel.name} className="h-7 w-7 rounded-full object-cover" />
+                            ) : (
+                              <div className="flex h-7 w-7 items-center justify-center rounded-full bg-muted text-[10px] font-bold uppercase">
+                                {channel.platform.slice(0, 2)}
+                              </div>
                             )}
-                          </div>
-                        </div>
-                      </label>
-                    );
-                  })}
-                </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-sm font-medium">{channel.name}</p>
+                              <div className="flex items-center gap-1.5">
+                                <Badge variant="outline" className="text-[10px]">
+                                  {channel.platform}
+                                </Badge>
+                                {channel.username && (
+                                  <span className="text-xs text-muted-foreground">
+                                    @{channel.username}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </label>
+                        );
+                      })}
+                  </div>
+
+                  {/* No results */}
+                  {channels?.filter((channel: any) => {
+                    const matchesSearch =
+                      !channelSearch ||
+                      channel.name.toLowerCase().includes(channelSearch.toLowerCase()) ||
+                      channel.platform.toLowerCase().includes(channelSearch.toLowerCase()) ||
+                      (channel.username || "").toLowerCase().includes(channelSearch.toLowerCase());
+                    const matchesGroup =
+                      activeGroupTab === "all" ||
+                      channelGroups?.find((g: any) => g.id === activeGroupTab)
+                        ?.channels.some((c: any) => c.id === channel.id);
+                    return matchesSearch && matchesGroup;
+                  }).length === 0 && (
+                    <p className="py-4 text-center text-sm text-muted-foreground">No channels found</p>
+                  )}
+
+                  {/* Manage groups link */}
+                  <div className="flex items-center justify-end pt-1">
+                    <a
+                      href="/dashboard/channels"
+                      className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                    >
+                      <Users className="h-3 w-3" />
+                      Manage channel groups
+                    </a>
+                  </div>
+                </>
               )}
             </CardContent>
           </Card>

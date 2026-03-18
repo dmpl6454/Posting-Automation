@@ -104,6 +104,7 @@ model Organization {
 
   members        OrganizationMember[]
   channels       Channel[]
+  channelGroups  ChannelGroup[]
   posts          Post[]
   media          Media[]
   webhooks       Webhook[]
@@ -167,13 +168,29 @@ model Channel {
   metadata       Json?
   isActive       Boolean        @default(true)
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  postTargets  PostTarget[]
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  postTargets    PostTarget[]
+  channelGroups  ChannelGroup[] @relation("ChannelGroupMembers")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([organizationId, platform, platformId])
+  @@index([organizationId])
+}
+
+model ChannelGroup {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  color          String   @default("#6366f1")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channels     Channel[]    @relation("ChannelGroupMembers")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
   @@index([organizationId])
 }
 
