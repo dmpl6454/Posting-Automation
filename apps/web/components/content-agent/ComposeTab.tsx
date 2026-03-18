@@ -43,10 +43,11 @@ const MediaEditor = dynamic(
 interface ComposeTabProps {
   initialContent?: string;
   initialImage?: string;
+  initialImageMediaId?: string;
   onPostCreated?: () => void;
 }
 
-export function ComposeTab({ initialContent, initialImage, onPostCreated }: ComposeTabProps) {
+export function ComposeTab({ initialContent, initialImage, initialImageMediaId, onPostCreated }: ComposeTabProps) {
   const router = useRouter();
   const { toast } = useToast();
   const [content, setContent] = useState(initialContent || "");
@@ -68,7 +69,7 @@ export function ComposeTab({ initialContent, initialImage, onPostCreated }: Comp
 
   useEffect(() => {
     if (initialContent) setContent(initialContent);
-    if (initialImage) setPostMedia((prev) => (prev.length === 0 ? [{ url: initialImage }] : prev));
+    if (initialImage) setPostMedia((prev) => (prev.length === 0 ? [{ url: initialImage, mediaId: initialImageMediaId }] : prev));
   }, [initialContent, initialImage]);
 
   const { data: channels, isLoading: channelsLoading } = trpc.channel.list.useQuery();

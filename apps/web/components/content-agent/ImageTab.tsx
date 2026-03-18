@@ -266,7 +266,7 @@ export function ImageTab() {
       toast({ title: "Saving image..." });
       const saved = await saveMutation.mutateAsync({ imageBase64, mimeType, fileName: `ai-image-${Date.now()}.png` });
       if (saved?.url) {
-        router.push(`/dashboard/content-agent?tab=compose&aiImage=${encodeURIComponent(saved.url)}`);
+        router.push(`/dashboard/content-agent?tab=compose&aiImage=${encodeURIComponent(saved.url)}&aiMediaId=${encodeURIComponent(saved.id)}`);
       } else {
         toast({ title: "Save succeeded but no URL returned", variant: "destructive" });
       }

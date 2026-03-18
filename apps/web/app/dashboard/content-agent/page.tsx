@@ -29,6 +29,7 @@ function ContentStudioInner() {
   const [activeTab, setActiveTab] = useState(tabParam);
   const composeContent = searchParams.get("content") || undefined;
   const composeImage = searchParams.get("aiImage") || undefined;
+  const composeMediaId = searchParams.get("aiMediaId") || undefined;
 
   useEffect(() => {
     setActiveTab(tabParam);
@@ -125,6 +126,7 @@ function ContentStudioInner() {
             <ComposeTab
               initialContent={composeContent}
               initialImage={composeImage}
+              initialImageMediaId={composeMediaId}
               onPostCreated={() => handleTabChange("posts")}
             />
           </div>
