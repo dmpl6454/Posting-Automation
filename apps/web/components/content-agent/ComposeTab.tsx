@@ -34,6 +34,7 @@ import {
 import dynamic from "next/dynamic";
 import { PostPreviewSwitcher } from "~/components/previews";
 import { MediaPickerDialog } from "~/components/media-picker-dialog";
+import { ImageGenerationPanel } from "~/components/content-agent/ImageGenerationPanel";
 
 const MediaEditor = dynamic(
   () => import("~/components/media-editor/MediaEditor").then((m) => ({ default: m.MediaEditor })),
@@ -300,15 +301,21 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
           </Card>
 
           {/* AI Image Generation — link to Image tab */}
-          <Button
-            variant="outline"
-            className="w-full gap-2 border-dashed"
-            onClick={() => router.push("/dashboard/content-agent?tab=image")}
-          >
-            <Sparkles className="h-4 w-4 text-purple-500" />
-            Generate AI Image
-            <span className="ml-auto text-xs text-muted-foreground">Image tab →</span>
-          </Button>
+          {/* AI Image Generation */}
+          <ImageGenerationPanel
+            onAddToPost={(imageDataUrl) => {
+              // Convert base64 data URL to a File for upload
+              const match = imageDataUrl.match(/^data:([^;]+);base64,(.+)$/);
+              if (!match) return;
+              const mimeType = match[1] ?? "image/png";
+              const byteString = atob(match[2] ?? "");
+              const ab = new ArrayBuffer(byteString.length);
+              const ia = new Uint8Array(ab);
+              for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
+              const file = new File([ab], `ai-image-${Date.now()}.png`, { type: mimeType });
+              setPostMedia((prev) => [...prev, { url: imageDataUrl, file }]);
+            }}
+          />
 
           {/* Media Attachments */}
           <Card>
