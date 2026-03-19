@@ -10,7 +10,7 @@ import {
 } from "~/components/ui/dialog";
 import { Button } from "~/components/ui/button";
 import { Skeleton } from "~/components/ui/skeleton";
-import { ImageIcon, Check } from "lucide-react";
+import { ImageIcon, Film, Check } from "lucide-react";
 
 interface MediaPickerDialogProps {
   open: boolean;
@@ -28,9 +28,10 @@ export function MediaPickerDialog({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedUrl, setSelectedUrl] = useState<string>("");
   const [selectedName, setSelectedName] = useState<string>("");
+  const [mediaType, setMediaType] = useState<"all" | "image" | "video">("all");
 
   const { data, isLoading } = trpc.media.list.useQuery(
-    { limit: 50, type: "image" },
+    { limit: 50, type: mediaType },
     { enabled: open }
   );
 
@@ -51,6 +52,23 @@ export function MediaPickerDialog({
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
 
+        {/* Type filter tabs */}
+        <div className="flex gap-1 border-b pb-2">
+          {(["all", "image", "video"] as const).map((t) => (
+            <button
+              key={t}
+              onClick={() => { setMediaType(t); setSelectedId(null); }}
+              className={`rounded px-3 py-1 text-sm capitalize transition-colors ${
+                mediaType === t
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-muted"
+              }`}
+            >
+              {t === "all" ? "All" : t === "image" ? "Images" : "Videos"}
+            </button>
+          ))}
+        </div>
+
         {isLoading ? (
           <div className="grid grid-cols-4 gap-2">
             {Array.from({ length: 8 }).map((_, i) => (
@@ -61,47 +79,51 @@ export function MediaPickerDialog({
           <div className="flex flex-col items-center justify-center py-12 text-center">
             <ImageIcon className="mb-3 h-10 w-10 text-muted-foreground/50" />
             <p className="text-sm text-muted-foreground">
-              No images in your media library yet.
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground/70">
-              Upload images from the Media Library page first.
+              No {mediaType === "all" ? "media" : mediaType + "s"} in your library yet.
             </p>
           </div>
         ) : (
           <div className="grid max-h-[400px] grid-cols-4 gap-2 overflow-y-auto pr-1">
-            {items.map((item) => (
-              <button
-                key={item.id}
-                onClick={() => {
-                  setSelectedId(item.id);
-                  setSelectedUrl(item.url);
-                  setSelectedName(item.fileName);
-                }}
-                className={`group relative aspect-square overflow-hidden rounded-lg border-2 transition-all ${
-                  selectedId === item.id
-                    ? "border-primary ring-2 ring-primary/30"
-                    : "border-transparent hover:border-muted-foreground/30"
-                }`}
-              >
-                <img
-                  src={item.thumbnailUrl || item.url}
-                  alt={item.fileName}
-                  className="h-full w-full object-cover"
-                />
-                {selectedId === item.id && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-primary/20">
-                    <div className="rounded-full bg-primary p-1">
-                      <Check className="h-4 w-4 text-primary-foreground" />
+            {items.map((item) => {
+              const isVideo = item.fileType?.startsWith("video/");
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => {
+                    setSelectedId(item.id);
+                    setSelectedUrl(item.url);
+                    setSelectedName(item.fileName);
+                  }}
+                  className={`group relative aspect-square overflow-hidden rounded-lg border-2 transition-all ${
+                    selectedId === item.id
+                      ? "border-primary ring-2 ring-primary/30"
+                      : "border-transparent hover:border-muted-foreground/30"
+                  }`}
+                >
+                  {isVideo ? (
+                    <div className="flex h-full w-full items-center justify-center bg-muted">
+                      <Film className="h-8 w-8 text-muted-foreground" />
                     </div>
+                  ) : (
+                    <img
+                      src={item.thumbnailUrl || item.url}
+                      alt={item.fileName}
+                      className="h-full w-full object-cover"
+                    />
+                  )}
+                  {selectedId === item.id && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-primary/20">
+                      <div className="rounded-full bg-primary p-1">
+                        <Check className="h-4 w-4 text-primary-foreground" />
+                      </div>
+                    </div>
+                  )}
+                  <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/60 to-transparent p-1.5 opacity-0 transition-opacity group-hover:opacity-100">
+                    <p className="truncate text-[10px] text-white">{item.fileName}</p>
                   </div>
-                )}
-                <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/60 to-transparent p-1.5 opacity-0 transition-opacity group-hover:opacity-100">
-                  <p className="truncate text-[10px] text-white">
-                    {item.fileName}
-                  </p>
-                </div>
-              </button>
-            ))}
+                </button>
+              );
+            })}
           </div>
         )}
 

@@ -30,6 +30,8 @@ import {
   Search,
   Users,
   Check,
+  Video,
+  Film,
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import { PostPreviewSwitcher } from "~/components/previews";
@@ -66,6 +68,7 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   const [channelSearch, setChannelSearch] = useState("");
   const [activeGroupTab, setActiveGroupTab] = useState<string>("all");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const videoInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (initialContent) setContent(initialContent);
@@ -173,6 +176,17 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
       setPostMedia((prev) => [...prev, { url, file }]);
     });
     if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const handleVideoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+    Array.from(files).forEach((file) => {
+      if (!file.type.startsWith("video/")) return;
+      const url = URL.createObjectURL(file);
+      setPostMedia((prev) => [...prev, { url, file }]);
+    });
+    if (videoInputRef.current) videoInputRef.current.value = "";
   };
 
   const handleMediaLibrarySelect = (url: string, _fileName: string, mediaId?: string) => {
@@ -418,49 +432,15 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
                   </div>
                 )}
 
-                {postMedia.length > 0 && (
-                  <div className="space-y-1.5">
-                    <p className="text-xs font-medium text-muted-foreground">
-                      Attached Images ({postMedia.length})
-                    </p>
-                    <div className="flex gap-2 overflow-x-auto">
-                      {postMedia.map((item, idx) => (
-                        <div key={idx} className="group relative flex-shrink-0">
-                          <img
-                            src={item.url}
-                            alt={`Attached ${idx + 1}`}
-                            className="h-16 w-16 rounded-md border object-cover"
-                          />
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setPostMedia((prev) => prev.filter((_, i) => i !== idx))
-                            }
-                            className="absolute -right-1 -top-1 rounded-full bg-destructive p-0.5 text-destructive-foreground opacity-0 transition-opacity group-hover:opacity-100"
-                          >
-                            <X className="h-3 w-3" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleOpenEditor(idx)}
-                            className="absolute bottom-0 left-0 right-0 bg-black/50 py-0.5 text-center text-[10px] text-white opacity-0 transition-opacity group-hover:opacity-100"
-                          >
-                            Edit
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
               </CardContent>
             )}
           </Card>
 
-          {/* Image Attachments */}
+          {/* Media Attachments */}
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-base">Images</CardTitle>
-              <CardDescription>Attach images to your post</CardDescription>
+              <CardTitle className="text-base">Media</CardTitle>
+              <CardDescription>Attach images or videos to your post</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="flex gap-2">
@@ -472,6 +452,13 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
                   className="hidden"
                   onChange={handleFileUpload}
                 />
+                <input
+                  ref={videoInputRef}
+                  type="file"
+                  accept="video/mp4,video/webm,video/quicktime"
+                  className="hidden"
+                  onChange={handleVideoUpload}
+                />
                 <Button
                   variant="outline"
                   size="sm"
@@ -479,7 +466,16 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
                   onClick={() => fileInputRef.current?.click()}
                 >
                   <Upload className="h-3.5 w-3.5" />
-                  Upload
+                  Image
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="flex-1 gap-1.5"
+                  onClick={() => videoInputRef.current?.click()}
+                >
+                  <Video className="h-3.5 w-3.5" />
+                  Video
                 </Button>
                 <Button
                   variant="outline"
@@ -488,34 +484,53 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
                   onClick={() => setShowMediaPicker(true)}
                 >
                   <FolderOpen className="h-3.5 w-3.5" />
-                  Media Library
+                  Library
                 </Button>
               </div>
               {postMedia.length > 0 && (
-                <div className="flex gap-2 overflow-x-auto">
-                  {postMedia.map((item, idx) => (
-                    <div key={idx} className="group relative flex-shrink-0">
-                      <img
-                        src={item.url}
-                        alt={`Attached ${idx + 1}`}
-                        className="h-16 w-16 rounded-md border object-cover"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setPostMedia((prev) => prev.filter((_, i) => i !== idx))}
-                        className="absolute -right-1 -top-1 rounded-full bg-destructive p-0.5 text-destructive-foreground opacity-0 transition-opacity group-hover:opacity-100"
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleOpenEditor(idx)}
-                        className="absolute bottom-0 left-0 right-0 bg-black/50 py-0.5 text-center text-[10px] text-white opacity-0 transition-opacity group-hover:opacity-100"
-                      >
-                        Edit
-                      </button>
-                    </div>
-                  ))}
+                <div className="flex gap-2 overflow-x-auto pb-1">
+                  {postMedia.map((item, idx) => {
+                    const isVideo = item.file?.type.startsWith("video/") || item.url.includes("video") || /\.(mp4|webm|mov)/.test(item.url);
+                    return (
+                      <div key={idx} className="group relative flex-shrink-0">
+                        {isVideo ? (
+                          <div className="relative h-16 w-24 overflow-hidden rounded-md border bg-muted">
+                            <video
+                              src={item.url}
+                              className="h-full w-full object-cover"
+                              muted
+                              preload="metadata"
+                            />
+                            <div className="absolute inset-0 flex items-center justify-center">
+                              <Film className="h-6 w-6 text-white drop-shadow" />
+                            </div>
+                          </div>
+                        ) : (
+                          <img
+                            src={item.url}
+                            alt={`Attached ${idx + 1}`}
+                            className="h-16 w-16 rounded-md border object-cover"
+                          />
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setPostMedia((prev) => prev.filter((_, i) => i !== idx))}
+                          className="absolute -right-1 -top-1 rounded-full bg-destructive p-0.5 text-destructive-foreground opacity-0 transition-opacity group-hover:opacity-100"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                        {!isVideo && (
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditor(idx)}
+                            className="absolute bottom-0 left-0 right-0 bg-black/50 py-0.5 text-center text-[10px] text-white opacity-0 transition-opacity group-hover:opacity-100"
+                          >
+                            Edit
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </CardContent>
