@@ -5,7 +5,9 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { createRouter, orgProcedure } from "../trpc";
 import { getS3Client, BUCKET, getPublicUrl } from "../lib/s3";
 
-const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
+const MAX_IMAGE_SIZE = 50 * 1024 * 1024;  // 50MB for images
+const MAX_VIDEO_SIZE = 500 * 1024 * 1024; // 500MB for videos
+const MAX_FILE_SIZE = MAX_VIDEO_SIZE;
 const ALLOWED_TYPES = [
   "image/jpeg",
   "image/png",
@@ -63,6 +65,16 @@ export const mediaRouter = createRouter({
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: `File type '${input.fileType}' is not allowed. Supported: ${ALLOWED_TYPES.join(", ")}`,
+        });
+      }
+
+      // Per-type size validation
+      const isVideo = input.fileType.startsWith("video/");
+      const sizeLimit = isVideo ? MAX_VIDEO_SIZE : MAX_IMAGE_SIZE;
+      if (input.fileSize > sizeLimit) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `File too large. ${isVideo ? "Videos" : "Images"} must be under ${isVideo ? "500MB" : "50MB"}.`,
         });
       }
 

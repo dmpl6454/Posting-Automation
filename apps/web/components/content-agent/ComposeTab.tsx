@@ -183,6 +183,10 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
     if (!files) return;
     Array.from(files).forEach((file) => {
       if (!file.type.startsWith("video/")) return;
+      if (file.size > 500 * 1024 * 1024) {
+        toast({ title: "Video too large", description: "Videos must be under 500MB.", variant: "destructive" });
+        return;
+      }
       const url = URL.createObjectURL(file);
       setPostMedia((prev) => [...prev, { url, file }]);
     });
