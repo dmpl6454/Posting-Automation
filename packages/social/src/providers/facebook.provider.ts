@@ -262,7 +262,7 @@ export class FacebookProvider extends SocialProvider {
   private buildMultipartBody(
     fields: Record<string, string>,
     file: { name: string; contentType: string; buffer: Buffer }
-  ): { body: Buffer; contentType: string } {
+  ): { body: Uint8Array; contentType: string } {
     const boundary = `----FacebookUpload${Date.now()}`;
     const parts: Buffer[] = [];
 
@@ -312,7 +312,7 @@ export class FacebookProvider extends SocialProvider {
       {
         method: "POST",
         headers: { "Content-Type": multipartContentType },
-        body,
+        body: new Uint8Array(body),
       }
     );
 
