@@ -19,7 +19,7 @@ import { useToast } from "~/hooks/use-toast";
 import {
   Wand2, Pencil, Loader2, Download, Save, Upload, ImagePlus,
   Trash2, Square, RectangleHorizontal, RectangleVertical, Monitor, Smartphone,
-  X, Clock, Sparkles, FolderOpen, ChevronDown, ChevronUp, Plus,
+  X, Sparkles, FolderOpen, ChevronDown, ChevronUp, Plus, Newspaper, Merge,
 } from "lucide-react";
 import { MediaPickerDialog } from "~/components/media-picker-dialog";
 
@@ -35,6 +35,16 @@ const ASPECT_RATIOS = [
   { label: "Portrait", value: "9:16", icon: RectangleVertical },
   { label: "Standard", value: "4:3", icon: Monitor },
   { label: "Tall", value: "3:4", icon: Smartphone },
+  { label: "Feed", value: "4:5", icon: RectangleVertical },
+];
+
+const NEWS_STYLES = [
+  { label: "Breaking News", value: "breaking", prompt: "Create a professional breaking news graphic with bold red and white colors, urgent typography, a news ticker style banner, and a dramatic photorealistic background scene." },
+  { label: "Editorial", value: "editorial", prompt: "Create a clean editorial news image with a professional journalistic style, neutral tones, sharp photography aesthetic, and a credible newspaper layout feel." },
+  { label: "Feature Story", value: "feature", prompt: "Create a compelling feature story image with rich colors, documentary-style photography aesthetic, engaging composition, and a magazine editorial look." },
+  { label: "Infographic", value: "infographic", prompt: "Create a clean data-driven news infographic style image with modern flat design, clear typography areas, professional color palette, and a structured layout." },
+  { label: "Social News", value: "social", prompt: "Create a bold social media news graphic with high contrast colors, large impactful typography space, modern design, and eye-catching visual elements suitable for social platforms." },
+  { label: "Sports News", value: "sports", prompt: "Create a dynamic sports news image with high energy, bold typography areas, action-oriented composition, vibrant colors, and a modern sports broadcast aesthetic." },
 ];
 
 const IMAGE_SIZES = [
@@ -55,12 +65,15 @@ const PROMPT_MAX_LENGTH = 2000;
 
 interface ImageGenerationPanelProps {
   onAddToPost: (imageDataUrl: string) => void;
+  postContent?: string;
 }
 
-export function ImageGenerationPanel({ onAddToPost }: ImageGenerationPanelProps) {
+export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerationPanelProps) {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [activeTab, setActiveTab] = useState("generate");
+  const [mergeContent, setMergeContent] = useState(false);
+  const [selectedNewsStyle, setSelectedNewsStyle] = useState<string | null>(null);
 
   // Generate state
   const [generatePrompt, setGeneratePrompt] = useState("");
@@ -154,6 +167,18 @@ export function ImageGenerationPanel({ onAddToPost }: ImageGenerationPanelProps)
     if (logoImage) { const logo = extractBase64(logoImage); if (logo) refs.push(logo); }
 
     let fullPrompt = generatePrompt;
+
+    // Merge post content into prompt
+    if (mergeContent && postContent?.trim()) {
+      fullPrompt = `${fullPrompt}\n\nBased on this post content:\n"${postContent.trim()}"`;
+    }
+
+    // Apply news style preset
+    if (selectedNewsStyle) {
+      const style = NEWS_STYLES.find((s) => s.value === selectedNewsStyle);
+      if (style) fullPrompt = `${style.prompt}\n\nImage topic: ${fullPrompt}`;
+    }
+
     if (referenceImage && logoImage) fullPrompt += `\n\nI've attached a reference design image and a logo. Please use the reference as style/layout inspiration and incorporate the logo into the generated image.`;
     else if (referenceImage) fullPrompt += `\n\nI've attached a reference design image. Please use it as style/layout inspiration for the generated image.`;
     else if (logoImage) fullPrompt += `\n\nI've attached a logo image. Please incorporate this logo into the generated image.`;
@@ -243,6 +268,43 @@ export function ImageGenerationPanel({ onAddToPost }: ImageGenerationPanelProps)
 
               {/* GENERATE TAB */}
               <TabsContent value="generate" className="space-y-3 mt-3">
+
+                {/* Merge content toggle */}
+                {postContent?.trim() && (
+                  <button
+                    type="button"
+                    onClick={() => setMergeContent(!mergeContent)}
+                    className={`flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-all ${mergeContent ? "border-primary bg-primary/5 text-primary" : "border-dashed border-muted-foreground/40 text-muted-foreground hover:border-primary/50 hover:bg-muted/30"}`}
+                  >
+                    <Merge className="h-3.5 w-3.5 shrink-0" />
+                    <span className="font-medium">Merge post content into prompt</span>
+                    {mergeContent && <span className="ml-auto text-[10px] text-primary">ON</span>}
+                  </button>
+                )}
+
+                {/* News style presets */}
+                <div>
+                  <div className="mb-1.5 flex items-center gap-1.5">
+                    <Newspaper className="h-3.5 w-3.5 text-muted-foreground" />
+                    <p className="text-xs font-medium text-muted-foreground">News Style</p>
+                    {selectedNewsStyle && (
+                      <button type="button" onClick={() => setSelectedNewsStyle(null)} className="ml-auto text-[10px] text-muted-foreground hover:text-destructive">Clear</button>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {NEWS_STYLES.map((style) => (
+                      <button
+                        key={style.value}
+                        type="button"
+                        onClick={() => setSelectedNewsStyle(selectedNewsStyle === style.value ? null : style.value)}
+                        className={`rounded-lg border px-2 py-1.5 text-xs font-medium transition-all text-left ${selectedNewsStyle === style.value ? "border-primary bg-primary/5 text-primary ring-1 ring-primary" : "border-border text-muted-foreground hover:bg-muted/50"}`}
+                      >
+                        {style.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
                 <Textarea
                   value={generatePrompt}
                   onChange={(e) => { if (e.target.value.length <= PROMPT_MAX_LENGTH) setGeneratePrompt(e.target.value); }}
