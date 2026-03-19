@@ -7,6 +7,9 @@ const nextConfig = {
   ],
   experimental: {
     serverComponentsExternalPackages: ["@prisma/client", "prisma", "puppeteer", "puppeteer-core"],
+    serverActions: {
+      bodySizeLimit: "500mb",
+    },
   },
   webpack: (config, { isServer }) => {
     if (isServer) {

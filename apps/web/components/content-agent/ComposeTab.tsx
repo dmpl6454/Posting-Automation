@@ -199,17 +199,16 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   };
 
   const uploadFileToS3 = async (file: File): Promise<string> => {
-    const { uploadUrl, mediaId } = await getUploadUrl.mutateAsync({
-      fileName: file.name,
-      fileType: file.type,
-      fileSize: file.size,
-    });
-    await fetch(uploadUrl, {
-      method: "PUT",
-      body: file,
-      headers: { "Content-Type": file.type },
-    });
-    return mediaId;
+    // Upload through the Next.js server proxy to avoid browser→MinIO CORS issues
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch("/api/upload", { method: "POST", body: form });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error((err as any).error || "Upload failed");
+    }
+    const data = await res.json();
+    return data.id;
   };
 
   const handleSubmit = async (publishNow: boolean) => {

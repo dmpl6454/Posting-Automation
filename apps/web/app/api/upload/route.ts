@@ -4,8 +4,12 @@ import { prisma } from "@postautomation/db";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 
 export const dynamic = "force-dynamic";
+// Allow large video uploads (up to 500MB)
+export const maxDuration = 300; // 5 min timeout for large uploads
 
-const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
+const MAX_IMAGE_SIZE = 50 * 1024 * 1024;   // 50MB
+const MAX_VIDEO_SIZE = 500 * 1024 * 1024;  // 500MB
+const MAX_FILE_SIZE = MAX_VIDEO_SIZE;
 const ALLOWED_TYPES = [
   "image/jpeg",
   "image/png",
@@ -47,9 +51,11 @@ export async function POST(req: Request) {
     );
   }
 
-  if (file.size > MAX_FILE_SIZE) {
+  const isVideo = file.type.startsWith("video/");
+  const sizeLimit = isVideo ? MAX_VIDEO_SIZE : MAX_IMAGE_SIZE;
+  if (file.size > sizeLimit) {
     return NextResponse.json(
-      { error: `File too large. Max ${MAX_FILE_SIZE / 1024 / 1024}MB` },
+      { error: `File too large. ${isVideo ? "Videos" : "Images"} must be under ${isVideo ? "500" : "50"}MB.` },
       { status: 400 }
     );
   }
