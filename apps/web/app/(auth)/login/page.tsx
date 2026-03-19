@@ -7,27 +7,75 @@ import { useSearchParams } from "next/navigation";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
-import { Loader2, AlertCircle, ArrowRight } from "lucide-react";
+import { Loader2, AlertCircle, ArrowRight, Smartphone, Mail } from "lucide-react";
+import { trpc } from "~/lib/trpc/client";
+
+type LoginTab = "email" | "phone";
+type PhoneStep = "enter-phone" | "enter-otp";
 
 export default function LoginPage() {
   const searchParams = useSearchParams();
   const callbackUrl = searchParams.get("callbackUrl") || "/dashboard";
+
+  const [tab, setTab] = useState<LoginTab>("email");
+
+  // Email/password state
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+
+  // Phone OTP state
+  const [phone, setPhone] = useState("");
+  const [otp, setOtp] = useState("");
+  const [phoneStep, setPhoneStep] = useState<PhoneStep>("enter-phone");
+
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const sendOtpMutation = trpc.auth.sendPhoneOtp.useMutation();
+
+  const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError("");
     const result = await signIn("credentials", {
       email,
       password,
+      loginType: "email",
       redirect: false,
     });
     if (result?.error) {
       setError("Invalid email or password");
+    } else {
+      window.location.href = callbackUrl;
+    }
+    setLoading(false);
+  };
+
+  const handleSendOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError("");
+    try {
+      await sendOtpMutation.mutateAsync({ phone });
+      setPhoneStep("enter-otp");
+    } catch (err: any) {
+      setError(err.message || "Failed to send OTP. Please try again.");
+    }
+    setLoading(false);
+  };
+
+  const handleVerifyOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError("");
+    const result = await signIn("credentials", {
+      phone,
+      otp,
+      loginType: "phone-otp",
+      redirect: false,
+    });
+    if (result?.error) {
+      setError("Invalid or expired OTP. Please try again.");
     } else {
       window.location.href = callbackUrl;
     }
@@ -72,85 +120,178 @@ export default function LoginPage() {
       </div>
 
       {/* Divider */}
-      <div className="relative my-6">
+      <div className="relative my-5">
         <div className="absolute inset-0 flex items-center">
           <div className="w-full border-t border-border/40" />
         </div>
         <div className="relative flex justify-center">
           <span className="bg-transparent px-3 text-xs text-muted-foreground/70 backdrop-blur-sm">
-            or continue with email
+            or continue with
           </span>
         </div>
       </div>
 
-      {/* Form */}
-      <form onSubmit={handleSubmit} className="space-y-4">
-        {error && (
-          <div className="flex items-center gap-2.5 rounded-xl bg-destructive/8 px-4 py-3 text-sm text-destructive">
-            <AlertCircle className="h-4 w-4 shrink-0" />
-            {error}
-          </div>
-        )}
-
-        <div className="space-y-1.5">
-          <Label htmlFor="email" className="text-sm font-medium">
-            Email
-          </Label>
-          <Input
-            id="email"
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="you@example.com"
-            required
-            className="h-11 rounded-xl border-border/60 bg-background/50 transition-shadow focus:shadow-sm"
-          />
-        </div>
-
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between">
-            <Label htmlFor="password" className="text-sm font-medium">
-              Password
-            </Label>
-            <Link
-              href="/forgot-password"
-              className="text-xs text-muted-foreground transition-colors hover:text-foreground"
-            >
-              Forgot password?
-            </Link>
-          </div>
-          <Input
-            id="password"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Enter your password"
-            required
-            className="h-11 rounded-xl border-border/60 bg-background/50 transition-shadow focus:shadow-sm"
-          />
-        </div>
-
-        <Button
-          type="submit"
-          disabled={loading}
-          className="h-11 w-full rounded-xl bg-foreground text-background transition-all hover:bg-foreground/90 active:scale-[0.98]"
+      {/* Tab switcher */}
+      <div className="mb-5 flex rounded-xl border border-border/60 bg-muted/30 p-1">
+        <button
+          type="button"
+          onClick={() => { setTab("email"); setError(""); }}
+          className={`flex flex-1 items-center justify-center gap-2 rounded-lg py-2 text-sm font-medium transition-all ${
+            tab === "email"
+              ? "bg-background shadow-sm text-foreground"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
         >
-          {loading ? (
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          ) : (
-            <ArrowRight className="mr-2 h-4 w-4" />
-          )}
-          {loading ? "Signing in..." : "Sign In"}
-        </Button>
-      </form>
+          <Mail className="h-4 w-4" />
+          Email
+        </button>
+        <button
+          type="button"
+          onClick={() => { setTab("phone"); setError(""); setPhoneStep("enter-phone"); }}
+          className={`flex flex-1 items-center justify-center gap-2 rounded-lg py-2 text-sm font-medium transition-all ${
+            tab === "phone"
+              ? "bg-background shadow-sm text-foreground"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          <Smartphone className="h-4 w-4" />
+          Phone OTP
+        </button>
+      </div>
+
+      {/* Error */}
+      {error && (
+        <div className="mb-4 flex items-center gap-2.5 rounded-xl bg-destructive/8 px-4 py-3 text-sm text-destructive">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          {error}
+        </div>
+      )}
+
+      {/* Email / Password form */}
+      {tab === "email" && (
+        <form onSubmit={handleEmailLogin} className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="email" className="text-sm font-medium">Email</Label>
+            <Input
+              id="email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@example.com"
+              required
+              className="h-11 rounded-xl border-border/60 bg-background/50 transition-shadow focus:shadow-sm"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <Label htmlFor="password" className="text-sm font-medium">Password</Label>
+              <Link href="/forgot-password" className="text-xs text-muted-foreground transition-colors hover:text-foreground">
+                Forgot password?
+              </Link>
+            </div>
+            <Input
+              id="password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Enter your password"
+              required
+              className="h-11 rounded-xl border-border/60 bg-background/50 transition-shadow focus:shadow-sm"
+            />
+          </div>
+          <Button
+            type="submit"
+            disabled={loading}
+            className="h-11 w-full rounded-xl bg-foreground text-background transition-all hover:bg-foreground/90 active:scale-[0.98]"
+          >
+            {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ArrowRight className="mr-2 h-4 w-4" />}
+            {loading ? "Signing in..." : "Sign In"}
+          </Button>
+        </form>
+      )}
+
+      {/* Phone OTP — Step 1: enter phone */}
+      {tab === "phone" && phoneStep === "enter-phone" && (
+        <form onSubmit={handleSendOtp} className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="phone" className="text-sm font-medium">Mobile Number</Label>
+            <Input
+              id="phone"
+              type="tel"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              placeholder="+91 98765 43210"
+              required
+              className="h-11 rounded-xl border-border/60 bg-background/50 transition-shadow focus:shadow-sm"
+            />
+            <p className="text-xs text-muted-foreground">
+              Enter the number linked to your account. Include country code (e.g. +91).
+            </p>
+          </div>
+          <Button
+            type="submit"
+            disabled={loading || !phone}
+            className="h-11 w-full rounded-xl bg-foreground text-background transition-all hover:bg-foreground/90 active:scale-[0.98]"
+          >
+            {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Smartphone className="mr-2 h-4 w-4" />}
+            {loading ? "Sending OTP..." : "Send OTP"}
+          </Button>
+        </form>
+      )}
+
+      {/* Phone OTP — Step 2: enter OTP */}
+      {tab === "phone" && phoneStep === "enter-otp" && (
+        <form onSubmit={handleVerifyOtp} className="space-y-4">
+          <div className="rounded-xl border border-border/40 bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
+            OTP sent to{" "}
+            <span className="font-medium text-foreground">{phone}</span>
+            <button
+              type="button"
+              onClick={() => { setPhoneStep("enter-phone"); setOtp(""); setError(""); }}
+              className="ml-2 text-xs underline hover:text-foreground"
+            >
+              Change
+            </button>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="otp" className="text-sm font-medium">Enter 6-digit OTP</Label>
+            <Input
+              id="otp"
+              type="text"
+              inputMode="numeric"
+              maxLength={6}
+              value={otp}
+              onChange={(e) => setOtp(e.target.value.replace(/\D/g, ""))}
+              placeholder="123456"
+              required
+              autoFocus
+              className="h-11 rounded-xl border-border/60 bg-background/50 text-center text-lg tracking-[0.4em] transition-shadow focus:shadow-sm"
+            />
+            <p className="text-xs text-muted-foreground">Valid for 10 minutes</p>
+          </div>
+          <Button
+            type="submit"
+            disabled={loading || otp.length < 6}
+            className="h-11 w-full rounded-xl bg-foreground text-background transition-all hover:bg-foreground/90 active:scale-[0.98]"
+          >
+            {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ArrowRight className="mr-2 h-4 w-4" />}
+            {loading ? "Verifying..." : "Verify & Sign In"}
+          </Button>
+          <button
+            type="button"
+            onClick={() => { setPhoneStep("enter-phone"); handleSendOtp({ preventDefault: () => {} } as any); }}
+            disabled={loading}
+            className="w-full text-center text-xs text-muted-foreground transition-colors hover:text-foreground"
+          >
+            Didn&apos;t receive the OTP? Resend
+          </button>
+        </form>
+      )}
 
       {/* Footer link */}
       <p className="mt-6 text-center text-sm text-muted-foreground">
         Don&apos;t have an account?{" "}
-        <Link
-          href="/register"
-          className="font-medium text-foreground transition-colors hover:text-foreground/80"
-        >
+        <Link href="/register" className="font-medium text-foreground transition-colors hover:text-foreground/80">
           Create one
         </Link>
       </p>

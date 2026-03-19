@@ -5,6 +5,7 @@ import bcrypt from "bcryptjs";
 import { createRouter, publicProcedure, protectedProcedure } from "../trpc";
 import { sendEmail } from "../lib/email";
 import { passwordResetEmail, emailVerificationEmail } from "../lib/email-templates";
+import { sendSms } from "../lib/sms";
 
 export const authRouter = createRouter({
   requestPasswordReset: publicProcedure
@@ -181,4 +182,36 @@ export const authRouter = createRouter({
 
     return { success: true };
   }),
+
+  sendPhoneOtp: publicProcedure
+    .input(z.object({ phone: z.string().min(7).max(20) }))
+    .mutation(async ({ ctx, input }) => {
+      const user = await ctx.prisma.user.findUnique({
+        where: { phone: input.phone },
+        select: { id: true, isBanned: true, phoneVerified: true },
+      });
+
+      // Always return success to avoid phone enumeration
+      if (!user || !user.phoneVerified || user.isBanned) {
+        return { success: true };
+      }
+
+      // Clean up old OTPs
+      await ctx.prisma.phoneOtp.deleteMany({ where: { phone: input.phone } });
+
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const hashedOtp = await bcrypt.hash(otp, 8);
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+      await ctx.prisma.phoneOtp.create({
+        data: { phone: input.phone, otp: hashedOtp, expiresAt },
+      });
+
+      await sendSms(
+        input.phone,
+        `Your PostAutomation login code is: ${otp}. Valid for 10 minutes. Do not share this code.`
+      );
+
+      return { success: true };
+    }),
 });

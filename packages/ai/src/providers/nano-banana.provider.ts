@@ -136,7 +136,15 @@ export async function editImage(params: NanoBananaEditParams): Promise<NanoBanan
  */
 function parseNanoBananaResponse(data: any): NanoBananaResult {
   const candidate = data.candidates?.[0];
+
+  // Check for safety block or finish reason issues
+  if (candidate?.finishReason && candidate.finishReason !== "STOP") {
+    throw new Error(`Image generation blocked: ${candidate.finishReason}. Try a different prompt.`);
+  }
+
   if (!candidate?.content?.parts) {
+    const reason = data.promptFeedback?.blockReason;
+    if (reason) throw new Error(`Prompt blocked by safety filter: ${reason}. Try rephrasing.`);
     throw new Error("No content in Nano Banana response");
   }
 
@@ -155,7 +163,8 @@ function parseNanoBananaResponse(data: any): NanoBananaResult {
   }
 
   if (!imageBase64) {
-    throw new Error("No image data in Nano Banana response");
+    const hint = text ? ` Model responded with text: "${text.slice(0, 100)}"` : "";
+    throw new Error(`No image data in Nano Banana response.${hint} Try a different prompt or model.`);
   }
 
   return { imageBase64, mimeType, text };

@@ -30,8 +30,62 @@ export const authConfig: NextAuthConfig = {
       credentials: {
         email: { label: "Email", type: "email" },
         password: { label: "Password", type: "password" },
+        phone: { label: "Phone", type: "text" },
+        otp: { label: "OTP", type: "text" },
+        loginType: { label: "Login Type", type: "text" },
       },
       async authorize(credentials) {
+        // Phone OTP login
+        if (credentials?.loginType === "phone-otp") {
+          const phone = credentials.phone as string;
+          const otp = credentials.otp as string;
+          if (!phone || !otp) return null;
+
+          const otpRecord = await prisma.phoneOtp.findFirst({
+            where: {
+              phone,
+              used: false,
+              expiresAt: { gt: new Date() },
+            },
+            orderBy: { createdAt: "desc" },
+          });
+
+          if (!otpRecord) return null;
+
+          const isValid = await bcrypt.compare(otp, otpRecord.otp);
+          if (!isValid) return null;
+
+          await prisma.phoneOtp.update({
+            where: { id: otpRecord.id },
+            data: { used: true },
+          });
+
+          const user = await prisma.user.findUnique({
+            where: { phone },
+            select: {
+              id: true,
+              email: true,
+              name: true,
+              image: true,
+              isSuperAdmin: true,
+              isBanned: true,
+              deletedAt: true,
+            },
+          });
+
+          if (!user || user.isBanned || user.deletedAt) return null;
+
+          return {
+            id: user.id,
+            email: user.email,
+            name: user.name,
+            image: user.image,
+            isSuperAdmin: user.isSuperAdmin,
+            isBanned: user.isBanned,
+          } as any;
+        }
+
+        // Email/password login
         if (!credentials?.email || !credentials?.password) return null;
 
         const email = (credentials.email as string).toLowerCase().trim();

@@ -18,6 +18,8 @@ model User {
   password      String?
   isSuperAdmin  Boolean   @default(false)
   isBanned      Boolean   @default(false)
+  phone         String?   @unique
+  phoneVerified DateTime?
   deletedAt     DateTime?
 
   accounts    Account[]
@@ -87,6 +89,28 @@ model EmailVerificationToken {
   token     String   @unique
   expiresAt DateTime
   createdAt DateTime @default(now())
+}
+
+model PhoneOtp {
+  id        String   @id @default(cuid())
+  phone     String
+  otp       String
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([phone])
+}
+
+model PhoneOtp {
+  id        String   @id @default(cuid())
+  phone     String
+  otp       String
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([phone])
 }
 
 // ==================== ORGANIZATIONS & TEAMS ====================
