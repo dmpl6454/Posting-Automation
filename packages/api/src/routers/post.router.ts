@@ -219,14 +219,29 @@ export const postRouter = createRouter({
       });
       if (!post) throw new TRPCError({ code: "NOT_FOUND" });
 
+      // Only retry targets that haven't been successfully published yet
+      const targetsToPublish = post.targets.filter(
+        (t) => t.status !== "PUBLISHED"
+      );
+
+      if (targetsToPublish.length === 0) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "All channels already published." });
+      }
+
       await ctx.prisma.post.update({
         where: { id: input.id },
         data: { status: "SCHEDULED", scheduledAt: new Date() },
       });
 
-      for (const target of post.targets) {
+      // Reset failed targets back to PENDING so they can be retried
+      await ctx.prisma.postTarget.updateMany({
+        where: { id: { in: targetsToPublish.map((t) => t.id) }, status: "FAILED" },
+        data: { status: "SCHEDULED", errorMessage: null },
+      });
+
+      for (const target of targetsToPublish) {
         await postPublishQueue.add(
-          `publish-now-${target.id}`,
+          `publish-now-${target.id}-${Date.now()}`,
           {
             postId: post.id,
             postTargetId: target.id,
