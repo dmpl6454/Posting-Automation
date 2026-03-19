@@ -242,9 +242,52 @@ export class FacebookProvider extends SocialProvider {
   }
 
   /**
+   * Download a media file and return it as a Buffer with its content type.
+   * This is needed because MinIO URLs are internal Docker hostnames that
+   * external APIs (Facebook, etc.) cannot reach directly.
+   */
+  private async fetchMediaAsBuffer(mediaUrl: string): Promise<{ buffer: Buffer; contentType: string; fileName: string }> {
+    const res = await fetch(mediaUrl);
+    if (!res.ok) throw new Error(`Failed to fetch media from ${mediaUrl}: ${res.status}`);
+    const buffer = Buffer.from(await res.arrayBuffer());
+    const contentType = res.headers.get("content-type") || "image/jpeg";
+    const ext = contentType.split("/")[1]?.split(";")[0] || "jpg";
+    return { buffer, contentType, fileName: `upload.${ext}` };
+  }
+
+  /**
+   * Upload a single photo to Facebook using binary source (not URL).
+   * Returns the photo ID.
+   */
+  private async uploadPhotoToFacebook(
+    tokens: OAuthTokens,
+    pageId: string,
+    mediaUrl: string,
+    published: boolean,
+    message?: string
+  ): Promise<{ id: string; post_id?: string }> {
+    const { buffer, contentType, fileName } = await this.fetchMediaAsBuffer(mediaUrl);
+
+    const form = new FormData();
+    form.append("source", new Blob([buffer], { type: contentType }), fileName);
+    form.append("access_token", tokens.accessToken);
+    form.append("published", String(published));
+    if (message) form.append("message", message);
+
+    const res = await fetch(
+      `${this.graphBaseUrl}/${this.apiVersion}/${pageId}/photos`,
+      { method: "POST", body: form }
+    );
+
+    const data: any = await res.json();
+    if (!res.ok) throw new Error(`Facebook photo post failed: ${JSON.stringify(data)}`);
+    return data;
+  }
+
+  /**
    * Publish a post with one or more photo attachments.
-   * For a single photo, posts directly to /{page-id}/photos.
-   * For multiple photos, uploads each as unpublished, then groups them in a feed post.
+   * Downloads images server-side and uploads as binary to avoid
+   * Facebook needing to fetch from internal MinIO URLs.
    */
   private async publishPostWithMedia(
     tokens: OAuthTokens,
@@ -254,76 +297,44 @@ export class FacebookProvider extends SocialProvider {
     const mediaUrls = payload.mediaUrls!;
 
     if (mediaUrls.length === 1) {
-      // Single photo post
-      const res = await fetch(
-        `${this.graphBaseUrl}/${this.apiVersion}/${pageId}/photos`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            url: mediaUrls[0],
-            message: payload.content,
-            access_token: tokens.accessToken,
-          }),
-        }
-      );
-
-      const data: any = await res.json();
-      if (!res.ok) throw new Error(`Facebook photo post failed: ${JSON.stringify(data)}`);
-
+      const data = await this.uploadPhotoToFacebook(tokens, pageId, mediaUrls[0]!, true, payload.content);
+      const postId = data.post_id || data.id;
       return {
-        platformPostId: data.post_id || data.id,
-        url: `https://www.facebook.com/${(data.post_id || data.id).replace("_", "/posts/")}`,
+        platformPostId: postId,
+        url: `https://www.facebook.com/${postId.replace("_", "/posts/")}`,
         metadata: data,
       };
     }
 
-    // Multi-photo post: upload each photo as unpublished, then create a feed post
+    // Multi-photo: upload each as unpublished, then create a feed post
     const photoIds = await Promise.all(
       mediaUrls.map(async (url) => {
-        const res = await fetch(
-          `${this.graphBaseUrl}/${this.apiVersion}/${pageId}/photos`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              url,
-              published: false,
-              access_token: tokens.accessToken,
-            }),
-          }
-        );
-
-        const data: any = await res.json();
-        if (!res.ok) throw new Error(`Facebook photo upload failed: ${JSON.stringify(data)}`);
+        const data = await this.uploadPhotoToFacebook(tokens, pageId, url, false);
         return data.id;
       })
     );
 
-    // Create the multi-photo feed post
     const attachedMedia = photoIds.map((id) => ({ media_fbid: id }));
-    const feedBody: Record<string, unknown> = {
-      message: payload.content,
-      access_token: tokens.accessToken,
-      attached_media: attachedMedia,
-    };
-
-    const res = await fetch(
+    const feedRes = await fetch(
       `${this.graphBaseUrl}/${this.apiVersion}/${pageId}/feed`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(feedBody),
+        body: JSON.stringify({
+          message: payload.content,
+          access_token: tokens.accessToken,
+          attached_media: attachedMedia,
+        }),
       }
     );
 
-    const data: any = await res.json();
-    if (!res.ok) throw new Error(`Facebook multi-photo post failed: ${JSON.stringify(data)}`);
+    const feedData: any = await feedRes.json();
+    if (!feedRes.ok) throw new Error(`Facebook multi-photo post failed: ${JSON.stringify(feedData)}`);
 
     return {
-      platformPostId: data.id,
-      url: `https://www.facebook.com/${data.id.replace("_", "/posts/")}`,
-      metadata: data,
+      platformPostId: feedData.id,
+      url: `https://www.facebook.com/${feedData.id.replace("_", "/posts/")}`,
+      metadata: feedData,
     };
   }
 }
