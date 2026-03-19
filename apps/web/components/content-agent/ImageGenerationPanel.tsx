@@ -64,7 +64,7 @@ interface HistoryItem {
 const PROMPT_MAX_LENGTH = 2000;
 
 interface ImageGenerationPanelProps {
-  onAddToPost: (imageDataUrl: string) => void;
+  onAddToPost: (imageDataUrl: string) => void | Promise<void>;
   postContent?: string;
 }
 
@@ -234,7 +234,6 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
   const handleAddToPost = () => {
     if (!resultImage) return;
     onAddToPost(resultImage);
-    toast({ title: "Image added to post!" });
   };
 
   const isGenerating = generateMutation.isPending;

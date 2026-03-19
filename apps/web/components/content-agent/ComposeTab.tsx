@@ -87,6 +87,7 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
     },
   });
   const getUploadUrl = trpc.media.getUploadUrl.useMutation();
+  const saveGeneratedImage = trpc.image.saveGenerated.useMutation();
   const generateAI = trpc.ai.generateContent.useMutation();
 
   const handleAIGenerate = async () => {
@@ -303,17 +304,34 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
           {/* AI Image Generation — link to Image tab */}
           {/* AI Image Generation */}
           <ImageGenerationPanel
-            onAddToPost={(imageDataUrl) => {
-              // Convert base64 data URL to a File for upload
+            postContent={content}
+            onAddToPost={async (imageDataUrl) => {
+              // Upload the AI image to S3 immediately so we have a real mediaId
               const match = imageDataUrl.match(/^data:([^;]+);base64,(.+)$/);
-              if (!match) return;
+              if (!match) {
+                toast({ title: "Invalid image format", variant: "destructive" });
+                return;
+              }
               const mimeType = match[1] ?? "image/png";
-              const byteString = atob(match[2] ?? "");
-              const ab = new ArrayBuffer(byteString.length);
-              const ia = new Uint8Array(ab);
-              for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
-              const file = new File([ab], `ai-image-${Date.now()}.png`, { type: mimeType });
-              setPostMedia((prev) => [...prev, { url: imageDataUrl, file }]);
+              const imageBase64 = match[2] ?? "";
+              try {
+                const result = await saveGeneratedImage.mutateAsync({
+                  imageBase64,
+                  mimeType,
+                  fileName: `ai-image-${Date.now()}.png`,
+                });
+                setPostMedia((prev) => [...prev, { url: result.url, mediaId: result.id }]);
+                toast({ title: "Image uploaded and added to post!" });
+              } catch {
+                // Fallback: add as file for upload at post time
+                const byteString = atob(imageBase64);
+                const ab = new ArrayBuffer(byteString.length);
+                const ia = new Uint8Array(ab);
+                for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
+                const file = new File([ab], `ai-image-${Date.now()}.png`, { type: mimeType });
+                setPostMedia((prev) => [...prev, { url: imageDataUrl, file }]);
+                toast({ title: "Image added to post", description: "Will upload when publishing." });
+              }
             }}
           />
 
