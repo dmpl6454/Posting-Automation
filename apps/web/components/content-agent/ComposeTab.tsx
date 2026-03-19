@@ -21,8 +21,6 @@ import {
   CheckCircle2,
   Eye,
   ImagePlus,
-  ChevronDown,
-  ChevronUp,
   X,
   Paintbrush,
   Upload,
@@ -56,9 +54,6 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   const [selectedChannels, setSelectedChannels] = useState<string[]>([]);
   const [scheduledAt, setScheduledAt] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
-  const [aiImageOpen, setAiImageOpen] = useState(false);
-  const [aiImagePrompt, setAiImagePrompt] = useState("");
-  const [aiGeneratedImage, setAiGeneratedImage] = useState<string | null>(null);
   const [postMedia, setPostMedia] = useState<{ url: string; mediaId?: string; file?: File }[]>([]);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingImageIndex, setEditingImageIndex] = useState<number | null>(null);
@@ -92,41 +87,6 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   });
   const getUploadUrl = trpc.media.getUploadUrl.useMutation();
   const generateAI = trpc.ai.generateContent.useMutation();
-  const generateImage = trpc.image.generate.useMutation({
-    onSuccess: (data: any) => {
-      const imageUrl = `data:${data.mimeType || "image/png"};base64,${data.imageBase64}`;
-      setAiGeneratedImage(imageUrl);
-      toast({ title: "Image generated!", description: "Your AI image is ready." });
-    },
-    onError: (err: any) => {
-      toast({
-        title: "Image generation failed",
-        description: err.message || "Please try again.",
-        variant: "destructive",
-      });
-    },
-  });
-
-  const handleGenerateImage = () => {
-    if (!aiImagePrompt.trim()) return;
-    generateImage.mutate({ prompt: aiImagePrompt });
-  };
-
-  const handleAddImageToPost = () => {
-    if (aiGeneratedImage) {
-      // Convert base64 to file for later upload
-      const byteString = atob(aiGeneratedImage.split(",")[1] || "");
-      const mimeType = aiGeneratedImage.split(":")[1]?.split(";")[0] || "image/png";
-      const ab = new ArrayBuffer(byteString.length);
-      const ia = new Uint8Array(ab);
-      for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
-      const file = new File([ab], `ai-image-${Date.now()}.png`, { type: mimeType });
-      setPostMedia((prev) => [...prev, { url: aiGeneratedImage, file }]);
-      setAiGeneratedImage(null);
-      setAiImagePrompt("");
-      toast({ title: "Image added", description: "Image has been attached to your post." });
-    }
-  };
 
   const handleAIGenerate = async () => {
     if (!content) return;
@@ -339,105 +299,16 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
             </CardContent>
           </Card>
 
-          {/* AI Image Generation */}
-          <Card>
-            <CardHeader className="pb-3">
-              <button
-                type="button"
-                onClick={() => setAiImageOpen(!aiImageOpen)}
-                className="flex w-full items-center justify-between"
-              >
-                <div className="flex items-center gap-2">
-                  <ImagePlus className="h-4 w-4 text-purple-500" />
-                  <CardTitle className="text-base">AI Image Generation</CardTitle>
-                </div>
-                {aiImageOpen ? (
-                  <ChevronUp className="h-4 w-4 text-muted-foreground" />
-                ) : (
-                  <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                )}
-              </button>
-            </CardHeader>
-            {aiImageOpen && (
-              <CardContent className="space-y-3">
-                <div className="flex gap-2">
-                  <Input
-                    value={aiImagePrompt}
-                    onChange={(e) => setAiImagePrompt(e.target.value)}
-                    placeholder="Describe the image you want..."
-                    className="flex-1"
-                  />
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={handleGenerateImage}
-                    disabled={!aiImagePrompt.trim() || generateImage.isPending}
-                    className="gap-1.5 whitespace-nowrap"
-                  >
-                    {generateImage.isPending ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Sparkles className="h-3.5 w-3.5" />
-                    )}
-                    Generate
-                  </Button>
-                </div>
-
-                {generateImage.isPending && (
-                  <div className="flex items-center justify-center rounded-lg border border-dashed p-6">
-                    <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                  </div>
-                )}
-
-                {aiGeneratedImage && !generateImage.isPending && (
-                  <div className="space-y-2">
-                    <div className="relative overflow-hidden rounded-lg border">
-                      <img
-                        src={aiGeneratedImage}
-                        alt="AI generated"
-                        className="w-full object-contain"
-                        style={{ maxHeight: "200px" }}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setAiGeneratedImage(null);
-                          setAiImagePrompt("");
-                        }}
-                        className="absolute right-2 top-2 rounded-full bg-black/50 p-1 text-white transition-colors hover:bg-black/70"
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleAddImageToPost}
-                      className="w-full gap-1.5"
-                    >
-                      <ImagePlus className="h-3.5 w-3.5" />
-                      Add to Post
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => {
-                        if (aiGeneratedImage) {
-                          handleAddImageToPost();
-                        }
-                        handleOpenEditor(aiGeneratedImage ? postMedia.length : undefined);
-                      }}
-                      className="w-full gap-1.5"
-                    >
-                      <Paintbrush className="h-3.5 w-3.5" />
-                      Edit in Designer
-                    </Button>
-                  </div>
-                )}
-
-              </CardContent>
-            )}
-          </Card>
+          {/* AI Image Generation — link to Image tab */}
+          <Button
+            variant="outline"
+            className="w-full gap-2 border-dashed"
+            onClick={() => router.push("/dashboard/content-agent?tab=image")}
+          >
+            <Sparkles className="h-4 w-4 text-purple-500" />
+            Generate AI Image
+            <span className="ml-auto text-xs text-muted-foreground">Image tab →</span>
+          </Button>
 
           {/* Media Attachments */}
           <Card>
