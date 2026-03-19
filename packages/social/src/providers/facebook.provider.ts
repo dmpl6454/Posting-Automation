@@ -256,6 +256,37 @@ export class FacebookProvider extends SocialProvider {
   }
 
   /**
+   * Build a multipart/form-data body manually (avoids DOM FormData/Blob types
+   * which are not in the ES2022-only TypeScript lib used by this package).
+   */
+  private buildMultipartBody(
+    fields: Record<string, string>,
+    file: { name: string; contentType: string; buffer: Buffer }
+  ): { body: Buffer; contentType: string } {
+    const boundary = `----FacebookUpload${Date.now()}`;
+    const parts: Buffer[] = [];
+
+    // Text fields
+    for (const [key, value] of Object.entries(fields)) {
+      parts.push(Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="${key}"\r\n\r\n${value}\r\n`
+      ));
+    }
+
+    // File field
+    parts.push(Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="source"; filename="${file.name}"\r\nContent-Type: ${file.contentType}\r\n\r\n`
+    ));
+    parts.push(file.buffer);
+    parts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
+
+    return {
+      body: Buffer.concat(parts),
+      contentType: `multipart/form-data; boundary=${boundary}`,
+    };
+  }
+
+  /**
    * Upload a single photo to Facebook using binary source (not URL).
    * Returns the photo ID.
    */
@@ -268,15 +299,21 @@ export class FacebookProvider extends SocialProvider {
   ): Promise<{ id: string; post_id?: string }> {
     const { buffer, contentType, fileName } = await this.fetchMediaAsBuffer(mediaUrl);
 
-    const form = new FormData();
-    form.append("source", new Blob([buffer], { type: contentType }), fileName);
-    form.append("access_token", tokens.accessToken);
-    form.append("published", String(published));
-    if (message) form.append("message", message);
+    const fields: Record<string, string> = {
+      access_token: tokens.accessToken,
+      published: String(published),
+    };
+    if (message) fields["message"] = message;
+
+    const { body, contentType: multipartContentType } = this.buildMultipartBody(fields, { name: fileName, contentType, buffer });
 
     const res = await fetch(
       `${this.graphBaseUrl}/${this.apiVersion}/${pageId}/photos`,
-      { method: "POST", body: form }
+      {
+        method: "POST",
+        headers: { "Content-Type": multipartContentType },
+        body,
+      }
     );
 
     const data: any = await res.json();
