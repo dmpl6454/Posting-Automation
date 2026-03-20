@@ -90,7 +90,10 @@ export function createPostPublishWorker() {
         throw new Error(`Validation failed: ${errors.join(", ")}`);
       }
 
-      const result = await provider.publishPost(tokens, { content, mediaUrls, mediaTypes });
+      // Pass channel metadata so providers can use platform-specific IDs
+      // (e.g. igUserId for Instagram, pageId for Facebook)
+      const channelMetadata = (channel.metadata ?? {}) as Record<string, unknown>;
+      const result = await provider.publishPost(tokens, { content, mediaUrls, mediaTypes, metadata: channelMetadata });
 
       // 4. Mark as PUBLISHED
       await prisma.postTarget.update({
