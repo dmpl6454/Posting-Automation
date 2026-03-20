@@ -7,7 +7,7 @@ import { Button } from "~/components/ui/button";
 import { Badge } from "~/components/ui/badge";
 import { Skeleton } from "~/components/ui/skeleton";
 import { useToast } from "~/hooks/use-toast";
-import { ImageIcon, Upload, Trash2, Loader2 } from "lucide-react";
+import { Upload, Trash2, Loader2, ImageIcon, Film } from "lucide-react";
 
 export default function MediaPage() {
   const { toast } = useToast();
@@ -91,16 +91,27 @@ export default function MediaPage() {
           {data?.items.map((media: any) => (
             <Card key={media.id} className="group overflow-hidden">
               <div className="relative aspect-square bg-muted">
-                {media.fileType.startsWith("image/") ? (
+                {media.fileType.startsWith("video/") ? (
+                  <div className="relative h-full w-full bg-black">
+                    <video
+                      src={media.url}
+                      className="h-full w-full object-cover"
+                      preload="metadata"
+                      muted
+                      playsInline
+                    />
+                    <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                      <div className="rounded-full bg-black/50 p-1.5">
+                        <Film className="h-4 w-4 text-white" />
+                      </div>
+                    </div>
+                  </div>
+                ) : (
                   <img
                     src={media.thumbnailUrl || media.url}
                     alt={media.fileName}
                     className="h-full w-full object-cover"
                   />
-                ) : (
-                  <div className="flex h-full items-center justify-center">
-                    <ImageIcon className="h-8 w-8 text-muted-foreground" />
-                  </div>
                 )}
                 <Button
                   variant="destructive"

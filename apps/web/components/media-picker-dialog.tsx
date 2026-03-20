@@ -101,8 +101,19 @@ export function MediaPickerDialog({
                   }`}
                 >
                   {isVideo ? (
-                    <div className="flex h-full w-full items-center justify-center bg-muted">
-                      <Film className="h-8 w-8 text-muted-foreground" />
+                    <div className="relative h-full w-full bg-black">
+                      <video
+                        src={item.url}
+                        className="h-full w-full object-cover"
+                        preload="metadata"
+                        muted
+                        playsInline
+                      />
+                      <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                        <div className="rounded-full bg-black/50 p-1.5">
+                          <Film className="h-4 w-4 text-white" />
+                        </div>
+                      </div>
                     </div>
                   ) : (
                     <img
