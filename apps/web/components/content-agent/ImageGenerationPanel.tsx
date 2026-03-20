@@ -77,6 +77,7 @@ async function extractBrandColors(imageDataUrl: string): Promise<string[]> {
     const img = new Image();
     img.onload = () => {
       try {
+        if (typeof document === "undefined") { resolve([]); return; }
         const canvas = document.createElement("canvas");
         const size = 80; // Downscale for speed
         canvas.width = size;
