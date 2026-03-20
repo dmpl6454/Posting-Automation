@@ -116,7 +116,10 @@ export class TwitterProvider extends SocialProvider {
     });
 
     const body = await res.text();
-    if (!res.ok) throw new Error(`Twitter OAuth request token failed (${res.status}): ${body}`);
+    if (!res.ok) {
+      console.error(`[Twitter] request_token failed HTTP ${res.status}: ${body}`);
+      throw new Error(`Twitter OAuth request token failed (${res.status}): ${body}`);
+    }
 
     const rp = new URLSearchParams(body);
     const requestToken = rp.get("oauth_token");

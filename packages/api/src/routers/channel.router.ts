@@ -51,8 +51,13 @@ export const channelRouter = createRouter({
         scopes: getDefaultScopes(input.platform),
       };
 
-      const url = await provider.getOAuthUrl(config, stateWithOrg);
-      return { url, state: stateWithOrg };
+      try {
+        const url = await provider.getOAuthUrl(config, stateWithOrg);
+        return { url, state: stateWithOrg };
+      } catch (err: any) {
+        console.error(`[channel.getOAuthUrl] ${input.platform} failed:`, err.message);
+        throw err;
+      }
     }),
 
   disconnect: orgProcedure
