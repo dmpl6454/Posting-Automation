@@ -236,10 +236,16 @@ export class TwitterProvider extends SocialProvider {
 
     const res = await fetch(analyticsUrl, { headers: { Authorization: header.Authorization } });
     const data: any = await res.json();
-    if (!res.ok) return null;
+    if (!res.ok) {
+      console.warn(`[Twitter] getPostAnalytics failed for ${platformPostId}: ${JSON.stringify(data)}`);
+      return null;
+    }
 
     const metrics = data.data?.public_metrics;
-    if (!metrics) return null;
+    if (!metrics) {
+      console.warn(`[Twitter] No public_metrics in response for ${platformPostId}: ${JSON.stringify(data)}`);
+      return null;
+    }
 
     return {
       impressions: metrics.impression_count || 0,

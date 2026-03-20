@@ -173,7 +173,10 @@ export class FacebookProvider extends SocialProvider {
     );
 
     const data: any = await res.json();
-    if (!res.ok) return null;
+    if (!res.ok) {
+      console.warn(`[Facebook] getPostAnalytics failed for ${platformPostId}: ${JSON.stringify(data)}`);
+      // Insights API failed (e.g. insufficient permissions) — fall back to basic post fields only
+    }
 
     const metrics: Record<string, number> = {};
     if (data.data) {
@@ -188,6 +191,10 @@ export class FacebookProvider extends SocialProvider {
     );
 
     const postData: any = await postRes.json();
+    if (!postRes.ok) {
+      console.warn(`[Facebook] post fields fetch failed for ${platformPostId}: ${JSON.stringify(postData)}`);
+      return null;
+    }
     const shares = postData.shares?.count || 0;
     const comments = postData.comments?.summary?.total_count || 0;
     const reactions = postData.reactions?.summary?.total_count || 0;

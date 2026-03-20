@@ -223,12 +223,15 @@ export class InstagramProvider extends SocialProvider {
     );
 
     const data: any = await res.json();
-    if (!res.ok) return null;
+    if (!res.ok) {
+      console.warn(`[Instagram] insights failed for ${platformPostId}: ${JSON.stringify(data)}`);
+      // Fall through — try fetching basic like/comment counts directly
+    }
 
     const metrics: Record<string, number> = {};
     if (data.data) {
       for (const metric of data.data) {
-        metrics[metric.name] = metric.values?.[0]?.value || 0;
+        metrics[metric.name] = metric.values?.[0]?.value || metric.value || 0;
       }
     }
 
@@ -238,6 +241,10 @@ export class InstagramProvider extends SocialProvider {
     );
 
     const mediaData: any = await mediaRes.json();
+    if (!mediaRes.ok) {
+      console.warn(`[Instagram] media fields failed for ${platformPostId}: ${JSON.stringify(mediaData)}`);
+      return null;
+    }
     const likes = mediaData.like_count || 0;
     const comments = mediaData.comments_count || 0;
 
