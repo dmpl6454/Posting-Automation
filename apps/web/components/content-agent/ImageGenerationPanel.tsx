@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { trpc } from "~/lib/trpc/client";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "~/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
 import { Textarea } from "~/components/ui/textarea";
 import { Badge } from "~/components/ui/badge";
@@ -20,6 +20,7 @@ import {
   Wand2, Pencil, Loader2, Download, Save, Upload, ImagePlus,
   Trash2, Square, RectangleHorizontal, RectangleVertical, Monitor, Smartphone,
   X, Sparkles, FolderOpen, ChevronDown, ChevronUp, Plus, Newspaper, Merge,
+  Zap, LayoutGrid, Palette,
 } from "lucide-react";
 import { MediaPickerDialog } from "~/components/media-picker-dialog";
 
@@ -54,6 +55,8 @@ const IMAGE_SIZES = [
   { label: "4K", value: "4K" },
 ];
 
+const CAROUSEL_COUNTS = [3, 4, 5, 6, 7, 10];
+
 interface HistoryItem {
   id: string;
   imageUrl: string;
@@ -66,6 +69,51 @@ const PROMPT_MAX_LENGTH = 2000;
 interface ImageGenerationPanelProps {
   onAddToPost: (imageDataUrl: string) => void | Promise<void>;
   postContent?: string;
+}
+
+// Extract dominant colors from an image data URL using Canvas API
+async function extractBrandColors(imageDataUrl: string): Promise<string[]> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const canvas = document.createElement("canvas");
+        const size = 80; // Downscale for speed
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) { resolve([]); return; }
+        ctx.drawImage(img, 0, 0, size, size);
+        const data = ctx.getImageData(0, 0, size, size).data;
+        const colorMap: Record<string, number> = {};
+        for (let i = 0; i < data.length; i += 4) {
+          const r = data[i]!;
+          const g = data[i + 1]!;
+          const b = data[i + 2]!;
+          const a = data[i + 3]!;
+          if (a < 128) continue; // skip transparent
+          // Skip near-white and near-black
+          if (r > 230 && g > 230 && b > 230) continue;
+          if (r < 25 && g < 25 && b < 25) continue;
+          // Quantize to 32-step buckets
+          const rq = Math.round(r / 32) * 32;
+          const gq = Math.round(g / 32) * 32;
+          const bq = Math.round(b / 32) * 32;
+          const hex = `#${rq.toString(16).padStart(2, "0")}${gq.toString(16).padStart(2, "0")}${bq.toString(16).padStart(2, "0")}`;
+          colorMap[hex] = (colorMap[hex] ?? 0) + 1;
+        }
+        const top = Object.entries(colorMap)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 4)
+          .map(([hex]) => hex);
+        resolve(top);
+      } catch {
+        resolve([]);
+      }
+    };
+    img.onerror = () => resolve([]);
+    img.src = imageDataUrl;
+  });
 }
 
 export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerationPanelProps) {
@@ -85,8 +133,18 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
   const [referenceFileName, setReferenceFileName] = useState("");
   const [logoImage, setLogoImage] = useState<string | null>(null);
   const [logoFileName, setLogoFileName] = useState("");
+  const [brandColors, setBrandColors] = useState<string[]>([]);
+  const [useBrandColors, setUseBrandColors] = useState(true);
   const referenceInputRef = useRef<HTMLInputElement>(null);
   const logoInputRef = useRef<HTMLInputElement>(null);
+
+  // Auto-add & Carousel
+  const [autoAddToPost, setAutoAddToPost] = useState(false);
+  const [carouselMode, setCarouselMode] = useState(false);
+  const [carouselCount, setCarouselCount] = useState(3);
+  const [carouselImages, setCarouselImages] = useState<string[]>([]);
+  const [carouselProgress, setCarouselProgress] = useState(0);
+  const [isGeneratingCarousel, setIsGeneratingCarousel] = useState(false);
 
   // Edit state
   const [editPrompt, setEditPrompt] = useState("");
@@ -103,8 +161,55 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
   const [showReferencePicker, setShowReferencePicker] = useState(false);
   const [showLogoPicker, setShowLogoPicker] = useState(false);
 
+  // Extract brand colors when logo is set
+  useEffect(() => {
+    if (logoImage) {
+      extractBrandColors(logoImage).then((colors) => {
+        setBrandColors(colors);
+      });
+    } else {
+      setBrandColors([]);
+    }
+  }, [logoImage]);
+
   const addToHistory = (imageUrl: string, prompt: string) => {
     setHistory((prev) => [{ id: crypto.randomUUID(), imageUrl, prompt, timestamp: new Date() }, ...prev]);
+  };
+
+  const buildFullPrompt = (base: string, slideIndex?: number, totalSlides?: number) => {
+    let fullPrompt = base;
+
+    // Merge post content
+    if (mergeContent && postContent?.trim()) {
+      fullPrompt = `${fullPrompt}\n\nBased on this post content:\n"${postContent.trim()}"`;
+    }
+
+    // Apply news style preset
+    if (selectedNewsStyle) {
+      const style = NEWS_STYLES.find((s) => s.value === selectedNewsStyle);
+      if (style) fullPrompt = `${style.prompt}\n\nImage topic: ${fullPrompt}`;
+    }
+
+    // Add brand colors from logo
+    if (useBrandColors && brandColors.length > 0) {
+      fullPrompt += `\n\nBrand color palette (use these as primary colors throughout the image): ${brandColors.join(", ")}.`;
+    }
+
+    // Attachment instructions
+    if (referenceImage && logoImage) {
+      fullPrompt += `\n\nI've attached a reference design image and a logo. Please use the reference as style/layout inspiration and incorporate the logo into the generated image.`;
+    } else if (referenceImage) {
+      fullPrompt += `\n\nI've attached a reference design image. Please use it as style/layout inspiration for the generated image.`;
+    } else if (logoImage) {
+      fullPrompt += `\n\nI've attached a logo image. Please incorporate this logo into the generated image.`;
+    }
+
+    // Carousel slide instruction
+    if (slideIndex !== undefined && totalSlides !== undefined) {
+      fullPrompt += `\n\nThis is slide ${slideIndex + 1} of ${totalSlides} in a carousel series. Keep a consistent visual style across all slides. ${slideIndex === 0 ? "This is the cover/intro slide." : slideIndex === totalSlides - 1 ? "This is the final/closing slide." : `This is slide ${slideIndex + 1}, continuing the story.`}`;
+    }
+
+    return fullPrompt;
   };
 
   const generateMutation = trpc.image.generate.useMutation({
@@ -113,6 +218,10 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
       setResultImage(imageUrl);
       addToHistory(imageUrl, generatePrompt);
       toast({ title: "Image generated!", description: "Your image is ready." });
+      if (autoAddToPost) {
+        onAddToPost(imageUrl);
+        toast({ title: "Added to post automatically!" });
+      }
     },
     onError: (err: any) => {
       toast({ title: "Generation failed", description: err.message || "Something went wrong.", variant: "destructive" });
@@ -160,36 +269,90 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
     });
   };
 
+  const generateSingle = (prompt: string): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const refs: Array<{ base64: string; mimeType?: string }> = [];
+      if (referenceImage) { const ref = extractBase64(referenceImage); if (ref) refs.push(ref); }
+      if (logoImage) { const logo = extractBase64(logoImage); if (logo) refs.push(logo); }
+
+      const params = {
+        prompt,
+        provider: imageProvider,
+        ...(imageProvider === "nano-banana" || imageProvider === "nano-banana-pro"
+          ? { model: model as any, aspectRatio, imageSize, ...(refs.length > 0 ? { referenceImages: refs } : {}) }
+          : { aspectRatio }),
+      };
+
+      // Use fetch directly to avoid mutation state conflicts during carousel
+      fetch("/api/trpc/image.generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ json: params }),
+      })
+        .then((r) => r.json())
+        .then((json) => {
+          const data = json?.result?.data?.json ?? json?.result?.data;
+          if (data?.imageBase64) {
+            resolve(`data:${data.mimeType || "image/png"};base64,${data.imageBase64}`);
+          } else {
+            reject(new Error(json?.error?.message || "Generation failed"));
+          }
+        })
+        .catch(reject);
+    });
+  };
+
   const handleGenerate = () => {
     if (!generatePrompt.trim()) return;
+
+    if (carouselMode) {
+      handleGenerateCarousel();
+      return;
+    }
+
     const refs: Array<{ base64: string; mimeType?: string }> = [];
     if (referenceImage) { const ref = extractBase64(referenceImage); if (ref) refs.push(ref); }
     if (logoImage) { const logo = extractBase64(logoImage); if (logo) refs.push(logo); }
 
-    let fullPrompt = generatePrompt;
-
-    // Merge post content into prompt
-    if (mergeContent && postContent?.trim()) {
-      fullPrompt = `${fullPrompt}\n\nBased on this post content:\n"${postContent.trim()}"`;
-    }
-
-    // Apply news style preset
-    if (selectedNewsStyle) {
-      const style = NEWS_STYLES.find((s) => s.value === selectedNewsStyle);
-      if (style) fullPrompt = `${style.prompt}\n\nImage topic: ${fullPrompt}`;
-    }
-
-    if (referenceImage && logoImage) fullPrompt += `\n\nI've attached a reference design image and a logo. Please use the reference as style/layout inspiration and incorporate the logo into the generated image.`;
-    else if (referenceImage) fullPrompt += `\n\nI've attached a reference design image. Please use it as style/layout inspiration for the generated image.`;
-    else if (logoImage) fullPrompt += `\n\nI've attached a logo image. Please incorporate this logo into the generated image.`;
-
     generateMutation.mutate({
-      prompt: fullPrompt,
+      prompt: buildFullPrompt(generatePrompt),
       provider: imageProvider,
       ...(imageProvider === "nano-banana" || imageProvider === "nano-banana-pro"
         ? { model: model as any, aspectRatio, imageSize, ...(refs.length > 0 ? { referenceImages: refs } : {}) }
         : { aspectRatio }),
     });
+  };
+
+  const handleGenerateCarousel = async () => {
+    if (!generatePrompt.trim()) return;
+    setIsGeneratingCarousel(true);
+    setCarouselImages([]);
+    setCarouselProgress(0);
+
+    const images: string[] = [];
+    for (let i = 0; i < carouselCount; i++) {
+      try {
+        setCarouselProgress(i);
+        const prompt = buildFullPrompt(generatePrompt, i, carouselCount);
+        const imageUrl = await generateSingle(prompt);
+        images.push(imageUrl);
+        setCarouselImages([...images]);
+        addToHistory(imageUrl, `Slide ${i + 1}: ${generatePrompt}`);
+      } catch (err: any) {
+        toast({ title: `Slide ${i + 1} failed`, description: err.message, variant: "destructive" });
+      }
+    }
+
+    setIsGeneratingCarousel(false);
+    setCarouselProgress(carouselCount);
+    toast({ title: `Carousel ready!`, description: `${images.length} of ${carouselCount} slides generated.` });
+
+    if (autoAddToPost && images.length > 0) {
+      for (const img of images) {
+        await onAddToPost(img);
+      }
+      toast({ title: "All carousel slides added to post!" });
+    }
   };
 
   const handleEdit = () => {
@@ -215,28 +378,38 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
     const file = e.dataTransfer.files?.[0]; if (file) handleFileSelect(file);
   }, []);
 
-  const handleDownload = () => {
-    if (!resultImage) return;
-    const a = document.createElement("a"); a.href = resultImage; a.download = `ai-image-${Date.now()}.png`;
+  const handleDownload = (src?: string) => {
+    const url = src || resultImage;
+    if (!url) return;
+    const a = document.createElement("a"); a.href = url; a.download = `ai-image-${Date.now()}.png`;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
   };
 
-  const handleSaveToLibrary = () => {
-    if (!resultImage) return;
-    let imageBase64 = resultImage; let mimeType = "image/png";
-    if (resultImage.startsWith("data:")) {
-      const match = resultImage.match(/^data:([^;]+);base64,(.+)$/);
+  const handleSaveToLibrary = (src?: string) => {
+    const url = src || resultImage;
+    if (!url) return;
+    let imageBase64 = url; let mimeType = "image/png";
+    if (url.startsWith("data:")) {
+      const match = url.match(/^data:([^;]+);base64,(.+)$/);
       if (match) { mimeType = match[1] ?? "image/png"; imageBase64 = match[2] ?? ""; }
     }
     saveMutation.mutate({ imageBase64, mimeType, fileName: `ai-image-${Date.now()}.png` });
   };
 
-  const handleAddToPost = () => {
-    if (!resultImage) return;
-    onAddToPost(resultImage);
+  const handleAddToPost = (src?: string) => {
+    const url = src || resultImage;
+    if (!url) return;
+    onAddToPost(url);
   };
 
-  const isGenerating = generateMutation.isPending;
+  const handleAddAllCarouselToPost = async () => {
+    for (const img of carouselImages) {
+      await onAddToPost(img);
+    }
+    toast({ title: `${carouselImages.length} slides added to post!` });
+  };
+
+  const isGenerating = generateMutation.isPending || isGeneratingCarousel;
   const isEditing = editMutation.isPending;
   const isSaving = saveMutation.isPending;
 
@@ -267,6 +440,47 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
 
               {/* GENERATE TAB */}
               <TabsContent value="generate" className="space-y-3 mt-3">
+
+                {/* Auto-add & Carousel toggles */}
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setAutoAddToPost(!autoAddToPost)}
+                    className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-all ${autoAddToPost ? "border-green-500 bg-green-500/10 text-green-600 dark:text-green-400" : "border-dashed border-muted-foreground/40 text-muted-foreground hover:border-primary/50 hover:bg-muted/30"}`}
+                  >
+                    <Zap className="h-3.5 w-3.5 shrink-0" />
+                    <span className="font-medium">Auto-add to Post</span>
+                    {autoAddToPost && <span className="ml-auto text-[10px]">ON</span>}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCarouselMode(!carouselMode)}
+                    className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-all ${carouselMode ? "border-blue-500 bg-blue-500/10 text-blue-600 dark:text-blue-400" : "border-dashed border-muted-foreground/40 text-muted-foreground hover:border-primary/50 hover:bg-muted/30"}`}
+                  >
+                    <LayoutGrid className="h-3.5 w-3.5 shrink-0" />
+                    <span className="font-medium">Carousel</span>
+                    {carouselMode && <span className="ml-auto text-[10px]">ON</span>}
+                  </button>
+                </div>
+
+                {/* Carousel count */}
+                {carouselMode && (
+                  <div>
+                    <p className="mb-1.5 text-xs font-medium text-muted-foreground">Number of Slides</p>
+                    <div className="flex gap-1.5">
+                      {CAROUSEL_COUNTS.map((n) => (
+                        <button
+                          key={n}
+                          type="button"
+                          onClick={() => setCarouselCount(n)}
+                          className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-all ${carouselCount === n ? "border-blue-500 bg-blue-500/10 text-blue-600 dark:text-blue-400" : "border-border text-muted-foreground hover:bg-muted/50"}`}
+                        >
+                          {n}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Merge content toggle */}
                 {postContent?.trim() && (
@@ -366,7 +580,7 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
                 {/* Aspect Ratio */}
                 <div>
                   <p className="mb-1.5 text-xs font-medium text-muted-foreground">Aspect Ratio</p>
-                  <div className="grid grid-cols-5 gap-1.5">
+                  <div className="grid grid-cols-6 gap-1.5">
                     {ASPECT_RATIOS.map((ar) => {
                       const Icon = ar.icon;
                       return (
@@ -407,6 +621,7 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
                 <div>
                   <p className="mb-1.5 text-xs font-medium text-muted-foreground">Attachments (optional)</p>
                   <div className="grid grid-cols-2 gap-2">
+                    {/* Reference image */}
                     <div>
                       <input ref={referenceInputRef} type="file" accept="image/*" className="hidden"
                         onChange={(e) => { const f = e.target.files?.[0]; if (f) { fileToBase64(f).then(d => { setReferenceImage(d); setReferenceFileName(f.name); }); } e.target.value = ""; }} />
@@ -429,16 +644,46 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
                         </div>
                       )}
                     </div>
+
+                    {/* Logo */}
                     <div>
                       <input ref={logoInputRef} type="file" accept="image/*" className="hidden"
                         onChange={(e) => { const f = e.target.files?.[0]; if (f) { fileToBase64(f).then(d => { setLogoImage(d); setLogoFileName(f.name); }); } e.target.value = ""; }} />
                       {logoImage ? (
-                        <div className="relative group rounded-lg border overflow-hidden">
-                          <img src={logoImage} alt="Logo" className="w-full h-16 object-contain bg-muted/30 p-1" />
-                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                            <button type="button" onClick={() => { setLogoImage(null); setLogoFileName(""); }} className="rounded-full bg-white/90 p-1"><X className="h-3 w-3 text-black" /></button>
+                        <div className="space-y-1">
+                          <div className="relative group rounded-lg border overflow-hidden">
+                            <img src={logoImage} alt="Logo" className="w-full h-16 object-contain bg-muted/30 p-1" />
+                            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                              <button type="button" onClick={() => { setLogoImage(null); setLogoFileName(""); setBrandColors([]); }} className="rounded-full bg-white/90 p-1"><X className="h-3 w-3 text-black" /></button>
+                            </div>
+                            <p className="text-[9px] text-muted-foreground truncate px-1 py-0.5">{logoFileName}</p>
                           </div>
-                          <p className="text-[9px] text-muted-foreground truncate px-1 py-0.5">{logoFileName}</p>
+                          {/* Brand colors preview */}
+                          {brandColors.length > 0 && (
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-1">
+                                <Palette className="h-3 w-3 text-muted-foreground" />
+                                <span className="text-[10px] text-muted-foreground">Brand Colors</span>
+                                <button
+                                  type="button"
+                                  onClick={() => setUseBrandColors(!useBrandColors)}
+                                  className={`ml-auto text-[10px] px-1.5 py-0.5 rounded transition-colors ${useBrandColors ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground"}`}
+                                >
+                                  {useBrandColors ? "Applied" : "Apply"}
+                                </button>
+                              </div>
+                              <div className="flex gap-1">
+                                {brandColors.map((color) => (
+                                  <div
+                                    key={color}
+                                    className={`h-5 flex-1 rounded border transition-all ${useBrandColors ? "ring-1 ring-primary/50" : "opacity-50"}`}
+                                    style={{ backgroundColor: color }}
+                                    title={color}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       ) : (
                         <div className="space-y-1">
@@ -455,8 +700,14 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
                 </div>
 
                 <Button onClick={handleGenerate} disabled={!generatePrompt.trim() || isGenerating} className="w-full gap-2">
-                  {isGenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                  {isGenerating ? "Generating..." : "Generate Image"}
+                  {isGenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : carouselMode ? <LayoutGrid className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
+                  {isGeneratingCarousel
+                    ? `Generating slide ${carouselProgress + 1} of ${carouselCount}...`
+                    : generateMutation.isPending
+                    ? "Generating..."
+                    : carouselMode
+                    ? `Generate ${carouselCount} Slides`
+                    : "Generate Image"}
                 </Button>
               </TabsContent>
 
@@ -500,11 +751,52 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
               </TabsContent>
             </Tabs>
 
-            {/* Result */}
-            {(isGenerating || isEditing || resultImage) && (
+            {/* Carousel Result */}
+            {carouselMode && (isGeneratingCarousel || carouselImages.length > 0) && (
+              <div className="space-y-3 border-t pt-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-medium text-muted-foreground">
+                    Carousel Slides {carouselImages.length > 0 ? `(${carouselImages.length}/${carouselCount})` : ""}
+                  </p>
+                  {carouselImages.length > 0 && !isGeneratingCarousel && (
+                    <Button size="sm" variant="outline" onClick={handleAddAllCarouselToPost} className="h-7 gap-1.5 text-xs">
+                      <Plus className="h-3 w-3" />Add All to Post
+                    </Button>
+                  )}
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  {Array.from({ length: carouselCount }).map((_, i) => (
+                    <div key={i} className="relative aspect-square overflow-hidden rounded-lg border bg-muted/30">
+                      {carouselImages[i] ? (
+                        <>
+                          <img src={carouselImages[i]} alt={`Slide ${i + 1}`} className="h-full w-full object-cover" />
+                          <div className="absolute inset-0 bg-black/50 opacity-0 hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-1">
+                            <button type="button" onClick={() => handleAddToPost(carouselImages[i])} className="rounded-md bg-white/90 px-2 py-1 text-[10px] font-medium text-black">Add</button>
+                            <button type="button" onClick={() => handleDownload(carouselImages[i])} className="rounded-md bg-white/70 px-2 py-1 text-[10px] font-medium text-black">Save</button>
+                          </div>
+                          <div className="absolute bottom-1 left-1 rounded bg-black/60 px-1 py-0.5 text-[9px] text-white">{i + 1}</div>
+                        </>
+                      ) : isGeneratingCarousel && i === carouselProgress ? (
+                        <div className="flex h-full flex-col items-center justify-center gap-1">
+                          <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                          <span className="text-[10px] text-muted-foreground">Generating...</span>
+                        </div>
+                      ) : (
+                        <div className="flex h-full items-center justify-center">
+                          <span className="text-[10px] text-muted-foreground/50">{i + 1}</span>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Single Result */}
+            {!carouselMode && (generateMutation.isPending || isEditing || resultImage) && (
               <div className="space-y-3 border-t pt-3">
                 <p className="text-xs font-medium text-muted-foreground">Result</p>
-                {isGenerating || isEditing ? (
+                {generateMutation.isPending || isEditing ? (
                   <Skeleton className="aspect-square w-full rounded-lg" />
                 ) : resultImage ? (
                   <div className="space-y-2">
@@ -512,14 +804,14 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
                       <img src={resultImage} alt="Result" className="w-full object-contain" style={{ maxHeight: "300px" }} />
                     </div>
                     <div className="grid grid-cols-2 gap-2">
-                      <Button size="sm" className="gap-1.5" onClick={handleAddToPost}>
+                      <Button size="sm" className="gap-1.5" onClick={() => handleAddToPost()}>
                         <Plus className="h-3.5 w-3.5" />Add to Post
                       </Button>
-                      <Button size="sm" variant="outline" onClick={handleSaveToLibrary} disabled={isSaving} className="gap-1.5">
+                      <Button size="sm" variant="outline" onClick={() => handleSaveToLibrary()} disabled={isSaving} className="gap-1.5">
                         {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
                         Save to Library
                       </Button>
-                      <Button size="sm" variant="outline" onClick={handleDownload} className="gap-1.5">
+                      <Button size="sm" variant="outline" onClick={() => handleDownload()} className="gap-1.5">
                         <Download className="h-3.5 w-3.5" />Download
                       </Button>
                       <Button size="sm" variant="outline" onClick={() => { setUploadedImage(resultImage); setUploadedFileName("generated.png"); setEditPrompt(""); setActiveTab("edit"); }} className="gap-1.5">
@@ -545,7 +837,7 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
                     <button
                       key={item.id}
                       type="button"
-                      onClick={() => setResultImage(item.imageUrl)}
+                      onClick={() => { setResultImage(item.imageUrl); if (carouselMode) setCarouselMode(false); }}
                       className={`group relative overflow-hidden rounded-lg border transition-all hover:ring-2 hover:ring-primary/50 ${resultImage === item.imageUrl ? "ring-2 ring-primary" : ""}`}
                     >
                       <img src={item.imageUrl} alt={item.prompt} className="aspect-square w-full object-cover" />
