@@ -71,13 +71,13 @@ interface ImageGenerationPanelProps {
   postContent?: string;
 }
 
-// Extract dominant colors from an image data URL using Canvas API
+// Extract dominant colors from an image data URL using Canvas API (browser only)
 async function extractBrandColors(imageDataUrl: string): Promise<string[]> {
+  if (typeof window === "undefined" || typeof document === "undefined") return [];
   return new Promise((resolve) => {
-    const img = new Image();
+    const img = new window.Image();
     img.onload = () => {
       try {
-        if (typeof document === "undefined") { resolve([]); return; }
         const canvas = document.createElement("canvas");
         const size = 80; // Downscale for speed
         canvas.width = size;
