@@ -89,11 +89,15 @@ export default function AccountGroupsPage() {
   const groups = (data as any[]) ?? [];
   const agents = (agentsData as any[]) ?? [];
 
-  // Agents not in any group
-  const assignedAgentIds = new Set(
-    groups.flatMap((g: any) => (g.agents ?? []).map((a: any) => a.id))
-  );
-  const unassignedAgents = agents.filter((a: any) => !assignedAgentIds.has(a.id));
+  // Agents not assigned to the currently selected group
+  const getAvailableAgents = (groupId: string | null) => {
+    if (!groupId) return agents.filter((a: any) => !a.accountGroupId);
+    const group = groups.find((g: any) => g.id === groupId);
+    const alreadyInGroup = new Set((group?.agents ?? []).map((a: any) => a.id));
+    return agents.filter((a: any) => !alreadyInGroup.has(a.id));
+  };
+
+  const unassignedAgents = getAvailableAgents(selectedGroupId);
 
   const handleCreate = () => {
     createMutation.mutate({
@@ -335,9 +339,13 @@ export default function AccountGroupsPage() {
             <DialogTitle>Add Agents to Group</DialogTitle>
           </DialogHeader>
           <div className="space-y-2 py-2 max-h-[400px] overflow-y-auto">
-            {unassignedAgents.length === 0 ? (
+            {agents.length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-4">
-                All agents are already assigned to groups.
+                No agents created yet. Go to <strong>Dashboard → Agents</strong> to create one first.
+              </p>
+            ) : unassignedAgents.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-4">
+                All agents are already in this group.
               </p>
             ) : (
               unassignedAgents.map((agent: any) => (
