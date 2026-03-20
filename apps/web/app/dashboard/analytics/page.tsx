@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { trpc } from "~/lib/trpc/client";
-import { toast } from "~/components/ui/use-toast";
+import { useToast } from "~/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "~/components/ui/card";
 import { Skeleton } from "~/components/ui/skeleton";
 import { Badge } from "~/components/ui/badge";
@@ -103,6 +103,7 @@ export default function AnalyticsPage() {
   const [from, setFrom] = useState(() => subDays(new Date(), 30).toISOString());
   const [to, setTo] = useState(() => new Date().toISOString());
   const [syncing, setSyncing] = useState(false);
+  const { toast } = useToast();
 
   const dateInput = { from, to };
   const utils = trpc.useUtils();
