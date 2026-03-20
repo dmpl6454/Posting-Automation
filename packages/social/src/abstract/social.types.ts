@@ -1,6 +1,7 @@
 export interface SocialPostPayload {
   content: string;
   mediaUrls?: string[];
+  mediaTypes?: string[]; // MIME types corresponding to mediaUrls, e.g. ["video/mp4"]
   metadata?: Record<string, unknown>;
 }
 

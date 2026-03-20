@@ -82,18 +82,60 @@ export class InstagramProvider extends SocialProvider {
 
     // Single image or single video post
     const mediaUrl = payload.mediaUrls?.[0];
-    if (!mediaUrl) {
-      throw new Error("Instagram requires at least one media attachment to publish a post.");
+    if (!mediaUrl || !mediaUrl.startsWith("http")) {
+      throw new Error("Instagram requires a valid publicly accessible media URL to publish a post.");
     }
 
-    // Step 1: Create a media container
-    const containerId = await this.createMediaContainer(tokens, igUserId, {
-      image_url: mediaUrl,
+    // Detect if this is a video
+    const isVideo = /\.(mp4|mov|avi|mkv|webm)$/i.test(mediaUrl) ||
+      (payload.mediaTypes?.[0] ?? "").startsWith("video/");
+
+    // Step 1: Create a media container (image_url for images, video_url for videos)
+    const containerParams: Record<string, string> = {
       caption: payload.content,
-    });
+    };
+
+    if (isVideo) {
+      containerParams["video_url"] = mediaUrl;
+      containerParams["media_type"] = "REELS"; // Instagram supports REELS for video
+    } else {
+      containerParams["image_url"] = mediaUrl;
+    }
+
+    const containerId = await this.createMediaContainer(tokens, igUserId, containerParams);
+
+    // For videos, wait for processing before publishing
+    if (isVideo) {
+      await this.waitForMediaReady(tokens, containerId);
+    }
 
     // Step 2: Publish the container
     return this.publishContainer(tokens, igUserId, containerId);
+  }
+
+  /**
+   * Poll until the media container status is FINISHED (ready to publish).
+   * Instagram video processing can take 30-90 seconds.
+   */
+  private async waitForMediaReady(tokens: OAuthTokens, containerId: string, maxWaitMs = 90000): Promise<void> {
+    const pollInterval = 5000;
+    const maxAttempts = Math.ceil(maxWaitMs / pollInterval);
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      await new Promise((r) => setTimeout(r, pollInterval));
+
+      const res = await fetch(
+        `${this.graphBaseUrl}/${this.apiVersion}/${containerId}?fields=status_code,status&access_token=${tokens.accessToken}`
+      );
+      const data: any = await res.json();
+
+      if (data.status_code === "FINISHED") return;
+      if (data.status_code === "ERROR" || data.status_code === "EXPIRED") {
+        throw new Error(`Instagram media processing failed: ${data.status || data.status_code}`);
+      }
+    }
+
+    throw new Error("Instagram video processing timed out after 90 seconds");
   }
 
   async deletePost(tokens: OAuthTokens, platformPostId: string): Promise<void> {

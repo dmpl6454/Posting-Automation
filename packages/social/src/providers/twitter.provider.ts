@@ -179,25 +179,43 @@ export class TwitterProvider extends SocialProvider {
   private async uploadMedia(tokens: OAuthTokens, mediaUrl: string): Promise<string> {
     // Download the media file
     const mediaRes = await fetch(mediaUrl);
+    if (!mediaRes.ok) throw new Error(`Failed to fetch media for Twitter upload: ${mediaRes.status}`);
     const mediaBuffer = Buffer.from(await mediaRes.arrayBuffer());
     const mediaType = mediaRes.headers.get("content-type") || "image/jpeg";
+    const mediaCategory = mediaType.startsWith("video/") ? "tweet_video" : "tweet_image";
 
-    // Twitter v2 media upload expects JSON body with base64-encoded media
-    const res = await fetch("https://api.twitter.com/2/media/upload", {
+    // Twitter media upload uses the v1.1 endpoint (v2 media upload is not yet stable)
+    // Uses multipart/form-data with media_data (base64) field
+    const boundary = `----TwitterUpload${Date.now()}`;
+    const base64Data = mediaBuffer.toString("base64");
+
+    const parts: Buffer[] = [
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="media_data"\r\n\r\n${base64Data}\r\n`),
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="media_category"\r\n\r\n${mediaCategory}\r\n`),
+      Buffer.from(`--${boundary}--\r\n`),
+    ];
+    const body = Buffer.concat(parts);
+
+    const res = await fetch("https://upload.twitter.com/1.1/media/upload.json", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${tokens.accessToken}`,
-        "Content-Type": "application/json",
+        "Content-Type": `multipart/form-data; boundary=${boundary}`,
       },
-      body: JSON.stringify({
-        media: mediaBuffer.toString("base64"),
-        media_type: mediaType,
-        media_category: mediaType.startsWith("video") ? "tweet_video" : "tweet_image",
-      }),
+      body: new Uint8Array(body),
     });
 
-    const data: any = await res.json();
+    const text = await res.text();
+    if (!text) throw new Error("Twitter media upload returned empty response");
+
+    let data: any;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error(`Twitter media upload returned non-JSON response: ${text.slice(0, 200)}`);
+    }
+
     if (!res.ok) throw new Error(`Twitter media upload failed: ${JSON.stringify(data)}`);
-    return data.data?.id ?? data.media_id_string;
+    return data.media_id_string ?? data.data?.id;
   }
 }

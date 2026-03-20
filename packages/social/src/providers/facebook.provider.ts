@@ -322,8 +322,44 @@ export class FacebookProvider extends SocialProvider {
   }
 
   /**
-   * Publish a post with one or more photo attachments.
-   * Downloads images server-side and uploads as binary to avoid
+   * Upload a video to Facebook using binary source.
+   * Uses the /{page-id}/videos endpoint (not /photos).
+   */
+  private async uploadVideoToFacebook(
+    tokens: OAuthTokens,
+    pageId: string,
+    mediaUrl: string,
+    message?: string
+  ): Promise<{ id: string; post_id?: string }> {
+    const { buffer, contentType, fileName } = await this.fetchMediaAsBuffer(mediaUrl);
+
+    const fields: Record<string, string> = {
+      access_token: tokens.accessToken,
+    };
+    if (message) fields["description"] = message;
+
+    const { body, contentType: multipartContentType } = this.buildMultipartBody(
+      fields,
+      { name: fileName, contentType, buffer }
+    );
+
+    const res = await fetch(
+      `${this.graphBaseUrl}/${this.apiVersion}/${pageId}/videos`,
+      {
+        method: "POST",
+        headers: { "Content-Type": multipartContentType },
+        body: new Uint8Array(body),
+      }
+    );
+
+    const data: any = await res.json();
+    if (!res.ok) throw new Error(`Facebook video post failed: ${JSON.stringify(data)}`);
+    return data;
+  }
+
+  /**
+   * Publish a post with one or more media attachments (photos or video).
+   * Downloads media server-side and uploads as binary to avoid
    * Facebook needing to fetch from internal MinIO URLs.
    */
   private async publishPostWithMedia(
@@ -333,8 +369,24 @@ export class FacebookProvider extends SocialProvider {
   ): Promise<SocialPostResult> {
     const mediaUrls = payload.mediaUrls!;
 
+    // Detect if any media is a video
+    const firstUrl = mediaUrls[0]!;
+    const isVideo = /\.(mp4|mov|avi|mkv|webm)$/i.test(firstUrl) ||
+      (payload.mediaTypes?.[0] ?? "").startsWith("video/");
+
+    if (isVideo) {
+      // Facebook only supports one video per post
+      const data = await this.uploadVideoToFacebook(tokens, pageId, firstUrl, payload.content);
+      const postId = data.post_id || data.id;
+      return {
+        platformPostId: postId,
+        url: `https://www.facebook.com/${postId.replace("_", "/posts/")}`,
+        metadata: data,
+      };
+    }
+
     if (mediaUrls.length === 1) {
-      const data = await this.uploadPhotoToFacebook(tokens, pageId, mediaUrls[0]!, true, payload.content);
+      const data = await this.uploadPhotoToFacebook(tokens, pageId, firstUrl, true, payload.content);
       const postId = data.post_id || data.id;
       return {
         platformPostId: postId,

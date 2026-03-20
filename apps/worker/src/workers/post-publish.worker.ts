@@ -82,14 +82,15 @@ export function createPostPublishWorker() {
       const contentVariants = postTarget.post.contentVariants as Record<string, string> | null;
       const content = contentVariants?.[platform] ?? postTarget.post.content;
       const mediaUrls = postTarget.post.mediaAttachments.map((m) => m.media.url);
+      const mediaTypes = postTarget.post.mediaAttachments.map((m) => m.media.fileType);
 
       // Validate content before publishing
-      const errors = provider.validateContent({ content, mediaUrls });
+      const errors = provider.validateContent({ content, mediaUrls, mediaTypes });
       if (errors.length > 0) {
         throw new Error(`Validation failed: ${errors.join(", ")}`);
       }
 
-      const result = await provider.publishPost(tokens, { content, mediaUrls });
+      const result = await provider.publishPost(tokens, { content, mediaUrls, mediaTypes });
 
       // 4. Mark as PUBLISHED
       await prisma.postTarget.update({
