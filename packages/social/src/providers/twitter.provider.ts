@@ -254,6 +254,8 @@ export class TwitterProvider extends SocialProvider {
 
   // ---------------------------------------------------------------------------
   // Media upload — v1.1 with OAuth 1.0a
+  // Images: simple multipart upload
+  // Videos: chunked upload (INIT → APPEND → FINALIZE → STATUS poll)
   // ---------------------------------------------------------------------------
 
   private async uploadMedia(
@@ -277,16 +279,20 @@ export class TwitterProvider extends SocialProvider {
       mediaType = mimeMap[urlExt] ?? "image/jpeg";
     }
 
-    const mediaCategory = mediaType.startsWith("video/") ? "tweet_video" : "tweet_image";
-    const uploadUrl = "https://upload.twitter.com/1.1/media/upload.json";
+    const isVideo = mediaType.startsWith("video/");
 
+    if (isVideo) {
+      return this.uploadVideoChunked(token, mediaBuffer, mediaType);
+    }
+
+    // Simple multipart upload for images
+    const uploadUrl = "https://upload.twitter.com/1.1/media/upload.json";
     const oauth = this.makeOAuth();
-    // For multipart uploads, body params are NOT included in OAuth signature
     const header = oauth.toHeader(oauth.authorize({ url: uploadUrl, method: "POST" }, token));
 
     const form = new FormData();
     form.append("media", new Blob([mediaBuffer], { type: mediaType }), "upload");
-    form.append("media_category", mediaCategory);
+    form.append("media_category", "tweet_image");
 
     const res = await fetch(uploadUrl, {
       method: "POST",
@@ -295,14 +301,116 @@ export class TwitterProvider extends SocialProvider {
     });
 
     const text = await res.text();
-    if (!text) throw new Error(`Twitter media upload HTTP ${res.status} (empty response)`);
-
+    if (!text) throw new Error(`Twitter image upload HTTP ${res.status} (empty response)`);
     let data: any;
     try { data = JSON.parse(text); } catch {
-      throw new Error(`Twitter media upload non-JSON (HTTP ${res.status}): ${text.slice(0, 300)}`);
+      throw new Error(`Twitter image upload non-JSON (HTTP ${res.status}): ${text.slice(0, 300)}`);
+    }
+    if (!res.ok) throw new Error(`Twitter image upload failed (HTTP ${res.status}): ${JSON.stringify(data)}`);
+    return data.media_id_string ?? data.data?.id;
+  }
+
+  /** Chunked upload flow required for all video files */
+  private async uploadVideoChunked(
+    token: { key: string; secret: string },
+    mediaBuffer: Buffer,
+    mediaType: string
+  ): Promise<string> {
+    const uploadUrl = "https://upload.twitter.com/1.1/media/upload.json";
+    const oauth = this.makeOAuth();
+
+    // --- INIT ---
+    const initParams = {
+      command: "INIT",
+      total_bytes: mediaBuffer.length.toString(),
+      media_type: mediaType,
+      media_category: "tweet_video",
+    };
+    const initHeader = oauth.toHeader(
+      oauth.authorize({ url: uploadUrl, method: "POST", data: initParams }, token)
+    );
+    const initRes = await fetch(uploadUrl, {
+      method: "POST",
+      headers: { Authorization: initHeader.Authorization, "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(initParams).toString(),
+    });
+    const initText = await initRes.text();
+    if (!initRes.ok) throw new Error(`Twitter video INIT failed (${initRes.status}): ${initText}`);
+    const initData = JSON.parse(initText);
+    const mediaId: string = initData.media_id_string;
+
+    // --- APPEND (5 MB chunks) ---
+    const chunkSize = 5 * 1024 * 1024;
+    const totalChunks = Math.ceil(mediaBuffer.length / chunkSize);
+    for (let i = 0; i < totalChunks; i++) {
+      const chunk = mediaBuffer.slice(i * chunkSize, (i + 1) * chunkSize);
+      const appendHeader = oauth.toHeader(
+        oauth.authorize({ url: uploadUrl, method: "POST" }, token)
+      );
+      const form = new FormData();
+      form.append("command", "APPEND");
+      form.append("media_id", mediaId);
+      form.append("segment_index", i.toString());
+      form.append("media", new Blob([chunk], { type: mediaType }), "chunk");
+      const appendRes = await fetch(uploadUrl, {
+        method: "POST",
+        headers: { Authorization: appendHeader.Authorization },
+        body: form,
+      });
+      if (!appendRes.ok) {
+        const err = await appendRes.text();
+        throw new Error(`Twitter video APPEND segment ${i} failed (${appendRes.status}): ${err}`);
+      }
     }
 
-    if (!res.ok) throw new Error(`Twitter media upload failed (HTTP ${res.status}): ${JSON.stringify(data)}`);
-    return data.media_id_string ?? data.data?.id;
+    // --- FINALIZE ---
+    const finalizeParams = { command: "FINALIZE", media_id: mediaId };
+    const finalizeHeader = oauth.toHeader(
+      oauth.authorize({ url: uploadUrl, method: "POST", data: finalizeParams }, token)
+    );
+    const finalizeRes = await fetch(uploadUrl, {
+      method: "POST",
+      headers: { Authorization: finalizeHeader.Authorization, "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(finalizeParams).toString(),
+    });
+    const finalizeText = await finalizeRes.text();
+    if (!finalizeRes.ok) throw new Error(`Twitter video FINALIZE failed (${finalizeRes.status}): ${finalizeText}`);
+    const finalizeData = JSON.parse(finalizeText);
+
+    // --- STATUS poll (if processing required) ---
+    if (finalizeData.processing_info) {
+      await this.pollVideoStatus(token, mediaId);
+    }
+
+    return mediaId;
+  }
+
+  /** Poll media/upload STATUS until video processing completes */
+  private async pollVideoStatus(
+    token: { key: string; secret: string },
+    mediaId: string
+  ): Promise<void> {
+    const uploadUrl = "https://upload.twitter.com/1.1/media/upload.json";
+    const oauth = this.makeOAuth();
+    const maxAttempts = 30; // 90 seconds max
+
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise((r) => setTimeout(r, 3000));
+
+      const statusUrl = `${uploadUrl}?command=STATUS&media_id=${mediaId}`;
+      const header = oauth.toHeader(oauth.authorize({ url: statusUrl, method: "GET" }, token));
+      const res = await fetch(statusUrl, { headers: { Authorization: header.Authorization } });
+      const data: any = await res.json();
+
+      const state = data.processing_info?.state;
+      console.log(`[Twitter] Video processing state: ${state} (attempt ${i + 1})`);
+
+      if (state === "succeeded") return;
+      if (state === "failed") {
+        throw new Error(`Twitter video processing failed: ${JSON.stringify(data.processing_info)}`);
+      }
+    }
+
+    throw new Error("Twitter video processing timed out after 90 seconds");
   }
 }
