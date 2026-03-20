@@ -1,6 +1,6 @@
+import crypto from "node:crypto";
 import type { SocialPlatform } from "@postautomation/db";
 import { SocialProvider } from "../abstract/social.abstract";
-import { generateCodeVerifier, generateCodeChallenge } from "../utils/oauth-helper";
 import type {
   SocialPostPayload,
   SocialPostResult,
@@ -10,6 +10,10 @@ import type {
   SocialProfile,
   PlatformConstraints,
 } from "../abstract/social.types";
+import {
+  storeRequestTokenSecret,
+  getAndDeleteRequestTokenSecret,
+} from "../utils/oauth1a-temp-store";
 
 export class TwitterProvider extends SocialProvider {
   readonly platform: SocialPlatform = "TWITTER";
@@ -18,86 +22,186 @@ export class TwitterProvider extends SocialProvider {
     maxContentLength: 280,
     supportedMediaTypes: ["image/jpeg", "image/png", "image/gif", "video/mp4"],
     maxMediaCount: 4,
-    maxMediaSize: 5 * 1024 * 1024, // 5MB for images
+    maxMediaSize: 5 * 1024 * 1024,
     supportsThreads: true,
   };
 
-  async getOAuthUrl(config: OAuthConfig, state: string): Promise<string> {
-    const codeVerifier = generateCodeVerifier();
-    const codeChallenge = await generateCodeChallenge(codeVerifier);
+  // ---------------------------------------------------------------------------
+  // OAuth 1.0a helpers
+  // ---------------------------------------------------------------------------
 
-    // Embed PKCE verifier in state so it survives the OAuth redirect roundtrip
-    const stateWithPkce = `${state}|pkce:${codeVerifier}`;
-
-    const params = new URLSearchParams({
-      response_type: "code",
-      client_id: config.clientId,
-      redirect_uri: config.callbackUrl,
-      scope: config.scopes.join(" "),
-      state: stateWithPkce,
-      code_challenge: codeChallenge,
-      code_challenge_method: "S256",
-    });
-    return `https://twitter.com/i/oauth2/authorize?${params.toString()}`;
+  /** Build the base set of OAuth 1.0a params (nonce, timestamp, etc.) */
+  private oAuth1aParams(extras: Record<string, string> = {}): Record<string, string> {
+    return {
+      oauth_consumer_key: process.env.TWITTER_CLIENT_ID ?? "",
+      oauth_nonce: crypto.randomBytes(16).toString("hex"),
+      oauth_signature_method: "HMAC-SHA1",
+      oauth_timestamp: Math.floor(Date.now() / 1000).toString(),
+      oauth_version: "1.0",
+      ...extras,
+    };
   }
 
-  async exchangeCodeForTokens(code: string, config: OAuthConfig, codeVerifier?: string): Promise<OAuthTokens> {
-    const bodyParams: Record<string, string> = {
-      code,
-      grant_type: "authorization_code",
-      redirect_uri: config.callbackUrl,
-    };
-    if (codeVerifier) {
-      bodyParams.code_verifier = codeVerifier;
+  /**
+   * Generate an HMAC-SHA1 OAuth 1.0a signature.
+   * queryParams are included in the signature for GET requests.
+   * Body params are NOT included for multipart or JSON bodies.
+   */
+  private signOAuth1a(
+    method: string,
+    baseUrl: string,
+    oauthParams: Record<string, string>,
+    queryParams: Record<string, string> = {},
+    tokenSecret = ""
+  ): string {
+    const consumerSecret = process.env.TWITTER_CLIENT_SECRET ?? "";
+    const allParams = { ...oauthParams, ...queryParams };
+
+    const paramStr = Object.entries(allParams)
+      .map(([k, v]) => [encodeURIComponent(k), encodeURIComponent(v)] as const)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, v]) => `${k}=${v}`)
+      .join("&");
+
+    const baseString = [
+      method.toUpperCase(),
+      encodeURIComponent(baseUrl),
+      encodeURIComponent(paramStr),
+    ].join("&");
+
+    const signingKey = `${encodeURIComponent(consumerSecret)}&${encodeURIComponent(tokenSecret)}`;
+    return crypto.createHmac("sha1", signingKey).update(baseString).digest("base64");
+  }
+
+  /** Build the OAuth Authorization header string from a params map. */
+  private oAuth1aHeader(params: Record<string, string>): string {
+    const fields = Object.entries(params)
+      .filter(([k]) => k.startsWith("oauth_"))
+      .map(([k, v]) => `${encodeURIComponent(k)}="${encodeURIComponent(v)}"`)
+      .join(", ");
+    return `OAuth ${fields}`;
+  }
+
+  /**
+   * One-shot helper: build params, sign, and return the Authorization header.
+   * Use this for any signed API request.
+   */
+  private signedAuthHeader(
+    method: string,
+    url: string,
+    extraOAuthParams: Record<string, string> = {},
+    queryParams: Record<string, string> = {},
+    tokenSecret = ""
+  ): string {
+    const params = this.oAuth1aParams(extraOAuthParams);
+    const sig = this.signOAuth1a(method, url, params, queryParams, tokenSecret);
+    return this.oAuth1aHeader({ ...params, oauth_signature: sig });
+  }
+
+  // ---------------------------------------------------------------------------
+  // OAuth flow — 3-legged OAuth 1.0a
+  // ---------------------------------------------------------------------------
+
+  async getOAuthUrl(config: OAuthConfig, state: string): Promise<string> {
+    // Encode our state in the callback URL — Twitter preserves query params
+    const callbackWithState = `${config.callbackUrl}?twitterstate=${encodeURIComponent(state)}`;
+
+    const params = this.oAuth1aParams({ oauth_callback: callbackWithState });
+    const sig = this.signOAuth1a("POST", "https://api.twitter.com/oauth/request_token", params, {}, "");
+    const authHeader = this.oAuth1aHeader({ ...params, oauth_signature: sig });
+
+    const res = await fetch("https://api.twitter.com/oauth/request_token", {
+      method: "POST",
+      headers: { Authorization: authHeader },
+    });
+
+    const body = await res.text();
+    if (!res.ok) throw new Error(`Twitter OAuth request token failed (${res.status}): ${body}`);
+
+    const rp = new URLSearchParams(body);
+    const requestToken = rp.get("oauth_token");
+    const requestTokenSecret = rp.get("oauth_token_secret");
+
+    if (!requestToken || !requestTokenSecret) {
+      throw new Error(`Twitter OAuth request token response invalid: ${body}`);
     }
 
-    const res = await fetch("https://api.twitter.com/2/oauth2/token", {
+    // Store the secret temporarily — retrieved in exchangeCodeForTokens
+    storeRequestTokenSecret(requestToken, requestTokenSecret);
+
+    return `https://api.twitter.com/oauth/authorize?oauth_token=${requestToken}`;
+  }
+
+  /**
+   * Exchange the OAuth verifier for access tokens.
+   * For OAuth 1.0a:
+   *   code        = oauth_verifier  (from callback query param)
+   *   codeVerifier = oauth_token    (request token; used to look up stored secret)
+   */
+  async exchangeCodeForTokens(
+    oauthVerifier: string,
+    _config: OAuthConfig,
+    requestToken?: string
+  ): Promise<OAuthTokens> {
+    if (!requestToken) {
+      throw new Error("Twitter OAuth 1.0a requires the oauth_token (request token) as codeVerifier.");
+    }
+
+    const requestTokenSecret = getAndDeleteRequestTokenSecret(requestToken);
+    if (!requestTokenSecret) {
+      throw new Error(
+        "Twitter OAuth 1.0a: request token secret not found or expired. Please try connecting again."
+      );
+    }
+
+    const params = this.oAuth1aParams({
+      oauth_token: requestToken,
+      oauth_verifier: oauthVerifier,
+    });
+    const sig = this.signOAuth1a(
+      "POST",
+      "https://api.twitter.com/oauth/access_token",
+      params,
+      {},
+      requestTokenSecret
+    );
+    const authHeader = this.oAuth1aHeader({ ...params, oauth_signature: sig });
+
+    const res = await fetch("https://api.twitter.com/oauth/access_token", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Authorization: `Basic ${Buffer.from(`${config.clientId}:${config.clientSecret}`).toString("base64")}`,
-      },
-      body: new URLSearchParams(bodyParams),
+      headers: { Authorization: authHeader },
     });
 
-    const data: any = await res.json();
-    if (!res.ok) throw new Error(`Twitter token exchange failed: ${JSON.stringify(data)}`);
+    const body = await res.text();
+    if (!res.ok) throw new Error(`Twitter OAuth access token exchange failed (${res.status}): ${body}`);
 
+    const rp = new URLSearchParams(body);
+    const accessToken = rp.get("oauth_token");
+    const tokenSecret = rp.get("oauth_token_secret");
+
+    if (!accessToken || !tokenSecret) {
+      throw new Error(`Twitter OAuth access token response invalid: ${body}`);
+    }
+
+    // Store the token secret in refreshToken field — OAuth 1.0a tokens never expire
     return {
-      accessToken: data.access_token,
-      refreshToken: data.refresh_token,
-      expiresAt: new Date(Date.now() + data.expires_in * 1000),
-      scopes: data.scope?.split(" "),
+      accessToken,
+      refreshToken: tokenSecret,
     };
   }
 
-  async refreshAccessToken(refreshToken: string, config: OAuthConfig): Promise<OAuthTokens> {
-    const res = await fetch("https://api.twitter.com/2/oauth2/token", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Authorization: `Basic ${Buffer.from(`${config.clientId}:${config.clientSecret}`).toString("base64")}`,
-      },
-      body: new URLSearchParams({
-        refresh_token: refreshToken,
-        grant_type: "refresh_token",
-      }),
-    });
-
-    const data: any = await res.json();
-    if (!res.ok) throw new Error(`Twitter token refresh failed: ${JSON.stringify(data)}`);
-
-    return {
-      accessToken: data.access_token,
-      refreshToken: data.refresh_token,
-      expiresAt: new Date(Date.now() + data.expires_in * 1000),
-    };
+  async refreshAccessToken(_refreshToken: string, _config: OAuthConfig): Promise<OAuthTokens> {
+    // OAuth 1.0a tokens do not expire — no refresh needed
+    throw new Error("Twitter OAuth 1.0a tokens do not expire and do not need refreshing.");
   }
+
+  // ---------------------------------------------------------------------------
+  // Publishing
+  // ---------------------------------------------------------------------------
 
   async publishPost(tokens: OAuthTokens, payload: SocialPostPayload): Promise<SocialPostResult> {
-    // Upload media first if present.
-    // Twitter v1.1 media/upload requires OAuth 1.0a or Basic API tier ($100/mo).
-    // If upload is forbidden (403) we fall back to text-only so the post still goes through.
+    const tokenSecret = tokens.refreshToken ?? "";
+
     let mediaIds: string[] = [];
     if (payload.mediaUrls?.length) {
       const results = await Promise.allSettled(
@@ -107,7 +211,7 @@ export class TwitterProvider extends SocialProvider {
         if (r.status === "fulfilled") {
           mediaIds.push(r.value);
         } else {
-          console.warn(`[Twitter] Media upload skipped (will post text-only): ${r.reason?.message}`);
+          console.warn(`[Twitter] Media upload skipped (posting text-only): ${(r as PromiseRejectedResult).reason?.message}`);
         }
       }
     }
@@ -117,10 +221,19 @@ export class TwitterProvider extends SocialProvider {
       body.media = { media_ids: mediaIds };
     }
 
-    const res = await fetch("https://api.twitter.com/2/tweets", {
+    const tweetUrl = "https://api.twitter.com/2/tweets";
+    const authHeader = this.signedAuthHeader(
+      "POST",
+      tweetUrl,
+      { oauth_token: tokens.accessToken },
+      {},
+      tokenSecret
+    );
+
+    const res = await fetch(tweetUrl, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${tokens.accessToken}`,
+        Authorization: authHeader,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
@@ -137,10 +250,21 @@ export class TwitterProvider extends SocialProvider {
   }
 
   async deletePost(tokens: OAuthTokens, platformPostId: string): Promise<void> {
-    const res = await fetch(`https://api.twitter.com/2/tweets/${platformPostId}`, {
+    const tokenSecret = tokens.refreshToken ?? "";
+    const deleteUrl = `https://api.twitter.com/2/tweets/${platformPostId}`;
+    const authHeader = this.signedAuthHeader(
+      "DELETE",
+      deleteUrl,
+      { oauth_token: tokens.accessToken },
+      {},
+      tokenSecret
+    );
+
+    const res = await fetch(deleteUrl, {
       method: "DELETE",
-      headers: { Authorization: `Bearer ${tokens.accessToken}` },
+      headers: { Authorization: authHeader },
     });
+
     if (!res.ok) {
       const data: any = await res.json();
       throw new Error(`Twitter delete failed: ${JSON.stringify(data)}`);
@@ -148,10 +272,22 @@ export class TwitterProvider extends SocialProvider {
   }
 
   async getProfile(tokens: OAuthTokens): Promise<SocialProfile> {
-    const res = await fetch(
-      "https://api.twitter.com/2/users/me?user.fields=profile_image_url,username",
-      { headers: { Authorization: `Bearer ${tokens.accessToken}` } }
+    const tokenSecret = tokens.refreshToken ?? "";
+    const profileUrl = "https://api.twitter.com/2/users/me";
+    const query = { "user.fields": "profile_image_url,username" };
+    const authHeader = this.signedAuthHeader(
+      "GET",
+      profileUrl,
+      { oauth_token: tokens.accessToken },
+      query,
+      tokenSecret
     );
+
+    const res = await fetch(
+      `${profileUrl}?user.fields=profile_image_url,username`,
+      { headers: { Authorization: authHeader } }
+    );
+
     const data: any = await res.json();
     if (!res.ok) throw new Error(`Twitter profile fetch failed: ${JSON.stringify(data)}`);
 
@@ -164,10 +300,22 @@ export class TwitterProvider extends SocialProvider {
   }
 
   async getPostAnalytics(tokens: OAuthTokens, platformPostId: string): Promise<SocialAnalytics | null> {
-    const res = await fetch(
-      `https://api.twitter.com/2/tweets/${platformPostId}?tweet.fields=public_metrics`,
-      { headers: { Authorization: `Bearer ${tokens.accessToken}` } }
+    const tokenSecret = tokens.refreshToken ?? "";
+    const analyticsUrl = `https://api.twitter.com/2/tweets/${platformPostId}`;
+    const query = { "tweet.fields": "public_metrics" };
+    const authHeader = this.signedAuthHeader(
+      "GET",
+      analyticsUrl,
+      { oauth_token: tokens.accessToken },
+      query,
+      tokenSecret
     );
+
+    const res = await fetch(
+      `${analyticsUrl}?tweet.fields=public_metrics`,
+      { headers: { Authorization: authHeader } }
+    );
+
     const data: any = await res.json();
     if (!res.ok) return null;
 
@@ -185,39 +333,58 @@ export class TwitterProvider extends SocialProvider {
     };
   }
 
+  // ---------------------------------------------------------------------------
+  // Media upload — v1.1 with OAuth 1.0a signing
+  // ---------------------------------------------------------------------------
+
   private async uploadMedia(tokens: OAuthTokens, mediaUrl: string): Promise<string> {
-    // Download the media file
+    const tokenSecret = tokens.refreshToken ?? "";
+
     const mediaRes = await fetch(mediaUrl);
     if (!mediaRes.ok) throw new Error(`Failed to fetch media for Twitter upload: ${mediaRes.status}`);
     const mediaBuffer = Buffer.from(await mediaRes.arrayBuffer());
 
     // Detect MIME type — fall back to URL extension if server returns generic type
-    let mediaType = mediaRes.headers.get("content-type") || "";
+    let mediaType = mediaRes.headers.get("content-type") ?? "";
     if (!mediaType || mediaType.startsWith("application/octet-stream")) {
-      const urlExt = mediaUrl.split("?")[0].split(".").pop()?.toLowerCase() ?? "";
+      const [urlBase = ""] = mediaUrl.split("?");
+      const urlExt = urlBase.split(".").pop()?.toLowerCase() ?? "";
       const mimeMap: Record<string, string> = {
         mp4: "video/mp4", mov: "video/quicktime", webm: "video/webm",
         jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png",
         gif: "image/gif", webp: "image/webp",
       };
-      mediaType = mimeMap[urlExt] || "image/jpeg";
+      mediaType = mimeMap[urlExt] ?? "image/jpeg";
     }
+
     const isVideo = mediaType.startsWith("video/");
     const mediaCategory = isVideo ? "tweet_video" : "tweet_image";
 
-    // Twitter v1.1 media upload — use FormData so Node handles the boundary
+    const uploadUrl = "https://upload.twitter.com/1.1/media/upload.json";
+
+    // For multipart form data, body params are NOT included in the OAuth 1.0a signature
+    const authHeader = this.signedAuthHeader(
+      "POST",
+      uploadUrl,
+      { oauth_token: tokens.accessToken },
+      {},
+      tokenSecret
+    );
+
     const form = new FormData();
     form.append("media", new Blob([mediaBuffer], { type: mediaType }), "upload");
     form.append("media_category", mediaCategory);
 
-    const res = await fetch("https://upload.twitter.com/1.1/media/upload.json", {
+    const res = await fetch(uploadUrl, {
       method: "POST",
-      headers: { Authorization: `Bearer ${tokens.accessToken}` },
+      headers: { Authorization: authHeader },
       body: form,
     });
 
     const text = await res.text();
-    if (!text) throw new Error(`Twitter media upload failed with HTTP ${res.status} (empty response body)`);
+    if (!text) {
+      throw new Error(`Twitter media upload failed with HTTP ${res.status} (empty response body)`);
+    }
 
     let data: any;
     try {
@@ -226,14 +393,10 @@ export class TwitterProvider extends SocialProvider {
       throw new Error(`Twitter media upload non-JSON (HTTP ${res.status}): ${text.slice(0, 300)}`);
     }
 
-    if (res.status === 403) {
-      throw new Error(
-        "Twitter media upload forbidden (HTTP 403). " +
-        "Media uploads require Twitter API Basic tier ($100/mo) or higher, AND Read+Write app permissions. " +
-        "The post will be published as text-only."
-      );
+    if (!res.ok) {
+      throw new Error(`Twitter media upload failed (HTTP ${res.status}): ${JSON.stringify(data)}`);
     }
-    if (!res.ok) throw new Error(`Twitter media upload failed (HTTP ${res.status}): ${JSON.stringify(data)}`);
+
     return data.media_id_string ?? data.data?.id;
   }
 }

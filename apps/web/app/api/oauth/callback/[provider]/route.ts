@@ -7,8 +7,6 @@ export async function GET(
   { params }: { params: { provider: string } }
 ) {
   const url = new URL(req.url);
-  const code = url.searchParams.get("code");
-  const state = url.searchParams.get("state");
   const error = url.searchParams.get("error");
 
   if (error) {
@@ -16,6 +14,89 @@ export async function GET(
       `${process.env.APP_URL}/dashboard/channels?error=${encodeURIComponent(error)}`
     );
   }
+
+  // ------------------------------------------------------------------
+  // Twitter uses OAuth 1.0a — callback params are different from OAuth 2.0
+  // Twitter sends: oauth_token, oauth_verifier, and our custom twitterstate
+  // ------------------------------------------------------------------
+  const isTwitter = params.provider.toLowerCase() === "twitter";
+  const oauthVerifier = url.searchParams.get("oauth_verifier");
+  const oauthToken = url.searchParams.get("oauth_token"); // request token
+  const twitterState = url.searchParams.get("twitterstate");
+
+  if (isTwitter && oauthVerifier && oauthToken) {
+    // OAuth 1.0a Twitter callback
+    if (!twitterState) {
+      return NextResponse.redirect(
+        `${process.env.APP_URL}/dashboard/channels?error=missing_twitter_state`
+      );
+    }
+
+    try {
+      const organizationId = twitterState.split(":")[1];
+      if (!organizationId) throw new Error("Invalid twitterstate: missing organization ID");
+
+      const platform = "TWITTER";
+      const provider = getSocialProvider(platform as any);
+      const config = {
+        clientId: process.env.TWITTER_CLIENT_ID || "",
+        clientSecret: process.env.TWITTER_CLIENT_SECRET || "",
+        callbackUrl: `${process.env.APP_URL}/api/oauth/callback/twitter`,
+        scopes: [],
+      };
+
+      // exchangeCodeForTokens(verifier, config, requestToken) for OAuth 1.0a
+      const tokens = await provider.exchangeCodeForTokens(oauthVerifier, config, oauthToken);
+      const profile = await provider.getProfile(tokens);
+
+      await prisma.channel.upsert({
+        where: {
+          organizationId_platform_platformId: {
+            organizationId,
+            platform: "TWITTER",
+            platformId: profile.id,
+          },
+        },
+        update: {
+          accessToken: tokens.accessToken,
+          refreshToken: tokens.refreshToken || null,
+          tokenExpiresAt: null,
+          scopes: ["tweet.read", "tweet.write", "media.write"],
+          name: profile.name,
+          username: profile.username || null,
+          avatar: profile.avatar || null,
+          isActive: true,
+        },
+        create: {
+          organizationId,
+          platform: "TWITTER",
+          platformId: profile.id,
+          name: profile.name,
+          username: profile.username || null,
+          avatar: profile.avatar || null,
+          accessToken: tokens.accessToken,
+          refreshToken: tokens.refreshToken || null,
+          tokenExpiresAt: null,
+          scopes: ["tweet.read", "tweet.write", "media.write"],
+        },
+      });
+
+      return NextResponse.redirect(
+        `${process.env.APP_URL}/dashboard/channels?success=connected&platform=twitter`
+      );
+    } catch (err: any) {
+      console.error("Twitter OAuth 1.0a callback error:", err);
+      return NextResponse.redirect(
+        `${process.env.APP_URL}/dashboard/channels?error=${encodeURIComponent(err.message)}`
+      );
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // OAuth 2.0 flow (Facebook, Instagram, LinkedIn, etc.)
+  // ------------------------------------------------------------------
+  const code = url.searchParams.get("code");
+  const state = url.searchParams.get("state");
 
   if (!code || !state) {
     return NextResponse.redirect(
@@ -29,7 +110,6 @@ export async function GET(
     let codeVerifier: string | undefined;
     let cleanState = state;
 
-    // Extract PKCE verifier if present (used by Twitter/X OAuth2)
     const pkceIndex = state.indexOf("|pkce:");
     if (pkceIndex !== -1) {
       codeVerifier = state.slice(pkceIndex + 6);
@@ -52,7 +132,6 @@ export async function GET(
       scopes: [],
     };
 
-    // Exchange code for tokens (pass PKCE verifier for Twitter)
     const tokens = await provider.exchangeCodeForTokens(code, config, codeVerifier);
 
     // Get profile info
