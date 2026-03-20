@@ -10,7 +10,8 @@
     "clean": "rm -rf dist node_modules .turbo"
   },
   "dependencies": {
-    "@postautomation/db": "workspace:*"
+    "@postautomation/db": "workspace:*",
+    "oauth-1.0a": "^2.2.6"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
