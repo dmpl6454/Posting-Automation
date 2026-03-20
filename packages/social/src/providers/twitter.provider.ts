@@ -95,12 +95,21 @@ export class TwitterProvider extends SocialProvider {
   }
 
   async publishPost(tokens: OAuthTokens, payload: SocialPostPayload): Promise<SocialPostResult> {
-    // Upload media first if present
+    // Upload media first if present.
+    // Twitter v1.1 media/upload requires OAuth 1.0a or Basic API tier ($100/mo).
+    // If upload is forbidden (403) we fall back to text-only so the post still goes through.
     let mediaIds: string[] = [];
     if (payload.mediaUrls?.length) {
-      mediaIds = await Promise.all(
+      const results = await Promise.allSettled(
         payload.mediaUrls.map((url) => this.uploadMedia(tokens, url))
       );
+      for (const r of results) {
+        if (r.status === "fulfilled") {
+          mediaIds.push(r.value);
+        } else {
+          console.warn(`[Twitter] Media upload skipped (will post text-only): ${r.reason?.message}`);
+        }
+      }
     }
 
     const body: Record<string, unknown> = { text: payload.content };
@@ -217,6 +226,13 @@ export class TwitterProvider extends SocialProvider {
       throw new Error(`Twitter media upload non-JSON (HTTP ${res.status}): ${text.slice(0, 300)}`);
     }
 
+    if (res.status === 403) {
+      throw new Error(
+        "Twitter media upload forbidden (HTTP 403). " +
+        "Media uploads require Twitter API Basic tier ($100/mo) or higher, AND Read+Write app permissions. " +
+        "The post will be published as text-only."
+      );
+    }
     if (!res.ok) throw new Error(`Twitter media upload failed (HTTP ${res.status}): ${JSON.stringify(data)}`);
     return data.media_id_string ?? data.data?.id;
   }
