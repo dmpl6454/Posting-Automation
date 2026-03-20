@@ -207,4 +207,129 @@ export const analyticsRouter = createRouter({
         take: 30,
       });
     }),
+
+  /** Daily post count over time */
+  postsOverTime: orgProcedure
+    .input(
+      z.object({
+        from: z.string().datetime().optional(),
+        to: z.string().datetime().optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const from = input.from ? new Date(input.from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const to = input.to ? new Date(input.to) : new Date();
+
+      const posts = await ctx.prisma.post.findMany({
+        where: {
+          organizationId: ctx.organizationId,
+          status: "PUBLISHED",
+          publishedAt: { gte: from, lte: to },
+        },
+        select: { publishedAt: true },
+        orderBy: { publishedAt: "asc" },
+      });
+
+      const grouped: Record<string, number> = {};
+      for (const post of posts) {
+        if (!post.publishedAt) continue;
+        const day = post.publishedAt.toISOString().split("T")[0]!;
+        grouped[day] = (grouped[day] ?? 0) + 1;
+      }
+
+      const result: { date: string; posts: number }[] = [];
+      const current = new Date(from);
+      while (current <= to) {
+        const key = current.toISOString().split("T")[0]!;
+        result.push({ date: key, posts: grouped[key] ?? 0 });
+        current.setDate(current.getDate() + 1);
+      }
+      return result;
+    }),
+
+  /** Per-channel aggregated stats */
+  perChannelStats: orgProcedure
+    .input(
+      z.object({
+        from: z.string().datetime().optional(),
+        to: z.string().datetime().optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const from = input.from ? new Date(input.from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const to = input.to ? new Date(input.to) : new Date();
+
+      const channels = await ctx.prisma.channel.findMany({
+        where: { organizationId: ctx.organizationId, isActive: true },
+      });
+
+      const stats = await Promise.all(
+        channels.map(async (channel) => {
+          const postCount = await ctx.prisma.postTarget.count({
+            where: {
+              channelId: channel.id,
+              status: "PUBLISHED",
+              post: { publishedAt: { gte: from, lte: to } },
+            },
+          });
+
+          const metrics: Array<{
+            impressions: bigint;
+            clicks: bigint;
+            likes: bigint;
+            shares: bigint;
+            comments: bigint;
+            reach: bigint;
+          }> = await (ctx.prisma.$queryRawUnsafe as any)(
+            `SELECT
+              COALESCE(SUM(a.impressions), 0) as impressions,
+              COALESCE(SUM(a.clicks), 0) as clicks,
+              COALESCE(SUM(a.likes), 0) as likes,
+              COALESCE(SUM(a.shares), 0) as shares,
+              COALESCE(SUM(a.comments), 0) as comments,
+              COALESCE(SUM(a.reach), 0) as reach
+            FROM "AnalyticsSnapshot" a
+            INNER JOIN (
+              SELECT a2."postTargetId", MAX(a2."snapshotAt") as max_snap
+              FROM "AnalyticsSnapshot" a2
+              INNER JOIN "PostTarget" pt ON pt.id = a2."postTargetId"
+              INNER JOIN "Post" p ON p.id = pt."postId"
+              WHERE pt."channelId" = $1
+                AND p."publishedAt" >= $2
+                AND p."publishedAt" <= $3
+              GROUP BY a2."postTargetId"
+            ) latest ON a."postTargetId" = latest."postTargetId" AND a."snapshotAt" = latest.max_snap`,
+            channel.id,
+            from,
+            to
+          );
+
+          const m = metrics[0];
+          const impressions = Number(m?.impressions ?? 0);
+          const likes = Number(m?.likes ?? 0);
+          const comments = Number(m?.comments ?? 0);
+          const shares = Number(m?.shares ?? 0);
+          const engagementRate =
+            impressions > 0 ? ((likes + comments + shares) / impressions) * 100 : 0;
+
+          return {
+            id: channel.id,
+            name: channel.name,
+            username: channel.username,
+            avatar: channel.avatar,
+            platform: channel.platform,
+            postCount,
+            impressions,
+            clicks: Number(m?.clicks ?? 0),
+            likes,
+            shares,
+            comments,
+            reach: Number(m?.reach ?? 0),
+            engagementRate,
+          };
+        })
+      );
+
+      return stats.sort((a, b) => b.postCount - a.postCount);
+    }),
 });

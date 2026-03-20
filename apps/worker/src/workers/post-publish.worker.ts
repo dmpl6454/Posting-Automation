@@ -96,7 +96,7 @@ export function createPostPublishWorker() {
       const result = await provider.publishPost(tokens, { content, mediaUrls, mediaTypes, metadata: channelMetadata });
 
       // 4. Mark as PUBLISHED
-      await prisma.postTarget.update({
+      const updatedTarget = await prisma.postTarget.update({
         where: { id: postTargetId },
         data: {
           status: "PUBLISHED",
@@ -106,6 +106,32 @@ export function createPostPublishWorker() {
           metadata: (result.metadata ?? undefined) as any,
         },
       });
+
+      // 4b. Fetch & save initial analytics snapshot (best-effort)
+      if (result.platformPostId) {
+        try {
+          const analytics = await provider.getPostAnalytics(tokens, result.platformPostId);
+          if (analytics) {
+            await prisma.analyticsSnapshot.create({
+              data: {
+                postTargetId: updatedTarget.id,
+                platform: platform as any,
+                impressions: analytics.impressions ?? 0,
+                clicks: analytics.clicks ?? 0,
+                likes: analytics.likes ?? 0,
+                shares: analytics.shares ?? 0,
+                comments: analytics.comments ?? 0,
+                reach: analytics.reach ?? 0,
+                engagementRate: analytics.engagementRate ?? 0,
+                metadata: analytics as any,
+              },
+            });
+            console.log(`[Analytics] Snapshot saved for ${postTargetId}`);
+          }
+        } catch (analyticsErr: any) {
+          console.warn(`[Analytics] Snapshot failed for ${postTargetId}:`, analyticsErr.message);
+        }
+      }
 
       // 5. Check if all targets are published and update parent post
       const allTargets = await prisma.postTarget.findMany({
