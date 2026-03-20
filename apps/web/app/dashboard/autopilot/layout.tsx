@@ -6,6 +6,7 @@ import { cn } from "~/lib/utils";
 
 const tabs = [
   { name: "Overview", href: "/dashboard/autopilot" },
+  { name: "Agents", href: "/dashboard/autopilot/agents" },
   { name: "Trending", href: "/dashboard/autopilot/trending" },
   { name: "Review Queue", href: "/dashboard/autopilot/review" },
   { name: "Account Groups", href: "/dashboard/autopilot/accounts" },
