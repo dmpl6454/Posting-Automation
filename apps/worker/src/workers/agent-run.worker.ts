@@ -34,7 +34,7 @@ export function createAgentRunWorker() {
       });
 
       try {
-        const { generateContent } = await import("@postautomation/ai");
+        const { generateContent, fetchTrendingNews } = await import("@postautomation/ai");
 
         let postsCreated = 0;
         let firstPostContent = "";
@@ -50,14 +50,31 @@ export function createAgentRunWorker() {
             topic = agent.niche;
           }
 
-          // 4b-d. Build prompt and generate content
+          // 4b. Fetch real trending news for this topic
+          let newsContext = "";
+          try {
+            const headlines = await fetchTrendingNews(topic, 5);
+            if (headlines.length > 0) {
+              const top = headlines[0]!;
+              newsContext = `\n\nLatest trending news:\nHeadline: ${top.title}${top.summary ? `\nSummary: ${top.summary}` : ""}${top.link ? `\nSource: ${top.link}` : ""}`;
+              console.log(`[AgentRun] Fetched trending news for "${topic}": ${top.title}`);
+            }
+          } catch (e) {
+            console.warn(`[AgentRun] Could not fetch trending news for "${topic}":`, e);
+          }
+
+          // 4c. Build prompt with real news context
           const platform = channels[0]!.platform;
           let userPrompt: string;
 
           if (agent.customPrompt) {
-            userPrompt = agent.customPrompt;
+            userPrompt = newsContext
+              ? `${agent.customPrompt}\n\nUse this trending news as the basis:\n${newsContext}`
+              : agent.customPrompt;
+          } else if (newsContext) {
+            userPrompt = `You are a social media expert for the ${agent.niche} niche. Write a viral ${agent.tone} post based on this trending news:${newsContext}\n\nMake it engaging, include relevant hashtags, and optimise for ${platform}.`;
           } else {
-            userPrompt = `Create a social media post about "${topic}" in the ${agent.niche} niche. Use a ${agent.tone} tone.`;
+            userPrompt = `You are a social media expert for the ${agent.niche} niche. Write a viral ${agent.tone} post about "${topic}". Include relevant hashtags and optimise for ${platform}.`;
           }
 
           const content = await generateContent({
