@@ -20,7 +20,7 @@ import {
   Wand2, Pencil, Loader2, Download, Save, Upload, ImagePlus,
   Trash2, Square, RectangleHorizontal, RectangleVertical, Monitor, Smartphone,
   X, Sparkles, FolderOpen, ChevronDown, ChevronUp, Plus, Newspaper, Merge,
-  Zap, LayoutGrid, Palette,
+  Zap, LayoutGrid, Palette, Image,
 } from "lucide-react";
 import { MediaPickerDialog } from "~/components/media-picker-dialog";
 
@@ -152,6 +152,12 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
   const [uploadedFileName, setUploadedFileName] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragOver, setIsDragOver] = useState(false);
+
+  // Upload-own-image state
+  const [ownImage, setOwnImage] = useState<string | null>(null);
+  const [ownImageFileName, setOwnImageFileName] = useState("");
+  const ownImageInputRef = useRef<HTMLInputElement>(null);
+  const [isOwnDragOver, setIsOwnDragOver] = useState(false);
 
   // Result & history
   const [resultImage, setResultImage] = useState<string | null>(null);
@@ -433,9 +439,10 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
         {open && (
           <CardContent className="space-y-4 pt-0">
             <Tabs value={activeTab} onValueChange={setActiveTab}>
-              <TabsList className="grid w-full grid-cols-2">
+              <TabsList className="grid w-full grid-cols-3">
                 <TabsTrigger value="generate" className="gap-2"><Wand2 className="h-3.5 w-3.5" />Generate</TabsTrigger>
                 <TabsTrigger value="edit" className="gap-2"><Pencil className="h-3.5 w-3.5" />Edit</TabsTrigger>
+                <TabsTrigger value="upload" className="gap-2"><Image className="h-3.5 w-3.5" />Upload</TabsTrigger>
               </TabsList>
 
               {/* GENERATE TAB */}
@@ -749,6 +756,97 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
                   {isEditing ? "Editing..." : "Edit Image"}
                 </Button>
               </TabsContent>
+
+              {/* UPLOAD TAB */}
+              <TabsContent value="upload" className="space-y-3 mt-3">
+                <input
+                  ref={ownImageInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) {
+                      fileToBase64(f).then((d) => { setOwnImage(d); setOwnImageFileName(f.name); });
+                    }
+                    e.target.value = "";
+                  }}
+                />
+
+                {ownImage ? (
+                  <div className="space-y-3">
+                    <div className="overflow-hidden rounded-lg border bg-muted/30">
+                      <img src={ownImage} alt="Your image" className="w-full object-contain" style={{ maxHeight: "300px" }} />
+                    </div>
+                    <p className="truncate text-xs text-muted-foreground">{ownImageFileName}</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Button
+                        size="sm"
+                        className="gap-1.5"
+                        onClick={() => { onAddToPost(ownImage); toast({ title: "Image added to post!" }); }}
+                      >
+                        <Plus className="h-3.5 w-3.5" />Add to Post
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleSaveToLibrary(ownImage)}
+                        disabled={isSaving}
+                        className="gap-1.5"
+                      >
+                        {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                        Save to Library
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => { setUploadedImage(ownImage); setUploadedFileName(ownImageFileName); setEditPrompt(""); setActiveTab("edit"); }}
+                        className="gap-1.5"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />Edit with AI
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => { setOwnImage(null); setOwnImageFileName(""); }}
+                        className="gap-1.5 text-destructive hover:text-destructive"
+                      >
+                        <X className="h-3.5 w-3.5" />Remove
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    onDrop={(e) => {
+                      e.preventDefault(); setIsOwnDragOver(false);
+                      const f = e.dataTransfer.files?.[0];
+                      if (f && f.type.startsWith("image/")) {
+                        fileToBase64(f).then((d) => { setOwnImage(d); setOwnImageFileName(f.name); });
+                      }
+                    }}
+                    onDragOver={(e) => { e.preventDefault(); setIsOwnDragOver(true); }}
+                    onDragLeave={() => setIsOwnDragOver(false)}
+                    onClick={() => ownImageInputRef.current?.click()}
+                    className={`flex cursor-pointer flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed p-10 transition-colors ${isOwnDragOver ? "border-primary bg-primary/5" : "border-muted-foreground/25 hover:border-muted-foreground/50 hover:bg-muted/50"}`}
+                  >
+                    <Image className="h-10 w-10 text-muted-foreground/50" />
+                    <div className="text-center">
+                      <p className="text-sm font-medium text-muted-foreground">Upload your own image</p>
+                      <p className="mt-1 text-xs text-muted-foreground/70">Drop an image or click to browse</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Library picker for own images */}
+                <button
+                  type="button"
+                  onClick={() => setShowReferencePicker(true)}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed p-2.5 text-xs text-muted-foreground hover:border-primary/50 hover:bg-muted/30 transition-colors"
+                >
+                  <FolderOpen className="h-3.5 w-3.5" />
+                  <span>Choose from Media Library</span>
+                </button>
+              </TabsContent>
             </Tabs>
 
             {/* Carousel Result */}
@@ -856,8 +954,15 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
       <MediaPickerDialog
         open={showReferencePicker}
         onOpenChange={setShowReferencePicker}
-        onSelect={(url, fileName) => { urlToBase64(url).then(d => { setReferenceImage(d); setReferenceFileName(fileName); }).catch(() => toast({ title: "Failed to load image", variant: "destructive" })); setShowReferencePicker(false); }}
-        title="Choose Reference Design"
+        onSelect={(url, fileName) => {
+          if (activeTab === "upload") {
+            urlToBase64(url).then(d => { setOwnImage(d); setOwnImageFileName(fileName); }).catch(() => toast({ title: "Failed to load image", variant: "destructive" }));
+          } else {
+            urlToBase64(url).then(d => { setReferenceImage(d); setReferenceFileName(fileName); }).catch(() => toast({ title: "Failed to load image", variant: "destructive" }));
+          }
+          setShowReferencePicker(false);
+        }}
+        title={activeTab === "upload" ? "Choose Image" : "Choose Reference Design"}
       />
       <MediaPickerDialog
         open={showLogoPicker}
