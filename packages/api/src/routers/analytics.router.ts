@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { createRouter, orgProcedure } from "../trpc";
+import { analyticsSyncQueue } from "@postautomation/queue";
 
 export const analyticsRouter = createRouter({
   overview: orgProcedure
@@ -332,4 +333,49 @@ export const analyticsRouter = createRouter({
 
       return stats.sort((a, b) => b.postCount - a.postCount);
     }),
+
+  /** On-demand: queue analytics sync for all published posts in this org */
+  triggerSync: orgProcedure.mutation(async ({ ctx }) => {
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+    const publishedTargets = await ctx.prisma.postTarget.findMany({
+      where: {
+        status: "PUBLISHED",
+        publishedId: { not: null },
+        publishedAt: { gte: thirtyDaysAgo },
+        channel: {
+          organizationId: ctx.organizationId,
+          isActive: true,
+        },
+      },
+      select: {
+        id: true,
+        publishedId: true,
+        channelId: true,
+        channel: { select: { platform: true } },
+      },
+    });
+
+    let queued = 0;
+    for (const target of publishedTargets) {
+      if (!target.publishedId) continue;
+      await analyticsSyncQueue.add(
+        `analytics-manual-${target.id}`,
+        {
+          postTargetId: target.id,
+          platform: target.channel.platform,
+          channelId: target.channelId,
+          platformPostId: target.publishedId,
+        },
+        {
+          jobId: `analytics-manual-${target.id}-${Date.now()}`,
+          removeOnComplete: true,
+          removeOnFail: 100,
+        }
+      );
+      queued++;
+    }
+
+    return { queued };
+  }),
 });

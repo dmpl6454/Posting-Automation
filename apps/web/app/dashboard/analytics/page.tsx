@@ -2,12 +2,13 @@
 
 import { useState } from "react";
 import { trpc } from "~/lib/trpc/client";
+import { toast } from "~/components/ui/use-toast";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "~/components/ui/card";
 import { Skeleton } from "~/components/ui/skeleton";
 import { Badge } from "~/components/ui/badge";
 import {
   BarChart3, TrendingUp, CheckCircle, XCircle, Eye, Heart, MessageCircle,
-  Share, MousePointerClick, Users, Percent, Calendar,
+  Share, MousePointerClick, Users, Percent, Calendar, RefreshCw,
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
@@ -101,8 +102,21 @@ function DateRangePicker({
 export default function AnalyticsPage() {
   const [from, setFrom] = useState(() => subDays(new Date(), 30).toISOString());
   const [to, setTo] = useState(() => new Date().toISOString());
+  const [syncing, setSyncing] = useState(false);
 
   const dateInput = { from, to };
+  const utils = trpc.useUtils();
+  const triggerSync = trpc.analytics.triggerSync.useMutation({
+    onSuccess: (data) => {
+      toast({ title: "Analytics sync started", description: `Queued ${data.queued} posts for refresh. Data will update shortly.` });
+      setSyncing(false);
+      setTimeout(() => { void utils.analytics.invalidate(); }, 8000);
+    },
+    onError: () => {
+      toast({ title: "Sync failed", description: "Could not queue analytics sync.", variant: "destructive" });
+      setSyncing(false);
+    },
+  });
 
   const { data: overview, isLoading: overviewLoading } = trpc.analytics.overview.useQuery(dateInput);
   const { data: engagement, isLoading: engagementLoading } = trpc.analytics.engagement.useQuery(dateInput);
@@ -140,11 +154,21 @@ export default function AnalyticsPage() {
           <h1 className="text-2xl font-bold tracking-tight">Analytics</h1>
           <p className="text-muted-foreground">Track your social media performance across all platforms</p>
         </div>
-        <DateRangePicker
-          from={from}
-          to={to}
-          onChange={(f, t) => { setFrom(f); setTo(t); }}
-        />
+        <div className="flex items-center gap-3 flex-wrap">
+          <DateRangePicker
+            from={from}
+            to={to}
+            onChange={(f, t) => { setFrom(f); setTo(t); }}
+          />
+          <button
+            onClick={() => { setSyncing(true); triggerSync.mutate(); }}
+            disabled={syncing}
+            className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-60 transition-colors"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${syncing ? "animate-spin" : ""}`} />
+            {syncing ? "Syncing…" : "Sync Now"}
+          </button>
+        </div>
       </div>
 
       {/* Stat Cards */}

@@ -22,9 +22,16 @@ export function createAnalyticsSyncWorker() {
         refreshToken: channel.refreshToken ?? undefined,
       };
 
-      const analytics = await provider.getPostAnalytics(tokens, platformPostId);
+      let analytics;
+      try {
+        analytics = await provider.getPostAnalytics(tokens, platformPostId);
+      } catch (err: any) {
+        console.warn(`[AnalyticsSync] getPostAnalytics threw for ${platform} post ${platformPostId}: ${err.message}`);
+        return null;
+      }
+
       if (!analytics) {
-        console.log(`[AnalyticsSync] No analytics data returned for ${postTargetId}`);
+        console.warn(`[AnalyticsSync] No analytics returned for ${platform} post ${platformPostId} (target: ${postTargetId})`);
         return null;
       }
 
@@ -33,13 +40,13 @@ export function createAnalyticsSyncWorker() {
         data: {
           postTargetId,
           platform: platform as any,
-          impressions: analytics.impressions,
-          clicks: analytics.clicks,
-          likes: analytics.likes,
-          shares: analytics.shares,
-          comments: analytics.comments,
-          reach: analytics.reach,
-          engagementRate: analytics.engagementRate,
+          impressions: analytics.impressions ?? 0,
+          clicks: analytics.clicks ?? 0,
+          likes: analytics.likes ?? 0,
+          shares: analytics.shares ?? 0,
+          comments: analytics.comments ?? 0,
+          reach: analytics.reach ?? 0,
+          engagementRate: analytics.engagementRate ?? 0,
           snapshotAt: new Date(),
         },
       });
