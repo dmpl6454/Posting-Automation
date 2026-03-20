@@ -181,41 +181,43 @@ export class TwitterProvider extends SocialProvider {
     const mediaRes = await fetch(mediaUrl);
     if (!mediaRes.ok) throw new Error(`Failed to fetch media for Twitter upload: ${mediaRes.status}`);
     const mediaBuffer = Buffer.from(await mediaRes.arrayBuffer());
-    const mediaType = mediaRes.headers.get("content-type") || "image/jpeg";
-    const mediaCategory = mediaType.startsWith("video/") ? "tweet_video" : "tweet_image";
 
-    // Twitter media upload uses the v1.1 endpoint (v2 media upload is not yet stable)
-    // Uses multipart/form-data with media_data (base64) field
-    const boundary = `----TwitterUpload${Date.now()}`;
-    const base64Data = mediaBuffer.toString("base64");
+    // Detect MIME type — fall back to URL extension if server returns generic type
+    let mediaType = mediaRes.headers.get("content-type") || "";
+    if (!mediaType || mediaType.startsWith("application/octet-stream")) {
+      const urlExt = mediaUrl.split("?")[0].split(".").pop()?.toLowerCase() ?? "";
+      const mimeMap: Record<string, string> = {
+        mp4: "video/mp4", mov: "video/quicktime", webm: "video/webm",
+        jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png",
+        gif: "image/gif", webp: "image/webp",
+      };
+      mediaType = mimeMap[urlExt] || "image/jpeg";
+    }
+    const isVideo = mediaType.startsWith("video/");
+    const mediaCategory = isVideo ? "tweet_video" : "tweet_image";
 
-    const parts: Buffer[] = [
-      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="media_data"\r\n\r\n${base64Data}\r\n`),
-      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="media_category"\r\n\r\n${mediaCategory}\r\n`),
-      Buffer.from(`--${boundary}--\r\n`),
-    ];
-    const body = Buffer.concat(parts);
+    // Twitter v1.1 media upload — use FormData so Node handles the boundary
+    const form = new FormData();
+    form.append("media", new Blob([mediaBuffer], { type: mediaType }), "upload");
+    form.append("media_category", mediaCategory);
 
     const res = await fetch("https://upload.twitter.com/1.1/media/upload.json", {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${tokens.accessToken}`,
-        "Content-Type": `multipart/form-data; boundary=${boundary}`,
-      },
-      body: new Uint8Array(body),
+      headers: { Authorization: `Bearer ${tokens.accessToken}` },
+      body: form,
     });
 
     const text = await res.text();
-    if (!text) throw new Error("Twitter media upload returned empty response");
+    if (!text) throw new Error(`Twitter media upload failed with HTTP ${res.status} (empty response body)`);
 
     let data: any;
     try {
       data = JSON.parse(text);
     } catch {
-      throw new Error(`Twitter media upload returned non-JSON response: ${text.slice(0, 200)}`);
+      throw new Error(`Twitter media upload non-JSON (HTTP ${res.status}): ${text.slice(0, 300)}`);
     }
 
-    if (!res.ok) throw new Error(`Twitter media upload failed: ${JSON.stringify(data)}`);
+    if (!res.ok) throw new Error(`Twitter media upload failed (HTTP ${res.status}): ${JSON.stringify(data)}`);
     return data.media_id_string ?? data.data?.id;
   }
 }

@@ -245,14 +245,37 @@ export class FacebookProvider extends SocialProvider {
    * Download a media file and return it as a Buffer with its content type.
    * This is needed because MinIO URLs are internal Docker hostnames that
    * external APIs (Facebook, etc.) cannot reach directly.
+   * Falls back to URL extension detection when the server returns a generic
+   * content-type (e.g. application/octet-stream from MinIO).
    */
   private async fetchMediaAsBuffer(mediaUrl: string): Promise<{ buffer: Buffer; contentType: string; fileName: string }> {
     const res = await fetch(mediaUrl);
     if (!res.ok) throw new Error(`Failed to fetch media from ${mediaUrl}: ${res.status}`);
     const buffer = Buffer.from(await res.arrayBuffer());
-    const contentType = res.headers.get("content-type") || "image/jpeg";
-    const ext = contentType.split("/")[1]?.split(";")[0] || "jpg";
-    return { buffer, contentType, fileName: `upload.${ext}` };
+    let contentType = res.headers.get("content-type") || "";
+
+    // If server returns a generic content-type, detect from URL extension
+    if (!contentType || contentType.startsWith("application/octet-stream") || contentType.startsWith("binary/")) {
+      const urlPath = mediaUrl.split("?")[0] ?? "";
+      const urlExt = urlPath.split(".").pop()?.toLowerCase() ?? "";
+      const mimeMap: Record<string, string> = {
+        mp4: "video/mp4",
+        mov: "video/quicktime",
+        webm: "video/webm",
+        avi: "video/avi",
+        mkv: "video/x-matroska",
+        jpg: "image/jpeg",
+        jpeg: "image/jpeg",
+        png: "image/png",
+        gif: "image/gif",
+        webp: "image/webp",
+      };
+      contentType = mimeMap[urlExt] || "image/jpeg";
+    }
+
+    const ext = contentType.split("/")[1]?.split(";")[0] ?? "jpg";
+    const fileExt = ext === "jpeg" ? "jpg" : ext === "quicktime" ? "mov" : ext;
+    return { buffer, contentType, fileName: `upload.${fileExt}` };
   }
 
   /**

@@ -370,9 +370,22 @@ export class InstagramProvider extends SocialProvider {
     const data: any = await res.json();
     if (!res.ok) throw new Error(`Instagram publish failed: ${JSON.stringify(data)}`);
 
+    // media_publish returns a numeric media ID, not a shortcode.
+    // Fetch the permalink field to get the real post URL.
+    let url = `https://www.instagram.com/p/${data.id}`;
+    try {
+      const permalinkRes = await fetch(
+        `${this.graphBaseUrl}/${this.apiVersion}/${data.id}?fields=permalink&access_token=${tokens.accessToken}`
+      );
+      const permalinkData: any = await permalinkRes.json();
+      if (permalinkData.permalink) url = permalinkData.permalink;
+    } catch {
+      // Fall back to the numeric ID URL — better than nothing
+    }
+
     return {
       platformPostId: data.id,
-      url: `https://www.instagram.com/p/${data.id}`,
+      url,
       metadata: data,
     };
   }
