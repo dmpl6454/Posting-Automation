@@ -57,6 +57,22 @@ const IMAGE_SIZES = [
 
 const CAROUSEL_COUNTS = [3, 4, 5, 6, 7, 10];
 
+const CAROUSEL_TEMPLATES = [
+  {
+    id: "instagram-engagement",
+    name: "Instagram Engagement",
+    description: "6-slide hook → CTA carousel",
+    slides: [
+      `COVER SLIDE — Hook: Bold cinematic headline, editorial magazine look, premium typography, dramatic high-contrast background. Emotion: curiosity + urgency. 4:5 vertical format. Subtle page branding at bottom.`,
+      `CONTEXT SLIDE: Clean editorial layout, left-aligned text block, short impactful paragraph. Highlight 2–3 bold keywords visually. Readable social-media-optimized typography. 4:5 vertical format.`,
+      `KEY DETAILS SLIDE: 2–3 bullet point insights, one highlighted keyword per bullet. Bold typography, clean light background, editorial infographic style. 4:5 vertical format.`,
+      `REACTION / QUOTE SLIDE: Bold large pull-quote centered on slide, subtle dark textured background, emphasis on key words. Premium editorial feel. 4:5 vertical format.`,
+      `IMPACT SLIDE — What's Next: Forward-looking excitement, bold headline, timeline hint visual. Speculative exciting tone. Clean cinematic layout. 4:5 vertical format.`,
+      `CLOSING CTA SLIDE: Minimal clean design. Bold headline "What do YOU think?" with comment, follow, and save/share call-to-actions as visual elements. Community-focused, page branding. 4:5 vertical format.`,
+    ],
+  },
+];
+
 interface HistoryItem {
   id: string;
   imageUrl: string;
@@ -146,6 +162,8 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
   const [carouselImages, setCarouselImages] = useState<string[]>([]);
   const [carouselProgress, setCarouselProgress] = useState(0);
   const [isGeneratingCarousel, setIsGeneratingCarousel] = useState(false);
+  const [perSlidePrompts, setPerSlidePrompts] = useState<string[]>([]);
+  const [activeTemplateId, setActiveTemplateId] = useState<string | null>(null);
 
   // Edit state
   const [editPrompt, setEditPrompt] = useState("");
@@ -183,11 +201,29 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
     setHistory((prev) => [{ id: crypto.randomUUID(), imageUrl, prompt, timestamp: new Date() }, ...prev]);
   };
 
-  const buildFullPrompt = (base: string, slideIndex?: number, totalSlides?: number) => {
+  const parseContentSections = (content: string): string[] => {
+    // Numbered items: 1. item\n2. item
+    const numbered = content.split(/\n(?=\d+[\.\)]\s)/);
+    if (numbered.length > 1) return numbered.map((s) => s.trim()).filter(Boolean);
+    // Bullet points: - or * or •
+    const bulleted = content.split(/\n(?=[-•*]\s)/);
+    if (bulleted.length > 1) return bulleted.map((s) => s.trim()).filter(Boolean);
+    // Double-newline paragraphs
+    const paragraphs = content.split(/\n\n+/).map((s) => s.trim()).filter(Boolean);
+    if (paragraphs.length > 1) return paragraphs;
+    // Single newlines (lines with at least 10 chars)
+    const lines = content.split(/\n/).map((s) => s.trim()).filter((s) => s.length >= 10);
+    if (lines.length > 1) return lines;
+    return [content.trim()];
+  };
+
+  const buildFullPrompt = (base: string, slideIndex?: number, totalSlides?: number, slideContent?: string) => {
     let fullPrompt = base;
 
-    // Merge post content
-    if (mergeContent && postContent?.trim()) {
+    // Merge post content — use slide-specific section if provided, or full postContent if mergeContent is on
+    if (slideContent) {
+      fullPrompt = `${fullPrompt}\n\nThis slide is about:\n"${slideContent}"`;
+    } else if (mergeContent && postContent?.trim()) {
       fullPrompt = `${fullPrompt}\n\nBased on this post content:\n"${postContent.trim()}"`;
     }
 
@@ -332,27 +368,59 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
 
   const handleGenerateCarousel = async () => {
     if (!generatePrompt.trim()) return;
+
+    let slidePrompts: string[] | undefined; // per-slide base prompts (from generatePrompt bullets)
+    let slideContents: string[] | undefined; // per-slide post content sections
+    let count = carouselCount;
+
+    // Template per-slide prompts take priority
+    if (perSlidePrompts.length > 0) {
+      slidePrompts = perSlidePrompts;
+      count = perSlidePrompts.length;
+    // If the prompt itself has multiple bullet/numbered items, use each as its own slide prompt
+    } else if (parseContentSections(generatePrompt).length > 1) {
+      const promptSections = parseContentSections(generatePrompt);
+      slidePrompts = promptSections;
+      count = promptSections.length;
+      setCarouselCount(count);
+    } else if (postContent?.trim()) {
+      // Always check postContent for sections when in carousel mode (regardless of mergeContent toggle)
+      const sections = parseContentSections(postContent);
+      if (sections.length > 1) {
+        slideContents = sections;
+        count = sections.length;
+        setCarouselCount(count);
+        // Auto-enable mergeContent so buildFullPrompt uses the per-slide content
+        setMergeContent(true);
+      }
+    }
+
     setIsGeneratingCarousel(true);
     setCarouselImages([]);
     setCarouselProgress(0);
 
     const images: string[] = [];
-    for (let i = 0; i < carouselCount; i++) {
+    for (let i = 0; i < count; i++) {
       try {
         setCarouselProgress(i);
-        const prompt = buildFullPrompt(generatePrompt, i, carouselCount);
+        const slideBase = slidePrompts?.[i] ?? generatePrompt;
+        // If using template, append generatePrompt as extra style/topic notes
+        const basePrompt = (perSlidePrompts.length > 0 && generatePrompt.trim())
+          ? `${slideBase}\n\nExtra style/topic context: ${generatePrompt.trim()}`
+          : slideBase;
+        const prompt = buildFullPrompt(basePrompt, i, count, slideContents?.[i]);
         const imageUrl = await generateSingle(prompt);
         images.push(imageUrl);
         setCarouselImages([...images]);
-        addToHistory(imageUrl, `Slide ${i + 1}: ${generatePrompt}`);
+        addToHistory(imageUrl, `Slide ${i + 1}: ${slidePrompts?.[i] ?? generatePrompt}`);
       } catch (err: any) {
         toast({ title: `Slide ${i + 1} failed`, description: err.message, variant: "destructive" });
       }
     }
 
     setIsGeneratingCarousel(false);
-    setCarouselProgress(carouselCount);
-    toast({ title: `Carousel ready!`, description: `${images.length} of ${carouselCount} slides generated.` });
+    setCarouselProgress(count);
+    toast({ title: `Carousel ready!`, description: `${images.length} of ${count} slides generated.` });
 
     if (autoAddToPost && images.length > 0) {
       for (const img of images) {
@@ -487,6 +555,69 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
                         </button>
                       ))}
                     </div>
+                  </div>
+                )}
+
+                {/* Carousel templates */}
+                {carouselMode && (
+                  <div>
+                    <div className="mb-1.5 flex items-center justify-between">
+                      <p className="text-xs font-medium text-muted-foreground">Templates</p>
+                      {activeTemplateId && (
+                        <button
+                          type="button"
+                          onClick={() => { setActiveTemplateId(null); setPerSlidePrompts([]); }}
+                          className="text-[10px] text-muted-foreground hover:text-destructive"
+                        >
+                          Clear template
+                        </button>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {CAROUSEL_TEMPLATES.map((tpl) => (
+                        <button
+                          key={tpl.id}
+                          type="button"
+                          onClick={() => {
+                            if (activeTemplateId === tpl.id) {
+                              setActiveTemplateId(null);
+                              setPerSlidePrompts([]);
+                            } else {
+                              setActiveTemplateId(tpl.id);
+                              setPerSlidePrompts([...tpl.slides]);
+                              setCarouselCount(tpl.slides.length);
+                            }
+                          }}
+                          className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-all ${activeTemplateId === tpl.id ? "border-purple-500 bg-purple-500/10 text-purple-600 dark:text-purple-400" : "border-border text-muted-foreground hover:bg-muted/50"}`}
+                        >
+                          {tpl.name}
+                          <span className="ml-1.5 text-[10px] opacity-60">{tpl.description}</span>
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Per-slide editable prompts */}
+                    {perSlidePrompts.length > 0 && (
+                      <div className="mt-2 space-y-2">
+                        {perSlidePrompts.map((p, i) => (
+                          <div key={i} className="rounded-lg border border-purple-500/20 bg-purple-500/5 p-2">
+                            <p className="mb-1 text-[10px] font-semibold text-purple-600 dark:text-purple-400">
+                              Slide {i + 1}
+                            </p>
+                            <textarea
+                              value={p}
+                              onChange={(e) => {
+                                const updated = [...perSlidePrompts];
+                                updated[i] = e.target.value;
+                                setPerSlidePrompts(updated);
+                              }}
+                              rows={3}
+                              className="w-full resize-none rounded border-0 bg-transparent text-[11px] text-foreground outline-none placeholder:text-muted-foreground/50"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
 
