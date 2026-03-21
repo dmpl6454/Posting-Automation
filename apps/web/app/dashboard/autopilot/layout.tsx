@@ -9,6 +9,7 @@ const tabs = [
   { name: "Agents", href: "/dashboard/autopilot/agents" },
   { name: "Trending", href: "/dashboard/autopilot/trending" },
   { name: "Review Queue", href: "/dashboard/autopilot/review" },
+  { name: "Posts", href: "/dashboard/autopilot/posts" },
   { name: "Account Groups", href: "/dashboard/autopilot/accounts" },
   { name: "Pipeline Logs", href: "/dashboard/autopilot/logs" },
 ];

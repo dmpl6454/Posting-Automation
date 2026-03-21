@@ -250,6 +250,50 @@ export const autopilotRouter = createRouter({
       });
     }),
 
+  // Autopilot-generated posts with performance stats
+  posts: orgProcedure
+    .input(
+      z.object({
+        status: z.string().optional(),
+        skip: z.number().default(0),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      return ctx.prisma.autopilotPost.findMany({
+        where: {
+          organizationId: ctx.organizationId,
+          postId: { not: null },
+          ...(input.status
+            ? {
+                post: {
+                  targets: {
+                    some: { status: input.status as any },
+                  },
+                },
+              }
+            : {}),
+        },
+        include: {
+          post: {
+            include: {
+              targets: {
+                include: {
+                  channel: {
+                    select: { id: true, platform: true, name: true },
+                  },
+                },
+              },
+            },
+          },
+          trendingItem: { select: { title: true, sourceUrl: true } },
+          agent: { select: { id: true, name: true } },
+        },
+        orderBy: { createdAt: "desc" },
+        take: 20,
+        skip: input.skip,
+      });
+    }),
+
   // Manual trigger
   triggerPipeline: orgProcedure.mutation(async ({ ctx }) => {
     const pipelineRun = await ctx.prisma.pipelineRun.create({
