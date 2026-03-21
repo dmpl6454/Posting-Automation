@@ -290,6 +290,7 @@ export const newsgridRouter = createRouter({
         const post = await ctx.prisma.post.create({
           data: {
             organizationId: ctx.organizationId,
+            createdById:    ctx.session.user.id,
             content:        fullContent,
             status:         "SCHEDULED",
             scheduledAt,
