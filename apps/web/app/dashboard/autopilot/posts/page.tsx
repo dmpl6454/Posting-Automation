@@ -6,7 +6,7 @@ import { Card } from "~/components/ui/card";
 import { Badge } from "~/components/ui/badge";
 import { Skeleton } from "~/components/ui/skeleton";
 import { Button } from "~/components/ui/button";
-import { Send, ChevronLeft, ChevronRight } from "lucide-react";
+import { Send, ChevronLeft, ChevronRight, ExternalLink } from "lucide-react";
 
 const PLATFORM_COLORS: Record<string, string> = {
   TWITTER: "bg-sky-400",
@@ -267,6 +267,26 @@ export default function AutopilotPostsPage() {
                       </div>
                     )}
                   </div>
+
+                  {/* Published links */}
+                  {targets.some((t: any) => t.publishedUrl) && (
+                    <div className="flex flex-wrap gap-2 border-t pt-3">
+                      {targets
+                        .filter((t: any) => t.publishedUrl)
+                        .map((t: any) => (
+                          <a
+                            key={t.id}
+                            href={t.publishedUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:border-foreground transition-colors"
+                          >
+                            <ExternalLink className="h-3 w-3" />
+                            {t.channel?.platform ?? "View"}
+                          </a>
+                        ))}
+                    </div>
+                  )}
                 </div>
               </Card>
             );
