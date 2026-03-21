@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { trpc } from "~/lib/trpc/client";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
@@ -466,7 +466,7 @@ export default function NewsGridPage() {
   const [includeHashtags, setIncludeHashtags] = useState(true);
   const [includeCTA, setIncludeCTA]         = useState(true);
   const [language, setLanguage]             = useState<"EN"|"HI"|"MIX">("EN");
-  const [provider, setProvider]             = useState<"openai"|"anthropic"|"gemini"|"grok"|"deepseek">("openai");
+  const [provider, setProvider]             = useState<"openai"|"anthropic"|"gemini"|"grok"|"deepseek">("gemini");
   const [postFormat, setPostFormat]         = useState<"single"|"carousel"|"reel"|"story">("single");
   const [showOptional, setShowOptional]     = useState(false);
   const [selectedChannelIds, setSelectedChannelIds] = useState<Set<string>>(new Set());
@@ -477,6 +477,29 @@ export default function NewsGridPage() {
   const [scheduleMap, setScheduleMap]       = useState<Record<string, string>>({});
   const [step, setStep]                     = useState<"form"|"results">("form");
   const [exportingId, setExportingId]       = useState<string | null>(null);
+  const [prefilling, setPrefilling]         = useState(false);
+  const prefillDebounce                     = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const prefill = trpc.newsgrid.prefillFromHeadline.useMutation({
+    onSuccess: (data) => {
+      if (data.summary)            setSummary(data.summary);
+      if (data.hashtags?.length)   {/* hashtags shown in generate results */}
+      if (data.cta)                {/* cta shown in generate results */}
+      setPrefilling(false);
+    },
+    onError: () => setPrefilling(false),
+  });
+
+  // Auto-fill summary/hashtags/cta when headline changes (debounced 1.5s)
+  useEffect(() => {
+    if (prefillDebounce.current) clearTimeout(prefillDebounce.current);
+    if (headline.trim().length < 5) { setPrefilling(false); return; }
+    setPrefilling(true);
+    prefillDebounce.current = setTimeout(() => {
+      prefill.mutate({ headline: headline.trim() });
+    }, 1500);
+    return () => { if (prefillDebounce.current) clearTimeout(prefillDebounce.current); };
+  }, [headline]);
 
   const { data: channelsData, isLoading: channelsLoading } = trpc.newsgrid.channelsWithProfiles.useQuery();
 
@@ -599,11 +622,18 @@ export default function NewsGridPage() {
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label>Summary (optional)</Label>
+                  <Label className="flex items-center gap-2">
+                    Summary
+                    {prefilling && (
+                      <span className="flex items-center gap-1 text-xs text-muted-foreground font-normal">
+                        <Loader2 className="h-3 w-3 animate-spin" /> AI filling…
+                      </span>
+                    )}
+                  </Label>
                   <Textarea
                     value={summary}
                     onChange={(e) => setSummary(e.target.value)}
-                    placeholder="Brief context about the news..."
+                    placeholder="Type a headline above — AI will auto-fill this…"
                     className="min-h-[80px] resize-none"
                   />
                 </div>

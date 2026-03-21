@@ -130,7 +130,7 @@ export const newsgridRouter = createRouter({
         includeHashtags: z.boolean().default(true),
         includeCTA:  z.boolean().default(true),
         language:    z.enum(["EN","HI","MIX"]).default("EN"),
-        provider:    z.enum(["openai","anthropic","gemini","grok","deepseek"]).default("openai"),
+        provider:    z.enum(["openai","anthropic","gemini","grok","deepseek"]).default("gemini"),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -174,14 +174,42 @@ export const newsgridRouter = createRouter({
             ].filter(Boolean).join("\n");
 
             let caption = input.headline;
+            let rephrasedHeadline = input.headline;
             try {
+              // Generate caption + rephrased headline in one call
+              const headlinePrompt = [
+                `You are a social media creative bot for ${channel.name}.`,
+                `Given this news headline: "${input.headline}"`,
+                `Return ONLY a JSON object (no markdown) with two keys:`,
+                `"caption": a ${tone}-style Instagram caption under 150 chars, no hashtags`,
+                `"headline": a short rephrased headline for the image card (max 12 words, punchy, ${tone} tone)`,
+                input.summary ? `Context: ${input.summary}` : "",
+                input.celebName ? `Celebrity: ${input.celebName}` : "",
+                input.eventName ? `Event: ${input.eventName}` : "",
+                input.language === "HI" ? "Write in Hindi." : input.language === "MIX" ? "Use Hinglish." : "",
+              ].filter(Boolean).join("\n");
+
               const res = await generateContent({
                 provider: input.provider as any,
                 platform:  "INSTAGRAM" as any,
-                userPrompt: prompt,
+                userPrompt: headlinePrompt,
                 tone:       "casual" as any,
               });
-              caption = res ?? caption;
+
+              if (res) {
+                try {
+                  const jsonMatch = res.match(/\{[\s\S]*\}/);
+                  if (jsonMatch) {
+                    const parsed = JSON.parse(jsonMatch[0]);
+                    if (parsed.caption) caption = parsed.caption;
+                    if (parsed.headline) rephrasedHeadline = parsed.headline;
+                  } else {
+                    caption = res;
+                  }
+                } catch {
+                  caption = res;
+                }
+              }
             } catch {
               // fallback: use headline as caption
             }
@@ -211,7 +239,7 @@ export const newsgridRouter = createRouter({
               hashtags,
               cta,
               creativeSpec,
-              onImageText:  input.headline,
+              onImageText:  rephrasedHeadline,
               logoUsed:     (profile.logo_path as string) ?? null,
               approved:     false,
               scheduleTime: null as string | null,
@@ -324,6 +352,48 @@ export const newsgridRouter = createRouter({
       }
 
       return { created, count: created.length };
+    }),
+
+  // ── Auto-fill form from headline (called on headline change) ─────────────
+  prefillFromHeadline: orgProcedure
+    .input(z.object({ headline: z.string().min(3) }))
+    .mutation(async ({ input }) => {
+      const { generateContent } = await import("@postautomation/ai");
+
+      const prompt = [
+        `You are a social media newsroom bot. Given this headline, return ONLY a JSON object (no markdown) with:`,
+        `"summary": 1-2 sentence news summary (plain text, under 200 chars)`,
+        `"hashtags": array of 8 relevant hashtags (strings with # prefix)`,
+        `"cta": one short engagement CTA under 10 words`,
+        `Headline: "${input.headline}"`,
+      ].join("\n");
+
+      let summary = "";
+      let hashtags: string[] = [];
+      let cta = "";
+
+      try {
+        const res = await generateContent({
+          provider: "gemini" as any,
+          platform: "INSTAGRAM" as any,
+          userPrompt: prompt,
+          tone: "casual" as any,
+        });
+
+        if (res) {
+          const jsonMatch = res.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            const parsed = JSON.parse(jsonMatch[0]);
+            if (parsed.summary)  summary  = String(parsed.summary);
+            if (Array.isArray(parsed.hashtags)) hashtags = parsed.hashtags.map(String);
+            if (parsed.cta)      cta      = String(parsed.cta);
+          }
+        }
+      } catch {
+        // silent fallback — form stays empty
+      }
+
+      return { summary, hashtags, cta };
     }),
 
   // ── List channels with their brand profiles ──────────────────────────────
