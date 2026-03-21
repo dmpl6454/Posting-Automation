@@ -1,18 +1,9 @@
 "use client";
 
-import { useState, useEffect, Suspense } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "~/components/ui/tabs";
-import {
-  Bot,
-  Sparkles,
-  Repeat2,
-  ImagePlus,
-  PenSquare,
-  Send,
-  CalendarDays,
-  Layers,
-} from "lucide-react";
+import { useState, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
+import { Button } from "~/components/ui/button";
+import { Sparkles, Repeat2, ImagePlus, Layers, MessageSquare, PenSquare, CalendarDays, X } from "lucide-react";
 import { ChatLayout } from "~/components/chat/ChatLayout";
 import { GenerateTab } from "~/components/content-agent/GenerateTab";
 import { RepurposeTab } from "~/components/content-agent/RepurposeTab";
@@ -21,146 +12,144 @@ import { PostsTab } from "~/components/content-agent/PostsTab";
 import { ComposeTab } from "~/components/content-agent/ComposeTab";
 import { CalendarTab } from "~/components/content-agent/CalendarTab";
 import { BulkTab } from "~/components/content-agent/BulkTab";
+import { cn } from "~/lib/utils";
+
+type Tool = "generate" | "repurpose" | "image" | "bulk" | null;
+type RightPanel = "chat" | "posts" | "calendar";
+
+const tools = [
+  { id: "generate" as Tool, label: "Generate", icon: Sparkles },
+  { id: "repurpose" as Tool, label: "Repurpose", icon: Repeat2 },
+  { id: "image" as Tool, label: "Image", icon: ImagePlus },
+  { id: "bulk" as Tool, label: "Bulk", icon: Layers },
+];
+
+const rightPanels = [
+  { id: "chat" as RightPanel, label: "Chat", icon: MessageSquare },
+  { id: "posts" as RightPanel, label: "Posts", icon: PenSquare },
+  { id: "calendar" as RightPanel, label: "Calendar", icon: CalendarDays },
+];
 
 function ContentStudioInner() {
-  const router = useRouter();
   const searchParams = useSearchParams();
-  const tabParam = searchParams.get("tab") || "chat";
-  const [activeTab, setActiveTab] = useState(tabParam);
   const composeContent = searchParams.get("content") || undefined;
   const composeImage = searchParams.get("aiImage") || undefined;
   const composeMediaId = searchParams.get("aiMediaId") || undefined;
 
-  useEffect(() => {
-    setActiveTab(tabParam);
-  }, [tabParam]);
+  const [activeTool, setActiveTool] = useState<Tool>(null);
+  const [rightPanel, setRightPanel] = useState<RightPanel>("chat");
+  const [postCreated, setPostCreated] = useState(0);
 
-  const handleTabChange = (tab: string) => {
-    setActiveTab(tab);
-    router.replace(`/dashboard/content-agent?tab=${tab}`, { scroll: false });
+  const toggleTool = (tool: Tool) => {
+    setActiveTool((prev) => (prev === tool ? null : tool));
   };
 
   return (
     <div className="flex h-[calc(100vh-4rem)] flex-col overflow-hidden">
-      {/* Header with tabs */}
-      <div className="flex-none border-b bg-background px-4 pt-2">
-        <div className="flex items-center justify-between pb-2">
-          <div>
-            <h1 className="text-xl font-bold tracking-tight">Content Studio</h1>
-            <p className="text-xs text-muted-foreground">
-              Create, schedule, and manage all your social media content
-            </p>
-          </div>
-        </div>
-        <Tabs value={activeTab} onValueChange={handleTabChange}>
-          <TabsList className="h-9 w-full justify-start overflow-x-auto rounded-none border-b-0 bg-transparent p-0">
-            <TabsTrigger
-              value="chat"
-              className="gap-1.5 rounded-none border-b-2 border-transparent px-3 pb-2 pt-1 text-sm data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
-            >
-              <Bot className="h-3.5 w-3.5" />
-              Chat
-            </TabsTrigger>
-            <TabsTrigger
-              value="compose"
-              className="gap-1.5 rounded-none border-b-2 border-transparent px-3 pb-2 pt-1 text-sm data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
-            >
-              <Send className="h-3.5 w-3.5" />
-              Compose
-            </TabsTrigger>
-            <TabsTrigger
-              value="posts"
-              className="gap-1.5 rounded-none border-b-2 border-transparent px-3 pb-2 pt-1 text-sm data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
-            >
-              <PenSquare className="h-3.5 w-3.5" />
-              Posts
-            </TabsTrigger>
-            <TabsTrigger
-              value="calendar"
-              className="gap-1.5 rounded-none border-b-2 border-transparent px-3 pb-2 pt-1 text-sm data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
-            >
-              <CalendarDays className="h-3.5 w-3.5" />
-              Calendar
-            </TabsTrigger>
-            <TabsTrigger
-              value="generate"
-              className="gap-1.5 rounded-none border-b-2 border-transparent px-3 pb-2 pt-1 text-sm data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
-            >
-              <Sparkles className="h-3.5 w-3.5" />
-              Generate
-            </TabsTrigger>
-            <TabsTrigger
-              value="repurpose"
-              className="gap-1.5 rounded-none border-b-2 border-transparent px-3 pb-2 pt-1 text-sm data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
-            >
-              <Repeat2 className="h-3.5 w-3.5" />
-              Repurpose
-            </TabsTrigger>
-            <TabsTrigger
-              value="image"
-              className="gap-1.5 rounded-none border-b-2 border-transparent px-3 pb-2 pt-1 text-sm data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
-            >
-              <ImagePlus className="h-3.5 w-3.5" />
-              Image
-            </TabsTrigger>
-            <TabsTrigger
-              value="bulk"
-              className="gap-1.5 rounded-none border-b-2 border-transparent px-3 pb-2 pt-1 text-sm data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
-            >
-              <Layers className="h-3.5 w-3.5" />
-              Bulk
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
+      {/* Header */}
+      <div className="flex-none border-b bg-background px-4 py-3">
+        <h1 className="text-xl font-bold tracking-tight">Content Studio</h1>
+        <p className="text-xs text-muted-foreground">
+          Create, schedule, and manage all your social media content
+        </p>
       </div>
 
-      {/* Tab content */}
-      <div className="flex-1 overflow-hidden">
-        {activeTab === "chat" && (
-          <div className="h-full">
-            <ChatLayout />
-          </div>
-        )}
-        {activeTab === "compose" && (
-          <div className="h-full overflow-y-auto p-6">
+      {/* Main 2-column layout */}
+      <div className="flex flex-1 overflow-hidden">
+
+        {/* ── Left column: Compose + Tool panels ── */}
+        <div className="flex w-[58%] flex-col border-r overflow-hidden">
+
+          {/* Compose area */}
+          <div className="flex-1 overflow-y-auto p-4">
             <ComposeTab
               initialContent={composeContent}
               initialImage={composeImage}
               initialImageMediaId={composeMediaId}
-              onPostCreated={() => handleTabChange("posts")}
+              onPostCreated={() => {
+                setPostCreated((n) => n + 1);
+                setRightPanel("posts");
+              }}
             />
           </div>
-        )}
-        {activeTab === "posts" && (
-          <div className="h-full overflow-y-auto p-6">
-            <PostsTab onSwitchTab={handleTabChange} />
+
+          {/* Tool toggle buttons */}
+          <div className="flex-none border-t bg-muted/30 px-4 py-2 flex items-center gap-2">
+            <span className="text-xs text-muted-foreground mr-1">AI Tools:</span>
+            {tools.map(({ id, label, icon: Icon }) => (
+              <Button
+                key={id}
+                size="sm"
+                variant={activeTool === id ? "default" : "outline"}
+                className="h-7 gap-1.5 text-xs"
+                onClick={() => toggleTool(id)}
+              >
+                <Icon className="h-3.5 w-3.5" />
+                {label}
+                {activeTool === id && <X className="h-3 w-3 ml-0.5" />}
+              </Button>
+            ))}
           </div>
-        )}
-        {activeTab === "calendar" && (
-          <div className="h-full overflow-y-auto p-6">
-            <CalendarTab />
+
+          {/* Active tool panel */}
+          {activeTool && (
+            <div className="flex-none border-t max-h-[45%] overflow-y-auto bg-background">
+              <div className="p-4">
+                {activeTool === "generate" && <GenerateTab />}
+                {activeTool === "repurpose" && <RepurposeTab />}
+                {activeTool === "image" && <ImageTab />}
+                {activeTool === "bulk" && <BulkTab />}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* ── Right column: Chat / Posts / Calendar ── */}
+        <div className="flex w-[42%] flex-col overflow-hidden">
+
+          {/* Right panel switcher */}
+          <div className="flex-none border-b bg-muted/20 flex">
+            {rightPanels.map(({ id, label, icon: Icon }) => (
+              <button
+                key={id}
+                onClick={() => setRightPanel(id)}
+                className={cn(
+                  "flex flex-1 items-center justify-center gap-1.5 border-b-2 py-2 text-xs font-medium transition-colors",
+                  rightPanel === id
+                    ? "border-primary text-foreground"
+                    : "border-transparent text-muted-foreground hover:text-foreground"
+                )}
+              >
+                <Icon className="h-3.5 w-3.5" />
+                {label}
+              </button>
+            ))}
           </div>
-        )}
-        {activeTab === "generate" && (
-          <div className="h-full overflow-y-auto p-6">
-            <GenerateTab />
+
+          {/* Right panel content */}
+          <div className="flex-1 overflow-hidden">
+            {rightPanel === "chat" && (
+              <div className="h-full">
+                <ChatLayout />
+              </div>
+            )}
+            {rightPanel === "posts" && (
+              <div className="h-full overflow-y-auto p-4">
+                <PostsTab
+                  key={postCreated}
+                  onSwitchTab={(tab) => {
+                    if (tab === "calendar") setRightPanel("calendar");
+                  }}
+                />
+              </div>
+            )}
+            {rightPanel === "calendar" && (
+              <div className="h-full overflow-y-auto p-4">
+                <CalendarTab />
+              </div>
+            )}
           </div>
-        )}
-        {activeTab === "repurpose" && (
-          <div className="h-full overflow-y-auto p-6">
-            <RepurposeTab />
-          </div>
-        )}
-        {activeTab === "image" && (
-          <div className="h-full overflow-y-auto p-6">
-            <ImageTab />
-          </div>
-        )}
-        {activeTab === "bulk" && (
-          <div className="h-full overflow-y-auto p-6">
-            <BulkTab />
-          </div>
-        )}
+        </div>
       </div>
     </div>
   );
