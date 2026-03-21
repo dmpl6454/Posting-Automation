@@ -2,6 +2,7 @@ export { SocialProvider } from "./abstract/social.abstract";
 export { getSocialProvider, getSupportedPlatforms } from "./abstract/social.factory";
 export { FacebookProvider } from "./providers/facebook.provider";
 export { InstagramProvider } from "./providers/instagram.provider";
+export { LinkedInProvider } from "./providers/linkedin.provider";
 export type {
   SocialPostPayload,
   SocialPostResult,

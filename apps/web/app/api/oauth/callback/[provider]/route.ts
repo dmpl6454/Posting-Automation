@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@postautomation/db";
-import { getSocialProvider, FacebookProvider, InstagramProvider } from "@postautomation/social";
+import { getSocialProvider, FacebookProvider, InstagramProvider, LinkedInProvider } from "@postautomation/social";
 
 export async function GET(
   req: Request,
@@ -263,6 +263,86 @@ export async function GET(
 
       return NextResponse.redirect(
         `${process.env.APP_URL}/dashboard/channels?success=connected&platform=${params.provider}&pages=${igAccounts.length}`
+      );
+    }
+
+    // For LinkedIn, save personal profile + managed company pages
+    if (platform === "LINKEDIN" && provider instanceof LinkedInProvider) {
+      // Save personal profile
+      await prisma.channel.upsert({
+        where: {
+          organizationId_platform_platformId: {
+            organizationId,
+            platform: "LINKEDIN",
+            platformId: profile.id,
+          },
+        },
+        update: {
+          accessToken: tokens.accessToken,
+          refreshToken: tokens.refreshToken || null,
+          tokenExpiresAt: tokens.expiresAt || null,
+          scopes: tokens.scopes || [],
+          name: `${profile.name} (Personal)`,
+          avatar: profile.avatar || null,
+          isActive: true,
+        },
+        create: {
+          organizationId,
+          platform: "LINKEDIN",
+          platformId: profile.id,
+          name: `${profile.name} (Personal)`,
+          avatar: profile.avatar || null,
+          accessToken: tokens.accessToken,
+          refreshToken: tokens.refreshToken || null,
+          tokenExpiresAt: tokens.expiresAt || null,
+          scopes: tokens.scopes || [],
+        },
+      });
+
+      // Fetch and save LinkedIn Pages (organizations)
+      let pageCount = 0;
+      try {
+        const pages = await provider.getPages(tokens);
+        for (const page of pages) {
+          await prisma.channel.upsert({
+            where: {
+              organizationId_platform_platformId: {
+                organizationId,
+                platform: "LINKEDIN",
+                platformId: `org-${page.id}`,
+              },
+            },
+            update: {
+              accessToken: tokens.accessToken,
+              refreshToken: tokens.refreshToken || null,
+              tokenExpiresAt: tokens.expiresAt || null,
+              scopes: tokens.scopes || [],
+              name: `${page.name} (Page)`,
+              avatar: page.avatar || null,
+              isActive: true,
+              metadata: { orgId: page.id },
+            },
+            create: {
+              organizationId,
+              platform: "LINKEDIN",
+              platformId: `org-${page.id}`,
+              name: `${page.name} (Page)`,
+              avatar: page.avatar || null,
+              accessToken: tokens.accessToken,
+              refreshToken: tokens.refreshToken || null,
+              tokenExpiresAt: tokens.expiresAt || null,
+              scopes: tokens.scopes || [],
+              metadata: { orgId: page.id },
+            },
+          });
+          pageCount++;
+        }
+      } catch (e: any) {
+        console.warn(`[LinkedIn] Failed to fetch pages: ${e.message}`);
+      }
+
+      return NextResponse.redirect(
+        `${process.env.APP_URL}/dashboard/channels?success=connected&platform=linkedin&pages=${1 + pageCount}`
       );
     }
 

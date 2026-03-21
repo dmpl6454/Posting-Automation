@@ -99,7 +99,7 @@ export const channelRouter = createRouter({
 function getDefaultScopes(platform: string): string[] {
   const scopeMap: Record<string, string[]> = {
     TWITTER: ["tweet.read", "tweet.write", "media.write", "users.read", "offline.access"],
-    LINKEDIN: ["openid", "profile", "w_member_social"],
+    LINKEDIN: ["openid", "profile", "w_member_social", "w_organization_social", "r_organization_social"],
     FACEBOOK: ["public_profile", "email", "pages_show_list", "pages_manage_posts", "pages_read_engagement"],
     INSTAGRAM: ["public_profile", "email", "pages_show_list", "pages_read_engagement", "instagram_basic", "instagram_content_publish", "instagram_manage_comments", "business_management"],
     REDDIT: ["submit", "identity", "read"],
