@@ -21,6 +21,7 @@ import {
 import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
 import { Switch } from "~/components/ui/switch";
+import Link from "next/link";
 import {
   Plus,
   Trash2,
@@ -341,7 +342,11 @@ export default function AccountGroupsPage() {
           <div className="space-y-2 py-2 max-h-[400px] overflow-y-auto">
             {agents.length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-4">
-                No agents created yet. Go to <strong>Dashboard → Agents</strong> to create one first.
+                No agents created yet.{" "}
+                <Link href="/dashboard/autopilot/agents" className="underline font-medium">
+                  Go to Autopilot → Agents
+                </Link>{" "}
+                to create one first.
               </p>
             ) : unassignedAgents.length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-4">
