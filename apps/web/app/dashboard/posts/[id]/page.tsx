@@ -97,13 +97,23 @@ export default function PostDetailPage() {
 
   const publishNow = trpc.post.publishNow.useMutation({
     onSuccess: () => {
-      toast({ title: "Publishing started", description: "Your post is being published to all channels." });
+      toast({ title: "Publishing started", description: "Publishing to selected channels." });
       refetch();
     },
     onError: (err) => {
       toast({ title: "Publish failed", description: err.message, variant: "destructive" });
     },
   });
+
+  const [retryingTargetId, setRetryingTargetId] = useState<string | null>(null);
+
+  const handleRetryTarget = (targetId: string) => {
+    setRetryingTargetId(targetId);
+    publishNow.mutate(
+      { id: postId, targetIds: [targetId] },
+      { onSettled: () => setRetryingTargetId(null) }
+    );
+  };
 
   const handleSave = () => {
     const parsedTags = tags
@@ -126,7 +136,11 @@ export default function PostDetailPage() {
   };
 
   const handlePublishNow = () => {
-    if (confirm("Publish this post now to all connected channels?")) {
+    const failedCount = post?.targets.filter((t: any) => t.status === "FAILED").length ?? 0;
+    const msg = failedCount > 0
+      ? `Retry publishing to ${failedCount} failed channel${failedCount !== 1 ? "s" : ""}?`
+      : "Publish this post now to selected channels?";
+    if (confirm(msg)) {
       publishNow.mutate({ id: postId });
     }
   };
@@ -312,6 +326,22 @@ export default function PostDetailPage() {
                     <Badge variant={targetConfig.variant} className="text-xs">
                       {target.status.charAt(0) + target.status.slice(1).toLowerCase()}
                     </Badge>
+                    {target.status === "FAILED" && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 px-2 text-xs"
+                        onClick={() => handleRetryTarget(target.id)}
+                        disabled={retryingTargetId === target.id}
+                      >
+                        {retryingTargetId === target.id ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <RotateCcw className="h-3 w-3" />
+                        )}
+                        <span className="ml-1">Retry</span>
+                      </Button>
+                    )}
                     {target.publishedUrl && (
                       <a
                         href={target.publishedUrl}

@@ -211,7 +211,7 @@ export const postRouter = createRouter({
     }),
 
   publishNow: orgProcedure
-    .input(z.object({ id: z.string() }))
+    .input(z.object({ id: z.string(), targetIds: z.array(z.string()).optional() }))
     .mutation(async ({ ctx, input }) => {
       const post = await ctx.prisma.post.findFirst({
         where: { id: input.id, organizationId: ctx.organizationId },
@@ -219,13 +219,13 @@ export const postRouter = createRouter({
       });
       if (!post) throw new TRPCError({ code: "NOT_FOUND" });
 
-      // Only retry targets that haven't been successfully published yet
-      const targetsToPublish = post.targets.filter(
-        (t) => t.status !== "PUBLISHED"
-      );
+      // If specific targetIds provided, use those; otherwise use all FAILED/DRAFT/SCHEDULED targets
+      let targetsToPublish = input.targetIds?.length
+        ? post.targets.filter((t) => input.targetIds!.includes(t.id) && t.status !== "PUBLISHED")
+        : post.targets.filter((t) => t.status === "FAILED" || t.status === "DRAFT" || t.status === "SCHEDULED");
 
       if (targetsToPublish.length === 0) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "All channels already published." });
+        throw new TRPCError({ code: "BAD_REQUEST", message: "No eligible channels to publish." });
       }
 
       await ctx.prisma.post.update({
@@ -233,9 +233,8 @@ export const postRouter = createRouter({
         data: { status: "SCHEDULED", scheduledAt: new Date() },
       });
 
-      // Reset failed targets back to PENDING so they can be retried
       await ctx.prisma.postTarget.updateMany({
-        where: { id: { in: targetsToPublish.map((t) => t.id) }, status: "FAILED" },
+        where: { id: { in: targetsToPublish.map((t) => t.id) } },
         data: { status: "SCHEDULED", errorMessage: null },
       });
 
