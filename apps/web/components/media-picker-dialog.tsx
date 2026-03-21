@@ -47,7 +47,7 @@ export function MediaPickerDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="flex max-h-[80vh] max-w-2xl flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
@@ -83,7 +83,8 @@ export function MediaPickerDialog({
             </p>
           </div>
         ) : (
-          <div className="grid max-h-[400px] grid-cols-4 gap-2 overflow-y-auto pr-1">
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <div className="grid grid-cols-4 gap-2 p-1">
             {items.map((item) => {
               const isVideo = item.fileType?.startsWith("video/");
               return (
@@ -94,14 +95,14 @@ export function MediaPickerDialog({
                     setSelectedUrl(item.url);
                     setSelectedName(item.fileName);
                   }}
-                  className={`group relative aspect-square overflow-hidden rounded-lg border-2 transition-all ${
+                  className={`group relative block aspect-square w-full overflow-hidden rounded-lg border-2 transition-all ${
                     selectedId === item.id
                       ? "border-primary ring-2 ring-primary/30"
                       : "border-transparent hover:border-muted-foreground/30"
                   }`}
                 >
                   {isVideo ? (
-                    <div className="relative h-full w-full bg-black">
+                    <div className="absolute inset-0 bg-black">
                       <video
                         src={item.url}
                         className="h-full w-full object-cover"
@@ -119,7 +120,7 @@ export function MediaPickerDialog({
                     <img
                       src={item.thumbnailUrl || item.url}
                       alt={item.fileName}
-                      className="h-full w-full object-cover"
+                      className="absolute inset-0 h-full w-full object-cover"
                     />
                   )}
                   {selectedId === item.id && (
@@ -135,6 +136,7 @@ export function MediaPickerDialog({
                 </button>
               );
             })}
+            </div>
           </div>
         )}
 

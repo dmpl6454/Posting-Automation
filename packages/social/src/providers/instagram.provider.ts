@@ -10,6 +10,7 @@ import type {
   PlatformConstraints,
 } from "../abstract/social.types";
 
+
 export class InstagramProvider extends SocialProvider {
   readonly platform: SocialPlatform = "INSTAGRAM";
   readonly displayName = "Instagram";
@@ -71,6 +72,16 @@ export class InstagramProvider extends SocialProvider {
     );
 
     return longLivedTokens;
+  }
+
+  validateContent(payload: SocialPostPayload): string[] {
+    const errors = super.validateContent(payload);
+    if (!payload.mediaUrls || payload.mediaUrls.length === 0) {
+      errors.push("Instagram requires at least one image or video to publish a post.");
+    } else if (!payload.mediaUrls[0]?.startsWith("http")) {
+      errors.push("Instagram requires a valid publicly accessible media URL (must start with http/https).");
+    }
+    return errors;
   }
 
   async publishPost(tokens: OAuthTokens, payload: SocialPostPayload): Promise<SocialPostResult> {

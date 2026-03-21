@@ -90,9 +90,9 @@ export default function MediaPage() {
         <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-4">
           {data?.items.map((media: any) => (
             <Card key={media.id} className="group overflow-hidden">
-              <div className="relative aspect-square bg-muted">
+              <div className="relative aspect-square w-full overflow-hidden bg-muted">
                 {media.fileType.startsWith("video/") ? (
-                  <div className="relative h-full w-full bg-black">
+                  <div className="absolute inset-0 bg-black">
                     <video
                       src={media.url}
                       className="h-full w-full object-cover"
@@ -110,7 +110,7 @@ export default function MediaPage() {
                   <img
                     src={media.thumbnailUrl || media.url}
                     alt={media.fileName}
-                    className="h-full w-full object-cover"
+                    className="absolute inset-0 h-full w-full object-cover"
                   />
                 )}
                 <Button

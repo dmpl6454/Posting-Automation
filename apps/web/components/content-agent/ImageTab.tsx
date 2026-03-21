@@ -20,7 +20,7 @@ import { useToast } from "~/hooks/use-toast";
 import {
   Wand2, Pencil, Loader2, Download, Save, ArrowRight, Upload, ImagePlus,
   Trash2, Square, RectangleHorizontal, RectangleVertical, Monitor, Smartphone,
-  X, Clock, Sparkles, FolderOpen,
+  X, Clock, Sparkles, FolderOpen, Image,
 } from "lucide-react";
 import { MediaPickerDialog } from "~/components/media-picker-dialog";
 
@@ -55,7 +55,11 @@ interface HistoryItem {
 
 const PROMPT_MAX_LENGTH = 2000;
 
-export function ImageTab() {
+interface ImageTabProps {
+  onImageGenerated?: (dataUrl: string) => void;
+}
+
+export function ImageTab({ onImageGenerated }: ImageTabProps = {}) {
   const router = useRouter();
   const { toast } = useToast();
 
@@ -72,9 +76,16 @@ export function ImageTab() {
   const referenceInputRef = useRef<HTMLInputElement>(null);
   const logoInputRef = useRef<HTMLInputElement>(null);
 
+  // Base image for generation (user's own photo)
+  const [baseImage, setBaseImage] = useState<string | null>(null);
+  const [baseImageFileName, setBaseImageFileName] = useState("");
+  const baseImageInputRef = useRef<HTMLInputElement>(null);
+
   // Media Picker State
+  const [showBaseImagePicker, setShowBaseImagePicker] = useState(false);
   const [showReferencePicker, setShowReferencePicker] = useState(false);
   const [showLogoPicker, setShowLogoPicker] = useState(false);
+  const [showEditImagePicker, setShowEditImagePicker] = useState(false);
 
   // Edit Mode State
   const [editPrompt, setEditPrompt] = useState("");
@@ -93,35 +104,18 @@ export function ImageTab() {
 
   // tRPC mutations
   const generateMutation = trpc.image.generate.useMutation({
-    onSuccess: (data: any) => {
-      const imageUrl = `data:${data.mimeType || "image/png"};base64,${data.imageBase64}`;
-      const description = data.description || null;
-      setResultImage(imageUrl);
-      setResultDescription(description);
-      addToHistory(imageUrl, generatePrompt, description);
-      toast({ title: "Image generated!", description: "Your image is ready." });
-    },
     onError: (err: any) => {
       toast({ title: "Generation failed", description: err.message || "Something went wrong.", variant: "destructive" });
     },
   });
 
   const editMutation = trpc.image.edit.useMutation({
-    onSuccess: (data: any) => {
-      const imageUrl = `data:${data.mimeType || "image/png"};base64,${data.imageBase64}`;
-      const description = data.description || null;
-      setResultImage(imageUrl);
-      setResultDescription(description);
-      addToHistory(imageUrl, editPrompt, description);
-      toast({ title: "Image edited!", description: "Your edited image is ready." });
-    },
     onError: (err: any) => {
       toast({ title: "Edit failed", description: err.message || "Something went wrong.", variant: "destructive" });
     },
   });
 
   const saveMutation = trpc.image.saveGenerated.useMutation({
-    onSuccess: () => { toast({ title: "Saved!", description: "Image saved to your media library." }); },
     onError: (err: any) => { toast({ title: "Save failed", description: err.message || "Could not save image.", variant: "destructive" }); },
   });
 
@@ -144,26 +138,79 @@ export function ImageTab() {
     return match ? { base64: match[2]!, mimeType: match[1]! } : null;
   };
 
-  const handleGenerate = () => {
+  const handleGenerate = async () => {
     if (!generatePrompt.trim()) return;
     const refs: Array<{ base64: string; mimeType?: string }> = [];
+    // Base image is the primary reference (user's own photo)
+    if (baseImage) { const ref = extractBase64(baseImage); if (ref) refs.push(ref); }
     if (referenceImage) { const ref = extractBase64(referenceImage); if (ref) refs.push(ref); }
     if (logoImage) { const logo = extractBase64(logoImage); if (logo) refs.push(logo); }
 
     let fullPrompt = generatePrompt;
-    if (referenceImage && logoImage) fullPrompt = `${generatePrompt}\n\nI've attached a reference design image and a logo. Please use the reference as style/layout inspiration and incorporate the logo into the generated image.`;
-    else if (referenceImage) fullPrompt = `${generatePrompt}\n\nI've attached a reference design image. Please use it as style/layout inspiration for the generated image.`;
-    else if (logoImage) fullPrompt = `${generatePrompt}\n\nI've attached a logo image. Please incorporate this logo into the generated image.`;
+    if (baseImage) {
+      const extras = [];
+      if (referenceImage) extras.push("a reference design for style/layout inspiration");
+      if (logoImage) extras.push("a logo to incorporate");
+      const extrasNote = extras.length > 0 ? ` I've also attached ${extras.join(" and ")}.` : "";
+      fullPrompt = `${generatePrompt}\n\nI've attached my own image as the base. Please use it as the primary visual reference and transform/generate based on it.${extrasNote}`;
+    } else if (referenceImage && logoImage) {
+      fullPrompt = `${generatePrompt}\n\nI've attached a reference design image and a logo. Please use the reference as style/layout inspiration and incorporate the logo into the generated image.`;
+    } else if (referenceImage) {
+      fullPrompt = `${generatePrompt}\n\nI've attached a reference design image. Please use it as style/layout inspiration for the generated image.`;
+    } else if (logoImage) {
+      fullPrompt = `${generatePrompt}\n\nI've attached a logo image. Please incorporate this logo into the generated image.`;
+    }
 
-    generateMutation.mutate({
-      prompt: fullPrompt,
-      provider: imageProvider,
-      ...(imageProvider === "nano-banana" || imageProvider === "nano-banana-pro"
-        ? { model: model as any, aspectRatio, imageSize, ...(refs.length > 0 ? { referenceImages: refs } : {}) }
-        : imageProvider === "dall-e"
-        ? { aspectRatio }
-        : { aspectRatio }), // meta-ai
-    });
+    try {
+      const data = await generateMutation.mutateAsync({
+        prompt: fullPrompt,
+        provider: imageProvider,
+        ...(imageProvider === "nano-banana" || imageProvider === "nano-banana-pro"
+          ? { model: model as any, aspectRatio, imageSize, ...(refs.length > 0 ? { referenceImages: refs } : {}) }
+          : imageProvider === "dall-e"
+          ? { aspectRatio }
+          : { aspectRatio }), // meta-ai
+      });
+      const imageUrl = `data:${data.mimeType || "image/png"};base64,${data.imageBase64}`;
+      setResultImage(imageUrl);
+      setResultDescription(data.description || null);
+      addToHistory(imageUrl, generatePrompt, data.description);
+      toast({ title: "Image generated!", description: "Your image is ready." });
+
+      if (onImageGenerated) {
+        onImageGenerated(imageUrl);
+        toast({ title: "Image added to post!" });
+      }
+    } catch {
+      // onError handles toast
+    }
+  };
+
+  const handleBaseImageSelect = async (file: File) => {
+    if (!file.type.startsWith("image/")) { toast({ title: "Invalid file", description: "Please upload an image file.", variant: "destructive" }); return; }
+    const dataUrl = await fileToBase64(file);
+    setBaseImage(dataUrl);
+    setBaseImageFileName(file.name);
+  };
+
+  const handleBaseImageFromLibrary = async (url: string, fileName: string) => {
+    try {
+      const dataUrl = await urlToBase64(url);
+      setBaseImage(dataUrl);
+      setBaseImageFileName(fileName);
+    } catch {
+      toast({ title: "Failed to load image", description: "Could not load the selected image.", variant: "destructive" });
+    }
+  };
+
+  const handleEditImageFromLibrary = async (url: string, fileName: string) => {
+    try {
+      const dataUrl = await urlToBase64(url);
+      setUploadedImage(dataUrl);
+      setUploadedFileName(fileName);
+    } catch {
+      toast({ title: "Failed to load image", description: "Could not load the selected image.", variant: "destructive" });
+    }
   };
 
   const handleReferenceSelect = async (file: File) => {
@@ -211,7 +258,7 @@ export function ImageTab() {
     }
   };
 
-  const handleEdit = () => {
+  const handleEdit = async () => {
     if (!editPrompt.trim() || !uploadedImage) return;
     let imageBase64 = uploadedImage;
     let imageMimeType = "image/jpeg";
@@ -219,7 +266,21 @@ export function ImageTab() {
       const match = uploadedImage.match(/^data:([^;]+);base64,(.+)$/);
       if (match) { imageMimeType = match[1] ?? "image/jpeg"; imageBase64 = match[2] ?? ""; }
     }
-    editMutation.mutate({ prompt: editPrompt, imageBase64, imageMimeType });
+    try {
+      const data = await editMutation.mutateAsync({ prompt: editPrompt, imageBase64, imageMimeType });
+      const imageUrl = `data:${data.mimeType || "image/png"};base64,${data.imageBase64}`;
+      setResultImage(imageUrl);
+      setResultDescription(data.description || null);
+      addToHistory(imageUrl, editPrompt, data.description);
+      toast({ title: "Image edited!", description: "Your edited image is ready." });
+
+      if (onImageGenerated) {
+        onImageGenerated(imageUrl);
+        toast({ title: "Image added to post!" });
+      }
+    } catch {
+      // onError handles toast
+    }
   };
 
   const handleFileSelect = async (file: File) => {
@@ -245,14 +306,19 @@ export function ImageTab() {
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
   };
 
-  const handleSaveToLibrary = () => {
+  const handleSaveToLibrary = async () => {
     if (!resultImage) return;
     let imageBase64 = resultImage; let mimeType = "image/png";
     if (resultImage.startsWith("data:")) {
       const match = resultImage.match(/^data:([^;]+);base64,(.+)$/);
       if (match) { mimeType = match[1] ?? "image/png"; imageBase64 = match[2] ?? ""; }
     }
-    saveMutation.mutate({ imageBase64, mimeType, fileName: `ai-image-${Date.now()}.png` });
+    try {
+      await saveMutation.mutateAsync({ imageBase64, mimeType, fileName: `ai-image-${Date.now()}.png` });
+      toast({ title: "Saved!", description: "Image saved to your media library." });
+    } catch {
+      // onError handles toast
+    }
   };
 
   const handleUseInPost = async () => {
@@ -301,6 +367,66 @@ export function ImageTab() {
 
             {/* GENERATE TAB */}
             <TabsContent value="generate" className="space-y-4">
+
+              {/* ── Your Image (base for generation) ── */}
+              <Card>
+                <CardHeader className="pb-3">
+                  <div className="flex items-center gap-2">
+                    <Image className="h-4 w-4 text-primary" />
+                    <CardTitle className="text-base">Your Image</CardTitle>
+                    <span className="text-xs text-muted-foreground">(optional)</span>
+                  </div>
+                  <CardDescription>Upload your own photo or pick from your library — AI will generate based on it</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <input
+                    ref={baseImageInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => { const f = e.target.files?.[0]; if (f) handleBaseImageSelect(f); e.target.value = ""; }}
+                  />
+                  {baseImage ? (
+                    <div className="space-y-2">
+                      <div className="relative overflow-hidden rounded-lg border">
+                        <img src={baseImage} alt="Base" className="w-full object-contain" style={{ maxHeight: 220 }} />
+                        <button
+                          onClick={() => { setBaseImage(null); setBaseImageFileName(""); }}
+                          className="absolute right-2 top-2 rounded-full bg-black/60 p-1.5 text-white hover:bg-black/80"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                      <p className="truncate text-xs text-muted-foreground">{baseImageFileName}</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        onClick={() => baseImageInputRef.current?.click()}
+                        className="flex flex-col items-center gap-2 rounded-lg border-2 border-dashed p-5 text-sm text-muted-foreground transition-colors hover:border-primary/50 hover:bg-muted/30"
+                      >
+                        <Upload className="h-6 w-6" />
+                        <span className="font-medium">Upload Photo</span>
+                        <span className="text-xs opacity-70">JPG, PNG, WebP</span>
+                      </button>
+                      <button
+                        onClick={() => setShowBaseImagePicker(true)}
+                        className="flex flex-col items-center gap-2 rounded-lg border-2 border-dashed p-5 text-sm text-muted-foreground transition-colors hover:border-primary/50 hover:bg-muted/30"
+                      >
+                        <FolderOpen className="h-6 w-6" />
+                        <span className="font-medium">From Library</span>
+                        <span className="text-xs opacity-70">Your saved media</span>
+                      </button>
+                    </div>
+                  )}
+                  {(imageProvider === "dall-e" || imageProvider === "meta-ai") && baseImage && (
+                    <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+                      Image input works best with Nano Banana. DALL-E and Meta AI are text-only.
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+
               <Card>
                 <CardHeader className="pb-3"><CardTitle className="text-base">Prompt</CardTitle><CardDescription>Describe the image you want to create</CardDescription></CardHeader>
                 <CardContent className="space-y-3">
@@ -449,9 +575,18 @@ export function ImageTab() {
                       </div>
                     </div>
                   ) : (
-                    <div onDrop={onDrop} onDragOver={onDragOver} onDragLeave={onDragLeave} onClick={() => fileInputRef.current?.click()} className={`flex cursor-pointer flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed p-10 transition-colors ${isDragOver ? "border-primary bg-primary/5" : "border-muted-foreground/25 hover:border-muted-foreground/50 hover:bg-muted/50"}`}>
-                      <Upload className="h-10 w-10 text-muted-foreground" />
-                      <div className="text-center"><p className="text-sm font-medium">Drop an image here or click to upload</p><p className="text-xs text-muted-foreground">PNG, JPG, WebP up to 10MB</p></div>
+                    <div className="space-y-2">
+                      <div onDrop={onDrop} onDragOver={onDragOver} onDragLeave={onDragLeave} onClick={() => fileInputRef.current?.click()} className={`flex cursor-pointer flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed p-8 transition-colors ${isDragOver ? "border-primary bg-primary/5" : "border-muted-foreground/25 hover:border-muted-foreground/50 hover:bg-muted/50"}`}>
+                        <Upload className="h-8 w-8 text-muted-foreground" />
+                        <div className="text-center"><p className="text-sm font-medium">Drop an image here or click to upload</p><p className="text-xs text-muted-foreground">PNG, JPG, WebP up to 10MB</p></div>
+                      </div>
+                      <button
+                        onClick={() => setShowEditImagePicker(true)}
+                        className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed p-2.5 text-sm text-muted-foreground transition-colors hover:border-primary/50 hover:bg-muted/30"
+                      >
+                        <FolderOpen className="h-4 w-4" />
+                        Pick from Media Library
+                      </button>
                     </div>
                   )}
                   <input ref={fileInputRef} type="file" accept="image/*" onChange={onFileInputChange} className="hidden" />
@@ -522,6 +657,12 @@ export function ImageTab() {
       </div>
 
       <MediaPickerDialog
+        open={showBaseImagePicker}
+        onOpenChange={setShowBaseImagePicker}
+        onSelect={handleBaseImageFromLibrary}
+        title="Choose Your Image"
+      />
+      <MediaPickerDialog
         open={showReferencePicker}
         onOpenChange={setShowReferencePicker}
         onSelect={handleReferenceFromLibrary}
@@ -532,6 +673,12 @@ export function ImageTab() {
         onOpenChange={setShowLogoPicker}
         onSelect={handleLogoFromLibrary}
         title="Choose Logo"
+      />
+      <MediaPickerDialog
+        open={showEditImagePicker}
+        onOpenChange={setShowEditImagePicker}
+        onSelect={handleEditImageFromLibrary}
+        title="Choose Image to Edit"
       />
     </div>
   );

@@ -41,6 +41,7 @@ function ContentStudioInner() {
   const [expanded, setExpanded] = useState<ExpandedSection>(null);
   const [postCreated, setPostCreated] = useState(0);
   const [showCalendar, setShowCalendar] = useState(false);
+  const [pendingMedia, setPendingMedia] = useState<{ dataUrl: string } | null>(null);
 
   const toggle = (section: ExpandedSection) =>
     setExpanded((prev) => (prev === section ? null : section));
@@ -64,6 +65,8 @@ function ContentStudioInner() {
             initialImage={composeImage}
             initialImageMediaId={composeMediaId}
             onPostCreated={() => setPostCreated((n) => n + 1)}
+            externalMediaToAdd={pendingMedia}
+            onExternalMediaConsumed={() => setPendingMedia(null)}
           />
 
           {/* ── AI Tools (expandable cards) ── */}
@@ -99,7 +102,7 @@ function ContentStudioInner() {
               </div>
               {expanded === "generate" && <GenerateTab />}
               {expanded === "repurpose" && <RepurposeTab />}
-              {expanded === "image" && <ImageTab />}
+              {expanded === "image" && <ImageTab onImageGenerated={(dataUrl) => setPendingMedia({ dataUrl })} />}
               {expanded === "bulk" && <BulkTab />}
             </Card>
           )}

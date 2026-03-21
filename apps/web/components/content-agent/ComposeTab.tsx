@@ -46,16 +46,18 @@ interface ComposeTabProps {
   initialImage?: string;
   initialImageMediaId?: string;
   onPostCreated?: () => void;
+  externalMediaToAdd?: { dataUrl: string } | null;
+  onExternalMediaConsumed?: () => void;
 }
 
-export function ComposeTab({ initialContent, initialImage, initialImageMediaId, onPostCreated }: ComposeTabProps) {
+export function ComposeTab({ initialContent, initialImage, initialImageMediaId, onPostCreated, externalMediaToAdd, onExternalMediaConsumed }: ComposeTabProps) {
   const router = useRouter();
   const { toast } = useToast();
   const [content, setContent] = useState(initialContent || "");
   const [selectedChannels, setSelectedChannels] = useState<string[]>([]);
   const [scheduledAt, setScheduledAt] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
-  const [postMedia, setPostMedia] = useState<{ url: string; mediaId?: string; file?: File }[]>([]);
+  const [postMedia, setPostMedia] = useState<{ url: string; mediaId?: string; file?: File; uploading?: boolean }[]>([]);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingImageIndex, setEditingImageIndex] = useState<number | null>(null);
   const [editorPreview, setEditorPreview] = useState<string | null>(null);
@@ -70,6 +72,24 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
     if (initialContent) setContent(initialContent);
     if (initialImage) setPostMedia((prev) => (prev.length === 0 ? [{ url: initialImage, mediaId: initialImageMediaId }] : prev));
   }, [initialContent, initialImage]);
+
+  useEffect(() => {
+    if (!externalMediaToAdd) return;
+    const { dataUrl } = externalMediaToAdd;
+    const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+    if (match) {
+      const mimeType = match[1] ?? "image/png";
+      const byteString = atob(match[2] ?? "");
+      const ab = new ArrayBuffer(byteString.length);
+      const ia = new Uint8Array(ab);
+      for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
+      const file = new File([ab], `ai-image-${Date.now()}.png`, { type: mimeType });
+      const objectUrl = URL.createObjectURL(file);
+      // Add without auto-uploading — media record is created only when the post is submitted
+      setPostMedia((prev) => [...prev, { url: objectUrl, file }]);
+    }
+    onExternalMediaConsumed?.();
+  }, [externalMediaToAdd]);
 
   const { data: channels, isLoading: channelsLoading } = trpc.channel.list.useQuery();
   const { data: channelGroups } = trpc.channelGroup.list.useQuery();
@@ -114,10 +134,11 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
     const blob = await resp.blob();
     const file = new File([blob], `design-${Date.now()}.png`, { type: "image/png" });
     if (editingImageIndex !== null) {
-      setPostMedia((prev) => prev.map((item, i) => (i === editingImageIndex ? { url: blobUrl, file } : item)));
+      setPostMedia((prev) => prev.map((item, i) => (i === editingImageIndex ? { url: blobUrl, file, uploading: true } : item)));
     } else {
-      setPostMedia((prev) => [...prev, { url: blobUrl, file }]);
+      setPostMedia((prev) => [...prev, { url: blobUrl, file, uploading: true }]);
     }
+    startAutoUpload(file, blobUrl);
     setEditorOpen(false);
     setEditingImageIndex(null);
     setEditorPreview(null);
@@ -129,13 +150,29 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
     setEditorPreview(null);
   };
 
+  const startAutoUpload = (file: File, objectUrl: string) => {
+    uploadFileToS3(file)
+      .then((mediaId) => {
+        setPostMedia((prev) =>
+          prev.map((item) => (item.url === objectUrl ? { ...item, mediaId, uploading: false } : item))
+        );
+      })
+      .catch((err) => {
+        toast({ title: "Upload failed", description: err.message, variant: "destructive" });
+        setPostMedia((prev) =>
+          prev.map((item) => (item.url === objectUrl ? { ...item, uploading: false } : item))
+        );
+      });
+  };
+
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files) return;
     Array.from(files).forEach((file) => {
       if (!file.type.startsWith("image/")) return;
       const url = URL.createObjectURL(file);
-      setPostMedia((prev) => [...prev, { url, file }]);
+      setPostMedia((prev) => [...prev, { url, file, uploading: true }]);
+      startAutoUpload(file, url);
     });
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
@@ -150,7 +187,8 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
         return;
       }
       const url = URL.createObjectURL(file);
-      setPostMedia((prev) => [...prev, { url, file }]);
+      setPostMedia((prev) => [...prev, { url, file, uploading: true }]);
+      startAutoUpload(file, url);
     });
     if (videoInputRef.current) videoInputRef.current.value = "";
   };
@@ -183,9 +221,15 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
       return;
     }
 
+    const stillUploading = postMedia.some((item) => item.uploading);
+    if (stillUploading) {
+      toast({ title: "Please wait", description: "Media is still uploading...", variant: "destructive" });
+      return;
+    }
+
     try {
       setIsUploading(true);
-      // Upload any files that don't have a mediaId yet
+      // Upload any files that don't have a mediaId yet (fallback for edge cases)
       const mediaIds: string[] = [];
       for (const item of postMedia) {
         if (item.mediaId) {
@@ -401,15 +445,26 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
                               preload="metadata"
                             />
                             <div className="absolute inset-0 flex items-center justify-center">
-                              <Film className="h-6 w-6 text-white drop-shadow" />
+                              {item.uploading ? (
+                                <Loader2 className="h-6 w-6 animate-spin text-white drop-shadow" />
+                              ) : (
+                                <Film className="h-6 w-6 text-white drop-shadow" />
+                              )}
                             </div>
                           </div>
                         ) : (
-                          <img
-                            src={item.url}
-                            alt={`Attached ${idx + 1}`}
-                            className="h-16 w-16 rounded-md border object-cover"
-                          />
+                          <div className="relative h-16 w-16">
+                            <img
+                              src={item.url}
+                              alt={`Attached ${idx + 1}`}
+                              className="h-16 w-16 rounded-md border object-cover"
+                            />
+                            {item.uploading && (
+                              <div className="absolute inset-0 flex items-center justify-center rounded-md bg-black/40">
+                                <Loader2 className="h-4 w-4 animate-spin text-white" />
+                              </div>
+                            )}
+                          </div>
                         )}
                         <button
                           type="button"
