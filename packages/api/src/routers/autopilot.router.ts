@@ -271,10 +271,6 @@ export const autopilotRouter = createRouter({
           targets: {
             include: {
               channel: { select: { id: true, platform: true, name: true } },
-              analyticsSnapshots: {
-                orderBy: { snapshotAt: "desc" },
-                take: 1,
-              },
             },
           },
           autopilotPost: {
