@@ -28,6 +28,7 @@ import { autopilotRouter } from "./routers/autopilot.router";
 import { accountGroupRouter } from "./routers/account-group.router";
 import { designTemplateRouter } from "./routers/design-template.router";
 import { channelGroupRouter } from "./routers/channel-group.router";
+import { newsgridRouter } from "./routers/newsgrid.router";
 
 export const appRouter = createRouter({
   user: userRouter,
@@ -59,6 +60,7 @@ export const appRouter = createRouter({
   accountGroup: accountGroupRouter,
   designTemplate: designTemplateRouter,
   channelGroup: channelGroupRouter,
+  newsgrid: newsgridRouter,
 });
 
 export type AppRouter = typeof appRouter;
