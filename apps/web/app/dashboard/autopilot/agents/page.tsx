@@ -24,7 +24,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "~/components/ui/dialog";
-import { Plus, Trash2, Pencil, Bot, Loader2 } from "lucide-react";
+import { Plus, Trash2, Pencil, Bot, Loader2, Play } from "lucide-react";
 
 const TONES = ["professional", "casual", "humorous", "formal", "inspiring"] as const;
 const FREQUENCIES = ["daily", "weekdays", "weekly", "custom"] as const;
@@ -69,6 +69,11 @@ export default function AutopilotAgentsPage() {
 
   const deleteMutation = trpc.agent.delete.useMutation({
     onSuccess: () => utils.agent.list.invalidate(),
+  });
+
+  const runNowMutation = trpc.agent.runNow.useMutation({
+    onSuccess: () => alert("Agent queued! Check Autopilot → Posts in a minute."),
+    onError: (e) => alert(e.message),
   });
 
   const closeDialog = () => {
@@ -173,6 +178,16 @@ export default function AutopilotAgentsPage() {
                   <CardTitle className="truncate text-base">{agent.name}</CardTitle>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-7 w-7 text-muted-foreground hover:text-green-600"
+                    title="Run Now"
+                    disabled={runNowMutation.isPending}
+                    onClick={() => runNowMutation.mutate({ id: agent.id })}
+                  >
+                    <Play className="h-3.5 w-3.5" />
+                  </Button>
                   <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => openEdit(agent)}>
                     <Pencil className="h-3.5 w-3.5" />
                   </Button>
