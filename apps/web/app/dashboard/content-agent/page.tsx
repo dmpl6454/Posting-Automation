@@ -2,8 +2,17 @@
 
 import { useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
+import {
+  Sparkles,
+  Repeat2,
+  ImagePlus,
+  Layers,
+  MessageSquare,
+  ChevronDown,
+  ChevronUp,
+} from "lucide-react";
 import { Button } from "~/components/ui/button";
-import { Sparkles, Repeat2, ImagePlus, Layers, MessageSquare, PenSquare, CalendarDays, X } from "lucide-react";
+import { Card } from "~/components/ui/card";
 import { ChatLayout } from "~/components/chat/ChatLayout";
 import { GenerateTab } from "~/components/content-agent/GenerateTab";
 import { RepurposeTab } from "~/components/content-agent/RepurposeTab";
@@ -14,20 +23,13 @@ import { CalendarTab } from "~/components/content-agent/CalendarTab";
 import { BulkTab } from "~/components/content-agent/BulkTab";
 import { cn } from "~/lib/utils";
 
-type Tool = "generate" | "repurpose" | "image" | "bulk" | null;
-type RightPanel = "chat" | "posts" | "calendar";
+type ExpandedSection = "generate" | "repurpose" | "image" | "bulk" | "chat" | null;
 
-const tools = [
-  { id: "generate" as Tool, label: "Generate", icon: Sparkles },
-  { id: "repurpose" as Tool, label: "Repurpose", icon: Repeat2 },
-  { id: "image" as Tool, label: "Image", icon: ImagePlus },
-  { id: "bulk" as Tool, label: "Bulk", icon: Layers },
-];
-
-const rightPanels = [
-  { id: "chat" as RightPanel, label: "Chat", icon: MessageSquare },
-  { id: "posts" as RightPanel, label: "Posts", icon: PenSquare },
-  { id: "calendar" as RightPanel, label: "Calendar", icon: CalendarDays },
+const aiTools = [
+  { id: "generate" as const, label: "AI Generate", icon: Sparkles, color: "text-purple-500" },
+  { id: "repurpose" as const, label: "Repurpose", icon: Repeat2, color: "text-blue-500" },
+  { id: "image" as const, label: "AI Image", icon: ImagePlus, color: "text-green-500" },
+  { id: "bulk" as const, label: "Bulk Create", icon: Layers, color: "text-orange-500" },
 ];
 
 function ContentStudioInner() {
@@ -36,120 +38,122 @@ function ContentStudioInner() {
   const composeImage = searchParams.get("aiImage") || undefined;
   const composeMediaId = searchParams.get("aiMediaId") || undefined;
 
-  const [activeTool, setActiveTool] = useState<Tool>(null);
-  const [rightPanel, setRightPanel] = useState<RightPanel>("chat");
+  const [expanded, setExpanded] = useState<ExpandedSection>(null);
   const [postCreated, setPostCreated] = useState(0);
+  const [showCalendar, setShowCalendar] = useState(false);
 
-  const toggleTool = (tool: Tool) => {
-    setActiveTool((prev) => (prev === tool ? null : tool));
-  };
+  const toggle = (section: ExpandedSection) =>
+    setExpanded((prev) => (prev === section ? null : section));
 
   return (
-    <div className="flex h-[calc(100vh-4rem)] flex-col overflow-hidden">
-      {/* Header */}
-      <div className="flex-none border-b bg-background px-4 py-3">
-        <h1 className="text-xl font-bold tracking-tight">Content Studio</h1>
-        <p className="text-xs text-muted-foreground">
-          Create, schedule, and manage all your social media content
-        </p>
-      </div>
-
-      {/* Main 2-column layout */}
-      <div className="flex flex-1 overflow-hidden">
-
-        {/* ── Left column: Compose + Tool panels ── */}
-        <div className="flex w-[58%] flex-col border-r overflow-hidden">
-
-          {/* Compose area */}
-          <div className="flex-1 overflow-y-auto p-4">
-            <ComposeTab
-              initialContent={composeContent}
-              initialImage={composeImage}
-              initialImageMediaId={composeMediaId}
-              onPostCreated={() => {
-                setPostCreated((n) => n + 1);
-                setRightPanel("posts");
-              }}
-            />
+    <div className="flex h-[calc(100vh-4rem)] overflow-hidden">
+      {/* ── Main content (scrollable) ── */}
+      <div className="flex-1 overflow-y-auto">
+        <div className="mx-auto max-w-4xl space-y-4 p-4">
+          {/* Header */}
+          <div>
+            <h1 className="text-xl font-bold tracking-tight">Content Studio</h1>
+            <p className="text-xs text-muted-foreground">
+              Create, schedule, and manage all your social media content
+            </p>
           </div>
 
-          {/* Tool toggle buttons */}
-          <div className="flex-none border-t bg-muted/30 px-4 py-2 flex items-center gap-2">
-            <span className="text-xs text-muted-foreground mr-1">AI Tools:</span>
-            {tools.map(({ id, label, icon: Icon }) => (
+          {/* ── Compose ── */}
+          <ComposeTab
+            initialContent={composeContent}
+            initialImage={composeImage}
+            initialImageMediaId={composeMediaId}
+            onPostCreated={() => setPostCreated((n) => n + 1)}
+          />
+
+          {/* ── AI Tools (expandable cards) ── */}
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {aiTools.map(({ id, label, icon: Icon, color }) => (
               <Button
                 key={id}
-                size="sm"
-                variant={activeTool === id ? "default" : "outline"}
-                className="h-7 gap-1.5 text-xs"
-                onClick={() => toggleTool(id)}
+                variant={expanded === id ? "default" : "outline"}
+                className="h-auto flex-col gap-1 py-3"
+                onClick={() => toggle(id)}
               >
-                <Icon className="h-3.5 w-3.5" />
-                {label}
-                {activeTool === id && <X className="h-3 w-3 ml-0.5" />}
+                <Icon className={cn("h-5 w-5", expanded === id ? "text-white" : color)} />
+                <span className="text-xs">{label}</span>
               </Button>
             ))}
           </div>
 
-          {/* Active tool panel */}
-          {activeTool && (
-            <div className="flex-none border-t max-h-[45%] overflow-y-auto bg-background">
-              <div className="p-4">
-                {activeTool === "generate" && <GenerateTab />}
-                {activeTool === "repurpose" && <RepurposeTab />}
-                {activeTool === "image" && <ImageTab />}
-                {activeTool === "bulk" && <BulkTab />}
+          {/* Expanded AI tool panel */}
+          {expanded && expanded !== "chat" && (
+            <Card className="p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold">
+                  {aiTools.find((t) => t.id === expanded)?.label}
+                </h3>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 w-6 p-0"
+                  onClick={() => setExpanded(null)}
+                >
+                  <ChevronUp className="h-4 w-4" />
+                </Button>
               </div>
-            </div>
+              {expanded === "generate" && <GenerateTab />}
+              {expanded === "repurpose" && <RepurposeTab />}
+              {expanded === "image" && <ImageTab />}
+              {expanded === "bulk" && <BulkTab />}
+            </Card>
+          )}
+
+          {/* ── Posts & Calendar toggle ── */}
+          <div className="flex items-center gap-2">
+            <Button
+              variant={!showCalendar ? "default" : "outline"}
+              size="sm"
+              onClick={() => setShowCalendar(false)}
+            >
+              Recent Posts
+            </Button>
+            <Button
+              variant={showCalendar ? "default" : "outline"}
+              size="sm"
+              onClick={() => setShowCalendar(true)}
+            >
+              Calendar
+            </Button>
+          </div>
+
+          {!showCalendar ? (
+            <PostsTab
+              key={postCreated}
+              onSwitchTab={(tab) => {
+                if (tab === "calendar") setShowCalendar(true);
+              }}
+            />
+          ) : (
+            <CalendarTab />
           )}
         </div>
+      </div>
 
-        {/* ── Right column: Chat / Posts / Calendar ── */}
-        <div className="flex w-[42%] flex-col overflow-hidden">
-
-          {/* Right panel switcher */}
-          <div className="flex-none border-b bg-muted/20 flex">
-            {rightPanels.map(({ id, label, icon: Icon }) => (
-              <button
-                key={id}
-                onClick={() => setRightPanel(id)}
-                className={cn(
-                  "flex flex-1 items-center justify-center gap-1.5 border-b-2 py-2 text-xs font-medium transition-colors",
-                  rightPanel === id
-                    ? "border-primary text-foreground"
-                    : "border-transparent text-muted-foreground hover:text-foreground"
-                )}
-              >
-                <Icon className="h-3.5 w-3.5" />
-                {label}
-              </button>
-            ))}
-          </div>
-
-          {/* Right panel content */}
+      {/* ── AI Chat sidebar (collapsible) ── */}
+      <div
+        className={cn(
+          "flex flex-col border-l bg-background transition-all duration-200",
+          expanded === "chat" ? "w-[380px]" : "w-10"
+        )}
+      >
+        <button
+          onClick={() => toggle("chat")}
+          className="flex h-10 w-full items-center justify-center border-b hover:bg-muted"
+          title="AI Chat"
+        >
+          <MessageSquare className="h-4 w-4" />
+        </button>
+        {expanded === "chat" && (
           <div className="flex-1 overflow-hidden">
-            {rightPanel === "chat" && (
-              <div className="h-full">
-                <ChatLayout />
-              </div>
-            )}
-            {rightPanel === "posts" && (
-              <div className="h-full overflow-y-auto p-4">
-                <PostsTab
-                  key={postCreated}
-                  onSwitchTab={(tab) => {
-                    if (tab === "calendar") setRightPanel("calendar");
-                  }}
-                />
-              </div>
-            )}
-            {rightPanel === "calendar" && (
-              <div className="h-full overflow-y-auto p-4">
-                <CalendarTab />
-              </div>
-            )}
+            <ChatLayout />
           </div>
-        </div>
+        )}
       </div>
     </div>
   );
