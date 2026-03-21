@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useCallback } from "react";
 import { trpc } from "~/lib/trpc/client";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
@@ -12,28 +12,23 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~
 import { Switch } from "~/components/ui/switch";
 import { Separator } from "~/components/ui/separator";
 import { useToast } from "~/hooks/use-toast";
+import { MediaPickerDialog } from "~/components/media-picker-dialog";
 import {
   Loader2, Zap, CheckCircle2, XCircle, Edit2, Send,
   ChevronDown, ChevronUp, Settings2, Hash, MessageSquare,
-  LayoutTemplate, RefreshCw, CheckSquare, Square,
+  CheckSquare, Square, Download, Image as ImageIcon,
 } from "lucide-react";
 
 const TEMPLATE_TYPES = [
-  "luxury_news", "breaking_news", "cinematic", "viral_entertainment",
-  "paparazzi_stamp", "minimal_dark", "quote_typography", "magazine",
+  "breaking_news","luxury_news","cinematic","viral_entertainment",
+  "paparazzi_stamp","minimal_dark","magazine","quote_typography",
 ];
 const CAPTION_STYLES = [
-  "editorial", "dramatic", "breaking", "fan-reaction", "insider",
-  "minimalist", "viral", "question-hook", "timeline", "announcement",
+  "editorial","dramatic","breaking","fan-reaction","insider",
+  "minimalist","viral","question-hook","timeline","announcement",
 ];
-const LOGO_POSITIONS = [
-  "bottom_center","bottom_left","top_left","top_right",
-  "footer_strip","timestamp_bar","masthead_style",
-];
-const USERNAME_POSITIONS = [
-  "below_logo","footer_center","lower_third","corner_signature",
-  "ticker_strip","watermark_line",
-];
+const LOGO_POSITIONS    = ["bottom_center","bottom_left","top_left","top_right","footer_strip","timestamp_bar","masthead_style"];
+const USERNAME_POSITIONS = ["below_logo","footer_center","lower_third","corner_signature","ticker_strip","watermark_line"];
 
 type GeneratedPayload = {
   channelId:    string;
@@ -56,54 +51,273 @@ type GeneratedPayload = {
   scheduleTime: string | null;
 };
 
-function CreativePreview({ spec, headline, channelName, username }: {
-  spec: GeneratedPayload["creativeSpec"];
+// ─────────────────────────────────────────────────────────────────────────────
+// News Card Templates
+// ─────────────────────────────────────────────────────────────────────────────
+
+const TEMPLATE_CONFIGS: Record<string, {
+  bg: string; accentColor: string; headlineColor: string;
+  subColor: string; overlayBg: string; tag?: string; tagBg?: string;
+}> = {
+  breaking_news: {
+    bg: "linear-gradient(180deg,#0d0000 0%,#1a0000 40%,#0d0000 100%)",
+    accentColor: "#ff1a1a", headlineColor: "#ffffff",
+    subColor: "#ffaaaa", overlayBg: "rgba(180,0,0,0.85)",
+    tag: "⚡ BREAKING", tagBg: "#cc0000",
+  },
+  luxury_news: {
+    bg: "linear-gradient(160deg,#080808 0%,#1a1500 60%,#080808 100%)",
+    accentColor: "#c9a84c", headlineColor: "#fff8e7",
+    subColor: "#c9a84c", overlayBg: "rgba(0,0,0,0.80)",
+    tag: "✦ EXCLUSIVE", tagBg: "transparent",
+  },
+  cinematic: {
+    bg: "linear-gradient(180deg,#000 0%,#0a0a1a 50%,#000 100%)",
+    accentColor: "#d4af37", headlineColor: "#ffffff",
+    subColor: "#d4af37", overlayBg: "rgba(0,0,0,0.70)",
+  },
+  viral_entertainment: {
+    bg: "linear-gradient(135deg,#1a0033 0%,#2d0052 40%,#0d001a 100%)",
+    accentColor: "#c940ff", headlineColor: "#ffffff",
+    subColor: "#e896ff", overlayBg: "rgba(100,0,160,0.75)",
+    tag: "🔥 VIRAL", tagBg: "#8800cc",
+  },
+  paparazzi_stamp: {
+    bg: "linear-gradient(180deg,#080808 0%,#111 100%)",
+    accentColor: "#ff6600", headlineColor: "#ffffff",
+    subColor: "#ff9955", overlayBg: "rgba(0,0,0,0.75)",
+    tag: "📸 SPOTTED", tagBg: "#cc4400",
+  },
+  minimal_dark: {
+    bg: "linear-gradient(180deg,#000 0%,#0a0a0a 100%)",
+    accentColor: "#ffffff", headlineColor: "#ffffff",
+    subColor: "#888888", overlayBg: "rgba(0,0,0,0.60)",
+  },
+  magazine: {
+    bg: "linear-gradient(180deg,#0c0c0c 0%,#1a1a1a 55%,#0c0c0c 100%)",
+    accentColor: "#e8e8e8", headlineColor: "#ffffff",
+    subColor: "#aaaaaa", overlayBg: "rgba(0,0,0,0.65)",
+    tag: "MAGAZINE", tagBg: "transparent",
+  },
+  quote_typography: {
+    bg: "linear-gradient(135deg,#050510 0%,#0a0a20 100%)",
+    accentColor: "#4a9eff", headlineColor: "#ffffff",
+    subColor: "#4a9eff", overlayBg: "rgba(0,0,30,0.70)",
+  },
+};
+
+const NewsCard = ({
+  cardRef, template, headline, channelName, username, logoUrl, date, size = "preview",
+}: {
+  cardRef?: React.RefObject<HTMLDivElement>;
+  template: string;
   headline: string;
   channelName: string;
   username: string;
-}) {
-  const gradientMap: Record<string, string> = {
-    "dark gold overlay":         "linear-gradient(135deg, #1a1a1a 0%, #2d2410 60%, #1a1a1a 100%)",
-    "red-black breaking alert":  "linear-gradient(135deg, #1a0000 0%, #3d0000 50%, #1a0000 100%)",
-    "dark cinematic gradient":   "linear-gradient(180deg, #000 0%, #1a1a2e 50%, #000 100%)",
-    "vibrant color pop":         "linear-gradient(135deg, #1a0033 0%, #330066 50%, #1a0033 100%)",
-    "dark minimal overlay":      "linear-gradient(180deg, #111 0%, #222 100%)",
-    "pure black overlay":        "linear-gradient(180deg, #000 0%, #111 100%)",
-    "subtle texture gradient":   "linear-gradient(135deg, #0d0d0d 0%, #1a1a1a 100%)",
-    "white-black split":         "linear-gradient(180deg, #fff 0%, #fff 45%, #111 45%, #111 100%)",
-  };
-  const bg = gradientMap[spec.gradient] ?? "linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%)";
-  const textColor = spec.gradient.includes("white") ? "#111" : "#fff";
+  logoUrl?: string | null;
+  date?: string;
+  size?: "preview" | "full";
+}) => {
+  const cfg = TEMPLATE_CONFIGS[template] ?? TEMPLATE_CONFIGS.cinematic;
+  const w = size === "full" ? 540 : 240;
+  const h = Math.round(w * (5 / 4));
+  const scale = w / 540;
+
+  const fs = (base: number) => Math.round(base * scale);
+  const today = date ?? new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 
   return (
     <div
-      className="relative w-full overflow-hidden rounded-lg"
-      style={{ aspectRatio: "4/5", background: bg, maxWidth: 200 }}
+      ref={cardRef}
+      style={{
+        width: w, height: h, position: "relative", overflow: "hidden",
+        borderRadius: size === "full" ? 0 : 10,
+        background: cfg.bg, fontFamily: "'Arial Black', 'Arial Bold', Arial, sans-serif",
+        flexShrink: 0,
+      }}
     >
-      {/* Headline */}
-      <div className="absolute inset-0 flex flex-col items-center justify-center p-3">
-        <p className="text-center font-bold leading-tight" style={{ color: textColor, fontSize: 11 }}>
+      {/* Top accent bar */}
+      <div style={{
+        position: "absolute", top: 0, left: 0, right: 0,
+        height: fs(4), background: cfg.accentColor,
+      }} />
+
+      {/* Top tag badge */}
+      {cfg.tag && (
+        <div style={{
+          position: "absolute", top: fs(14), left: fs(14),
+          background: cfg.tagBg || cfg.accentColor,
+          border: cfg.tagBg === "transparent" ? `1px solid ${cfg.accentColor}` : "none",
+          color: cfg.tagBg === "transparent" ? cfg.accentColor : "#fff",
+          padding: `${fs(4)}px ${fs(10)}px`,
+          borderRadius: fs(3),
+          fontSize: fs(10), fontWeight: 800,
+          letterSpacing: "0.08em",
+          textTransform: "uppercase" as const,
+        }}>
+          {cfg.tag}
+        </div>
+      )}
+
+      {/* Main content area */}
+      <div style={{
+        position: "absolute",
+        top: fs(cfg.tag ? 50 : 30),
+        left: fs(14), right: fs(14),
+        bottom: fs(90),
+        display: "flex", flexDirection: "column", justifyContent: "center",
+        gap: fs(10),
+      }}>
+        {/* Accent line */}
+        <div style={{ width: fs(32), height: fs(3), background: cfg.accentColor, borderRadius: 2 }} />
+
+        {/* Headline */}
+        <div style={{
+          color: cfg.headlineColor,
+          fontSize: fs(template === "minimal_dark" ? 28 : template === "magazine" ? 24 : 21),
+          fontWeight: 900,
+          lineHeight: 1.2,
+          letterSpacing: template === "minimal_dark" ? "-0.02em" : "0",
+          textTransform: template === "magazine" ? "uppercase" as const : "none" as const,
+          wordBreak: "break-word" as const,
+        }}>
           {headline}
-        </p>
+        </div>
+
+        {/* Quote marks for quote_typography */}
+        {template === "quote_typography" && (
+          <div style={{
+            color: cfg.accentColor, fontSize: fs(48), lineHeight: 0.5,
+            fontFamily: "Georgia, serif", opacity: 0.4,
+            position: "absolute", top: fs(-8), left: fs(-4),
+          }}>
+            "
+          </div>
+        )}
+
+        {/* Date */}
+        <div style={{
+          color: cfg.subColor, fontSize: fs(9),
+          letterSpacing: "0.1em", textTransform: "uppercase" as const,
+          marginTop: fs(4),
+        }}>
+          {today}
+        </div>
       </div>
-      {/* Logo/username footer */}
-      <div
-        className="absolute bottom-0 left-0 right-0 px-2 py-1.5 text-center"
-        style={{ background: "rgba(0,0,0,0.6)" }}
-      >
-        <p className="font-semibold text-white" style={{ fontSize: 8 }}>{channelName}</p>
-        <p className="text-gray-300" style={{ fontSize: 7 }}>@{username}</p>
+
+      {/* Bottom overlay / footer */}
+      <div style={{
+        position: "absolute", bottom: 0, left: 0, right: 0,
+        height: fs(80),
+        background: cfg.overlayBg,
+        backdropFilter: "blur(2px)",
+        display: "flex", alignItems: "center",
+        padding: `${fs(8)}px ${fs(14)}px`,
+        gap: fs(10),
+        borderTop: `1px solid ${cfg.accentColor}33`,
+      }}>
+        {/* Logo */}
+        {logoUrl ? (
+          <img
+            src={logoUrl}
+            alt={channelName}
+            style={{
+              width: fs(36), height: fs(36),
+              objectFit: "contain", borderRadius: fs(4),
+              flexShrink: 0,
+            }}
+            crossOrigin="anonymous"
+          />
+        ) : (
+          <div style={{
+            width: fs(36), height: fs(36), borderRadius: fs(4),
+            background: cfg.accentColor,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            color: "#fff", fontWeight: 900, fontSize: fs(14), flexShrink: 0,
+          }}>
+            {channelName[0]?.toUpperCase()}
+          </div>
+        )}
+
+        {/* Channel info */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{
+            color: "#fff", fontWeight: 700,
+            fontSize: fs(11), lineHeight: 1.2,
+            whiteSpace: "nowrap" as const, overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}>
+            {channelName}
+          </div>
+          <div style={{
+            color: cfg.subColor, fontSize: fs(9),
+            fontWeight: 400, letterSpacing: "0.05em",
+          }}>
+            @{username}
+          </div>
+        </div>
+
+        {/* Bottom accent dot */}
+        <div style={{
+          width: fs(6), height: fs(6), borderRadius: "50%",
+          background: cfg.accentColor, flexShrink: 0,
+        }} />
       </div>
-      {/* Template label */}
-      <div className="absolute left-1 top-1">
-        <span className="rounded bg-black/60 px-1 py-0.5 text-white" style={{ fontSize: 6 }}>
-          {spec.template}
-        </span>
-      </div>
+
+      {/* Bottom accent bar */}
+      <div style={{
+        position: "absolute", bottom: 0, left: 0, right: 0,
+        height: fs(3), background: cfg.accentColor,
+      }} />
     </div>
   );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Export card as PNG via html2canvas
+// ─────────────────────────────────────────────────────────────────────────────
+async function exportCardAsPng(
+  template: string, headline: string, channelName: string,
+  username: string, logoUrl: string | null, channelId: string,
+): Promise<void> {
+  const html2canvas = (await import("html2canvas")).default;
+  const container = document.createElement("div");
+  container.style.cssText = "position:fixed;left:-9999px;top:0;z-index:9999;";
+  document.body.appendChild(container);
+
+  const { createRoot } = await import("react-dom/client");
+  const React = await import("react");
+  const root = createRoot(container);
+  const cardRef = { current: null as HTMLDivElement | null };
+
+  await new Promise<void>((resolve) => {
+    root.render(
+      React.createElement(NewsCard, {
+        cardRef: cardRef as any,
+        template, headline, channelName, username,
+        logoUrl, size: "full",
+      })
+    );
+    setTimeout(resolve, 300);
+  });
+
+  if (cardRef.current) {
+    const canvas = await html2canvas(cardRef.current, {
+      scale: 2, useCORS: true, allowTaint: false, backgroundColor: null,
+    });
+    const link = document.createElement("a");
+    link.download = `${channelName.replace(/\s+/g, "_")}_${Date.now()}.png`;
+    link.href = canvas.toDataURL("image/png");
+    link.click();
+  }
+
+  root.unmount();
+  document.body.removeChild(container);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Channel Profile Modal (with logo picker from media library)
+// ─────────────────────────────────────────────────────────────────────────────
 function ChannelProfileModal({ channel, onClose, onSave }: {
   channel: any;
   onClose: () => void;
@@ -120,16 +334,42 @@ function ChannelProfileModal({ channel, onClose, onSave }: {
     username_position: profile.username_position ?? "below_logo",
     language_style:    profile.language_style ?? "EN",
   });
+  const [showLogoPicker, setShowLogoPicker] = useState(false);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
       <div className="w-full max-w-md rounded-xl border bg-card p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <h3 className="mb-4 text-lg font-semibold">Brand Profile — {channel.name}</h3>
         <div className="space-y-3">
-          <div>
-            <Label>Logo URL</Label>
-            <Input value={form.logo_path} onChange={(e) => setForm((p) => ({ ...p, logo_path: e.target.value }))} placeholder="https://..." />
+
+          {/* Logo picker */}
+          <div className="space-y-1.5">
+            <Label>Channel Logo</Label>
+            <div className="flex items-center gap-2">
+              {form.logo_path && (
+                <img src={form.logo_path} alt="logo" className="h-10 w-10 rounded-md object-contain border bg-muted" />
+              )}
+              <div className="flex flex-1 gap-2">
+                <Input
+                  value={form.logo_path}
+                  onChange={(e) => setForm((p) => ({ ...p, logo_path: e.target.value }))}
+                  placeholder="https://… or pick from library"
+                  className="text-xs"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0 gap-1.5"
+                  onClick={() => setShowLogoPicker(true)}
+                >
+                  <ImageIcon className="h-3.5 w-3.5" />
+                  Library
+                </Button>
+              </div>
+            </div>
           </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label>Caption Style</Label>
@@ -146,6 +386,7 @@ function ChannelProfileModal({ channel, onClose, onSave }: {
               </Select>
             </div>
           </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label>Logo Position</Label>
@@ -162,52 +403,80 @@ function ChannelProfileModal({ channel, onClose, onSave }: {
               </Select>
             </div>
           </div>
+
           <div>
             <Label>Brand Palette</Label>
             <Input value={form.brand_palette} onChange={(e) => setForm((p) => ({ ...p, brand_palette: e.target.value }))} placeholder="e.g. gold, red-black, purple" />
           </div>
+
           <div>
             <Label>Font Family</Label>
             <Input value={form.font_family} onChange={(e) => setForm((p) => ({ ...p, font_family: e.target.value }))} placeholder="e.g. Playfair Display, Roboto" />
           </div>
         </div>
+
+        {/* Template preview */}
+        <div className="mt-4">
+          <Label className="text-xs text-muted-foreground">Preview</Label>
+          <div className="mt-1.5">
+            <NewsCard
+              template={form.template_type}
+              headline="Hardik Pandya spotted at Naman Awards 2026"
+              channelName={channel.name}
+              username={channel.username ?? channel.name.toLowerCase().replace(/\s/g, "")}
+              logoUrl={form.logo_path || null}
+              size="preview"
+            />
+          </div>
+        </div>
+
         <div className="mt-5 flex justify-end gap-2">
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
           <Button onClick={() => onSave(form)}>Save Profile</Button>
         </div>
       </div>
+
+      {showLogoPicker && (
+        <MediaPickerDialog
+          open={showLogoPicker}
+          onOpenChange={setShowLogoPicker}
+          onSelect={(url) => {
+            setForm((p) => ({ ...p, logo_path: url }));
+            setShowLogoPicker(false);
+          }}
+        />
+      )}
     </div>
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Main Page
+// ─────────────────────────────────────────────────────────────────────────────
 export default function NewsGridPage() {
   const { toast } = useToast();
 
-  // Form state
-  const [headline, setHeadline]       = useState("");
-  const [summary, setSummary]         = useState("");
-  const [contentType, setContentType] = useState("celebrity");
-  const [celebName, setCelebName]     = useState("");
-  const [eventName, setEventName]     = useState("");
-  const [location, setLocation]       = useState("");
-  const [moodStyle, setMoodStyle]     = useState("");
+  const [headline, setHeadline]             = useState("");
+  const [summary, setSummary]               = useState("");
+  const [contentType, setContentType]       = useState("celebrity");
+  const [celebName, setCelebName]           = useState("");
+  const [eventName, setEventName]           = useState("");
+  const [location, setLocation]             = useState("");
+  const [moodStyle, setMoodStyle]           = useState("");
   const [includeHashtags, setIncludeHashtags] = useState(true);
-  const [includeCTA, setIncludeCTA]   = useState(true);
-  const [language, setLanguage]       = useState<"EN"|"HI"|"MIX">("EN");
-  const [provider, setProvider]       = useState<"openai"|"anthropic"|"gemini"|"grok"|"deepseek">("openai");
-  const [postFormat, setPostFormat]   = useState<"single"|"carousel"|"reel"|"story">("single");
-  const [showOptional, setShowOptional] = useState(false);
-
-  // Channel selection
+  const [includeCTA, setIncludeCTA]         = useState(true);
+  const [language, setLanguage]             = useState<"EN"|"HI"|"MIX">("EN");
+  const [provider, setProvider]             = useState<"openai"|"anthropic"|"gemini"|"grok"|"deepseek">("openai");
+  const [postFormat, setPostFormat]         = useState<"single"|"carousel"|"reel"|"story">("single");
+  const [showOptional, setShowOptional]     = useState(false);
   const [selectedChannelIds, setSelectedChannelIds] = useState<Set<string>>(new Set());
-  const [profileModal, setProfileModal] = useState<any>(null);
-
-  // Generated results
-  const [results, setResults]         = useState<GeneratedPayload[]>([]);
-  const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
+  const [profileModal, setProfileModal]     = useState<any>(null);
+  const [results, setResults]               = useState<GeneratedPayload[]>([]);
+  const [expandedCards, setExpandedCards]   = useState<Set<string>>(new Set());
   const [editingCaption, setEditingCaption] = useState<Record<string, string>>({});
-  const [scheduleMap, setScheduleMap] = useState<Record<string, string>>({});
-  const [step, setStep]               = useState<"form"|"results">("form");
+  const [scheduleMap, setScheduleMap]       = useState<Record<string, string>>({});
+  const [step, setStep]                     = useState<"form"|"results">("form");
+  const [exportingId, setExportingId]       = useState<string | null>(null);
 
   const { data: channelsData, isLoading: channelsLoading } = trpc.newsgrid.channelsWithProfiles.useQuery();
 
@@ -218,7 +487,6 @@ export default function NewsGridPage() {
   const generate = trpc.newsgrid.generate.useMutation({
     onSuccess: (data) => {
       setResults(data.results as GeneratedPayload[]);
-      // Pre-fill schedule map
       const sm: Record<string, string> = {};
       data.results.forEach((r: any) => { sm[r.channelId] = ""; });
       setScheduleMap(sm);
@@ -230,8 +498,7 @@ export default function NewsGridPage() {
   const bulkPublish = trpc.newsgrid.bulkPublish.useMutation({
     onSuccess: (data) => {
       toast({ title: `Published ${data.count} posts`, description: "Posts queued successfully." });
-      setResults([]);
-      setStep("form");
+      setResults([]); setStep("form");
     },
     onError: (err) => toast({ title: "Publish failed", description: err.message, variant: "destructive" }),
   });
@@ -266,10 +533,7 @@ export default function NewsGridPage() {
   const approvedResults = results.filter((r) => r.approved);
 
   const handleBulkPublish = () => {
-    if (approvedResults.length === 0) {
-      toast({ title: "Approve at least one channel result", variant: "destructive" });
-      return;
-    }
+    if (approvedResults.length === 0) { toast({ title: "Approve at least one channel result", variant: "destructive" }); return; }
     bulkPublish.mutate({
       headline,
       payloads: approvedResults.map((r) => ({
@@ -282,15 +546,20 @@ export default function NewsGridPage() {
     });
   };
 
-  const toggleApprove = (channelId: string) => {
-    setResults((prev) => prev.map((r) => r.channelId === channelId ? { ...r, approved: !r.approved } : r));
-  };
+  const toggleApprove    = (id: string) => setResults((p) => p.map((r) => r.channelId === id ? { ...r, approved: !r.approved } : r));
+  const approveAll       = () => setResults((p) => p.map((r) => ({ ...r, approved: true })));
+  const unapproveAll     = () => setResults((p) => p.map((r) => ({ ...r, approved: false })));
+  const toggleCard       = (id: string) => setExpandedCards((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
-  const approveAll = () => setResults((prev) => prev.map((r) => ({ ...r, approved: true })));
-  const unapproveAll = () => setResults((prev) => prev.map((r) => ({ ...r, approved: false })));
-
-  const toggleCard = (id: string) => {
-    setExpandedCards((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const handleExport = async (r: GeneratedPayload) => {
+    setExportingId(r.channelId);
+    try {
+      await exportCardAsPng(r.creativeSpec.template, r.onImageText, r.channelName, r.username, r.logoUsed, r.channelId);
+    } catch (e) {
+      toast({ title: "Export failed", variant: "destructive" });
+    } finally {
+      setExportingId(null);
+    }
   };
 
   return (
@@ -307,9 +576,7 @@ export default function NewsGridPage() {
           </p>
         </div>
         {step === "results" && (
-          <Button variant="outline" onClick={() => setStep("form")}>
-            ← Back to Form
-          </Button>
+          <Button variant="outline" onClick={() => setStep("form")}>← Back to Form</Button>
         )}
       </div>
 
@@ -317,7 +584,6 @@ export default function NewsGridPage() {
         <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
           {/* Left: Form */}
           <div className="space-y-5">
-            {/* Headline */}
             <Card>
               <CardHeader className="pb-3">
                 <CardTitle className="text-base">News Input</CardTitle>
@@ -366,7 +632,6 @@ export default function NewsGridPage() {
                   </div>
                 </div>
 
-                {/* Optional fields */}
                 <button
                   className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
                   onClick={() => setShowOptional((v) => !v)}
@@ -436,8 +701,7 @@ export default function NewsGridPage() {
             </Card>
 
             <Button
-              className="w-full gap-2"
-              size="lg"
+              className="w-full gap-2" size="lg"
               onClick={handleGenerate}
               disabled={generate.isPending || selectedChannelIds.size === 0 || !headline.trim()}
             >
@@ -460,11 +724,7 @@ export default function NewsGridPage() {
                   )}
                 </CardTitle>
                 <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={toggleAll}>
-                  {allSelected ? (
-                    <><Square className="mr-1 h-3 w-3" />Deselect all</>
-                  ) : (
-                    <><CheckSquare className="mr-1 h-3 w-3" />Select all</>
-                  )}
+                  {allSelected ? <><Square className="mr-1 h-3 w-3" />Deselect all</> : <><CheckSquare className="mr-1 h-3 w-3" />Select all</>}
                 </Button>
               </div>
             </CardHeader>
@@ -474,26 +734,26 @@ export default function NewsGridPage() {
                   <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                 </div>
               ) : instagramChannels.length === 0 ? (
-                <p className="py-4 text-center text-sm text-muted-foreground">
-                  No Instagram channels connected.
-                </p>
+                <p className="py-4 text-center text-sm text-muted-foreground">No Instagram channels connected.</p>
               ) : (
                 <div className="max-h-[480px] space-y-1 overflow-y-auto pr-1">
                   {instagramChannels.map((channel) => {
                     const isSelected = selectedChannelIds.has(channel.id);
                     const profile = (channel.metadata as any) ?? {};
+                    const logoUrl = profile.logo_path || null;
                     return (
                       <div
                         key={channel.id}
-                        className={`flex items-center gap-3 rounded-lg border p-2.5 transition-colors cursor-pointer ${
-                          isSelected ? "border-primary bg-primary/5" : "hover:bg-muted/50"
-                        }`}
+                        className={`flex items-center gap-3 rounded-lg border p-2.5 transition-colors cursor-pointer ${isSelected ? "border-primary bg-primary/5" : "hover:bg-muted/50"}`}
                         onClick={() => toggleChannel(channel.id)}
                       >
                         <div className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${isSelected ? "border-primary bg-primary" : "border-muted-foreground"}`}>
                           {isSelected && <CheckCircle2 className="h-3 w-3 text-primary-foreground" />}
                         </div>
-                        {channel.avatar ? (
+                        {/* Logo or avatar */}
+                        {logoUrl ? (
+                          <img src={logoUrl} alt="" className="h-8 w-8 rounded-md object-contain border bg-muted" />
+                        ) : channel.avatar ? (
                           <img src={channel.avatar} alt="" className="h-8 w-8 rounded-full object-cover" />
                         ) : (
                           <div className="flex h-8 w-8 items-center justify-center rounded-full bg-muted text-xs font-bold">
@@ -502,15 +762,15 @@ export default function NewsGridPage() {
                         )}
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-sm font-medium">{channel.name}</p>
-                          {profile.caption_style && (
-                            <p className="text-xs text-muted-foreground">{profile.caption_style} · {profile.template_type ?? "default"}</p>
-                          )}
+                          <p className="text-xs text-muted-foreground">
+                            {profile.caption_style ?? "editorial"} · {profile.template_type ?? "cinematic"}
+                            {logoUrl && <span className="ml-1 text-green-600">· logo ✓</span>}
+                          </p>
                         </div>
                         <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7 shrink-0"
+                          variant="ghost" size="icon" className="h-7 w-7 shrink-0"
                           onClick={(e) => { e.stopPropagation(); setProfileModal(channel); }}
+                          title="Edit brand profile"
                         >
                           <Settings2 className="h-3.5 w-3.5" />
                         </Button>
@@ -547,18 +807,14 @@ export default function NewsGridPage() {
               disabled={bulkPublish.isPending || approvedResults.length === 0}
               className="gap-2"
             >
-              {bulkPublish.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Send className="h-4 w-4" />
-              )}
+              {bulkPublish.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
               Publish {approvedResults.length} approved
             </Button>
           </div>
 
           {/* Results grid */}
           <div className="space-y-3">
-            {results.map((r, idx) => {
+            {results.map((r) => {
               const isExpanded = expandedCards.has(r.channelId);
               const caption = editingCaption[r.channelId] ?? r.caption;
               return (
@@ -566,12 +822,10 @@ export default function NewsGridPage() {
                   key={r.channelId}
                   className={`transition-colors ${r.approved ? "border-green-500/50 bg-green-500/5" : ""}`}
                 >
-                  {/* Card header */}
                   <div
                     className="flex cursor-pointer items-center gap-3 p-4"
                     onClick={() => toggleCard(r.channelId)}
                   >
-                    {/* Channel avatar */}
                     {r.avatar ? (
                       <img src={r.avatar} alt="" className="h-10 w-10 rounded-full object-cover shrink-0" />
                     ) : (
@@ -581,15 +835,17 @@ export default function NewsGridPage() {
                     )}
                     <div className="min-w-0 flex-1">
                       <p className="font-semibold">{r.channelName}</p>
-                      <p className="truncate text-xs text-muted-foreground">@{r.username} · {r.creativeSpec.template}</p>
+                      <p className="truncate text-xs text-muted-foreground">
+                        @{r.username} · {r.creativeSpec.template}
+                        {r.logoUsed && <span className="ml-1 text-green-600">· logo ✓</span>}
+                      </p>
                     </div>
                     <div className="flex items-center gap-2">
                       <Badge variant={r.approved ? "default" : "secondary"} className="text-xs">
                         {r.approved ? "Approved" : "Pending"}
                       </Badge>
                       <Button
-                        size="sm"
-                        variant={r.approved ? "outline" : "default"}
+                        size="sm" variant={r.approved ? "outline" : "default"}
                         className="h-7 text-xs"
                         onClick={(e) => { e.stopPropagation(); toggleApprove(r.channelId); }}
                       >
@@ -602,19 +858,34 @@ export default function NewsGridPage() {
                   {isExpanded && (
                     <>
                       <Separator />
-                      <div className="grid gap-4 p-4 md:grid-cols-[200px_1fr]">
-                        {/* Creative preview */}
-                        <div className="flex flex-col items-center gap-2">
-                          <CreativePreview
-                            spec={r.creativeSpec}
+                      <div className="grid gap-4 p-4 md:grid-cols-[260px_1fr]">
+                        {/* News card preview */}
+                        <div className="flex flex-col items-center gap-3">
+                          <NewsCard
+                            template={r.creativeSpec.template}
                             headline={r.onImageText}
                             channelName={r.channelName}
                             username={r.username}
+                            logoUrl={r.logoUsed}
+                            size="preview"
                           />
+                          <Button
+                            variant="outline" size="sm"
+                            className="w-full gap-1.5 text-xs"
+                            disabled={exportingId === r.channelId}
+                            onClick={() => handleExport(r)}
+                          >
+                            {exportingId === r.channelId ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Download className="h-3.5 w-3.5" />
+                            )}
+                            Export PNG
+                          </Button>
                           <div className="w-full space-y-1 rounded-lg bg-muted/50 p-2 text-xs">
+                            <p><span className="text-muted-foreground">Template:</span> {r.creativeSpec.template}</p>
                             <p><span className="text-muted-foreground">Layout:</span> {r.creativeSpec.layout}</p>
-                            <p><span className="text-muted-foreground">Logo:</span> {r.creativeSpec.logoPosition}</p>
-                            <p><span className="text-muted-foreground">Username:</span> {r.creativeSpec.usernamePosition}</p>
+                            <p><span className="text-muted-foreground">Frame:</span> {r.creativeSpec.frameStyle}</p>
                           </div>
                         </div>
 
@@ -658,13 +929,6 @@ export default function NewsGridPage() {
                           </div>
                         </div>
                       </div>
-                      {/* Creative spec raw */}
-                      <div className="border-t bg-muted/20 px-4 py-2">
-                        <p className="text-xs text-muted-foreground font-mono">
-                          <span className="font-semibold text-foreground">CREATIVE_SPEC: </span>
-                          {r.creativeSpec.layout} · {r.creativeSpec.gradient} · {r.creativeSpec.frameStyle} · logo:{r.creativeSpec.logoPosition} · username:{r.creativeSpec.usernamePosition}
-                        </p>
-                      </div>
                     </>
                   )}
                 </Card>
@@ -674,7 +938,6 @@ export default function NewsGridPage() {
         </div>
       )}
 
-      {/* Channel Profile Modal */}
       {profileModal && (
         <ChannelProfileModal
           channel={profileModal}
