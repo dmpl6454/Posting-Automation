@@ -153,10 +153,10 @@ export default function AutopilotPostsPage() {
       ) : (
         <div className="space-y-4">
           {items.map((item: any) => {
-            const post = item.post;
-            const targets: any[] = post?.targets ?? [];
-            const trendingItem = item.trendingItem;
-            const agent = item.agent;
+            const post = item;
+            const targets: any[] = item.targets ?? [];
+            const trendingItem = item.autopilotPost?.trendingItem;
+            const agent = item.autopilotPost?.agent;
 
             // Aggregate analytics across all targets
             const totalImpressions = targets.reduce(

@@ -259,34 +259,30 @@ export const autopilotRouter = createRouter({
       })
     )
     .query(async ({ ctx, input }) => {
-      return ctx.prisma.autopilotPost.findMany({
+      return ctx.prisma.post.findMany({
         where: {
           organizationId: ctx.organizationId,
-          postId: { not: null },
+          aiGenerated: true,
           ...(input.status
-            ? {
-                post: {
-                  targets: {
-                    some: { status: input.status as any },
-                  },
-                },
-              }
+            ? { targets: { some: { status: input.status as any } } }
             : {}),
         },
         include: {
-          post: {
+          targets: {
             include: {
-              targets: {
-                include: {
-                  channel: {
-                    select: { id: true, platform: true, name: true },
-                  },
-                },
+              channel: { select: { id: true, platform: true, name: true } },
+              analyticsSnapshots: {
+                orderBy: { snapshotAt: "desc" },
+                take: 1,
               },
             },
           },
-          trendingItem: { select: { title: true, sourceUrl: true } },
-          agent: { select: { id: true, name: true } },
+          autopilotPost: {
+            include: {
+              trendingItem: { select: { title: true, sourceUrl: true } },
+              agent: { select: { id: true, name: true } },
+            },
+          },
         },
         orderBy: { createdAt: "desc" },
         take: 20,
