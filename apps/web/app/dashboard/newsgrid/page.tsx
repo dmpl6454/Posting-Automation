@@ -118,7 +118,7 @@ const NewsCard = ({
   date?: string;
   size?: "preview" | "full";
 }) => {
-  const cfg = TEMPLATE_CONFIGS[template] ?? TEMPLATE_CONFIGS.cinematic;
+  const cfg = (TEMPLATE_CONFIGS[template] ?? TEMPLATE_CONFIGS["cinematic"])!;
   const w = size === "full" ? 540 : 240;
   const h = Math.round(w * (5 / 4));
   const scale = w / 540;
