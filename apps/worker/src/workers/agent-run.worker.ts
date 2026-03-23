@@ -1,8 +1,30 @@
 import { Worker, type Job } from "bullmq";
 import { prisma } from "@postautomation/db";
 import { QUEUE_NAMES, postPublishQueue, type AgentRunJobData, createRedisConnection } from "@postautomation/queue";
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import crypto from "crypto";
 
 const SCHEDULE_HOURS = [9, 12, 15, 18]; // 9am, 12pm, 3pm, 6pm
+
+// ---------------------------------------------------------------------------
+// S3 helpers (same pattern as content-generate.worker.ts)
+// ---------------------------------------------------------------------------
+function getS3Client(): S3Client {
+  return new S3Client({
+    region: process.env.S3_REGION || "us-east-1",
+    endpoint: process.env.S3_ENDPOINT || undefined,
+    forcePathStyle: true,
+    credentials: {
+      accessKeyId: process.env.S3_ACCESS_KEY_ID || process.env.S3_ACCESS_KEY || "",
+      secretAccessKey: process.env.S3_SECRET_ACCESS_KEY || process.env.S3_SECRET_KEY || "",
+    },
+  });
+}
+const BUCKET = process.env.S3_BUCKET || "postautomation-media";
+function getPublicUrl(key: string): string {
+  if (process.env.S3_PUBLIC_URL) return `${process.env.S3_PUBLIC_URL}/${key}`;
+  return `${process.env.S3_ENDPOINT || "https://s3.amazonaws.com"}/${BUCKET}/${key}`;
+}
 
 export function createAgentRunWorker() {
   const worker = new Worker<AgentRunJobData>(
@@ -34,7 +56,7 @@ export function createAgentRunWorker() {
       });
 
       try {
-        const { generateContent, fetchTrendingNews } = await import("@postautomation/ai");
+        const { generateContent, fetchTrendingNews, generateStaticNewsCreativeImage } = await import("@postautomation/ai");
 
         let postsCreated = 0;
         let firstPostContent = "";
@@ -112,7 +134,76 @@ export function createAgentRunWorker() {
             },
           });
 
-          // 4f. Create PostTarget records for each channel
+          // 4f. Generate news creative image for the post
+          let newsHeadline = topic; // fallback to topic name
+          try {
+            const headlines = await fetchTrendingNews(topic, 1);
+            if (headlines.length > 0 && headlines[0]!.title) {
+              newsHeadline = headlines[0]!.title;
+            }
+          } catch { /* use topic as headline fallback */ }
+
+          // Use first channel's config for the image (all channels get the same image)
+          const primaryChannel = channels[0]!;
+          const meta = (primaryChannel.metadata as Record<string, any>) ?? {};
+          const logoUrl = meta.logo_path || primaryChannel.avatar || null;
+          const templateType = meta.template_type || "breaking_news";
+
+          let mediaId: string | null = null;
+          try {
+            const result = await generateStaticNewsCreativeImage({
+              headline: newsHeadline,
+              channelName: primaryChannel.name,
+              handle: primaryChannel.username || primaryChannel.name,
+              logoUrl,
+              template: templateType as any,
+              bgSeed: Date.now() + i,
+              date: new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
+            });
+
+            // Upload to S3
+            const s3 = getS3Client();
+            const key = `${agent.organizationId}/news-${Date.now()}-${crypto.randomBytes(4).toString("hex")}.jpg`;
+            const imgBuffer = Buffer.from(result.imageBase64, "base64");
+
+            await s3.send(new PutObjectCommand({
+              Bucket: BUCKET,
+              Key: key,
+              Body: imgBuffer,
+              ContentType: result.mimeType || "image/jpeg",
+            }));
+
+            const imageUrl = getPublicUrl(key);
+
+            // Create Media record
+            const media = await prisma.media.create({
+              data: {
+                organizationId: agent.organizationId,
+                uploadedById: "agent-system",
+                url: imageUrl,
+                fileName: `news-creative-${i + 1}.jpg`,
+                fileType: result.mimeType || "image/jpeg",
+                fileSize: imgBuffer.length,
+              },
+            });
+
+            // Link media to post
+            await prisma.postMedia.create({
+              data: {
+                postId: post.id,
+                mediaId: media.id,
+                order: 0,
+              },
+            });
+
+            mediaId = media.id;
+            console.log(`[AgentRun] Generated news creative for post ${post.id}: ${imageUrl}`);
+          } catch (imgErr) {
+            console.warn(`[AgentRun] Failed to generate news creative for post ${post.id}:`, imgErr);
+            // Continue without image — text-only post
+          }
+
+          // 4g. Create PostTarget records for each channel
           for (const channel of channels) {
             const postTarget = await prisma.postTarget.create({
               data: {

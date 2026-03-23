@@ -310,14 +310,32 @@ export default function AutopilotAgentsPage() {
                 <p className="text-sm text-muted-foreground">No channels connected. Go to Channels to connect first.</p>
               ) : (
                 <div className="space-y-1 max-h-40 overflow-y-auto border rounded-md p-2">
-                  {allChannels.map((ch: any) => (
-                    <label key={ch.id} className="flex items-center gap-2 cursor-pointer p-1 rounded hover:bg-muted">
-                      <input type="checkbox" className="h-4 w-4"
+                  {allChannels.map((ch: any) => {
+                    const meta = (ch.metadata as Record<string, any>) ?? {};
+                    const templateType = meta.template_type || null;
+                    return (
+                    <label key={ch.id} className="flex items-center gap-2 cursor-pointer p-1.5 rounded hover:bg-muted">
+                      <input type="checkbox" className="h-4 w-4 shrink-0"
                         checked={form.channelIds.includes(ch.id)}
                         onChange={() => toggleChannel(ch.id)} />
-                      <span className="text-sm">{ch.name} <span className="text-xs text-muted-foreground">({ch.platform})</span></span>
+                      {ch.avatar ? (
+                        <img src={ch.avatar} alt="" className="h-6 w-6 rounded-full shrink-0 object-cover" />
+                      ) : (
+                        <div className="h-6 w-6 rounded-full shrink-0 bg-muted flex items-center justify-center text-[10px] font-bold text-muted-foreground">
+                          {ch.name?.[0]?.toUpperCase() || "?"}
+                        </div>
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <span className="text-sm truncate block">{ch.name} <span className="text-xs text-muted-foreground">({ch.platform})</span></span>
+                      </div>
+                      {templateType && (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-primary/10 text-primary shrink-0">
+                          {templateType.replace(/_/g, " ")}
+                        </span>
+                      )}
                     </label>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
