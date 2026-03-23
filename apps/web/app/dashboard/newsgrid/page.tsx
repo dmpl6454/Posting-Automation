@@ -45,14 +45,16 @@ type GeneratedPayload = {
     logoPosition: string; usernamePosition: string;
     brandPalette: string; fontFamily: string;
   };
-  onImageText:  string;
-  logoUsed:     string | null;
-  approved:     boolean;
-  scheduleTime: string | null;
+  onImageText:      string;
+  logoUsed:         string | null;
+  approved:         boolean;
+  scheduleTime:     string | null;
+  backgroundImageUrl?:  string | null;
+  backgroundGenerating?: boolean;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// News Card Templates
+// Static News Creative Templates
 // ─────────────────────────────────────────────────────────────────────────────
 
 const TEMPLATE_CONFIGS: Record<string, {
@@ -106,7 +108,7 @@ const TEMPLATE_CONFIGS: Record<string, {
   },
 };
 
-const NewsCard = ({
+const StaticNewsCreative = ({
   cardRef, template, headline, channelName, username, logoUrl, date, size = "preview",
 }: {
   cardRef?: React.RefObject<HTMLDivElement>;
@@ -122,153 +124,153 @@ const NewsCard = ({
   const w = size === "full" ? 540 : 240;
   const h = Math.round(w * (5 / 4));
   const scale = w / 540;
-
   const fs = (base: number) => Math.round(base * scale);
   const today = date ?? new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+
+  // Consistent background photo seeded from headline
+  const seed = headline.split("").reduce((a, c) => a + c.charCodeAt(0), 42) % 1000;
+  const bgImageUrl = `https://picsum.photos/seed/${seed}/540/675`;
 
   return (
     <div
       ref={cardRef}
       style={{
         width: w, height: h, position: "relative", overflow: "hidden",
-        borderRadius: size === "full" ? 0 : 10,
-        background: cfg.bg, fontFamily: "'Arial Black', 'Arial Bold', Arial, sans-serif",
+        borderRadius: size === "full" ? 0 : 12,
+        fontFamily: "'Arial Black', 'Arial Bold', Arial, sans-serif",
         flexShrink: 0,
+        background: "#000",
       }}
     >
-      {/* Top accent bar */}
+      {/* Background photo */}
+      <img
+        src={bgImageUrl}
+        alt=""
+        crossOrigin="anonymous"
+        style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
+      />
+
+      {/* Cinematic dark gradient overlay */}
       <div style={{
-        position: "absolute", top: 0, left: 0, right: 0,
-        height: fs(4), background: cfg.accentColor,
+        position: "absolute", inset: 0,
+        background: "linear-gradient(180deg, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0.15) 35%, rgba(0,0,0,0.35) 55%, rgba(0,0,0,0.88) 78%, rgba(0,0,0,0.97) 100%)",
       }} />
 
-      {/* Top tag badge */}
+      {/* Template color tint */}
+      <div style={{
+        position: "absolute", inset: 0,
+        background: cfg.overlayBg,
+        opacity: 0.3,
+      }} />
+
+      {/* Top accent bar */}
+      <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: fs(4), background: cfg.accentColor }} />
+
+      {/* Tag badge */}
       {cfg.tag && (
         <div style={{
-          position: "absolute", top: fs(14), left: fs(14),
-          background: cfg.tagBg || cfg.accentColor,
-          border: cfg.tagBg === "transparent" ? `1px solid ${cfg.accentColor}` : "none",
+          position: "absolute", top: fs(16), left: fs(16),
+          background: cfg.tagBg === "transparent" ? "rgba(0,0,0,0.65)" : (cfg.tagBg || cfg.accentColor),
+          border: `1.5px solid ${cfg.accentColor}`,
           color: cfg.tagBg === "transparent" ? cfg.accentColor : "#fff",
-          padding: `${fs(4)}px ${fs(10)}px`,
-          borderRadius: fs(3),
-          fontSize: fs(10), fontWeight: 800,
-          letterSpacing: "0.08em",
+          padding: `${fs(5)}px ${fs(12)}px`,
+          borderRadius: fs(4),
+          fontSize: fs(10), fontWeight: 900,
+          letterSpacing: "0.1em",
           textTransform: "uppercase" as const,
+          backdropFilter: "blur(4px)",
         }}>
           {cfg.tag}
         </div>
       )}
 
-      {/* Main content area */}
+      {/* Date — top right */}
       <div style={{
-        position: "absolute",
-        top: fs(cfg.tag ? 50 : 30),
-        left: fs(14), right: fs(14),
-        bottom: fs(90),
-        display: "flex", flexDirection: "column", justifyContent: "center",
-        gap: fs(10),
+        position: "absolute", top: fs(18), right: fs(16),
+        color: "rgba(255,255,255,0.65)", fontSize: fs(8),
+        fontWeight: 600, letterSpacing: "0.08em",
+        textTransform: "uppercase" as const,
       }}>
-        {/* Accent line */}
-        <div style={{ width: fs(32), height: fs(3), background: cfg.accentColor, borderRadius: 2 }} />
+        {today}
+      </div>
 
-        {/* Headline */}
+      {/* Headline block */}
+      <div style={{ position: "absolute", bottom: fs(90), left: fs(16), right: fs(16) }}>
+        {/* Accent rule */}
+        <div style={{ width: fs(40), height: fs(3), background: cfg.accentColor, borderRadius: 2, marginBottom: fs(10) }} />
+
+        {/* Quote mark for quote_typography */}
+        {template === "quote_typography" && (
+          <div style={{
+            color: cfg.accentColor, fontSize: fs(54), lineHeight: 0.6,
+            fontFamily: "Georgia, serif", opacity: 0.5,
+            position: "absolute", top: fs(-14), left: fs(-4),
+          }}>"</div>
+        )}
+
         <div style={{
           color: cfg.headlineColor,
-          fontSize: fs(template === "minimal_dark" ? 28 : template === "magazine" ? 24 : 21),
+          fontSize: fs(template === "minimal_dark" ? 30 : template === "magazine" ? 26 : 23),
           fontWeight: 900,
-          lineHeight: 1.2,
-          letterSpacing: template === "minimal_dark" ? "-0.02em" : "0",
+          lineHeight: 1.15,
+          letterSpacing: template === "minimal_dark" ? "-0.02em" : "-0.01em",
           textTransform: template === "magazine" ? "uppercase" as const : "none" as const,
+          textShadow: "0 2px 14px rgba(0,0,0,0.9)",
           wordBreak: "break-word" as const,
         }}>
           {headline}
         </div>
-
-        {/* Quote marks for quote_typography */}
-        {template === "quote_typography" && (
-          <div style={{
-            color: cfg.accentColor, fontSize: fs(48), lineHeight: 0.5,
-            fontFamily: "Georgia, serif", opacity: 0.4,
-            position: "absolute", top: fs(-8), left: fs(-4),
-          }}>
-            "
-          </div>
-        )}
-
-        {/* Date */}
-        <div style={{
-          color: cfg.subColor, fontSize: fs(9),
-          letterSpacing: "0.1em", textTransform: "uppercase" as const,
-          marginTop: fs(4),
-        }}>
-          {today}
-        </div>
       </div>
 
-      {/* Bottom overlay / footer */}
+      {/* Footer */}
       <div style={{
         position: "absolute", bottom: 0, left: 0, right: 0,
-        height: fs(80),
-        background: cfg.overlayBg,
-        backdropFilter: "blur(2px)",
+        height: fs(82),
+        background: "linear-gradient(0deg, rgba(0,0,0,0.97) 0%, rgba(0,0,0,0.6) 100%)",
+        borderTop: `1px solid ${cfg.accentColor}44`,
         display: "flex", alignItems: "center",
-        padding: `${fs(8)}px ${fs(14)}px`,
+        padding: `${fs(8)}px ${fs(16)}px`,
         gap: fs(10),
-        borderTop: `1px solid ${cfg.accentColor}33`,
       }}>
-        {/* Logo */}
         {logoUrl ? (
           <img
-            src={logoUrl}
-            alt={channelName}
+            src={logoUrl} alt={channelName} crossOrigin="anonymous"
             style={{
-              width: fs(36), height: fs(36),
-              objectFit: "contain", borderRadius: fs(4),
-              flexShrink: 0,
+              width: fs(38), height: fs(38), objectFit: "contain",
+              borderRadius: fs(6), border: `1px solid ${cfg.accentColor}66`, flexShrink: 0,
             }}
-            crossOrigin="anonymous"
           />
         ) : (
           <div style={{
-            width: fs(36), height: fs(36), borderRadius: fs(4),
-            background: cfg.accentColor,
+            width: fs(38), height: fs(38), borderRadius: fs(6),
+            background: `linear-gradient(135deg, ${cfg.accentColor}, ${cfg.accentColor}88)`,
             display: "flex", alignItems: "center", justifyContent: "center",
-            color: "#fff", fontWeight: 900, fontSize: fs(14), flexShrink: 0,
+            color: "#fff", fontWeight: 900, fontSize: fs(16), flexShrink: 0,
+            border: `1px solid ${cfg.accentColor}66`,
           }}>
             {channelName[0]?.toUpperCase()}
           </div>
         )}
-
-        {/* Channel info */}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{
-            color: "#fff", fontWeight: 700,
-            fontSize: fs(11), lineHeight: 1.2,
-            whiteSpace: "nowrap" as const, overflow: "hidden",
-            textOverflow: "ellipsis",
+            color: "#fff", fontWeight: 800, fontSize: fs(12), lineHeight: 1.2,
+            whiteSpace: "nowrap" as const, overflow: "hidden", textOverflow: "ellipsis",
           }}>
             {channelName}
           </div>
-          <div style={{
-            color: cfg.subColor, fontSize: fs(9),
-            fontWeight: 400, letterSpacing: "0.05em",
-          }}>
+          <div style={{ color: cfg.accentColor, fontSize: fs(9.5), fontWeight: 600, letterSpacing: "0.04em", marginTop: fs(1) }}>
             @{username}
           </div>
         </div>
-
-        {/* Bottom accent dot */}
         <div style={{
           width: fs(6), height: fs(6), borderRadius: "50%",
           background: cfg.accentColor, flexShrink: 0,
+          boxShadow: `0 0 ${fs(6)}px ${cfg.accentColor}`,
         }} />
       </div>
 
       {/* Bottom accent bar */}
-      <div style={{
-        position: "absolute", bottom: 0, left: 0, right: 0,
-        height: fs(3), background: cfg.accentColor,
-      }} />
+      <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: fs(3), background: cfg.accentColor }} />
     </div>
   );
 };
@@ -292,7 +294,7 @@ async function exportCardAsPng(
 
   await new Promise<void>((resolve) => {
     root.render(
-      React.createElement(NewsCard, {
+      React.createElement(StaticNewsCreative, {
         cardRef: cardRef as any,
         template, headline, channelName, username,
         logoUrl, size: "full",
@@ -419,7 +421,7 @@ function ChannelProfileModal({ channel, onClose, onSave }: {
         <div className="mt-4">
           <Label className="text-xs text-muted-foreground">Preview</Label>
           <div className="mt-1.5">
-            <NewsCard
+            <StaticNewsCreative
               template={form.template_type}
               headline="Hardik Pandya spotted at Naman Awards 2026"
               channelName={channel.name}
@@ -527,8 +529,14 @@ export default function NewsGridPage() {
   });
 
   const channels = channelsData ?? [];
-  const instagramChannels = channels.filter((c) => c.platform === "INSTAGRAM");
-  const allSelected = instagramChannels.length > 0 && instagramChannels.every((c) => selectedChannelIds.has(c.id));
+  const [channelSearch, setChannelSearch] = useState("");
+  const [platformFilter, setPlatformFilter] = useState<string>("ALL");
+  const filteredChannels = channels.filter((c: any) => {
+    const matchesPlatform = platformFilter === "ALL" || c.platform === platformFilter;
+    const matchesSearch = !channelSearch || c.name.toLowerCase().includes(channelSearch.toLowerCase()) || (c.username || "").toLowerCase().includes(channelSearch.toLowerCase());
+    return matchesPlatform && matchesSearch;
+  });
+  const allSelected = filteredChannels.length > 0 && filteredChannels.every((c: any) => selectedChannelIds.has(c.id));
 
   const toggleChannel = (id: string) => {
     setSelectedChannelIds((prev) => {
@@ -540,7 +548,7 @@ export default function NewsGridPage() {
 
   const toggleAll = () => {
     if (allSelected) setSelectedChannelIds(new Set());
-    else setSelectedChannelIds(new Set(instagramChannels.map((c) => c.id)));
+    else setSelectedChannelIds(new Set(filteredChannels.map((c: any) => c.id)));
   };
 
   const handleGenerate = () => {
@@ -763,11 +771,35 @@ export default function NewsGridPage() {
                 <div className="flex items-center justify-center py-8">
                   <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                 </div>
-              ) : instagramChannels.length === 0 ? (
-                <p className="py-4 text-center text-sm text-muted-foreground">No Instagram channels connected.</p>
+              ) : channels.length === 0 ? (
+                <p className="py-4 text-center text-sm text-muted-foreground">No channels connected.</p>
               ) : (
+                <div className="space-y-2">
+                  {/* Search & Platform Filter */}
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="Search channels..."
+                      value={channelSearch}
+                      onChange={(e) => setChannelSearch(e.target.value)}
+                      className="h-8 text-sm"
+                    />
+                    <Select value={platformFilter} onValueChange={setPlatformFilter}>
+                      <SelectTrigger className="h-8 w-[140px] text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="ALL">All Platforms</SelectItem>
+                        {[...new Set(channels.map((c: any) => c.platform))].map((p: any) => (
+                          <SelectItem key={p} value={p}>{p}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {filteredChannels.length === 0 ? (
+                    <p className="py-4 text-center text-sm text-muted-foreground">No channels match your search.</p>
+                  ) : (
                 <div className="max-h-[480px] space-y-1 overflow-y-auto pr-1">
-                  {instagramChannels.map((channel) => {
+                  {filteredChannels.map((channel: any) => {
                     const isSelected = selectedChannelIds.has(channel.id);
                     const profile = (channel.metadata as any) ?? {};
                     const logoUrl = profile.logo_path || null;
@@ -791,7 +823,10 @@ export default function NewsGridPage() {
                           </div>
                         )}
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-medium">{channel.name}</p>
+                          <div className="flex items-center gap-1.5">
+                            <p className="truncate text-sm font-medium">{channel.name}</p>
+                            <Badge variant="outline" className="text-[9px] px-1 py-0 shrink-0">{channel.platform}</Badge>
+                          </div>
                           <p className="text-xs text-muted-foreground">
                             {profile.caption_style ?? "editorial"} · {profile.template_type ?? "cinematic"}
                             {logoUrl && <span className="ml-1 text-green-600">· logo ✓</span>}
@@ -807,6 +842,8 @@ export default function NewsGridPage() {
                       </div>
                     );
                   })}
+                </div>
+                  )}
                 </div>
               )}
             </CardContent>
@@ -889,33 +926,54 @@ export default function NewsGridPage() {
                     <>
                       <Separator />
                       <div className="grid gap-4 p-4 md:grid-cols-[260px_1fr]">
-                        {/* News card preview */}
+                        {/* Static news creative — server-generated image */}
                         <div className="flex flex-col items-center gap-3">
-                          <NewsCard
-                            template={r.creativeSpec.template}
-                            headline={r.onImageText}
-                            channelName={r.channelName}
-                            username={r.username}
-                            logoUrl={r.logoUsed}
-                            size="preview"
-                          />
-                          <Button
-                            variant="outline" size="sm"
-                            className="w-full gap-1.5 text-xs"
-                            disabled={exportingId === r.channelId}
-                            onClick={() => handleExport(r)}
-                          >
-                            {exportingId === r.channelId ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <Download className="h-3.5 w-3.5" />
-                            )}
-                            Export PNG
-                          </Button>
+                          {r.backgroundImageUrl ? (
+                            <img
+                              src={r.backgroundImageUrl}
+                              alt={r.onImageText}
+                              className="w-full rounded-lg object-cover"
+                              style={{ aspectRatio: "4/5" }}
+                            />
+                          ) : (
+                            <StaticNewsCreative
+                              template={r.creativeSpec.template}
+                              headline={r.onImageText}
+                              channelName={r.channelName}
+                              username={r.username}
+                              logoUrl={r.logoUsed}
+                              size="preview"
+                            />
+                          )}
+                          {r.backgroundImageUrl ? (
+                            <a
+                              href={r.backgroundImageUrl}
+                              download={`${r.channelName.replace(/\s+/g, "_")}_creative.jpg`}
+                              className="w-full"
+                            >
+                              <Button variant="outline" size="sm" className="w-full gap-1.5 text-xs">
+                                <Download className="h-3.5 w-3.5" />
+                                Download Creative
+                              </Button>
+                            </a>
+                          ) : (
+                            <Button
+                              variant="outline" size="sm"
+                              className="w-full gap-1.5 text-xs"
+                              disabled={exportingId === r.channelId}
+                              onClick={() => handleExport(r)}
+                            >
+                              {exportingId === r.channelId ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Download className="h-3.5 w-3.5" />
+                              )}
+                              Export PNG
+                            </Button>
+                          )}
                           <div className="w-full space-y-1 rounded-lg bg-muted/50 p-2 text-xs">
                             <p><span className="text-muted-foreground">Template:</span> {r.creativeSpec.template}</p>
-                            <p><span className="text-muted-foreground">Layout:</span> {r.creativeSpec.layout}</p>
-                            <p><span className="text-muted-foreground">Frame:</span> {r.creativeSpec.frameStyle}</p>
+                            <p><span className="text-muted-foreground">Style:</span> {r.backgroundImageUrl ? "Static Creative ✓" : r.creativeSpec.layout}</p>
                           </div>
                         </div>
 
