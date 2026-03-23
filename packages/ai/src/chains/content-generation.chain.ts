@@ -22,8 +22,11 @@ export async function generateContent(params: ContentGenerationParams): Promise<
   }
 
   // Non-LangChain providers: Gemini
-  const prompt = `You are a social media content expert. Generate engaging content for ${params.platform}.
-Guidelines:
+  const prompt = `You are a social media content expert writing posts for ${params.platform}.
+CRITICAL: Output ONLY the post text and hashtags. Nothing else.
+- Do NOT include any preamble like "Here's a post..." or "Here's an engaging..."
+- Do NOT explain what you wrote or add commentary
+- Start directly with the post content
 - Character limit: ${charLimit}
 - Tone: ${tone}
 - Include relevant hashtags if appropriate for the platform
