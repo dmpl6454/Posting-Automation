@@ -1,5 +1,5 @@
 import puppeteer from "puppeteer";
-import { generateNewsCardHtml, type NewsCardOptions } from "./news-card-template";
+import { generateNewsCardHtml, generateStaticNewsCreativeHtml, type NewsCardOptions, type StaticNewsCreativeOptions } from "./news-card-template";
 import { generateImageDallE } from "../providers/dalle.provider";
 
 export interface NewsImageResult {
@@ -65,6 +65,42 @@ export async function generateNewsAiImage(
     height: 1024,
     style: "ai_generated",
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Static News Creative — full-bleed Instagram 4:5 image via Puppeteer
+// ─────────────────────────────────────────────────────────────────────────────
+export async function generateStaticNewsCreativeImage(
+  options: StaticNewsCreativeOptions
+): Promise<NewsImageResult> {
+  const html = generateStaticNewsCreativeHtml(options);
+
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+  });
+
+  try {
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1080, height: 1350 });
+    await page.setContent(html, { waitUntil: "networkidle0", timeout: 15000 });
+
+    const screenshotBuffer = await page.screenshot({
+      type: "jpeg",
+      quality: 82,
+      encoding: "base64",
+    });
+
+    return {
+      imageBase64: screenshotBuffer as string,
+      mimeType: "image/jpeg",
+      width: 1080,
+      height: 1350,
+      style: "news_card",
+    };
+  } finally {
+    await browser.close();
+  }
 }
 
 export async function generateNewsImage(
