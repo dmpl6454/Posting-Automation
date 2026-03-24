@@ -6,13 +6,12 @@ import { Card, CardContent } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
 import { Badge } from "~/components/ui/badge";
 import { Skeleton } from "~/components/ui/skeleton";
+import { Input } from "~/components/ui/input";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "~/components/ui/select";
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "~/components/ui/popover";
 import { useToast } from "~/hooks/use-toast";
 import {
   Upload,
@@ -20,8 +19,94 @@ import {
   Loader2,
   ImageIcon,
   ArrowLeft,
+  ChevronsUpDown,
+  Search,
+  Check,
 } from "lucide-react";
 import Link from "next/link";
+
+function SearchableChannelSelect({
+  channels,
+  value,
+  onSelect,
+}: {
+  channels: any[];
+  value: string;
+  onSelect: (channelId: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+
+  const filtered = channels.filter(
+    (ch: any) =>
+      ch.name.toLowerCase().includes(search.toLowerCase()) ||
+      (ch.username || "").toLowerCase().includes(search.toLowerCase()) ||
+      ch.platform.toLowerCase().includes(search.toLowerCase())
+  );
+
+  const selectedChannel = channels.find((ch: any) => ch.id === value);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          role="combobox"
+          className="h-8 w-full justify-between text-xs font-normal"
+        >
+          <span className="truncate">
+            {selectedChannel
+              ? `${selectedChannel.name} (${selectedChannel.platform})`
+              : "Assign to channel..."}
+          </span>
+          <ChevronsUpDown className="ml-1 h-3 w-3 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[260px] p-2" align="start">
+        <div className="flex items-center gap-2 mb-2">
+          <Search className="h-3.5 w-3.5 text-muted-foreground" />
+          <Input
+            placeholder="Search channels..."
+            className="h-7 text-xs border-0 shadow-none focus-visible:ring-0 p-0"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            autoFocus
+          />
+        </div>
+        <div className="max-h-[200px] overflow-y-auto space-y-0.5">
+          {filtered.length === 0 ? (
+            <p className="text-xs text-muted-foreground text-center py-2">No channels found</p>
+          ) : (
+            filtered.map((ch: any) => (
+              <button
+                key={ch.id}
+                className="flex items-center gap-2 w-full rounded px-2 py-1.5 text-xs hover:bg-muted text-left"
+                onClick={() => {
+                  onSelect(ch.id);
+                  setOpen(false);
+                  setSearch("");
+                }}
+              >
+                {ch.avatar ? (
+                  <img src={ch.avatar} className="h-5 w-5 rounded-full object-cover" alt="" />
+                ) : (
+                  <div className="h-5 w-5 rounded-full bg-muted-foreground/20 flex items-center justify-center text-[10px] font-bold">
+                    {ch.name[0]}
+                  </div>
+                )}
+                <span className="truncate flex-1">{ch.name}</span>
+                <Badge variant="outline" className="text-[9px] px-1 py-0 shrink-0">
+                  {ch.platform}
+                </Badge>
+                {ch.id === value && <Check className="h-3 w-3 text-primary shrink-0" />}
+              </button>
+            ))
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 export default function LogoLibraryPage() {
   const { toast } = useToast();
@@ -165,26 +250,14 @@ export default function LogoLibraryPage() {
                     )}
                   </div>
 
-                  {/* Assign to channel */}
-                  <Select
+                  {/* Assign to channel (searchable) */}
+                  <SearchableChannelSelect
+                    channels={channels ?? []}
                     value={logo.channelId ?? ""}
-                    onValueChange={(channelId) => {
-                      if (channelId) {
-                        assignLogo.mutate({ mediaId: logo.id, channelId });
-                      }
+                    onSelect={(channelId) => {
+                      assignLogo.mutate({ mediaId: logo.id, channelId });
                     }}
-                  >
-                    <SelectTrigger className="h-8 text-xs">
-                      <SelectValue placeholder="Assign to channel..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {channels?.map((ch: any) => (
-                        <SelectItem key={ch.id} value={ch.id}>
-                          {ch.name} ({ch.platform})
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  />
 
                   {/* Delete */}
                   <Button
