@@ -39,6 +39,7 @@ export async function POST(req: Request) {
 
   const formData = await req.formData();
   const file = formData.get("file") as File | null;
+  const category = (formData.get("category") as string | null) ?? "general";
 
   if (!file) {
     return NextResponse.json({ error: "No file provided" }, { status: 400 });
@@ -100,6 +101,7 @@ export async function POST(req: Request) {
       fileType: file.type,
       fileSize: file.size,
       url: publicUrl,
+      ...(category !== "general" ? { category } : {}),
     },
   });
 

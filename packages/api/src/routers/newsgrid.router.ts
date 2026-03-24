@@ -229,6 +229,35 @@ export const newsgridRouter = createRouter({
             const cta = input.includeCTA ? pickCTA(tone, seed) : "";
             const creativeSpec = buildCreativeSpec(profile, seed);
 
+            // Resolve logo: prefer logo library assignment, fallback to profile.logo_path
+            let resolvedLogoUrl: string | null = (profile.logo_path as string | undefined) ?? null;
+            try {
+              const logoMedia = await ctx.prisma.media.findFirst({
+                where: { organizationId: ctx.organizationId, category: "logo", channelId: channel.id },
+                select: { url: true },
+              });
+              if (logoMedia) resolvedLogoUrl = logoMedia.url;
+            } catch {
+              // fallback to profile logo_path
+            }
+
+            // Generate static image creative via Puppeteer
+            const { generateStaticNewsCreativeImage } = await import("@postautomation/ai");
+            let backgroundImageUrl: string | null = null;
+            try {
+              const imgResult = await generateStaticNewsCreativeImage({
+                headline:    rephrasedHeadline,
+                channelName: channel.name,
+                handle:      channel.username ?? channel.platformId,
+                logoUrl:     resolvedLogoUrl,
+                template:    creativeSpec.template as any,
+                bgSeed:      seed,
+              });
+              backgroundImageUrl = `data:${imgResult.mimeType};base64,${imgResult.imageBase64}`;
+            } catch {
+              // image generation failed — frontend will show fallback
+            }
+
             return {
               channelId:    channel.id,
               channelName:  channel.name,
@@ -240,9 +269,10 @@ export const newsgridRouter = createRouter({
               cta,
               creativeSpec,
               onImageText:  rephrasedHeadline,
-              logoUsed:     (profile.logo_path as string) ?? null,
+              logoUsed:     resolvedLogoUrl,
               approved:     false,
               scheduleTime: null as string | null,
+              backgroundImageUrl,
             };
           })
         );
@@ -394,6 +424,50 @@ export const newsgridRouter = createRouter({
       }
 
       return { summary, hashtags, cta };
+    }),
+
+  // ── Logo Library ─────────────────────────────────────────────────────────
+  getLogos: orgProcedure.query(async ({ ctx }) => {
+    return ctx.prisma.media.findMany({
+      where: { organizationId: ctx.organizationId, category: "logo" },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, fileName: true, url: true, channelId: true, createdAt: true },
+    });
+  }),
+
+  assignLogoToChannel: orgProcedure
+    .input(z.object({ mediaId: z.string(), channelId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      // Remove previous logo assignment for this channel
+      await ctx.prisma.media.updateMany({
+        where: { organizationId: ctx.organizationId, category: "logo", channelId: input.channelId },
+        data: { channelId: null },
+      });
+      // Assign new logo
+      await ctx.prisma.media.update({
+        where: { id: input.mediaId },
+        data: { channelId: input.channelId },
+      });
+      // Also update channel metadata logo_path
+      const media = await ctx.prisma.media.findUnique({ where: { id: input.mediaId } });
+      if (media) {
+        const channel = await ctx.prisma.channel.findFirst({ where: { id: input.channelId, organizationId: ctx.organizationId } });
+        if (channel) {
+          const existing = (channel.metadata as any) ?? {};
+          await ctx.prisma.channel.update({
+            where: { id: input.channelId },
+            data: { metadata: { ...existing, logo_path: media.url } },
+          });
+        }
+      }
+      return { success: true };
+    }),
+
+  deleteLogo: orgProcedure
+    .input(z.object({ mediaId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      await ctx.prisma.media.delete({ where: { id: input.mediaId } });
+      return { success: true };
     }),
 
   // ── List channels with their brand profiles ──────────────────────────────

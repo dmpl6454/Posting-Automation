@@ -304,6 +304,8 @@ model Media {
   width        Int?
   height       Int?
   duration     Int?
+  category     String  @default("general") // "general" | "logo" | "template"
+  channelId    String? // links logo to a specific channel
 
   organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   postMedia       PostMedia[]
@@ -312,6 +314,7 @@ model Media {
   createdAt DateTime @default(now())
 
   @@index([organizationId, createdAt])
+  @@index([organizationId, category])
 }
 
 model PostMedia {

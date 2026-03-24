@@ -13,6 +13,7 @@ import { Switch } from "~/components/ui/switch";
 import { Separator } from "~/components/ui/separator";
 import { useToast } from "~/hooks/use-toast";
 import { MediaPickerDialog } from "~/components/media-picker-dialog";
+import Link from "next/link";
 import {
   Loader2, Zap, CheckCircle2, XCircle, Edit2, Send,
   ChevronDown, ChevronUp, Settings2, Hash, MessageSquare,
@@ -608,9 +609,17 @@ export default function NewsGridPage() {
             One headline → unique branded posts for all your channels
           </p>
         </div>
-        {step === "results" && (
-          <Button variant="outline" onClick={() => setStep("form")}>← Back to Form</Button>
-        )}
+        <div className="flex items-center gap-2">
+          <Link href="/dashboard/newsgrid/logos">
+            <Button variant="outline" size="sm">
+              <ImageIcon className="mr-1.5 h-3.5 w-3.5" />
+              Logos
+            </Button>
+          </Link>
+          {step === "results" && (
+            <Button variant="outline" onClick={() => setStep("form")}>← Back to Form</Button>
+          )}
+        </div>
       </div>
 
       {step === "form" && (
