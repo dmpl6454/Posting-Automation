@@ -127,9 +127,11 @@ const StaticNewsCreative = ({
   const fs = (base: number) => Math.round(base * scale);
   const today = date ?? new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 
-  // Consistent background photo seeded from headline
+  // Keyword-based background photo from headline
   const seed = headline.split("").reduce((a, c) => a + c.charCodeAt(0), 42) % 1000;
-  const bgImageUrl = `https://picsum.photos/seed/${seed}/540/675`;
+  const stopWords = new Set(["the","a","an","is","are","was","were","in","on","at","to","for","of","and","or","but","with","has","have","had","not","no","this","that","it","its","from","by","as","be","been","will","would","could","should","may","might","can","do","does","did","about","after","all","also","than","then","very","just","over","such","more","most","other","into","out","up","down","so","if","new","says","said"]);
+  const bgKeywords = headline.replace(/[^a-zA-Z\s]/g, "").split(/\s+/).filter((w) => w.length > 2 && !stopWords.has(w.toLowerCase())).slice(0, 3).map((w) => w.toLowerCase()).join(",") || "news";
+  const bgImageUrl = `https://loremflickr.com/540/675/${bgKeywords}?lock=${seed}`;
 
   return (
     <div
