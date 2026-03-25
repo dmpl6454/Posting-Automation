@@ -362,11 +362,12 @@ Requirements:
         headline: z.string(),
         payloads: z.array(
           z.object({
-            channelId:   z.string(),
-            caption:     z.string(),
-            hashtags:    z.array(z.string()),
-            cta:         z.string(),
-            scheduleTime:z.string().nullable(),
+            channelId:        z.string(),
+            caption:          z.string(),
+            hashtags:         z.array(z.string()),
+            cta:              z.string(),
+            scheduleTime:     z.string().nullable(),
+            backgroundImageUrl: z.string().nullable().optional(),
           })
         ),
       })
@@ -400,6 +401,79 @@ Requirements:
           },
           include: { targets: { include: { channel: true } } },
         });
+
+        // Attach the preview image (from news grid) so the SAME image gets published
+        if (payload.backgroundImageUrl) {
+          try {
+            let imgBuffer: Buffer;
+            let mimeType = "image/jpeg";
+
+            if (payload.backgroundImageUrl.startsWith("data:")) {
+              // data:image/jpeg;base64,...
+              const match = payload.backgroundImageUrl.match(/^data:([^;]+);base64,(.+)$/);
+              if (match) {
+                mimeType = match[1] || "image/jpeg";
+                imgBuffer = Buffer.from(match[2]!, "base64");
+              } else {
+                throw new Error("Invalid data URL format");
+              }
+            } else {
+              // External URL — download it
+              const resp = await fetch(payload.backgroundImageUrl);
+              const arrayBuf = await resp.arrayBuffer();
+              imgBuffer = Buffer.from(arrayBuf);
+              mimeType = resp.headers.get("content-type") || "image/jpeg";
+            }
+
+            // Upload to S3
+            const { S3Client, PutObjectCommand } = await import("@aws-sdk/client-s3");
+            const s3 = new S3Client({
+              region: process.env.S3_REGION || "us-east-1",
+              endpoint: process.env.S3_ENDPOINT || undefined,
+              forcePathStyle: true,
+              credentials: {
+                accessKeyId: process.env.S3_ACCESS_KEY_ID || process.env.S3_ACCESS_KEY || "",
+                secretAccessKey: process.env.S3_SECRET_ACCESS_KEY || process.env.S3_SECRET_KEY || "",
+              },
+            });
+            const bucket = process.env.S3_BUCKET || "postautomation-media";
+            const ext = mimeType.includes("png") ? "png" : "jpg";
+            const key = `newsgrid/${Date.now()}-${Math.random().toString(36).slice(2, 6)}.${ext}`;
+            await s3.send(new PutObjectCommand({
+              Bucket: bucket,
+              Key: key,
+              Body: imgBuffer!,
+              ContentType: mimeType,
+            }));
+            const publicUrl = process.env.S3_PUBLIC_URL
+              ? `${process.env.S3_PUBLIC_URL}/${key}`
+              : `${process.env.S3_ENDPOINT || "https://s3.amazonaws.com"}/${bucket}/${key}`;
+
+            // Create Media record
+            const media = await ctx.prisma.media.create({
+              data: {
+                organizationId: ctx.organizationId,
+                uploadedById:   ctx.session.user.id,
+                fileName:       `newsgrid-${Date.now()}.${ext}`,
+                fileType:       mimeType,
+                fileSize:       imgBuffer!.length,
+                url:            publicUrl,
+              },
+            });
+
+            // Attach to post
+            await ctx.prisma.postMedia.create({
+              data: {
+                postId:  post.id,
+                mediaId: media.id,
+                order:   0,
+              },
+            });
+            console.log(`[NewsGrid] Image attached to post ${post.id}: ${publicUrl}`);
+          } catch (imgErr) {
+            console.warn(`[NewsGrid] Failed to attach image to post ${post.id}:`, (imgErr as Error).message);
+          }
+        }
 
         for (const target of post.targets) {
           const delayMs = Math.max(0, scheduledAt.getTime() - Date.now());

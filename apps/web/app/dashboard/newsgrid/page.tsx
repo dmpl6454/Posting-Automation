@@ -571,11 +571,12 @@ export default function NewsGridPage() {
     bulkPublish.mutate({
       headline,
       payloads: approvedResults.map((r) => ({
-        channelId:    r.channelId,
-        caption:      editingCaption[r.channelId] ?? r.caption,
-        hashtags:     r.hashtags,
-        cta:          r.cta,
-        scheduleTime: scheduleMap[r.channelId] || null,
+        channelId:          r.channelId,
+        caption:            editingCaption[r.channelId] ?? r.caption,
+        hashtags:           r.hashtags,
+        cta:                r.cta,
+        scheduleTime:       scheduleMap[r.channelId] || null,
+        backgroundImageUrl: r.backgroundImageUrl || null,
       })),
     });
   };
