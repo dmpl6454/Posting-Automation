@@ -204,7 +204,14 @@ export function createAgentRunWorker() {
           }
 
           // 4g. Create PostTarget records for each channel
+          // Skip Instagram/Facebook if no image was generated (they require media)
+          const mediaRequiredPlatforms = ["INSTAGRAM", "FACEBOOK"];
           for (const channel of channels) {
+            if (!mediaId && mediaRequiredPlatforms.includes(channel.platform)) {
+              console.warn(`[AgentRun] Skipping ${channel.platform} channel "${channel.name}" — no image generated and platform requires media`);
+              continue;
+            }
+
             const postTarget = await prisma.postTarget.create({
               data: {
                 postId: post.id,
@@ -213,7 +220,7 @@ export function createAgentRunWorker() {
               },
             });
 
-            // 4g. Queue post-publish jobs with delay
+            // Queue post-publish jobs with delay
             const delay = scheduledAt.getTime() - Date.now();
             await postPublishQueue.add(
               `agent-publish-${post.id}-${channel.id}`,
