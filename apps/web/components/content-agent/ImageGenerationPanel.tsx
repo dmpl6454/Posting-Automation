@@ -838,6 +838,35 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
                   </div>
                 </div>
 
+                {/* Generate from content — no prompt needed */}
+                {postContent && !generatePrompt.trim() && (
+                  <Button
+                    variant="secondary"
+                    className="w-full gap-2"
+                    disabled={isGenerating}
+                    onClick={() => {
+                      const autoPrompt = `Create a visually striking social media image for this post:\n\n${postContent.slice(0, 500)}`;
+                      setGeneratePrompt(autoPrompt);
+                      // Trigger generate after state updates
+                      setTimeout(() => {
+                        const refs: Array<{ base64: string; mimeType?: string }> = [];
+                        if (referenceImage) { const ref = extractBase64(referenceImage); if (ref) refs.push(ref); }
+                        if (logoImage) { const logo = extractBase64(logoImage); if (logo) refs.push(logo); }
+                        generateMutation.mutate({
+                          prompt: buildFullPrompt(autoPrompt),
+                          provider: imageProvider,
+                          ...(imageProvider === "nano-banana" || imageProvider === "nano-banana-pro"
+                            ? { model: model as any, aspectRatio, imageSize, ...(refs.length > 0 ? { referenceImages: refs } : {}) }
+                            : { aspectRatio }),
+                        });
+                      }, 50);
+                    }}
+                  >
+                    <Zap className="h-4 w-4" />
+                    Generate from Content
+                  </Button>
+                )}
+
                 <Button onClick={handleGenerate} disabled={!generatePrompt.trim() || isGenerating} className="w-full gap-2">
                   {isGenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : carouselMode ? <LayoutGrid className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
                   {isGeneratingCarousel
