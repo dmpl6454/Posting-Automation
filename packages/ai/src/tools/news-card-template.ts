@@ -165,7 +165,8 @@ export interface StaticNewsCreativeOptions {
   handle: string;
   logoUrl?: string | null;
   template: "breaking_news" | "luxury_news" | "cinematic" | "viral_entertainment" | "paparazzi_stamp" | "minimal_dark" | "magazine" | "quote_typography";
-  bgSeed?: number; // for picsum background
+  bgSeed?: number; // for stock photo fallback
+  backgroundImageUrl?: string; // AI-generated background (data URL or http URL)
   date?: string;
 }
 
@@ -246,6 +247,7 @@ export function generateStaticNewsCreativeHtml(options: StaticNewsCreativeOption
     .map((w) => w.toLowerCase())
     .join(",");
   const bgQuery = keywords || "news";
+  const bgUrl = options.backgroundImageUrl || `https://loremflickr.com/1080/1350/${bgQuery}?lock=${seed}`;
 
   const words = options.headline.trim().split(/\s+/).length;
   const fontSize = words <= 6 ? 90 : words <= 9 ? 72 : words <= 13 ? 58 : 48;
@@ -269,7 +271,7 @@ export function generateStaticNewsCreativeHtml(options: StaticNewsCreativeOption
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
 *{margin:0;padding:0;box-sizing:border-box;}
 body{width:1080px;height:1350px;overflow:hidden;position:relative;font-family:'Arial Black','Arial Bold',Arial,sans-serif;background:#000;}
-.bg-photo{position:absolute;inset:0;background-image:url(https://loremflickr.com/1080/1350/${bgQuery}?lock=${seed});background-size:cover;background-position:center;}
+.bg-photo{position:absolute;inset:0;background-image:url(${bgUrl});background-size:cover;background-position:center;}
 .overlay{position:absolute;inset:0;background:${theme.overlayGradient};}
 .tint{position:absolute;inset:0;background:${theme.tintColor};}
 .accent-top{position:absolute;top:0;left:0;right:0;height:8px;background:${theme.accentColor};}

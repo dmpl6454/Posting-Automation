@@ -241,9 +241,20 @@ export const newsgridRouter = createRouter({
               // fallback to profile logo_path
             }
 
-            // Generate static image creative via Puppeteer
+            // Generate AI background image via Gemini, then composite with Puppeteer
             const { generateStaticNewsCreativeImage } = await import("@postautomation/ai");
             let backgroundImageUrl: string | null = null;
+            let aiBgDataUrl: string | undefined;
+            try {
+              const { generateImage: genGeminiImg } = await import("@postautomation/ai");
+              const bgPrompt = `Create a high-quality cinematic background photo for a news post about: "${rephrasedHeadline}". Dramatic, visually striking, suitable as background for text overlay. No text in image. Dark moody tones, editorial photography style.`;
+              const bgRes = await genGeminiImg({ prompt: bgPrompt, aspectRatio: "3:4" });
+              aiBgDataUrl = `data:${bgRes.mimeType};base64,${bgRes.imageBase64}`;
+              console.log(`[NewsGrid] Gemini bg generated for "${rephrasedHeadline.slice(0, 40)}..."`);
+            } catch (e) {
+              console.warn(`[NewsGrid] Gemini bg failed, using stock fallback:`, (e as Error).message);
+            }
+
             try {
               const imgResult = await generateStaticNewsCreativeImage({
                 headline:    rephrasedHeadline,
@@ -252,6 +263,7 @@ export const newsgridRouter = createRouter({
                 logoUrl:     resolvedLogoUrl,
                 template:    creativeSpec.template as any,
                 bgSeed:      seed,
+                backgroundImageUrl: aiBgDataUrl,
               });
               backgroundImageUrl = `data:${imgResult.mimeType};base64,${imgResult.imageBase64}`;
             } catch {
