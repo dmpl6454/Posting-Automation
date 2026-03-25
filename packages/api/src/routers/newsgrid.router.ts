@@ -241,33 +241,62 @@ export const newsgridRouter = createRouter({
               // fallback to profile logo_path
             }
 
-            // Generate AI background image via Gemini, then composite with Puppeteer
-            const { generateStaticNewsCreativeImage } = await import("@postautomation/ai");
+            // Generate full news creative via Gemini AI (complete design with headline)
+            const { generateImage: genGeminiImg } = await import("@postautomation/ai");
             let backgroundImageUrl: string | null = null;
-            let aiBgDataUrl: string | undefined;
-            try {
-              const { generateImage: genGeminiImg } = await import("@postautomation/ai");
-              const bgPrompt = `Create a high-quality cinematic background photo for a news post about: "${rephrasedHeadline}". Dramatic, visually striking, suitable as background for text overlay. No text in image. Dark moody tones, editorial photography style.`;
-              const bgRes = await genGeminiImg({ prompt: bgPrompt, aspectRatio: "3:4" });
-              aiBgDataUrl = `data:${bgRes.mimeType};base64,${bgRes.imageBase64}`;
-              console.log(`[NewsGrid] Gemini bg generated for "${rephrasedHeadline.slice(0, 40)}..."`);
-            } catch (e) {
-              console.warn(`[NewsGrid] Gemini bg failed, using stock fallback:`, (e as Error).message);
+
+            // Build logo reference for Gemini
+            const logoRefs: Array<{ base64: string; mimeType?: string }> = [];
+            if (resolvedLogoUrl) {
+              try {
+                const logoFetch = await fetch(resolvedLogoUrl);
+                if (logoFetch.ok) {
+                  const logoBuffer = Buffer.from(await logoFetch.arrayBuffer());
+                  const logoMime = logoFetch.headers.get("content-type") || "image/png";
+                  logoRefs.push({ base64: logoBuffer.toString("base64"), mimeType: logoMime });
+                }
+              } catch { /* skip logo ref if fetch fails */ }
             }
 
             try {
-              const imgResult = await generateStaticNewsCreativeImage({
-                headline:    rephrasedHeadline,
-                channelName: channel.name,
-                handle:      channel.username ?? channel.platformId,
-                logoUrl:     resolvedLogoUrl,
-                template:    creativeSpec.template as any,
-                bgSeed:      seed,
-                backgroundImageUrl: aiBgDataUrl,
+              const creativePrompt = `Create a professional, visually striking Instagram news post image (4:5 aspect ratio, 1080x1350px) about this headline:
+
+"${rephrasedHeadline}"
+
+Design requirements:
+- This is a NEWS post for the channel "${channel.name}" (@${channel.username ?? channel.platformId})
+- The headline text MUST be prominently displayed on the image in bold, large typography
+- Use dramatic, editorial design with modern typography
+- Include the channel name "${channel.name}" at the bottom as a branding element
+- Add today's date: ${new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }).toUpperCase()}
+- Use a cinematic color scheme that matches the mood of the news
+- Make it look like a premium news media brand post (similar to LiveLaw, NDTV, India Today style)
+- Include relevant visual elements/illustrations related to the headline topic
+- The overall design should be scroll-stopping and shareable
+${logoRefs.length > 0 ? "- Use the provided logo image in the design as the channel branding" : ""}`;
+
+              const imgRes = await genGeminiImg({
+                prompt: creativePrompt,
+                aspectRatio: "3:4",
+                referenceImages: logoRefs.length > 0 ? logoRefs : undefined,
               });
-              backgroundImageUrl = `data:${imgResult.mimeType};base64,${imgResult.imageBase64}`;
-            } catch {
-              // image generation failed — frontend will show fallback
+              backgroundImageUrl = `data:${imgRes.mimeType};base64,${imgRes.imageBase64}`;
+              console.log(`[NewsGrid] Gemini creative generated for "${rephrasedHeadline.slice(0, 40)}..."`);
+            } catch (e) {
+              console.warn(`[NewsGrid] Gemini creative failed, using Puppeteer fallback:`, (e as Error).message);
+              // Fallback to Puppeteer template
+              try {
+                const { generateStaticNewsCreativeImage } = await import("@postautomation/ai");
+                const imgResult = await generateStaticNewsCreativeImage({
+                  headline:    rephrasedHeadline,
+                  channelName: channel.name,
+                  handle:      channel.username ?? channel.platformId,
+                  logoUrl:     resolvedLogoUrl,
+                  template:    creativeSpec.template as any,
+                  bgSeed:      seed,
+                });
+                backgroundImageUrl = `data:${imgResult.mimeType};base64,${imgResult.imageBase64}`;
+              } catch { /* total fallback failure */ }
             }
 
             return {
