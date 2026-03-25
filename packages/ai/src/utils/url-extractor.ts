@@ -244,62 +244,99 @@ async function extractWebPage(url: string): Promise<ExtractedContent> {
   };
 }
 
-/** Instagram extraction via oEmbed API */
+/** Instagram extraction via multiple methods */
 async function extractInstagram(url: string): Promise<ExtractedContent> {
-  // Instagram blocks normal fetches — use oEmbed API
   let title = "";
   let description = "";
   let author = "";
   let images: string[] = [];
   let body = "";
 
-  try {
-    const oembedUrl = `https://graph.facebook.com/v18.0/instagram_oembed?url=${encodeURIComponent(url)}&access_token=${process.env.FACEBOOK_APP_ID}|${process.env.FACEBOOK_APP_SECRET}&fields=thumbnail_url,author_name,title`;
-    const res = await fetch(oembedUrl, { signal: AbortSignal.timeout(TIMEOUT_MS) });
-    if (res.ok) {
-      const data = (await res.json()) as any;
-      title = data.title || "";
-      author = data.author_name || "";
-      if (data.thumbnail_url) images.push(data.thumbnail_url);
-    }
-  } catch { /* fallback to page scrape */ }
+  // Method 1: Use ddinstagram (public proxy that works without auth)
+  const shortcode = url.match(/instagram\.com\/(?:p|reel|tv)\/([^/?]+)/)?.[1];
+  if (shortcode) {
+    try {
+      const ddUrl = `https://www.ddinstagram.com/p/${shortcode}/`;
+      const res = await fetch(ddUrl, {
+        headers: { "User-Agent": USER_AGENT },
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+        redirect: "follow",
+      });
+      if (res.ok) {
+        const html = await res.text();
+        title = getMeta(html, "og:title") || getTitle(html);
+        description = getMeta(html, "og:description") || getMeta(html, "description");
+        const ogImage = getMeta(html, "og:image");
+        if (ogImage) images.push(ogImage);
+        body = description;
+        // Extract author from title like "Author (@handle) on Instagram"
+        const authorMatch = title?.match(/^(.+?)\s*\(/);
+        if (authorMatch) author = authorMatch[1]!.trim();
+      }
+    } catch { /* try next method */ }
+  }
 
-  // Fallback: try fetching the page with a browser-like User-Agent
-  if (!title) {
+  // Method 2: Try Instagram's embed endpoint
+  if (!title || title === "Instagram") {
+    try {
+      const embedUrl = `https://api.instagram.com/oembed/?url=${encodeURIComponent(url)}`;
+      const res = await fetch(embedUrl, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+      if (res.ok) {
+        const data = (await res.json()) as any;
+        if (data.title) title = data.title;
+        if (data.author_name) author = data.author_name;
+        if (data.thumbnail_url) images = [data.thumbnail_url, ...images.filter(i => i !== data.thumbnail_url)];
+        // The HTML field contains the caption
+        if (data.html) {
+          const captionMatch = data.html.match(/class=".*?caption.*?"[^>]*>([\s\S]*?)<\/div>/i);
+          if (captionMatch) body = stripHtml(captionMatch[1]);
+        }
+      }
+    } catch { /* try next method */ }
+  }
+
+  // Method 3: Direct fetch with full browser headers
+  if (!title || title === "Instagram") {
     try {
       const res = await fetch(url, {
         headers: {
-          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-          "Accept-Language": "en-US,en;q=0.5",
+          "User-Agent": USER_AGENT,
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+          "Accept-Language": "en-US,en;q=0.9",
+          "Accept-Encoding": "gzip, deflate, br",
+          "Sec-Fetch-Dest": "document",
+          "Sec-Fetch-Mode": "navigate",
+          "Sec-Fetch-Site": "none",
         },
         signal: AbortSignal.timeout(TIMEOUT_MS),
         redirect: "follow",
       });
       if (res.ok) {
         const html = await res.text();
-        title = getTitle(html) || "Instagram Post";
-        description = getMeta(html, "og:description") || getMeta(html, "description");
+        const ogTitle = getMeta(html, "og:title");
+        if (ogTitle && ogTitle !== "Instagram") title = ogTitle;
+        if (!description) description = getMeta(html, "og:description") || getMeta(html, "description");
         const ogImage = getMeta(html, "og:image");
         if (ogImage && !images.includes(ogImage)) images.push(ogImage);
-        body = description;
-        if (!author) author = getMeta(html, "og:title")?.split("on Instagram")?.[0]?.trim() || "";
+        if (!body) body = description;
+        if (!author) {
+          const authorFromTitle = (ogTitle || "").match(/^(.+?)\s*(?:\(|on Instagram)/);
+          if (authorFromTitle) author = authorFromTitle[1]!.trim();
+        }
       }
     } catch { /* use what we have */ }
   }
 
-  // If still no title, extract from URL
-  if (!title) {
-    title = "Instagram Post";
-    const pathMatch = url.match(/instagram\.com\/(p|reel|tv)\/([^/?]+)/);
-    if (pathMatch) {
-      title = `Instagram ${pathMatch[1] === "reel" ? "Reel" : "Post"}`;
-    }
+  // Build final result
+  if (!title || title === "Instagram") {
+    const isReel = url.includes("/reel/");
+    title = isReel ? "Instagram Reel" : "Instagram Post";
+    if (author) title = `${author}'s ${isReel ? "Reel" : "Post"}`;
   }
 
   return {
     title,
-    description: description || title,
+    description: description || body || title,
     body: body || description || title,
     images,
     url,
