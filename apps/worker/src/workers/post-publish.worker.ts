@@ -84,30 +84,50 @@ export function createPostPublishWorker() {
       let mediaUrls = postTarget.post.mediaAttachments.map((m) => m.media.url);
       const mediaTypes = postTarget.post.mediaAttachments.map((m) => m.media.fileType);
 
-      // Add text overlay to videos for Instagram and Facebook
-      const overlayText = (postTarget.post.metadata as any)?.videoOverlayText as string | undefined;
-      if (overlayText && mediaUrls.length > 0) {
-        const overlayPlatforms = ["INSTAGRAM", "FACEBOOK"];
-        if (overlayPlatforms.includes(platform)) {
+      // Auto-add channel logo watermark + optional text overlay on videos
+      const hasVideo = mediaTypes.some((t) => t?.startsWith("video/"));
+      if (hasVideo && ["INSTAGRAM", "FACEBOOK"].includes(platform)) {
+        try {
+          const { processVideoOverlay } = await import("../lib/video-overlay");
+
+          // Resolve channel logo from Logo Library
+          let logoUrl: string | null = null;
           try {
-            const { addTextOverlayToVideo } = await import("../lib/video-overlay");
-            const processed: string[] = [];
-            for (let i = 0; i < mediaUrls.length; i++) {
-              if (mediaTypes[i]?.startsWith("video/")) {
-                console.log(`[PostPublish] Adding text overlay to video ${i + 1}`);
-                const newUrl = await addTextOverlayToVideo(mediaUrls[i]!, overlayText, {
-                  position: "bottom",
-                  fontSize: 42,
-                });
-                processed.push(newUrl);
-              } else {
-                processed.push(mediaUrls[i]!);
-              }
-            }
-            mediaUrls = processed;
-          } catch (e) {
-            console.warn(`[PostPublish] Video overlay failed, posting without overlay:`, (e as Error).message);
+            const logoMedia = await prisma.media.findFirst({
+              where: { organizationId: postTarget.post.organizationId, category: "logo", channelId },
+              select: { url: true },
+            });
+            if (logoMedia) logoUrl = logoMedia.url;
+          } catch { /* no logo */ }
+
+          // Fallback: check channel metadata for logo_path
+          if (!logoUrl) {
+            logoUrl = (channelMetadata?.logo_path as string) || null;
           }
+
+          const overlayText = (postTarget.post.metadata as any)?.videoOverlayText as string | undefined;
+
+          const processed: string[] = [];
+          for (let i = 0; i < mediaUrls.length; i++) {
+            if (mediaTypes[i]?.startsWith("video/")) {
+              console.log(`[PostPublish] Processing video ${i + 1}: logo=${logoUrl ? "yes" : "name"}, text=${overlayText ? "yes" : "no"}`);
+              const newUrl = await processVideoOverlay(mediaUrls[i]!, {
+                text: overlayText,
+                textPosition: "bottom",
+                textFontSize: 42,
+                logoUrl,
+                channelName: channel.name, // fallback watermark if no logo
+                logoPosition: "bottom_right",
+                logoSize: 120,
+              });
+              processed.push(newUrl);
+            } else {
+              processed.push(mediaUrls[i]!);
+            }
+          }
+          mediaUrls = processed;
+        } catch (e) {
+          console.warn(`[PostPublish] Video overlay failed, posting without:`, (e as Error).message);
         }
       }
 
