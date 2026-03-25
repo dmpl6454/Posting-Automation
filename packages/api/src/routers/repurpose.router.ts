@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { createRouter, protectedProcedure } from "../trpc";
+import { createRouter, protectedProcedure, orgProcedure } from "../trpc";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import crypto from "crypto";
 
@@ -50,7 +50,7 @@ export const repurposeRouter = createRouter({
     }),
 
   /** Repurpose from URL — generates caption + media (static/carousel/reel) */
-  repurposeFromUrl: protectedProcedure
+  repurposeFromUrl: orgProcedure
     .input(
       z.object({
         url: z.string().url(),
@@ -67,7 +67,7 @@ export const repurposeRouter = createRouter({
         bgMusic: z.boolean().default(false),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const {
         extractUrlContent,
         repurposeContent,
@@ -77,6 +77,39 @@ export const repurposeRouter = createRouter({
         generateVoiceOverScript,
         generateImage: generateGeminiImage,
       } = await import("@postautomation/ai");
+
+      const userId = (ctx.session.user as any).id as string;
+      const organizationId = ctx.organizationId;
+
+      // Helper: upload to S3 + create Media record in DB
+      async function uploadAndCreateMedia(
+        imageBase64: string,
+        mimeType: string,
+        prefix: string,
+      ): Promise<{ url: string; mediaId: string }> {
+        const s3 = getS3Client();
+        const ext = mimeType.includes("png") ? "png" : mimeType.includes("mp4") ? "mp4" : "jpg";
+        const contentType = mimeType.includes("png") ? "image/png" : mimeType.includes("mp4") ? "video/mp4" : "image/jpeg";
+        const key = `repurpose/${prefix}-${Date.now()}-${crypto.randomBytes(3).toString("hex")}.${ext}`;
+        const buf = Buffer.from(imageBase64, "base64");
+        const fileSize = buf.length;
+        await s3.send(new PutObjectCommand({ Bucket: BUCKET, Key: key, Body: buf, ContentType: contentType }));
+        const url = getPublicUrl(key);
+
+        // Create Media record so it can be attached to posts
+        const media = await ctx.prisma.media.create({
+          data: {
+            organizationId,
+            uploadedById: userId,
+            fileName: `${prefix}-${Date.now()}.${ext}`,
+            fileType: contentType,
+            fileSize,
+            url,
+          },
+        });
+
+        return { url, mediaId: media.id };
+      }
 
       // 1. Extract content from URL
       console.log(`[Repurpose] Extracting content from: ${input.url}`);
@@ -154,11 +187,11 @@ KEYWORDS: ${(brief.keywords || []).join(", ")}`;
       const handle = input.channelHandle || channelName;
       let mediaUrls: string[] = [];
       let mediaType = "image/jpeg";
+      const perPlatformMedia: Record<string, { url: string; mediaId: string }> = {};
 
       if (input.format === "static") {
         // Generate a UNIQUE AI-designed creative per platform
         const contentSummary = extracted.body.slice(0, 600) || extracted.description || extracted.title;
-        const s3 = getS3Client();
 
         const platformStyles: Record<string, string> = {
           INSTAGRAM: "Instagram-style visual storytelling with bold typography, vibrant colors, cinematic imagery, 4:5 portrait, trendy design with gradients and modern aesthetics",
@@ -175,7 +208,6 @@ KEYWORDS: ${(brief.keywords || []).join(", ")}`;
         const defaultStyle = "Professional social media creative with bold typography, modern design, vibrant colors, and engaging visual hierarchy";
 
         // Generate one unique image per selected platform
-        const perPlatformMedia: Record<string, string> = {};
         for (const platform of input.targetPlatforms) {
           const style = platformStyles[platform] || defaultStyle;
           const imagePrompt = `Create a professional social media post image.
@@ -206,23 +238,19 @@ Requirements:
               aspectRatio: "3:4",
             });
 
-            const ext = aiResult.mimeType.includes("png") ? "png" : "jpg";
-            const ct = aiResult.mimeType.includes("png") ? "image/png" : "image/jpeg";
-            const key = `repurpose/${platform.toLowerCase()}-${Date.now()}-${crypto.randomBytes(3).toString("hex")}.${ext}`;
-            const buf = Buffer.from(aiResult.imageBase64, "base64");
-            await s3.send(new PutObjectCommand({ Bucket: BUCKET, Key: key, Body: buf, ContentType: ct }));
-            const url = getPublicUrl(key);
-            perPlatformMedia[platform] = url;
+            const { url, mediaId } = await uploadAndCreateMedia(
+              aiResult.imageBase64,
+              aiResult.mimeType,
+              platform.toLowerCase(),
+            );
+            perPlatformMedia[platform] = { url, mediaId };
             mediaUrls.push(url);
-            mediaType = ct;
-            console.log(`[Repurpose] ${platform} creative uploaded: ${url}`);
+            mediaType = aiResult.mimeType.includes("png") ? "image/png" : "image/jpeg";
+            console.log(`[Repurpose] ${platform} creative uploaded: ${url} (mediaId: ${mediaId})`);
           } catch (e) {
             console.warn(`[Repurpose] ${platform} AI image failed:`, (e as Error).message);
           }
         }
-
-        // Store per-platform media mapping in response
-        (platformContent as any).__mediaMap = perPlatformMedia;
       } else if (input.format === "carousel" || input.format === "reel") {
         // Generate carousel slide content via AI
         const slidePrompt = `Analyze this content and break it into 5-7 key points for a carousel post.
@@ -437,10 +465,6 @@ Requirements:
         }
       }
 
-      // Extract per-platform media map if available
-      const mediaMap = (platformContent as any).__mediaMap as Record<string, string> | undefined;
-      if (mediaMap) delete (platformContent as any).__mediaMap;
-
       return {
         extracted: {
           title: extracted.title,
@@ -452,7 +476,7 @@ Requirements:
         },
         platformContent,
         mediaUrls,
-        mediaMap: mediaMap || {},
+        mediaMap: perPlatformMedia,
         mediaType,
         format: input.format,
       };

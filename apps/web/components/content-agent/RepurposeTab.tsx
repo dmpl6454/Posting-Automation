@@ -77,7 +77,7 @@ export function RepurposeTab() {
     extracted?: { title: string; description: string; siteName: string; type: string; url: string; images?: string[] };
     platformContent: Record<string, string>;
     mediaUrls: string[];
-    mediaMap?: Record<string, string>;
+    mediaMap?: Record<string, { url: string; mediaId: string }>;
     mediaType: string;
     format: string;
   } | null>(null);
@@ -495,7 +495,9 @@ export function RepurposeTab() {
           <h2 className="text-lg font-semibold">Platform Creatives & Captions</h2>
           <div className="grid gap-4 sm:grid-cols-1 lg:grid-cols-2">
             {Object.entries(results.platformContent).map(([platform, content]) => {
-              const platformImage = results.mediaMap?.[platform] || results.mediaUrls[0];
+              const platformMedia = results.mediaMap?.[platform];
+              const platformImage = platformMedia?.url || results.mediaUrls[0];
+              const platformMediaId = platformMedia?.mediaId;
               return (
                 <Card key={platform} className="border-green-200 bg-green-50/30 dark:border-green-900 dark:bg-green-950/20 overflow-hidden">
                   {/* Platform-specific AI creative preview */}
@@ -539,7 +541,8 @@ export function RepurposeTab() {
                         className="gap-1.5 text-xs"
                         onClick={() => {
                           const mediaParam = platformImage ? `&aiImage=${encodeURIComponent(platformImage)}` : "";
-                          window.location.href = `/dashboard/content-agent?tab=compose&content=${encodeURIComponent(content)}${mediaParam}`;
+                          const mediaIdParam = platformMediaId ? `&aiMediaId=${encodeURIComponent(platformMediaId)}` : "";
+                          window.location.href = `/dashboard/content-agent?tab=compose&content=${encodeURIComponent(content)}${mediaParam}${mediaIdParam}`;
                         }}
                       >
                         <FileText className="h-3 w-3" />
