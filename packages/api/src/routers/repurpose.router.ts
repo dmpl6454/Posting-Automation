@@ -71,7 +71,6 @@ export const repurposeRouter = createRouter({
       const {
         extractUrlContent,
         repurposeContent,
-        generateStaticNewsCreativeImage,
         generateCarouselImages,
         generateReelVideo,
         generateContent,
@@ -100,52 +99,38 @@ export const repurposeRouter = createRouter({
       let mediaType = "image/jpeg";
 
       if (input.format === "static") {
-        // Single news creative: AI background + Puppeteer text/logo overlay
+        // Generate a fresh AI image from Gemini based on article content
         try {
-          // Step 1: Generate a content-relevant background image with Gemini AI
-          let backgroundImageUrl: string | undefined;
-          try {
-            const bgPrompt = `Create a cinematic, high-quality background image related to this topic:
+          const imagePrompt = `Create a high-quality, visually striking social media image for this article:
 
-"${extracted.title}"
+Title: "${extracted.title}"
+Summary: ${extracted.body.slice(0, 800)}
 
-Context: ${extracted.body.slice(0, 500)}
+Requirements:
+- Create a photorealistic, editorial-quality image that captures the essence of this story
+- 4:5 aspect ratio (portrait, suitable for Instagram/Facebook)
+- Professional, magazine-quality composition
+- Vivid colors, dramatic lighting, cinematic feel
+- DO NOT include any text, words, letters, numbers, watermarks, or logos in the image
+- The image should visually represent the core topic and emotion of the article`;
 
-Style: Professional photojournalistic, dramatic lighting, shallow depth of field, 4:5 aspect ratio.
-DO NOT include any text, words, letters, numbers, logos, watermarks, or typography in the image.
-The image should be slightly blurred/dark to allow text overlay on top.`;
-
-            console.log(`[Repurpose] Generating AI background for: "${extracted.title.slice(0, 50)}..."`);
-            const bgRes = await generateGeminiImage({
-              prompt: bgPrompt,
-              aspectRatio: "3:4",
-            });
-            backgroundImageUrl = `data:${bgRes.mimeType};base64,${bgRes.imageBase64}`;
-            console.log(`[Repurpose] AI background generated successfully`);
-          } catch (bgErr) {
-            console.warn(`[Repurpose] AI background failed, using stock fallback:`, (bgErr as Error).message);
-          }
-
-          // Step 2: Composite headline text + logo via Puppeteer HTML template
-          const result = await generateStaticNewsCreativeImage({
-            headline: extracted.title,
-            channelName,
-            handle,
-            logoUrl: input.logoUrl || null,
-            template: "breaking_news",
-            bgSeed: Date.now(),
-            backgroundImageUrl,
-            date: new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }).toUpperCase(),
+          console.log(`[Repurpose] Generating AI image for: "${extracted.title.slice(0, 50)}..."`);
+          const aiResult = await generateGeminiImage({
+            prompt: imagePrompt,
+            aspectRatio: "3:4",
           });
 
           const s3 = getS3Client();
-          const key = `repurpose/${Date.now()}-${crypto.randomBytes(4).toString("hex")}.jpg`;
-          const buf = Buffer.from(result.imageBase64, "base64");
-          await s3.send(new PutObjectCommand({ Bucket: BUCKET, Key: key, Body: buf, ContentType: "image/jpeg" }));
+          const ext = aiResult.mimeType.includes("png") ? "png" : "jpg";
+          const contentType = aiResult.mimeType.includes("png") ? "image/png" : "image/jpeg";
+          const key = `repurpose/${Date.now()}-${crypto.randomBytes(4).toString("hex")}.${ext}`;
+          const buf = Buffer.from(aiResult.imageBase64, "base64");
+          await s3.send(new PutObjectCommand({ Bucket: BUCKET, Key: key, Body: buf, ContentType: contentType }));
           mediaUrls = [getPublicUrl(key)];
-          console.log(`[Repurpose] Static image uploaded: ${mediaUrls[0]}`);
+          mediaType = contentType;
+          console.log(`[Repurpose] AI image uploaded: ${mediaUrls[0]}`);
         } catch (e) {
-          console.warn(`[Repurpose] Static image generation failed:`, (e as Error).message);
+          console.warn(`[Repurpose] AI image generation failed:`, (e as Error).message);
         }
       } else if (input.format === "carousel" || input.format === "reel") {
         // Generate carousel slide content via AI
