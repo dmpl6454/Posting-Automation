@@ -83,15 +83,73 @@ export const repurposeRouter = createRouter({
       const extracted = await extractUrlContent(input.url);
       console.log(`[Repurpose] Extracted: "${extracted.title}" (${extracted.body.length} chars)`);
 
-      // 2. Generate platform-specific captions
-      const sourceText = `Title: ${extracted.title}\n\n${extracted.body.slice(0, 6000)}`;
+      // 2. Understand the content — disambiguate people, identify context, create content brief
+      const contentBody = extracted.body.slice(0, 5000) || extracted.description || extracted.title;
+      let contentBrief = "";
+      try {
+        const understandPrompt = `You are a content analyst. Analyze this article and provide a clear content brief.
+
+IMPORTANT: Many names are shared by different people. You MUST identify the CORRECT person based on article context.
+Examples:
+- "Imran Khan" could be the Bollywood actor OR the Pakistani politician/cricketer
+- "Chris Brown" could be the singer OR someone else
+- "John Smith" could be anyone
+
+Read the FULL article context carefully to determine WHO exactly is being discussed.
+
+Title: ${extracted.title}
+Source: ${extracted.siteName} (${extracted.url})
+Content: ${contentBody}
+
+Provide a JSON response:
+{
+  "subject": "Full name and identity of the main person/topic (e.g. 'Imran Khan, Bollywood actor' or 'Imran Khan, former PM of Pakistan')",
+  "context": "What is this article about in 2-3 sentences",
+  "category": "entertainment/politics/sports/technology/business/health/lifestyle/other",
+  "keywords": ["keyword1", "keyword2", "keyword3"],
+  "tone": "the emotional tone - inspiring/shocking/informative/controversial/celebratory/sad",
+  "visualDescription": "What kind of imagery would best represent this article (describe the ideal image scene)"
+}
+
+Return ONLY the JSON, no other text.`;
+
+        const briefResponse = await generateContent({
+          provider: input.provider,
+          platform: "INSTAGRAM",
+          userPrompt: understandPrompt,
+          tone: "professional",
+        });
+
+        const cleaned = briefResponse.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+        const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const brief = JSON.parse(jsonMatch[0]);
+          contentBrief = `SUBJECT: ${brief.subject || extracted.title}
+CONTEXT: ${brief.context || extracted.description}
+CATEGORY: ${brief.category || "general"}
+TONE: ${brief.tone || "informative"}
+VISUAL: ${brief.visualDescription || ""}
+KEYWORDS: ${(brief.keywords || []).join(", ")}`;
+          console.log(`[Repurpose] Content understood: ${brief.subject} (${brief.category})`);
+        }
+      } catch (e) {
+        console.warn(`[Repurpose] Content understanding failed, using raw content:`, (e as Error).message);
+      }
+
+      // Fallback if content understanding failed
+      if (!contentBrief) {
+        contentBrief = `SUBJECT: ${extracted.title}\nCONTEXT: ${extracted.description || contentBody.slice(0, 300)}`;
+      }
+
+      // 3. Generate platform-specific captions WITH content brief for accuracy
+      const sourceText = `${contentBrief}\n\n---\n\nTitle: ${extracted.title}\n\n${extracted.body.slice(0, 5000)}`;
       const platformContent = await repurposeContent({
         originalContent: sourceText,
         targetPlatforms: input.targetPlatforms,
         provider: input.provider,
       });
 
-      // 3. Generate media based on format
+      // 4. Generate media based on format
       const channelName = input.channelName || extracted.siteName || "Channel";
       const handle = input.channelHandle || channelName;
       let mediaUrls: string[] = [];
@@ -122,15 +180,21 @@ export const repurposeRouter = createRouter({
           const style = platformStyles[platform] || defaultStyle;
           const imagePrompt = `Create a professional social media post image.
 
+${contentBrief}
+
 Topic: "${extracted.title}"
 Context: ${contentSummary.slice(0, 400)}
 
 Design style: ${style}
 
+IMPORTANT: Use the SUBJECT and CONTEXT above to understand exactly who/what this is about.
+For example, if the subject is "Imran Khan, Bollywood actor" — show imagery related to Bollywood/movies, NOT politics.
+If the subject is "Imran Khan, former PM of Pakistan" — show imagery related to politics/cricket, NOT Bollywood.
+
 Requirements:
 - Visually stunning, premium quality design
 - Include headline text "${extracted.title.slice(0, 60)}" integrated into the design
-- Relevant visual imagery that matches the topic
+- Relevant visual imagery that ACCURATELY matches the topic and subject
 - Professional layout with strong visual hierarchy
 - Do NOT include any watermarks or stock photo marks
 - 4:5 portrait aspect ratio`;
@@ -162,6 +226,8 @@ Requirements:
       } else if (input.format === "carousel" || input.format === "reel") {
         // Generate carousel slide content via AI
         const slidePrompt = `Analyze this content and break it into 5-7 key points for a carousel post.
+
+${contentBrief}
 
 Title: ${extracted.title}
 Content: ${extracted.body.slice(0, 4000)}
@@ -222,6 +288,8 @@ Return ONLY the JSON array, no other text.`;
             let slideImagePrompt: string;
             if (slide.type === "cover") {
               slideImagePrompt = `Design a bold, eye-catching social media carousel COVER slide (slide 1 of ${allSlides.length}).
+
+${contentBrief}
 
 Topic: "${slide.title}"
 ${slide.body ? `Subtitle: "${slide.body}"` : ""}
