@@ -135,13 +135,12 @@ export default function PostDetailPage() {
     }
   };
 
-  const handlePublishNow = () => {
-    const failedCount = post?.targets.filter((t: any) => t.status === "FAILED").length ?? 0;
-    const msg = failedCount > 0
-      ? `Retry publishing to ${failedCount} failed channel${failedCount !== 1 ? "s" : ""}?`
-      : "Publish this post now to selected channels?";
+  const handlePublishAll = () => {
+    const eligible = post?.targets.filter((t: any) => t.status === "FAILED" || t.status === "DRAFT" || t.status === "SCHEDULED") ?? [];
+    if (eligible.length === 0) return;
+    const msg = `Publish to ${eligible.length} channel${eligible.length !== 1 ? "s" : ""}?`;
     if (confirm(msg)) {
-      publishNow.mutate({ id: postId });
+      publishNow.mutate({ id: postId, targetIds: eligible.map((t: any) => t.id) });
     }
   };
 
@@ -326,7 +325,7 @@ export default function PostDetailPage() {
                     <Badge variant={targetConfig.variant} className="text-xs">
                       {target.status.charAt(0) + target.status.slice(1).toLowerCase()}
                     </Badge>
-                    {target.status === "FAILED" && (
+                    {(target.status === "FAILED" || target.status === "DRAFT" || target.status === "SCHEDULED") && (
                       <Button
                         size="sm"
                         variant="outline"
@@ -336,10 +335,12 @@ export default function PostDetailPage() {
                       >
                         {retryingTargetId === target.id ? (
                           <Loader2 className="h-3 w-3 animate-spin" />
-                        ) : (
+                        ) : target.status === "FAILED" ? (
                           <RotateCcw className="h-3 w-3" />
+                        ) : (
+                          <Send className="h-3 w-3" />
                         )}
-                        <span className="ml-1">Retry</span>
+                        <span className="ml-1">{target.status === "FAILED" ? "Retry" : "Publish"}</span>
                       </Button>
                     )}
                     {target.publishedUrl && (
@@ -565,27 +566,27 @@ export default function PostDetailPage() {
             </Button>
           )}
 
-          {/* Publish Now — for DRAFT, SCHEDULED */}
+          {/* Publish All — for DRAFT, SCHEDULED */}
           {(post.status === "DRAFT" || post.status === "SCHEDULED") && (
-            <Button onClick={handlePublishNow} disabled={publishNow.isPending}>
+            <Button onClick={handlePublishAll} disabled={publishNow.isPending}>
               {publishNow.isPending ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : (
                 <Send className="mr-2 h-4 w-4" />
               )}
-              Publish Now
+              Publish All Channels
             </Button>
           )}
 
-          {/* Retry — for FAILED */}
+          {/* Retry All Failed — for FAILED */}
           {post.status === "FAILED" && (
-            <Button onClick={handlePublishNow} disabled={publishNow.isPending}>
+            <Button onClick={handlePublishAll} disabled={publishNow.isPending}>
               {publishNow.isPending ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : (
                 <RotateCcw className="mr-2 h-4 w-4" />
               )}
-              Retry Publish
+              Retry All Failed
             </Button>
           )}
 
