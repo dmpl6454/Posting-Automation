@@ -243,6 +243,7 @@ model Post {
   aiGenerated Boolean @default(false)
   aiProvider  String?
   aiPrompt    String? @db.Text
+  metadata    Json?
 
   organization     Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   targets          PostTarget[]

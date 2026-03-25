@@ -81,8 +81,35 @@ export function createPostPublishWorker() {
       // Use platform-specific content variant if available
       const contentVariants = postTarget.post.contentVariants as Record<string, string> | null;
       const content = contentVariants?.[platform] ?? postTarget.post.content;
-      const mediaUrls = postTarget.post.mediaAttachments.map((m) => m.media.url);
+      let mediaUrls = postTarget.post.mediaAttachments.map((m) => m.media.url);
       const mediaTypes = postTarget.post.mediaAttachments.map((m) => m.media.fileType);
+
+      // Add text overlay to videos for Instagram and Facebook
+      const overlayText = (postTarget.post.metadata as any)?.videoOverlayText as string | undefined;
+      if (overlayText && mediaUrls.length > 0) {
+        const overlayPlatforms = ["INSTAGRAM", "FACEBOOK"];
+        if (overlayPlatforms.includes(platform)) {
+          try {
+            const { addTextOverlayToVideo } = await import("../lib/video-overlay");
+            const processed: string[] = [];
+            for (let i = 0; i < mediaUrls.length; i++) {
+              if (mediaTypes[i]?.startsWith("video/")) {
+                console.log(`[PostPublish] Adding text overlay to video ${i + 1}`);
+                const newUrl = await addTextOverlayToVideo(mediaUrls[i]!, overlayText, {
+                  position: "bottom",
+                  fontSize: 42,
+                });
+                processed.push(newUrl);
+              } else {
+                processed.push(mediaUrls[i]!);
+              }
+            }
+            mediaUrls = processed;
+          } catch (e) {
+            console.warn(`[PostPublish] Video overlay failed, posting without overlay:`, (e as Error).message);
+          }
+        }
+      }
 
       // Validate content before publishing
       const errors = provider.validateContent({ content, mediaUrls, mediaTypes });
