@@ -144,7 +144,7 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
   const [generatePrompt, setGeneratePrompt] = useState("");
   const [imageProvider, setImageProvider] = useState<"nano-banana" | "nano-banana-pro" | "dall-e" | "meta-ai">("nano-banana");
   const [model, setModel] = useState(MODELS[0]?.value ?? "gemini-3.1-flash-image-preview");
-  const [aspectRatio, setAspectRatio] = useState("1:1");
+  const [aspectRatio, setAspectRatio] = useState("4:5");
   const [imageSize, setImageSize] = useState("1K");
   const [referenceImage, setReferenceImage] = useState<string | null>(null);
   const [referenceFileName, setReferenceFileName] = useState("");
@@ -1025,7 +1025,7 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
                 </div>
                 <div className="grid grid-cols-3 gap-2">
                   {Array.from({ length: carouselCount }).map((_, i) => (
-                    <div key={i} className="relative aspect-square overflow-hidden rounded-lg border bg-muted/30">
+                    <div key={i} className="relative aspect-[4/5] overflow-hidden rounded-lg border bg-muted/30">
                       {carouselImages[i] ? (
                         <>
                           <img src={carouselImages[i]} alt={`Slide ${i + 1}`} className="h-full w-full object-cover" />
@@ -1056,11 +1056,11 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
               <div className="space-y-3 border-t pt-3">
                 <p className="text-xs font-medium text-muted-foreground">Result</p>
                 {generateMutation.isPending || isEditing ? (
-                  <Skeleton className="aspect-square w-full rounded-lg" />
+                  <Skeleton className="aspect-[4/5] w-full rounded-lg" />
                 ) : resultImage ? (
                   <div className="space-y-2">
                     <div className="overflow-hidden rounded-lg border bg-muted/30">
-                      <img src={resultImage} alt="Result" className="w-full object-contain" style={{ maxHeight: "300px" }} />
+                      <img src={resultImage} alt="Result" className="w-full object-contain aspect-[4/5]" />
                     </div>
                     <div className="grid grid-cols-2 gap-2">
                       <Button size="sm" className="gap-1.5" onClick={() => handleAddToPost()}>
@@ -1099,7 +1099,7 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
                       onClick={() => { setResultImage(item.imageUrl); if (carouselMode) setCarouselMode(false); }}
                       className={`group relative overflow-hidden rounded-lg border transition-all hover:ring-2 hover:ring-primary/50 ${resultImage === item.imageUrl ? "ring-2 ring-primary" : ""}`}
                     >
-                      <img src={item.imageUrl} alt={item.prompt} className="aspect-square w-full object-cover" />
+                      <img src={item.imageUrl} alt={item.prompt} className="aspect-[4/5] w-full object-cover" />
                       <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-end p-1">
                         <p className="truncate text-[9px] text-white leading-tight">{item.prompt}</p>
                       </div>
