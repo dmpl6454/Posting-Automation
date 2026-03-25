@@ -19,7 +19,7 @@ const TIMEOUT_MS = 15_000;
 const MAX_BODY_LENGTH = 15_000;
 
 const USER_AGENT =
-  "Mozilla/5.0 (compatible; PostAutomation/1.0; +https://postautomation.com)";
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
 /** Detect URL type from hostname */
 function detectUrlType(
@@ -244,6 +244,134 @@ async function extractWebPage(url: string): Promise<ExtractedContent> {
   };
 }
 
+/** Instagram extraction via oEmbed API */
+async function extractInstagram(url: string): Promise<ExtractedContent> {
+  // Instagram blocks normal fetches — use oEmbed API
+  let title = "";
+  let description = "";
+  let author = "";
+  let images: string[] = [];
+  let body = "";
+
+  try {
+    const oembedUrl = `https://graph.facebook.com/v18.0/instagram_oembed?url=${encodeURIComponent(url)}&access_token=${process.env.FACEBOOK_APP_ID}|${process.env.FACEBOOK_APP_SECRET}&fields=thumbnail_url,author_name,title`;
+    const res = await fetch(oembedUrl, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+    if (res.ok) {
+      const data = (await res.json()) as any;
+      title = data.title || "";
+      author = data.author_name || "";
+      if (data.thumbnail_url) images.push(data.thumbnail_url);
+    }
+  } catch { /* fallback to page scrape */ }
+
+  // Fallback: try fetching the page with a browser-like User-Agent
+  if (!title) {
+    try {
+      const res = await fetch(url, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Accept-Language": "en-US,en;q=0.5",
+        },
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+        redirect: "follow",
+      });
+      if (res.ok) {
+        const html = await res.text();
+        title = getTitle(html) || "Instagram Post";
+        description = getMeta(html, "og:description") || getMeta(html, "description");
+        const ogImage = getMeta(html, "og:image");
+        if (ogImage && !images.includes(ogImage)) images.push(ogImage);
+        body = description;
+        if (!author) author = getMeta(html, "og:title")?.split("on Instagram")?.[0]?.trim() || "";
+      }
+    } catch { /* use what we have */ }
+  }
+
+  // If still no title, extract from URL
+  if (!title) {
+    title = "Instagram Post";
+    const pathMatch = url.match(/instagram\.com\/(p|reel|tv)\/([^/?]+)/);
+    if (pathMatch) {
+      title = `Instagram ${pathMatch[1] === "reel" ? "Reel" : "Post"}`;
+    }
+  }
+
+  return {
+    title,
+    description: description || title,
+    body: body || description || title,
+    images,
+    url,
+    siteName: "Instagram",
+    type: "social",
+    author,
+  };
+}
+
+/** Twitter/X extraction with better handling */
+async function extractTwitter(url: string): Promise<ExtractedContent> {
+  // Try to use nitter or fxtwitter for better extraction
+  let title = "";
+  let description = "";
+  let author = "";
+  let images: string[] = [];
+  let body = "";
+
+  // Try fxtwitter for better meta extraction
+  const fxUrl = url.replace(/twitter\.com|x\.com/, "fxtwitter.com");
+  try {
+    const res = await fetch(fxUrl, {
+      headers: { "User-Agent": USER_AGENT },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+      redirect: "follow",
+    });
+    if (res.ok) {
+      const html = await res.text();
+      title = getMeta(html, "og:title") || getTitle(html);
+      description = getMeta(html, "og:description") || getMeta(html, "description");
+      const ogImage = getMeta(html, "og:image");
+      if (ogImage) images.push(ogImage);
+      body = description;
+      author = title.split("(@")?.[0]?.trim() || "";
+    }
+  } catch { /* fallback */ }
+
+  // Fallback: try original URL
+  if (!title) {
+    try {
+      const res = await fetch(url, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        },
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+        redirect: "follow",
+      });
+      if (res.ok) {
+        const html = await res.text();
+        title = getTitle(html) || "X Post";
+        description = getMeta(html, "og:description") || getMeta(html, "description");
+        const ogImage = getMeta(html, "og:image");
+        if (ogImage && !images.includes(ogImage)) images.push(ogImage);
+        body = description;
+      }
+    } catch { /* use what we have */ }
+  }
+
+  if (!title) title = "X Post";
+
+  return {
+    title,
+    description: description || title,
+    body: body || description || title,
+    images,
+    url,
+    siteName: "X (Twitter)",
+    type: "social",
+    author,
+  };
+}
+
 /** Main extraction function */
 export async function extractUrlContent(url: string): Promise<ExtractedContent> {
   // Validate URL
@@ -257,6 +385,12 @@ export async function extractUrlContent(url: string): Promise<ExtractedContent> 
 
   if (urlType === "youtube") {
     return extractYouTube(url);
+  }
+  if (urlType === "instagram") {
+    return extractInstagram(url);
+  }
+  if (urlType === "twitter") {
+    return extractTwitter(url);
   }
 
   return extractWebPage(url);

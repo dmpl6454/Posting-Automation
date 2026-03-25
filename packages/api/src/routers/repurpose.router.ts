@@ -99,22 +99,26 @@ export const repurposeRouter = createRouter({
       let mediaType = "image/jpeg";
 
       if (input.format === "static") {
-        // Generate a fresh AI image from Gemini based on article content
+        // Generate a fresh AI-designed creative image from Gemini
         try {
-          const imagePrompt = `Create a high-quality, visually striking social media image for this article:
+          const contentSummary = extracted.body.slice(0, 600) || extracted.description || extracted.title;
+          const imagePrompt = `Design a professional social media creative post image about this topic:
 
-Title: "${extracted.title}"
-Summary: ${extracted.body.slice(0, 800)}
+"${extracted.title}"
 
-Requirements:
-- Create a photorealistic, editorial-quality image that captures the essence of this story
-- 4:5 aspect ratio (portrait, suitable for Instagram/Facebook)
-- Professional, magazine-quality composition
-- Vivid colors, dramatic lighting, cinematic feel
-- DO NOT include any text, words, letters, numbers, watermarks, or logos in the image
-- The image should visually represent the core topic and emotion of the article`;
+Context: ${contentSummary}
 
-          console.log(`[Repurpose] Generating AI image for: "${extracted.title.slice(0, 50)}..."`);
+Create a visually stunning, eye-catching social media graphic that:
+- Has a bold, modern design with vibrant colors and professional layout
+- Includes the headline text "${extracted.title.slice(0, 80)}" as part of the design
+- Uses dramatic visual elements related to the topic
+- Looks like a professionally designed Instagram/Facebook post
+- Has a 4:5 portrait aspect ratio
+- Uses bold typography, gradients, and visual hierarchy
+- Feels like a premium news or brand social media post
+- Include relevant visual imagery that matches the topic`;
+
+          console.log(`[Repurpose] Generating AI creative for: "${extracted.title.slice(0, 50)}..."`);
           const aiResult = await generateGeminiImage({
             prompt: imagePrompt,
             aspectRatio: "3:4",
