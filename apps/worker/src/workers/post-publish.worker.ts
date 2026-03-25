@@ -84,6 +84,10 @@ export function createPostPublishWorker() {
       let mediaUrls = postTarget.post.mediaAttachments.map((m) => m.media.url);
       const mediaTypes = postTarget.post.mediaAttachments.map((m) => m.media.fileType);
 
+      // Pass channel metadata so providers can use platform-specific IDs
+      // (e.g. igUserId for Instagram, pageId for Facebook)
+      const channelMetadata = (channel.metadata ?? {}) as Record<string, unknown>;
+
       // Auto-add channel logo watermark + optional text overlay on videos
       const hasVideo = mediaTypes.some((t) => t?.startsWith("video/"));
       if (hasVideo && ["INSTAGRAM", "FACEBOOK"].includes(platform)) {
@@ -137,9 +141,6 @@ export function createPostPublishWorker() {
         throw new Error(`Validation failed: ${errors.join(", ")}`);
       }
 
-      // Pass channel metadata so providers can use platform-specific IDs
-      // (e.g. igUserId for Instagram, pageId for Facebook)
-      const channelMetadata = (channel.metadata ?? {}) as Record<string, unknown>;
       const result = await provider.publishPost(tokens, { content, mediaUrls, mediaTypes, metadata: channelMetadata });
 
       // 4. Mark as PUBLISHED
