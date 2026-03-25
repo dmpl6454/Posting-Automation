@@ -57,9 +57,9 @@ export const repurposeRouter = createRouter({
         format: z.enum(["static", "carousel", "reel"]),
         targetPlatforms: z.array(z.string()).min(1).max(16),
         provider: z.enum(["openai", "anthropic", "gemini", "grok", "deepseek"]).default("gemini"),
-        channelName: z.string().nullish(),
-        channelHandle: z.string().nullish(),
-        logoUrl: z.string().nullish(),
+        channelName: z.string().optional().default(""),
+        channelHandle: z.string().optional().default(""),
+        logoUrl: z.string().optional().default(""),
         accentColor: z.string().nullish(),
         theme: z.enum(["dark", "light", "gradient"]).default("dark"),
         voiceOver: z.boolean().default(false),
@@ -98,43 +98,67 @@ export const repurposeRouter = createRouter({
       let mediaType = "image/jpeg";
 
       if (input.format === "static") {
-        // Generate a fresh AI-designed creative image from Gemini
-        try {
-          const contentSummary = extracted.body.slice(0, 600) || extracted.description || extracted.title;
-          const imagePrompt = `Design a professional social media creative post image about this topic:
+        // Generate a UNIQUE AI-designed creative per platform
+        const contentSummary = extracted.body.slice(0, 600) || extracted.description || extracted.title;
+        const s3 = getS3Client();
 
-"${extracted.title}"
+        const platformStyles: Record<string, string> = {
+          INSTAGRAM: "Instagram-style visual storytelling with bold typography, vibrant colors, cinematic imagery, 4:5 portrait, trendy design with gradients and modern aesthetics",
+          FACEBOOK: "Facebook news-style creative with professional layout, clean typography, engaging hero image, informative design that drives engagement and shares",
+          TWITTER: "Bold, attention-grabbing Twitter/X graphic with impactful headline, high-contrast design, minimal text, punchy visual that stops the scroll",
+          LINKEDIN: "Professional LinkedIn post design with corporate aesthetics, clean layout, business-focused imagery, subtle gradients, executive look and feel",
+          YOUTUBE: "YouTube thumbnail-style design with dramatic visuals, bold text overlay, high contrast colors, expressive imagery that makes people click",
+          TIKTOK: "TikTok-style vibrant creative with Gen-Z aesthetics, bold neon accents, dynamic layout, trendy and eye-catching mobile-first design",
+          THREADS: "Minimalist Threads-style design with clean typography, subtle aesthetics, modern and understated elegance, conversation-starting visual",
+          PINTEREST: "Pinterest-optimized pin design with beautiful imagery, aspirational aesthetics, elegant typography, lifestyle visual appeal",
+          REDDIT: "Informative infographic-style design with data-focused layout, clear hierarchy, educational visual that adds value to discussion",
+        };
 
-Context: ${contentSummary}
+        const defaultStyle = "Professional social media creative with bold typography, modern design, vibrant colors, and engaging visual hierarchy";
 
-Create a visually stunning, eye-catching social media graphic that:
-- Has a bold, modern design with vibrant colors and professional layout
-- Includes the headline text "${extracted.title.slice(0, 80)}" as part of the design
-- Uses dramatic visual elements related to the topic
-- Looks like a professionally designed Instagram/Facebook post
-- Has a 4:5 portrait aspect ratio
-- Uses bold typography, gradients, and visual hierarchy
-- Feels like a premium news or brand social media post
-- Include relevant visual imagery that matches the topic`;
+        // Generate one unique image per selected platform
+        const perPlatformMedia: Record<string, string> = {};
+        for (const platform of input.targetPlatforms) {
+          const style = platformStyles[platform] || defaultStyle;
+          const imagePrompt = `Create a professional social media post image.
 
-          console.log(`[Repurpose] Generating AI creative for: "${extracted.title.slice(0, 50)}..."`);
-          const aiResult = await generateGeminiImage({
-            prompt: imagePrompt,
-            aspectRatio: "3:4",
-          });
+Topic: "${extracted.title}"
+Context: ${contentSummary.slice(0, 400)}
 
-          const s3 = getS3Client();
-          const ext = aiResult.mimeType.includes("png") ? "png" : "jpg";
-          const contentType = aiResult.mimeType.includes("png") ? "image/png" : "image/jpeg";
-          const key = `repurpose/${Date.now()}-${crypto.randomBytes(4).toString("hex")}.${ext}`;
-          const buf = Buffer.from(aiResult.imageBase64, "base64");
-          await s3.send(new PutObjectCommand({ Bucket: BUCKET, Key: key, Body: buf, ContentType: contentType }));
-          mediaUrls = [getPublicUrl(key)];
-          mediaType = contentType;
-          console.log(`[Repurpose] AI image uploaded: ${mediaUrls[0]}`);
-        } catch (e) {
-          console.warn(`[Repurpose] AI image generation failed:`, (e as Error).message);
+Design style: ${style}
+
+Requirements:
+- Visually stunning, premium quality design
+- Include headline text "${extracted.title.slice(0, 60)}" integrated into the design
+- Relevant visual imagery that matches the topic
+- Professional layout with strong visual hierarchy
+- Do NOT include any watermarks or stock photo marks
+- 4:5 portrait aspect ratio`;
+
+          try {
+            console.log(`[Repurpose] Generating AI creative for ${platform}...`);
+            const aiResult = await generateGeminiImage({
+              prompt: imagePrompt,
+              aspectRatio: "3:4",
+            });
+
+            const ext = aiResult.mimeType.includes("png") ? "png" : "jpg";
+            const ct = aiResult.mimeType.includes("png") ? "image/png" : "image/jpeg";
+            const key = `repurpose/${platform.toLowerCase()}-${Date.now()}-${crypto.randomBytes(3).toString("hex")}.${ext}`;
+            const buf = Buffer.from(aiResult.imageBase64, "base64");
+            await s3.send(new PutObjectCommand({ Bucket: BUCKET, Key: key, Body: buf, ContentType: ct }));
+            const url = getPublicUrl(key);
+            perPlatformMedia[platform] = url;
+            mediaUrls.push(url);
+            mediaType = ct;
+            console.log(`[Repurpose] ${platform} creative uploaded: ${url}`);
+          } catch (e) {
+            console.warn(`[Repurpose] ${platform} AI image failed:`, (e as Error).message);
+          }
         }
+
+        // Store per-platform media mapping in response
+        (platformContent as any).__mediaMap = perPlatformMedia;
       } else if (input.format === "carousel" || input.format === "reel") {
         // Generate carousel slide content via AI
         const slidePrompt = `Analyze this content and break it into 5-7 key points for a carousel post.
@@ -345,6 +369,10 @@ Requirements:
         }
       }
 
+      // Extract per-platform media map if available
+      const mediaMap = (platformContent as any).__mediaMap as Record<string, string> | undefined;
+      if (mediaMap) delete (platformContent as any).__mediaMap;
+
       return {
         extracted: {
           title: extracted.title,
@@ -356,6 +384,7 @@ Requirements:
         },
         platformContent,
         mediaUrls,
+        mediaMap: mediaMap || {},
         mediaType,
         format: input.format,
       };

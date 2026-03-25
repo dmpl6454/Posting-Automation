@@ -77,6 +77,7 @@ export function RepurposeTab() {
     extracted?: { title: string; description: string; siteName: string; type: string; url: string; images?: string[] };
     platformContent: Record<string, string>;
     mediaUrls: string[];
+    mediaMap?: Record<string, string>;
     mediaType: string;
     format: string;
   } | null>(null);
@@ -140,9 +141,9 @@ export function RepurposeTab() {
         format,
         targetPlatforms: selectedPlatforms,
         provider,
-        channelName: primaryChannel?.name,
-        channelHandle: primaryChannel?.username,
-        logoUrl: primaryChannel?.avatar,
+        channelName: primaryChannel?.name || "Channel",
+        channelHandle: primaryChannel?.username || "",
+        logoUrl: primaryChannel?.avatar || "",
         theme,
         voiceOver: format === "reel" ? voiceOver : false,
         voiceType: voiceType as any,
@@ -490,47 +491,65 @@ export function RepurposeTab() {
             </Card>
           )}
 
-          {/* Platform Captions */}
-          <h2 className="text-lg font-semibold">Platform Captions</h2>
+          {/* Platform Captions with Unique Creatives */}
+          <h2 className="text-lg font-semibold">Platform Creatives & Captions</h2>
           <div className="grid gap-4 sm:grid-cols-1 lg:grid-cols-2">
-            {Object.entries(results.platformContent).map(([platform, content]) => (
-              <Card key={platform} className="border-green-200 bg-green-50/30 dark:border-green-900 dark:bg-green-950/20">
-                <CardHeader className="pb-2">
-                  <div className="flex items-center justify-between">
-                    <CardTitle className="text-sm">
-                      {platform.charAt(0) + platform.slice(1).toLowerCase()}
-                    </CardTitle>
-                    <div className="flex items-center gap-1">
-                      <Badge variant="outline" className="text-[10px]">{content.length} chars</Badge>
-                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => copyContent(platform, content)}>
-                        {copiedPlatform === platform ? (
-                          <Check className="h-3.5 w-3.5 text-green-600" />
-                        ) : (
-                          <Copy className="h-3.5 w-3.5" />
-                        )}
+            {Object.entries(results.platformContent).map(([platform, content]) => {
+              const platformImage = results.mediaMap?.[platform] || results.mediaUrls[0];
+              return (
+                <Card key={platform} className="border-green-200 bg-green-50/30 dark:border-green-900 dark:bg-green-950/20 overflow-hidden">
+                  {/* Platform-specific AI creative preview */}
+                  {platformImage && results.format === "static" && (
+                    <div className="relative">
+                      <img
+                        src={platformImage}
+                        alt={`${platform} creative`}
+                        className="w-full aspect-[4/5] object-cover"
+                      />
+                      <div className="absolute top-2 left-2">
+                        <Badge className="bg-black/60 text-white border-0 text-[10px]">
+                          {platform.charAt(0) + platform.slice(1).toLowerCase()}
+                        </Badge>
+                      </div>
+                    </div>
+                  )}
+                  <CardHeader className="pb-2">
+                    <div className="flex items-center justify-between">
+                      <CardTitle className="text-sm">
+                        {platform.charAt(0) + platform.slice(1).toLowerCase()}
+                      </CardTitle>
+                      <div className="flex items-center gap-1">
+                        <Badge variant="outline" className="text-[10px]">{content.length} chars</Badge>
+                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => copyContent(platform, content)}>
+                          {copiedPlatform === platform ? (
+                            <Check className="h-3.5 w-3.5 text-green-600" />
+                          ) : (
+                            <Copy className="h-3.5 w-3.5" />
+                          )}
+                        </Button>
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="whitespace-pre-wrap rounded-lg bg-background p-3 text-sm leading-relaxed max-h-40 overflow-y-auto">{content}</div>
+                    <div className="mt-2 flex justify-end">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-1.5 text-xs"
+                        onClick={() => {
+                          const mediaParam = platformImage ? `&aiImage=${encodeURIComponent(platformImage)}` : "";
+                          window.location.href = `/dashboard/content-agent?tab=compose&content=${encodeURIComponent(content)}${mediaParam}`;
+                        }}
+                      >
+                        <FileText className="h-3 w-3" />
+                        Create Post
                       </Button>
                     </div>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <div className="whitespace-pre-wrap rounded-lg bg-background p-3 text-sm leading-relaxed">{content}</div>
-                  <div className="mt-2 flex justify-end">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="gap-1.5 text-xs"
-                      onClick={() => {
-                        const mediaParam = results.mediaUrls[0] ? `&aiImage=${encodeURIComponent(results.mediaUrls[0])}` : "";
-                        window.location.href = `/dashboard/content-agent?tab=compose&content=${encodeURIComponent(content)}${mediaParam}`;
-                      }}
-                    >
-                      <FileText className="h-3 w-3" />
-                      Create Post
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+                  </CardContent>
+                </Card>
+              );
+            })}
           </div>
 
           <div className="flex justify-center">
