@@ -16,6 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "~/components/ui/select";
+import { Switch } from "~/components/ui/switch";
 import { useToast } from "~/hooks/use-toast";
 import {
   Sparkles,
@@ -31,6 +32,8 @@ import {
   Film,
   Globe,
   ExternalLink,
+  Mic,
+  Music,
 } from "lucide-react";
 
 const ALL_PLATFORMS = [
@@ -65,6 +68,9 @@ export function RepurposeTab() {
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>(["INSTAGRAM", "TWITTER", "LINKEDIN"]);
   const [provider, setProvider] = useState<typeof providers[number]>("gemini");
   const [theme, setTheme] = useState<"dark" | "light" | "gradient">("dark");
+  const [voiceOver, setVoiceOver] = useState(true);
+  const [voiceType, setVoiceType] = useState<string>("nova");
+  const [bgMusic, setBgMusic] = useState(true);
 
   // Results
   const [results, setResults] = useState<{
@@ -138,6 +144,9 @@ export function RepurposeTab() {
         channelHandle: primaryChannel?.username,
         logoUrl: primaryChannel?.avatar,
         theme,
+        voiceOver: format === "reel" ? voiceOver : false,
+        voiceType: voiceType as any,
+        bgMusic: format === "reel" ? bgMusic : false,
       });
     } else {
       if (!originalContent || selectedPlatforms.length === 0) return;
@@ -270,6 +279,54 @@ export function RepurposeTab() {
                         {label}
                       </button>
                     ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Voice-over & Music (Reel only) */}
+              {format === "reel" && (
+                <div className="space-y-3 rounded-lg border bg-muted/30 p-3">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Reel Audio</p>
+
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Mic className="h-4 w-4 text-purple-500" />
+                      <div>
+                        <p className="text-sm font-medium">Voice-Over</p>
+                        <p className="text-[10px] text-muted-foreground">AI narration of the article</p>
+                      </div>
+                    </div>
+                    <Switch checked={voiceOver} onCheckedChange={setVoiceOver} />
+                  </div>
+
+                  {voiceOver && (
+                    <div className="ml-6 space-y-1.5">
+                      <Label className="text-xs">Voice</Label>
+                      <Select value={voiceType} onValueChange={setVoiceType}>
+                        <SelectTrigger className="h-8 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="nova">Nova (Female, warm)</SelectItem>
+                          <SelectItem value="shimmer">Shimmer (Female, expressive)</SelectItem>
+                          <SelectItem value="alloy">Alloy (Neutral)</SelectItem>
+                          <SelectItem value="echo">Echo (Male, deep)</SelectItem>
+                          <SelectItem value="fable">Fable (Male, British)</SelectItem>
+                          <SelectItem value="onyx">Onyx (Male, authoritative)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Music className="h-4 w-4 text-blue-500" />
+                      <div>
+                        <p className="text-sm font-medium">Background Music</p>
+                        <p className="text-[10px] text-muted-foreground">Subtle news-style ambient tone</p>
+                      </div>
+                    </div>
+                    <Switch checked={bgMusic} onCheckedChange={setBgMusic} />
                   </div>
                 </div>
               )}

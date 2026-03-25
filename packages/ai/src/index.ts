@@ -31,6 +31,8 @@ export { generateCarouselSlideHtml } from "./tools/carousel-template";
 export type { CarouselOptions, CarouselSlide } from "./tools/carousel-template";
 export { generateReelVideo } from "./tools/reel-generator";
 export type { ReelOptions, ReelResult } from "./tools/reel-generator";
+export { generateSpeech, generateVoiceOverScript } from "./providers/tts.provider";
+export type { TTSVoice, TTSOptions, TTSResult } from "./providers/tts.provider";
 export { parseRssItems } from "./utils/rss-parser";
 export type { RssItem } from "./utils/rss-parser";
 export type { DiscoveredItem } from "./tools/trending-sources/index";

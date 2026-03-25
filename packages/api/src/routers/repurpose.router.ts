@@ -62,6 +62,9 @@ export const repurposeRouter = createRouter({
         logoUrl: z.string().optional(),
         accentColor: z.string().optional(),
         theme: z.enum(["dark", "light", "gradient"]).default("dark"),
+        voiceOver: z.boolean().default(false),
+        voiceType: z.enum(["nova", "shimmer", "alloy", "echo", "fable", "onyx"]).default("nova"),
+        bgMusic: z.boolean().default(false),
       })
     )
     .mutation(async ({ input }) => {
@@ -72,6 +75,8 @@ export const repurposeRouter = createRouter({
         generateCarouselImages,
         generateReelVideo,
         generateContent,
+        generateSpeech,
+        generateVoiceOverScript,
       } = await import("@postautomation/ai");
 
       // 1. Extract content from URL
@@ -192,8 +197,56 @@ Return ONLY the JSON array, no other text.`;
         console.log(`[Repurpose] ${uploadedUrls.length} carousel slides uploaded`);
 
         if (input.format === "reel") {
-          // Stitch slides into video
+          // Stitch slides into video with optional voice-over + background music
           try {
+            // Generate voice-over if requested
+            let voiceOverBase64: string | undefined;
+            if (input.voiceOver) {
+              try {
+                const totalSlidesDuration = carouselResult.slides.length * 3;
+                const script = generateVoiceOverScript(extracted.title, extracted.body, totalSlidesDuration);
+                console.log(`[Repurpose] Generating voice-over (${script.split(/\s+/).length} words, voice: ${input.voiceType})`);
+                const ttsResult = await generateSpeech({
+                  text: script,
+                  voice: input.voiceType as any,
+                  speed: 1.0,
+                  model: "tts-1-hd",
+                });
+                voiceOverBase64 = ttsResult.audioBase64;
+                console.log(`[Repurpose] Voice-over generated (~${Math.round(ttsResult.durationEstimate)}s)`);
+              } catch (ttsErr) {
+                console.warn(`[Repurpose] Voice-over generation failed:`, (ttsErr as Error).message);
+              }
+            }
+
+            // Fetch background music if requested
+            let bgMusicBase64: string | undefined;
+            if (input.bgMusic) {
+              try {
+                // Use a bundled news-style background music (royalty-free)
+                // Generate a subtle ambient tone using FFmpeg if no music file available
+                const { execSync } = await import("node:child_process");
+                const { readFileSync, mkdirSync } = await import("node:fs");
+                const { join } = await import("node:path");
+                const { tmpdir } = await import("node:os");
+                const musicDir = join(tmpdir(), `bgmusic-${Date.now()}`);
+                mkdirSync(musicDir, { recursive: true });
+                const musicPath = join(musicDir, "bg.mp3");
+                // Generate a subtle ambient news-style tone (low drone + soft pad)
+                const duration = carouselResult.slides.length * 3 + 2;
+                execSync(
+                  `ffmpeg -y -f lavfi -i "sine=frequency=110:duration=${duration}" -f lavfi -i "sine=frequency=165:duration=${duration}" -filter_complex "[0:a][1:a]amix=inputs=2,volume=0.3,afade=t=in:d=1,afade=t=out:st=${duration - 1}:d=1[out]" -map "[out]" -c:a libmp3lame -b:a 128k "${musicPath}"`,
+                  { timeout: 30_000, stdio: "pipe" }
+                );
+                bgMusicBase64 = readFileSync(musicPath).toString("base64");
+                const { rmSync } = await import("node:fs");
+                rmSync(musicDir, { recursive: true, force: true });
+                console.log(`[Repurpose] Background music generated (${duration}s)`);
+              } catch (musicErr) {
+                console.warn(`[Repurpose] Background music generation failed:`, (musicErr as Error).message);
+              }
+            }
+
             const reelResult = await generateReelVideo({
               slideImages: carouselResult.slides.map((s) => ({
                 imageBase64: s.imageBase64,
@@ -202,6 +255,10 @@ Return ONLY the JSON array, no other text.`;
               slideDuration: 3,
               width: 1080,
               height: 1350,
+              voiceOverBase64,
+              bgMusicBase64,
+              bgMusicVolume: 0.15,
+              voiceVolume: 0.9,
             });
 
             const videoKey = `repurpose/reel-${Date.now()}-${crypto.randomBytes(4).toString("hex")}.mp4`;
