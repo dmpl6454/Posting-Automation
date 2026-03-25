@@ -135,6 +135,49 @@ export function createPostPublishWorker() {
         }
       }
 
+      // Auto-generate AI image for media-required platforms (Instagram, Facebook) if no media attached
+      const mediaRequiredPlatforms = ["INSTAGRAM", "FACEBOOK"];
+      if (mediaUrls.length === 0 && mediaRequiredPlatforms.includes(platform)) {
+        console.log(`[PostPublish] No media for ${platform} — auto-generating AI image...`);
+        try {
+          const { generateImage } = await import("@postautomation/ai");
+          const headline = content.split("\n")[0]?.slice(0, 100) || "Social Media Post";
+          const aiResult = await generateImage({
+            prompt: `Create a professional, eye-catching social media post image about: "${headline}".
+Visually stunning design with bold modern typography, vibrant colors, dramatic imagery related to the topic.
+4:5 portrait aspect ratio. Premium quality social media creative. Do NOT include watermarks.`,
+            aspectRatio: "3:4",
+          });
+
+          // Upload to S3
+          const { S3Client, PutObjectCommand } = await import("@aws-sdk/client-s3");
+          const s3 = new S3Client({
+            region: process.env.S3_REGION || "us-east-1",
+            endpoint: process.env.S3_ENDPOINT || undefined,
+            forcePathStyle: true,
+            credentials: {
+              accessKeyId: process.env.S3_ACCESS_KEY_ID || process.env.S3_ACCESS_KEY || "",
+              secretAccessKey: process.env.S3_SECRET_ACCESS_KEY || process.env.S3_SECRET_KEY || "",
+            },
+          });
+          const bucket = process.env.S3_BUCKET || "postautomation-media";
+          const ext = aiResult.mimeType.includes("png") ? "png" : "jpg";
+          const ct = aiResult.mimeType.includes("png") ? "image/png" : "image/jpeg";
+          const key = `auto-gen/${platform.toLowerCase()}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.${ext}`;
+          const buf = Buffer.from(aiResult.imageBase64, "base64");
+          await s3.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: buf, ContentType: ct }));
+          const publicUrl = process.env.S3_PUBLIC_URL
+            ? `${process.env.S3_PUBLIC_URL}/${key}`
+            : `${process.env.S3_ENDPOINT || "https://s3.amazonaws.com"}/${bucket}/${key}`;
+          mediaUrls = [publicUrl];
+          mediaTypes.push(ct);
+          console.log(`[PostPublish] AI image generated and uploaded: ${publicUrl}`);
+        } catch (aiErr) {
+          console.warn(`[PostPublish] AI image generation failed:`, (aiErr as Error).message);
+          // Will fail at validation below
+        }
+      }
+
       // Validate content before publishing
       const errors = provider.validateContent({ content, mediaUrls, mediaTypes });
       if (errors.length > 0) {
