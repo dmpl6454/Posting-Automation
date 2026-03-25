@@ -241,52 +241,49 @@ export const newsgridRouter = createRouter({
               // fallback to profile logo_path
             }
 
-            // Generate full news creative via Gemini AI (complete design with headline)
-            const { generateImage: genGeminiImg } = await import("@postautomation/ai");
+            // Step 1: Generate a relevant background image via Gemini AI
+            // Step 2: Composite headline text + logo via Puppeteer HTML template
+            const { generateImage: genGeminiImg, generateStaticNewsCreativeImage } = await import("@postautomation/ai");
             let backgroundImageUrl: string | null = null;
 
-            // Build logo reference for Gemini
-            const logoRefs: Array<{ base64: string; mimeType?: string }> = [];
-            if (resolvedLogoUrl) {
-              try {
-                const logoFetch = await fetch(resolvedLogoUrl);
-                if (logoFetch.ok) {
-                  const logoBuffer = Buffer.from(await logoFetch.arrayBuffer());
-                  const logoMime = logoFetch.headers.get("content-type") || "image/png";
-                  logoRefs.push({ base64: logoBuffer.toString("base64"), mimeType: logoMime });
-                }
-              } catch { /* skip logo ref if fetch fails */ }
-            }
-
+            // Generate background image with Gemini (no text — just a relevant visual)
             try {
-              const creativePrompt = `Create a professional, visually striking Instagram news post image (4:5 aspect ratio, 1080x1350px) about this headline:
+              const bgPrompt = `Create a cinematic, high-quality background image related to this news headline:
 
 "${rephrasedHeadline}"
 
-Design requirements:
-- This is a NEWS post for the channel "${channel.name}" (@${channel.username ?? channel.platformId})
-- The headline text MUST be prominently displayed on the image in bold, large typography
-- Use dramatic, editorial design with modern typography
-- Include the channel name "${channel.name}" at the bottom as a branding element
-- Add today's date: ${new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }).toUpperCase()}
-- Use a cinematic color scheme that matches the mood of the news
-- Make it look like a premium news media brand post (similar to LiveLaw, NDTV, India Today style)
-- Include relevant visual elements/illustrations related to the headline topic
-- The overall design should be scroll-stopping and shareable
-${logoRefs.length > 0 ? "- Use the provided logo image in the design as the channel branding" : ""}`;
+Requirements:
+- Photorealistic or editorial illustration style
+- Dramatic lighting, rich colors, and strong visual mood
+- DO NOT include any text, words, letters, numbers, or typography
+- DO NOT include any logos or branding elements
+- The image should work as a background with text overlaid on top
+- Use dark/moody tones so white text will be readable over it
+- Relevant visual elements that convey the topic of the headline`;
 
-              const imgRes = await genGeminiImg({
-                prompt: creativePrompt,
+              const bgRes = await genGeminiImg({
+                prompt: bgPrompt,
                 aspectRatio: "3:4",
-                referenceImages: logoRefs.length > 0 ? logoRefs : undefined,
               });
-              backgroundImageUrl = `data:${imgRes.mimeType};base64,${imgRes.imageBase64}`;
-              console.log(`[NewsGrid] Gemini creative generated for "${rephrasedHeadline.slice(0, 40)}..."`);
+              const geminiDataUrl = `data:${bgRes.mimeType};base64,${bgRes.imageBase64}`;
+              console.log(`[NewsGrid] Gemini background generated for "${rephrasedHeadline.slice(0, 40)}..."`);
+
+              // Now composite with Puppeteer template (crisp text + logo)
+              const imgResult = await generateStaticNewsCreativeImage({
+                headline:    rephrasedHeadline,
+                channelName: channel.name,
+                handle:      channel.username ?? channel.platformId,
+                logoUrl:     resolvedLogoUrl,
+                template:    creativeSpec.template as any,
+                bgSeed:      seed,
+                backgroundImageUrl: geminiDataUrl,
+              });
+              backgroundImageUrl = `data:${imgResult.mimeType};base64,${imgResult.imageBase64}`;
+              console.log(`[NewsGrid] Composited creative with Gemini bg + Puppeteer text/logo`);
             } catch (e) {
-              console.warn(`[NewsGrid] Gemini creative failed, using Puppeteer fallback:`, (e as Error).message);
-              // Fallback to Puppeteer template
+              console.warn(`[NewsGrid] Gemini bg failed, using Puppeteer-only fallback:`, (e as Error).message);
+              // Fallback: Puppeteer template with stock background
               try {
-                const { generateStaticNewsCreativeImage } = await import("@postautomation/ai");
                 const imgResult = await generateStaticNewsCreativeImage({
                   headline:    rephrasedHeadline,
                   channelName: channel.name,
