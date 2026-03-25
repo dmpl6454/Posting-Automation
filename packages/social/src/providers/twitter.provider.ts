@@ -20,7 +20,7 @@ export class TwitterProvider extends SocialProvider {
   readonly platform: SocialPlatform = "TWITTER";
   readonly displayName = "Twitter / X";
   readonly constraints: PlatformConstraints = {
-    maxContentLength: 280,
+    maxContentLength: 25000, // X Premium supports up to 25,000 characters
     supportedMediaTypes: ["image/jpeg", "image/png", "image/gif", "video/mp4"],
     maxMediaCount: 4,
     maxMediaSize: 5 * 1024 * 1024,

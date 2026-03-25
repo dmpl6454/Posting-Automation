@@ -66,7 +66,7 @@ export function PostPreviewSwitcher({
     timestamp,
   };
 
-  const availablePlatforms = platforms ?? (platform ? [platform] : ["twitter", "linkedin", "facebook", "instagram"]);
+  const availablePlatforms = platforms ?? (platform ? [platform] : ["instagram", "facebook", "twitter", "linkedin"]);
 
   const [activePlatform, setActivePlatform] = useState<string>(
     availablePlatforms[0] || "twitter"

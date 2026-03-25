@@ -1,5 +1,5 @@
 export const PLATFORM_CHAR_LIMITS: Record<string, number> = {
-  TWITTER: 280,
+  TWITTER: 25000, // X Premium allows up to 25,000 characters
   INSTAGRAM: 2200,
   FACEBOOK: 63206,
   LINKEDIN: 3000,
