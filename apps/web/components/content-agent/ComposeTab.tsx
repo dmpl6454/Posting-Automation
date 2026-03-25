@@ -229,7 +229,7 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
 
     try {
       setIsUploading(true);
-      // Upload any files that don't have a mediaId yet (fallback for edge cases)
+      // Upload any files that don't have a mediaId yet
       const mediaIds: string[] = [];
       for (const item of postMedia) {
         if (item.mediaId) {
@@ -237,6 +237,18 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
         } else if (item.file) {
           const mediaId = await uploadFileToS3(item.file);
           mediaIds.push(mediaId);
+        } else if (item.url && !item.url.startsWith("blob:")) {
+          // External URL (e.g. from repurpose AI image) — download and upload
+          try {
+            const resp = await fetch(item.url);
+            const blob = await resp.blob();
+            const ext = item.url.match(/\.(png|jpg|jpeg|webp|mp4)(?:\?|$)/i)?.[1] || "jpg";
+            const file = new File([blob], `repurpose-${Date.now()}.${ext}`, { type: blob.type || "image/jpeg" });
+            const mediaId = await uploadFileToS3(file);
+            mediaIds.push(mediaId);
+          } catch (dlErr) {
+            console.warn("Failed to download external image:", dlErr);
+          }
         }
       }
 
