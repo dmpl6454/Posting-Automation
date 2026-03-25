@@ -74,7 +74,7 @@ export function RepurposeTab() {
 
   // Results
   const [results, setResults] = useState<{
-    extracted?: { title: string; description: string; siteName: string; type: string; url: string };
+    extracted?: { title: string; description: string; siteName: string; type: string; url: string; images?: string[] };
     platformContent: Record<string, string>;
     mediaUrls: string[];
     mediaType: string;
@@ -412,37 +412,77 @@ export function RepurposeTab() {
       {/* Results */}
       {results && (
         <div className="space-y-4">
-          {/* Generated Media */}
+          {/* Extracted Article Summary */}
+          {results.extracted && (
+            <Card className="border-blue-200 bg-blue-50/30 dark:border-blue-900 dark:bg-blue-950/20">
+              <CardContent className="pt-4">
+                <div className="flex items-start gap-4">
+                  {results.extracted.images?.[0] && (
+                    <img src={results.extracted.images[0]} alt="" className="h-20 w-20 rounded-lg object-cover shrink-0" />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <h3 className="font-semibold text-sm leading-tight">{results.extracted.title}</h3>
+                    {results.extracted.description && (
+                      <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{results.extracted.description}</p>
+                    )}
+                    <div className="flex items-center gap-2 mt-2">
+                      <Badge variant="outline" className="text-[10px]">{results.extracted.siteName}</Badge>
+                      <Badge variant="secondary" className="text-[10px]">{results.extracted.type}</Badge>
+                      <a href={results.extracted.url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-blue-500 hover:underline flex items-center gap-0.5">
+                        <ExternalLink className="h-2.5 w-2.5" /> Source
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Generated Media Preview */}
           {results.mediaUrls.length > 0 && (
             <Card>
               <CardHeader className="pb-2">
                 <CardTitle className="text-base flex items-center gap-2">
-                  {results.format === "reel" ? <Film className="h-4 w-4" /> : results.mediaUrls.length > 1 ? <Layers className="h-4 w-4" /> : <Image className="h-4 w-4" />}
-                  Generated {results.format === "reel" ? "Reel Video" : results.mediaUrls.length > 1 ? `Carousel (${results.mediaUrls.length} slides)` : "Image"}
+                  {results.format === "reel" ? <Film className="h-4 w-4 text-purple-500" /> : results.mediaUrls.length > 1 ? <Layers className="h-4 w-4 text-blue-500" /> : <Image className="h-4 w-4 text-green-500" />}
+                  Generated {results.format === "reel" ? "Reel Video" : results.mediaUrls.length > 1 ? `Carousel (${results.mediaUrls.length} slides)` : "Static Post"}
                 </CardTitle>
+                <CardDescription>
+                  {results.format === "reel" ? "AI-generated video with slides" : results.format === "static" ? "AI-generated background with branded overlay" : "Swipe through carousel slides"}
+                </CardDescription>
               </CardHeader>
               <CardContent>
                 {results.mediaType === "video/mp4" ? (
-                  <video
-                    src={results.mediaUrls[0]}
-                    controls
-                    className="w-full max-w-sm rounded-lg mx-auto aspect-[4/5]"
-                  />
+                  <div className="flex justify-center">
+                    <video
+                      src={results.mediaUrls[0]}
+                      controls
+                      className="w-full max-w-xs rounded-xl shadow-lg aspect-[4/5]"
+                      poster={undefined}
+                    />
+                  </div>
                 ) : results.mediaUrls.length === 1 ? (
-                  <img
-                    src={results.mediaUrls[0]}
-                    alt="Generated"
-                    className="w-full max-w-sm rounded-lg mx-auto aspect-[4/5] object-cover"
-                  />
+                  <div className="flex justify-center">
+                    <img
+                      src={results.mediaUrls[0]}
+                      alt="Generated post"
+                      className="w-full max-w-xs rounded-xl shadow-lg"
+                    />
+                  </div>
                 ) : (
-                  <div className="flex gap-3 overflow-x-auto pb-2">
-                    {results.mediaUrls.map((url, i) => (
-                      <img
-                        key={i}
-                        src={url}
-                        alt={`Slide ${i + 1}`}
-                        className="h-64 rounded-lg shrink-0 aspect-[4/5] object-cover"
-                      />
+                  <div className="flex gap-3 overflow-x-auto pb-3 snap-x snap-mandatory">
+                    {results.mediaUrls.map((mediaUrl, i) => (
+                      <div key={i} className="shrink-0 snap-center">
+                        <div className="relative">
+                          <img
+                            src={mediaUrl}
+                            alt={`Slide ${i + 1}`}
+                            className="h-72 rounded-xl shadow-md aspect-[4/5] object-cover"
+                          />
+                          <div className="absolute top-2 right-2 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded-full">
+                            {i + 1}/{results.mediaUrls.length}
+                          </div>
+                        </div>
+                      </div>
                     ))}
                   </div>
                 )}

@@ -77,6 +77,7 @@ export const repurposeRouter = createRouter({
         generateContent,
         generateSpeech,
         generateVoiceOverScript,
+        generateImage: generateGeminiImage,
       } = await import("@postautomation/ai");
 
       // 1. Extract content from URL
@@ -99,8 +100,33 @@ export const repurposeRouter = createRouter({
       let mediaType = "image/jpeg";
 
       if (input.format === "static") {
-        // Single news creative image
+        // Single news creative: AI background + Puppeteer text/logo overlay
         try {
+          // Step 1: Generate a content-relevant background image with Gemini AI
+          let backgroundImageUrl: string | undefined;
+          try {
+            const bgPrompt = `Create a cinematic, high-quality background image related to this topic:
+
+"${extracted.title}"
+
+Context: ${extracted.body.slice(0, 500)}
+
+Style: Professional photojournalistic, dramatic lighting, shallow depth of field, 4:5 aspect ratio.
+DO NOT include any text, words, letters, numbers, logos, watermarks, or typography in the image.
+The image should be slightly blurred/dark to allow text overlay on top.`;
+
+            console.log(`[Repurpose] Generating AI background for: "${extracted.title.slice(0, 50)}..."`);
+            const bgRes = await generateGeminiImage({
+              prompt: bgPrompt,
+              aspectRatio: "3:4",
+            });
+            backgroundImageUrl = `data:${bgRes.mimeType};base64,${bgRes.imageBase64}`;
+            console.log(`[Repurpose] AI background generated successfully`);
+          } catch (bgErr) {
+            console.warn(`[Repurpose] AI background failed, using stock fallback:`, (bgErr as Error).message);
+          }
+
+          // Step 2: Composite headline text + logo via Puppeteer HTML template
           const result = await generateStaticNewsCreativeImage({
             headline: extracted.title,
             channelName,
@@ -108,6 +134,7 @@ export const repurposeRouter = createRouter({
             logoUrl: input.logoUrl || null,
             template: "breaking_news",
             bgSeed: Date.now(),
+            backgroundImageUrl,
             date: new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }).toUpperCase(),
           });
 
