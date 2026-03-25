@@ -81,7 +81,7 @@ export function InstagramPreview({
         </div>
 
         {/* Image area */}
-        <div className="relative aspect-square w-full bg-zinc-100 dark:bg-zinc-800">
+        <div className="relative aspect-[4/5] w-full bg-zinc-100 dark:bg-zinc-800">
           {mediaUrls && mediaUrls.length > 0 ? (
             <>
               {/* eslint-disable-next-line @next/next/no-img-element */}
