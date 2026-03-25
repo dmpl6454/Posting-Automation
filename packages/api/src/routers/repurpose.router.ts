@@ -180,7 +180,7 @@ Return ONLY the JSON array, no other text.`;
           channelName,
           handle,
           logoUrl: input.logoUrl || null,
-          accentColor: input.accentColor,
+          accentColor: input.accentColor ?? undefined,
           theme: input.theme,
         });
 
