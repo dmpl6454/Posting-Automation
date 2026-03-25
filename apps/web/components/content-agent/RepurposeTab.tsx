@@ -5,8 +5,10 @@ import { trpc } from "~/lib/trpc/client";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
 import { Textarea } from "~/components/ui/textarea";
+import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
 import { Badge } from "~/components/ui/badge";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "~/components/ui/tabs";
 import {
   Select,
   SelectContent,
@@ -23,6 +25,12 @@ import {
   RefreshCw,
   FileText,
   ArrowRight,
+  Link2,
+  Image,
+  Layers,
+  Film,
+  Globe,
+  ExternalLink,
 } from "lucide-react";
 
 const ALL_PLATFORMS = [
@@ -32,28 +40,116 @@ const ALL_PLATFORMS = [
 
 const providers = ["openai", "anthropic", "gemini", "grok", "deepseek"] as const;
 
+const FORMAT_OPTIONS = [
+  { id: "static" as const, label: "Static Post", icon: Image, desc: "Single branded image + caption" },
+  { id: "carousel" as const, label: "Carousel", icon: Layers, desc: "Multi-slide carousel post" },
+  { id: "reel" as const, label: "Reel / Video", icon: Film, desc: "Slideshow video from key points" },
+];
+
+const THEMES = [
+  { id: "dark" as const, label: "Dark", color: "bg-zinc-900" },
+  { id: "light" as const, label: "Light", color: "bg-zinc-100" },
+  { id: "gradient" as const, label: "Gradient", color: "bg-gradient-to-r from-indigo-900 to-purple-900" },
+];
+
 export function RepurposeTab() {
   const { toast } = useToast();
+
+  // Source mode
+  const [sourceMode, setSourceMode] = useState<"url" | "text">("url");
+  const [url, setUrl] = useState("");
   const [originalContent, setOriginalContent] = useState("");
-  const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>(["TWITTER", "LINKEDIN", "INSTAGRAM"]);
-  const [provider, setProvider] = useState<typeof providers[number]>("openai");
-  const [results, setResults] = useState<Record<string, string> | null>(null);
+
+  // Options
+  const [format, setFormat] = useState<"static" | "carousel" | "reel">("static");
+  const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>(["INSTAGRAM", "TWITTER", "LINKEDIN"]);
+  const [provider, setProvider] = useState<typeof providers[number]>("gemini");
+  const [theme, setTheme] = useState<"dark" | "light" | "gradient">("dark");
+
+  // Results
+  const [results, setResults] = useState<{
+    extracted?: { title: string; description: string; siteName: string; type: string; url: string };
+    platformContent: Record<string, string>;
+    mediaUrls: string[];
+    mediaType: string;
+    format: string;
+  } | null>(null);
   const [copiedPlatform, setCopiedPlatform] = useState<string | null>(null);
 
-  const repurpose = trpc.repurpose.repurpose.useMutation({
+  // Channel info (for branding)
+  const { data: channels } = trpc.channel.list.useQuery();
+  const primaryChannel = (channels as any[])?.[0];
+
+  // URL extract (preview)
+  const [extractedPreview, setExtractedPreview] = useState<{
+    title: string; description: string; siteName: string; type: string; images: string[];
+  } | null>(null);
+
+  const extractMutation = trpc.repurpose.extractUrl.useMutation({
     onSuccess: (data) => {
-      setResults(data.platformContent);
-      toast({ title: "Content repurposed!", description: "Platform-specific content is ready." });
+      setExtractedPreview(data);
+      toast({ title: "Content extracted", description: `"${data.title}"` });
     },
     onError: (err) => {
-      toast({ title: "Repurpose failed", description: err.message || "Please check your AI provider keys.", variant: "destructive" });
+      toast({ title: "Extraction failed", description: err.message, variant: "destructive" });
     },
   });
 
-  const handleGenerate = () => {
-    if (!originalContent || selectedPlatforms.length === 0) return;
-    repurpose.mutate({ originalContent, targetPlatforms: selectedPlatforms, provider });
+  // Text-based repurpose (existing)
+  const repurpose = trpc.repurpose.repurpose.useMutation({
+    onSuccess: (data) => {
+      setResults({ platformContent: data.platformContent, mediaUrls: [], mediaType: "", format: "text" });
+      toast({ title: "Content repurposed!" });
+    },
+    onError: (err) => {
+      toast({ title: "Repurpose failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  // URL-based repurpose
+  const repurposeFromUrl = trpc.repurpose.repurposeFromUrl.useMutation({
+    onSuccess: (data) => {
+      setResults(data);
+      const mediaCount = data.mediaUrls.length;
+      toast({
+        title: "Content repurposed!",
+        description: `${Object.keys(data.platformContent).length} captions + ${mediaCount} ${data.format === "reel" ? "video" : mediaCount === 1 ? "image" : "slides"} generated.`,
+      });
+    },
+    onError: (err) => {
+      toast({ title: "Repurpose failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const handleExtractPreview = () => {
+    if (!url) return;
+    extractMutation.mutate({ url });
   };
+
+  const handleGenerate = () => {
+    if (sourceMode === "url") {
+      if (!url || selectedPlatforms.length === 0) return;
+      repurposeFromUrl.mutate({
+        url,
+        format,
+        targetPlatforms: selectedPlatforms,
+        provider,
+        channelName: primaryChannel?.name,
+        channelHandle: primaryChannel?.username,
+        logoUrl: primaryChannel?.avatar,
+        theme,
+      });
+    } else {
+      if (!originalContent || selectedPlatforms.length === 0) return;
+      repurpose.mutate({
+        originalContent,
+        targetPlatforms: selectedPlatforms,
+        provider,
+      });
+    }
+  };
+
+  const isLoading = repurpose.isPending || repurposeFromUrl.isPending;
 
   const togglePlatform = (platform: string) => {
     setSelectedPlatforms((prev) =>
@@ -77,21 +173,123 @@ export function RepurposeTab() {
             Repurpose Content
           </CardTitle>
           <CardDescription>
-            Paste your blog post, article, or any long-form content and select target platforms
+            Paste a URL or text content to create social media posts, carousels, or reels
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-5">
-          <div className="space-y-1.5">
-            <Label>Source Content</Label>
-            <Textarea
-              value={originalContent}
-              onChange={(e) => setOriginalContent(e.target.value)}
-              placeholder="Paste your blog post, article, newsletter, or any content here..."
-              className="min-h-[200px] resize-y"
-            />
-            <p className="text-xs text-muted-foreground">{originalContent.length} characters</p>
-          </div>
+          {/* Source Mode Tabs */}
+          <Tabs value={sourceMode} onValueChange={(v) => setSourceMode(v as "url" | "text")}>
+            <TabsList className="w-full">
+              <TabsTrigger value="url" className="flex-1 gap-2">
+                <Link2 className="h-4 w-4" />
+                From URL
+              </TabsTrigger>
+              <TabsTrigger value="text" className="flex-1 gap-2">
+                <FileText className="h-4 w-4" />
+                From Text
+              </TabsTrigger>
+            </TabsList>
 
+            <TabsContent value="url" className="space-y-4 mt-4">
+              <div className="space-y-1.5">
+                <Label>URL</Label>
+                <div className="flex gap-2">
+                  <Input
+                    type="url"
+                    value={url}
+                    onChange={(e) => { setUrl(e.target.value); setExtractedPreview(null); }}
+                    placeholder="https://example.com/article, youtube.com/watch?v=..., x.com/post/..."
+                    className="flex-1"
+                  />
+                  <Button
+                    variant="outline"
+                    onClick={handleExtractPreview}
+                    disabled={!url || extractMutation.isPending}
+                  >
+                    {extractMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Globe className="h-4 w-4" />}
+                    <span className="ml-1.5 hidden sm:inline">Preview</span>
+                  </Button>
+                </div>
+              </div>
+
+              {/* URL Preview */}
+              {extractedPreview && (
+                <div className="rounded-lg border bg-muted/30 p-3 space-y-1.5">
+                  <div className="flex items-start gap-3">
+                    {extractedPreview.images?.[0] && (
+                      <img src={extractedPreview.images[0]} alt="" className="h-16 w-16 rounded-md object-cover shrink-0" />
+                    )}
+                    <div className="min-w-0">
+                      <p className="font-medium text-sm truncate">{extractedPreview.title}</p>
+                      <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{extractedPreview.description}</p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <Badge variant="outline" className="text-[10px]">{extractedPreview.siteName}</Badge>
+                        <Badge variant="secondary" className="text-[10px]">{extractedPreview.type}</Badge>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Output Format */}
+              <div className="space-y-2">
+                <Label>Output Format</Label>
+                <div className="grid grid-cols-3 gap-2">
+                  {FORMAT_OPTIONS.map(({ id, label, icon: Icon, desc }) => (
+                    <button
+                      key={id}
+                      onClick={() => setFormat(id)}
+                      className={`flex flex-col items-center gap-1.5 rounded-lg border p-3 text-center transition-all ${
+                        format === id
+                          ? "border-primary bg-primary/5 ring-1 ring-primary"
+                          : "border-border hover:border-primary/50"
+                      }`}
+                    >
+                      <Icon className={`h-5 w-5 ${format === id ? "text-primary" : "text-muted-foreground"}`} />
+                      <span className="text-xs font-medium">{label}</span>
+                      <span className="text-[10px] text-muted-foreground">{desc}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Theme (for carousel/reel) */}
+              {(format === "carousel" || format === "reel") && (
+                <div className="space-y-2">
+                  <Label>Slide Theme</Label>
+                  <div className="flex gap-2">
+                    {THEMES.map(({ id, label, color }) => (
+                      <button
+                        key={id}
+                        onClick={() => setTheme(id)}
+                        className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-medium transition-all ${
+                          theme === id ? "border-primary ring-1 ring-primary" : "border-border hover:border-primary/50"
+                        }`}
+                      >
+                        <div className={`h-4 w-4 rounded-full ${color}`} />
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </TabsContent>
+
+            <TabsContent value="text" className="space-y-4 mt-4">
+              <div className="space-y-1.5">
+                <Label>Source Content</Label>
+                <Textarea
+                  value={originalContent}
+                  onChange={(e) => setOriginalContent(e.target.value)}
+                  placeholder="Paste your blog post, article, newsletter, or any content here..."
+                  className="min-h-[200px] resize-y"
+                />
+                <p className="text-xs text-muted-foreground">{originalContent.length} characters</p>
+              </div>
+            </TabsContent>
+          </Tabs>
+
+          {/* Target Platforms */}
           <div className="space-y-2">
             <Label>Target Platforms</Label>
             <div className="flex flex-wrap gap-2">
@@ -114,6 +312,7 @@ export function RepurposeTab() {
             </p>
           </div>
 
+          {/* AI Provider */}
           <div className="w-48 space-y-1.5">
             <Label>AI Provider</Label>
             <Select value={provider} onValueChange={(v) => setProvider(v as typeof providers[number])}>
@@ -130,28 +329,74 @@ export function RepurposeTab() {
             </Select>
           </div>
 
+          {/* Generate Button */}
           <Button
             onClick={handleGenerate}
-            disabled={!originalContent || selectedPlatforms.length === 0 || repurpose.isPending}
+            disabled={
+              (sourceMode === "url" ? !url : !originalContent) ||
+              selectedPlatforms.length === 0 ||
+              isLoading
+            }
             className="w-full gap-2"
+            size="lg"
           >
-            {repurpose.isPending ? (
+            {isLoading ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
               <Sparkles className="h-4 w-4" />
             )}
-            {repurpose.isPending
-              ? "Repurposing..."
-              : `Repurpose for ${selectedPlatforms.length} Platform${selectedPlatforms.length !== 1 ? "s" : ""}`}
+            {isLoading
+              ? `Generating ${format === "carousel" ? "carousel" : format === "reel" ? "reel" : "post"}...`
+              : `Repurpose as ${FORMAT_OPTIONS.find((f) => f.id === format)?.label || "Static Post"}`}
           </Button>
         </CardContent>
       </Card>
 
+      {/* Results */}
       {results && (
         <div className="space-y-4">
-          <h2 className="text-lg font-semibold">Generated Content</h2>
+          {/* Generated Media */}
+          {results.mediaUrls.length > 0 && (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base flex items-center gap-2">
+                  {results.format === "reel" ? <Film className="h-4 w-4" /> : results.mediaUrls.length > 1 ? <Layers className="h-4 w-4" /> : <Image className="h-4 w-4" />}
+                  Generated {results.format === "reel" ? "Reel Video" : results.mediaUrls.length > 1 ? `Carousel (${results.mediaUrls.length} slides)` : "Image"}
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {results.mediaType === "video/mp4" ? (
+                  <video
+                    src={results.mediaUrls[0]}
+                    controls
+                    className="w-full max-w-sm rounded-lg mx-auto aspect-[4/5]"
+                  />
+                ) : results.mediaUrls.length === 1 ? (
+                  <img
+                    src={results.mediaUrls[0]}
+                    alt="Generated"
+                    className="w-full max-w-sm rounded-lg mx-auto aspect-[4/5] object-cover"
+                  />
+                ) : (
+                  <div className="flex gap-3 overflow-x-auto pb-2">
+                    {results.mediaUrls.map((url, i) => (
+                      <img
+                        key={i}
+                        src={url}
+                        alt={`Slide ${i + 1}`}
+                        className="h-64 rounded-lg shrink-0 aspect-[4/5] object-cover"
+                      />
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Platform Captions */}
+          <h2 className="text-lg font-semibold">Platform Captions</h2>
           <div className="grid gap-4 sm:grid-cols-1 lg:grid-cols-2">
-            {Object.entries(results).map(([platform, content]) => (
+            {Object.entries(results.platformContent).map(([platform, content]) => (
               <Card key={platform} className="border-green-200 bg-green-50/30 dark:border-green-900 dark:bg-green-950/20">
                 <CardHeader className="pb-2">
                   <div className="flex items-center justify-between">
@@ -178,7 +423,8 @@ export function RepurposeTab() {
                       size="sm"
                       className="gap-1.5 text-xs"
                       onClick={() => {
-                        window.location.href = `/dashboard/content-agent?tab=compose&content=${encodeURIComponent(content)}`;
+                        const mediaParam = results.mediaUrls[0] ? `&aiImage=${encodeURIComponent(results.mediaUrls[0])}` : "";
+                        window.location.href = `/dashboard/content-agent?tab=compose&content=${encodeURIComponent(content)}${mediaParam}`;
                       }}
                     >
                       <FileText className="h-3 w-3" />
@@ -194,7 +440,7 @@ export function RepurposeTab() {
             <Button
               className="gap-2"
               onClick={() => {
-                toast({ title: "Posts created as drafts", description: `${Object.keys(results).length} draft posts have been created.` });
+                toast({ title: "Posts created as drafts", description: `${Object.keys(results.platformContent).length} draft posts created.` });
               }}
             >
               <ArrowRight className="h-4 w-4" />
