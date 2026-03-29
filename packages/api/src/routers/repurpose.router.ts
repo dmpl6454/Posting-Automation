@@ -308,14 +308,10 @@ Return ONLY the JSON array, no other text.`;
 
         console.log(`[Repurpose] Generating ${allSlides.length} AI carousel slides...`);
 
-        // Generate each slide as an AI-designed creative
-        const slideImages: Array<{ imageBase64: string; mimeType: string }> = [];
-        for (let i = 0; i < allSlides.length; i++) {
-          const slide = allSlides[i]!;
-          try {
-            let slideImagePrompt: string;
-            if (slide.type === "cover") {
-              slideImagePrompt = `Design a bold, eye-catching social media carousel COVER slide (slide 1 of ${allSlides.length}).
+        // Build prompts for all slides
+        const slidePrompts: string[] = allSlides.map((slide, i) => {
+          if (slide.type === "cover") {
+            return `Design a bold, eye-catching social media carousel COVER slide (slide 1 of ${allSlides.length}).
 
 ${contentBrief}
 
@@ -330,8 +326,8 @@ Requirements:
 - 4:5 portrait aspect ratio
 - Make it look like a premium Instagram carousel cover
 - Use vibrant, attention-grabbing colors`;
-            } else if (slide.type === "cta") {
-              slideImagePrompt = `Design a social media carousel CTA (call-to-action) slide (last slide of ${allSlides.length}).
+          } else if (slide.type === "cta") {
+            return `Design a social media carousel CTA (call-to-action) slide (last slide of ${allSlides.length}).
 
 Text: "Follow for More"
 Handle: "${handle}"
@@ -344,8 +340,8 @@ Requirements:
 - Matching color scheme for social media
 - 4:5 portrait aspect ratio
 - Professional, engaging call-to-action design`;
-            } else {
-              slideImagePrompt = `Design a social media carousel content slide (slide ${i + 1} of ${allSlides.length}).
+          } else {
+            return `Design a social media carousel content slide (slide ${i + 1} of ${allSlides.length}).
 
 Heading: "${slide.title}"
 Content: "${slide.body}"
@@ -358,32 +354,66 @@ Requirements:
 - 4:5 portrait aspect ratio
 - Professional layout with good spacing
 - Use complementary colors`;
-            }
-
-            const slideResult = await generateGeminiImage({
-              prompt: slideImagePrompt,
-              aspectRatio: "3:4",
-            });
-
-            slideImages.push({
-              imageBase64: slideResult.imageBase64,
-              mimeType: slideResult.mimeType,
-            });
-
-            // Upload to S3
-            const ext = slideResult.mimeType.includes("png") ? "png" : "jpg";
-            const contentType = slideResult.mimeType.includes("png") ? "image/png" : "image/jpeg";
-            const key = `repurpose/carousel-${Date.now()}-${i}-${crypto.randomBytes(3).toString("hex")}.${ext}`;
-            const buf = Buffer.from(slideResult.imageBase64, "base64");
-            await s3.send(new PutObjectCommand({ Bucket: BUCKET, Key: key, Body: buf, ContentType: contentType }));
-            uploadedUrls.push(getPublicUrl(key));
-            console.log(`[Repurpose] Slide ${i + 1}/${allSlides.length} generated`);
-          } catch (slideErr) {
-            console.warn(`[Repurpose] AI slide ${i + 1} failed:`, (slideErr as Error).message);
           }
+        });
+
+        // Generate slides in batches of 3 with retry + delay to avoid Gemini rate limits
+        const slideImages: Array<{ imageBase64: string; mimeType: string }> = [];
+        const BATCH_SIZE = 3;
+        const DELAY_BETWEEN_BATCHES = 3000; // 3s between batches
+
+        for (let batchStart = 0; batchStart < slidePrompts.length; batchStart += BATCH_SIZE) {
+          if (batchStart > 0) {
+            await new Promise((r) => setTimeout(r, DELAY_BETWEEN_BATCHES));
+          }
+
+          const batchEnd = Math.min(batchStart + BATCH_SIZE, slidePrompts.length);
+          const batchPromises = slidePrompts.slice(batchStart, batchEnd).map(async (prompt, batchIdx) => {
+            const slideIdx = batchStart + batchIdx;
+            // Retry up to 2 times per slide
+            for (let attempt = 0; attempt < 3; attempt++) {
+              try {
+                if (attempt > 0) {
+                  await new Promise((r) => setTimeout(r, 2000 * attempt)); // backoff
+                  console.log(`[Repurpose] Retrying slide ${slideIdx + 1} (attempt ${attempt + 1})`);
+                }
+                const slideResult = await generateGeminiImage({
+                  prompt,
+                  aspectRatio: "3:4",
+                });
+                return { slideIdx, imageBase64: slideResult.imageBase64, mimeType: slideResult.mimeType };
+              } catch (e) {
+                if (attempt === 2) {
+                  console.warn(`[Repurpose] Slide ${slideIdx + 1} failed after 3 attempts:`, (e as Error).message);
+                  return null;
+                }
+              }
+            }
+            return null;
+          });
+
+          const batchResults = await Promise.all(batchPromises);
+          for (const result of batchResults) {
+            if (result) {
+              slideImages[result.slideIdx] = { imageBase64: result.imageBase64, mimeType: result.mimeType };
+            }
+          }
+          console.log(`[Repurpose] Batch ${Math.floor(batchStart / BATCH_SIZE) + 1} done (${batchResults.filter(Boolean).length}/${batchEnd - batchStart} slides)`);
         }
 
-        console.log(`[Repurpose] ${uploadedUrls.length} AI carousel slides uploaded`);
+        // Upload all successfully generated slides to S3
+        for (let i = 0; i < slideImages.length; i++) {
+          const slide = slideImages[i];
+          if (!slide) continue;
+          const ext = slide.mimeType.includes("png") ? "png" : "jpg";
+          const contentType = slide.mimeType.includes("png") ? "image/png" : "image/jpeg";
+          const key = `repurpose/carousel-${Date.now()}-${i}-${crypto.randomBytes(3).toString("hex")}.${ext}`;
+          const buf = Buffer.from(slide.imageBase64, "base64");
+          await s3.send(new PutObjectCommand({ Bucket: BUCKET, Key: key, Body: buf, ContentType: contentType }));
+          uploadedUrls.push(getPublicUrl(key));
+        }
+
+        console.log(`[Repurpose] ${uploadedUrls.length}/${allSlides.length} carousel slides uploaded`);
 
         if (input.format === "reel") {
           // Stitch slides into video with optional voice-over + background music
