@@ -254,4 +254,33 @@ export const postRouter = createRouter({
 
       return { success: true };
     }),
+
+  /** Recent post target activity for the activity feed */
+  recentActivity: orgProcedure
+    .input(z.object({ limit: z.number().min(1).max(50).default(20) }))
+    .query(async ({ ctx, input }) => {
+      const targets = await ctx.prisma.postTarget.findMany({
+        where: {
+          post: { organizationId: ctx.organizationId },
+        },
+        include: {
+          channel: { select: { name: true, platform: true } },
+          post: { select: { content: true } },
+        },
+        orderBy: { updatedAt: "desc" },
+        take: input.limit,
+      });
+
+      return targets.map((t) => ({
+        id: t.id,
+        postId: t.postId,
+        status: t.status,
+        platform: t.channel.platform,
+        channelName: t.channel.name,
+        content: t.post.content?.slice(0, 100),
+        errorMessage: t.errorMessage,
+        publishedAt: t.publishedAt,
+        updatedAt: t.updatedAt,
+      }));
+    }),
 });
