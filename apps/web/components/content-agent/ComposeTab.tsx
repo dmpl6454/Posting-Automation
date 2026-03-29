@@ -146,6 +146,8 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   const generateCarousel = trpc.post.generateCarousel.useMutation();
   const [isGeneratingCarousel, setIsGeneratingCarousel] = useState(false);
   const [carouselSlideCount, setCarouselSlideCount] = useState(5);
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [isCreatingWithAI, setIsCreatingWithAI] = useState(false);
 
   const handleAIGenerate = async () => {
     if (!content) return;
@@ -169,6 +171,25 @@ ${content}`;
       toast({ title: "AI generation failed", description: "Please try again.", variant: "destructive" });
     }
     setIsGenerating(false);
+  };
+
+  const handleCreateWithAI = async () => {
+    if (!aiPrompt.trim()) return;
+    setIsCreatingWithAI(true);
+    try {
+      const selectedPlatform = channels?.find((ch: any) => selectedChannels.includes(ch.id))?.platform as string | undefined;
+      const result = await generateAI.mutateAsync({
+        prompt: aiPrompt,
+        provider: "anthropic",
+        platform: selectedPlatform || undefined,
+      });
+      setContent(result.content);
+      setAiPrompt("");
+      toast({ title: "Content created!", description: "AI generated your post. You can edit it before publishing." });
+    } catch {
+      toast({ title: "AI generation failed", description: "Please try again.", variant: "destructive" });
+    }
+    setIsCreatingWithAI(false);
   };
 
   // Track carousel generation as active task
@@ -398,6 +419,46 @@ ${content}`;
             Create Design
           </Button>
 
+          {/* Create with AI */}
+          <Card className="border-purple-200 bg-gradient-to-r from-purple-50/50 to-blue-50/50 dark:border-purple-900 dark:from-purple-950/20 dark:to-blue-950/20">
+            <CardHeader className="pb-3">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-purple-500" />
+                <CardTitle className="text-base">Create with AI</CardTitle>
+              </div>
+              <CardDescription>Describe what you want to post and AI will write it for you</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex gap-2">
+                <Input
+                  value={aiPrompt}
+                  onChange={(e) => setAiPrompt(e.target.value)}
+                  placeholder="e.g. Write a post about upcoming Marvel movies in 2026..."
+                  className="flex-1 bg-background"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey && aiPrompt.trim()) {
+                      e.preventDefault();
+                      handleCreateWithAI();
+                    }
+                  }}
+                  disabled={isCreatingWithAI}
+                />
+                <Button
+                  onClick={handleCreateWithAI}
+                  disabled={!aiPrompt.trim() || isCreatingWithAI}
+                  className="gap-1.5 bg-purple-600 hover:bg-purple-700"
+                >
+                  {isCreatingWithAI ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-3.5 w-3.5" />
+                  )}
+                  {isCreatingWithAI ? "Creating..." : "Generate"}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
           {/* Content Editor */}
           <Card>
             <CardHeader className="pb-3">
@@ -415,7 +476,7 @@ ${content}`;
                   ) : (
                     <Sparkles className="h-3.5 w-3.5 text-purple-500" />
                   )}
-                  {isGenerating ? "Generating..." : "Enhance with AI"}
+                  {isGenerating ? "Enhancing..." : "Enhance with AI"}
                 </Button>
               </div>
             </CardHeader>
@@ -423,7 +484,7 @@ ${content}`;
               <Textarea
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
-                placeholder="What do you want to share? Type a topic and click 'Enhance with AI' to generate content..."
+                placeholder="Write your post here, or use 'Create with AI' above to generate content..."
                 className="min-h-[200px] resize-none"
               />
               <div className="flex items-center justify-end text-xs">
