@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { trpc } from "~/lib/trpc/client";
+import { useActiveTask } from "~/lib/active-task";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
 import { Textarea } from "~/components/ui/textarea";
@@ -31,15 +32,33 @@ export function GenerateTab() {
   const [result, setResult] = useState("");
   const [copied, setCopied] = useState(false);
 
+  const { addTask, removeTask } = useActiveTask();
+
   const generate = trpc.ai.generateContent.useMutation({
     onSuccess: (data) => {
       setResult(data.content);
+      removeTask("generate-task");
       toast({ title: "Content generated!", description: "Your AI content is ready." });
     },
     onError: (err) => {
+      removeTask("generate-task");
       toast({ title: "Generation failed", description: err.message || "Please check your AI provider keys.", variant: "destructive" });
     },
   });
+
+  // Track generation as active task
+  useEffect(() => {
+    if (generate.isPending) {
+      addTask({
+        id: "generate-task",
+        type: "generate",
+        label: "Generating content",
+        description: prompt.slice(0, 50),
+        href: "/dashboard/content-agent",
+        createdAt: Date.now(),
+      });
+    }
+  }, [generate.isPending]);
 
   const handleGenerate = () => {
     if (!prompt) return;

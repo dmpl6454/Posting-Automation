@@ -22,9 +22,10 @@ export const mediaRouter = createRouter({
   list: orgProcedure
     .input(
       z.object({
-        limit: z.number().min(1).max(100).default(20),
+        limit: z.number().min(1).max(100).default(40),
         cursor: z.string().optional(),
         type: z.enum(["image", "video", "all"]).default("all"),
+        search: z.string().max(200).optional(),
       })
     )
     .query(async ({ ctx, input }) => {
@@ -33,6 +34,9 @@ export const mediaRouter = createRouter({
         where.fileType = { startsWith: "image/" };
       } else if (input.type === "video") {
         where.fileType = { startsWith: "video/" };
+      }
+      if (input.search) {
+        where.fileName = { contains: input.search, mode: "insensitive" };
       }
 
       const items = await ctx.prisma.media.findMany({

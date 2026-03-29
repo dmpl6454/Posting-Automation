@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Sidebar } from "~/components/layout/sidebar";
 import { Header } from "~/components/layout/header";
 import { ActivityPanel } from "~/components/layout/activity-panel";
+import { ActiveTaskBar } from "~/components/layout/active-task-bar";
 
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -13,6 +14,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
       <div className="flex flex-1 flex-col overflow-hidden">
         <Header onMenuClick={() => setSidebarOpen(true)} />
+        <ActiveTaskBar />
         <div className="flex flex-1 overflow-hidden">
           <main className="relative flex-1 overflow-y-auto">
             {/* Subtle ambient background */}

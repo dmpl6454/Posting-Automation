@@ -26,6 +26,7 @@ import {
   Zap,
   Newspaper,
   Monitor,
+  GitBranch,
 } from "lucide-react";
 
 const navigation = [
@@ -50,6 +51,7 @@ const settingsNav = [
   { name: "API Keys", href: "/dashboard/settings/api-keys", icon: Key },
   { name: "API Docs", href: "/dashboard/settings/api-docs", icon: BookOpen },
   { name: "Audit Log", href: "/dashboard/settings/audit-log", icon: FileText },
+  { name: "Versions", href: "/dashboard/settings/versions", icon: GitBranch },
 ];
 
 interface SidebarProps {
@@ -159,6 +161,17 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           );
         })}
       </nav>
+
+      {/* Version footer */}
+      <div className="border-t border-border/40 px-4 py-2">
+        <Link
+          href="/dashboard/settings/versions"
+          className="flex items-center gap-1.5 text-[11px] text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+        >
+          <GitBranch className="h-3 w-3" />
+          v{process.env.NEXT_PUBLIC_APP_VERSION || "1.0.0-dev"}
+        </Link>
+      </div>
     </>
   );
 

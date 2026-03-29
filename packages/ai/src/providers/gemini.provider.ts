@@ -1,4 +1,5 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenerativeAI, DynamicRetrievalMode } from "@google/generative-ai";
+import type { Tool } from "@google/generative-ai";
 
 const MODEL_NAME = "gemini-2.5-flash";
 
@@ -24,15 +25,29 @@ function getClient(): GoogleGenerativeAI {
  */
 export async function callGemini(
   prompt: string,
-  options: { temperature?: number; maxTokens?: number } = {}
+  options: { temperature?: number; maxTokens?: number; grounded?: boolean } = {}
 ): Promise<string> {
   const client = getClient();
+
+  const tools: Tool[] = [];
+  if (options.grounded) {
+    tools.push({
+      googleSearchRetrieval: {
+        dynamicRetrievalConfig: {
+          mode: DynamicRetrievalMode.MODE_DYNAMIC,
+          dynamicThreshold: 0.3,
+        },
+      },
+    });
+  }
+
   const model = client.getGenerativeModel({
     model: MODEL_NAME,
     generationConfig: {
       temperature: options.temperature ?? 0.7,
       maxOutputTokens: options.maxTokens ?? 4096,
     },
+    ...(tools.length > 0 ? { tools } : {}),
   });
 
   const result = await model.generateContent(prompt);

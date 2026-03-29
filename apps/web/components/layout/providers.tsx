@@ -6,6 +6,7 @@ import { TRPCProvider } from "~/lib/trpc/react";
 import { Toaster } from "~/components/ui/toaster";
 import { OrgInit } from "./org-init";
 import { GlobalErrorMonitor, ErrorBoundary } from "~/components/ErrorMonitor";
+import { ActiveTaskProvider } from "~/lib/active-task";
 
 export function Providers({ children }: { children: React.ReactNode }) {
   return (
@@ -17,10 +18,12 @@ export function Providers({ children }: { children: React.ReactNode }) {
         disableTransitionOnChange
       >
         <TRPCProvider>
-          <GlobalErrorMonitor />
-          <OrgInit />
-          <ErrorBoundary>{children}</ErrorBoundary>
-          <Toaster />
+          <ActiveTaskProvider>
+            <GlobalErrorMonitor />
+            <OrgInit />
+            <ErrorBoundary>{children}</ErrorBoundary>
+            <Toaster />
+          </ActiveTaskProvider>
         </TRPCProvider>
       </ThemeProvider>
     </SessionProvider>

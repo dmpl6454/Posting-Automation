@@ -882,3 +882,25 @@ model ErrorLog {
   @@index([resolved, lastSeenAt])
   @@index([fingerprint])
 }
+
+// ==================== DEPLOYMENTS ====================
+
+model Deployment {
+  id          String   @id @default(cuid())
+  version     String   // e.g. "1.0.42"
+  commitHash  String   // short git SHA
+  commitMsg   String   @db.Text
+  branch      String   @default("main")
+  deployedBy  String?  // user or "ci"
+  status      String   @default("active") // active, rolled_back, superseded
+  environment String   @default("production") // production, staging
+  changelog   String?  @db.Text // auto-generated from commits since last deploy
+  metadata    Json?    // extra info (docker image tags, build duration, etc.)
+  rolledBackAt   DateTime?
+  rolledBackTo   String?  // ID of the deployment that was rolled back to
+  createdAt   DateTime @default(now())
+
+  @@index([status])
+  @@index([createdAt])
+  @@index([commitHash])
+}

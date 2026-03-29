@@ -2,6 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import { trpc } from "~/lib/trpc/client";
+import { useActiveTask } from "~/lib/active-task";
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
 import { Textarea } from "~/components/ui/textarea";
@@ -487,6 +488,55 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
   const isGenerating = generateMutation.isPending || isGeneratingCarousel;
   const isEditing = editMutation.isPending;
   const isSaving = saveMutation.isPending;
+  const { addTask, removeTask, updateTask } = useActiveTask();
+
+  // Track image generation as active task
+  useEffect(() => {
+    if (generateMutation.isPending) {
+      addTask({
+        id: "panel-image-gen",
+        type: "image",
+        label: "Generating image",
+        description: generatePrompt.slice(0, 50) || "AI image",
+        href: "/dashboard/content-agent",
+        createdAt: Date.now(),
+      });
+    } else {
+      removeTask("panel-image-gen");
+    }
+  }, [generateMutation.isPending]);
+
+  // Track carousel generation with progress
+  useEffect(() => {
+    if (isGeneratingCarousel) {
+      addTask({
+        id: "panel-carousel-gen",
+        type: "image",
+        label: `Generating carousel (${carouselProgress}/${carouselCount})`,
+        description: generatePrompt.slice(0, 40) || "Carousel slides",
+        href: "/dashboard/content-agent",
+        createdAt: Date.now(),
+      });
+    } else {
+      removeTask("panel-carousel-gen");
+    }
+  }, [isGeneratingCarousel, carouselProgress]);
+
+  // Track image editing
+  useEffect(() => {
+    if (isEditing) {
+      addTask({
+        id: "panel-image-edit",
+        type: "image",
+        label: "Editing image",
+        description: editPrompt.slice(0, 50) || "AI edit",
+        href: "/dashboard/content-agent",
+        createdAt: Date.now(),
+      });
+    } else {
+      removeTask("panel-image-edit");
+    }
+  }, [isEditing]);
 
   return (
     <>

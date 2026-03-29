@@ -43,3 +43,4 @@ export { extractTopics, generateTitleHash } from "./tools/topic-extractor";
 export { isSourceOpen, recordSourceFailure, recordSourceSuccess } from "./tools/trending-sources/circuit-breaker";
 export { calculateTrendScore, calculateNicheRelevance, calculateRecencyScore, calculateSourceCredibility, calculateViralSignal } from "./tools/trend-scorer";
 export { classifySensitivity, type Sensitivity } from "./tools/sensitivity-classifier";
+export { detectGroundingNeed, searchForGrounding, buildGroundingContext, type GroundingResult } from "./utils/web-grounding";

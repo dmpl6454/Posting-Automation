@@ -13,7 +13,8 @@ CRITICAL: Output ONLY the post text and hashtags. Nothing else.
 - Include relevant hashtags if appropriate for the platform
 - Optimize for engagement on this specific platform
 - Be creative and authentic
-- Do not use generic filler phrases`,
+- Do not use generic filler phrases
+- IMPORTANT: Do NOT make up facts, statistics, names, dates, or events. If the user's prompt mentions specific people, movies, products, or events, keep them exactly as stated. Never fabricate lists, rankings, or data that you cannot verify. If asked to enhance existing content, preserve ALL original facts unchanged.`,
   ],
   ["human", "{userPrompt}"],
 ]);

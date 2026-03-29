@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import { useActiveTask } from "~/lib/active-task";
 import { trpc } from "~/lib/trpc/client";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
@@ -18,7 +19,6 @@ import {
   Loader2,
   Save,
   AlertCircle,
-  CheckCircle2,
   Eye,
   ImagePlus,
   X,
@@ -30,6 +30,7 @@ import {
   Check,
   Video,
   Film,
+  LayoutGrid,
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import { PostPreviewSwitcher } from "~/components/previews";
@@ -67,6 +68,38 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   const [activeGroupTab, setActiveGroupTab] = useState<string>("all");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
+  const { addTask, removeTask, getTask } = useActiveTask();
+  const TASK_ID = "compose-draft";
+
+  // Restore draft from active task on mount
+  useEffect(() => {
+    const saved = getTask(TASK_ID);
+    if (saved?.draft && !initialContent) {
+      if (saved.draft.content) setContent(saved.draft.content);
+      if (saved.draft.channels?.length) setSelectedChannels(saved.draft.channels);
+    }
+  }, []);
+
+  // Track compose as active task when content is being written
+  useEffect(() => {
+    if (content.trim().length > 0 || selectedChannels.length > 0 || postMedia.length > 0) {
+      addTask({
+        id: TASK_ID,
+        type: "compose",
+        label: "Composing post",
+        description: content.slice(0, 60) || "New post",
+        href: "/dashboard/content-agent?tab=compose",
+        draft: {
+          content,
+          channels: selectedChannels,
+          mediaUrls: postMedia.map((m) => m.url),
+        },
+        createdAt: getTask(TASK_ID)?.createdAt || Date.now(),
+      });
+    } else {
+      removeTask(TASK_ID);
+    }
+  }, [content, selectedChannels, postMedia]);
 
   useEffect(() => {
     if (initialContent) setContent(initialContent);
@@ -100,6 +133,7 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
       setSelectedChannels([]);
       setScheduledAt("");
       setPostMedia([]);
+      removeTask(TASK_ID);
       onPostCreated?.();
     },
     onError: (err) => {
@@ -109,18 +143,80 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   const getUploadUrl = trpc.media.getUploadUrl.useMutation();
   const saveGeneratedImage = trpc.image.saveGenerated.useMutation();
   const generateAI = trpc.ai.generateContent.useMutation();
+  const generateCarousel = trpc.post.generateCarousel.useMutation();
+  const [isGeneratingCarousel, setIsGeneratingCarousel] = useState(false);
+  const [carouselSlideCount, setCarouselSlideCount] = useState(5);
 
   const handleAIGenerate = async () => {
     if (!content) return;
     setIsGenerating(true);
     try {
-      const result = await generateAI.mutateAsync({ prompt: content });
+      const enhancePrompt = `ENHANCE the following social media post for better engagement. IMPORTANT RULES:
+1. Do NOT change the core meaning or topic
+2. Do NOT invent or fabricate any facts, names, movie titles, dates, prices, or statistics
+3. If the content mentions specific items (movies, people, events), keep ONLY those that are factually correct
+4. If the content asks about upcoming/latest/trending topics, the system will provide VERIFIED REAL-TIME DATA — use ONLY that data
+5. Remove any information you cannot verify as factual
+6. Improve writing quality, grammar, formatting, and add relevant hashtags
+7. If the original content contains a list, only include items that are verified in the real-time data provided
+
+Original post:
+${content}`;
+      const result = await generateAI.mutateAsync({ prompt: enhancePrompt, provider: "anthropic" });
       setContent(result.content);
-      toast({ title: "Content enhanced!", description: "AI has improved your content." });
+      toast({ title: "Content enhanced!", description: "AI verified and improved your content." });
     } catch {
       toast({ title: "AI generation failed", description: "Please try again.", variant: "destructive" });
     }
     setIsGenerating(false);
+  };
+
+  // Track carousel generation as active task
+  useEffect(() => {
+    if (isGeneratingCarousel) {
+      addTask({
+        id: "compose-carousel",
+        type: "image",
+        label: `Generating ${carouselSlideCount} carousel slides`,
+        description: content.slice(0, 40) || "Carousel",
+        href: "/dashboard/content-agent?tab=compose",
+        createdAt: Date.now(),
+      });
+    } else {
+      removeTask("compose-carousel");
+    }
+  }, [isGeneratingCarousel]);
+
+  const handleGenerateCarousel = async () => {
+    if (!content || content.trim().length < 10) {
+      toast({ title: "Content too short", description: "Write some content first to generate carousel slides.", variant: "destructive" });
+      return;
+    }
+    setIsGeneratingCarousel(true);
+    // Find selected channel info for branding
+    const selectedChannel = (channels as any[])?.find((c: any) => selectedChannels.includes(c.id));
+    try {
+      const result = await generateCarousel.mutateAsync({
+        content,
+        slideCount: carouselSlideCount,
+        channelName: selectedChannel?.name || "",
+        channelHandle: selectedChannel?.username || "",
+        channelLogoUrl: selectedChannel?.avatar || undefined,
+      });
+      // Replace existing media with carousel slides
+      setPostMedia(result.slides.map((s) => ({ url: s.url, mediaId: s.mediaId })));
+      toast({
+        title: "Carousel generated!",
+        description: `${result.slideCount} slides created and ready to post.`,
+      });
+    } catch (err: any) {
+      toast({
+        title: "Carousel generation failed",
+        description: err.message || "Please try again.",
+        variant: "destructive",
+      });
+    }
+    setIsGeneratingCarousel(false);
   };
 
   const handleOpenEditor = (imageIndex?: number) => {
@@ -270,7 +366,6 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   };
 
   const charCount = content.length;
-  const maxChars = 280;
 
   const selectedPlatforms: string[] = channels
     ? channels
@@ -331,27 +426,9 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
                 placeholder="What do you want to share? Type a topic and click 'Enhance with AI' to generate content..."
                 className="min-h-[200px] resize-none"
               />
-              <div className="flex items-center justify-between text-xs">
-                <div className="flex items-center gap-2">
-                  {charCount > 0 && charCount <= maxChars && (
-                    <Badge variant="secondary" className="gap-1">
-                      <CheckCircle2 className="h-3 w-3 text-green-500" />
-                      Twitter OK
-                    </Badge>
-                  )}
-                  {charCount > maxChars && (
-                    <Badge variant="destructive" className="gap-1">
-                      <AlertCircle className="h-3 w-3" />
-                      Over Twitter limit
-                    </Badge>
-                  )}
-                </div>
-                <span
-                  className={`tabular-nums ${
-                    charCount > maxChars ? "text-destructive" : "text-muted-foreground"
-                  }`}
-                >
-                  {charCount} / {maxChars}
+              <div className="flex items-center justify-end text-xs">
+                <span className="tabular-nums text-muted-foreground">
+                  {charCount} characters
                 </span>
               </div>
             </CardContent>
@@ -441,6 +518,38 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
                   <FolderOpen className="h-3.5 w-3.5" />
                   Library
                 </Button>
+              </div>
+              {/* Generate Carousel */}
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="flex-1 gap-1.5 border-dashed"
+                  onClick={handleGenerateCarousel}
+                  disabled={!content || isGeneratingCarousel}
+                >
+                  {isGeneratingCarousel ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      Generating slides...
+                    </>
+                  ) : (
+                    <>
+                      <LayoutGrid className="h-3.5 w-3.5" />
+                      Generate Carousel
+                    </>
+                  )}
+                </Button>
+                <select
+                  value={carouselSlideCount}
+                  onChange={(e) => setCarouselSlideCount(Number(e.target.value))}
+                  disabled={isGeneratingCarousel}
+                  className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                >
+                  {[3, 4, 5, 6, 7, 8, 10].map((n) => (
+                    <option key={n} value={n}>{n} slides</option>
+                  ))}
+                </select>
               </div>
               {postMedia.length > 0 && (
                 <div className="flex gap-2 overflow-x-auto pb-1">

@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { trpc } from "~/lib/trpc/client";
+import { useActiveTask } from "~/lib/active-task";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
 import { Textarea } from "~/components/ui/textarea";
@@ -160,6 +161,23 @@ export function RepurposeTab() {
   };
 
   const isLoading = repurpose.isPending || repurposeFromUrl.isPending;
+  const { addTask, removeTask } = useActiveTask();
+
+  // Track repurpose as active task while generating
+  useEffect(() => {
+    if (isLoading) {
+      addTask({
+        id: "repurpose-task",
+        type: "repurpose",
+        label: "Repurposing content",
+        description: url ? url.slice(0, 50) : originalContent.slice(0, 50),
+        href: "/dashboard/content-agent",
+        createdAt: Date.now(),
+      });
+    } else {
+      removeTask("repurpose-task");
+    }
+  }, [isLoading]);
 
   const togglePlatform = (platform: string) => {
     setSelectedPlatforms((prev) =>

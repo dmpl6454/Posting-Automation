@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { trpc } from "~/lib/trpc/client";
+import { useActiveTask } from "~/lib/active-task";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
 import { Textarea } from "~/components/ui/textarea";
@@ -352,6 +353,39 @@ export function ImageTab({ onImageGenerated }: ImageTabProps = {}) {
 
   const isGenerating = generateMutation.isPending;
   const isEditing = editMutation.isPending;
+  const { addTask, removeTask } = useActiveTask();
+
+  // Track image generation as active task
+  useEffect(() => {
+    if (isGenerating) {
+      addTask({
+        id: "image-gen",
+        type: "image",
+        label: "Generating image",
+        description: generatePrompt.slice(0, 50) || "AI image",
+        href: "/dashboard/content-agent",
+        createdAt: Date.now(),
+      });
+    } else {
+      removeTask("image-gen");
+    }
+  }, [isGenerating]);
+
+  // Track image editing as active task
+  useEffect(() => {
+    if (isEditing) {
+      addTask({
+        id: "image-edit",
+        type: "image",
+        label: "Editing image",
+        description: editPrompt.slice(0, 50) || "AI edit",
+        href: "/dashboard/content-agent",
+        createdAt: Date.now(),
+      });
+    } else {
+      removeTask("image-edit");
+    }
+  }, [isEditing]);
   const isSaving = saveMutation.isPending;
 
   return (
