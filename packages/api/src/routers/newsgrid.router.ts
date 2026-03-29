@@ -475,8 +475,11 @@ Requirements:
           }
         }
 
-        for (const target of post.targets) {
-          const delayMs = Math.max(0, scheduledAt.getTime() - Date.now());
+        for (let ti = 0; ti < post.targets.length; ti++) {
+          const target = post.targets[ti]!;
+          // Stagger jobs by 10s per channel to avoid platform rate limits
+          const staggerMs = (created.length * post.targets.length + ti) * 10_000;
+          const delayMs = Math.max(0, scheduledAt.getTime() - Date.now()) + staggerMs;
           await postPublishQueue.add(
             `newsgrid-${target.id}-${Date.now()}`,
             {
@@ -486,7 +489,7 @@ Requirements:
               platform:       target.channel.platform,
               organizationId: ctx.organizationId,
             },
-            { delay: delayMs, attempts: 3, backoff: { type: "exponential", delay: 30000 } }
+            { delay: delayMs, attempts: 3, backoff: { type: "exponential", delay: 60_000 } }
           );
         }
 

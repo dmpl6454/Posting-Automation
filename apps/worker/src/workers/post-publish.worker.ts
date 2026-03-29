@@ -1,7 +1,45 @@
-import { Worker, type Job } from "bullmq";
+import { Worker, type Job, UnrecoverableError } from "bullmq";
 import { prisma } from "@postautomation/db";
 import { getSocialProvider } from "@postautomation/social";
-import { QUEUE_NAMES, type PostPublishJobData, createRedisConnection } from "@postautomation/queue";
+import { QUEUE_NAMES, postPublishQueue, type PostPublishJobData, createRedisConnection } from "@postautomation/queue";
+
+// ── Platform character limits ───────────────────────────────────────────
+const PLATFORM_CHAR_LIMITS: Record<string, number> = {
+  TWITTER: 280,
+  INSTAGRAM: 2200,
+  FACEBOOK: 63206,
+  LINKEDIN: 3000,
+  THREADS: 500,
+  TIKTOK: 2200,
+  PINTEREST: 500,
+  MASTODON: 500,
+  BLUESKY: 300,
+  REDDIT: 40000,
+  YOUTUBE: 5000,
+  MEDIUM: 100000,
+  DEVTO: 100000,
+};
+
+// ── Error classification ────────────────────────────────────────────────
+function classifyError(errMsg: string): "rate_limit" | "token_expired" | "permission" | "content_too_large" | "media_required" | "unknown" {
+  const msg = errMsg.toLowerCase();
+  if (msg.includes("limit how often") || msg.includes("rate limit") || msg.includes("too many") || msg.includes("code\":368") || msg.includes("code\":32")) return "rate_limit";
+  if (msg.includes("token") && (msg.includes("expired") || msg.includes("invalid")) || msg.includes("code\":190") || msg.includes("401")) return "token_expired";
+  if (msg.includes("permission") || msg.includes("code\":10") || msg.includes("403")) return "permission";
+  if (msg.includes("reduce the amount") || msg.includes("too long") || msg.includes("too large") || msg.includes("content is too")) return "content_too_large";
+  if (msg.includes("requires at least one image") || msg.includes("media required")) return "media_required";
+  return "unknown";
+}
+
+// ── Auto-truncate content for platform ──────────────────────────────────
+function truncateForPlatform(content: string, platform: string): string {
+  const limit = PLATFORM_CHAR_LIMITS[platform];
+  if (!limit || content.length <= limit) return content;
+  // Truncate at last space before limit, add ellipsis
+  const cut = content.slice(0, limit - 3);
+  const lastSpace = cut.lastIndexOf(" ");
+  return (lastSpace > limit * 0.7 ? cut.slice(0, lastSpace) : cut) + "...";
+}
 
 export function createPostPublishWorker() {
   const worker = new Worker<PostPublishJobData>(
@@ -178,13 +216,88 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
         }
       }
 
+      // Auto-truncate content to platform limit
+      const publishContent = truncateForPlatform(content, platform);
+      if (publishContent.length !== content.length) {
+        console.log(`[PostPublish] Auto-truncated content from ${content.length} to ${publishContent.length} chars for ${platform}`);
+      }
+
       // Validate content before publishing
-      const errors = provider.validateContent({ content, mediaUrls, mediaTypes });
+      const errors = provider.validateContent({ content: publishContent, mediaUrls, mediaTypes });
       if (errors.length > 0) {
         throw new Error(`Validation failed: ${errors.join(", ")}`);
       }
 
-      const result = await provider.publishPost(tokens, { content, mediaUrls, mediaTypes, metadata: channelMetadata });
+      let result;
+      try {
+        result = await provider.publishPost(tokens, { content: publishContent, mediaUrls, mediaTypes, metadata: channelMetadata });
+      } catch (publishErr: any) {
+        const errMsg = publishErr.message || String(publishErr);
+        const errType = classifyError(errMsg);
+        console.log(`[PostPublish] Error classified as: ${errType}`);
+
+        if (errType === "rate_limit") {
+          // Re-queue with exponential backoff delay (2min, 5min, 10min)
+          const delayMs = Math.min(120_000 * Math.pow(2, job.attemptsMade), 600_000);
+          console.log(`[PostPublish] Rate-limited — re-queuing with ${Math.round(delayMs / 1000)}s delay`);
+          await postPublishQueue.add(
+            `retry-ratelimit-${postTargetId}-${Date.now()}`,
+            job.data,
+            { delay: delayMs, attempts: 3, backoff: { type: "exponential", delay: 60_000 } }
+          );
+          // Mark as SCHEDULED (not FAILED) so the UI shows it's pending
+          await prisma.postTarget.update({
+            where: { id: postTargetId },
+            data: { status: "SCHEDULED", errorMessage: `Rate-limited, retrying in ${Math.round(delayMs / 1000)}s` },
+          });
+          return; // Don't throw — this is handled
+        }
+
+        if (errType === "token_expired") {
+          // Force token refresh and retry once
+          console.log(`[PostPublish] Token expired — forcing refresh for channel ${channelId}`);
+          try {
+            const clientId = process.env[`${platform}_CLIENT_ID`] || "";
+            const clientSecret = process.env[`${platform}_CLIENT_SECRET`] || "";
+            if (clientId && clientSecret && channel.refreshToken) {
+              const refreshed = await provider.refreshAccessToken(
+                { accessToken: channel.accessToken, refreshToken: channel.refreshToken },
+                { clientId, clientSecret, callbackUrl: `${process.env.APP_URL || ""}/api/oauth/callback/${platform.toLowerCase()}`, scopes: [] }
+              );
+              await prisma.channel.update({
+                where: { id: channelId },
+                data: {
+                  accessToken: refreshed.accessToken,
+                  refreshToken: refreshed.refreshToken ?? channel.refreshToken,
+                  tokenExpiresAt: refreshed.expiresAt ? new Date(refreshed.expiresAt) : undefined,
+                },
+              });
+              // Retry immediately with fresh token
+              result = await provider.publishPost(
+                { accessToken: refreshed.accessToken, refreshToken: refreshed.refreshToken ?? channel.refreshToken ?? undefined },
+                { content: publishContent, mediaUrls, mediaTypes, metadata: channelMetadata }
+              );
+              console.log(`[PostPublish] Retry with fresh token succeeded`);
+            } else {
+              throw publishErr; // Can't refresh — rethrow original error
+            }
+          } catch (refreshRetryErr: any) {
+            // Mark with clear message about token issue
+            throw new Error(`Token expired and refresh failed: ${refreshRetryErr.message}. Reconnect this channel in Settings.`);
+          }
+        } else if (errType === "content_too_large") {
+          // Aggressively truncate and retry
+          const aggressiveContent = truncateForPlatform(publishContent, platform);
+          console.log(`[PostPublish] Content too large — retrying with aggressive truncation`);
+          result = await provider.publishPost(tokens, { content: aggressiveContent.slice(0, Math.floor(aggressiveContent.length * 0.7)), mediaUrls, mediaTypes, metadata: channelMetadata });
+        } else {
+          throw publishErr; // Unknown or unrecoverable — rethrow
+        }
+      }
+
+      if (!result) {
+        throw new Error("Publish returned no result");
+      }
 
       // 4. Mark as PUBLISHED
       const updatedTarget = await prisma.postTarget.update({
@@ -241,23 +354,34 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
     },
     {
       connection: createRedisConnection(),
-      concurrency: 5,
-      limiter: { max: 10, duration: 1000 },
+      concurrency: 3,
+      limiter: { max: 3, duration: 5000 }, // max 3 publishes per 5 seconds to avoid rate limits
     }
   );
 
   worker.on("failed", async (job, err) => {
-    console.error(`[PostPublish] Job ${job?.id} failed (attempt ${job?.attemptsMade}/${job?.opts?.attempts ?? 1}):`, err.message);
-    if (job) {
-      const isFinalAttempt = job.attemptsMade >= (job.opts?.attempts ?? 1);
-      await prisma.postTarget.update({
-        where: { id: job.data.postTargetId },
-        data: {
-          status: isFinalAttempt ? "FAILED" : "PUBLISHING",
-          errorMessage: err.message,
-          retryCount: { increment: 1 },
-        },
-      });
+    if (!job) return;
+    const errType = classifyError(err.message);
+    console.error(`[PostPublish] Job ${job.id} failed (attempt ${job.attemptsMade}/${job.opts?.attempts ?? 1}, type: ${errType}):`, err.message);
+
+    const isFinalAttempt = job.attemptsMade >= (job.opts?.attempts ?? 1);
+
+    // Build user-friendly error message
+    let userMessage = err.message;
+    if (errType === "rate_limit") userMessage = "Platform rate limit hit. Will retry automatically.";
+    else if (errType === "token_expired") userMessage = "Access token expired. Please reconnect this channel in Settings.";
+    else if (errType === "permission") userMessage = "Missing permissions. Check app permissions in platform developer console.";
+    else if (errType === "content_too_large") userMessage = "Content exceeds platform character limit.";
+    else if (errType === "media_required") userMessage = "This platform requires at least one image or video.";
+
+    await prisma.postTarget.update({
+      where: { id: job.data.postTargetId },
+      data: {
+        status: isFinalAttempt ? "FAILED" : "PUBLISHING",
+        errorMessage: userMessage,
+        retryCount: { increment: 1 },
+      },
+    });
 
       // If this was the final attempt, check if ALL targets have failed/completed
       // and update parent post status accordingly
@@ -279,7 +403,6 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
           }
         }
       }
-    }
   });
 
   worker.on("completed", (job) => {

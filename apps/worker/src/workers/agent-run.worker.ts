@@ -206,6 +206,7 @@ export function createAgentRunWorker() {
           // 4g. Create PostTarget records for each channel
           // Skip Instagram/Facebook if no image was generated (they require media)
           const mediaRequiredPlatforms = ["INSTAGRAM", "FACEBOOK"];
+          let channelIdx = 0;
           for (const channel of channels) {
             if (!mediaId && mediaRequiredPlatforms.includes(channel.platform)) {
               console.warn(`[AgentRun] Skipping ${channel.platform} channel "${channel.name}" — no image generated and platform requires media`);
@@ -220,8 +221,9 @@ export function createAgentRunWorker() {
               },
             });
 
-            // Queue post-publish jobs with delay
-            const delay = scheduledAt.getTime() - Date.now();
+            // Queue post-publish jobs with staggered delay (10s per channel) to avoid rate limits
+            const baseDelay = scheduledAt.getTime() - Date.now();
+            const staggerMs = (i * channels.length + channelIdx) * 10_000;
             await postPublishQueue.add(
               `agent-publish-${post.id}-${channel.id}`,
               {
@@ -232,11 +234,14 @@ export function createAgentRunWorker() {
                 organizationId: agent.organizationId,
               },
               {
-                delay: Math.max(delay, 0),
+                delay: Math.max(baseDelay, 0) + staggerMs,
+                attempts: 3,
+                backoff: { type: "exponential", delay: 60_000 },
                 removeOnComplete: true,
                 removeOnFail: 100,
               }
             );
+            channelIdx++;
           }
 
           postsCreated++;
