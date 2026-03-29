@@ -42,7 +42,7 @@ export const monitorRouter = createRouter({
           data: {
             occurrences: { increment: 1 },
             lastSeenAt: new Date(),
-            metadata: input.metadata ?? existing.metadata,
+            metadata: input.metadata || (existing.metadata as any) || undefined,
           },
         });
         return { id: existing.id, deduplicated: true };
