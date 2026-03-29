@@ -29,6 +29,7 @@ import { accountGroupRouter } from "./routers/account-group.router";
 import { designTemplateRouter } from "./routers/design-template.router";
 import { channelGroupRouter } from "./routers/channel-group.router";
 import { newsgridRouter } from "./routers/newsgrid.router";
+import { monitorRouter } from "./routers/monitor.router";
 
 export const appRouter = createRouter({
   user: userRouter,
@@ -61,6 +62,7 @@ export const appRouter = createRouter({
   designTemplate: designTemplateRouter,
   channelGroup: channelGroupRouter,
   newsgrid: newsgridRouter,
+  monitor: monitorRouter,
 });
 
 export type AppRouter = typeof appRouter;

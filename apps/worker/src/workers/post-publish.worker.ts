@@ -383,6 +383,42 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
       },
     });
 
+    // Log to ErrorLog for monitoring dashboard
+    if (isFinalAttempt) {
+      try {
+        const fp = require("crypto").createHash("md5").update(`${err.message}::${job.data.platform}`).digest("hex");
+        const existing = await prisma.errorLog.findFirst({
+          where: { fingerprint: fp, resolved: false, lastSeenAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
+        });
+        if (existing) {
+          await prisma.errorLog.update({
+            where: { id: existing.id },
+            data: { occurrences: { increment: 1 }, lastSeenAt: new Date() },
+          });
+        } else {
+          await prisma.errorLog.create({
+            data: {
+              source: "publish",
+              severity: errType === "rate_limit" ? "warning" : "error",
+              message: userMessage,
+              stack: err.stack?.slice(0, 5000),
+              endpoint: `PostPublish/${job.data.platform}`,
+              organizationId: job.data.organizationId,
+              fingerprint: fp,
+              metadata: {
+                platform: job.data.platform,
+                postId: job.data.postId,
+                postTargetId: job.data.postTargetId,
+                channelId: job.data.channelId,
+                errorType: errType,
+                attempts: job.attemptsMade,
+              },
+            },
+          });
+        }
+      } catch { /* never let monitoring break the worker */ }
+    }
+
       // If this was the final attempt, check if ALL targets have failed/completed
       // and update parent post status accordingly
       if (isFinalAttempt) {

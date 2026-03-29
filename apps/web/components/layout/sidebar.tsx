@@ -25,6 +25,7 @@ import {
   BookOpen,
   Zap,
   Newspaper,
+  Monitor,
 } from "lucide-react";
 
 const navigation = [
@@ -42,6 +43,7 @@ const navigation = [
 ];
 
 const settingsNav = [
+  { name: "Monitoring", href: "/dashboard/monitoring", icon: Monitor },
   { name: "Settings", href: "/dashboard/settings", icon: Settings },
   { name: "Billing", href: "/dashboard/settings/billing", icon: CreditCard },
   { name: "Webhooks", href: "/dashboard/settings/webhooks", icon: Webhook },

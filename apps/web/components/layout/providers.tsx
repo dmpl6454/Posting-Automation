@@ -5,6 +5,7 @@ import { ThemeProvider } from "next-themes";
 import { TRPCProvider } from "~/lib/trpc/react";
 import { Toaster } from "~/components/ui/toaster";
 import { OrgInit } from "./org-init";
+import { GlobalErrorMonitor, ErrorBoundary } from "~/components/ErrorMonitor";
 
 export function Providers({ children }: { children: React.ReactNode }) {
   return (
@@ -16,8 +17,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
         disableTransitionOnChange
       >
         <TRPCProvider>
+          <GlobalErrorMonitor />
           <OrgInit />
-          {children}
+          <ErrorBoundary>{children}</ErrorBoundary>
           <Toaster />
         </TRPCProvider>
       </ThemeProvider>

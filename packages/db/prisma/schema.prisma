@@ -853,3 +853,32 @@ model DesignTemplate {
   @@index([isGlobal])
   @@index([category])
 }
+
+// ==================== ERROR MONITORING ====================
+
+model ErrorLog {
+  id             String   @id @default(cuid())
+  organizationId String?
+  userId         String?
+  source         String   // "frontend" | "api" | "worker" | "publish"
+  severity       String   @default("error") // "error" | "warning" | "critical"
+  message        String   @db.Text
+  stack          String?  @db.Text
+  endpoint       String?  // API route or page path
+  userAgent      String?
+  metadata       Json?    // extra context (browser, platform, postId, channelId, etc.)
+  resolved       Boolean  @default(false)
+  resolvedAt     DateTime?
+  resolvedBy     String?
+  resolvedNote   String?  @db.Text
+  fingerprint    String?  // hash of message+stack for dedup
+  occurrences    Int      @default(1)
+  firstSeenAt    DateTime @default(now())
+  lastSeenAt     DateTime @default(now())
+  createdAt      DateTime @default(now())
+
+  @@index([organizationId, createdAt])
+  @@index([source, severity])
+  @@index([resolved, lastSeenAt])
+  @@index([fingerprint])
+}
