@@ -126,9 +126,13 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
 
   const { data: channels, isLoading: channelsLoading } = trpc.channel.list.useQuery();
   const { data: channelGroups } = trpc.channelGroup.list.useQuery();
+  const { data: recentlyUsedIds } = trpc.channel.recentlyUsed.useQuery();
+  const utils = trpc.useUtils();
   const createPost = trpc.post.create.useMutation({
     onSuccess: () => {
       toast({ title: "Post created!", description: "Your post has been saved successfully." });
+      // Invalidate recently used cache so it refreshes
+      utils.channel.recentlyUsed.invalidate();
       setContent("");
       setSelectedChannels([]);
       setScheduledAt("");
@@ -784,9 +788,9 @@ ${content}`;
                     })()
                   )}
 
-                  {/* Channel list */}
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    {channels
+                  {/* Channel list — sorted: recently used first */}
+                  {(() => {
+                    const filtered = channels
                       ?.filter((channel: any) => {
                         const matchesSearch =
                           !channelSearch ||
@@ -798,70 +802,122 @@ ${content}`;
                           channelGroups?.find((g: any) => g.id === activeGroupTab)
                             ?.channels.some((c: any) => c.id === channel.id);
                         return matchesSearch && matchesGroup;
-                      })
-                      .map((channel: any) => {
-                        const isSelected = selectedChannels.includes(channel.id);
-                        return (
-                          <label
-                            key={channel.id}
-                            className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 transition-all ${
-                              isSelected
-                                ? "border-primary bg-primary/5 ring-1 ring-primary"
-                                : "hover:border-muted-foreground/50 hover:bg-muted/50"
-                            }`}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={isSelected}
-                              onChange={(e) => {
-                                if (e.target.checked) {
-                                  setSelectedChannels([...selectedChannels, channel.id]);
-                                } else {
-                                  setSelectedChannels(selectedChannels.filter((id) => id !== channel.id));
-                                }
-                              }}
-                              className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
-                            />
-                            {channel.avatar ? (
-                              <img src={channel.avatar} alt={channel.name} className="h-7 w-7 rounded-full object-cover" />
-                            ) : (
-                              <div className="flex h-7 w-7 items-center justify-center rounded-full bg-muted text-[10px] font-bold uppercase">
-                                {channel.platform.slice(0, 2)}
-                              </div>
-                            )}
-                            <div className="min-w-0 flex-1">
-                              <p className="truncate text-sm font-medium">{channel.name}</p>
-                              <div className="flex items-center gap-1.5">
-                                <Badge variant="outline" className="text-[10px]">
-                                  {channel.platform}
-                                </Badge>
-                                {channel.username && (
-                                  <span className="text-xs text-muted-foreground">
-                                    @{channel.username}
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                          </label>
-                        );
-                      })}
-                  </div>
+                      }) || [];
 
-                  {/* No results */}
-                  {channels?.filter((channel: any) => {
-                    const matchesSearch =
-                      !channelSearch ||
-                      channel.name.toLowerCase().includes(channelSearch.toLowerCase()) ||
-                      channel.platform.toLowerCase().includes(channelSearch.toLowerCase()) ||
-                      (channel.username || "").toLowerCase().includes(channelSearch.toLowerCase());
-                    const matchesGroup =
-                      activeGroupTab === "all" ||
-                      channelGroups?.find((g: any) => g.id === activeGroupTab)
-                        ?.channels.some((c: any) => c.id === channel.id);
-                    return matchesSearch && matchesGroup;
-                  }).length === 0 && (
-                    <p className="py-4 text-center text-sm text-muted-foreground">No channels found</p>
-                  )}
+                    const recentSet = new Set(recentlyUsedIds || []);
+                    const recentChannels = recentlyUsedIds
+                      ? recentlyUsedIds
+                          .map((id: string) => filtered.find((ch: any) => ch.id === id))
+                          .filter(Boolean)
+                      : [];
+                    const otherChannels = filtered.filter((ch: any) => !recentSet.has(ch.id));
+
+                    const renderChannel = (channel: any, isRecent: boolean) => {
+                      const isSelected = selectedChannels.includes(channel.id);
+                      return (
+                        <label
+                          key={channel.id}
+                          className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 transition-all ${
+                            isSelected
+                              ? "border-primary bg-primary/5 ring-1 ring-primary"
+                              : "hover:border-muted-foreground/50 hover:bg-muted/50"
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedChannels([...selectedChannels, channel.id]);
+                              } else {
+                                setSelectedChannels(selectedChannels.filter((id: string) => id !== channel.id));
+                              }
+                            }}
+                            className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                          />
+                          {channel.avatar ? (
+                            <img src={channel.avatar} alt={channel.name} className="h-7 w-7 rounded-full object-cover" />
+                          ) : (
+                            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-muted text-[10px] font-bold uppercase">
+                              {channel.platform.slice(0, 2)}
+                            </div>
+                          )}
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5">
+                              <p className="truncate text-sm font-medium">{channel.name}</p>
+                              {isRecent && (
+                                <Badge variant="secondary" className="text-[9px] px-1 py-0 leading-tight">Recent</Badge>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <Badge variant="outline" className="text-[10px]">
+                                {channel.platform}
+                              </Badge>
+                              {channel.username && (
+                                <span className="text-xs text-muted-foreground">
+                                  @{channel.username}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </label>
+                      );
+                    };
+
+                    if (filtered.length === 0) {
+                      return <p className="py-4 text-center text-sm text-muted-foreground">No channels found</p>;
+                    }
+
+                    return (
+                      <>
+                        {recentChannels.length > 0 && !channelSearch && (
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-1.5">
+                                <Clock className="h-3 w-3 text-muted-foreground" />
+                                <span className="text-xs font-medium text-muted-foreground">Recently Used</span>
+                              </div>
+                              {(() => {
+                                const recentIds = recentChannels.map((ch: any) => ch.id);
+                                const allRecentSelected = recentIds.every((id: string) => selectedChannels.includes(id));
+                                return (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (allRecentSelected) {
+                                        setSelectedChannels(prev => prev.filter(id => !recentIds.includes(id)));
+                                      } else {
+                                        setSelectedChannels(prev => [...new Set([...prev, ...recentIds])]);
+                                      }
+                                    }}
+                                    className="text-[11px] text-primary hover:underline"
+                                  >
+                                    {allRecentSelected ? "Deselect recent" : "Select all recent"}
+                                  </button>
+                                );
+                              })()}
+                            </div>
+                            <div className="grid gap-2 sm:grid-cols-2">
+                              {recentChannels.map((ch: any) => renderChannel(ch, true))}
+                            </div>
+                          </div>
+                        )}
+                        {recentChannels.length > 0 && otherChannels.length > 0 && !channelSearch && (
+                          <div className="flex items-center gap-2 pt-1">
+                            <div className="h-px flex-1 bg-border" />
+                            <span className="text-[10px] text-muted-foreground">All Channels</span>
+                            <div className="h-px flex-1 bg-border" />
+                          </div>
+                        )}
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          {channelSearch
+                            ? filtered.map((ch: any) => renderChannel(ch, recentSet.has(ch.id)))
+                            : otherChannels.map((ch: any) => renderChannel(ch, false))
+                          }
+                        </div>
+                      </>
+                    );
+                  })()}
 
                   {/* Manage groups link */}
                   <div className="flex items-center justify-end pt-1">

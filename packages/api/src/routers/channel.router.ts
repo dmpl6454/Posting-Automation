@@ -22,6 +22,29 @@ export const channelRouter = createRouter({
     });
   }),
 
+  recentlyUsed: orgProcedure.query(async ({ ctx }) => {
+    // Get channel IDs from the most recent post targets (last 30 days)
+    const recentTargets = await ctx.prisma.postTarget.findMany({
+      where: {
+        post: { organizationId: ctx.organizationId },
+        createdAt: { gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
+      },
+      select: { channelId: true, createdAt: true },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+    });
+    // Deduplicate: keep first occurrence (most recent) of each channel
+    const seen = new Set<string>();
+    const orderedIds: string[] = [];
+    for (const t of recentTargets) {
+      if (!seen.has(t.channelId)) {
+        seen.add(t.channelId);
+        orderedIds.push(t.channelId);
+      }
+    }
+    return orderedIds;
+  }),
+
   supportedPlatforms: orgProcedure.query(() => {
     return getSupportedPlatforms().map((platform) => {
       const provider = getSocialProvider(platform);
