@@ -127,3 +127,26 @@ export async function generateNewsImage(
     platform: options.platform,
   });
 }
+
+/**
+ * Generate a relevant background image for a news headline using DALL-E.
+ * Returns a data URL that can be used as backgroundImageUrl in StaticNewsCreativeOptions.
+ */
+export async function generateRelevantBackground(
+  headline: string
+): Promise<string | null> {
+  try {
+    const prompt = `Create a cinematic, atmospheric background photo for a news article about: "${headline}". The image should be a dramatic, editorial-quality photograph — moody lighting, shallow depth of field, relevant subject matter. NO text, NO logos, NO overlays. Just a beautiful, relevant background image.`;
+
+    const result = await generateImageDallE({
+      prompt,
+      size: "1024x1792",
+      quality: "standard",
+    });
+
+    return `data:${result.mimeType};base64,${result.imageBase64}`;
+  } catch (err) {
+    console.warn(`[NewsImage] Background generation failed, will use fallback:`, (err as Error).message);
+    return null;
+  }
+}

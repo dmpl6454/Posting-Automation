@@ -56,7 +56,7 @@ export function createAgentRunWorker() {
       });
 
       try {
-        const { generateContent, fetchTrendingNews, generateStaticNewsCreativeImage } = await import("@postautomation/ai");
+        const { generateContent, fetchTrendingNews, generateStaticNewsCreativeImage, generateRelevantBackground } = await import("@postautomation/ai");
 
         let postsCreated = 0;
         let firstPostContent = "";
@@ -151,12 +151,16 @@ export function createAgentRunWorker() {
 
           let mediaId: string | null = null;
           try {
+            // Generate a relevant AI background image instead of random stock photos
+            const bgImageUrl = await generateRelevantBackground(newsHeadline);
+
             const result = await generateStaticNewsCreativeImage({
               headline: newsHeadline,
               channelName: primaryChannel.name,
               handle: primaryChannel.username || primaryChannel.name,
               logoUrl,
               template: templateType as any,
+              backgroundImageUrl: bgImageUrl || undefined,
               bgSeed: Date.now() + i,
               date: new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
             });

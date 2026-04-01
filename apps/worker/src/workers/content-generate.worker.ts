@@ -10,6 +10,8 @@ import {
   generateContent,
   suggestHashtags,
   generateNewsImage,
+  generateStaticNewsCreativeImage,
+  generateRelevantBackground,
   type AIProvider,
 } from "@postautomation/ai";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
@@ -121,21 +123,25 @@ export function createContentGenerateWorker() {
 
         const hashtags = hashtagList.join(" ");
 
-        // 5. Generate news card image
+        // 5. Generate news creative image with AI-generated relevant background
         let imageResult;
         try {
-          imageResult = await generateNewsImage("news_card", {
+          // Generate a relevant background image using DALL-E
+          const bgImageUrl = await generateRelevantBackground(trendingItem.title);
+
+          imageResult = await generateStaticNewsCreativeImage({
             headline: trendingItem.title,
-            source: trendingItem.sourceName,
-            sourceUrl: trendingItem.sourceUrl,
-            logoUrl: agent.referenceImageUrl ?? undefined,
+            channelName: agent.name,
             handle: agent.name,
-            platform: "instagram",
+            logoUrl: agent.referenceImageUrl ?? undefined,
+            template: "cinematic",
+            backgroundImageUrl: bgImageUrl || undefined,
+            date: new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
           });
         } catch (imgErr) {
-          // Fallback: try without logoUrl
+          // Fallback: basic news card without AI background
           console.warn(
-            `[ContentGenerate] Image generation failed with logoUrl, retrying without:`,
+            `[ContentGenerate] Static creative failed, falling back to news card:`,
             imgErr,
           );
           imageResult = await generateNewsImage("news_card", {
