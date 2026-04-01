@@ -1,12 +1,21 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { jwtVerify } from "jose";
-import { getToken } from "next-auth/jwt";
 
 const ADMIN_JWT_SECRET = new TextEncoder().encode(
   process.env.ADMIN_JWT_SECRET || process.env.NEXTAUTH_SECRET || "admin-secret-key"
 );
 const ADMIN_COOKIE = "admin-token";
+
+// Check for NextAuth session cookie (works with both v4 and v5)
+function hasSessionCookie(request: NextRequest): boolean {
+  return !!(
+    request.cookies.get("next-auth.session-token")?.value ||
+    request.cookies.get("__Secure-next-auth.session-token")?.value ||
+    request.cookies.get("authjs.session-token")?.value ||
+    request.cookies.get("__Secure-authjs.session-token")?.value
+  );
+}
 
 async function verifyAdminToken(request: NextRequest) {
   const token = request.cookies.get(ADMIN_COOKIE)?.value;
@@ -22,20 +31,11 @@ async function verifyAdminToken(request: NextRequest) {
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Check NextAuth session for user route guards
-  const sessionToken = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET });
-  const isAuthenticated = !!sessionToken;
+  const isAuthenticated = hasSessionCookie(request);
 
   // Redirect authenticated users from public pages to dashboard
   if (isAuthenticated && (pathname === "/" || pathname === "/login" || pathname === "/register")) {
     return NextResponse.redirect(new URL("/dashboard", request.url));
-  }
-
-  // Redirect unauthenticated users from dashboard to login
-  if (!isAuthenticated && pathname.startsWith("/dashboard")) {
-    const loginUrl = new URL("/login", request.url);
-    loginUrl.searchParams.set("callbackUrl", pathname);
-    return NextResponse.redirect(loginUrl);
   }
 
   // Admin route guard — uses custom admin JWT cookie (bypasses NextAuth)
