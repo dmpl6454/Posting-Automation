@@ -26,7 +26,6 @@ import {
   Upload,
   FolderOpen,
   Search,
-  Users,
   Check,
   Video,
   Film,
@@ -65,11 +64,23 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   const [showMediaPicker, setShowMediaPicker] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [channelSearch, setChannelSearch] = useState("");
-  const [activeGroupTab, setActiveGroupTab] = useState<string>("all");
+  const [channelDropdownOpen, setChannelDropdownOpen] = useState(false);
+  const channelSectionRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
   const { addTask, removeTask, getTask } = useActiveTask();
   const TASK_ID = "compose-draft";
+
+  // Close channel dropdown on click outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (channelSectionRef.current && !channelSectionRef.current.contains(e.target as Node)) {
+        setChannelDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   // Restore draft from active task on mount
   useEffect(() => {
@@ -125,7 +136,6 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   }, [externalMediaToAdd]);
 
   const { data: channels, isLoading: channelsLoading } = trpc.channel.list.useQuery();
-  const { data: channelGroups } = trpc.channelGroup.list.useQuery();
   const { data: recentlyUsedIds } = trpc.channel.recentlyUsed.useQuery();
   const utils = trpc.useUtils();
   const createPost = trpc.post.create.useMutation({
@@ -676,13 +686,13 @@ ${content}`;
             </CardContent>
           </Card>
 
-          {/* Channel Selection */}
-          <Card>
+          {/* Channel Selection — compact search & select */}
+          <Card ref={channelSectionRef}>
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <div>
                   <CardTitle className="text-base">Select Channels</CardTitle>
-                  <CardDescription>Choose which platforms to publish to</CardDescription>
+                  <CardDescription>Search and pick channels to publish to</CardDescription>
                 </div>
                 {selectedChannels.length > 0 && (
                   <Badge variant="secondary">{selectedChannels.length} selected</Badge>
@@ -691,244 +701,140 @@ ${content}`;
             </CardHeader>
             <CardContent className="space-y-3">
               {channelsLoading ? (
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {[1, 2].map((i) => (
-                    <div key={i} className="h-16 animate-pulse rounded-lg border bg-muted" />
-                  ))}
-                </div>
+                <div className="h-10 animate-pulse rounded-md border bg-muted" />
               ) : channels?.length === 0 ? (
-                <div className="flex flex-col items-center rounded-lg border border-dashed p-8 text-center">
-                  <AlertCircle className="mb-2 h-8 w-8 text-muted-foreground" />
+                <div className="flex flex-col items-center rounded-lg border border-dashed p-6 text-center">
+                  <AlertCircle className="mb-2 h-6 w-6 text-muted-foreground" />
                   <p className="text-sm font-medium">No channels connected</p>
-                  <p className="mb-4 text-xs text-muted-foreground">
-                    Connect a social media account to start posting
-                  </p>
-                  <Button variant="outline" size="sm" asChild>
+                  <Button variant="outline" size="sm" className="mt-2" asChild>
                     <a href="/dashboard/channels">Connect Channel</a>
                   </Button>
                 </div>
               ) : (
                 <>
-                  {/* Search */}
+                  {/* Selected channels as chips */}
+                  {selectedChannels.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {selectedChannels.map((id) => {
+                        const ch = channels?.find((c: any) => c.id === id) as any;
+                        if (!ch) return null;
+                        return (
+                          <span
+                            key={id}
+                            className="inline-flex items-center gap-1.5 rounded-full border bg-primary/5 px-2.5 py-1 text-xs font-medium"
+                          >
+                            {ch.avatar ? (
+                              <img src={ch.avatar} alt="" className="h-4 w-4 rounded-full object-cover" />
+                            ) : (
+                              <span className="flex h-4 w-4 items-center justify-center rounded-full bg-muted text-[8px] font-bold uppercase">
+                                {ch.platform.slice(0, 2)}
+                              </span>
+                            )}
+                            {ch.name}
+                            <button
+                              type="button"
+                              onClick={() => setSelectedChannels(prev => prev.filter(i => i !== id))}
+                              className="ml-0.5 rounded-full p-0.5 hover:bg-destructive/10"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </span>
+                        );
+                      })}
+                      {selectedChannels.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => setSelectedChannels([])}
+                          className="text-[11px] text-muted-foreground hover:text-destructive"
+                        >
+                          Clear all
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Search input */}
                   <div className="relative">
                     <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
                     <Input
                       value={channelSearch}
                       onChange={(e) => setChannelSearch(e.target.value)}
-                      placeholder="Search channels..."
-                      className="h-8 pl-8 text-sm"
+                      placeholder="Search channels by name, platform, or @handle..."
+                      className="h-9 pl-8 text-sm"
+                      onFocus={() => setChannelDropdownOpen(true)}
                     />
                   </div>
 
-                  {/* Group tabs */}
-                  {channelGroups && channelGroups.length > 0 && (
-                    <div className="flex gap-1 overflow-x-auto pb-1">
-                      <button
-                        type="button"
-                        onClick={() => setActiveGroupTab("all")}
-                        className={`flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-                          activeGroupTab === "all"
-                            ? "bg-primary text-primary-foreground"
-                            : "bg-muted text-muted-foreground hover:text-foreground"
-                        }`}
-                      >
-                        All
-                      </button>
-                      {channelGroups.map((group: any) => {
-                        const groupSelected = group.channels.every((c: any) =>
-                          selectedChannels.includes(c.id)
-                        );
-                        return (
-                          <button
-                            key={group.id}
-                            type="button"
-                            onClick={() => setActiveGroupTab(group.id)}
-                            className={`flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-                              activeGroupTab === group.id
-                                ? "bg-primary text-primary-foreground"
-                                : "bg-muted text-muted-foreground hover:text-foreground"
-                            }`}
-                          >
-                            <span
-                              className="h-2 w-2 rounded-full"
-                              style={{ background: group.color }}
-                            />
-                            {group.name}
-                            {groupSelected && group.channels.length > 0 && (
-                              <Check className="h-3 w-3" />
-                            )}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-
-                  {/* Select all in group */}
-                  {activeGroupTab !== "all" && channelGroups && (
-                    (() => {
-                      const group = channelGroups.find((g: any) => g.id === activeGroupTab);
-                      if (!group || group.channels.length === 0) return null;
-                      const groupIds = group.channels.map((c: any) => c.id);
-                      const allSelected = groupIds.every((id: string) => selectedChannels.includes(id));
-                      return (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (allSelected) {
-                              setSelectedChannels(prev => prev.filter(id => !groupIds.includes(id)));
-                            } else {
-                              setSelectedChannels(prev => [...new Set([...prev, ...groupIds])]);
-                            }
-                          }}
-                          className="text-xs text-primary hover:underline"
-                        >
-                          {allSelected ? "Deselect all in group" : `Select all in "${group.name}"`}
-                        </button>
-                      );
-                    })()
-                  )}
-
-                  {/* Channel list — sorted: recently used first */}
-                  {(() => {
-                    const filtered = channels
-                      ?.filter((channel: any) => {
-                        const matchesSearch =
-                          !channelSearch ||
-                          channel.name.toLowerCase().includes(channelSearch.toLowerCase()) ||
-                          channel.platform.toLowerCase().includes(channelSearch.toLowerCase()) ||
-                          (channel.username || "").toLowerCase().includes(channelSearch.toLowerCase());
-                        const matchesGroup =
-                          activeGroupTab === "all" ||
-                          channelGroups?.find((g: any) => g.id === activeGroupTab)
-                            ?.channels.some((c: any) => c.id === channel.id);
-                        return matchesSearch && matchesGroup;
-                      }) || [];
-
+                  {/* Dropdown results — shows when searching or focused */}
+                  {channelDropdownOpen && (() => {
                     const recentSet = new Set(recentlyUsedIds || []);
-                    const recentChannels = recentlyUsedIds
-                      ? recentlyUsedIds
-                          .map((id: string) => filtered.find((ch: any) => ch.id === id))
-                          .filter(Boolean)
-                      : [];
-                    const otherChannels = filtered.filter((ch: any) => !recentSet.has(ch.id));
+                    const allFiltered = channels?.filter((channel: any) => {
+                      const matchesSearch =
+                        !channelSearch ||
+                        channel.name.toLowerCase().includes(channelSearch.toLowerCase()) ||
+                        channel.platform.toLowerCase().includes(channelSearch.toLowerCase()) ||
+                        (channel.username || "").toLowerCase().includes(channelSearch.toLowerCase());
+                      return matchesSearch;
+                    }) || [];
 
-                    const renderChannel = (channel: any, isRecent: boolean) => {
-                      const isSelected = selectedChannels.includes(channel.id);
-                      return (
-                        <label
-                          key={channel.id}
-                          className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 transition-all ${
-                            isSelected
-                              ? "border-primary bg-primary/5 ring-1 ring-primary"
-                              : "hover:border-muted-foreground/50 hover:bg-muted/50"
-                          }`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            onChange={(e) => {
-                              if (e.target.checked) {
-                                setSelectedChannels([...selectedChannels, channel.id]);
-                              } else {
-                                setSelectedChannels(selectedChannels.filter((id: string) => id !== channel.id));
-                              }
-                            }}
-                            className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
-                          />
-                          {channel.avatar ? (
-                            <img src={channel.avatar} alt={channel.name} className="h-7 w-7 rounded-full object-cover" />
-                          ) : (
-                            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-muted text-[10px] font-bold uppercase">
-                              {channel.platform.slice(0, 2)}
-                            </div>
-                          )}
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-1.5">
-                              <p className="truncate text-sm font-medium">{channel.name}</p>
-                              {isRecent && (
-                                <Badge variant="secondary" className="text-[9px] px-1 py-0 leading-tight">Recent</Badge>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-1.5">
-                              <Badge variant="outline" className="text-[10px]">
-                                {channel.platform}
-                              </Badge>
-                              {channel.username && (
-                                <span className="text-xs text-muted-foreground">
-                                  @{channel.username}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        </label>
-                      );
-                    };
-
-                    if (filtered.length === 0) {
-                      return <p className="py-4 text-center text-sm text-muted-foreground">No channels found</p>;
-                    }
+                    // Sort: recently used first, then alphabetical
+                    const sorted = [...allFiltered].sort((a: any, b: any) => {
+                      const aRecent = recentSet.has(a.id) ? 0 : 1;
+                      const bRecent = recentSet.has(b.id) ? 0 : 1;
+                      if (aRecent !== bRecent) return aRecent - bRecent;
+                      return a.name.localeCompare(b.name);
+                    });
 
                     return (
-                      <>
-                        {recentChannels.length > 0 && !channelSearch && (
-                          <div className="space-y-2">
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-1.5">
-                                <Clock className="h-3 w-3 text-muted-foreground" />
-                                <span className="text-xs font-medium text-muted-foreground">Recently Used</span>
-                              </div>
-                              {(() => {
-                                const recentIds = recentChannels.map((ch: any) => ch.id);
-                                const allRecentSelected = recentIds.every((id: string) => selectedChannels.includes(id));
-                                return (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      if (allRecentSelected) {
-                                        setSelectedChannels(prev => prev.filter(id => !recentIds.includes(id)));
-                                      } else {
-                                        setSelectedChannels(prev => [...new Set([...prev, ...recentIds])]);
-                                      }
-                                    }}
-                                    className="text-[11px] text-primary hover:underline"
-                                  >
-                                    {allRecentSelected ? "Deselect recent" : "Select all recent"}
-                                  </button>
-                                );
-                              })()}
-                            </div>
-                            <div className="grid gap-2 sm:grid-cols-2">
-                              {recentChannels.map((ch: any) => renderChannel(ch, true))}
-                            </div>
-                          </div>
+                      <div className="max-h-48 overflow-y-auto rounded-md border bg-background shadow-sm">
+                        {sorted.length === 0 ? (
+                          <p className="p-3 text-center text-xs text-muted-foreground">No channels found</p>
+                        ) : (
+                          sorted.map((channel: any) => {
+                            const isSelected = selectedChannels.includes(channel.id);
+                            const isRecent = recentSet.has(channel.id);
+                            return (
+                              <button
+                                key={channel.id}
+                                type="button"
+                                onClick={() => {
+                                  if (isSelected) {
+                                    setSelectedChannels(prev => prev.filter(i => i !== channel.id));
+                                  } else {
+                                    setSelectedChannels(prev => [...prev, channel.id]);
+                                  }
+                                }}
+                                className={`flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm transition-colors hover:bg-muted/50 ${
+                                  isSelected ? "bg-primary/5" : ""
+                                }`}
+                              >
+                                <div className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                                  isSelected ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/30"
+                                }`}>
+                                  {isSelected && <Check className="h-3 w-3" />}
+                                </div>
+                                {channel.avatar ? (
+                                  <img src={channel.avatar} alt="" className="h-6 w-6 rounded-full object-cover" />
+                                ) : (
+                                  <div className="flex h-6 w-6 items-center justify-center rounded-full bg-muted text-[9px] font-bold uppercase">
+                                    {channel.platform.slice(0, 2)}
+                                  </div>
+                                )}
+                                <div className="min-w-0 flex-1">
+                                  <span className="truncate font-medium">{channel.name}</span>
+                                  {channel.username && (
+                                    <span className="ml-1.5 text-xs text-muted-foreground">@{channel.username}</span>
+                                  )}
+                                </div>
+                                <Badge variant="outline" className="shrink-0 text-[9px]">{channel.platform}</Badge>
+                                {isRecent && <Badge variant="secondary" className="shrink-0 text-[9px] px-1 py-0">Recent</Badge>}
+                              </button>
+                            );
+                          })
                         )}
-                        {recentChannels.length > 0 && otherChannels.length > 0 && !channelSearch && (
-                          <div className="flex items-center gap-2 pt-1">
-                            <div className="h-px flex-1 bg-border" />
-                            <span className="text-[10px] text-muted-foreground">All Channels</span>
-                            <div className="h-px flex-1 bg-border" />
-                          </div>
-                        )}
-                        <div className="grid gap-2 sm:grid-cols-2">
-                          {channelSearch
-                            ? filtered.map((ch: any) => renderChannel(ch, recentSet.has(ch.id)))
-                            : otherChannels.map((ch: any) => renderChannel(ch, false))
-                          }
-                        </div>
-                      </>
+                      </div>
                     );
                   })()}
-
-                  {/* Manage groups link */}
-                  <div className="flex items-center justify-end pt-1">
-                    <a
-                      href="/dashboard/channels"
-                      className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-                    >
-                      <Users className="h-3 w-3" />
-                      Manage channel groups
-                    </a>
-                  </div>
                 </>
               )}
             </CardContent>
