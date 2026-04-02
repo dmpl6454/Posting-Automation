@@ -10,15 +10,62 @@ import {
   Share2,
   Sparkles,
   Plus,
-  Calendar,
   ArrowRight,
   Clock,
   CheckCircle,
   XCircle,
   ExternalLink,
   TrendingUp,
+  Repeat2,
+  Newspaper,
+  Zap,
+  Bot,
+  Layers,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
+
+const featureCards = [
+  {
+    href: "/dashboard/content-agent",
+    icon: Sparkles,
+    title: "Content Studio",
+    desc: "Create, enhance, and schedule posts with AI",
+    gradient: "from-violet-500/12 to-purple-500/12",
+    borderColor: "hover:border-violet-400/40",
+    iconColor: "text-violet-600 dark:text-violet-400",
+    iconBg: "bg-violet-500/10",
+  },
+  {
+    href: "/dashboard/content-agent?expanded=repurpose",
+    icon: Repeat2,
+    title: "Repurpose Content",
+    desc: "Transform content across platforms instantly",
+    gradient: "from-blue-500/12 to-cyan-500/12",
+    borderColor: "hover:border-blue-400/40",
+    iconColor: "text-blue-600 dark:text-blue-400",
+    iconBg: "bg-blue-500/10",
+  },
+  {
+    href: "/dashboard/newsgrid",
+    icon: Newspaper,
+    title: "NewsGrid Bot",
+    desc: "Auto-generate news creatives from trending topics",
+    gradient: "from-rose-500/12 to-pink-500/12",
+    borderColor: "hover:border-rose-400/40",
+    iconColor: "text-rose-600 dark:text-rose-400",
+    iconBg: "bg-rose-500/10",
+  },
+  {
+    href: "/dashboard/autopilot",
+    icon: Zap,
+    title: "Autopilot",
+    desc: "Fully automated posting from trending news",
+    gradient: "from-amber-500/12 to-orange-500/12",
+    borderColor: "hover:border-amber-400/40",
+    iconColor: "text-amber-600 dark:text-amber-400",
+    iconBg: "bg-amber-500/10",
+  },
+];
 
 export default function DashboardPage() {
   const { data: user, isLoading: userLoading } = trpc.user.me.useQuery();
@@ -110,6 +157,33 @@ export default function DashboardPage() {
             ))}
       </div>
 
+      {/* Feature Cards — Content Studio, Repurpose, NewsGrid, Autopilot */}
+      <div>
+        <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-muted-foreground">
+          <Bot className="h-3.5 w-3.5" />
+          AI Tools
+        </h2>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {featureCards.map((card) => (
+            <Link
+              key={card.href}
+              href={card.href}
+              className={`group relative flex items-center gap-4 overflow-hidden rounded-2xl border border-border/40 bg-card/50 p-5 transition-all ${card.borderColor} hover:shadow-lg active:scale-[0.99]`}
+            >
+              <div className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${card.gradient} opacity-0 transition-opacity group-hover:opacity-100`} />
+              <div className={`relative flex h-12 w-12 shrink-0 items-center justify-center rounded-xl ${card.iconBg} ${card.iconColor}`}>
+                <card.icon className="h-6 w-6" />
+              </div>
+              <div className="relative flex-1 min-w-0">
+                <p className="text-sm font-semibold">{card.title}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">{card.desc}</p>
+              </div>
+              <ArrowRight className="relative h-4 w-4 text-muted-foreground/30 transition-all group-hover:translate-x-1 group-hover:text-muted-foreground" />
+            </Link>
+          ))}
+        </div>
+      </div>
+
       {/* Quick Actions + Recent Activity */}
       <div className="grid gap-6 lg:grid-cols-5">
         {/* Quick Actions */}
@@ -136,20 +210,20 @@ export default function DashboardPage() {
                 iconColor: "text-emerald-600 dark:text-emerald-400",
               },
               {
-                href: "/dashboard/content-agent",
-                icon: Sparkles,
-                title: "Content Studio",
-                desc: "Generate content with AI",
-                gradient: "from-violet-500/8 to-purple-500/8",
-                iconColor: "text-violet-600 dark:text-violet-400",
+                href: "/dashboard/content-agent?expanded=bulk",
+                icon: Layers,
+                title: "Bulk Create",
+                desc: "Create multiple posts at once",
+                gradient: "from-orange-500/8 to-red-500/8",
+                iconColor: "text-orange-600 dark:text-orange-400",
               },
               {
-                href: "/dashboard/content-agent?tab=calendar",
-                icon: Calendar,
-                title: "View Calendar",
-                desc: "See your content schedule",
-                gradient: "from-amber-500/8 to-orange-500/8",
-                iconColor: "text-amber-600 dark:text-amber-400",
+                href: "/dashboard/autopilot/agents",
+                icon: Bot,
+                title: "Manage Agents",
+                desc: "Configure autopilot AI agents",
+                gradient: "from-cyan-500/8 to-blue-500/8",
+                iconColor: "text-cyan-600 dark:text-cyan-400",
               },
             ].map((action) => (
               <Link
