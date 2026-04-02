@@ -60,11 +60,36 @@ const sentimentIcons = {
   MIXED: Meh,
 };
 
+const PLATFORMS = [
+  { id: "twitter", label: "X / Twitter" },
+  { id: "facebook", label: "Facebook" },
+  { id: "instagram", label: "Instagram" },
+  { id: "linkedin", label: "LinkedIn" },
+  { id: "reddit", label: "Reddit" },
+  { id: "tiktok", label: "TikTok" },
+  { id: "news", label: "Google News" },
+];
+
+const sourceColors: Record<string, string> = {
+  TWITTER: "bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-400",
+  FACEBOOK: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400",
+  INSTAGRAM: "bg-pink-100 text-pink-700 dark:bg-pink-900/40 dark:text-pink-400",
+  LINKEDIN: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400",
+  REDDIT: "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-400",
+  TIKTOK: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
+  YOUTUBE: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400",
+  NEWS: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400",
+  BLOG: "bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-400",
+  FORUM: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400",
+  OTHER: "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400",
+};
+
 export default function ListeningPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [name, setName] = useState("");
   const [keywords, setKeywords] = useState("");
   const [excludeWords, setExcludeWords] = useState("");
+  const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
   const [selectedQuery, setSelectedQuery] = useState<string | undefined>();
 
   const { data: queries, isLoading: queriesLoading } = trpc.listening.listQueries.useQuery();
@@ -94,6 +119,7 @@ export default function ListeningPage() {
       setName("");
       setKeywords("");
       setExcludeWords("");
+      setSelectedPlatforms([]);
     },
   });
 
@@ -124,7 +150,14 @@ export default function ListeningPage() {
       name,
       keywords: keywords.split(",").map((k) => k.trim()).filter(Boolean),
       excludeWords: excludeWords ? excludeWords.split(",").map((w) => w.trim()).filter(Boolean) : [],
+      platforms: selectedPlatforms,
     });
+  };
+
+  const togglePlatform = (id: string) => {
+    setSelectedPlatforms((prev) =>
+      prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]
+    );
   };
 
   const sentimentPercent = (count: number) => {
@@ -179,6 +212,28 @@ export default function ListeningPage() {
                   onChange={(e) => setExcludeWords(e.target.value)}
                   placeholder="spam, sale (comma separated)"
                 />
+              </div>
+              <div>
+                <Label>Platforms to Monitor</Label>
+                <p className="mb-2 text-xs text-muted-foreground">
+                  Select platforms to search. Leave empty to search all.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {PLATFORMS.map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => togglePlatform(p.id)}
+                      className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-all ${
+                        selectedPlatforms.includes(p.id)
+                          ? "border-foreground/20 bg-foreground/[0.08] text-foreground"
+                          : "border-border/40 text-muted-foreground hover:border-border/60"
+                      }`}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
               </div>
               <Button
                 onClick={handleCreate}
@@ -369,7 +424,7 @@ export default function ListeningPage() {
                         {mention.authorName && (
                           <span className="font-medium">{mention.authorName}</span>
                         )}
-                        <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                        <Badge className={`text-[10px] px-1.5 py-0 border-0 ${sourceColors[mention.source] ?? sourceColors.OTHER}`}>
                           {mention.source}
                         </Badge>
                         <span>
