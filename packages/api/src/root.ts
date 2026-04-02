@@ -31,6 +31,8 @@ import { channelGroupRouter } from "./routers/channel-group.router";
 import { newsgridRouter } from "./routers/newsgrid.router";
 import { monitorRouter } from "./routers/monitor.router";
 import { deploymentRouter } from "./routers/deployment.router";
+import { campaignRouter } from "./routers/campaign.router";
+import { listeningRouter } from "./routers/listening.router";
 
 export const appRouter = createRouter({
   user: userRouter,
@@ -65,6 +67,8 @@ export const appRouter = createRouter({
   newsgrid: newsgridRouter,
   monitor: monitorRouter,
   deployment: deploymentRouter,
+  campaign: campaignRouter,
+  listening: listeningRouter,
 });
 
 export type AppRouter = typeof appRouter;

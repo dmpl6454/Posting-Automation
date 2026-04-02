@@ -21,6 +21,8 @@ import {
   Zap,
   Bot,
   Layers,
+  Ear,
+  Target,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
@@ -64,6 +66,26 @@ const featureCards = [
     borderColor: "hover:border-amber-400/40",
     iconColor: "text-amber-600 dark:text-amber-400",
     iconBg: "bg-amber-500/10",
+  },
+  {
+    href: "/dashboard/listening",
+    icon: Ear,
+    title: "Social Listening",
+    desc: "Monitor mentions, sentiment & competitor activity",
+    gradient: "from-teal-500/12 to-emerald-500/12",
+    borderColor: "hover:border-teal-400/40",
+    iconColor: "text-teal-600 dark:text-teal-400",
+    iconBg: "bg-teal-500/10",
+  },
+  {
+    href: "/dashboard/campaigns",
+    icon: Target,
+    title: "Campaign Tracking",
+    desc: "Track external campaign performance & ROI",
+    gradient: "from-indigo-500/12 to-blue-500/12",
+    borderColor: "hover:border-indigo-400/40",
+    iconColor: "text-indigo-600 dark:text-indigo-400",
+    iconBg: "bg-indigo-500/10",
   },
 ];
 
@@ -163,7 +185,7 @@ export default function DashboardPage() {
           <Bot className="h-3.5 w-3.5" />
           AI Tools
         </h2>
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {featureCards.map((card) => (
             <Link
               key={card.href}

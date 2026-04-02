@@ -9,6 +9,9 @@ import { createTrendDiscoverWorker } from "./workers/trend-discover.worker";
 import { createTrendScoreWorker } from "./workers/trend-score.worker";
 import { createContentGenerateWorker } from "./workers/content-generate.worker";
 import { createAutopilotScheduleWorker } from "./workers/autopilot-schedule.worker";
+import { createListeningSyncWorker } from "./workers/listening-sync.worker";
+import { createSentimentAnalysisWorker } from "./workers/sentiment-analysis.worker";
+import { createCampaignAnalyticsSyncWorker } from "./workers/campaign-analytics-sync.worker";
 import { startCronJobs } from "./scheduler/cron-jobs";
 import { registerWorker, markWorkerStopped, startHealthServer } from "./lib/health";
 
@@ -26,6 +29,9 @@ registerWorker("trend-discover");
 registerWorker("trend-score");
 registerWorker("content-generate");
 registerWorker("autopilot-schedule");
+registerWorker("listening-sync");
+registerWorker("sentiment-analysis");
+registerWorker("campaign-analytics-sync");
 
 // Start workers
 const postPublishWorker = createPostPublishWorker();
@@ -39,6 +45,9 @@ const trendDiscoverWorker = createTrendDiscoverWorker();
 const trendScoreWorker = createTrendScoreWorker();
 const contentGenerateWorker = createContentGenerateWorker();
 const autopilotScheduleWorker = createAutopilotScheduleWorker();
+const listeningSyncWorker = createListeningSyncWorker();
+const sentimentAnalysisWorker = createSentimentAnalysisWorker();
+const campaignAnalyticsSyncWorker = createCampaignAnalyticsSyncWorker();
 
 // Start cron jobs
 startCronJobs();
@@ -58,6 +67,9 @@ console.log("  - Trend Discover Worker");
 console.log("  - Trend Score Worker");
 console.log("  - Content Generate Worker");
 console.log("  - Autopilot Schedule Worker");
+console.log("  - Listening Sync Worker");
+console.log("  - Sentiment Analysis Worker");
+console.log("  - Campaign Analytics Sync Worker");
 console.log("  - Cron Jobs (token refresh: 30min, analytics: 6hr, agent runs: 1min, cleanup: 1hr, pipeline: 15min)");
 
 // Graceful shutdown
@@ -76,6 +88,9 @@ async function shutdown() {
   markWorkerStopped("trend-score");
   markWorkerStopped("content-generate");
   markWorkerStopped("autopilot-schedule");
+  markWorkerStopped("listening-sync");
+  markWorkerStopped("sentiment-analysis");
+  markWorkerStopped("campaign-analytics-sync");
 
   await Promise.all([
     postPublishWorker.close(),
@@ -89,6 +104,9 @@ async function shutdown() {
     trendScoreWorker.close(),
     contentGenerateWorker.close(),
     autopilotScheduleWorker.close(),
+    listeningSyncWorker.close(),
+    sentimentAnalysisWorker.close(),
+    campaignAnalyticsSyncWorker.close(),
   ]);
 
   healthServer.close();

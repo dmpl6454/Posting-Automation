@@ -72,3 +72,18 @@ export interface AutopilotScheduleJobData {
   organizationId: string;
   pipelineRunId: string;
 }
+
+export interface ListeningSyncJobData {
+  listeningQueryId: string;
+  organizationId: string;
+}
+
+export interface SentimentAnalysisJobData {
+  mentionId: string;
+  content: string;
+}
+
+export interface CampaignAnalyticsSyncJobData {
+  campaignId: string;
+  organizationId: string;
+}

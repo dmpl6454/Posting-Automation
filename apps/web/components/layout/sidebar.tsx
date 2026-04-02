@@ -27,6 +27,8 @@ import {
   Newspaper,
   Monitor,
   GitBranch,
+  Ear,
+  Target,
 } from "lucide-react";
 
 const navigation = [
@@ -39,6 +41,8 @@ const navigation = [
   { name: "Short Links", href: "/dashboard/links", icon: Link2 },
   { name: "NewsGrid Bot", href: "/dashboard/newsgrid", icon: Newspaper },
   { name: "Autopilot", href: "/dashboard/autopilot", icon: Zap },
+  { name: "Listening", href: "/dashboard/listening", icon: Ear },
+  { name: "Campaigns", href: "/dashboard/campaigns", icon: Target },
   { name: "Approvals", href: "/dashboard/approvals", icon: CheckCircle },
   { name: "Team", href: "/dashboard/team", icon: Users },
 ];

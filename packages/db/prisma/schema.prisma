@@ -129,7 +129,9 @@ model Organization {
   autopilotPosts AutopilotPost[]
   accountGroups   AccountGroup[]
   pipelineRuns    PipelineRun[]
-  designTemplates DesignTemplate[]
+  designTemplates    DesignTemplate[]
+  listeningQueries   ListeningQuery[]
+  campaigns          Campaign[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -250,6 +252,7 @@ model Post {
   mediaAttachments PostMedia[]
   tags             PostTag[]
   autopilotPost    AutopilotPost?
+  campaignPosts    CampaignPost[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -852,6 +855,163 @@ model DesignTemplate {
   @@index([organizationId])
   @@index([isGlobal])
   @@index([category])
+}
+
+// ==================== SOCIAL LISTENING & MONITORING ====================
+
+enum Sentiment {
+  POSITIVE
+  NEGATIVE
+  NEUTRAL
+  MIXED
+}
+
+enum MentionSource {
+  TWITTER
+  INSTAGRAM
+  FACEBOOK
+  LINKEDIN
+  REDDIT
+  NEWS
+  BLOG
+  FORUM
+  YOUTUBE
+  TIKTOK
+  OTHER
+}
+
+model ListeningQuery {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  keywords       String[] // Terms to track
+  excludeWords   String[] // Words to exclude
+  platforms      String[] // Which platforms to monitor
+  language       String   @default("en")
+  isActive       Boolean  @default(true)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  mentions     Mention[]
+  alerts       SentimentAlert[]
+
+  lastSyncAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([organizationId])
+  @@index([isActive])
+}
+
+model Mention {
+  id               String        @id @default(cuid())
+  listeningQueryId String
+  source           MentionSource
+  sourceUrl        String?
+  authorName       String?
+  authorHandle     String?
+  authorAvatar     String?
+  content          String        @db.Text
+  sentiment        Sentiment     @default(NEUTRAL)
+  sentimentScore   Float?        // -1.0 to 1.0
+  reach            Int           @default(0)
+  engagements      Int           @default(0)
+  metadata         Json?
+
+  listeningQuery ListeningQuery @relation(fields: [listeningQueryId], references: [id], onDelete: Cascade)
+
+  mentionedAt DateTime
+  createdAt   DateTime @default(now())
+
+  @@index([listeningQueryId, mentionedAt])
+  @@index([listeningQueryId, sentiment])
+  @@index([source])
+}
+
+model SentimentAlert {
+  id               String  @id @default(cuid())
+  listeningQueryId String
+  type             String  // "spike_negative", "volume_surge", "trending_mention"
+  title            String
+  description      String  @db.Text
+  severity         String  @default("medium") // "low", "medium", "high", "critical"
+  isRead           Boolean @default(false)
+  metadata         Json?
+
+  listeningQuery ListeningQuery @relation(fields: [listeningQueryId], references: [id], onDelete: Cascade)
+
+  triggeredAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+
+  @@index([listeningQueryId, isRead])
+  @@index([severity])
+}
+
+// ==================== BRAND CAMPAIGNS ====================
+
+enum CampaignStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  COMPLETED
+  ARCHIVED
+}
+
+model Campaign {
+  id             String         @id @default(cuid())
+  organizationId String
+  name           String
+  description    String?        @db.Text
+  status         CampaignStatus @default(DRAFT)
+  hashtags       String[]
+  trackingUrls   String[]
+  targetChannels String[]       // Channel IDs
+  budget         Float?
+  currency       String         @default("USD")
+  goalType       String?        // "awareness", "engagement", "traffic", "conversions"
+  goalTarget     Float?
+
+  // Metrics (aggregated)
+  totalImpressions Int   @default(0)
+  totalClicks      Int   @default(0)
+  totalEngagements Int   @default(0)
+  totalReach       Int   @default(0)
+  totalSpend       Float @default(0)
+
+  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaignPosts CampaignPost[]
+
+  startDate   DateTime?
+  endDate     DateTime?
+  lastSyncAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([organizationId, status])
+  @@index([startDate, endDate])
+}
+
+model CampaignPost {
+  id         String @id @default(cuid())
+  campaignId String
+  postId     String
+
+  // Per-post campaign metrics
+  impressions Int   @default(0)
+  clicks      Int   @default(0)
+  engagements Int   @default(0)
+  reach       Int   @default(0)
+  spend       Float @default(0)
+  conversions Int   @default(0)
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  post     Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([campaignId, postId])
+  @@index([campaignId])
+  @@index([postId])
 }
 
 // ==================== ERROR MONITORING ====================

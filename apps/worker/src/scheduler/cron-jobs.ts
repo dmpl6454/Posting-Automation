@@ -1,5 +1,5 @@
 import { prisma } from "@postautomation/db";
-import { tokenRefreshQueue, analyticsSyncQueue, agentRunQueue, trendDiscoverQueue } from "@postautomation/queue";
+import { tokenRefreshQueue, analyticsSyncQueue, agentRunQueue, trendDiscoverQueue, listeningSyncQueue, campaignAnalyticsSyncQueue } from "@postautomation/queue";
 
 /**
  * Check for channels with expiring tokens and queue refresh jobs.
@@ -225,6 +225,56 @@ export async function triggerAutopilotPipeline() {
 }
 
 /**
+ * Sync listening queries: fetch new mentions for active queries.
+ * Run every 30 minutes.
+ */
+export async function scheduleListeningSync() {
+  const activeQueries = await prisma.listeningQuery.findMany({
+    where: { isActive: true },
+    select: { id: true, organizationId: true },
+  });
+
+  let queued = 0;
+  for (const query of activeQueries) {
+    await listeningSyncQueue.add(
+      `listening-sync-cron-${query.id}`,
+      { listeningQueryId: query.id, organizationId: query.organizationId },
+      { jobId: `listening-sync-cron-${query.id}-${Date.now()}`, removeOnComplete: true, removeOnFail: 100 }
+    );
+    queued++;
+  }
+
+  if (queued > 0) {
+    console.log(`[Cron] Queued ${queued} listening sync jobs`);
+  }
+}
+
+/**
+ * Sync campaign analytics: aggregate metrics for active campaigns.
+ * Run every 4 hours.
+ */
+export async function scheduleCampaignAnalyticsSync() {
+  const activeCampaigns = await prisma.campaign.findMany({
+    where: { status: "ACTIVE" },
+    select: { id: true, organizationId: true },
+  });
+
+  let queued = 0;
+  for (const campaign of activeCampaigns) {
+    await campaignAnalyticsSyncQueue.add(
+      `campaign-sync-cron-${campaign.id}`,
+      { campaignId: campaign.id, organizationId: campaign.organizationId },
+      { jobId: `campaign-sync-cron-${campaign.id}-${Date.now()}`, removeOnComplete: true, removeOnFail: 100 }
+    );
+    queued++;
+  }
+
+  if (queued > 0) {
+    console.log(`[Cron] Queued ${queued} campaign analytics sync jobs`);
+  }
+}
+
+/**
  * Start all cron jobs
  */
 export function startCronJobs() {
@@ -249,10 +299,20 @@ export function startCronJobs() {
   setInterval(triggerAutopilotPipeline, 15 * 60 * 1000);
   setTimeout(triggerAutopilotPipeline, 60 * 1000); // Start after 1 minute warmup
 
+  // Listening sync every 30 minutes
+  setInterval(scheduleListeningSync, 30 * 60 * 1000);
+  setTimeout(scheduleListeningSync, 2 * 60 * 1000); // Start after 2 min warmup
+
+  // Campaign analytics sync every 4 hours
+  setInterval(scheduleCampaignAnalyticsSync, 4 * 60 * 60 * 1000);
+  setTimeout(scheduleCampaignAnalyticsSync, 10 * 60 * 1000); // Start after 10 min warmup
+
   console.log("[Cron] Cron jobs started");
   console.log("[Cron]   - Token refresh: every 30 min");
   console.log("[Cron]   - Analytics sync: every 6 hours");
   console.log("[Cron]   - Agent runs: every 1 min");
   console.log("[Cron]   - Autopilot cleanup: every 1 hour");
   console.log("[Cron]   - Autopilot pipeline: every 15 min");
+  console.log("[Cron]   - Listening sync: every 30 min");
+  console.log("[Cron]   - Campaign analytics sync: every 4 hours");
 }

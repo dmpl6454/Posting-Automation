@@ -1,6 +1,6 @@
 import { Queue } from "bullmq";
 import { redisConnection } from "./connection";
-import type { PostPublishJobData, TokenRefreshJobData, AnalyticsSyncJobData, MediaProcessJobData, WebhookDeliveryJobData, RssSyncJobData, NotificationSendJobData, AgentRunJobData, TrendDiscoverJobData, TrendScoreJobData, ContentGenerateJobData, AutopilotScheduleJobData } from "./types";
+import type { PostPublishJobData, TokenRefreshJobData, AnalyticsSyncJobData, MediaProcessJobData, WebhookDeliveryJobData, RssSyncJobData, NotificationSendJobData, AgentRunJobData, TrendDiscoverJobData, TrendScoreJobData, ContentGenerateJobData, AutopilotScheduleJobData, ListeningSyncJobData, SentimentAnalysisJobData, CampaignAnalyticsSyncJobData } from "./types";
 
 export const QUEUE_NAMES = {
   POST_PUBLISH: "post-publish",
@@ -15,6 +15,9 @@ export const QUEUE_NAMES = {
   TREND_SCORE: "trend-score",
   CONTENT_GENERATE: "content-generate",
   AUTOPILOT_SCHEDULE: "autopilot-schedule",
+  LISTENING_SYNC: "listening-sync",
+  SENTIMENT_ANALYSIS: "sentiment-analysis",
+  CAMPAIGN_ANALYTICS_SYNC: "campaign-analytics-sync",
 } as const;
 
 export const postPublishQueue = new Queue<PostPublishJobData>(
@@ -74,5 +77,20 @@ export const contentGenerateQueue = new Queue<ContentGenerateJobData>(
 
 export const autopilotScheduleQueue = new Queue<AutopilotScheduleJobData>(
   QUEUE_NAMES.AUTOPILOT_SCHEDULE,
+  { connection: redisConnection }
+);
+
+export const listeningSyncQueue = new Queue<ListeningSyncJobData>(
+  QUEUE_NAMES.LISTENING_SYNC,
+  { connection: redisConnection }
+);
+
+export const sentimentAnalysisQueue = new Queue<SentimentAnalysisJobData>(
+  QUEUE_NAMES.SENTIMENT_ANALYSIS,
+  { connection: redisConnection }
+);
+
+export const campaignAnalyticsSyncQueue = new Queue<CampaignAnalyticsSyncJobData>(
+  QUEUE_NAMES.CAMPAIGN_ANALYTICS_SYNC,
   { connection: redisConnection }
 );
