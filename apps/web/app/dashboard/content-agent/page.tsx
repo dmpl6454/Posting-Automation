@@ -8,11 +8,9 @@ import {
   ImagePlus,
   Layers,
   MessageSquare,
-  ChevronDown,
-  ChevronUp,
+  PenLine,
 } from "lucide-react";
-import { Button } from "~/components/ui/button";
-import { Card } from "~/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "~/components/ui/tabs";
 import { ChatLayout } from "~/components/chat/ChatLayout";
 import { GenerateTab } from "~/components/content-agent/GenerateTab";
 import { RepurposeTab } from "~/components/content-agent/RepurposeTab";
@@ -21,30 +19,29 @@ import { PostsTab } from "~/components/content-agent/PostsTab";
 import { ComposeTab } from "~/components/content-agent/ComposeTab";
 import { CalendarTab } from "~/components/content-agent/CalendarTab";
 import { BulkTab } from "~/components/content-agent/BulkTab";
+import { Button } from "~/components/ui/button";
 import { cn } from "~/lib/utils";
 
-type ExpandedSection = "generate" | "repurpose" | "image" | "bulk" | "chat" | null;
-
-const aiTools = [
-  { id: "generate" as const, label: "AI Generate", icon: Sparkles, color: "text-purple-500" },
-  { id: "repurpose" as const, label: "Repurpose", icon: Repeat2, color: "text-blue-500" },
-  { id: "image" as const, label: "AI Image", icon: ImagePlus, color: "text-green-500" },
-  { id: "bulk" as const, label: "Bulk Create", icon: Layers, color: "text-orange-500" },
+const tabs = [
+  { id: "compose", label: "Compose", icon: PenLine },
+  { id: "generate", label: "AI Generate", icon: Sparkles },
+  { id: "repurpose", label: "Repurpose", icon: Repeat2 },
+  { id: "image", label: "AI Image", icon: ImagePlus },
+  { id: "bulk", label: "Bulk Create", icon: Layers },
 ];
 
-function ContentStudioInner() {
+function SuperAgentInner() {
   const searchParams = useSearchParams();
   const composeContent = searchParams.get("content") || undefined;
   const composeImage = searchParams.get("aiImage") || undefined;
   const composeMediaId = searchParams.get("aiMediaId") || undefined;
 
-  const [expanded, setExpanded] = useState<ExpandedSection>(null);
+  const defaultTab = composeContent || composeImage ? "compose" : "compose";
+  const [activeTab, setActiveTab] = useState(defaultTab);
   const [postCreated, setPostCreated] = useState(0);
   const [showCalendar, setShowCalendar] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
   const [pendingMedia, setPendingMedia] = useState<{ dataUrl: string } | null>(null);
-
-  const toggle = (section: ExpandedSection) =>
-    setExpanded((prev) => (prev === section ? null : section));
 
   return (
     <div className="flex h-[calc(100vh-4rem)] overflow-hidden">
@@ -53,59 +50,50 @@ function ContentStudioInner() {
         <div className="mx-auto max-w-4xl space-y-4 p-4">
           {/* Header */}
           <div>
-            <h1 className="text-xl font-bold tracking-tight">Content Studio</h1>
+            <h1 className="text-xl font-bold tracking-tight">Super Agent</h1>
             <p className="text-xs text-muted-foreground">
-              Create, schedule, and manage all your social media content
+              Create, design, and generate content with AI — all in one place
             </p>
           </div>
 
-          {/* ── Compose ── */}
-          <ComposeTab
-            initialContent={composeContent}
-            initialImage={composeImage}
-            initialImageMediaId={composeMediaId}
-            onPostCreated={() => setPostCreated((n) => n + 1)}
-            externalMediaToAdd={pendingMedia}
-            onExternalMediaConsumed={() => setPendingMedia(null)}
-          />
+          {/* ── Unified Tabs ── */}
+          <Tabs value={activeTab} onValueChange={setActiveTab}>
+            <TabsList className="grid w-full grid-cols-5">
+              {tabs.map(({ id, label, icon: Icon }) => (
+                <TabsTrigger key={id} value={id} className="gap-1.5 text-xs">
+                  <Icon className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">{label}</span>
+                </TabsTrigger>
+              ))}
+            </TabsList>
 
-          {/* ── AI Tools (expandable cards) ── */}
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {aiTools.map(({ id, label, icon: Icon, color }) => (
-              <Button
-                key={id}
-                variant={expanded === id ? "default" : "outline"}
-                className="h-auto flex-col gap-1 py-3"
-                onClick={() => toggle(id)}
-              >
-                <Icon className={cn("h-5 w-5", expanded === id ? "text-white" : color)} />
-                <span className="text-xs">{label}</span>
-              </Button>
-            ))}
-          </div>
+            <TabsContent value="compose" className="mt-4">
+              <ComposeTab
+                initialContent={composeContent}
+                initialImage={composeImage}
+                initialImageMediaId={composeMediaId}
+                onPostCreated={() => setPostCreated((n) => n + 1)}
+                externalMediaToAdd={pendingMedia}
+                onExternalMediaConsumed={() => setPendingMedia(null)}
+              />
+            </TabsContent>
 
-          {/* Expanded AI tool panel */}
-          {expanded && expanded !== "chat" && (
-            <Card className="p-4">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-semibold">
-                  {aiTools.find((t) => t.id === expanded)?.label}
-                </h3>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-6 w-6 p-0"
-                  onClick={() => setExpanded(null)}
-                >
-                  <ChevronUp className="h-4 w-4" />
-                </Button>
-              </div>
-              {expanded === "generate" && <GenerateTab />}
-              {expanded === "repurpose" && <RepurposeTab />}
-              {expanded === "image" && <ImageTab onImageGenerated={(dataUrl) => setPendingMedia({ dataUrl })} />}
-              {expanded === "bulk" && <BulkTab />}
-            </Card>
-          )}
+            <TabsContent value="generate" className="mt-4">
+              <GenerateTab />
+            </TabsContent>
+
+            <TabsContent value="repurpose" className="mt-4">
+              <RepurposeTab />
+            </TabsContent>
+
+            <TabsContent value="image" className="mt-4">
+              <ImageTab onImageGenerated={(dataUrl) => setPendingMedia({ dataUrl })} />
+            </TabsContent>
+
+            <TabsContent value="bulk" className="mt-4">
+              <BulkTab />
+            </TabsContent>
+          </Tabs>
 
           {/* ── Posts & Calendar toggle ── */}
           <div className="flex items-center gap-2">
@@ -142,17 +130,17 @@ function ContentStudioInner() {
       <div
         className={cn(
           "flex flex-col border-l bg-background transition-all duration-200",
-          expanded === "chat" ? "w-[380px]" : "w-10"
+          chatOpen ? "w-[380px]" : "w-10"
         )}
       >
         <button
-          onClick={() => toggle("chat")}
+          onClick={() => setChatOpen((o) => !o)}
           className="flex h-10 w-full items-center justify-center border-b hover:bg-muted"
           title="AI Chat"
         >
           <MessageSquare className="h-4 w-4" />
         </button>
-        {expanded === "chat" && (
+        {chatOpen && (
           <div className="flex-1 overflow-hidden">
             <ChatLayout />
           </div>
@@ -162,7 +150,7 @@ function ContentStudioInner() {
   );
 }
 
-export default function ContentStudioPage() {
+export default function SuperAgentPage() {
   return (
     <Suspense
       fallback={
@@ -171,7 +159,7 @@ export default function ContentStudioPage() {
         </div>
       }
     >
-      <ContentStudioInner />
+      <SuperAgentInner />
     </Suspense>
   );
 }

@@ -30,8 +30,8 @@ const featureCards = [
   {
     href: "/dashboard/content-agent",
     icon: Sparkles,
-    title: "Content Studio",
-    desc: "Create, enhance, and schedule posts with AI",
+    title: "Super Agent",
+    desc: "Create, design, and generate content with AI",
     gradient: "from-violet-500/12 to-purple-500/12",
     borderColor: "hover:border-violet-400/40",
     iconColor: "text-violet-600 dark:text-violet-400",
