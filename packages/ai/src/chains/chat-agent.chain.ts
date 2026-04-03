@@ -31,6 +31,7 @@ export type ChatActionType =
   | "create_agent"
   | "generate_content"
   | "schedule_post"
+  | "bulk_schedule"
   | "publish_now"
   | "update_agent"
   | "generate_news_image"

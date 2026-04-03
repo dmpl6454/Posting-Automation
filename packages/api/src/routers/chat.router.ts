@@ -154,8 +154,8 @@ export const chatRouter = createRouter({
       z.object({
         threadId: z.string(),
         actionType: z.enum([
-          "create_agent", "generate_content", "schedule_post", "publish_now",
-          "update_agent", "generate_news_image", "create_campaign",
+          "create_agent", "generate_content", "schedule_post", "bulk_schedule",
+          "publish_now", "update_agent", "generate_news_image", "create_campaign",
           "create_brand_tracker", "create_listening_query", "update_influencer",
           "trigger_agent_run", "get_analytics",
         ]),
@@ -248,6 +248,52 @@ export const chatRouter = createRouter({
           });
 
           return { type: "post_scheduled", postId: post.id };
+        }
+
+        case "bulk_schedule": {
+          const p = input.payload as any;
+          const userId = (ctx.session.user as any).id;
+          const posts = p.posts || [];
+
+          if (!posts.length) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "No posts provided" });
+          }
+
+          const createdPosts = [];
+          for (const item of posts) {
+            const post = await ctx.prisma.post.create({
+              data: {
+                organizationId: ctx.organizationId,
+                createdById: userId,
+                content: item.content,
+                status: "SCHEDULED",
+                scheduledAt: item.scheduledAt ? new Date(item.scheduledAt) : new Date(Date.now() + 3600000),
+                aiGenerated: true,
+                targets: {
+                  create: (item.channelIds || []).map((channelId: string) => ({
+                    channelId,
+                    status: "SCHEDULED",
+                  })),
+                },
+              },
+            });
+            createdPosts.push(post);
+          }
+
+          const summary = createdPosts
+            .map((p) => `• "${p.content.slice(0, 50)}..." → ${p.scheduledAt?.toLocaleString() || "soon"}`)
+            .join("\n");
+
+          await ctx.prisma.chatMessage.create({
+            data: {
+              threadId: input.threadId,
+              role: "system",
+              content: `${createdPosts.length} posts scheduled:\n${summary}`,
+              metadata: { type: "bulk_scheduled", postIds: createdPosts.map((p) => p.id) },
+            },
+          });
+
+          return { type: "bulk_scheduled", count: createdPosts.length, postIds: createdPosts.map((p) => p.id) };
         }
 
         case "publish_now": {
