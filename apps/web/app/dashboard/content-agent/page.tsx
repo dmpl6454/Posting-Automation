@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "~/components/ui/tabs";
 import { ChatLayout } from "~/components/chat/ChatLayout";
+import { CommandPrompt } from "~/components/content-agent/CommandPrompt";
 import { GenerateTab } from "~/components/content-agent/GenerateTab";
 import { RepurposeTab } from "~/components/content-agent/RepurposeTab";
 import { ImageTab } from "~/components/content-agent/ImageTab";
@@ -55,6 +56,9 @@ function SuperAgentInner() {
               Create, design, and generate content with AI — all in one place
             </p>
           </div>
+
+          {/* ── AI Command Prompt ── */}
+          <CommandPrompt />
 
           {/* ── Unified Tabs ── */}
           <Tabs value={activeTab} onValueChange={setActiveTab}>
