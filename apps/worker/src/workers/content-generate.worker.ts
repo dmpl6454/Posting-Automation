@@ -256,16 +256,19 @@ export function createContentGenerateWorker() {
           );
         }
 
-        // 14. Update PipelineRun counters
-        await prisma.pipelineRun.update({
-          where: { id: pipelineRunId },
-          data: {
-            postsGenerated: { increment: 1 },
-            ...(finalStatus === "APPROVED"
-              ? { postsApproved: { increment: 1 } }
-              : {}),
-          },
-        });
+        // 14. Update PipelineRun counters (skip if pipeline run doesn't exist)
+        try {
+          await prisma.pipelineRun.update({
+            where: { id: pipelineRunId },
+            data: {
+              postsGenerated: { increment: 1 },
+              ...(finalStatus === "APPROVED"
+                ? { postsApproved: { increment: 1 } }
+                : {}),
+            },
+          });
+        } catch {}
+
 
         console.log(
           `[ContentGenerate] Done. Post ${post.id} created for autopilotPost ${autopilotPostId} (status: ${finalStatus})`,
@@ -293,12 +296,14 @@ export function createContentGenerateWorker() {
             },
           });
 
-          await prisma.pipelineRun.update({
-            where: { id: pipelineRunId },
-            data: {
-              postsFailed: { increment: 1 },
-            },
-          });
+          try {
+            await prisma.pipelineRun.update({
+              where: { id: pipelineRunId },
+              data: {
+                postsFailed: { increment: 1 },
+              },
+            });
+          } catch {}
         } catch (updateErr) {
           console.error(
             `[ContentGenerate] Failed to update error status:`,
