@@ -53,7 +53,7 @@ export function CommandPrompt() {
       try {
         await executeActionMutation.mutateAsync({
           threadId: tid,
-          actionType: action.type,
+          actionType: action.type as any,
           payload: action.payload,
         });
         utils.chat.listThreads.invalidate();
