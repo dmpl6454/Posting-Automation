@@ -131,7 +131,11 @@ model Organization {
   pipelineRuns    PipelineRun[]
   designTemplates    DesignTemplate[]
   listeningQueries   ListeningQuery[]
-  campaigns          Campaign[]
+  campaigns               Campaign[]
+  brandTrackers           BrandTracker[]
+  influencers             Influencer[]
+  celebrityBrandSignals   CelebrityBrandSignal[]
+  dailyDigests            DailyDigest[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -787,6 +791,7 @@ model AutopilotPost {
   trendScore     Float
   nicheAngle     String?
   errorMessage   String?             @db.Text
+  retryCount     Int                 @default(0)
   createdAt      DateTime            @default(now())
   updatedAt      DateTime            @updatedAt
 
@@ -946,7 +951,7 @@ model SentimentAlert {
   @@index([severity])
 }
 
-// ==================== BRAND CAMPAIGNS ====================
+// ==================== BRAND & CAMPAIGN TRACKING ====================
 
 enum CampaignStatus {
   DRAFT
@@ -977,8 +982,9 @@ model Campaign {
   totalReach       Int   @default(0)
   totalSpend       Float @default(0)
 
-  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  campaignPosts CampaignPost[]
+  organization    Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaignPosts   CampaignPost[]
+  brandTrackers   BrandTracker[]
 
   startDate   DateTime?
   endDate     DateTime?
@@ -1012,6 +1018,220 @@ model CampaignPost {
   @@unique([campaignId, postId])
   @@index([campaignId])
   @@index([postId])
+}
+
+// Track brands/competitors releasing new content
+model BrandTracker {
+  id             String  @id @default(cuid())
+  organizationId String
+  campaignId     String?
+  brandName      String
+  description    String? @db.Text
+  // Social handles to monitor
+  twitterHandle  String?
+  instagramHandle String?
+  facebookPageId String?
+  linkedinHandle String?
+  tiktokHandle   String?
+  youtubeHandle  String?
+  websiteUrl     String?
+  isActive       Boolean @default(true)
+
+  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaign      Campaign?      @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  contentItems  BrandContent[]
+
+  lastSyncAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([organizationId])
+  @@index([campaignId])
+  @@index([isActive])
+}
+
+// Content released by tracked brands
+model BrandContent {
+  id             String        @id @default(cuid())
+  brandTrackerId String
+  platform       MentionSource
+  contentType    String        // "post", "reel", "story", "article", "video", "ad"
+  content        String        @db.Text
+  contentUrl     String?
+  mediaUrl       String?
+  authorHandle   String?
+  engagements    Int           @default(0)
+  likes          Int           @default(0)
+  comments       Int           @default(0)
+  shares         Int           @default(0)
+  views          Int           @default(0)
+  hashtags       String[]
+  metadata       Json?
+
+  brandTracker BrandTracker @relation(fields: [brandTrackerId], references: [id], onDelete: Cascade)
+
+  publishedAt DateTime
+  createdAt   DateTime @default(now())
+
+  @@index([brandTrackerId, publishedAt])
+  @@index([platform])
+}
+
+// Discovered influencers / key persons to reach out
+model Influencer {
+  id             String  @id @default(cuid())
+  organizationId String
+  name           String
+  bio            String? @db.Text
+  avatarUrl      String?
+  platform       String  // primary platform
+  handle         String
+  profileUrl     String?
+  // Metrics
+  followers      Int     @default(0)
+  avgEngagement  Float   @default(0) // engagement rate %
+  avgLikes       Int     @default(0)
+  avgComments    Int     @default(0)
+  // Discovery context
+  niche          String?
+  relevanceScore Float   @default(0) // 0-100 how relevant to the org
+  discoveredFrom String? // "listening_query", "brand_tracker", "manual"
+  discoveredId   String? // ID of the listening query or brand tracker
+  // Outreach tracking
+  status         String  @default("discovered") // "discovered", "shortlisted", "contacted", "responded", "engaged", "rejected"
+  notes          String? @db.Text
+  contactEmail   String?
+  lastContactedAt DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, platform, handle])
+  @@index([organizationId, status])
+  @@index([organizationId, relevanceScore])
+  @@index([platform])
+}
+
+// ==================== CELEBRITY BRAND OUTREACH ====================
+
+enum SignalType {
+  AD_LIBRARY    // Meta/Google paid ad featuring celebrity — Score 3
+  SOCIAL_MEDIA  // Brand post with celebrity tag/hashtag — Score 2
+  PR_NEWS       // Press release or news about endorsement deal — Score 2
+  JOB_POSTING   // Brand hiring celebrity relations role — Score 1
+}
+
+enum OutreachStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  SENT
+  FAILED
+}
+
+enum OutreachChannel {
+  EMAIL
+  LINKEDIN
+  TWITTER
+  INSTAGRAM
+}
+
+enum MessageStatus {
+  DRAFT
+  QUEUED
+  SENT
+  FAILED
+}
+
+// A detected signal that a brand has onboarded a celebrity
+model CelebrityBrandSignal {
+  id              String     @id @default(cuid())
+  organizationId  String
+  brandName       String
+  brandWebsite    String?
+  brandEmail      String?
+  brandTwitter    String?
+  brandInstagram  String?
+  brandLinkedin   String?
+  celebrityNames  String[]   // e.g. ["Virat Kohli", "Alia Bhatt"]
+  signalType      SignalType
+  signalUrl       String?    @db.Text
+  signalData      Json?      // raw scraped payload
+  score           Int        // 1=weak, 2=confirmed, 3=active_spend
+  detectedAt      DateTime   @default(now())
+
+  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  outreachLeads OutreachLead[]
+
+  @@index([organizationId, detectedAt])
+  @@index([signalType, score])
+}
+
+// One outreach lead per brand per daily digest cycle
+model OutreachLead {
+  id          String        @id @default(cuid())
+  signalId    String
+  digestDate  DateTime      @db.Date
+  status      OutreachStatus @default(PENDING)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  signal    CelebrityBrandSignal @relation(fields: [signalId], references: [id], onDelete: Cascade)
+  messages  OutreachMessage[]
+
+  @@index([digestDate, status])
+  @@index([signalId])
+}
+
+// Per-channel message draft for an outreach lead
+model OutreachMessage {
+  id        String          @id @default(cuid())
+  leadId    String
+  channel   OutreachChannel
+  subject   String?         // email subject only
+  body      String          @db.Text
+  status    MessageStatus   @default(DRAFT)
+  sentAt    DateTime?
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  lead         OutreachLead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  deliveryLogs OutreachDeliveryLog[]
+
+  @@index([leadId, channel])
+  @@index([status])
+}
+
+// Daily digest log
+model DailyDigest {
+  id               String    @id @default(cuid())
+  organizationId   String
+  digestDate       DateTime  @unique @db.Date
+  telegramMessageId String?
+  leadCount        Int       @default(0)
+  approvedCount    Int       @default(0)
+  sentAt           DateTime?
+  createdAt        DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, digestDate])
+}
+
+// Outreach delivery audit trail
+model OutreachDeliveryLog {
+  id           String    @id @default(cuid())
+  messageId    String
+  attemptedAt  DateTime  @default(now())
+  responseCode Int?
+  responseBody String?   @db.Text
+  error        String?   @db.Text
+
+  message OutreachMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
 }
 
 // ==================== ERROR MONITORING ====================

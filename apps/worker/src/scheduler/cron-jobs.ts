@@ -1,5 +1,6 @@
 import { prisma } from "@postautomation/db";
-import { tokenRefreshQueue, analyticsSyncQueue, agentRunQueue, trendDiscoverQueue, listeningSyncQueue, campaignAnalyticsSyncQueue } from "@postautomation/queue";
+import { tokenRefreshQueue, analyticsSyncQueue, agentRunQueue, trendDiscoverQueue, listeningSyncQueue, campaignAnalyticsSyncQueue, outreachPollQueue } from "@postautomation/queue";
+import { runAutoHealerWithLogging } from "../workers/auto-healer.worker";
 
 /**
  * Check for channels with expiring tokens and queue refresh jobs.
@@ -275,6 +276,62 @@ export async function scheduleCampaignAnalyticsSync() {
 }
 
 /**
+ * Sync brand content: fetch new content from tracked brands and discover influencers.
+ * Run every 4 hours (shares queue with campaign analytics sync).
+ */
+export async function scheduleBrandContentSync() {
+  // Get all orgs that have active brand trackers
+  const orgsWithTrackers = await prisma.brandTracker.findMany({
+    where: { isActive: true },
+    select: { organizationId: true },
+    distinct: ["organizationId"],
+  });
+
+  let queued = 0;
+  for (const { organizationId } of orgsWithTrackers) {
+    await campaignAnalyticsSyncQueue.add(
+      `brand-sync-cron-${organizationId}`,
+      { organizationId, campaignId: "" },
+      { jobId: `brand-sync-cron-${organizationId}-${Date.now()}`, removeOnComplete: true, removeOnFail: 100 }
+    );
+    queued++;
+  }
+
+  if (queued > 0) {
+    console.log(`[Cron] Queued ${queued} brand content sync jobs`);
+  }
+}
+
+/**
+ * Poll for approved outreach leads and queue send jobs.
+ * Run every 5 minutes.
+ */
+export async function scheduleOutreachPoll() {
+  const orgs = await prisma.organization.findMany({
+    where: {
+      celebrityBrandSignals: {
+        some: {
+          outreachLeads: { some: { status: "APPROVED", messages: { none: {} } } },
+        },
+      },
+    },
+    select: { id: true },
+  });
+
+  for (const org of orgs) {
+    await outreachPollQueue.add(
+      `outreach-poll-${org.id}`,
+      { organizationId: org.id },
+      { jobId: `outreach-poll-${org.id}-${Date.now()}`, removeOnComplete: true }
+    );
+  }
+
+  if (orgs.length > 0) {
+    console.log(`[Cron] Queued ${orgs.length} outreach poll jobs`);
+  }
+}
+
+/**
  * Start all cron jobs
  */
 export function startCronJobs() {
@@ -307,6 +364,14 @@ export function startCronJobs() {
   setInterval(scheduleCampaignAnalyticsSync, 4 * 60 * 60 * 1000);
   setTimeout(scheduleCampaignAnalyticsSync, 10 * 60 * 1000); // Start after 10 min warmup
 
+  // Brand content sync every 4 hours
+  setInterval(scheduleBrandContentSync, 4 * 60 * 60 * 1000);
+  setTimeout(scheduleBrandContentSync, 12 * 60 * 1000); // Start after 12 min warmup
+
+  // Outreach poll every 5 minutes
+  setInterval(scheduleOutreachPoll, 5 * 60 * 1000);
+  setTimeout(scheduleOutreachPoll, 3 * 60 * 1000); // Start after 3 min warmup
+
   console.log("[Cron] Cron jobs started");
   console.log("[Cron]   - Token refresh: every 30 min");
   console.log("[Cron]   - Analytics sync: every 6 hours");
@@ -315,4 +380,12 @@ export function startCronJobs() {
   console.log("[Cron]   - Autopilot pipeline: every 15 min");
   console.log("[Cron]   - Listening sync: every 30 min");
   console.log("[Cron]   - Campaign analytics sync: every 4 hours");
+  console.log("[Cron]   - Brand content sync: every 4 hours");
+  console.log("[Cron]   - Outreach poll: every 5 min");
+
+  // Auto-healer: scan for failed jobs, classify errors, retry transient failures
+  setInterval(runAutoHealerWithLogging, 10 * 60 * 1000); // every 10 minutes
+  setTimeout(runAutoHealerWithLogging, 3 * 60 * 1000); // Start after 3 min warmup
+
+  console.log("[Cron]   - Auto-healer: every 10 min");
 }
