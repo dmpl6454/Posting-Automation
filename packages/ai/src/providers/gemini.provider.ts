@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI, DynamicRetrievalMode } from "@google/generative-ai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import type { Tool } from "@google/generative-ai";
 
 const MODEL_NAME = "gemini-2.5-flash";
@@ -31,14 +31,8 @@ export async function callGemini(
 
   const tools: Tool[] = [];
   if (options.grounded) {
-    tools.push({
-      googleSearchRetrieval: {
-        dynamicRetrievalConfig: {
-          mode: DynamicRetrievalMode.MODE_DYNAMIC,
-          dynamicThreshold: 0.3,
-        },
-      },
-    });
+    // Gemini 2.x uses google_search instead of the deprecated googleSearchRetrieval
+    tools.push({ googleSearch: {} } as Tool);
   }
 
   const model = client.getGenerativeModel({
