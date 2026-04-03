@@ -28,14 +28,24 @@ import { formatDistanceToNow } from "date-fns";
 
 const featureCards = [
   {
-    href: "/dashboard/content-agent",
-    icon: Sparkles,
+    href: "/dashboard/super-agent",
+    icon: Zap,
     title: "Super Agent",
-    desc: "Create, design, and generate content with AI",
+    desc: "AI agent that can execute any task on your platform",
     gradient: "from-violet-500/12 to-purple-500/12",
     borderColor: "hover:border-violet-400/40",
     iconColor: "text-violet-600 dark:text-violet-400",
     iconBg: "bg-violet-500/10",
+  },
+  {
+    href: "/dashboard/content-agent",
+    icon: Sparkles,
+    title: "Content Studio",
+    desc: "Create, schedule, and manage social media content",
+    gradient: "from-pink-500/12 to-rose-500/12",
+    borderColor: "hover:border-pink-400/40",
+    iconColor: "text-pink-600 dark:text-pink-400",
+    iconBg: "bg-pink-500/10",
   },
   {
     href: "/dashboard/content-agent?expanded=repurpose",

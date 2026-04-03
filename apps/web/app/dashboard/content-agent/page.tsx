@@ -12,7 +12,6 @@ import {
 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "~/components/ui/tabs";
 import { ChatLayout } from "~/components/chat/ChatLayout";
-import { CommandPrompt } from "~/components/content-agent/CommandPrompt";
 import { GenerateTab } from "~/components/content-agent/GenerateTab";
 import { RepurposeTab } from "~/components/content-agent/RepurposeTab";
 import { ImageTab } from "~/components/content-agent/ImageTab";
@@ -31,14 +30,13 @@ const tabs = [
   { id: "bulk", label: "Bulk Create", icon: Layers },
 ];
 
-function SuperAgentInner() {
+function ContentStudioInner() {
   const searchParams = useSearchParams();
   const composeContent = searchParams.get("content") || undefined;
   const composeImage = searchParams.get("aiImage") || undefined;
   const composeMediaId = searchParams.get("aiMediaId") || undefined;
 
-  const defaultTab = composeContent || composeImage ? "compose" : "compose";
-  const [activeTab, setActiveTab] = useState(defaultTab);
+  const [activeTab, setActiveTab] = useState(composeContent || composeImage ? "compose" : "compose");
   const [postCreated, setPostCreated] = useState(0);
   const [showCalendar, setShowCalendar] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
@@ -51,14 +49,11 @@ function SuperAgentInner() {
         <div className="mx-auto max-w-4xl space-y-4 p-4">
           {/* Header */}
           <div>
-            <h1 className="text-xl font-bold tracking-tight">Super Agent</h1>
+            <h1 className="text-xl font-bold tracking-tight">Content Studio</h1>
             <p className="text-xs text-muted-foreground">
-              Create, design, and generate content with AI — all in one place
+              Create, schedule, and manage all your social media content
             </p>
           </div>
-
-          {/* ── AI Command Prompt ── */}
-          <CommandPrompt />
 
           {/* ── Unified Tabs ── */}
           <Tabs value={activeTab} onValueChange={setActiveTab}>
@@ -154,7 +149,7 @@ function SuperAgentInner() {
   );
 }
 
-export default function SuperAgentPage() {
+export default function ContentStudioPage() {
   return (
     <Suspense
       fallback={
@@ -163,7 +158,7 @@ export default function SuperAgentPage() {
         </div>
       }
     >
-      <SuperAgentInner />
+      <ContentStudioInner />
     </Suspense>
   );
 }

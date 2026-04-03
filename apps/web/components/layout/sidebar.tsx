@@ -34,7 +34,8 @@ import {
 
 const navigation = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  { name: "Super Agent", href: "/dashboard/content-agent", icon: Sparkles },
+  { name: "Super Agent", href: "/dashboard/super-agent", icon: Zap },
+  { name: "Content Studio", href: "/dashboard/content-agent", icon: Sparkles },
   { name: "Channels", href: "/dashboard/channels", icon: Share2 },
   { name: "Media", href: "/dashboard/media", icon: Image },
   { name: "Analytics", href: "/dashboard/analytics", icon: BarChart3 },
