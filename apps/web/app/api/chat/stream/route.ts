@@ -60,23 +60,48 @@ export async function POST(req: Request) {
     content: m.content,
   }));
 
-  // Load org context
-  const [channels, agents] = await Promise.all([
+  // Load full platform context for the agent
+  const [channels, agents, campaigns, listeningQueries, influencers, recentPosts, postStats, org] = await Promise.all([
     prisma.channel.findMany({
       where: { organizationId: membership.organizationId },
       select: { id: true, name: true, platform: true, username: true },
     }),
     prisma.agent.findMany({
       where: { organizationId: membership.organizationId },
-      select: { id: true, name: true, niche: true, isActive: true },
+      select: { id: true, name: true, niche: true, isActive: true, postsPerDay: true, totalPosts: true },
+    }),
+    prisma.campaign.findMany({
+      where: { organizationId: membership.organizationId },
+      select: { id: true, name: true, status: true, _count: { select: { brandTrackers: true } } },
+      take: 10,
+    }),
+    prisma.listeningQuery.findMany({
+      where: { organizationId: membership.organizationId, isActive: true },
+      select: { id: true, name: true, keywords: true, platforms: true },
+      take: 10,
+    }),
+    prisma.influencer.findMany({
+      where: { organizationId: membership.organizationId },
+      select: { id: true, name: true, platform: true, handle: true, status: true, followers: true },
+      orderBy: { relevanceScore: "desc" },
+      take: 20,
+    }),
+    prisma.post.findMany({
+      where: { organizationId: membership.organizationId },
+      orderBy: { createdAt: "desc" },
+      take: 5,
+      select: { id: true, content: true, status: true, createdAt: true },
+    }),
+    Promise.all([
+      prisma.post.count({ where: { organizationId: membership.organizationId } }),
+      prisma.post.count({ where: { organizationId: membership.organizationId, status: "PUBLISHED" } }),
+      prisma.post.count({ where: { organizationId: membership.organizationId, status: "SCHEDULED" } }),
+    ]),
+    prisma.organization.findUnique({
+      where: { id: membership.organizationId },
+      select: { name: true, logo: true },
     }),
   ]);
-
-  // Load org info for branding
-  const org = await prisma.organization.findUnique({
-    where: { id: membership.organizationId },
-    select: { name: true, logo: true },
-  });
 
   // Detect trending news intent from the last user message
   const lastUserMessage = messages.filter((m) => m.role === "user").pop();
@@ -141,8 +166,34 @@ export async function POST(req: Request) {
             id: ch.id,
             name: ch.name || ch.username || "Unknown",
             platform: ch.platform,
+            username: ch.username || undefined,
           })),
           agents,
+          campaigns: campaigns.map((c) => ({
+            id: c.id,
+            name: c.name,
+            status: c.status,
+            brandCount: c._count.brandTrackers,
+          })),
+          listeningQueries: listeningQueries.map((q) => ({
+            id: q.id,
+            query: `${q.name}: ${q.keywords.join(", ")}`,
+            platforms: q.platforms,
+            mentionCount: 0,
+          })),
+          influencers,
+          recentPosts: recentPosts.map((p) => ({
+            id: p.id,
+            content: p.content,
+            status: p.status,
+            createdAt: p.createdAt.toISOString(),
+          })),
+          stats: {
+            totalPosts: postStats[0],
+            published: postStats[1],
+            scheduled: postStats[2],
+            connectedChannels: channels.length,
+          },
           trendingNews,
           orgLogo: org?.logo || undefined,
           orgName: org?.name || undefined,

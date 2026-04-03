@@ -153,7 +153,12 @@ export const chatRouter = createRouter({
     .input(
       z.object({
         threadId: z.string(),
-        actionType: z.enum(["create_agent", "generate_content", "schedule_post", "publish_now", "update_agent", "generate_news_image"]),
+        actionType: z.enum([
+          "create_agent", "generate_content", "schedule_post", "publish_now",
+          "update_agent", "generate_news_image", "create_campaign",
+          "create_brand_tracker", "create_listening_query", "update_influencer",
+          "trigger_agent_run", "get_analytics",
+        ]),
         payload: z.record(z.unknown()),
       })
     )
@@ -385,6 +390,165 @@ export const chatRouter = createRouter({
             style,
             content: p.content,
           };
+        }
+
+        case "create_campaign": {
+          const p = input.payload as any;
+          const campaign = await ctx.prisma.campaign.create({
+            data: {
+              organizationId: ctx.organizationId,
+              name: p.name || "New Campaign",
+              description: p.description || undefined,
+              hashtags: p.hashtags || [],
+              goalType: p.goalType || undefined,
+              status: "ACTIVE",
+            },
+          });
+
+          await ctx.prisma.chatMessage.create({
+            data: {
+              threadId: input.threadId,
+              role: "system",
+              content: `Campaign "${campaign.name}" created and is now active.`,
+              metadata: { type: "campaign_created", campaignId: campaign.id },
+            },
+          });
+
+          return { type: "campaign_created", campaignId: campaign.id, name: campaign.name };
+        }
+
+        case "create_brand_tracker": {
+          const p = input.payload as any;
+          const brand = await ctx.prisma.brandTracker.create({
+            data: {
+              organizationId: ctx.organizationId,
+              brandName: p.brandName || "Unknown Brand",
+              description: p.description || undefined,
+              campaignId: p.campaignId || undefined,
+              twitterHandle: p.twitterHandle || undefined,
+              instagramHandle: p.instagramHandle || undefined,
+              facebookPageId: p.facebookPageId || undefined,
+              linkedinHandle: p.linkedinHandle || undefined,
+              tiktokHandle: p.tiktokHandle || undefined,
+              websiteUrl: p.websiteUrl || undefined,
+            },
+          });
+
+          await ctx.prisma.chatMessage.create({
+            data: {
+              threadId: input.threadId,
+              role: "system",
+              content: `Now tracking brand "${brand.brandName}". Content sync will begin in the next cycle.`,
+              metadata: { type: "brand_tracker_created", brandId: brand.id },
+            },
+          });
+
+          return { type: "brand_tracker_created", brandId: brand.id, brandName: brand.brandName };
+        }
+
+        case "create_listening_query": {
+          const p = input.payload as any;
+          const queryText = p.query || p.keywords?.join(", ") || "";
+          const keywords = p.keywords || (p.query ? p.query.split(",").map((k: string) => k.trim()) : []);
+          const listeningQuery = await ctx.prisma.listeningQuery.create({
+            data: {
+              organizationId: ctx.organizationId,
+              name: p.name || queryText.slice(0, 50) || "New Query",
+              keywords,
+              platforms: p.platforms || ["TWITTER", "REDDIT"],
+            },
+          });
+
+          await ctx.prisma.chatMessage.create({
+            data: {
+              threadId: input.threadId,
+              role: "system",
+              content: `Listening query "${listeningQuery.name}" created. Monitoring ${listeningQuery.platforms.join(", ")} for: ${listeningQuery.keywords.join(", ")}. First results will appear after the next sync cycle.`,
+              metadata: { type: "listening_created", queryId: listeningQuery.id },
+            },
+          });
+
+          return { type: "listening_created", queryId: listeningQuery.id };
+        }
+
+        case "update_influencer": {
+          const p = input.payload as any;
+          if (!p.id) throw new TRPCError({ code: "BAD_REQUEST", message: "Influencer ID required" });
+
+          const influencer = await ctx.prisma.influencer.update({
+            where: { id: p.id },
+            data: {
+              ...(p.status && { status: p.status }),
+              ...(p.notes && { notes: p.notes }),
+              ...(p.contactEmail && { contactEmail: p.contactEmail }),
+            },
+          });
+
+          await ctx.prisma.chatMessage.create({
+            data: {
+              threadId: input.threadId,
+              role: "system",
+              content: `Influencer "${influencer.name}" updated to status: ${influencer.status}.`,
+              metadata: { type: "influencer_updated", influencerId: influencer.id },
+            },
+          });
+
+          return { type: "influencer_updated", influencerId: influencer.id, status: influencer.status };
+        }
+
+        case "trigger_agent_run": {
+          const p = input.payload as any;
+          if (!p.agentId) throw new TRPCError({ code: "BAD_REQUEST", message: "Agent ID required" });
+
+          const agent = await ctx.prisma.agent.findFirst({
+            where: { id: p.agentId, organizationId: ctx.organizationId },
+          });
+          if (!agent) throw new TRPCError({ code: "NOT_FOUND", message: "Agent not found" });
+
+          await agentRunQueue.add(
+            `chat-trigger-${agent.id}`,
+            { agentId: agent.id, organizationId: ctx.organizationId },
+            { removeOnComplete: true, removeOnFail: 100 },
+          );
+
+          await ctx.prisma.chatMessage.create({
+            data: {
+              threadId: input.threadId,
+              role: "system",
+              content: `Agent "${agent.name}" triggered manually. It will discover trends and generate content shortly.`,
+              metadata: { type: "agent_triggered", agentId: agent.id },
+            },
+          });
+
+          return { type: "agent_triggered", agentId: agent.id, agentName: agent.name };
+        }
+
+        case "get_analytics": {
+          const [totalPosts, published, scheduled, channels, recentPosts] = await Promise.all([
+            ctx.prisma.post.count({ where: { organizationId: ctx.organizationId } }),
+            ctx.prisma.post.count({ where: { organizationId: ctx.organizationId, status: "PUBLISHED" } }),
+            ctx.prisma.post.count({ where: { organizationId: ctx.organizationId, status: "SCHEDULED" } }),
+            ctx.prisma.channel.count({ where: { organizationId: ctx.organizationId, isActive: true } }),
+            ctx.prisma.post.findMany({
+              where: { organizationId: ctx.organizationId },
+              orderBy: { createdAt: "desc" },
+              take: 5,
+              select: { id: true, content: true, status: true, createdAt: true },
+            }),
+          ]);
+
+          const summary = `📊 Dashboard Summary:\n- Total posts: ${totalPosts}\n- Published: ${published}\n- Scheduled: ${scheduled}\n- Active channels: ${channels}\n\nRecent posts:\n${recentPosts.map((p) => `  • [${p.status}] ${p.content.slice(0, 60)}...`).join("\n")}`;
+
+          await ctx.prisma.chatMessage.create({
+            data: {
+              threadId: input.threadId,
+              role: "system",
+              content: summary,
+              metadata: { type: "analytics_fetched" },
+            },
+          });
+
+          return { type: "analytics_fetched", totalPosts, published, scheduled, channels };
         }
 
         default:

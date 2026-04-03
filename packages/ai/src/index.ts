@@ -4,7 +4,7 @@ export { optimizeContent } from "./chains/schedule-optimization.chain";
 export { repurposeContent } from "./chains/content-repurpose.chain";
 export type { RepurposeParams } from "./chains/content-repurpose.chain";
 export { streamChatAgent, chatAgent, parseActions, cleanResponseText } from "./chains/chat-agent.chain";
-export type { ChatMessage as AIChatMessage, ChatContext, ChatAgentAction } from "./chains/chat-agent.chain";
+export type { ChatMessage as AIChatMessage, ChatContext, ChatAgentAction, ChatActionType } from "./chains/chat-agent.chain";
 export { getModel, isLangChainProvider } from "./providers/provider.factory";
 export { getGrokModel } from "./providers/grok.provider";
 export { getDeepSeekModel } from "./providers/deepseek.provider";

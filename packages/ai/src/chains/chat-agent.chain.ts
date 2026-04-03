@@ -10,8 +10,13 @@ export interface ChatMessage {
 }
 
 export interface ChatContext {
-  channels: Array<{ id: string; name: string; platform: string }>;
-  agents: Array<{ id: string; name: string; niche: string; isActive: boolean }>;
+  channels: Array<{ id: string; name: string; platform: string; username?: string }>;
+  agents: Array<{ id: string; name: string; niche: string; isActive: boolean; postsPerDay?: number; totalPosts?: number }>;
+  campaigns?: Array<{ id: string; name: string; status: string; brandCount: number }>;
+  listeningQueries?: Array<{ id: string; query: string; platforms: string[]; mentionCount: number }>;
+  influencers?: Array<{ id: string; name: string; platform: string; handle: string; status: string; followers: number }>;
+  recentPosts?: Array<{ id: string; content: string; status: string; createdAt: string }>;
+  stats?: { totalPosts: number; published: number; scheduled: number; connectedChannels: number };
   trendingNews?: Array<{
     title: string;
     source: string;
@@ -22,8 +27,22 @@ export interface ChatContext {
   orgName?: string;
 }
 
+export type ChatActionType =
+  | "create_agent"
+  | "generate_content"
+  | "schedule_post"
+  | "publish_now"
+  | "update_agent"
+  | "generate_news_image"
+  | "create_campaign"
+  | "create_brand_tracker"
+  | "create_listening_query"
+  | "update_influencer"
+  | "trigger_agent_run"
+  | "get_analytics";
+
 export interface ChatAgentAction {
-  type: "create_agent" | "generate_content" | "schedule_post" | "publish_now" | "update_agent" | "generate_news_image";
+  type: ChatActionType;
   payload: Record<string, unknown>;
 }
 
@@ -56,22 +75,65 @@ export function cleanResponseText(text: string): string {
 function buildContextString(context: ChatContext): string {
   const parts: string[] = [];
 
+  // Organization
+  if (context.orgName) parts.push(`Organization: ${context.orgName}`);
+  if (context.orgLogo) parts.push(`Logo URL: ${context.orgLogo}`);
+
+  // Stats overview
+  if (context.stats) {
+    parts.push(`\nPlatform Stats: ${context.stats.totalPosts} total posts, ${context.stats.published} published, ${context.stats.scheduled} scheduled, ${context.stats.connectedChannels} channels`);
+  }
+
+  // Channels
   if (context.channels.length > 0) {
-    parts.push("Connected channels:");
+    parts.push("\nConnected channels:");
     context.channels.forEach((ch) => {
-      parts.push(`  - ${ch.name} (${ch.platform}, ID: ${ch.id})`);
+      parts.push(`  - ${ch.name}${ch.username ? ` (@${ch.username})` : ""} [${ch.platform}] (ID: ${ch.id})`);
     });
   } else {
-    parts.push("No channels connected yet. The user needs to connect social media channels first.");
+    parts.push("\nNo channels connected yet. The user needs to connect social media channels first.");
   }
 
+  // Agents
   if (context.agents.length > 0) {
-    parts.push("\nExisting agents:");
+    parts.push("\nAI Agents:");
     context.agents.forEach((a) => {
-      parts.push(`  - ${a.name} (${a.niche}, ${a.isActive ? "active" : "paused"}, ID: ${a.id})`);
+      parts.push(`  - ${a.name} (${a.niche}, ${a.isActive ? "active" : "paused"}${a.totalPosts ? `, ${a.totalPosts} posts created` : ""}, ID: ${a.id})`);
     });
   }
 
+  // Campaigns
+  if (context.campaigns && context.campaigns.length > 0) {
+    parts.push("\nCampaigns:");
+    context.campaigns.forEach((c) => {
+      parts.push(`  - ${c.name} [${c.status}] (${c.brandCount} brands tracked, ID: ${c.id})`);
+    });
+  }
+
+  // Listening queries
+  if (context.listeningQueries && context.listeningQueries.length > 0) {
+    parts.push("\nListening Queries:");
+    context.listeningQueries.forEach((q) => {
+      parts.push(`  - "${q.query}" on ${q.platforms.join(", ")} (${q.mentionCount} mentions, ID: ${q.id})`);
+    });
+  }
+
+  // Influencers summary
+  if (context.influencers && context.influencers.length > 0) {
+    const byStatus: Record<string, number> = {};
+    context.influencers.forEach((i) => { byStatus[i.status] = (byStatus[i.status] || 0) + 1; });
+    parts.push(`\nInfluencers: ${context.influencers.length} total (${Object.entries(byStatus).map(([s, c]) => `${c} ${s}`).join(", ")})`);
+  }
+
+  // Recent posts
+  if (context.recentPosts && context.recentPosts.length > 0) {
+    parts.push("\nRecent posts:");
+    context.recentPosts.slice(0, 5).forEach((p) => {
+      parts.push(`  - [${p.status}] "${p.content.slice(0, 80)}..." (${p.createdAt})`);
+    });
+  }
+
+  // Trending news
   if (context.trendingNews && context.trendingNews.length > 0) {
     parts.push("\n## Trending News (fetched just now — present these to the user)");
     context.trendingNews.forEach((article, i) => {
@@ -82,13 +144,6 @@ function buildContextString(context: ChatContext): string {
       }
     });
     parts.push("\nBased on these headlines, present the top stories and draft a social media post from the most relevant one. Include a generate_news_image action block.");
-  }
-
-  if (context.orgLogo) {
-    parts.push(`\nOrganization logo URL: ${context.orgLogo}`);
-  }
-  if (context.orgName) {
-    parts.push(`Organization name: ${context.orgName}`);
   }
 
   return parts.join("\n");
