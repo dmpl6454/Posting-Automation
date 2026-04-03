@@ -2,238 +2,227 @@ import { z } from "zod";
 import { createRouter, orgProcedure } from "../trpc";
 
 export const campaignRouter = createRouter({
+  // ==================== CAMPAIGNS ====================
   list: orgProcedure
-    .input(
-      z.object({
-        status: z.enum(["DRAFT", "ACTIVE", "PAUSED", "COMPLETED", "ARCHIVED"]).optional(),
-      }).optional()
-    )
+    .input(z.object({ status: z.enum(["DRAFT", "ACTIVE", "PAUSED", "COMPLETED", "ARCHIVED"]).optional() }).optional())
     .query(async ({ ctx, input }) => {
       return ctx.prisma.campaign.findMany({
-        where: {
-          organizationId: ctx.organizationId,
-          ...(input?.status ? { status: input.status } : {}),
-        },
+        where: { organizationId: ctx.organizationId, ...(input?.status ? { status: input.status } : {}) },
         include: {
-          _count: { select: { campaignPosts: true } },
+          _count: { select: { campaignPosts: true, brandTrackers: true } },
         },
         orderBy: { createdAt: "desc" },
       });
     }),
 
-  byId: orgProcedure
-    .input(z.object({ id: z.string() }))
-    .query(async ({ ctx, input }) => {
-      return ctx.prisma.campaign.findFirstOrThrow({
-        where: { id: input.id, organizationId: ctx.organizationId },
-        include: {
-          campaignPosts: {
-            include: {
-              post: {
-                select: {
-                  id: true,
-                  content: true,
-                  status: true,
-                  publishedAt: true,
-                  targets: {
-                    select: {
-                      id: true,
-                      status: true,
-                      publishedUrl: true,
-                      channel: { select: { platform: true, name: true, avatar: true } },
-                    },
-                  },
-                  mediaAttachments: {
-                    include: { media: { select: { url: true, thumbnailUrl: true } } },
-                    take: 1,
-                  },
-                },
-              },
-            },
-            orderBy: { createdAt: "desc" },
-          },
+  byId: orgProcedure.input(z.object({ id: z.string() })).query(async ({ ctx, input }) => {
+    return ctx.prisma.campaign.findFirstOrThrow({
+      where: { id: input.id, organizationId: ctx.organizationId },
+      include: {
+        brandTrackers: {
+          include: { _count: { select: { contentItems: true } } },
+          orderBy: { createdAt: "desc" },
         },
-      });
-    }),
+        _count: { select: { campaignPosts: true } },
+      },
+    });
+  }),
 
   create: orgProcedure
-    .input(
-      z.object({
-        name: z.string().min(1).max(200),
-        description: z.string().optional(),
-        hashtags: z.array(z.string()).default([]),
-        trackingUrls: z.array(z.string()).default([]),
-        targetChannels: z.array(z.string()).default([]),
-        budget: z.number().optional(),
-        currency: z.string().default("USD"),
-        goalType: z.string().optional(),
-        goalTarget: z.number().optional(),
-        startDate: z.string().datetime().optional(),
-        endDate: z.string().datetime().optional(),
-      })
-    )
+    .input(z.object({
+      name: z.string().min(1).max(200),
+      description: z.string().optional(),
+      hashtags: z.array(z.string()).default([]),
+      goalType: z.string().optional(),
+    }))
     .mutation(async ({ ctx, input }) => {
       return ctx.prisma.campaign.create({
-        data: {
-          organizationId: ctx.organizationId,
-          name: input.name,
-          description: input.description,
-          hashtags: input.hashtags,
-          trackingUrls: input.trackingUrls,
-          targetChannels: input.targetChannels,
-          budget: input.budget,
-          currency: input.currency,
-          goalType: input.goalType,
-          goalTarget: input.goalTarget,
-          startDate: input.startDate ? new Date(input.startDate) : undefined,
-          endDate: input.endDate ? new Date(input.endDate) : undefined,
-        },
+        data: { organizationId: ctx.organizationId, ...input, status: "ACTIVE" },
       });
     }),
 
   update: orgProcedure
-    .input(
-      z.object({
-        id: z.string(),
-        name: z.string().min(1).max(200).optional(),
-        description: z.string().optional(),
-        status: z.enum(["DRAFT", "ACTIVE", "PAUSED", "COMPLETED", "ARCHIVED"]).optional(),
-        hashtags: z.array(z.string()).optional(),
-        trackingUrls: z.array(z.string()).optional(),
-        targetChannels: z.array(z.string()).optional(),
-        budget: z.number().optional(),
-        goalType: z.string().optional(),
-        goalTarget: z.number().optional(),
-        startDate: z.string().datetime().optional(),
-        endDate: z.string().datetime().optional(),
-      })
-    )
+    .input(z.object({
+      id: z.string(),
+      name: z.string().min(1).max(200).optional(),
+      description: z.string().optional(),
+      status: z.enum(["DRAFT", "ACTIVE", "PAUSED", "COMPLETED", "ARCHIVED"]).optional(),
+      hashtags: z.array(z.string()).optional(),
+    }))
     .mutation(async ({ ctx, input }) => {
-      const { id, startDate, endDate, ...rest } = input;
-      return ctx.prisma.campaign.update({
-        where: { id, organizationId: ctx.organizationId },
-        data: {
-          ...rest,
-          ...(startDate !== undefined ? { startDate: new Date(startDate) } : {}),
-          ...(endDate !== undefined ? { endDate: new Date(endDate) } : {}),
-        },
-      });
+      const { id, ...data } = input;
+      return ctx.prisma.campaign.update({ where: { id, organizationId: ctx.organizationId }, data });
     }),
 
-  delete: orgProcedure
-    .input(z.object({ id: z.string() }))
-    .mutation(async ({ ctx, input }) => {
-      await ctx.prisma.campaign.delete({
-        where: { id: input.id, organizationId: ctx.organizationId },
-      });
-      return { success: true };
-    }),
+  delete: orgProcedure.input(z.object({ id: z.string() })).mutation(async ({ ctx, input }) => {
+    await ctx.prisma.campaign.delete({ where: { id: input.id, organizationId: ctx.organizationId } });
+    return { success: true };
+  }),
 
-  addPost: orgProcedure
-    .input(z.object({ campaignId: z.string(), postId: z.string() }))
-    .mutation(async ({ ctx, input }) => {
-      // Verify both belong to org
-      await ctx.prisma.campaign.findFirstOrThrow({
-        where: { id: input.campaignId, organizationId: ctx.organizationId },
-      });
-      await ctx.prisma.post.findFirstOrThrow({
-        where: { id: input.postId, organizationId: ctx.organizationId },
-      });
-      return ctx.prisma.campaignPost.create({
-        data: { campaignId: input.campaignId, postId: input.postId },
-      });
-    }),
-
-  removePost: orgProcedure
-    .input(z.object({ campaignId: z.string(), postId: z.string() }))
-    .mutation(async ({ ctx, input }) => {
-      await ctx.prisma.campaignPost.delete({
-        where: {
-          campaignId_postId: {
-            campaignId: input.campaignId,
-            postId: input.postId,
-          },
-        },
-      });
-      return { success: true };
-    }),
-
-  metrics: orgProcedure
-    .input(z.object({ id: z.string() }))
+  // ==================== BRAND TRACKERS ====================
+  listBrands: orgProcedure
+    .input(z.object({ campaignId: z.string().optional() }).optional())
     .query(async ({ ctx, input }) => {
-      const campaign = await ctx.prisma.campaign.findFirstOrThrow({
-        where: { id: input.id, organizationId: ctx.organizationId },
-      });
-
-      const campaignPosts = await ctx.prisma.campaignPost.findMany({
-        where: { campaignId: input.id },
-      });
-
-      const totalImpressions = campaignPosts.reduce((s, p) => s + p.impressions, 0);
-      const totalClicks = campaignPosts.reduce((s, p) => s + p.clicks, 0);
-      const totalEngagements = campaignPosts.reduce((s, p) => s + p.engagements, 0);
-      const totalReach = campaignPosts.reduce((s, p) => s + p.reach, 0);
-      const totalSpend = campaignPosts.reduce((s, p) => s + p.spend, 0);
-      const totalConversions = campaignPosts.reduce((s, p) => s + p.conversions, 0);
-
-      const engagementRate = totalImpressions > 0
-        ? (totalEngagements / totalImpressions) * 100
-        : 0;
-
-      const ctr = totalImpressions > 0
-        ? (totalClicks / totalImpressions) * 100
-        : 0;
-
-      const roi = campaign.budget && campaign.budget > 0
-        ? ((totalConversions * 10 - totalSpend) / campaign.budget) * 100 // simplified ROI
-        : null;
-
-      return {
-        totalPosts: campaignPosts.length,
-        totalImpressions,
-        totalClicks,
-        totalEngagements,
-        totalReach,
-        totalSpend,
-        totalConversions,
-        engagementRate,
-        ctr,
-        roi,
-        budget: campaign.budget,
-        goalType: campaign.goalType,
-        goalTarget: campaign.goalTarget,
-      };
-    }),
-
-  compare: orgProcedure
-    .input(z.object({ ids: z.array(z.string()).min(2).max(5) }))
-    .query(async ({ ctx, input }) => {
-      const campaigns = await ctx.prisma.campaign.findMany({
+      return ctx.prisma.brandTracker.findMany({
         where: {
-          id: { in: input.ids },
           organizationId: ctx.organizationId,
+          ...(input?.campaignId ? { campaignId: input.campaignId } : {}),
         },
-        include: {
-          _count: { select: { campaignPosts: true } },
+        include: { _count: { select: { contentItems: true } } },
+        orderBy: { createdAt: "desc" },
+      });
+    }),
+
+  createBrand: orgProcedure
+    .input(z.object({
+      brandName: z.string().min(1).max(200),
+      description: z.string().optional(),
+      campaignId: z.string().optional(),
+      twitterHandle: z.string().optional(),
+      instagramHandle: z.string().optional(),
+      facebookPageId: z.string().optional(),
+      linkedinHandle: z.string().optional(),
+      tiktokHandle: z.string().optional(),
+      youtubeHandle: z.string().optional(),
+      websiteUrl: z.string().optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      return ctx.prisma.brandTracker.create({
+        data: { organizationId: ctx.organizationId, ...input },
+      });
+    }),
+
+  updateBrand: orgProcedure
+    .input(z.object({
+      id: z.string(),
+      brandName: z.string().optional(),
+      description: z.string().optional(),
+      campaignId: z.string().nullable().optional(),
+      twitterHandle: z.string().nullable().optional(),
+      instagramHandle: z.string().nullable().optional(),
+      facebookPageId: z.string().nullable().optional(),
+      linkedinHandle: z.string().nullable().optional(),
+      tiktokHandle: z.string().nullable().optional(),
+      youtubeHandle: z.string().nullable().optional(),
+      websiteUrl: z.string().nullable().optional(),
+      isActive: z.boolean().optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const { id, ...data } = input;
+      return ctx.prisma.brandTracker.update({
+        where: { id, organizationId: ctx.organizationId },
+        data,
+      });
+    }),
+
+  deleteBrand: orgProcedure.input(z.object({ id: z.string() })).mutation(async ({ ctx, input }) => {
+    await ctx.prisma.brandTracker.delete({ where: { id: input.id, organizationId: ctx.organizationId } });
+    return { success: true };
+  }),
+
+  // Brand content feed
+  brandContent: orgProcedure
+    .input(z.object({
+      brandTrackerId: z.string().optional(),
+      campaignId: z.string().optional(),
+      limit: z.number().min(1).max(100).default(30),
+    }))
+    .query(async ({ ctx, input }) => {
+      const where: any = {};
+      if (input.brandTrackerId) {
+        where.brandTrackerId = input.brandTrackerId;
+      } else if (input.campaignId) {
+        where.brandTracker = { campaignId: input.campaignId, organizationId: ctx.organizationId };
+      } else {
+        where.brandTracker = { organizationId: ctx.organizationId };
+      }
+      return ctx.prisma.brandContent.findMany({
+        where,
+        include: { brandTracker: { select: { brandName: true } } },
+        orderBy: { publishedAt: "desc" },
+        take: input.limit,
+      });
+    }),
+
+  // ==================== INFLUENCER DISCOVERY ====================
+  listInfluencers: orgProcedure
+    .input(z.object({
+      status: z.string().optional(),
+      platform: z.string().optional(),
+      minFollowers: z.number().optional(),
+      sortBy: z.enum(["relevanceScore", "followers", "avgEngagement", "createdAt"]).default("relevanceScore"),
+    }).optional())
+    .query(async ({ ctx, input }) => {
+      return ctx.prisma.influencer.findMany({
+        where: {
+          organizationId: ctx.organizationId,
+          ...(input?.status ? { status: input.status } : {}),
+          ...(input?.platform ? { platform: input.platform } : {}),
+          ...(input?.minFollowers ? { followers: { gte: input.minFollowers } } : {}),
+        },
+        orderBy: { [input?.sortBy ?? "relevanceScore"]: "desc" },
+        take: 100,
+      });
+    }),
+
+  createInfluencer: orgProcedure
+    .input(z.object({
+      name: z.string().min(1),
+      platform: z.string(),
+      handle: z.string().min(1),
+      profileUrl: z.string().optional(),
+      bio: z.string().optional(),
+      avatarUrl: z.string().optional(),
+      followers: z.number().default(0),
+      avgEngagement: z.number().default(0),
+      niche: z.string().optional(),
+      contactEmail: z.string().optional(),
+      notes: z.string().optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      return ctx.prisma.influencer.create({
+        data: {
+          organizationId: ctx.organizationId,
+          ...input,
+          discoveredFrom: "manual",
+          relevanceScore: 50,
         },
       });
-
-      return campaigns.map((c) => ({
-        id: c.id,
-        name: c.name,
-        status: c.status,
-        postCount: c._count.campaignPosts,
-        totalImpressions: c.totalImpressions,
-        totalClicks: c.totalClicks,
-        totalEngagements: c.totalEngagements,
-        totalReach: c.totalReach,
-        totalSpend: c.totalSpend,
-        budget: c.budget,
-        startDate: c.startDate,
-        endDate: c.endDate,
-        engagementRate: c.totalImpressions > 0
-          ? (c.totalEngagements / c.totalImpressions) * 100
-          : 0,
-      }));
     }),
+
+  updateInfluencer: orgProcedure
+    .input(z.object({
+      id: z.string(),
+      status: z.string().optional(),
+      notes: z.string().nullable().optional(),
+      contactEmail: z.string().nullable().optional(),
+      relevanceScore: z.number().optional(),
+      lastContactedAt: z.string().datetime().optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const { id, lastContactedAt, ...data } = input;
+      return ctx.prisma.influencer.update({
+        where: { id },
+        data: {
+          ...data,
+          ...(lastContactedAt ? { lastContactedAt: new Date(lastContactedAt) } : {}),
+        },
+      });
+    }),
+
+  deleteInfluencer: orgProcedure.input(z.object({ id: z.string() })).mutation(async ({ ctx, input }) => {
+    await ctx.prisma.influencer.delete({ where: { id: input.id } });
+    return { success: true };
+  }),
+
+  // Influencer stats summary
+  influencerStats: orgProcedure.query(async ({ ctx }) => {
+    const [total, shortlisted, contacted, responded] = await Promise.all([
+      ctx.prisma.influencer.count({ where: { organizationId: ctx.organizationId } }),
+      ctx.prisma.influencer.count({ where: { organizationId: ctx.organizationId, status: "shortlisted" } }),
+      ctx.prisma.influencer.count({ where: { organizationId: ctx.organizationId, status: "contacted" } }),
+      ctx.prisma.influencer.count({ where: { organizationId: ctx.organizationId, status: { in: ["responded", "engaged"] } } }),
+    ]);
+    return { total, shortlisted, contacted, responded };
+  }),
 });

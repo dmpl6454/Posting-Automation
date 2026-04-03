@@ -29,6 +29,7 @@ import {
   GitBranch,
   Ear,
   Target,
+  Star,
 } from "lucide-react";
 
 const navigation = [
@@ -43,6 +44,7 @@ const navigation = [
   { name: "Autopilot", href: "/dashboard/autopilot", icon: Zap },
   { name: "Listening", href: "/dashboard/listening", icon: Ear },
   { name: "Campaigns", href: "/dashboard/campaigns", icon: Target },
+  { name: "Brand Leads", href: "/dashboard/brand-leads", icon: Star },
   { name: "Approvals", href: "/dashboard/approvals", icon: CheckCircle },
   { name: "Team", href: "/dashboard/team", icon: Users },
 ];

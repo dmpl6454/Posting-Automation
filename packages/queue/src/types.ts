@@ -87,3 +87,12 @@ export interface CampaignAnalyticsSyncJobData {
   campaignId: string;
   organizationId: string;
 }
+
+export interface OutreachSendJobData {
+  messageId: string;
+  leadId: string;
+}
+
+export interface OutreachPollJobData {
+  organizationId: string;
+}

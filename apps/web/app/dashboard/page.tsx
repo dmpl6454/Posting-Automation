@@ -81,7 +81,7 @@ const featureCards = [
     href: "/dashboard/campaigns",
     icon: Target,
     title: "Campaign Tracking",
-    desc: "Track external campaign performance & ROI",
+    desc: "Monitor brand content releases & discover influencers",
     gradient: "from-indigo-500/12 to-blue-500/12",
     borderColor: "hover:border-indigo-400/40",
     iconColor: "text-indigo-600 dark:text-indigo-400",
