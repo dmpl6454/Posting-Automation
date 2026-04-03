@@ -1,3 +1,7 @@
+// Force IPv4 DNS resolution to prevent ETIMEDOUT on IPv6-unreachable hosts (e.g. LinkedIn API in Docker)
+import dns from "node:dns";
+dns.setDefaultResultOrder("ipv4first");
+
 import { createPostPublishWorker } from "./workers/post-publish.worker";
 import { createTokenRefreshWorker } from "./workers/token-refresh.worker";
 import { createAnalyticsSyncWorker } from "./workers/analytics-sync.worker";
