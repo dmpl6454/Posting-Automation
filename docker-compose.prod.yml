@@ -149,6 +149,9 @@ services:
       TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID}
       TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN}
       TWILIO_PHONE_NUMBER: ${TWILIO_PHONE_NUMBER}
+      RESEND_API_KEY: ${RESEND_API_KEY}
+      OUTREACH_FROM_EMAIL: ${OUTREACH_FROM_EMAIL:-biz@digitalsukoon.com}
+      HUNTER_API_KEY: ${HUNTER_API_KEY}
     depends_on:
       postgres:
         condition: service_healthy
@@ -200,6 +203,9 @@ services:
       TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID}
       TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN}
       TWILIO_PHONE_NUMBER: ${TWILIO_PHONE_NUMBER}
+      RESEND_API_KEY: ${RESEND_API_KEY}
+      OUTREACH_FROM_EMAIL: ${OUTREACH_FROM_EMAIL:-biz@digitalsukoon.com}
+      HUNTER_API_KEY: ${HUNTER_API_KEY}
     depends_on:
       postgres:
         condition: service_healthy
