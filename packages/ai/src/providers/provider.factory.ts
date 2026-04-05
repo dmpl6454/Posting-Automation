@@ -21,6 +21,8 @@ export function getModel(provider: AIProvider, temperature = 0.7): BaseChatModel
       return getDeepSeekModel(temperature);
     case "gemini":
       throw new Error("Gemini does not use LangChain. Use callGemini() directly.");
+    case "gemma4":
+      throw new Error("Gemma 4 does not use LangChain. Use callGemma4() directly.");
     default:
       throw new Error(`Unknown AI provider: ${provider}`);
   }
@@ -32,4 +34,9 @@ export function getModel(provider: AIProvider, temperature = 0.7): BaseChatModel
  */
 export function isLangChainProvider(provider: AIProvider): provider is "openai" | "anthropic" | "grok" | "deepseek" {
   return provider === "openai" || provider === "anthropic" || provider === "grok" || provider === "deepseek";
+}
+
+/** Providers that use the Google Generative AI SDK (not LangChain) */
+export function isGoogleNativeProvider(provider: AIProvider): provider is "gemini" | "gemma4" {
+  return provider === "gemini" || provider === "gemma4";
 }

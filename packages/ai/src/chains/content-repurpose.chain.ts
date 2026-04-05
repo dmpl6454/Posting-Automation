@@ -2,6 +2,7 @@ import { ChatPromptTemplate } from "@langchain/core/prompts";
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { getModel, isLangChainProvider } from "../providers/provider.factory";
 import { callGemini } from "../providers/gemini.provider";
+import { callGemma4 } from "../providers/gemma4.provider";
 import { PLATFORM_CHAR_LIMITS, PLATFORM_TONES } from "../prompts/platform-specific.prompts";
 import type { AIProvider } from "../types";
 
@@ -15,7 +16,7 @@ For each target platform, create a post that:
 - Uses the appropriate tone and style for that platform
 - Captures the key message from the original content
 - Is optimized for engagement on that specific platform
-- Includes relevant hashtags if appropriate for the platform
+- Do NOT include any hashtags in the generated content
 
 You MUST respond in the following JSON format exactly:
 {{
@@ -75,7 +76,7 @@ For each target platform, create a post that:
 - Uses the appropriate tone and style for that platform
 - Captures the key message from the original content
 - Is optimized for engagement on that specific platform
-- Includes relevant hashtags if appropriate for the platform
+- Do NOT include any hashtags in the generated content
 
 You MUST respond in the following JSON format exactly:
 {
@@ -93,7 +94,7 @@ ${platformDetails}
 Original content:
 ${originalContent.slice(0, 8000)}`;
 
-    response = await callGemini(prompt);
+    response = provider === "gemma4" ? await callGemma4(prompt) : await callGemini(prompt);
   }
 
   // Parse the JSON response

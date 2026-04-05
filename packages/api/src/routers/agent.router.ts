@@ -44,7 +44,7 @@ export const agentRouter = createRouter({
     .input(
       z.object({
         name: z.string().min(1).max(255),
-        aiProvider: z.enum(["openai", "anthropic", "gemini"]).default("anthropic"),
+        aiProvider: z.enum(["openai", "anthropic", "gemini", "grok", "deepseek", "gemma4"]).default("anthropic"),
         niche: z.string(),
         topics: z.array(z.string()),
         tone: z.enum(["professional", "casual", "humorous", "formal", "inspiring"]).default("professional"),
@@ -81,7 +81,7 @@ export const agentRouter = createRouter({
       z.object({
         id: z.string(),
         name: z.string().min(1).max(255).optional(),
-        aiProvider: z.enum(["openai", "anthropic", "gemini"]).optional(),
+        aiProvider: z.enum(["openai", "anthropic", "gemini", "grok", "deepseek", "gemma4"]).optional(),
         niche: z.string().optional(),
         topics: z.array(z.string()).optional(),
         tone: z.enum(["professional", "casual", "humorous", "formal", "inspiring"]).optional(),

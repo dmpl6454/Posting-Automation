@@ -153,7 +153,7 @@ export async function POST(req: Request) {
   const encoder = new TextEncoder();
 
   // Ordered by reliability — only the first non-failed provider is tried (max 1 fallback)
-  const FALLBACK_PRIORITY: AIProvider[] = ["openai", "anthropic", "grok", "deepseek", "gemini"];
+  const FALLBACK_PRIORITY: AIProvider[] = ["openai", "anthropic", "grok", "deepseek", "gemini", "gemma4"];
 
   const streamResponse = async () => {
     let fullResponse = "";

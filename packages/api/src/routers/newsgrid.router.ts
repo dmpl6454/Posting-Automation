@@ -130,7 +130,7 @@ export const newsgridRouter = createRouter({
         includeHashtags: z.boolean().default(true),
         includeCTA:  z.boolean().default(true),
         language:    z.enum(["EN","HI","MIX"]).default("EN"),
-        provider:    z.enum(["openai","anthropic","gemini","grok","deepseek"]).default("gemini"),
+        provider:    z.enum(["openai","anthropic","gemini","grok","deepseek","gemma4"]).default("gemini"),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -379,7 +379,6 @@ Requirements:
         const fullContent = [
           payload.caption,
           payload.cta,
-          payload.hashtags.join(" "),
         ].filter(Boolean).join("\n\n");
 
         const scheduledAt = payload.scheduleTime ? new Date(payload.scheduleTime) : new Date();

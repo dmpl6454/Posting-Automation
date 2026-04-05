@@ -1,4 +1,4 @@
-export type AIProvider = "openai" | "anthropic" | "gemini" | "grok" | "deepseek";
+export type AIProvider = "openai" | "anthropic" | "gemini" | "grok" | "deepseek" | "gemma4";
 
 export interface ContentGenerationParams {
   provider: AIProvider;

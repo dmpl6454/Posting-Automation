@@ -10,7 +10,7 @@ import type {
   PlatformConstraints,
 } from "../abstract/social.types";
 
-const API_VERSION = "202401";
+const API_VERSION = "202504";
 
 function restHeaders(accessToken: string): Record<string, string> {
   return {

@@ -157,7 +157,7 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
   const logoInputRef = useRef<HTMLInputElement>(null);
 
   // Auto-add & Carousel
-  const [autoAddToPost, setAutoAddToPost] = useState(false);
+  const [autoAddToPost, setAutoAddToPost] = useState(true);
   const [carouselMode, setCarouselMode] = useState(false);
   const [carouselCount, setCarouselCount] = useState(3);
   const [carouselImages, setCarouselImages] = useState<string[]>([]);

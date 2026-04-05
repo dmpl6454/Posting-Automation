@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useDeferredValue } from "react";
 import { trpc } from "~/lib/trpc/client";
 import {
   Dialog,
@@ -10,7 +10,7 @@ import {
 } from "~/components/ui/dialog";
 import { Button } from "~/components/ui/button";
 import { Skeleton } from "~/components/ui/skeleton";
-import { ImageIcon, Film, Check } from "lucide-react";
+import { ImageIcon, Film, Check, Search, X } from "lucide-react";
 
 interface MediaPickerDialogProps {
   open: boolean;
@@ -29,9 +29,11 @@ export function MediaPickerDialog({
   const [selectedUrl, setSelectedUrl] = useState<string>("");
   const [selectedName, setSelectedName] = useState<string>("");
   const [mediaType, setMediaType] = useState<"all" | "image" | "video">("all");
+  const [search, setSearch] = useState("");
+  const deferredSearch = useDeferredValue(search);
 
   const { data, isLoading } = trpc.media.list.useQuery(
-    { limit: 50, type: mediaType },
+    { limit: 50, type: mediaType, ...(deferredSearch ? { search: deferredSearch } : {}) },
     { enabled: open }
   );
 
@@ -42,15 +44,36 @@ export function MediaPickerDialog({
       onSelect(selectedUrl, selectedName, selectedId ?? undefined);
       onOpenChange(false);
       setSelectedId(null);
+      setSearch("");
     }
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(v) => { onOpenChange(v); if (!v) setSearch(""); }}>
       <DialogContent className="flex max-h-[80vh] max-w-2xl flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
+
+        {/* Search bar */}
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <input
+            type="text"
+            placeholder="Search media by name..."
+            value={search}
+            onChange={(e) => { setSearch(e.target.value); setSelectedId(null); }}
+            className="w-full rounded-md border bg-background py-2 pl-9 pr-8 text-sm outline-none ring-offset-background placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          />
+          {search && (
+            <button
+              onClick={() => { setSearch(""); setSelectedId(null); }}
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
 
         {/* Type filter tabs */}
         <div className="flex gap-1 border-b pb-2">
@@ -67,6 +90,11 @@ export function MediaPickerDialog({
               {t === "all" ? "All" : t === "image" ? "Images" : "Videos"}
             </button>
           ))}
+          {deferredSearch && (
+            <span className="ml-auto self-center text-xs text-muted-foreground">
+              {items.length} result{items.length !== 1 ? "s" : ""} for &quot;{deferredSearch}&quot;
+            </span>
+          )}
         </div>
 
         {isLoading ? (
@@ -79,8 +107,20 @@ export function MediaPickerDialog({
           <div className="flex flex-col items-center justify-center py-12 text-center">
             <ImageIcon className="mb-3 h-10 w-10 text-muted-foreground/50" />
             <p className="text-sm text-muted-foreground">
-              No {mediaType === "all" ? "media" : mediaType + "s"} in your library yet.
+              {deferredSearch
+                ? `No results for "${deferredSearch}"`
+                : `No ${mediaType === "all" ? "media" : mediaType + "s"} in your library yet.`}
             </p>
+            {deferredSearch && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="mt-2"
+                onClick={() => setSearch("")}
+              >
+                Clear search
+              </Button>
+            )}
           </div>
         ) : (
           <div className="min-h-0 flex-1 overflow-y-auto">
@@ -141,7 +181,7 @@ export function MediaPickerDialog({
         )}
 
         <div className="flex justify-end gap-2 pt-2">
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" onClick={() => { onOpenChange(false); setSearch(""); }}>
             Cancel
           </Button>
           <Button onClick={handleConfirm} disabled={!selectedId}>

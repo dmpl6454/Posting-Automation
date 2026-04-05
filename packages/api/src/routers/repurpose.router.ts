@@ -2,6 +2,7 @@ import { z } from "zod";
 import { createRouter, protectedProcedure, orgProcedure } from "../trpc";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import crypto from "crypto";
+import { pushProgress, finishProgress } from "../lib/progress";
 
 // S3 helpers
 function getS3Client(): S3Client {
@@ -27,7 +28,7 @@ export const repurposeRouter = createRouter({
       z.object({
         originalContent: z.string().min(1).max(50000),
         targetPlatforms: z.array(z.string()).min(1).max(16),
-        provider: z.enum(["openai", "anthropic", "gemini", "grok", "deepseek"]).default("openai"),
+        provider: z.enum(["openai", "anthropic", "gemini", "grok", "deepseek", "gemma4"]).default("openai"),
       })
     )
     .mutation(async ({ input }) => {
@@ -54,9 +55,10 @@ export const repurposeRouter = createRouter({
     .input(
       z.object({
         url: z.string().url(),
-        format: z.enum(["static", "carousel", "reel"]),
+        progressId: z.string().optional(),
+        format: z.enum(["static", "carousel", "reel", "ai_video", "seedance_video"]),
         targetPlatforms: z.array(z.string()).min(1).max(16),
-        provider: z.enum(["openai", "anthropic", "gemini", "grok", "deepseek"]).default("gemini"),
+        provider: z.enum(["openai", "anthropic", "gemini", "grok", "deepseek", "gemma4"]).default("gemini"),
         channelName: z.string().optional().default(""),
         channelHandle: z.string().optional().default(""),
         logoUrl: z.string().optional().default(""),
@@ -76,10 +78,84 @@ export const repurposeRouter = createRouter({
         generateSpeech,
         generateVoiceOverScript,
         generateImage: generateGeminiImage,
+        generateVideo: generateVeo3Video,
+        buildVideoPrompt,
+        generateSeedanceVideo,
+        buildSeedancePrompt,
+        overlayLogoOnImage,
       } = await import("@postautomation/ai");
 
       const userId = (ctx.session.user as any).id as string;
       const organizationId = ctx.organizationId;
+
+      // Resolve logo: prefer input.logoUrl → DB media (category: "logo") → channel avatar
+      let resolvedLogoUrl = input.logoUrl || "";
+      const channelName = input.channelName || "";
+      const channelHandle = input.channelHandle || "";
+
+      if (!resolvedLogoUrl && channelName) {
+        try {
+          // Try to find a channel matching the name/handle
+          const channel = await ctx.prisma.channel.findFirst({
+            where: { organizationId, OR: [{ name: channelName }, { username: channelHandle || undefined }] },
+            select: { id: true, avatar: true, metadata: true },
+          });
+          if (channel) {
+            // Check for custom logo in media library
+            const logoMedia = await ctx.prisma.media.findFirst({
+              where: { organizationId, category: "logo", channelId: channel.id },
+              orderBy: { createdAt: "desc" },
+            });
+            if (logoMedia) {
+              resolvedLogoUrl = logoMedia.url;
+            } else {
+              // Fallback to metadata.logo_path → channel avatar
+              const meta = channel.metadata as any;
+              resolvedLogoUrl = meta?.logo_path || channel.avatar || "";
+            }
+          }
+        } catch {
+          // Non-critical — continue without logo
+        }
+      }
+
+      console.log(`[Repurpose] Logo config: logoUrl="${resolvedLogoUrl?.slice(0, 60) || ""}", channelName="${channelName}", handle="${channelHandle}"`);
+
+      // Helper: apply logo overlay to a generated image
+      async function applyLogoOverlay(
+        imageBase64: string,
+        imgMimeType: string,
+        imgWidth = 1080,
+        imgHeight = 1350,
+      ): Promise<{ imageBase64: string; mimeType: string }> {
+        if (!resolvedLogoUrl && !channelName) {
+          console.log(`[Repurpose] Skipping logo overlay — no logo or channel name`);
+          return { imageBase64, mimeType: imgMimeType };
+        }
+        try {
+          console.log(`[Repurpose] Applying logo overlay (${imgWidth}x${imgHeight})...`);
+          return await overlayLogoOnImage({
+            imageBase64,
+            mimeType: imgMimeType,
+            width: imgWidth,
+            height: imgHeight,
+            logoUrl: resolvedLogoUrl || undefined,
+            channelName: channelName || undefined,
+            channelHandle: channelHandle || undefined,
+            position: "bottom-left",
+            accentColor: input.accentColor || "#e11d48",
+          });
+        } catch (e) {
+          console.warn(`[Repurpose] Logo overlay failed, using original:`, (e as Error).message);
+          return { imageBase64, mimeType: imgMimeType };
+        }
+      }
+
+      // Progress tracking — fire-and-forget, never blocks
+      const pid = input.progressId;
+      const progress = (step: string, status: "running" | "done" | "error" | "skipped" = "running", detail?: string) => {
+        if (pid) pushProgress(pid, step, status, detail).catch(() => {});
+      };
 
       // Helper: upload to S3 + create Media record in DB
       async function uploadAndCreateMedia(
@@ -112,11 +188,14 @@ export const repurposeRouter = createRouter({
       }
 
       // 1. Extract content from URL
+      progress("Extracting content from URL");
       console.log(`[Repurpose] Extracting content from: ${input.url}`);
       const extracted = await extractUrlContent(input.url);
+      progress("Extracting content from URL", "done", `"${extracted.title}" (${extracted.body.length} chars)`);
       console.log(`[Repurpose] Extracted: "${extracted.title}" (${extracted.body.length} chars)`);
 
       // 2. Understand the content — disambiguate people, identify context, create content brief
+      progress("Analyzing content with AI");
       const contentBody = extracted.body.slice(0, 5000) || extracted.description || extracted.title;
       let contentBrief = "";
       try {
@@ -164,9 +243,11 @@ TONE: ${brief.tone || "informative"}
 VISUAL: ${brief.visualDescription || ""}
 KEYWORDS: ${(brief.keywords || []).join(", ")}`;
           console.log(`[Repurpose] Content understood: ${brief.subject} (${brief.category})`);
+          progress("Analyzing content with AI", "done", `${brief.subject} — ${brief.category}`);
         }
       } catch (e) {
         console.warn(`[Repurpose] Content understanding failed, using raw content:`, (e as Error).message);
+        progress("Analyzing content with AI", "skipped", "Using raw content");
       }
 
       // Fallback if content understanding failed
@@ -175,16 +256,18 @@ KEYWORDS: ${(brief.keywords || []).join(", ")}`;
       }
 
       // 3. Generate platform-specific captions WITH content brief for accuracy
+      progress("Generating captions for " + input.targetPlatforms.length + " platforms");
       const sourceText = `${contentBrief}\n\n---\n\nTitle: ${extracted.title}\n\n${extracted.body.slice(0, 5000)}`;
       const platformContent = await repurposeContent({
         originalContent: sourceText,
         targetPlatforms: input.targetPlatforms,
         provider: input.provider,
       });
+      progress("Generating captions for " + input.targetPlatforms.length + " platforms", "done", Object.keys(platformContent).join(", "));
 
       // 4. Generate media based on format
-      const channelName = input.channelName || extracted.siteName || "Channel";
-      const handle = input.channelHandle || channelName;
+      const displayName = channelName || extracted.siteName || "Channel";
+      const handle = channelHandle || displayName;
       let mediaUrls: string[] = [];
       let mediaType = "image/jpeg";
       const perPlatformMedia: Record<string, { url: string; mediaId: string }> = {};
@@ -232,25 +315,289 @@ Requirements:
 - 4:5 portrait aspect ratio`;
 
           try {
+            progress(`Generating image for ${platform}`);
             console.log(`[Repurpose] Generating AI creative for ${platform}...`);
             const aiResult = await generateGeminiImage({
               prompt: imagePrompt,
               aspectRatio: "3:4",
             });
 
+            // Apply logo overlay
+            const branded = await applyLogoOverlay(aiResult.imageBase64, aiResult.mimeType, 1080, 1350);
+
             const { url, mediaId } = await uploadAndCreateMedia(
-              aiResult.imageBase64,
-              aiResult.mimeType,
+              branded.imageBase64,
+              branded.mimeType,
               platform.toLowerCase(),
             );
             perPlatformMedia[platform] = { url, mediaId };
             mediaUrls.push(url);
             mediaType = aiResult.mimeType.includes("png") ? "image/png" : "image/jpeg";
+            progress(`Generating image for ${platform}`, "done", "Uploaded to S3");
             console.log(`[Repurpose] ${platform} creative uploaded: ${url} (mediaId: ${mediaId})`);
           } catch (e) {
+            progress(`Generating image for ${platform}`, "error", (e as Error).message);
             console.warn(`[Repurpose] ${platform} AI image failed:`, (e as Error).message);
           }
         }
+      } else if (input.format === "ai_video") {
+        // ── Veo3 Ultra AI Video Generation ─────────────────────────────
+        // 1. Break content into key points for video scenes
+        const slidePrompt = `Analyze this content and extract 4-6 key points for a short video.
+
+${contentBrief}
+
+Title: ${extracted.title}
+Content: ${extracted.body.slice(0, 4000)}
+
+Return a JSON array of strings — each is a short, punchy point (max 15 words each).
+Example: ["AI is transforming marketing", "Content creation is now 10x faster", "Brands see 3x engagement"]
+
+Return ONLY the JSON array, no other text.`;
+
+        let keyPoints: string[] = [];
+        progress("Extracting key points for video scenes");
+        try {
+          const kpResponse = await generateContent({
+            provider: input.provider,
+            platform: "INSTAGRAM",
+            userPrompt: slidePrompt,
+            tone: "professional",
+          });
+          const cleaned = kpResponse.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+          const arrMatch = cleaned.match(/\[[\s\S]*\]/);
+          if (arrMatch) keyPoints = JSON.parse(arrMatch[0]);
+          progress("Extracting key points for video scenes", "done", `${keyPoints.length} scenes`);
+        } catch (e) {
+          progress("Extracting key points for video scenes", "error", (e as Error).message);
+          console.warn(`[Repurpose] Key point extraction failed:`, (e as Error).message);
+        }
+
+        if (keyPoints.length === 0) {
+          const sentences = extracted.body.split(/[.!?]+/).filter((s) => s.trim().length > 20);
+          keyPoints = sentences.slice(0, 5).map((s) => s.trim().slice(0, 80));
+        }
+
+        // 2. Build cinematic video prompt
+        const musicMood = input.theme === "dark" ? "dramatic, cinematic, deep bass" :
+          input.theme === "gradient" ? "upbeat electronic, modern" : "clean corporate, optimistic";
+
+        const videoPrompt = buildVideoPrompt({
+          title: extracted.title.slice(0, 60),
+          keyPoints,
+          visualStyle: `${input.theme} theme, professional social media video, cinematic B-roll`,
+          musicMood,
+          brandName: input.channelName || undefined,
+        });
+
+        progress("Generating reference image for Veo3");
+        console.log(`[Repurpose] Generating Veo3 AI video (${keyPoints.length} scenes)...`);
+
+        // 3. Also generate a reference image for visual style guidance
+        let referenceImage: { base64: string; mimeType?: string } | undefined;
+        try {
+          const refResult = await generateGeminiImage({
+            prompt: `Create a cinematic vertical still frame for a social media video about: "${extracted.title}". ${input.theme} theme, dark background, dramatic lighting, bold white text overlay, modern design. 9:16 portrait vertical.`,
+            aspectRatio: "9:16",
+          });
+          referenceImage = { base64: refResult.imageBase64, mimeType: refResult.mimeType };
+          progress("Generating reference image for Veo3", "done");
+          console.log(`[Repurpose] Reference image generated for Veo3`);
+        } catch (e) {
+          progress("Generating reference image for Veo3", "skipped", (e as Error).message);
+          console.warn(`[Repurpose] Reference image failed (continuing without):`, (e as Error).message);
+        }
+
+        // 4. Generate video with Veo3
+        progress("Generating AI video with Veo3 Ultra (1-3 min)");
+        try {
+          const veoResult = await generateVeo3Video({
+            prompt: videoPrompt,
+            referenceImage,
+            durationSeconds: 8,
+            aspectRatio: "9:16",
+            personGeneration: "allow_adult",
+          });
+
+          // 5. Upload video to S3
+          const videoKey = `repurpose/veo3-${Date.now()}-${crypto.randomBytes(4).toString("hex")}.mp4`;
+          const videoBuf = Buffer.from(veoResult.videoBase64, "base64");
+          const s3 = getS3Client();
+          await s3.send(new PutObjectCommand({ Bucket: BUCKET, Key: videoKey, Body: videoBuf, ContentType: "video/mp4" }));
+
+          const videoUrl = getPublicUrl(videoKey);
+
+          // Create Media record
+          await ctx.prisma.media.create({
+            data: {
+              organizationId,
+              uploadedById: userId,
+              fileName: `veo3-video-${Date.now()}.mp4`,
+              fileType: "video/mp4",
+              fileSize: videoBuf.length,
+              url: videoUrl,
+              duration: veoResult.durationSeconds,
+            },
+          });
+
+          mediaUrls = [videoUrl];
+          mediaType = "video/mp4";
+          progress("Generating AI video with Veo3 Ultra (1-3 min)", "done", `${(videoBuf.length / 1024 / 1024).toFixed(1)}MB uploaded`);
+          console.log(`[Repurpose] Veo3 video uploaded: ${videoUrl} (${(videoBuf.length / 1024 / 1024).toFixed(1)}MB)`);
+        } catch (e) {
+          progress("Generating AI video with Veo3 Ultra (1-3 min)", "error", (e as Error).message);
+          progress("Falling back to slideshow reel");
+          console.error(`[Repurpose] Veo3 generation failed, falling back to slideshow reel:`, (e as Error).message);
+
+          // Fallback: generate slideshow reel from images (same as "reel" format)
+          try {
+            const slideImages: Array<{ imageBase64: string; mimeType: string }> = [];
+            for (const point of keyPoints.slice(0, 6)) {
+              try {
+                const img = await generateGeminiImage({
+                  prompt: `Create a professional social media slide. Text: "${point}". ${input.theme} theme, cinematic, bold typography, relevant visual background. 4:5 portrait.`,
+                  aspectRatio: "3:4",
+                });
+                // Apply logo overlay to fallback reel slides
+                const branded = await applyLogoOverlay(img.imageBase64, img.mimeType, 1080, 1350);
+                slideImages.push({ imageBase64: branded.imageBase64, mimeType: branded.mimeType });
+              } catch { /* skip failed slide */ }
+              await new Promise((r) => setTimeout(r, 1500)); // rate limit
+            }
+
+            if (slideImages.length > 0) {
+              let voiceOverBase64: string | undefined;
+              if (input.voiceOver) {
+                try {
+                  const script = generateVoiceOverScript(extracted.title, extracted.body, slideImages.length * 3);
+                  const ttsResult = await generateSpeech({ text: script, voice: input.voiceType as any, speed: 1.0, model: "tts-1-hd" });
+                  voiceOverBase64 = ttsResult.audioBase64;
+                } catch {}
+              }
+
+              let bgMusicBase64: string | undefined;
+              if (input.bgMusic) {
+                try {
+                  const { execSync } = await import("node:child_process");
+                  const { readFileSync, mkdirSync, rmSync } = await import("node:fs");
+                  const { join } = await import("node:path");
+                  const { tmpdir } = await import("node:os");
+                  const musicDir = join(tmpdir(), `bgmusic-${Date.now()}`);
+                  mkdirSync(musicDir, { recursive: true });
+                  const musicPath = join(musicDir, "bg.mp3");
+                  const duration = slideImages.length * 3 + 2;
+                  execSync(`ffmpeg -y -f lavfi -i "sine=frequency=110:duration=${duration}" -f lavfi -i "sine=frequency=165:duration=${duration}" -filter_complex "[0:a][1:a]amix=inputs=2,volume=0.3,afade=t=in:d=1,afade=t=out:st=${duration - 1}:d=1[out]" -map "[out]" -c:a libmp3lame -b:a 128k "${musicPath}"`, { timeout: 30_000, stdio: "pipe" });
+                  bgMusicBase64 = readFileSync(musicPath).toString("base64");
+                  rmSync(musicDir, { recursive: true, force: true });
+                } catch {}
+              }
+
+              const reelResult = await generateReelVideo({
+                slideImages,
+                slideDuration: 3,
+                width: 1080,
+                height: 1350,
+                voiceOverBase64,
+                bgMusicBase64,
+              });
+
+              const s3 = getS3Client();
+              const videoKey = `repurpose/veo3-fallback-${Date.now()}-${crypto.randomBytes(4).toString("hex")}.mp4`;
+              const videoBuf = Buffer.from(reelResult.videoBase64, "base64");
+              await s3.send(new PutObjectCommand({ Bucket: BUCKET, Key: videoKey, Body: videoBuf, ContentType: "video/mp4" }));
+              mediaUrls = [getPublicUrl(videoKey)];
+              mediaType = "video/mp4";
+              console.log(`[Repurpose] Fallback slideshow reel uploaded: ${mediaUrls[0]}`);
+            }
+          } catch (fallbackErr) {
+            console.error(`[Repurpose] Fallback reel also failed:`, (fallbackErr as Error).message);
+          }
+        }
+      } else if (input.format === "seedance_video") {
+        // ── Seedance 2.0 AI Video Generation ─────────────────────────────
+        progress("Extracting key points for video scenes");
+        const slidePrompt = `Analyze this content and extract 4-6 key points for a short video.
+
+${contentBrief}
+
+Title: ${extracted.title}
+Content: ${extracted.body.slice(0, 4000)}
+
+Return a JSON array of strings — each is a short, punchy point (max 15 words each).
+Return ONLY the JSON array, no other text.`;
+
+        let keyPoints: string[] = [];
+        try {
+          const kpResponse = await generateContent({
+            provider: input.provider,
+            platform: "INSTAGRAM",
+            userPrompt: slidePrompt,
+            tone: "professional",
+          });
+          const cleaned = kpResponse.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+          const arrMatch = cleaned.match(/\[[\s\S]*\]/);
+          if (arrMatch) keyPoints = JSON.parse(arrMatch[0]);
+          progress("Extracting key points for video scenes", "done", `${keyPoints.length} scenes`);
+        } catch (e) {
+          progress("Extracting key points for video scenes", "error", (e as Error).message);
+        }
+
+        if (keyPoints.length === 0) {
+          const sentences = extracted.body.split(/[.!?]+/).filter((s) => s.trim().length > 20);
+          keyPoints = sentences.slice(0, 5).map((s) => s.trim().slice(0, 80));
+        }
+
+        const musicMood = input.theme === "dark" ? "dramatic cinematic, deep bass, orchestral"
+          : input.theme === "gradient" ? "upbeat electronic, modern synth" : "clean corporate, optimistic";
+
+        const videoPrompt = buildSeedancePrompt({
+          title: extracted.title.slice(0, 60),
+          keyPoints,
+          visualStyle: `${input.theme} theme, professional social media video, cinematic B-roll`,
+          musicMood,
+          brandName: input.channelName || undefined,
+        });
+
+        progress("Generating AI video with Seedance 2.0 (30s-3min)");
+        console.log(`[Repurpose] Generating Seedance 2.0 video (${keyPoints.length} scenes)...`);
+
+        try {
+          const seedResult = await generateSeedanceVideo({
+            prompt: videoPrompt,
+            duration: 8,
+            aspectRatio: "9:16",
+            enableAudio: true,
+          });
+
+          const s3 = getS3Client();
+          const videoKey = `repurpose/seedance-${Date.now()}-${crypto.randomBytes(4).toString("hex")}.mp4`;
+          const videoBuf = Buffer.from(seedResult.videoBase64, "base64");
+          await s3.send(new PutObjectCommand({ Bucket: BUCKET, Key: videoKey, Body: videoBuf, ContentType: "video/mp4" }));
+
+          const videoUrl = getPublicUrl(videoKey);
+
+          await ctx.prisma.media.create({
+            data: {
+              organizationId,
+              uploadedById: userId,
+              fileName: `seedance-video-${Date.now()}.mp4`,
+              fileType: "video/mp4",
+              fileSize: videoBuf.length,
+              url: videoUrl,
+              duration: seedResult.durationSeconds,
+            },
+          });
+
+          mediaUrls = [videoUrl];
+          mediaType = "video/mp4";
+          progress("Generating AI video with Seedance 2.0 (30s-3min)", "done", `${(videoBuf.length / 1024 / 1024).toFixed(1)}MB uploaded`);
+          console.log(`[Repurpose] Seedance video uploaded: ${videoUrl} (${(videoBuf.length / 1024 / 1024).toFixed(1)}MB)`);
+        } catch (e) {
+          progress("Generating AI video with Seedance 2.0 (30s-3min)", "error", (e as Error).message);
+          console.error(`[Repurpose] Seedance generation failed:`, (e as Error).message);
+          // No fallback — Seedance failure is final for this format
+        }
+
       } else if (input.format === "carousel" || input.format === "reel") {
         // Generate carousel slide content via AI
         const slidePrompt = `Analyze this content and break it into 5-7 key points for a carousel post.
@@ -303,9 +650,10 @@ Return ONLY the JSON array, no other text.`;
         const allSlides = [
           { type: "cover", title: extracted.title, body: extracted.description?.slice(0, 100) || "" },
           ...slideData.map((d, i) => ({ type: "content", title: d.title, body: d.body })),
-          { type: "cta", title: "Follow for More", body: `@${handle}` },
+          { type: "cta", title: "Follow for More", body: "" },
         ];
 
+        progress(`Generating ${allSlides.length} carousel slides`);
         console.log(`[Repurpose] Generating ${allSlides.length} AI carousel slides...`);
 
         // Build prompts for all slides
@@ -330,12 +678,9 @@ Requirements:
             return `Design a social media carousel CTA (call-to-action) slide (last slide of ${allSlides.length}).
 
 Text: "Follow for More"
-Handle: "${handle}"
-Channel: "${channelName}"
 
 Requirements:
 - Large "Follow for More" text in the center
-- Show the handle "${handle}" below
 - Clean, minimal design with bold typography
 - Matching color scheme for social media
 - 4:5 portrait aspect ratio
@@ -381,7 +726,9 @@ Requirements:
                   prompt,
                   aspectRatio: "3:4",
                 });
-                return { slideIdx, imageBase64: slideResult.imageBase64, mimeType: slideResult.mimeType };
+                // Apply logo overlay to each carousel slide
+                const branded = await applyLogoOverlay(slideResult.imageBase64, slideResult.mimeType, 1080, 1350);
+                return { slideIdx, imageBase64: branded.imageBase64, mimeType: branded.mimeType };
               } catch (e) {
                 if (attempt === 2) {
                   console.warn(`[Repurpose] Slide ${slideIdx + 1} failed after 3 attempts:`, (e as Error).message);
@@ -398,7 +745,10 @@ Requirements:
               slideImages[result.slideIdx] = { imageBase64: result.imageBase64, mimeType: result.mimeType };
             }
           }
-          console.log(`[Repurpose] Batch ${Math.floor(batchStart / BATCH_SIZE) + 1} done (${batchResults.filter(Boolean).length}/${batchEnd - batchStart} slides)`);
+          const batchNum = Math.floor(batchStart / BATCH_SIZE) + 1;
+          const batchOk = batchResults.filter(Boolean).length;
+          progress(`Generating ${allSlides.length} carousel slides`, "running", `Batch ${batchNum} done — ${batchOk}/${batchEnd - batchStart} slides`);
+          console.log(`[Repurpose] Batch ${batchNum} done (${batchOk}/${batchEnd - batchStart} slides)`);
         }
 
         // Upload all successfully generated slides to S3
@@ -413,10 +763,12 @@ Requirements:
           uploadedUrls.push(getPublicUrl(key));
         }
 
+        progress(`Generating ${allSlides.length} carousel slides`, "done", `${uploadedUrls.length} uploaded`);
         console.log(`[Repurpose] ${uploadedUrls.length}/${allSlides.length} carousel slides uploaded`);
 
         if (input.format === "reel") {
           // Stitch slides into video with optional voice-over + background music
+          progress("Stitching reel video from slides");
           try {
             // Generate voice-over if requested
             let voiceOverBase64: string | undefined;
@@ -485,8 +837,10 @@ Requirements:
             await s3.send(new PutObjectCommand({ Bucket: BUCKET, Key: videoKey, Body: videoBuf, ContentType: "video/mp4" }));
             mediaUrls = [getPublicUrl(videoKey)];
             mediaType = "video/mp4";
+            progress("Stitching reel video from slides", "done", "Video uploaded");
             console.log(`[Repurpose] Reel video uploaded: ${mediaUrls[0]}`);
           } catch (e) {
+            progress("Stitching reel video from slides", "error", (e as Error).message);
             console.warn(`[Repurpose] Reel generation failed, falling back to carousel:`, (e as Error).message);
             mediaUrls = uploadedUrls;
           }
@@ -494,6 +848,8 @@ Requirements:
           mediaUrls = uploadedUrls;
         }
       }
+
+      if (pid) finishProgress(pid, "done", `${Object.keys(platformContent).length} captions, ${mediaUrls.length} media`).catch(() => {});
 
       return {
         extracted: {

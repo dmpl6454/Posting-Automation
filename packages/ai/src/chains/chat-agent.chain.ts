@@ -1,6 +1,7 @@
 import { HumanMessage, AIMessage, SystemMessage } from "@langchain/core/messages";
 import { getModel, isLangChainProvider } from "../providers/provider.factory";
 import { callGemini } from "../providers/gemini.provider";
+import { callGemma4 } from "../providers/gemma4.provider";
 import { CHAT_AGENT_SYSTEM_PROMPT } from "../prompts/chat-agent.prompt";
 import type { AIProvider } from "../types";
 
@@ -199,7 +200,9 @@ export async function* streamChatAgent(
       .join("\n\n");
 
     const fullPrompt = `${systemPrompt}\n\n${formattedMessages}\n\nAssistant:`;
-    const response = await callGemini(fullPrompt);
+    const response = provider === "gemma4"
+      ? await callGemma4(fullPrompt)
+      : await callGemini(fullPrompt);
 
     // Yield in chunks to simulate streaming
     const words = response.split(" ");

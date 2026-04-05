@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { trpc } from "~/lib/trpc/client";
 import { useActiveTask } from "~/lib/active-task";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "~/components/ui/card";
@@ -35,6 +35,11 @@ import {
   ExternalLink,
   Mic,
   Music,
+  Video,
+  CheckCircle2,
+  XCircle,
+  AlertTriangle,
+  Clock,
 } from "lucide-react";
 
 const ALL_PLATFORMS = [
@@ -42,12 +47,14 @@ const ALL_PLATFORMS = [
   "TIKTOK", "PINTEREST", "THREADS", "MASTODON", "BLUESKY", "MEDIUM", "DEVTO",
 ] as const;
 
-const providers = ["openai", "anthropic", "gemini", "grok", "deepseek"] as const;
+const providers = ["openai", "anthropic", "gemini", "grok", "deepseek", "gemma4"] as const;
 
 const FORMAT_OPTIONS = [
   { id: "static" as const, label: "Static Post", icon: Image, desc: "Single branded image + caption" },
   { id: "carousel" as const, label: "Carousel", icon: Layers, desc: "Multi-slide carousel post" },
   { id: "reel" as const, label: "Reel / Video", icon: Film, desc: "Slideshow video from key points" },
+  { id: "ai_video" as const, label: "AI Video (Veo3)", icon: Video, desc: "AI-generated cinematic video with text & music" },
+  { id: "seedance_video" as const, label: "Seedance 2.0", icon: Video, desc: "ByteDance cinematic video with native audio & 2K", badge: "NEW" },
 ];
 
 const THEMES = [
@@ -65,9 +72,9 @@ export function RepurposeTab() {
   const [originalContent, setOriginalContent] = useState("");
 
   // Options
-  const [format, setFormat] = useState<"static" | "carousel" | "reel">("static");
+  const [format, setFormat] = useState<"static" | "carousel" | "reel" | "ai_video" | "seedance_video">("static");
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>(["INSTAGRAM", "TWITTER", "LINKEDIN"]);
-  const [provider, setProvider] = useState<typeof providers[number]>("gemini");
+  const [provider, setProvider] = useState<typeof providers[number]>("gemma4");
   const [theme, setTheme] = useState<"dark" | "light" | "gradient">("dark");
   const [voiceOver, setVoiceOver] = useState(true);
   const [voiceType, setVoiceType] = useState<string>("nova");
@@ -84,9 +91,80 @@ export function RepurposeTab() {
   } | null>(null);
   const [copiedPlatform, setCopiedPlatform] = useState<string | null>(null);
 
-  // Channel info (for branding)
+  // Progress / activity log
+  interface ProgressStep { step: string; status: "running" | "done" | "error" | "skipped"; detail?: string; ts: number }
+  const [progressSteps, setProgressSteps] = useState<ProgressStep[]>([]);
+  const [progressId, setProgressId] = useState<string | null>(null);
+  const eventSourceRef = useRef<EventSource | null>(null);
+
+  const startProgress = useCallback(() => {
+    const id = `rep-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    setProgressId(id);
+    setProgressSteps([]);
+
+    // Connect SSE
+    const es = new EventSource(`/api/progress?id=${id}`);
+    eventSourceRef.current = es;
+
+    es.onmessage = (ev) => {
+      try {
+        const step: ProgressStep = JSON.parse(ev.data);
+        if (step.step === "__finished__") {
+          es.close();
+          eventSourceRef.current = null;
+          return;
+        }
+        setProgressSteps((prev) => {
+          // Update existing step or add new one
+          const idx = prev.findIndex((s) => s.step === step.step);
+          if (idx >= 0) {
+            const updated = [...prev];
+            updated[idx] = step;
+            return updated;
+          }
+          return [...prev, step];
+        });
+      } catch {}
+    };
+
+    es.onerror = () => {
+      es.close();
+      eventSourceRef.current = null;
+    };
+
+    return id;
+  }, []);
+
+  // Cleanup SSE on unmount
+  useEffect(() => {
+    return () => { eventSourceRef.current?.close(); };
+  }, []);
+
+  // Channel info (for branding + publishing)
   const { data: channels } = trpc.channel.list.useQuery();
-  const primaryChannel = (channels as any[])?.[0];
+  const activeChannels = (channels as any[])?.filter((c: any) => c.isActive) || [];
+  const primaryChannel = activeChannels[0];
+  const [selectedChannelIds, setSelectedChannelIds] = useState<string[]>([]);
+  const [channelSearch, setChannelSearch] = useState("");
+  const [publishingState, setPublishingState] = useState<"idle" | "publishing" | "done">("idle");
+  const filteredChannels = activeChannels.filter((c: any) =>
+    !channelSearch || c.name?.toLowerCase().includes(channelSearch.toLowerCase()) || c.username?.toLowerCase().includes(channelSearch.toLowerCase()) || c.platform?.toLowerCase().includes(channelSearch.toLowerCase())
+  );
+
+  // Auto-select first channel when channels load
+  useEffect(() => {
+    if (activeChannels.length > 0 && selectedChannelIds.length === 0) {
+      setSelectedChannelIds([activeChannels[0].id]);
+    }
+  }, [activeChannels.length]);
+
+  // Create post mutation
+  const createPost = trpc.post.create.useMutation({
+    onSuccess: () => {},
+    onError: (err) => {
+      toast({ title: "Failed to create post", description: err.message, variant: "destructive" });
+    },
+  });
 
   // URL extract (preview)
   const [extractedPreview, setExtractedPreview] = useState<{
@@ -126,6 +204,8 @@ export function RepurposeTab() {
     },
     onError: (err) => {
       toast({ title: "Repurpose failed", description: err.message, variant: "destructive" });
+      setProgressSteps((prev) => [...prev, { step: "Request failed", status: "error" as const, detail: err.message, ts: Date.now() }]);
+      eventSourceRef.current?.close();
     },
   });
 
@@ -137,18 +217,29 @@ export function RepurposeTab() {
   const handleGenerate = () => {
     if (sourceMode === "url") {
       if (!url || selectedPlatforms.length === 0) return;
+      const pid = startProgress();
       repurposeFromUrl.mutate({
         url,
+        progressId: pid,
         format,
         targetPlatforms: selectedPlatforms,
         provider,
-        channelName: primaryChannel?.name || "Channel",
-        channelHandle: primaryChannel?.username || "",
-        logoUrl: primaryChannel?.avatar || "",
+        channelName: selectedChannelIds.length > 0
+          ? activeChannels.find((c: any) => c.id === selectedChannelIds[0])?.name || "Channel"
+          : primaryChannel?.name || "Channel",
+        channelHandle: selectedChannelIds.length > 0
+          ? activeChannels.find((c: any) => c.id === selectedChannelIds[0])?.username || ""
+          : primaryChannel?.username || "",
+        logoUrl: (() => {
+          const ch = selectedChannelIds.length > 0
+            ? activeChannels.find((c: any) => c.id === selectedChannelIds[0])
+            : primaryChannel;
+          return ch?.avatar || "";
+        })(),
         theme,
-        voiceOver: format === "reel" ? voiceOver : false,
+        voiceOver: (format === "reel" || format === "ai_video" || format === "seedance_video") ? voiceOver : false,
         voiceType: voiceType as any,
-        bgMusic: format === "reel" ? bgMusic : false,
+        bgMusic: (format === "reel" || format === "ai_video" || format === "seedance_video") ? bgMusic : false,
       });
     } else {
       if (!originalContent || selectedPlatforms.length === 0) return;
@@ -262,17 +353,22 @@ export function RepurposeTab() {
               {/* Output Format */}
               <div className="space-y-2">
                 <Label>Output Format</Label>
-                <div className="grid grid-cols-3 gap-2">
-                  {FORMAT_OPTIONS.map(({ id, label, icon: Icon, desc }) => (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {FORMAT_OPTIONS.map(({ id, label, icon: Icon, desc, ...rest }) => (
                     <button
                       key={id}
                       onClick={() => setFormat(id)}
-                      className={`flex flex-col items-center gap-1.5 rounded-lg border p-3 text-center transition-all ${
+                      className={`relative flex flex-col items-center gap-1.5 rounded-lg border p-3 text-center transition-all ${
                         format === id
                           ? "border-primary bg-primary/5 ring-1 ring-primary"
                           : "border-border hover:border-primary/50"
                       }`}
                     >
+                      {"badge" in rest && (rest as any).badge && (
+                        <span className="absolute -top-1.5 -right-1.5 rounded-full bg-gradient-to-r from-purple-600 to-pink-500 px-1.5 py-0.5 text-[9px] font-bold text-white shadow-sm">
+                          {(rest as any).badge}
+                        </span>
+                      )}
                       <Icon className={`h-5 w-5 ${format === id ? "text-primary" : "text-muted-foreground"}`} />
                       <span className="text-xs font-medium">{label}</span>
                       <span className="text-[10px] text-muted-foreground">{desc}</span>
@@ -282,7 +378,7 @@ export function RepurposeTab() {
               </div>
 
               {/* Theme (for carousel/reel) */}
-              {(format === "carousel" || format === "reel") && (
+              {(format === "carousel" || format === "reel" || format === "ai_video") && (
                 <div className="space-y-2">
                   <Label>Slide Theme</Label>
                   <div className="flex gap-2">
@@ -302,8 +398,19 @@ export function RepurposeTab() {
                 </div>
               )}
 
-              {/* Voice-over & Music (Reel only) */}
-              {format === "reel" && (
+              {/* Veo3 AI Video info */}
+              {format === "ai_video" && (
+                <div className="rounded-lg border border-purple-300 bg-purple-50/50 p-3 dark:border-purple-800 dark:bg-purple-950/30">
+                  <p className="text-xs font-semibold text-purple-700 dark:text-purple-300">🎬 Veo3 Ultra — AI-Generated Cinematic Video</p>
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    Generates a real AI video with text slides, relevant background visuals, smooth transitions, and background music.
+                    Each key point becomes a scene with cinematic B-roll footage. Takes 1-3 minutes to generate.
+                  </p>
+                </div>
+              )}
+
+              {/* Voice-over & Music (Reel & AI Video) */}
+              {(format === "reel" || format === "ai_video" || format === "seedance_video") && (
                 <div className="space-y-3 rounded-lg border bg-muted/30 p-3">
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Reel Audio</p>
 
@@ -388,6 +495,62 @@ export function RepurposeTab() {
             </p>
           </div>
 
+          {/* Publish to Channels */}
+          {activeChannels.length > 0 && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label>Publish to Channels</Label>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setSelectedChannelIds(
+                      selectedChannelIds.length === activeChannels.length ? [] : activeChannels.map((c: any) => c.id)
+                    )}
+                    className="text-[10px] text-primary hover:underline"
+                  >
+                    {selectedChannelIds.length === activeChannels.length ? "Deselect All" : "Select All"}
+                  </button>
+                </div>
+              </div>
+              {activeChannels.length > 5 && (
+                <Input
+                  placeholder="Search channels..."
+                  value={channelSearch}
+                  onChange={(e) => setChannelSearch(e.target.value)}
+                  className="h-8 text-xs"
+                />
+              )}
+              <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto">
+                {filteredChannels.map((channel: any) => (
+                  <button
+                    key={channel.id}
+                    onClick={() => setSelectedChannelIds((prev) =>
+                      prev.includes(channel.id) ? prev.filter((id) => id !== channel.id) : [...prev, channel.id]
+                    )}
+                    className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium transition-all ${
+                      selectedChannelIds.includes(channel.id)
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-border bg-background text-muted-foreground hover:border-primary/50"
+                    }`}
+                  >
+                    {channel.avatar && (
+                      <img src={channel.avatar} alt="" className="h-4 w-4 rounded-full object-cover" />
+                    )}
+                    <span>{channel.name}</span>
+                    <Badge variant="secondary" className="text-[9px] px-1 py-0">
+                      {channel.platform.charAt(0) + channel.platform.slice(1).toLowerCase()}
+                    </Badge>
+                  </button>
+                ))}
+                {filteredChannels.length === 0 && channelSearch && (
+                  <p className="text-xs text-muted-foreground py-2">No channels match "{channelSearch}"</p>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {selectedChannelIds.length} channel{selectedChannelIds.length !== 1 ? "s" : ""} selected for publishing
+              </p>
+            </div>
+          )}
+
           {/* AI Provider */}
           <div className="w-48 space-y-1.5">
             <Label>AI Provider</Label>
@@ -401,6 +564,7 @@ export function RepurposeTab() {
                 <SelectItem value="gemini">Google (Gemini)</SelectItem>
                 <SelectItem value="grok">xAI (Grok)</SelectItem>
                 <SelectItem value="deepseek">DeepSeek</SelectItem>
+                <SelectItem value="gemma4">Google (Gemma 4)</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -422,11 +586,47 @@ export function RepurposeTab() {
               <Sparkles className="h-4 w-4" />
             )}
             {isLoading
-              ? `Generating ${format === "carousel" ? "carousel" : format === "reel" ? "reel" : "post"}...`
+              ? `Generating ${format === "carousel" ? "carousel" : format === "reel" ? "reel" : format === "ai_video" ? "AI video with Veo3 (1-3 min)" : format === "seedance_video" ? "AI video with Seedance 2.0 (30s-3 min)" : "post"}...`
               : `Repurpose as ${FORMAT_OPTIONS.find((f) => f.id === format)?.label || "Static Post"}`}
           </Button>
         </CardContent>
       </Card>
+
+      {/* Activity Log */}
+      {progressSteps.length > 0 && (
+        <Card className="border-zinc-200 dark:border-zinc-800">
+          <CardHeader className="pb-2 pt-3 px-4">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+              Activity Log
+              {isLoading && <Loader2 className="h-3 w-3 animate-spin ml-auto text-muted-foreground" />}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="px-4 pb-3">
+            <div className="space-y-1.5">
+              {progressSteps.map((s, i) => (
+                <div key={`${s.step}-${i}`} className="flex items-start gap-2 text-xs">
+                  {s.status === "running" && <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500 mt-0.5 shrink-0" />}
+                  {s.status === "done" && <CheckCircle2 className="h-3.5 w-3.5 text-green-500 mt-0.5 shrink-0" />}
+                  {s.status === "error" && <XCircle className="h-3.5 w-3.5 text-red-500 mt-0.5 shrink-0" />}
+                  {s.status === "skipped" && <AlertTriangle className="h-3.5 w-3.5 text-yellow-500 mt-0.5 shrink-0" />}
+                  <div className="min-w-0 flex-1">
+                    <span className={s.status === "error" ? "text-red-600 dark:text-red-400" : s.status === "skipped" ? "text-yellow-600 dark:text-yellow-400" : "text-foreground"}>
+                      {s.step}
+                    </span>
+                    {s.detail && (
+                      <span className="text-muted-foreground ml-1.5">— {s.detail}</span>
+                    )}
+                  </div>
+                  <span className="text-[10px] text-muted-foreground shrink-0 tabular-nums">
+                    {new Date(s.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Results */}
       {results && (
@@ -462,15 +662,15 @@ export function RepurposeTab() {
             <Card>
               <CardHeader className="pb-2">
                 <CardTitle className="text-base flex items-center gap-2">
-                  {results.format === "reel" ? <Film className="h-4 w-4 text-purple-500" /> : results.mediaUrls.length > 1 ? <Layers className="h-4 w-4 text-blue-500" /> : <Image className="h-4 w-4 text-green-500" />}
-                  Generated {results.format === "reel" ? "Reel Video" : results.mediaUrls.length > 1 ? `Carousel (${results.mediaUrls.length} slides)` : "Static Post"}
+                  {results.format === "ai_video" || results.format === "seedance_video" ? <Video className="h-4 w-4 text-purple-500" /> : results.format === "reel" ? <Film className="h-4 w-4 text-purple-500" /> : results.mediaUrls.length > 1 ? <Layers className="h-4 w-4 text-blue-500" /> : <Image className="h-4 w-4 text-green-500" />}
+                  Generated {results.format === "ai_video" ? "AI Video (Veo3)" : results.format === "seedance_video" ? "AI Video (Seedance 2.0)" : results.format === "reel" ? "Reel Video" : results.mediaUrls.length > 1 ? `Carousel (${results.mediaUrls.length} slides)` : "Static Post"}
                 </CardTitle>
                 <CardDescription>
-                  {results.format === "reel" ? "AI-generated video with slides" : results.format === "static" ? "AI-generated background with branded overlay" : "Swipe through carousel slides"}
+                  {results.format === "ai_video" ? "Cinematic AI video with text slides, visuals & music by Veo3" : results.format === "seedance_video" ? "Cinematic 2K video with native audio by Seedance 2.0" : results.format === "reel" ? "AI-generated video with slides" : results.format === "static" ? "AI-generated background with branded overlay" : "Swipe through carousel slides"}
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                {results.mediaType === "video/mp4" ? (
+                {(results.mediaType === "video/mp4" || results.format === "ai_video" || results.format === "seedance_video") && results.mediaUrls[0] ? (
                   <div className="flex justify-center">
                     <video
                       src={results.mediaUrls[0]}
@@ -573,16 +773,80 @@ export function RepurposeTab() {
             })}
           </div>
 
-          <div className="flex justify-center">
-            <Button
-              className="gap-2"
-              onClick={() => {
-                toast({ title: "Posts created as drafts", description: `${Object.keys(results.platformContent).length} draft posts created.` });
-              }}
-            >
-              <ArrowRight className="h-4 w-4" />
-              Create Draft Posts for All Platforms
-            </Button>
+          {/* Publish to Selected Channels */}
+          <div className="flex flex-col items-center gap-3">
+            {selectedChannelIds.length === 0 && (
+              <p className="text-sm text-muted-foreground">Select channels above to publish</p>
+            )}
+            <div className="flex gap-3">
+              <Button
+                variant="outline"
+                className="gap-2"
+                disabled={selectedChannelIds.length === 0 || publishingState === "publishing"}
+                onClick={async () => {
+                  setPublishingState("publishing");
+                  try {
+                    // Build content variants per platform
+                    const contentVariants: Record<string, string> = {};
+                    for (const [platform, content] of Object.entries(results.platformContent)) {
+                      contentVariants[platform] = content as string;
+                    }
+
+                    // Get first platform's content as default
+                    const defaultContent = Object.values(results.platformContent)[0] as string || "";
+
+                    // Collect all media IDs
+                    const mediaIds: string[] = [];
+                    if (results.mediaMap) {
+                      const seen = new Set<string>();
+                      for (const m of Object.values(results.mediaMap)) {
+                        if (m.mediaId && !seen.has(m.mediaId)) {
+                          mediaIds.push(m.mediaId);
+                          seen.add(m.mediaId);
+                        }
+                      }
+                    }
+
+                    await createPost.mutateAsync({
+                      content: defaultContent,
+                      contentVariants,
+                      channelIds: selectedChannelIds,
+                      mediaIds,
+                      aiGenerated: true,
+                      aiProvider: provider,
+                    });
+
+                    setPublishingState("done");
+                    toast({
+                      title: "Draft posts created!",
+                      description: `${selectedChannelIds.length} draft post${selectedChannelIds.length > 1 ? "s" : ""} created. Go to Posts to review & schedule.`,
+                    });
+                  } catch {
+                    setPublishingState("idle");
+                  }
+                }}
+              >
+                {publishingState === "publishing" ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : publishingState === "done" ? (
+                  <Check className="h-4 w-4 text-green-500" />
+                ) : (
+                  <FileText className="h-4 w-4" />
+                )}
+                {publishingState === "done" ? "Drafts Created" : `Create Drafts (${selectedChannelIds.length} channel${selectedChannelIds.length !== 1 ? "s" : ""})`}
+              </Button>
+
+              {publishingState === "done" && (
+                <Button
+                  variant="default"
+                  className="gap-2"
+                  onClick={() => window.location.href = "/dashboard/posts"}
+                >
+                  <ArrowRight className="h-4 w-4" />
+                  View Posts
+                </Button>
+              )}
+            </div>
           </div>
         </div>
       )}

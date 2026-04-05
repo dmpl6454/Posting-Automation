@@ -1,6 +1,7 @@
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { getModel, isLangChainProvider } from "../providers/provider.factory";
 import { callGemini } from "../providers/gemini.provider";
+import { callGemma4 } from "../providers/gemma4.provider";
 import { hashtagSuggestionPrompt } from "../prompts/content.prompts";
 import type { HashtagParams } from "../types";
 
@@ -21,7 +22,7 @@ Return only the hashtags separated by spaces, no explanations. Include a mix of 
 Return 5-10 hashtags.
 
 Content: ${params.content}`;
-    result = await callGemini(prompt);
+    result = provider === "gemma4" ? await callGemma4(prompt) : await callGemini(prompt);
   }
 
   return result

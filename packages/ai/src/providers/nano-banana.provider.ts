@@ -27,6 +27,34 @@ interface NanoBananaResult {
   text?: string; // Optional text response
 }
 
+/**
+ * Fetch with retry for rate-limit (429) and server errors (500/503)
+ * Retries up to 3 times with exponential backoff
+ */
+async function fetchWithRetry(url: string, init: RequestInit, label = "generate"): Promise<any> {
+  const MAX_RETRIES = 3;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    const response = await fetch(url, init);
+
+    if (response.ok) {
+      return response.json();
+    }
+
+    const errorText = await response.text();
+
+    // Retry on rate-limit or server errors
+    if ((response.status === 429 || response.status >= 500) && attempt < MAX_RETRIES) {
+      const delay = Math.min(2000 * Math.pow(2, attempt - 1), 30000); // 2s, 4s, 8s...
+      console.warn(`[Nano Banana] ${label} got ${response.status}, retrying in ${delay / 1000}s (attempt ${attempt}/${MAX_RETRIES})`);
+      await new Promise((r) => setTimeout(r, delay));
+      continue;
+    }
+
+    throw new Error(`Nano Banana API error (${response.status}): ${errorText}`);
+  }
+  throw new Error("Nano Banana API: max retries exceeded");
+}
+
 function getApiKey(): string {
   const key = process.env.GOOGLE_GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY;
   if (!key) {
@@ -68,7 +96,7 @@ export async function generateImage(params: NanoBananaGenerateParams): Promise<N
     },
   };
 
-  const response = await fetch(url, {
+  const data = await fetchWithRetry(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -77,12 +105,6 @@ export async function generateImage(params: NanoBananaGenerateParams): Promise<N
     body: JSON.stringify(body),
   });
 
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Nano Banana API error (${response.status}): ${error}`);
-  }
-
-  const data = await response.json();
   return parseNanoBananaResponse(data);
 }
 
@@ -113,21 +135,15 @@ export async function editImage(params: NanoBananaEditParams): Promise<NanoBanan
     },
   };
 
-  const response = await fetch(url, {
+  const data = await fetchWithRetry(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "x-goog-api-key": apiKey,
     },
     body: JSON.stringify(body),
-  });
+  }, "edit");
 
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Nano Banana edit API error (${response.status}): ${error}`);
-  }
-
-  const data = await response.json();
   return parseNanoBananaResponse(data);
 }
 

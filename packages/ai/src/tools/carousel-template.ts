@@ -106,7 +106,7 @@ export function generateCarouselSlideHtml(
         </h2>
         ${slide.body ? `<p style="margin-top:16px;font-size:22px;color:${theme.muted};line-height:1.5;">${escapeHtml(slide.body)}</p>` : ""}
         <div style="margin-top:32px;padding:16px 48px;background:${accent};border-radius:50px;font-size:22px;font-weight:700;color:#fff;">
-          @${escapeHtml(options.handle || options.channelName)}
+          Follow for More
         </div>
       </div>
     `;
@@ -132,7 +132,7 @@ export function generateCarouselSlideHtml(
         ? `<img src="${options.logoUrl}" style="width:28px;height:28px;border-radius:50%;object-fit:cover;" />`
         : `<div style="width:28px;height:28px;border-radius:50%;background:${accent};display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#fff;">${(options.channelName[0] || "?").toUpperCase()}</div>`
       }
-      <span style="font-size:16px;color:${theme.muted};font-weight:600;">@${escapeHtml(options.handle || options.channelName)}</span>
+      <span style="font-size:16px;color:${theme.muted};font-weight:600;">${escapeHtml(options.channelName)}</span>
     </div>
     ${slide.slideNumber && slide.totalSlides
       ? `<span style="font-size:14px;color:${theme.muted};font-weight:600;">${slide.slideNumber} / ${slide.totalSlides}</span>`

@@ -471,7 +471,7 @@ export default function NewsGridPage() {
   const [includeHashtags, setIncludeHashtags] = useState(true);
   const [includeCTA, setIncludeCTA]         = useState(true);
   const [language, setLanguage]             = useState<"EN"|"HI"|"MIX">("EN");
-  const [provider, setProvider]             = useState<"openai"|"anthropic"|"gemini"|"grok"|"deepseek">("gemini");
+  const [provider, setProvider]             = useState<"openai"|"anthropic"|"gemini"|"grok"|"deepseek"|"gemma4">("gemini");
   const [postFormat, setPostFormat]         = useState<"single"|"carousel"|"reel"|"story">("single");
   const [showOptional, setShowOptional]     = useState(false);
   const [selectedChannelIds, setSelectedChannelIds] = useState<Set<string>>(new Set());
@@ -728,7 +728,7 @@ export default function NewsGridPage() {
                         <Select value={provider} onValueChange={(v) => setProvider(v as any)}>
                           <SelectTrigger><SelectValue /></SelectTrigger>
                           <SelectContent>
-                            {["openai","anthropic","gemini","grok","deepseek"].map((p) => (
+                            {["openai","anthropic","gemini","grok","deepseek","gemma4"].map((p) => (
                               <SelectItem key={p} value={p}>{p}</SelectItem>
                             ))}
                           </SelectContent>

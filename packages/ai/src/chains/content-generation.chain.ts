@@ -1,6 +1,7 @@
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { getModel, isLangChainProvider } from "../providers/provider.factory";
 import { callGemini } from "../providers/gemini.provider";
+import { callGemma4 } from "../providers/gemma4.provider";
 import { contentGenerationPrompt } from "../prompts/content.prompts";
 import { PLATFORM_CHAR_LIMITS, PLATFORM_TONES } from "../prompts/platform-specific.prompts";
 import { detectGroundingNeed, searchForGrounding, buildGroundingContext } from "../utils/web-grounding";
@@ -46,11 +47,7 @@ export async function generateContent(params: ContentGenerationParams): Promise<
     });
   }
 
-  // Non-LangChain providers: Gemini — use native Google Search grounding
-  if (needsGrounding) {
-    console.log(`[AI] Gemini provider — using native Google Search grounding`);
-  }
-
+  // Non-LangChain providers: Gemini / Gemma4
   const prompt = `You are a social media content expert writing posts for ${params.platform}.
 CRITICAL: Output ONLY the post text and hashtags. Nothing else.
 - Do NOT include any preamble like "Here's a post..." or "Here's an engaging..."
@@ -67,5 +64,13 @@ CRITICAL: Output ONLY the post text and hashtags. Nothing else.
 
 User request: ${params.userPrompt}`;
 
+  if (params.provider === "gemma4") {
+    return callGemma4(prompt);
+  }
+
+  // Gemini — use native Google Search grounding
+  if (needsGrounding) {
+    console.log(`[AI] Gemini provider — using native Google Search grounding`);
+  }
   return callGemini(prompt, { grounded: needsGrounding });
 }

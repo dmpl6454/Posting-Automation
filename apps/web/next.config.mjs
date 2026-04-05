@@ -39,7 +39,7 @@ const nextConfig = {
     "@postautomation/auth",
   ],
   experimental: {
-    serverComponentsExternalPackages: ["@prisma/client", "prisma", "puppeteer", "puppeteer-core"],
+    serverComponentsExternalPackages: ["@prisma/client", "prisma", "puppeteer", "puppeteer-core", "ioredis"],
     serverActions: {
       bodySizeLimit: "500mb",
     },

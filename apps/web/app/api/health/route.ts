@@ -46,10 +46,14 @@ async function checkRedis(): Promise<HealthCheck> {
     const port = parseInt(url.port || "6379", 10);
 
     // Use Node.js net module for a simple TCP ping
+    const password = url.password || "";
     const net = await import("net");
     const connected = await new Promise<boolean>((resolve) => {
       const socket = net.createConnection({ host, port, timeout: 3000 }, () => {
-        // Send Redis PING command (RESP protocol)
+        // Authenticate first if password is set, then PING
+        if (password) {
+          socket.write(`*2\r\n$4\r\nAUTH\r\n$${password.length}\r\n${password}\r\n`);
+        }
         socket.write("*1\r\n$4\r\nPING\r\n");
       });
 

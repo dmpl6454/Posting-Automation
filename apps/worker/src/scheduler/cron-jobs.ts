@@ -1,6 +1,7 @@
 import { prisma } from "@postautomation/db";
-import { tokenRefreshQueue, analyticsSyncQueue, agentRunQueue, trendDiscoverQueue, listeningSyncQueue, campaignAnalyticsSyncQueue, outreachPollQueue } from "@postautomation/queue";
+import { tokenRefreshQueue, analyticsSyncQueue, agentRunQueue, trendDiscoverQueue, listeningSyncQueue, campaignAnalyticsSyncQueue, outreachPollQueue, postPublishQueue } from "@postautomation/queue";
 import { runAutoHealerWithLogging } from "../workers/auto-healer.worker";
+import { runCelebrityDetectors } from "../workers/celebrity-detect.worker";
 
 /**
  * Check for channels with expiring tokens and queue refresh jobs.
@@ -332,6 +333,72 @@ export async function scheduleOutreachPoll() {
 }
 
 /**
+ * Publish scheduled posts whose scheduledAt time has passed.
+ * Run every 2 minutes — catches posts from Super Agent, manual scheduling, etc.
+ */
+export async function publishScheduledPosts() {
+  const now = new Date();
+
+  // Find posts that are SCHEDULED and their time has come
+  const duePosts = await prisma.post.findMany({
+    where: {
+      status: "SCHEDULED",
+      scheduledAt: { lte: now },
+    },
+    select: {
+      id: true,
+      organizationId: true,
+      targets: {
+        where: { status: "SCHEDULED" },
+        select: {
+          id: true,
+          channelId: true,
+          channel: { select: { platform: true } },
+        },
+      },
+    },
+    take: 50, // batch limit
+  });
+
+  let queued = 0;
+  for (const post of duePosts) {
+    for (let i = 0; i < post.targets.length; i++) {
+      const target = post.targets[i]!;
+      const jobId = `scheduled-publish-${post.id}-${target.channelId}-${Date.now()}`;
+
+      await postPublishQueue.add(
+        jobId,
+        {
+          postId: post.id,
+          postTargetId: target.id,
+          channelId: target.channelId,
+          platform: target.channel.platform,
+          organizationId: post.organizationId,
+        },
+        {
+          delay: i * 10_000, // stagger 10s per channel
+          attempts: 3,
+          backoff: { type: "exponential", delay: 60_000 },
+          removeOnComplete: true,
+          removeOnFail: 100,
+        }
+      );
+      queued++;
+    }
+
+    // Mark post as PUBLISHING so we don't re-queue it next cycle
+    await prisma.post.update({
+      where: { id: post.id },
+      data: { status: "PUBLISHING" },
+    });
+  }
+
+  if (queued > 0) {
+    console.log(`[Cron:Scheduler] Queued ${queued} publish jobs for ${duePosts.length} scheduled posts`);
+  }
+}
+
+/**
  * Start all cron jobs
  */
 export function startCronJobs() {
@@ -372,6 +439,14 @@ export function startCronJobs() {
   setInterval(scheduleOutreachPoll, 5 * 60 * 1000);
   setTimeout(scheduleOutreachPoll, 3 * 60 * 1000); // Start after 3 min warmup
 
+  // Scheduled post publisher every 2 minutes
+  setInterval(publishScheduledPosts, 2 * 60 * 1000);
+  setTimeout(publishScheduledPosts, 30 * 1000); // Start after 30s warmup
+
+  // Celebrity-brand detection every 6 hours
+  setInterval(runCelebrityDetectors, 6 * 60 * 60 * 1000);
+  setTimeout(runCelebrityDetectors, 5 * 60 * 1000); // Start after 5 min warmup
+
   console.log("[Cron] Cron jobs started");
   console.log("[Cron]   - Token refresh: every 30 min");
   console.log("[Cron]   - Analytics sync: every 6 hours");
@@ -382,6 +457,8 @@ export function startCronJobs() {
   console.log("[Cron]   - Campaign analytics sync: every 4 hours");
   console.log("[Cron]   - Brand content sync: every 4 hours");
   console.log("[Cron]   - Outreach poll: every 5 min");
+  console.log("[Cron]   - Scheduled post publisher: every 2 min");
+  console.log("[Cron]   - Celebrity-brand detection: every 6 hours");
 
   // Auto-healer: scan for failed jobs, classify errors, retry transient failures
   setInterval(runAutoHealerWithLogging, 10 * 60 * 1000); // every 10 minutes

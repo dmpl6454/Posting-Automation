@@ -117,12 +117,12 @@ export async function generateReelVideo(options: ReelOptions): Promise<ReelResul
         "-i", voicePath,
         "-i", bgMusicPath,
         "-filter_complex",
-        `[1:a]volume=${voiceVolume}[voice];` +
+        `'[1:a]volume=${voiceVolume}[voice];` +
         `[2:a]volume=${bgMusicVolume},aloop=loop=-1:size=2e+09[music];` +
-        `[voice][music]amix=inputs=2:duration=first:dropout_transition=2[aout]`,
+        `[voice][music]amix=inputs=2:duration=first:dropout_transition=2[aout]'`,
         "-map", "0:v",
         "-map", "[aout]",
-        "-vf", `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,fps=30`,
+        "-vf", `'scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,fps=30'`,
         "-c:v", "libx264",
         "-preset", "fast",
         "-crf", "23",
@@ -142,7 +142,7 @@ export async function generateReelVideo(options: ReelOptions): Promise<ReelResul
         "-i", voicePath,
         "-map", "0:v",
         "-map", "1:a",
-        "-vf", `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,fps=30`,
+        "-vf", `'scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,fps=30'`,
         "-c:v", "libx264",
         "-preset", "fast",
         "-crf", "23",
@@ -163,7 +163,7 @@ export async function generateReelVideo(options: ReelOptions): Promise<ReelResul
         "-i", bgMusicPath,
         "-map", "0:v",
         "-map", "1:a",
-        "-vf", `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,fps=30`,
+        "-vf", `'scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,fps=30'`,
         "-c:v", "libx264",
         "-preset", "fast",
         "-crf", "23",
@@ -181,7 +181,7 @@ export async function generateReelVideo(options: ReelOptions): Promise<ReelResul
       ffmpegCmd = [
         "ffmpeg", "-y",
         "-f", "concat", "-safe", "0", "-i", concatFile,
-        "-vf", `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,fps=30`,
+        "-vf", `'scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,fps=30'`,
         "-c:v", "libx264",
         "-preset", "fast",
         "-crf", "23",

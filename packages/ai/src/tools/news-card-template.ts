@@ -43,9 +43,7 @@ export function generateNewsCardHtml(options: NewsCardOptions): string {
     ? `<img src="${escapeHtml(options.logoUrl)}" style="width:44px;height:44px;border-radius:10px;object-fit:contain;" />`
     : "";
 
-  const handleHtml = options.handle
-    ? `<span style="color:rgba(255,255,255,0.55);font-size:15px;font-weight:500;letter-spacing:0.02em;">@${escapeHtml(options.handle)}</span>`
-    : "";
+  const handleHtml = "";
 
   return `<!DOCTYPE html>
 <html>
@@ -266,7 +264,6 @@ ${tagHtml}
   ${logoHtml}
   <div style="flex:1;min-width:0;">
     <div class="channel-name">${escapeHtml(options.channelName)}</div>
-    <div class="channel-handle">@${escapeHtml(options.handle)}</div>
   </div>
 </div>
 <div class="accent-bottom"></div>

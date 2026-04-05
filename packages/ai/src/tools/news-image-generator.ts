@@ -103,6 +103,108 @@ export async function generateStaticNewsCreativeImage(
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Logo Overlay — stamp logo + channel name on any base64 image via Puppeteer
+// ─────────────────────────────────────────────────────────────────────────────
+export interface LogoOverlayOptions {
+  /** Base64-encoded source image */
+  imageBase64: string;
+  /** MIME type of the source image */
+  mimeType: string;
+  /** Image dimensions */
+  width: number;
+  height: number;
+  /** Logo URL (channel avatar or custom logo) */
+  logoUrl?: string;
+  /** Channel name displayed next to logo */
+  channelName?: string;
+  /** Channel handle displayed below name */
+  channelHandle?: string;
+  /** Position: bottom-left (default), bottom-right, top-left, top-right */
+  position?: "bottom-left" | "bottom-right" | "top-left" | "top-right";
+  /** Accent color for fallback initial avatar */
+  accentColor?: string;
+  /** Opacity of the branding bar background (0-1, default 0.85) */
+  opacity?: number;
+}
+
+export async function overlayLogoOnImage(options: LogoOverlayOptions): Promise<{ imageBase64: string; mimeType: string }> {
+  const {
+    imageBase64, mimeType, width, height,
+    logoUrl, channelName, channelHandle,
+    position = "bottom-left",
+    accentColor = "#e11d48",
+    opacity = 0.85,
+  } = options;
+
+  // If no logo and no channel name, return original image
+  if (!logoUrl && !channelName) {
+    return { imageBase64, mimeType };
+  }
+
+  const dataUrl = `data:${mimeType};base64,${imageBase64}`;
+  const initial = (channelName?.[0] ?? "C").toUpperCase();
+
+  const logoHtml = logoUrl
+    ? `<img src="${logoUrl}" style="width:48px;height:48px;border-radius:12px;object-fit:cover;border:2px solid rgba(255,255,255,0.2);flex-shrink:0;" crossorigin="anonymous" />`
+    : `<div style="width:48px;height:48px;border-radius:12px;background:${accentColor};display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:20px;flex-shrink:0;">${initial}</div>`;
+
+  const nameHtml = channelName
+    ? `<div style="color:#fff;font-size:18px;font-weight:700;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 1px 4px rgba(0,0,0,0.6);">${channelName}</div>`
+    : "";
+  const handleHtml = "";
+
+  const isTop = position.startsWith("top");
+  const isRight = position.endsWith("right");
+
+  const positionStyles = isTop
+    ? "top:0;left:0;right:0;"
+    : "bottom:0;left:0;right:0;";
+
+  const gradientDir = isTop ? "180deg" : "0deg";
+  const flexDir = isRight ? "row-reverse" : "row";
+  const textAlign = isRight ? "right" : "left";
+
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
+*{margin:0;padding:0;box-sizing:border-box;}
+body{width:${width}px;height:${height}px;overflow:hidden;position:relative;font-family:'Inter',system-ui,sans-serif;}
+.bg{position:absolute;inset:0;background-image:url(${dataUrl});background-size:cover;background-position:center;}
+.brand-bar{position:absolute;${positionStyles}padding:16px 24px;display:flex;flex-direction:${flexDir};align-items:center;gap:14px;background:linear-gradient(${gradientDir},rgba(0,0,0,${opacity}) 0%,rgba(0,0,0,0.3) 70%,transparent 100%);}
+.brand-text{text-align:${textAlign};}
+</style></head><body>
+<div class="bg"></div>
+<div class="brand-bar">
+  ${logoHtml}
+  <div class="brand-text">${nameHtml}${handleHtml}</div>
+</div>
+</body></html>`;
+
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+  });
+
+  try {
+    const page = await browser.newPage();
+    await page.setViewport({ width, height });
+    await page.setContent(html, { waitUntil: "networkidle0", timeout: 10000 });
+
+    const screenshotBuffer = await page.screenshot({
+      type: mimeType.includes("png") ? "png" : "jpeg",
+      quality: mimeType.includes("png") ? undefined : 85,
+      encoding: "base64",
+    });
+
+    return {
+      imageBase64: screenshotBuffer as string,
+      mimeType,
+    };
+  } finally {
+    await browser.close();
+  }
+}
+
 export async function generateNewsImage(
   style: "news_card" | "ai_generated",
   options: {
