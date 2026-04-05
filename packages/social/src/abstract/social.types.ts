@@ -26,6 +26,7 @@ export interface OAuthTokens {
   refreshToken?: string;
   expiresAt?: Date;
   scopes?: string[];
+  metadata?: Record<string, unknown>;
 }
 
 export interface OAuthConfig {

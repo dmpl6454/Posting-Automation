@@ -65,7 +65,7 @@ export class WordPressProvider extends SocialProvider {
 
   async publishPost(tokens: OAuthTokens, payload: SocialPostPayload): Promise<SocialPostResult> {
     // blog_id comes from channel metadata (stored during OAuth callback)
-    const siteId = (payload.metadata as any)?.blog_id || (tokens as any).metadata?.blog_id;
+    const siteId = (payload.metadata as any)?.blog_id || tokens.metadata?.blog_id;
     if (!siteId) throw new Error("WordPress blog_id not found in channel metadata. Re-connect the channel.");
 
     // Upload media first if present
@@ -124,7 +124,7 @@ export class WordPressProvider extends SocialProvider {
   }
 
   async deletePost(tokens: OAuthTokens, platformPostId: string, metadata?: Record<string, unknown>): Promise<void> {
-    const siteId = (metadata as any)?.blog_id || (tokens as any).metadata?.blog_id;
+    const siteId = (metadata as any)?.blog_id || tokens.metadata?.blog_id;
     if (!siteId) throw new Error("WordPress blog_id not found in channel metadata.");
 
     const res = await fetch(
@@ -150,7 +150,7 @@ export class WordPressProvider extends SocialProvider {
     if (!userRes.ok) throw new Error(`WordPress profile fetch failed: ${JSON.stringify(userData)}`);
 
     // Try to get site info
-    const siteId = (tokens as any).metadata?.blog_id;
+    const siteId = tokens.metadata?.blog_id;
     let siteName = userData.display_name;
     let siteUrl = userData.primary_blog_url;
     let avatar = userData.avatar_URL;
