@@ -230,6 +230,7 @@ enum SocialPlatform {
   BLUESKY
   MEDIUM
   DEVTO
+  WORDPRESS
 }
 
 // ==================== POSTS & SCHEDULING ====================

@@ -347,6 +347,9 @@ export async function GET(
     }
 
     // For all other platforms, save the single account
+    // Store token metadata (e.g. WordPress blog_id) in channel metadata
+    const channelMetadata = (tokens as any).metadata || undefined;
+
     await prisma.channel.upsert({
       where: {
         organizationId_platform_platformId: {
@@ -364,6 +367,7 @@ export async function GET(
         username: profile.username || null,
         avatar: profile.avatar || null,
         isActive: true,
+        ...(channelMetadata && { metadata: channelMetadata }),
       },
       create: {
         organizationId,
@@ -376,6 +380,7 @@ export async function GET(
         refreshToken: tokens.refreshToken || null,
         tokenExpiresAt: tokens.expiresAt || null,
         scopes: tokens.scopes || [],
+        ...(channelMetadata && { metadata: channelMetadata }),
       },
     });
 

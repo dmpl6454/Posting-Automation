@@ -125,6 +125,14 @@ export function MediumIcon({ className, size = 20 }: IconProps) {
   );
 }
 
+export function WordPressIcon({ className, size = 20 }: IconProps) {
+  return (
+    <svg className={className} width={size} height={size} viewBox="0 0 24 24" fill="currentColor">
+      <path d="M21.469 6.825c.84 1.537 1.318 3.3 1.318 5.175 0 3.979-2.156 7.456-5.363 9.325l3.295-9.527c.615-1.54.82-2.771.82-3.864 0-.397-.026-.765-.07-1.109m-7.981.105c.647-.034 1.233-.1 1.233-.1.58-.068.512-.92-.068-.889 0 0-1.744.137-2.868.137-1.057 0-2.834-.137-2.834-.137-.58-.032-.648.855-.068.889 0 0 .555.066 1.137.1l1.687 4.627-2.37 7.108L5.82 6.931c.647-.034 1.233-.1 1.233-.1.58-.068.512-.92-.068-.889 0 0-1.744.137-2.868.137-.201 0-.44-.005-.693-.014C5.218 3.2 8.37 1.286 12 1.286c2.7 0 5.163 1.032 7.009 2.722-.045-.003-.088-.008-.133-.008-1.057 0-1.807.921-1.807 1.907 0 .889.513 1.638 1.057 2.528.41.717.889 1.638.889 2.968 0 .921-.354 1.99-.82 3.479l-1.075 3.585-3.894-11.58m-3.503 1.07l-3.29 9.556c.98.29 2.016.446 3.09.446 1.274 0 2.497-.231 3.627-.652-.03-.047-.055-.098-.078-.15L9.985 7.999M1.213 12c0-2.8 1.02-5.37 2.706-7.348L8.156 18.06C3.94 16.282 1.213 14.478 1.213 12M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0" />
+    </svg>
+  );
+}
+
 export function DevToIcon({ className, size = 20 }: IconProps) {
   return (
     <svg className={className} width={size} height={size} viewBox="0 0 24 24" fill="currentColor">
@@ -151,6 +159,7 @@ const platformIconMap: Record<string, { icon: React.FC<IconProps>; color: string
   BLUESKY:   { icon: BlueskyIcon,   color: "text-[#0085FF]", bgColor: "bg-[#0085FF]/10" },
   MEDIUM:    { icon: MediumIcon,    color: "text-black dark:text-white", bgColor: "bg-black/5 dark:bg-white/10" },
   DEVTO:     { icon: DevToIcon,     color: "text-black dark:text-white", bgColor: "bg-black/5 dark:bg-white/10" },
+  WORDPRESS: { icon: WordPressIcon, color: "text-[#21759B]", bgColor: "bg-[#21759B]/10" },
 };
 
 interface PlatformIconProps {

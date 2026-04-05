@@ -127,6 +127,7 @@ function getDefaultScopes(platform: string): string[] {
     INSTAGRAM: ["public_profile", "email", "pages_show_list", "pages_read_engagement", "instagram_basic", "instagram_content_publish", "instagram_manage_comments", "business_management"],
     REDDIT: ["submit", "identity", "read"],
     YOUTUBE: ["https://www.googleapis.com/auth/youtube.upload"],
+    WORDPRESS: ["global"],
   };
   return scopeMap[platform] || [];
 }

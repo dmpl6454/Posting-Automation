@@ -18,6 +18,7 @@ const PLATFORM_CHAR_LIMITS: Record<string, number> = {
   YOUTUBE: 5000,
   MEDIUM: 100000,
   DEVTO: 100000,
+  WORDPRESS: 100000,
 };
 
 // ── Error classification ────────────────────────────────────────────────
@@ -230,10 +231,38 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
 
       let result;
       try {
-        result = await provider.publishPost(tokens, { content: publishContent, mediaUrls, mediaTypes, metadata: channelMetadata });
+        console.log(`[PostPublish] Publishing to ${platform} via ${provider.displayName} (mediaUrls: ${mediaUrls.length})`);
+
+        // Retry up to 3 times for transient network errors (fetch timeouts under heavy load)
+        let lastErr: any;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            result = await provider.publishPost(tokens, { content: publishContent, mediaUrls, mediaTypes, metadata: channelMetadata });
+            lastErr = null;
+            break;
+          } catch (e: any) {
+            lastErr = e;
+            if (attempt < 3 && (e.message === "fetch failed" || e.message?.includes("ETIMEDOUT"))) {
+              console.log(`[PostPublish] Transient error on attempt ${attempt}/3, retrying in ${attempt * 3}s...`);
+              await new Promise((r) => setTimeout(r, attempt * 3000));
+              continue;
+            }
+            throw e;
+          }
+        }
+        if (lastErr) throw lastErr;
       } catch (publishErr: any) {
         const errMsg = publishErr.message || String(publishErr);
         const errType = classifyError(errMsg);
+        console.error(`[PostPublish] Publish error detail:`, errMsg);
+        if (publishErr.cause) {
+          const cause = publishErr.cause;
+          if (cause.errors) {
+            cause.errors.forEach((e: any, i: number) => console.error(`[PostPublish] Cause[${i}]:`, e.message, e.code, e.address, e.port));
+          } else {
+            console.error(`[PostPublish] Cause:`, String(cause));
+          }
+        }
         console.log(`[PostPublish] Error classified as: ${errType}`);
 
         if (errType === "rate_limit") {

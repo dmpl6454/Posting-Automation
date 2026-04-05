@@ -153,6 +153,8 @@ services:
       OUTREACH_FROM_EMAIL: ${OUTREACH_FROM_EMAIL:-biz@digitalsukoon.com}
       HUNTER_API_KEY: ${HUNTER_API_KEY}
       FAL_KEY: ${FAL_KEY}
+      WORDPRESS_CLIENT_ID: ${WORDPRESS_CLIENT_ID}
+      WORDPRESS_CLIENT_SECRET: ${WORDPRESS_CLIENT_SECRET}
     depends_on:
       postgres:
         condition: service_healthy
@@ -208,6 +210,12 @@ services:
       OUTREACH_FROM_EMAIL: ${OUTREACH_FROM_EMAIL:-biz@digitalsukoon.com}
       HUNTER_API_KEY: ${HUNTER_API_KEY}
       FAL_KEY: ${FAL_KEY}
+      WORDPRESS_CLIENT_ID: ${WORDPRESS_CLIENT_ID}
+      WORDPRESS_CLIENT_SECRET: ${WORDPRESS_CLIENT_SECRET}
+      META_AD_LIBRARY_ACCESS_TOKEN: ${META_AD_LIBRARY_ACCESS_TOKEN}
+      TWITTER_BEARER_TOKEN: ${TWITTER_BEARER_TOKEN}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL}
+      OLLAMA_DETECT_MODEL: ${OLLAMA_DETECT_MODEL:-llama3.3:70b}
     depends_on:
       postgres:
         condition: service_healthy

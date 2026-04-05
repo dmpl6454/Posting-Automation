@@ -41,6 +41,7 @@ const PLATFORM_DISPLAY: Record<string, { name: string; description: string }> = 
   TELEGRAM: { name: "Telegram", description: "Channels and groups" },
   DISCORD: { name: "Discord", description: "Server channels" },
   BLUESKY: { name: "Bluesky", description: "Decentralized social" },
+  WORDPRESS: { name: "WordPress", description: "Blog posts and pages" },
 };
 
 export default function ChannelsPage() {
