@@ -152,6 +152,7 @@ services:
       RESEND_API_KEY: ${RESEND_API_KEY}
       OUTREACH_FROM_EMAIL: ${OUTREACH_FROM_EMAIL:-biz@digitalsukoon.com}
       HUNTER_API_KEY: ${HUNTER_API_KEY}
+      FAL_KEY: ${FAL_KEY}
     depends_on:
       postgres:
         condition: service_healthy
@@ -206,6 +207,7 @@ services:
       RESEND_API_KEY: ${RESEND_API_KEY}
       OUTREACH_FROM_EMAIL: ${OUTREACH_FROM_EMAIL:-biz@digitalsukoon.com}
       HUNTER_API_KEY: ${HUNTER_API_KEY}
+      FAL_KEY: ${FAL_KEY}
     depends_on:
       postgres:
         condition: service_healthy
