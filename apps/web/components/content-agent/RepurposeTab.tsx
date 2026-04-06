@@ -40,6 +40,7 @@ import {
   XCircle,
   AlertTriangle,
   Clock,
+  Download,
 } from "lucide-react";
 
 const ALL_PLATFORMS = [
@@ -671,38 +672,79 @@ export function RepurposeTab() {
               </CardHeader>
               <CardContent>
                 {(results.mediaType === "video/mp4" || results.format === "ai_video" || results.format === "seedance_video") && results.mediaUrls[0] ? (
-                  <div className="flex justify-center">
+                  <div className="flex flex-col items-center gap-3">
                     <video
                       src={results.mediaUrls[0]}
                       controls
                       className="w-full max-w-xs rounded-xl shadow-lg aspect-[4/5]"
                       poster={undefined}
                     />
+                    <a
+                      href={results.mediaUrls[0]}
+                      download={`repurposed-video-${Date.now()}.mp4`}
+                      className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-muted transition-colors"
+                    >
+                      <Download className="h-4 w-4" />
+                      Download Video
+                    </a>
                   </div>
                 ) : results.mediaUrls.length === 1 ? (
-                  <div className="flex justify-center">
+                  <div className="flex flex-col items-center gap-3">
                     <img
                       src={results.mediaUrls[0]}
                       alt="Generated post"
                       className="w-full max-w-xs rounded-xl shadow-lg"
                     />
+                    <a
+                      href={results.mediaUrls[0]}
+                      download={`repurposed-image-${Date.now()}.png`}
+                      className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-muted transition-colors"
+                    >
+                      <Download className="h-4 w-4" />
+                      Download Image
+                    </a>
                   </div>
                 ) : (
-                  <div className="flex gap-3 overflow-x-auto pb-3 snap-x snap-mandatory">
-                    {results.mediaUrls.map((mediaUrl, i) => (
-                      <div key={i} className="shrink-0 snap-center">
-                        <div className="relative">
-                          <img
-                            src={mediaUrl}
-                            alt={`Slide ${i + 1}`}
-                            className="h-72 rounded-xl shadow-md aspect-[4/5] object-cover"
-                          />
-                          <div className="absolute top-2 right-2 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded-full">
-                            {i + 1}/{results.mediaUrls.length}
+                  <div className="space-y-3">
+                    <div className="flex gap-3 overflow-x-auto pb-3 snap-x snap-mandatory">
+                      {results.mediaUrls.map((mediaUrl, i) => (
+                        <div key={i} className="shrink-0 snap-center">
+                          <div className="relative group">
+                            <img
+                              src={mediaUrl}
+                              alt={`Slide ${i + 1}`}
+                              className="h-72 rounded-xl shadow-md aspect-[4/5] object-cover"
+                            />
+                            <div className="absolute top-2 right-2 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded-full">
+                              {i + 1}/{results.mediaUrls.length}
+                            </div>
+                            <a
+                              href={mediaUrl}
+                              download={`slide-${i + 1}-${Date.now()}.png`}
+                              className="absolute bottom-2 right-2 rounded-full bg-black/60 p-2 text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/80"
+                            >
+                              <Download className="h-3.5 w-3.5" />
+                            </a>
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
+                    <div className="flex justify-center">
+                      <button
+                        onClick={() => {
+                          results.mediaUrls.forEach((url, i) => {
+                            const a = document.createElement("a");
+                            a.href = url;
+                            a.download = `slide-${i + 1}.png`;
+                            a.click();
+                          });
+                        }}
+                        className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-muted transition-colors"
+                      >
+                        <Download className="h-4 w-4" />
+                        Download All Slides
+                      </button>
+                    </div>
                   </div>
                 )}
               </CardContent>
@@ -720,7 +762,7 @@ export function RepurposeTab() {
                 <Card key={platform} className="border-green-200 bg-green-50/30 dark:border-green-900 dark:bg-green-950/20 overflow-hidden">
                   {/* Platform-specific AI creative preview */}
                   {platformImage && results.format === "static" && (
-                    <div className="relative">
+                    <div className="relative group">
                       <img
                         src={platformImage}
                         alt={`${platform} creative`}
@@ -731,6 +773,13 @@ export function RepurposeTab() {
                           {platform.charAt(0) + platform.slice(1).toLowerCase()}
                         </Badge>
                       </div>
+                      <a
+                        href={platformImage}
+                        download={`${platform.toLowerCase()}-creative-${Date.now()}.png`}
+                        className="absolute bottom-2 right-2 rounded-full bg-black/60 p-2.5 text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/80"
+                      >
+                        <Download className="h-4 w-4" />
+                      </a>
                     </div>
                   )}
                   <CardHeader className="pb-2">

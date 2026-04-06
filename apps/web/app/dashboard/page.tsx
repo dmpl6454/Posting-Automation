@@ -32,70 +32,63 @@ const featureCards = [
     icon: Zap,
     title: "Super Agent",
     desc: "AI agent that can execute any task on your platform",
-    gradient: "from-violet-500/12 to-purple-500/12",
-    borderColor: "hover:border-violet-400/40",
-    iconColor: "text-violet-600 dark:text-violet-400",
-    iconBg: "bg-violet-500/10",
+    accentFrom: "from-violet-500",
+    accentTo: "to-purple-500",
+    glowColor: "violet",
   },
   {
     href: "/dashboard/content-agent",
     icon: Sparkles,
     title: "Content Studio",
     desc: "Create, schedule, and manage social media content",
-    gradient: "from-pink-500/12 to-rose-500/12",
-    borderColor: "hover:border-pink-400/40",
-    iconColor: "text-pink-600 dark:text-pink-400",
-    iconBg: "bg-pink-500/10",
+    accentFrom: "from-pink-500",
+    accentTo: "to-rose-500",
+    glowColor: "pink",
   },
   {
     href: "/dashboard/content-agent?expanded=repurpose",
     icon: Repeat2,
     title: "Repurpose Content",
     desc: "Transform content across platforms instantly",
-    gradient: "from-blue-500/12 to-cyan-500/12",
-    borderColor: "hover:border-blue-400/40",
-    iconColor: "text-blue-600 dark:text-blue-400",
-    iconBg: "bg-blue-500/10",
+    accentFrom: "from-blue-500",
+    accentTo: "to-cyan-400",
+    glowColor: "blue",
   },
   {
     href: "/dashboard/newsgrid",
     icon: Newspaper,
     title: "NewsGrid Bot",
     desc: "Auto-generate news creatives from trending topics",
-    gradient: "from-rose-500/12 to-pink-500/12",
-    borderColor: "hover:border-rose-400/40",
-    iconColor: "text-rose-600 dark:text-rose-400",
-    iconBg: "bg-rose-500/10",
+    accentFrom: "from-rose-500",
+    accentTo: "to-orange-400",
+    glowColor: "rose",
   },
   {
     href: "/dashboard/autopilot",
     icon: Zap,
     title: "Autopilot",
     desc: "Fully automated posting from trending news",
-    gradient: "from-amber-500/12 to-orange-500/12",
-    borderColor: "hover:border-amber-400/40",
-    iconColor: "text-amber-600 dark:text-amber-400",
-    iconBg: "bg-amber-500/10",
+    accentFrom: "from-amber-500",
+    accentTo: "to-yellow-400",
+    glowColor: "amber",
   },
   {
     href: "/dashboard/listening",
     icon: Ear,
     title: "Social Listening",
     desc: "Monitor mentions, sentiment & competitor activity",
-    gradient: "from-teal-500/12 to-emerald-500/12",
-    borderColor: "hover:border-teal-400/40",
-    iconColor: "text-teal-600 dark:text-teal-400",
-    iconBg: "bg-teal-500/10",
+    accentFrom: "from-teal-500",
+    accentTo: "to-emerald-400",
+    glowColor: "teal",
   },
   {
     href: "/dashboard/campaigns",
     icon: Target,
     title: "Campaign Tracking",
     desc: "Monitor brand content releases & discover influencers",
-    gradient: "from-indigo-500/12 to-blue-500/12",
-    borderColor: "hover:border-indigo-400/40",
-    iconColor: "text-indigo-600 dark:text-indigo-400",
-    iconBg: "bg-indigo-500/10",
+    accentFrom: "from-indigo-500",
+    accentTo: "to-sky-400",
+    glowColor: "indigo",
   },
 ];
 
@@ -169,11 +162,20 @@ export default function DashboardPage() {
           : statItems.map((stat) => (
               <div
                 key={stat.name}
-                className="glass group relative overflow-hidden rounded-2xl p-5 transition-shadow hover:shadow-lg"
+                className="group relative overflow-hidden rounded-2xl border border-white/[0.08] p-5 transition-all hover:shadow-xl hover:shadow-black/5 dark:border-white/[0.06]"
+                style={{
+                  background: "linear-gradient(135deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 100%)",
+                  backdropFilter: "blur(16px) saturate(180%)",
+                  WebkitBackdropFilter: "blur(16px) saturate(180%)",
+                }}
               >
-                <div className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${stat.gradient} opacity-60`} />
+                <div className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${stat.gradient} opacity-50`} />
+                <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/15 to-transparent" />
                 <div className="relative flex items-center gap-4">
-                  <div className={`rounded-xl bg-background/60 p-2.5 ${stat.iconColor}`}>
+                  <div
+                    className={`rounded-xl border border-white/[0.08] p-2.5 ${stat.iconColor}`}
+                    style={{ background: "rgba(255,255,255,0.06)", backdropFilter: "blur(8px)" }}
+                  >
                     <stat.icon className="h-5 w-5" />
                   </div>
                   <div>
@@ -200,17 +202,31 @@ export default function DashboardPage() {
             <Link
               key={card.href}
               href={card.href}
-              className={`group relative flex items-center gap-4 overflow-hidden rounded-2xl border border-border/40 bg-card/50 p-5 transition-all ${card.borderColor} hover:shadow-lg active:scale-[0.99]`}
+              className="group relative flex items-center gap-4 overflow-hidden rounded-2xl border border-white/[0.08] p-5 transition-all hover:shadow-2xl hover:shadow-black/5 active:scale-[0.98] dark:border-white/[0.06]"
+              style={{
+                background: "linear-gradient(135deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.02) 100%)",
+                backdropFilter: "blur(20px) saturate(180%)",
+                WebkitBackdropFilter: "blur(20px) saturate(180%)",
+              }}
             >
-              <div className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${card.gradient} opacity-0 transition-opacity group-hover:opacity-100`} />
-              <div className={`relative flex h-12 w-12 shrink-0 items-center justify-center rounded-xl ${card.iconBg} ${card.iconColor}`}>
-                <card.icon className="h-6 w-6" />
+              {/* Liquid glass gradient overlay */}
+              <div className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${card.accentFrom}/[0.06] ${card.accentTo}/[0.03] opacity-60 transition-opacity group-hover:opacity-100`} />
+              {/* Top highlight for glass effect */}
+              <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent" />
+              {/* Animated glow on hover */}
+              <div className={`pointer-events-none absolute -inset-1 bg-gradient-to-br ${card.accentFrom}/20 ${card.accentTo}/10 opacity-0 blur-2xl transition-opacity duration-500 group-hover:opacity-100`} />
+
+              <div
+                className={`relative flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-white/[0.08] bg-gradient-to-br ${card.accentFrom}/15 ${card.accentTo}/10`}
+                style={{ backdropFilter: "blur(8px)" }}
+              >
+                <card.icon className={`h-6 w-6 text-white/90`} />
               </div>
               <div className="relative flex-1 min-w-0">
                 <p className="text-sm font-semibold">{card.title}</p>
-                <p className="text-xs text-muted-foreground mt-0.5">{card.desc}</p>
+                <p className="text-xs text-muted-foreground/80 mt-0.5">{card.desc}</p>
               </div>
-              <ArrowRight className="relative h-4 w-4 text-muted-foreground/30 transition-all group-hover:translate-x-1 group-hover:text-muted-foreground" />
+              <ArrowRight className="relative h-4 w-4 text-muted-foreground/20 transition-all group-hover:translate-x-1 group-hover:text-muted-foreground/60" />
             </Link>
           ))}
         </div>
