@@ -24,11 +24,11 @@ const PLAN_DATA: Record<string, Omit<PlanConfig, "stripePriceId"> & { envKey: st
     limits: {
       channels: 3,
       postsPerMonth: 30,
-      aiImagesPerMonth: 10,
+      aiImagesPerMonth: 50,
       aiVideosPerMonth: 0,
       teamMembers: 1,
     },
-    features: ["3 social channels", "30 posts/month", "10 AI images/month", "Basic scheduling"],
+    features: ["3 social channels", "30 posts/month", "50 AI images/month", "Basic scheduling"],
   },
   STARTER: {
     name: "Starter",
