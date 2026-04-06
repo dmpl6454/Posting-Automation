@@ -55,39 +55,31 @@ export function generateNewsCardHtml(options: NewsCardOptions): string {
   body{
     width:${width}px;height:${height}px;
     font-family:'Inter',system-ui,-apple-system,sans-serif;
-    background:#0a0a0f;
+    background:#0a0a0e;
     color:white;overflow:hidden;position:relative;
   }
-  /* Subtle mesh gradient background */
   .bg{position:absolute;inset:0;background:
-    radial-gradient(ellipse 80% 60% at 20% 10%,${accentColor}18 0%,transparent 60%),
-    radial-gradient(ellipse 60% 50% at 80% 90%,${accentColor}12 0%,transparent 50%),
-    linear-gradient(170deg,#0a0a14 0%,#0f0f1a 40%,#0a0a14 100%);
+    radial-gradient(ellipse 70% 50% at 15% 10%,${accentColor}10 0%,transparent 60%),
+    linear-gradient(170deg,#0a0a0e 0%,#0e0e14 100%);
   }
-  /* Noise texture overlay */
-  .noise{position:absolute;inset:0;opacity:0.03;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");background-size:128px 128px;}
-  .content{position:relative;z-index:1;height:100%;display:flex;flex-direction:column;justify-content:space-between;padding:${height > 800 ? 64 : 48}px;}
+  .content{position:relative;z-index:1;height:100%;display:flex;flex-direction:column;justify-content:space-between;padding:${height > 800 ? 56 : 44}px;}
   .top{display:flex;align-items:center;justify-content:space-between;}
-  .badge{display:inline-flex;align-items:center;gap:8px;background:${accentColor};padding:8px 18px;border-radius:6px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;}
-  .badge-dot{width:6px;height:6px;border-radius:50%;background:#fff;animation:pulse 2s infinite;}
-  .middle{flex:1;display:flex;flex-direction:column;justify-content:center;padding:${height > 800 ? '40px 0' : '24px 0'};}
-  .rule{width:48px;height:3px;background:${accentColor};border-radius:2px;margin-bottom:24px;}
-  .headline{font-size:${headlineFontSize}px;font-weight:800;line-height:1.15;letter-spacing:-0.03em;color:#fff;max-width:90%;}
+  .badge{display:inline-flex;align-items:center;gap:8px;background:${accentColor};padding:8px 16px;border-radius:4px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;}
+  .middle{flex:1;display:flex;flex-direction:column;justify-content:center;padding:${height > 800 ? '32px 0' : '20px 0'};}
+  .rule{width:40px;height:3px;background:${accentColor};border-radius:2px;margin-bottom:20px;}
+  .headline{font-size:${headlineFontSize}px;font-weight:800;line-height:1.15;letter-spacing:-0.02em;color:#fff;max-width:90%;}
   .bottom{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;}
-  .meta{display:flex;flex-direction:column;gap:6px;}
-  .source{font-size:14px;font-weight:600;color:rgba(255,255,255,0.7);text-transform:uppercase;letter-spacing:0.06em;}
-  .date{font-size:13px;font-weight:400;color:rgba(255,255,255,0.35);}
+  .meta{display:flex;flex-direction:column;gap:4px;}
+  .source{font-size:13px;font-weight:600;color:rgba(255,255,255,0.55);text-transform:uppercase;letter-spacing:0.06em;}
+  .date{font-size:12px;font-weight:400;color:rgba(255,255,255,0.3);}
   .branding{display:flex;align-items:center;gap:12px;}
-  /* Border accent */
-  .border-line{position:absolute;bottom:0;left:0;right:0;height:4px;background:linear-gradient(90deg,${accentColor},${accentColor}88,transparent);}
 </style>
 </head>
 <body>
 <div class="bg"></div>
-<div class="noise"></div>
 <div class="content">
   <div class="top">
-    <div class="badge"><div class="badge-dot"></div>TRENDING</div>
+    <div class="badge">TRENDING</div>
     <div class="branding">${handleHtml}${logoHtml}</div>
   </div>
   <div class="middle">
@@ -101,7 +93,6 @@ export function generateNewsCardHtml(options: NewsCardOptions): string {
     </div>
   </div>
 </div>
-<div class="border-line"></div>
 </body>
 </html>`;
 }
@@ -134,60 +125,60 @@ const CREATIVE_THEME: Record<string, {
   gradient: string; overlayGradient: string; tintColor: string;
 }> = {
   breaking_news: {
-    accentColor: "#ef4444", headlineColor: "#ffffff",
-    tag: "BREAKING", tagBg: "rgba(220,38,38,0.85)", tagColor: "#fff",
-    gradient: "linear-gradient(180deg,#0c0000 0%,#140000 50%,#0c0000 100%)",
-    overlayGradient: "linear-gradient(180deg,rgba(0,0,0,0.35) 0%,rgba(0,0,0,0.05) 25%,rgba(0,0,0,0.15) 50%,rgba(0,0,0,0.75) 72%,rgba(0,0,0,0.95) 100%)",
-    tintColor: "rgba(150,0,0,0.15)",
+    accentColor: "#dc2626", headlineColor: "#ffffff",
+    tag: "BREAKING", tagBg: "#dc2626", tagColor: "#fff",
+    gradient: "linear-gradient(180deg,#000 0%,#0a0a0a 100%)",
+    overlayGradient: "linear-gradient(180deg,transparent 0%,rgba(0,0,0,0.15) 40%,rgba(0,0,0,0.85) 70%,rgba(0,0,0,0.98) 100%)",
+    tintColor: "transparent",
   },
   luxury_news: {
-    accentColor: "#d4a853", headlineColor: "#fef3c7",
-    tag: "EXCLUSIVE", tagBg: "rgba(0,0,0,0.7)", tagColor: "#d4a853",
-    gradient: "linear-gradient(160deg,#080808 0%,#1a1500 60%,#080808 100%)",
-    overlayGradient: "linear-gradient(180deg,rgba(0,0,0,0.35) 0%,rgba(0,0,0,0.05) 25%,rgba(0,0,0,0.15) 50%,rgba(0,0,0,0.75) 72%,rgba(0,0,0,0.95) 100%)",
-    tintColor: "rgba(50,35,0,0.15)",
+    accentColor: "#c9a84c", headlineColor: "#ffffff",
+    tag: "EXCLUSIVE", tagBg: "rgba(0,0,0,0.65)", tagColor: "#c9a84c",
+    gradient: "linear-gradient(180deg,#080808 0%,#111 100%)",
+    overlayGradient: "linear-gradient(180deg,transparent 0%,rgba(0,0,0,0.15) 40%,rgba(0,0,0,0.85) 70%,rgba(0,0,0,0.98) 100%)",
+    tintColor: "transparent",
   },
   cinematic: {
-    accentColor: "#a78bfa", headlineColor: "#ffffff",
+    accentColor: "#8b5cf6", headlineColor: "#ffffff",
     tag: "", tagBg: "", tagColor: "",
-    gradient: "linear-gradient(180deg,#050510 0%,#0a0a1a 50%,#050510 100%)",
-    overlayGradient: "linear-gradient(180deg,rgba(0,0,0,0.4) 0%,rgba(0,0,0,0.05) 30%,rgba(0,0,0,0.15) 50%,rgba(0,0,0,0.8) 75%,rgba(0,0,0,0.96) 100%)",
-    tintColor: "rgba(0,0,30,0.15)",
+    gradient: "linear-gradient(180deg,#050510 0%,#0a0a1a 100%)",
+    overlayGradient: "linear-gradient(180deg,transparent 0%,rgba(0,0,0,0.15) 40%,rgba(0,0,0,0.85) 70%,rgba(0,0,0,0.98) 100%)",
+    tintColor: "transparent",
   },
   viral_entertainment: {
-    accentColor: "#c084fc", headlineColor: "#ffffff",
-    tag: "VIRAL", tagBg: "rgba(88,28,135,0.8)", tagColor: "#fff",
-    gradient: "linear-gradient(135deg,#1a0033 0%,#2d0052 40%,#0d001a 100%)",
-    overlayGradient: "linear-gradient(180deg,rgba(0,0,0,0.35) 0%,rgba(0,0,0,0.05) 25%,rgba(0,0,0,0.15) 50%,rgba(0,0,0,0.75) 72%,rgba(0,0,0,0.95) 100%)",
-    tintColor: "rgba(88,28,135,0.18)",
+    accentColor: "#a855f7", headlineColor: "#ffffff",
+    tag: "VIRAL", tagBg: "#7c3aed", tagColor: "#fff",
+    gradient: "linear-gradient(180deg,#0d001a 0%,#1a0033 100%)",
+    overlayGradient: "linear-gradient(180deg,transparent 0%,rgba(0,0,0,0.15) 40%,rgba(0,0,0,0.85) 70%,rgba(0,0,0,0.98) 100%)",
+    tintColor: "transparent",
   },
   paparazzi_stamp: {
-    accentColor: "#f97316", headlineColor: "#ffffff",
-    tag: "SPOTTED", tagBg: "rgba(154,52,18,0.8)", tagColor: "#fff",
+    accentColor: "#ea580c", headlineColor: "#ffffff",
+    tag: "SPOTTED", tagBg: "#c2410c", tagColor: "#fff",
     gradient: "linear-gradient(180deg,#080808 0%,#111 100%)",
-    overlayGradient: "linear-gradient(180deg,rgba(0,0,0,0.35) 0%,rgba(0,0,0,0.05) 25%,rgba(0,0,0,0.15) 50%,rgba(0,0,0,0.75) 72%,rgba(0,0,0,0.95) 100%)",
-    tintColor: "rgba(80,30,0,0.15)",
+    overlayGradient: "linear-gradient(180deg,transparent 0%,rgba(0,0,0,0.15) 40%,rgba(0,0,0,0.85) 70%,rgba(0,0,0,0.98) 100%)",
+    tintColor: "transparent",
   },
   minimal_dark: {
-    accentColor: "#e5e5e5", headlineColor: "#ffffff",
+    accentColor: "#d4d4d4", headlineColor: "#ffffff",
     tag: "", tagBg: "", tagColor: "",
     gradient: "linear-gradient(180deg,#000 0%,#0a0a0a 100%)",
-    overlayGradient: "linear-gradient(180deg,rgba(0,0,0,0.45) 0%,rgba(0,0,0,0.1) 30%,rgba(0,0,0,0.2) 50%,rgba(0,0,0,0.82) 75%,rgba(0,0,0,0.97) 100%)",
-    tintColor: "rgba(0,0,0,0.1)",
+    overlayGradient: "linear-gradient(180deg,transparent 0%,rgba(0,0,0,0.2) 40%,rgba(0,0,0,0.88) 70%,rgba(0,0,0,0.98) 100%)",
+    tintColor: "transparent",
   },
   magazine: {
     accentColor: "#e5e5e5", headlineColor: "#ffffff",
-    tag: "FEATURE", tagBg: "rgba(0,0,0,0.7)", tagColor: "#e5e5e5",
-    gradient: "linear-gradient(180deg,#0c0c0c 0%,#1a1a1a 55%,#0c0c0c 100%)",
-    overlayGradient: "linear-gradient(180deg,rgba(0,0,0,0.4) 0%,rgba(0,0,0,0.08) 30%,rgba(0,0,0,0.2) 50%,rgba(0,0,0,0.82) 75%,rgba(0,0,0,0.96) 100%)",
-    tintColor: "rgba(20,20,20,0.08)",
+    tag: "FEATURE", tagBg: "rgba(0,0,0,0.6)", tagColor: "#e5e5e5",
+    gradient: "linear-gradient(180deg,#0c0c0c 0%,#111 100%)",
+    overlayGradient: "linear-gradient(180deg,transparent 0%,rgba(0,0,0,0.15) 40%,rgba(0,0,0,0.85) 70%,rgba(0,0,0,0.98) 100%)",
+    tintColor: "transparent",
   },
   quote_typography: {
-    accentColor: "#60a5fa", headlineColor: "#ffffff",
+    accentColor: "#3b82f6", headlineColor: "#ffffff",
     tag: "", tagBg: "", tagColor: "",
-    gradient: "linear-gradient(135deg,#050510 0%,#0a0a20 100%)",
-    overlayGradient: "linear-gradient(180deg,rgba(0,0,0,0.4) 0%,rgba(0,0,0,0.08) 30%,rgba(0,0,0,0.2) 50%,rgba(0,0,0,0.82) 75%,rgba(0,0,0,0.96) 100%)",
-    tintColor: "rgba(0,20,60,0.15)",
+    gradient: "linear-gradient(180deg,#050510 0%,#0a0a1a 100%)",
+    overlayGradient: "linear-gradient(180deg,transparent 0%,rgba(0,0,0,0.2) 40%,rgba(0,0,0,0.85) 70%,rgba(0,0,0,0.98) 100%)",
+    tintColor: "transparent",
   },
 };
 
@@ -232,28 +223,21 @@ export function generateStaticNewsCreativeHtml(options: StaticNewsCreativeOption
 body{width:1080px;height:1350px;overflow:hidden;position:relative;font-family:'Inter',system-ui,-apple-system,sans-serif;background:#000;-webkit-font-smoothing:antialiased;}
 .bg-photo{position:absolute;inset:0;background-image:url(${bgUrl});background-size:cover;background-position:center top;}
 .overlay{position:absolute;inset:0;background:${theme.overlayGradient};}
-.tint{position:absolute;inset:0;background:${theme.tintColor};}
-/* Top accent bar */
-.accent-top{position:absolute;top:0;left:0;right:0;height:5px;background:${theme.accentColor};}
 /* Tag badge */
-.tag{position:absolute;top:44px;left:44px;background:${theme.tagBg};color:${theme.tagColor};padding:10px 22px;border-radius:6px;font-size:13px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.08);}
+.tag{position:absolute;top:48px;left:48px;background:${theme.tagBg};color:${theme.tagColor};padding:10px 20px;border-radius:4px;font-size:13px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;}
 /* Date */
-.date{position:absolute;top:48px;right:44px;color:rgba(255,255,255,0.45);font-size:14px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;}
-/* Headline area */
-.headline-block{position:absolute;bottom:160px;left:44px;right:44px;}
-.accent-rule{width:48px;height:4px;background:${theme.accentColor};border-radius:2px;margin-bottom:20px;}
-.headline{color:${theme.headlineColor};font-size:${fontSize}px;font-weight:800;line-height:1.1;letter-spacing:-0.03em;text-transform:${textTransform};text-shadow:0 2px 40px rgba(0,0,0,0.8);word-break:break-word;position:relative;}
-/* Footer */
-.footer{position:absolute;bottom:0;left:0;right:0;height:130px;background:linear-gradient(0deg,rgba(0,0,0,0.95) 0%,rgba(0,0,0,0.4) 100%);display:flex;align-items:center;padding:0 44px;gap:18px;}
-.channel-name{color:#fff;font-size:22px;font-weight:700;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.channel-handle{color:${theme.accentColor};font-size:15px;font-weight:600;margin-top:4px;letter-spacing:0.03em;opacity:0.8;}
-/* Bottom accent */
-.accent-bottom{position:absolute;bottom:0;left:0;right:0;height:4px;background:linear-gradient(90deg,${theme.accentColor},${theme.accentColor}66,transparent);}
+.date{position:absolute;top:52px;right:48px;color:rgba(255,255,255,0.5);font-size:13px;font-weight:500;letter-spacing:0.08em;text-transform:uppercase;}
+/* Headline area — positioned above footer */
+.headline-block{position:absolute;bottom:140px;left:48px;right:48px;}
+.accent-rule{width:40px;height:3px;background:${theme.accentColor};border-radius:2px;margin-bottom:18px;}
+.headline{color:${theme.headlineColor};font-size:${fontSize}px;font-weight:800;line-height:1.12;letter-spacing:-0.02em;text-transform:${textTransform};word-break:break-word;position:relative;}
+/* Footer — clean, no extra gradient */
+.footer{position:absolute;bottom:0;left:0;right:0;height:110px;display:flex;align-items:center;padding:0 48px;gap:16px;}
+.channel-name{color:rgba(255,255,255,0.9);font-size:18px;font-weight:600;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.channel-handle{color:${theme.accentColor};font-size:13px;font-weight:500;margin-top:2px;opacity:0.7;}
 </style></head><body>
 <div class="bg-photo"></div>
 <div class="overlay"></div>
-<div class="tint"></div>
-<div class="accent-top"></div>
 ${tagHtml}
 <div class="date">${date}</div>
 <div class="headline-block">
@@ -266,6 +250,5 @@ ${tagHtml}
     <div class="channel-name">${escapeHtml(options.channelName)}</div>
   </div>
 </div>
-<div class="accent-bottom"></div>
 </body></html>`;
 }
