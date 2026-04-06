@@ -162,20 +162,16 @@ export default function DashboardPage() {
           : statItems.map((stat) => (
               <div
                 key={stat.name}
-                className="group relative overflow-hidden rounded-2xl border border-white/[0.08] p-5 transition-all hover:shadow-xl hover:shadow-black/5 dark:border-white/[0.06]"
+                className="group relative overflow-hidden rounded-2xl border border-black/[0.06] bg-white/60 p-5 shadow-sm transition-all hover:shadow-lg dark:border-white/[0.08] dark:bg-white/[0.04]"
                 style={{
-                  background: "linear-gradient(135deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 100%)",
                   backdropFilter: "blur(16px) saturate(180%)",
                   WebkitBackdropFilter: "blur(16px) saturate(180%)",
                 }}
               >
                 <div className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${stat.gradient} opacity-50`} />
-                <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/15 to-transparent" />
+                <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-black/[0.04] to-transparent dark:via-white/15" />
                 <div className="relative flex items-center gap-4">
-                  <div
-                    className={`rounded-xl border border-white/[0.08] p-2.5 ${stat.iconColor}`}
-                    style={{ background: "rgba(255,255,255,0.06)", backdropFilter: "blur(8px)" }}
-                  >
+                  <div className={`rounded-xl bg-background/80 p-2.5 shadow-sm ${stat.iconColor} dark:bg-white/[0.06]`}>
                     <stat.icon className="h-5 w-5" />
                   </div>
                   <div>
@@ -202,31 +198,29 @@ export default function DashboardPage() {
             <Link
               key={card.href}
               href={card.href}
-              className="group relative flex items-center gap-4 overflow-hidden rounded-2xl border border-white/[0.08] p-5 transition-all hover:shadow-2xl hover:shadow-black/5 active:scale-[0.98] dark:border-white/[0.06]"
+              className="group relative flex items-center gap-4 overflow-hidden rounded-2xl border border-black/[0.06] bg-white/60 p-5 shadow-sm transition-all hover:shadow-xl hover:shadow-black/[0.08] active:scale-[0.98] dark:border-white/[0.08] dark:bg-white/[0.04] dark:hover:shadow-black/20"
               style={{
-                background: "linear-gradient(135deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.02) 100%)",
                 backdropFilter: "blur(20px) saturate(180%)",
                 WebkitBackdropFilter: "blur(20px) saturate(180%)",
               }}
             >
               {/* Liquid glass gradient overlay */}
-              <div className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${card.accentFrom}/[0.06] ${card.accentTo}/[0.03] opacity-60 transition-opacity group-hover:opacity-100`} />
+              <div className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${card.accentFrom}/[0.08] ${card.accentTo}/[0.04] opacity-60 transition-opacity group-hover:opacity-100 dark:${card.accentFrom}/[0.06] dark:${card.accentTo}/[0.03]`} />
               {/* Top highlight for glass effect */}
-              <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent" />
+              <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-black/[0.06] to-transparent dark:via-white/20" />
               {/* Animated glow on hover */}
-              <div className={`pointer-events-none absolute -inset-1 bg-gradient-to-br ${card.accentFrom}/20 ${card.accentTo}/10 opacity-0 blur-2xl transition-opacity duration-500 group-hover:opacity-100`} />
+              <div className={`pointer-events-none absolute -inset-1 bg-gradient-to-br ${card.accentFrom}/20 ${card.accentTo}/10 opacity-0 blur-2xl transition-opacity duration-500 group-hover:opacity-60`} />
 
               <div
-                className={`relative flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-white/[0.08] bg-gradient-to-br ${card.accentFrom}/15 ${card.accentTo}/10`}
-                style={{ backdropFilter: "blur(8px)" }}
+                className={`relative flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br ${card.accentFrom} ${card.accentTo} shadow-lg`}
               >
-                <card.icon className={`h-6 w-6 text-white/90`} />
+                <card.icon className="h-6 w-6 text-white" />
               </div>
               <div className="relative flex-1 min-w-0">
                 <p className="text-sm font-semibold">{card.title}</p>
-                <p className="text-xs text-muted-foreground/80 mt-0.5">{card.desc}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">{card.desc}</p>
               </div>
-              <ArrowRight className="relative h-4 w-4 text-muted-foreground/20 transition-all group-hover:translate-x-1 group-hover:text-muted-foreground/60" />
+              <ArrowRight className="relative h-4 w-4 text-muted-foreground/30 transition-all group-hover:translate-x-1 group-hover:text-muted-foreground" />
             </Link>
           ))}
         </div>
