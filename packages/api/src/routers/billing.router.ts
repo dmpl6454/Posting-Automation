@@ -2,6 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
 import { PLANS, createCheckoutSession, createCustomerPortalSession } from "@postautomation/billing";
+import { checkUsageLimit } from "../middleware/plan-limit.middleware";
 
 export const billingRouter = createRouter({
   plans: orgProcedure.query(() => {
@@ -39,5 +40,18 @@ export const billingRouter = createRouter({
     }
     const session = await createCustomerPortalSession(org.stripeCustomerId);
     return { url: session.url };
+  }),
+
+  /** Returns current usage vs limits for all plan resources */
+  usage: orgProcedure.query(async ({ ctx }) => {
+    const [channels, postsPerMonth, aiImagesPerMonth, aiVideosPerMonth, teamMembers] =
+      await Promise.all([
+        checkUsageLimit(ctx.organizationId, "channels"),
+        checkUsageLimit(ctx.organizationId, "postsPerMonth"),
+        checkUsageLimit(ctx.organizationId, "aiImagesPerMonth"),
+        checkUsageLimit(ctx.organizationId, "aiVideosPerMonth"),
+        checkUsageLimit(ctx.organizationId, "teamMembers"),
+      ]);
+    return { channels, postsPerMonth, aiImagesPerMonth, aiVideosPerMonth, teamMembers };
   }),
 });

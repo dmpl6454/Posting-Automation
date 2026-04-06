@@ -10,7 +10,7 @@ import {
 } from "~/components/ui/dropdown-menu";
 import { Button } from "~/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar";
-import { LogOut, User, Settings, Plus, Menu } from "lucide-react";
+import { LogOut, User, Settings, Menu } from "lucide-react";
 import Link from "next/link";
 import { NotificationBell } from "~/components/notifications/notification-bell";
 import { ThemeToggle } from "~/components/layout/theme-toggle";
@@ -44,18 +44,6 @@ export function Header({ onMenuClick }: HeaderProps) {
       </div>
 
       <div className="flex items-center gap-1.5 sm:gap-2">
-        {/* New Post */}
-        <Button
-          asChild
-          size="sm"
-          className="h-8 rounded-lg bg-foreground px-3 text-xs font-medium text-background hover:bg-foreground/90"
-        >
-          <Link href="/dashboard/content-agent?tab=compose">
-            <Plus className="mr-1.5 h-3.5 w-3.5" />
-            <span className="hidden sm:inline">New Post</span>
-          </Link>
-        </Button>
-
         {/* Theme Toggle */}
         <ThemeToggle />
 

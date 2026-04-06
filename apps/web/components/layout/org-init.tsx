@@ -9,7 +9,7 @@ import { trpc } from "~/lib/trpc/client";
  */
 export function OrgInit() {
   const { data } = trpc.org.current.useQuery(undefined, {
-    staleTime: Infinity,
+    staleTime: 30_000, // Refresh org every 30s instead of never
     retry: 1,
   });
 
@@ -18,10 +18,8 @@ export function OrgInit() {
       const current = localStorage.getItem("currentOrgId");
       if (current !== data.id) {
         localStorage.setItem("currentOrgId", data.id);
-        // Reload to ensure tRPC client picks up the new org ID
-        if (!current) {
-          window.location.reload();
-        }
+        // Always reload when org ID changes to ensure tRPC client picks up the new ID
+        window.location.reload();
       }
     }
   }, [data?.id]);

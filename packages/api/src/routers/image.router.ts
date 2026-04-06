@@ -11,6 +11,7 @@ import { createRateLimitMiddleware } from "../middleware/rate-limit.middleware";
 import { aiRateLimiter } from "../middleware/rate-limit";
 import { uploadBase64ToS3 } from "../lib/s3";
 import { mediaProcessQueue } from "@postautomation/queue";
+import { enforcePlanLimit } from "../middleware/plan-limit.middleware";
 
 const aiRateLimited = orgProcedure.use(createRateLimitMiddleware(aiRateLimiter));
 
@@ -40,7 +41,10 @@ export const imageRouter = createRouter({
         quality: z.enum(["standard", "hd"]).optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
+      // Enforce plan limit for AI images per month
+      await enforcePlanLimit(ctx.organizationId, "aiImagesPerMonth");
+
       try {
         if (input.provider === "dall-e") {
           const result = await generateImageDallE({

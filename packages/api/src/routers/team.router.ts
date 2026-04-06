@@ -2,6 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
+import { enforcePlanLimit } from "../middleware/plan-limit.middleware";
 
 export const teamRouter = createRouter({
   members: orgProcedure.query(async ({ ctx }) => {
@@ -18,6 +19,9 @@ export const teamRouter = createRouter({
       if (ctx.membership.role !== "OWNER" && ctx.membership.role !== "ADMIN") {
         throw new TRPCError({ code: "FORBIDDEN", message: "Only owners and admins can invite members" });
       }
+
+      // Enforce plan limit for team members
+      await enforcePlanLimit(ctx.organizationId, "teamMembers");
       const user = await ctx.prisma.user.findUnique({ where: { email: input.email } });
       if (!user) throw new TRPCError({ code: "NOT_FOUND", message: "User not found. They need to sign up first." });
 

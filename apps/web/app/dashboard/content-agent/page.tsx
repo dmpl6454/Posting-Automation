@@ -24,9 +24,8 @@ import { cn } from "~/lib/utils";
 
 const tabs = [
   { id: "compose", label: "Compose", icon: PenLine },
-  { id: "generate", label: "AI Generate", icon: Sparkles },
+  { id: "create", label: "AI Create", icon: Sparkles },
   { id: "repurpose", label: "Repurpose", icon: Repeat2 },
-  { id: "image", label: "AI Image", icon: ImagePlus },
   { id: "bulk", label: "Bulk Create", icon: Layers },
 ];
 
@@ -36,7 +35,8 @@ function ContentStudioInner() {
   const composeImage = searchParams.get("aiImage") || undefined;
   const composeMediaId = searchParams.get("aiMediaId") || undefined;
 
-  const [activeTab, setActiveTab] = useState(composeContent || composeImage ? "compose" : "compose");
+  const initialTab = searchParams.get("tab") || "compose";
+  const [activeTab, setActiveTab] = useState(composeContent || composeImage ? "compose" : initialTab);
   const [postCreated, setPostCreated] = useState(0);
   const [showCalendar, setShowCalendar] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
@@ -57,7 +57,7 @@ function ContentStudioInner() {
 
           {/* ── Unified Tabs ── */}
           <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabsList className="grid w-full grid-cols-5">
+            <TabsList className="grid w-full grid-cols-4">
               {tabs.map(({ id, label, icon: Icon }) => (
                 <TabsTrigger key={id} value={id} className="gap-1.5 text-xs">
                   <Icon className="h-3.5 w-3.5" />
@@ -77,16 +77,29 @@ function ContentStudioInner() {
               />
             </TabsContent>
 
-            <TabsContent value="generate" className="mt-4">
-              <GenerateTab />
+            <TabsContent value="create" className="mt-4">
+              <Tabs defaultValue="content" className="w-full">
+                <TabsList className="grid w-full grid-cols-2 mb-4">
+                  <TabsTrigger value="content" className="gap-1.5 text-xs">
+                    <Sparkles className="h-3.5 w-3.5" />
+                    Content
+                  </TabsTrigger>
+                  <TabsTrigger value="image" className="gap-1.5 text-xs">
+                    <ImagePlus className="h-3.5 w-3.5" />
+                    Image
+                  </TabsTrigger>
+                </TabsList>
+                <TabsContent value="content">
+                  <GenerateTab />
+                </TabsContent>
+                <TabsContent value="image">
+                  <ImageTab onImageGenerated={(dataUrl) => setPendingMedia({ dataUrl })} />
+                </TabsContent>
+              </Tabs>
             </TabsContent>
 
             <TabsContent value="repurpose" className="mt-4">
               <RepurposeTab />
-            </TabsContent>
-
-            <TabsContent value="image" className="mt-4">
-              <ImageTab onImageGenerated={(dataUrl) => setPendingMedia({ dataUrl })} />
             </TabsContent>
 
             <TabsContent value="bulk" className="mt-4">

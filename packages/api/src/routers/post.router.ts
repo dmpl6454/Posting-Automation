@@ -5,6 +5,7 @@ import { postPublishQueue } from "@postautomation/queue";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import crypto from "crypto";
+import { enforcePlanLimit } from "../middleware/plan-limit.middleware";
 
 export const postRouter = createRouter({
   list: orgProcedure
@@ -70,6 +71,9 @@ export const postRouter = createRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // Enforce plan limit for posts per month
+      await enforcePlanLimit(ctx.organizationId, "postsPerMonth");
+
       const status = input.scheduledAt ? "SCHEDULED" : "DRAFT";
 
       const post = await ctx.prisma.post.create({

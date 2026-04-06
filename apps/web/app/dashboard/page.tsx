@@ -23,6 +23,7 @@ import {
   Layers,
   Ear,
   Target,
+  Star,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
@@ -89,6 +90,15 @@ const featureCards = [
     accentFrom: "from-indigo-500",
     accentTo: "to-sky-400",
     glowColor: "indigo",
+  },
+  {
+    href: "/dashboard/brand-leads",
+    icon: Star,
+    title: "Brand Leads",
+    desc: "Celebrity-brand signals & outreach leads",
+    accentFrom: "from-yellow-500",
+    accentTo: "to-orange-400",
+    glowColor: "yellow",
   },
 ];
 

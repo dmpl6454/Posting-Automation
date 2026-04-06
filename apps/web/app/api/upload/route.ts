@@ -28,10 +28,22 @@ export async function POST(req: Request) {
 
   const userId = session.user.id as string;
 
-  const membership = await prisma.organizationMember.findFirst({
-    where: { userId },
-    select: { organizationId: true },
-  });
+  // Prefer org ID from header (set by client), fall back to first membership
+  const headerOrgId = req.headers.get("x-organization-id");
+
+  let membership;
+  if (headerOrgId) {
+    membership = await prisma.organizationMember.findUnique({
+      where: { userId_organizationId: { userId, organizationId: headerOrgId } },
+      select: { organizationId: true },
+    });
+  }
+  if (!membership) {
+    membership = await prisma.organizationMember.findFirst({
+      where: { userId },
+      select: { organizationId: true },
+    });
+  }
 
   if (!membership) {
     return NextResponse.json({ error: "No organization found" }, { status: 403 });

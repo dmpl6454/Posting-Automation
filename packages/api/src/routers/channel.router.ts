@@ -3,6 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
 import { getSocialProvider, getSupportedPlatforms, generateState } from "@postautomation/social";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
+import { enforcePlanLimit } from "../middleware/plan-limit.middleware";
 
 export const channelRouter = createRouter({
   list: orgProcedure.query(async ({ ctx }) => {
@@ -59,6 +60,9 @@ export const channelRouter = createRouter({
   getOAuthUrl: orgProcedure
     .input(z.object({ platform: z.string() }))
     .mutation(async ({ ctx, input }) => {
+      // Enforce plan limit for connected channels
+      await enforcePlanLimit(ctx.organizationId, "channels");
+
       const provider = getSocialProvider(input.platform as any);
       const state = generateState();
 
