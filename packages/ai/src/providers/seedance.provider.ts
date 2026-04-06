@@ -11,7 +11,7 @@
  */
 
 const FAL_QUEUE_BASE = "https://queue.fal.run";
-const MODEL_ID = "fal-ai/seedance-2-0";
+const MODEL_ID = "fal-ai/bytedance/seedance/v1.5/pro/text-to-video";
 
 export interface SeedanceGenerateParams {
   prompt: string;
@@ -54,13 +54,10 @@ export async function generateSeedanceVideo(params: SeedanceGenerateParams): Pro
   const body: any = {
     prompt: params.prompt,
     aspect_ratio: params.aspectRatio || "9:16",
-    duration: params.duration || 5,
-    enable_audio: params.enableAudio !== false,
+    duration: String(params.duration || 5),
+    generate_audio: params.enableAudio !== false,
+    resolution: "1080p",
   };
-
-  if (params.imageUrl) {
-    body.image_url = params.imageUrl;
-  }
 
   if (params.seed !== undefined) {
     body.seed = params.seed;
