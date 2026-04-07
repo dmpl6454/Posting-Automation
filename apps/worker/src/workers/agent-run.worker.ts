@@ -61,32 +61,57 @@ export function createAgentRunWorker() {
         let postsCreated = 0;
         let firstPostContent = "";
         let currentTopicIndex = agent.topicIndex;
+        const usedHeadlines = new Set<string>(); // Prevent duplicate headlines
 
+        // Group channels by platform — only post once per platform per post cycle
+        const channelsByPlatform = new Map<string, typeof channels>();
+        for (const ch of channels) {
+          const existing = channelsByPlatform.get(ch.platform) || [];
+          existing.push(ch);
+          channelsByPlatform.set(ch.platform, existing);
+        }
+        // Pick ONE channel per platform (first active one)
+        const uniqueChannels = Array.from(channelsByPlatform.values()).map((chs) => chs[0]!);
+        console.log(`[AgentRun] ${channels.length} total channels → ${uniqueChannels.length} unique platforms: ${Array.from(channelsByPlatform.keys()).join(", ")}`);
+
+        // Pre-fetch a batch of trending headlines to distribute across posts
+        const allHeadlines: { title: string; summary?: string; link?: string }[] = [];
+        const topics: string[] = [];
         for (let i = 0; i < agent.postsPerDay; i++) {
-          // 4a. Pick a topic
-          let topic: string;
-          if (agent.topics.length > 0) {
-            topic = agent.topics[currentTopicIndex % agent.topics.length]!;
-            currentTopicIndex++;
-          } else {
-            topic = agent.niche;
-          }
-
-          // 4b. Fetch real trending news for this topic
-          let newsContext = "";
+          const topic = agent.topics.length > 0
+            ? agent.topics[(agent.topicIndex + i) % agent.topics.length]!
+            : agent.niche;
+          topics.push(topic);
+        }
+        // Fetch unique headlines per topic
+        for (const topic of [...new Set(topics)]) {
           try {
-            const headlines = await fetchTrendingNews(topic, 5);
-            if (headlines.length > 0) {
-              const top = headlines[0]!;
-              newsContext = `\n\nLatest trending news:\nHeadline: ${top.title}${top.summary ? `\nSummary: ${top.summary}` : ""}${top.link ? `\nSource: ${top.link}` : ""}`;
-              console.log(`[AgentRun] Fetched trending news for "${topic}": ${top.title}`);
+            const fetched = await fetchTrendingNews(topic, Math.min(agent.postsPerDay, 10));
+            for (const h of fetched) {
+              if (h.title && !usedHeadlines.has(h.title)) {
+                usedHeadlines.add(h.title);
+                allHeadlines.push(h);
+              }
             }
           } catch (e) {
             console.warn(`[AgentRun] Could not fetch trending news for "${topic}":`, e);
           }
+        }
+        console.log(`[AgentRun] Fetched ${allHeadlines.length} unique headlines for ${agent.postsPerDay} posts`);
 
-          // 4c. Build prompt with real news context
-          const platform = channels[0]!.platform;
+        for (let i = 0; i < agent.postsPerDay; i++) {
+          const topic = topics[i]!;
+          currentTopicIndex = agent.topicIndex + i + 1;
+
+          // Pick a unique headline (round-robin through fetched headlines)
+          const headline = allHeadlines[i % Math.max(allHeadlines.length, 1)];
+          let newsContext = "";
+          if (headline) {
+            newsContext = `\n\nLatest trending news:\nHeadline: ${headline.title}${headline.summary ? `\nSummary: ${headline.summary}` : ""}${headline.link ? `\nSource: ${headline.link}` : ""}`;
+          }
+
+          // Build prompt with real news context
+          const platform = uniqueChannels[0]!.platform;
           let userPrompt: string;
 
           if (agent.customPrompt) {
@@ -94,7 +119,7 @@ export function createAgentRunWorker() {
               ? `${agent.customPrompt}\n\nUse this trending news as the basis:\n${newsContext}`
               : agent.customPrompt;
           } else if (newsContext) {
-            userPrompt = `You are a social media expert for the ${agent.niche} niche. Write a viral ${agent.tone} post based on this trending news:${newsContext}\n\nMake it engaging, include relevant hashtags, and optimise for ${platform}.`;
+            userPrompt = `You are a social media expert for the ${agent.niche} niche. Write a viral ${agent.tone} post based on this trending news:${newsContext}\n\nMake it engaging, include relevant hashtags, and optimise for ${platform}. Write UNIQUE content — do not repeat content from previous posts.`;
           } else {
             userPrompt = `You are a social media expert for the ${agent.niche} niche. Write a viral ${agent.tone} post about "${topic}". Include relevant hashtags and optimise for ${platform}.`;
           }
@@ -110,17 +135,16 @@ export function createAgentRunWorker() {
             firstPostContent = content;
           }
 
-          // 4e. Calculate scheduled time (stagger throughout the day)
+          // Calculate scheduled time (stagger throughout the day)
           const now = new Date();
           const scheduleHour = SCHEDULE_HOURS[i % SCHEDULE_HOURS.length]!;
           const scheduledAt = new Date(now);
           scheduledAt.setHours(scheduleHour, 0, 0, 0);
-          // If the scheduled time is in the past, push to tomorrow
           if (scheduledAt <= now) {
             scheduledAt.setDate(scheduledAt.getDate() + 1);
           }
 
-          // 4e. Create a Post record
+          // Create a Post record
           const post = await prisma.post.create({
             data: {
               organizationId: agent.organizationId,
@@ -134,30 +158,21 @@ export function createAgentRunWorker() {
             },
           });
 
-          // 4f. Generate news creative image for the post
-          let newsHeadline = topic; // fallback to topic name
-          try {
-            const headlines = await fetchTrendingNews(topic, 1);
-            if (headlines.length > 0 && headlines[0]!.title) {
-              newsHeadline = headlines[0]!.title;
-            }
-          } catch { /* use topic as headline fallback */ }
-
-          // Use first channel's config for the image (all channels get the same image)
-          const primaryChannel = channels[0]!;
+          // Generate news creative image
+          const newsHeadline = headline?.title || topic;
+          const primaryChannel = uniqueChannels[0]!;
           const meta = (primaryChannel.metadata as Record<string, any>) ?? {};
           const logoUrl = meta.logo_path || primaryChannel.avatar || null;
           const templateType = meta.template_type || "breaking_news";
 
-          // Extract brand color from logo
+          // Extract brand color from logo (only once)
           let brandColor: string | null = null;
-          if (logoUrl) {
+          if (logoUrl && i === 0) {
             try { brandColor = await extractDominantColor(logoUrl); } catch { /* use default */ }
           }
 
           let mediaId: string | null = null;
           try {
-            // Generate a relevant AI background image instead of random stock photos
             const bgImageUrl = await generateRelevantBackground(newsHeadline);
 
             const result = await generateStaticNewsCreativeImage({
@@ -172,7 +187,6 @@ export function createAgentRunWorker() {
               ...(brandColor && { brandColor }),
             });
 
-            // Upload to S3
             const s3 = getS3Client();
             const key = `${agent.organizationId}/news-${Date.now()}-${crypto.randomBytes(4).toString("hex")}.jpg`;
             const imgBuffer = Buffer.from(result.imageBase64, "base64");
@@ -186,7 +200,6 @@ export function createAgentRunWorker() {
 
             const imageUrl = getPublicUrl(key);
 
-            // Create Media record
             const media = await prisma.media.create({
               data: {
                 organizationId: agent.organizationId,
@@ -198,29 +211,22 @@ export function createAgentRunWorker() {
               },
             });
 
-            // Link media to post
             await prisma.postMedia.create({
-              data: {
-                postId: post.id,
-                mediaId: media.id,
-                order: 0,
-              },
+              data: { postId: post.id, mediaId: media.id, order: 0 },
             });
 
             mediaId = media.id;
             console.log(`[AgentRun] Generated news creative for post ${post.id}: ${imageUrl}`);
           } catch (imgErr) {
             console.warn(`[AgentRun] Failed to generate news creative for post ${post.id}:`, imgErr);
-            // Continue without image — text-only post
           }
 
-          // 4g. Create PostTarget records for each channel
-          // Skip Instagram/Facebook if no image was generated (they require media)
+          // Create PostTarget — ONE per unique platform (not all channels)
           const mediaRequiredPlatforms = ["INSTAGRAM", "FACEBOOK"];
-          let channelIdx = 0;
-          for (const channel of channels) {
+          for (let chIdx = 0; chIdx < uniqueChannels.length; chIdx++) {
+            const channel = uniqueChannels[chIdx]!;
             if (!mediaId && mediaRequiredPlatforms.includes(channel.platform)) {
-              console.warn(`[AgentRun] Skipping ${channel.platform} channel "${channel.name}" — no image generated and platform requires media`);
+              console.warn(`[AgentRun] Skipping ${channel.platform} — no image`);
               continue;
             }
 
@@ -232,9 +238,8 @@ export function createAgentRunWorker() {
               },
             });
 
-            // Queue post-publish jobs with staggered delay (10s per channel) to avoid rate limits
             const baseDelay = scheduledAt.getTime() - Date.now();
-            const staggerMs = (i * channels.length + channelIdx) * 10_000;
+            const staggerMs = (i * uniqueChannels.length + chIdx) * 10_000;
             await postPublishQueue.add(
               `agent-publish-${post.id}-${channel.id}`,
               {
@@ -252,7 +257,6 @@ export function createAgentRunWorker() {
                 removeOnFail: 100,
               }
             );
-            channelIdx++;
           }
 
           postsCreated++;
