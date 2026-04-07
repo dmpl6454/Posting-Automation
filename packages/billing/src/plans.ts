@@ -77,10 +77,10 @@ const PLAN_DATA: Record<string, Omit<PlanConfig, "stripePriceId"> & { envKey: st
     priceMonthly: 90,
     envKey: "STRIPE_ENTERPRISE_PRICE_ID",
     limits: {
-      channels: 100,
+      channels: -1,
       postsPerMonth: -1,
-      aiImagesPerMonth: 500,
-      aiVideosPerMonth: 60,
+      aiImagesPerMonth: -1,
+      aiVideosPerMonth: -1,
       teamMembers: -1,
     },
     features: [
