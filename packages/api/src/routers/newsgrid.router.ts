@@ -241,9 +241,18 @@ export const newsgridRouter = createRouter({
               // fallback to profile logo_path
             }
 
+            // Step 0: Extract brand color from logo
+            const { generateImage: genGeminiImg, generateStaticNewsCreativeImage, extractDominantColor } = await import("@postautomation/ai");
+            let brandColor: string | null = null;
+            if (resolvedLogoUrl) {
+              try {
+                brandColor = await extractDominantColor(resolvedLogoUrl);
+                if (brandColor) console.log(`[NewsGrid] Extracted brand color from logo: ${brandColor}`);
+              } catch { /* use default template color */ }
+            }
+
             // Step 1: Generate a relevant background image via Gemini AI
             // Step 2: Composite headline text + logo via Puppeteer HTML template
-            const { generateImage: genGeminiImg, generateStaticNewsCreativeImage } = await import("@postautomation/ai");
             let backgroundImageUrl: string | null = null;
 
             // Generate background image with Gemini (no text — just a relevant visual)
@@ -277,6 +286,7 @@ Requirements:
                 template:    creativeSpec.template as any,
                 bgSeed:      seed,
                 backgroundImageUrl: geminiDataUrl,
+                ...(brandColor && { brandColor }),
               });
               backgroundImageUrl = `data:${imgResult.mimeType};base64,${imgResult.imageBase64}`;
               console.log(`[NewsGrid] Composited creative with Gemini bg + Puppeteer text/logo`);
@@ -291,6 +301,7 @@ Requirements:
                   logoUrl:     resolvedLogoUrl,
                   template:    creativeSpec.template as any,
                   bgSeed:      seed,
+                  ...(brandColor && { brandColor }),
                 });
                 backgroundImageUrl = `data:${imgResult.mimeType};base64,${imgResult.imageBase64}`;
               } catch { /* total fallback failure */ }

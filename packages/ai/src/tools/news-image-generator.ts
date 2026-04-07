@@ -234,6 +234,73 @@ export async function generateNewsImage(
  * Generate a relevant background image for a news headline using DALL-E.
  * Returns a data URL that can be used as backgroundImageUrl in StaticNewsCreativeOptions.
  */
+/**
+ * Extract the dominant vibrant color from a logo image URL.
+ * Uses Puppeteer canvas to sample pixels and find the most prominent non-gray color.
+ * Returns a hex color string like "#e11d48", or null if extraction fails.
+ */
+export async function extractDominantColor(imageUrl: string): Promise<string | null> {
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+  });
+
+  try {
+    const page = await browser.newPage();
+    await page.setViewport({ width: 200, height: 200 });
+
+    const color = await page.evaluate(async (url: string) => {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error("Image load failed"));
+        img.src = url;
+      });
+
+      const canvas = document.createElement("canvas");
+      const size = 64;
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext("2d")!;
+      ctx.drawImage(img, 0, 0, size, size);
+      const data = ctx.getImageData(0, 0, size, size).data;
+
+      // Count colors in buckets (quantize to 16-step)
+      const buckets: Record<string, { r: number; g: number; b: number; count: number }> = {};
+      for (let i = 0; i < data.length; i += 4) {
+        const r = data[i]!, g = data[i + 1]!, b = data[i + 2]!, a = data[i + 3]!;
+        if (a < 128) continue; // skip transparent
+        // Skip near-white, near-black, and gray pixels
+        const max = Math.max(r, g, b), min = Math.min(r, g, b);
+        const saturation = max === 0 ? 0 : (max - min) / max;
+        if (saturation < 0.15 || max < 30 || min > 225) continue;
+        const qr = (r >> 4) << 4, qg = (g >> 4) << 4, qb = (b >> 4) << 4;
+        const key = `${qr},${qg},${qb}`;
+        if (!buckets[key]) buckets[key] = { r: qr, g: qg, b: qb, count: 0 };
+        buckets[key]!.count++;
+      }
+
+      // Find the bucket with highest count
+      let best: { r: number; g: number; b: number; count: number } | null = null;
+      for (const b of Object.values(buckets)) {
+        if (!best || b.count > best.count) best = b;
+      }
+
+      if (!best) return null;
+      const hex = (c: number) => c.toString(16).padStart(2, "0");
+      return `#${hex(best.r)}${hex(best.g)}${hex(best.b)}`;
+    }, imageUrl);
+
+    return color;
+  } catch (e) {
+    console.warn(`[extractDominantColor] Failed:`, (e as Error).message);
+    return null;
+  } finally {
+    await browser.close();
+  }
+}
+
 export async function generateRelevantBackground(
   headline: string
 ): Promise<string | null> {

@@ -12,6 +12,7 @@ import {
   generateNewsImage,
   generateStaticNewsCreativeImage,
   generateRelevantBackground,
+  extractDominantColor,
   type AIProvider,
 } from "@postautomation/ai";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
@@ -126,6 +127,13 @@ export function createContentGenerateWorker() {
         // 5. Generate news creative image with AI-generated relevant background
         let imageResult;
         try {
+          // Extract brand color from logo
+          const logoUrl = agent.referenceImageUrl ?? undefined;
+          let brandColor: string | null = null;
+          if (logoUrl) {
+            try { brandColor = await extractDominantColor(logoUrl); } catch { /* use default */ }
+          }
+
           // Generate a relevant background image using DALL-E
           const bgImageUrl = await generateRelevantBackground(trendingItem.title);
 
@@ -133,10 +141,11 @@ export function createContentGenerateWorker() {
             headline: trendingItem.title,
             channelName: agent.name,
             handle: agent.name,
-            logoUrl: agent.referenceImageUrl ?? undefined,
+            logoUrl,
             template: "cinematic",
             backgroundImageUrl: bgImageUrl || undefined,
             date: new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
+            ...(brandColor && { brandColor }),
           });
         } catch (imgErr) {
           // Fallback: basic news card without AI background

@@ -56,7 +56,7 @@ export function createAgentRunWorker() {
       });
 
       try {
-        const { generateContent, fetchTrendingNews, generateStaticNewsCreativeImage, generateRelevantBackground } = await import("@postautomation/ai");
+        const { generateContent, fetchTrendingNews, generateStaticNewsCreativeImage, generateRelevantBackground, extractDominantColor } = await import("@postautomation/ai");
 
         let postsCreated = 0;
         let firstPostContent = "";
@@ -149,6 +149,12 @@ export function createAgentRunWorker() {
           const logoUrl = meta.logo_path || primaryChannel.avatar || null;
           const templateType = meta.template_type || "breaking_news";
 
+          // Extract brand color from logo
+          let brandColor: string | null = null;
+          if (logoUrl) {
+            try { brandColor = await extractDominantColor(logoUrl); } catch { /* use default */ }
+          }
+
           let mediaId: string | null = null;
           try {
             // Generate a relevant AI background image instead of random stock photos
@@ -163,6 +169,7 @@ export function createAgentRunWorker() {
               backgroundImageUrl: bgImageUrl || undefined,
               bgSeed: Date.now() + i,
               date: new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
+              ...(brandColor && { brandColor }),
             });
 
             // Upload to S3

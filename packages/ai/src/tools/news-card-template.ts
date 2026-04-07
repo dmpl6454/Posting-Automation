@@ -118,6 +118,8 @@ export interface StaticNewsCreativeOptions {
   bgSeed?: number;
   backgroundImageUrl?: string;
   date?: string;
+  /** Override accent color (extracted from logo). Applies to tag, rule, and channel handle. */
+  brandColor?: string;
 }
 
 const CREATIVE_THEME: Record<string, {
@@ -183,7 +185,15 @@ const CREATIVE_THEME: Record<string, {
 };
 
 export function generateStaticNewsCreativeHtml(options: StaticNewsCreativeOptions): string {
-  const theme = CREATIVE_THEME[options.template] ?? CREATIVE_THEME["cinematic"]!;
+  const baseTheme = CREATIVE_THEME[options.template] ?? CREATIVE_THEME["cinematic"]!;
+  // Override accent color with brand color from logo if provided
+  const theme = options.brandColor
+    ? {
+        ...baseTheme,
+        accentColor: options.brandColor,
+        tagBg: baseTheme.tag ? options.brandColor : baseTheme.tagBg,
+      }
+    : baseTheme;
   const seed = options.bgSeed ?? Math.abs(options.headline.split("").reduce((a, c) => a + c.charCodeAt(0), 42)) % 1000;
   const date = options.date ?? new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }).toUpperCase();
 
