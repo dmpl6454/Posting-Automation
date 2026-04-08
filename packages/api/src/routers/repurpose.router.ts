@@ -70,6 +70,20 @@ export const repurposeRouter = createRouter({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      // Seedance & AI video are Pro/Enterprise only
+      if (input.format === "seedance_video" || input.format === "ai_video") {
+        const org = await ctx.prisma.organization.findUniqueOrThrow({
+          where: { id: ctx.organizationId },
+          select: { plan: true },
+        });
+        if (org.plan === "FREE" || org.plan === "STARTER") {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "AI video generation is available on Professional and Enterprise plans. Please upgrade to access this feature.",
+          });
+        }
+      }
+
       const {
         extractUrlContent,
         repurposeContent,
