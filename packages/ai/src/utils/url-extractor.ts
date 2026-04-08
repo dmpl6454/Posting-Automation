@@ -409,6 +409,194 @@ async function extractTwitter(url: string): Promise<ExtractedContent> {
   };
 }
 
+/** Facebook extraction via oEmbed + direct fetch */
+async function extractFacebook(url: string): Promise<ExtractedContent> {
+  let title = "";
+  let description = "";
+  let author = "";
+  let images: string[] = [];
+  let body = "";
+
+  // Method 1: Facebook oEmbed API (works for public posts without auth token)
+  try {
+    const oembedUrl = `https://www.facebook.com/plugins/post/oembed.json/?url=${encodeURIComponent(url)}`;
+    const res = await fetch(oembedUrl, {
+      headers: { "User-Agent": USER_AGENT },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    if (res.ok) {
+      const data = (await res.json()) as any;
+      if (data.author_name) author = data.author_name;
+      if (data.html) {
+        // oEmbed HTML contains the post text
+        const textContent = stripHtml(data.html);
+        if (textContent.length > 20) {
+          body = textContent.slice(0, MAX_BODY_LENGTH);
+          title = data.author_name
+            ? `${data.author_name}'s Facebook Post`
+            : "Facebook Post";
+          description = body.slice(0, 300);
+        }
+      }
+    }
+  } catch { /* try next method */ }
+
+  // Method 2: Direct fetch with full browser-like headers
+  if (!body) {
+    try {
+      const res = await fetch(url, {
+        headers: {
+          "User-Agent": USER_AGENT,
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+          "Accept-Language": "en-US,en;q=0.9",
+          "Sec-Fetch-Dest": "document",
+          "Sec-Fetch-Mode": "navigate",
+          "Sec-Fetch-Site": "none",
+          "Sec-Fetch-User": "?1",
+          "Upgrade-Insecure-Requests": "1",
+        },
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+        redirect: "follow",
+      });
+      if (res.ok) {
+        const html = await res.text();
+        const ogTitle = getMeta(html, "og:title");
+        if (ogTitle) title = ogTitle;
+        description = getMeta(html, "og:description") || getMeta(html, "description");
+        const ogImage = getMeta(html, "og:image");
+        if (ogImage) images.push(ogImage);
+        body = description || stripHtml(html).slice(0, MAX_BODY_LENGTH);
+        if (!author) {
+          const authorFromTitle = (ogTitle || "").match(/^(.+?)(?:\s*[-–|]|\s+on Facebook)/);
+          if (authorFromTitle) author = authorFromTitle[1]!.trim();
+        }
+      }
+    } catch { /* use what we have */ }
+  }
+
+  // Method 3: Try mobile Facebook URL (often less restrictive)
+  if (!body || body.length < 50) {
+    try {
+      const mobileUrl = url.replace("www.facebook.com", "m.facebook.com");
+      const res = await fetch(mobileUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
+          "Accept": "text/html,application/xhtml+xml",
+          "Accept-Language": "en-US,en;q=0.9",
+        },
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+        redirect: "follow",
+      });
+      if (res.ok) {
+        const html = await res.text();
+        if (!title) title = getMeta(html, "og:title") || getTitle(html);
+        if (!description) description = getMeta(html, "og:description") || getMeta(html, "description");
+        const ogImage = getMeta(html, "og:image");
+        if (ogImage && !images.includes(ogImage)) images.push(ogImage);
+
+        // Mobile FB often has post content in story_body_container or userContent
+        const storyMatch = html.match(/class="[^"]*(?:story_body_container|userContent)[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
+        if (storyMatch?.[1]) {
+          const storyText = stripHtml(storyMatch[1]);
+          if (storyText.length > body.length) body = storyText.slice(0, MAX_BODY_LENGTH);
+        }
+
+        if (!body || body.length < 50) {
+          body = description || stripHtml(html).slice(0, MAX_BODY_LENGTH);
+        }
+      }
+    } catch { /* use what we have */ }
+  }
+
+  if (!title) {
+    title = author ? `${author}'s Facebook Post` : "Facebook Post";
+  }
+
+  return {
+    title,
+    description: description || body.slice(0, 300) || title,
+    body: body || description || title,
+    images,
+    url,
+    siteName: "Facebook",
+    type: "social",
+    author,
+  };
+}
+
+/** LinkedIn extraction via oEmbed + direct fetch */
+async function extractLinkedIn(url: string): Promise<ExtractedContent> {
+  let title = "";
+  let description = "";
+  let author = "";
+  let images: string[] = [];
+  let body = "";
+
+  // Method 1: Direct fetch with browser headers (LinkedIn serves OG tags to crawlers)
+  try {
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent": USER_AGENT,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+      },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+      redirect: "follow",
+    });
+    if (res.ok) {
+      const html = await res.text();
+      title = getMeta(html, "og:title") || getTitle(html);
+      description = getMeta(html, "og:description") || getMeta(html, "description");
+      const ogImage = getMeta(html, "og:image");
+      if (ogImage) images.push(ogImage);
+      body = description;
+      // LinkedIn OG title often has author info
+      if (title) {
+        const authorMatch = title.match(/^(.+?)\s+(?:on LinkedIn|posted on)/i);
+        if (authorMatch) author = authorMatch[1]!.trim();
+      }
+    }
+  } catch { /* try next method */ }
+
+  // Method 2: Try LinkedIn oEmbed
+  if (!body) {
+    try {
+      const oembedUrl = `https://www.linkedin.com/oembed?url=${encodeURIComponent(url)}&format=json`;
+      const res = await fetch(oembedUrl, {
+        headers: { "User-Agent": USER_AGENT },
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      });
+      if (res.ok) {
+        const data = (await res.json()) as any;
+        if (data.title && !title) title = data.title;
+        if (data.author_name && !author) author = data.author_name;
+        if (data.html) {
+          const textContent = stripHtml(data.html);
+          if (textContent.length > 20) body = textContent.slice(0, MAX_BODY_LENGTH);
+        }
+      }
+    } catch { /* use what we have */ }
+  }
+
+  if (!title) {
+    title = author ? `${author}'s LinkedIn Post` : "LinkedIn Post";
+  }
+
+  return {
+    title,
+    description: description || body.slice(0, 300) || title,
+    body: body || description || title,
+    images,
+    url,
+    siteName: "LinkedIn",
+    type: "social",
+    author,
+  };
+}
+
 /** Main extraction function */
 export async function extractUrlContent(url: string): Promise<ExtractedContent> {
   // Validate URL
@@ -428,6 +616,12 @@ export async function extractUrlContent(url: string): Promise<ExtractedContent> 
   }
   if (urlType === "twitter") {
     return extractTwitter(url);
+  }
+  if (urlType === "facebook") {
+    return extractFacebook(url);
+  }
+  if (urlType === "linkedin") {
+    return extractLinkedIn(url);
   }
 
   return extractWebPage(url);
