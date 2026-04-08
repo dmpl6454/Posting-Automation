@@ -581,7 +581,6 @@ Return ONLY the JSON array, no other text.`;
             prompt: videoPrompt,
             duration: 8,
             aspectRatio: "9:16",
-            enableAudio: true,
           });
 
           const s3 = getS3Client();
