@@ -1,12 +1,12 @@
 /**
- * Seedance 2.0 Video Generation Provider (ByteDance)
- * Uses fal.ai queue API for text-to-video and image-to-video
- * Model: fal-ai/seedance-2-0
+ * Seedance 1.5 Pro Video Generation Provider (ByteDance)
+ * Uses fal.ai queue API for text-to-video
+ * Model: fal-ai/bytedance/seedance/v1.5/pro/text-to-video
  *
  * Flow:
  * 1. POST to queue → get request_id
  * 2. Poll status until COMPLETED
- * 3. Fetch result → get video URL
+ * 3. Fetch result → get video URL (response.video.url)
  * 4. Download video bytes
  */
 
@@ -15,16 +15,18 @@ const MODEL_ID = "fal-ai/bytedance/seedance/v1.5/pro/text-to-video";
 
 export interface SeedanceGenerateParams {
   prompt: string;
-  /** Reference image URL for image-to-video */
-  imageUrl?: string;
-  /** Duration in seconds (default: 5) */
+  /** Duration in seconds (4-12, default: 5) */
   duration?: number;
   /** Aspect ratio (default: "9:16" for reels) */
-  aspectRatio?: "16:9" | "9:16" | "4:3" | "3:4" | "1:1";
-  /** Seed for reproducibility */
+  aspectRatio?: "21:9" | "16:9" | "9:16" | "4:3" | "3:4" | "1:1";
+  /** Resolution (default: "720p") */
+  resolution?: "480p" | "720p";
+  /** Seed for reproducibility (-1 for random) */
   seed?: number;
   /** Enable native audio generation (default: true) */
   enableAudio?: boolean;
+  /** Lock camera (tripod shot) */
+  cameraFixed?: boolean;
 }
 
 export interface SeedanceResult {
@@ -32,18 +34,19 @@ export interface SeedanceResult {
   mimeType: string;
   durationSeconds: number;
   videoUrl?: string;
+  seed?: number;
 }
 
 function getApiKey(): string {
   const key = process.env.FAL_KEY || process.env.FAL_API_KEY;
   if (!key) {
-    throw new Error("FAL_KEY is required for Seedance 2.0 video generation");
+    throw new Error("FAL_KEY is required for Seedance video generation");
   }
   return key;
 }
 
 /**
- * Generate a video using Seedance 2.0
+ * Generate a video using Seedance 1.5 Pro
  */
 export async function generateSeedanceVideo(params: SeedanceGenerateParams): Promise<SeedanceResult> {
   const apiKey = getApiKey();
@@ -51,19 +54,25 @@ export async function generateSeedanceVideo(params: SeedanceGenerateParams): Pro
   // Step 1: Submit to queue
   const submitUrl = `${FAL_QUEUE_BASE}/${MODEL_ID}`;
 
-  const body: any = {
+  const duration = Math.max(4, Math.min(12, params.duration || 5));
+
+  const body: Record<string, unknown> = {
     prompt: params.prompt,
     aspect_ratio: params.aspectRatio || "9:16",
-    duration: String(params.duration || 5),
+    duration,
+    resolution: params.resolution || "720p",
     generate_audio: params.enableAudio !== false,
-    resolution: "1080p",
   };
+
+  if (params.cameraFixed) {
+    body.camera_fixed = true;
+  }
 
   if (params.seed !== undefined) {
     body.seed = params.seed;
   }
 
-  console.log(`[Seedance] Submitting video generation: "${params.prompt.slice(0, 80)}..."`);
+  console.log(`[Seedance] Submitting video generation: "${params.prompt.slice(0, 80)}..." (${duration}s, ${body.aspect_ratio})`);
 
   const submitRes = await fetch(submitUrl, {
     method: "POST",
@@ -91,6 +100,7 @@ export async function generateSeedanceVideo(params: SeedanceGenerateParams): Pro
   // Step 2: Poll until completed (video gen takes 30s-3min)
   const MAX_POLLS = 72; // 6 min max
   const POLL_INTERVAL = 5000; // 5s
+  let completed = false;
 
   for (let i = 0; i < MAX_POLLS; i++) {
     await new Promise((r) => setTimeout(r, POLL_INTERVAL));
@@ -110,6 +120,7 @@ export async function generateSeedanceVideo(params: SeedanceGenerateParams): Pro
 
     if (statusData.status === "COMPLETED") {
       console.log(`[Seedance] Generation completed after ${((i + 1) * POLL_INTERVAL) / 1000}s`);
+      completed = true;
       break;
     }
 
@@ -122,6 +133,10 @@ export async function generateSeedanceVideo(params: SeedanceGenerateParams): Pro
       const elapsed = ((i + 1) * POLL_INTERVAL) / 1000;
       console.log(`[Seedance] Still generating... (${elapsed}s, status: ${statusData.status})`);
     }
+  }
+
+  if (!completed) {
+    throw new Error("Seedance generation timed out after 6 minutes");
   }
 
   // Step 3: Fetch result
@@ -137,11 +152,8 @@ export async function generateSeedanceVideo(params: SeedanceGenerateParams): Pro
 
   const resultData = await resultRes.json();
 
-  // Extract video URL from result
-  const videoUrl = resultData.video?.url
-    || resultData.output?.url
-    || resultData.data?.video_url
-    || resultData.url;
+  // Response format: { video: { url: "..." }, seed: 42 }
+  const videoUrl = resultData.video?.url;
 
   if (!videoUrl) {
     console.error(`[Seedance] No video URL in result: ${JSON.stringify(resultData).slice(0, 1000)}`);
@@ -162,14 +174,14 @@ export async function generateSeedanceVideo(params: SeedanceGenerateParams): Pro
   return {
     videoBase64: videoBuf.toString("base64"),
     mimeType: "video/mp4",
-    durationSeconds: params.duration || 5,
+    durationSeconds: duration,
     videoUrl,
+    seed: resultData.seed,
   };
 }
 
 /**
  * Build a Seedance-optimized video prompt
- * Seedance 2.0 excels at cinematic camera work and native audio
  */
 export function buildSeedancePrompt(opts: {
   title: string;
@@ -196,9 +208,8 @@ Final scene: Call-to-action "${opts.brandName || "Follow for More"}" with dynami
 Camera: Smooth dolly movements, subtle parallax, cinematic rack focus transitions between scenes.
 Audio: ${music} background score. Male narrator with confident, engaging delivery reading each text slide.
 Text: SUPER BOLD, extra large, white, thick font weight, centered, high contrast against dark backgrounds.
-Do NOT show real people's faces. Use abstract visuals, motion graphics, silhouettes.
-Resolution: 2K vertical portrait.`;
+Do NOT show real people's faces. Use abstract visuals, motion graphics, silhouettes.`;
 }
 
-export const SEEDANCE_ASPECT_RATIOS = ["16:9", "9:16", "4:3", "3:4", "1:1"] as const;
-export const SEEDANCE_DURATIONS = [5, 8, 10, 15] as const;
+export const SEEDANCE_ASPECT_RATIOS = ["21:9", "16:9", "9:16", "4:3", "3:4", "1:1"] as const;
+export const SEEDANCE_DURATIONS = [4, 5, 6, 7, 8, 9, 10, 11, 12] as const;
