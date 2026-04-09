@@ -1,40 +1,40 @@
 /**
  * AI Video Generation Provider via fal.ai
- * Uses WAN 2.7 text-to-video (generally available)
- * Fallback-ready for Seedance 2.0 when access is granted
+ * Default: Seedance 2.0 text-to-video (early access)
+ * Fallback: WAN 2.7 text-to-video (GA) via FAL_VIDEO_MODEL env
  *
- * Flow:
- * 1. POST to queue → get request_id
- * 2. Poll status until COMPLETED
- * 3. Fetch result → get video URL (response.video.url)
+ * Queue flow:
+ * 1. POST to https://queue.fal.run/{model} → get request_id
+ * 2. GET  status → poll until COMPLETED
+ * 3. GET  result → get video URL
  * 4. Download video bytes
  */
 
 const FAL_QUEUE_BASE = "https://queue.fal.run";
 
-// WAN 2.7 is GA; Seedance 2.0 requires early access approval
 const MODELS = {
-  wan27: "fal-ai/wan/v2.7/text-to-video",
   seedance2: "fal-ai/bytedance/seedance-2.0/text-to-video",
+  wan27: "fal-ai/wan/v2.7/text-to-video",
 } as const;
 
-// Use env override or default to WAN 2.7
 function getModelId(): string {
-  return process.env.FAL_VIDEO_MODEL || MODELS.wan27;
+  return process.env.FAL_VIDEO_MODEL || MODELS.seedance2;
 }
 
 export interface SeedanceGenerateParams {
   prompt: string;
-  /** Duration in seconds (2-15, default: 5) */
+  /** Duration in seconds (2-12, default: 5) */
   duration?: number;
   /** Aspect ratio (default: "9:16" for reels) */
-  aspectRatio?: "16:9" | "9:16" | "4:3" | "3:4" | "1:1";
+  aspectRatio?: "16:9" | "9:16" | "4:3" | "3:4" | "1:1" | "auto";
   /** Resolution (default: "720p") */
-  resolution?: "720p" | "1080p";
+  resolution?: "480p" | "720p" | "1080p";
   /** Seed for reproducibility */
   seed?: number;
   /** Negative prompt */
   negativePrompt?: string;
+  /** Generate audio (Seedance 2.0 only) */
+  generateAudio?: boolean;
 }
 
 export interface SeedanceResult {
@@ -53,106 +53,117 @@ function getApiKey(): string {
   return key;
 }
 
+/** Safely parse JSON from a fetch response, with HTML detection */
+async function safeJsonParse(res: Response, label: string): Promise<any> {
+  const text = await res.text();
+  if (text.startsWith("<") || text.startsWith("<!")) {
+    throw new Error(`${label} returned HTML instead of JSON: ${text.slice(0, 300)}`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`${label} returned invalid JSON: ${text.slice(0, 300)}`);
+  }
+}
+
 /**
- * Generate a video using fal.ai (WAN 2.7 or Seedance 2.0)
+ * Generate a video using fal.ai
  */
 export async function generateSeedanceVideo(params: SeedanceGenerateParams): Promise<SeedanceResult> {
   const apiKey = getApiKey();
   const modelId = getModelId();
+  const isSeedance = modelId.includes("seedance");
 
-  // Step 1: Submit to queue
   const submitUrl = `${FAL_QUEUE_BASE}/${modelId}`;
+  const duration = String(Math.max(2, Math.min(12, params.duration || 5)));
 
-  const duration = String(Math.max(2, Math.min(15, params.duration || 5)));
-
-  const body: Record<string, unknown> = {
+  // Build input payload
+  const input: Record<string, unknown> = {
     prompt: params.prompt,
     aspect_ratio: params.aspectRatio || "9:16",
     duration,
     resolution: params.resolution || "720p",
-    enable_prompt_expansion: true,
   };
 
+  if (isSeedance) {
+    // Seedance 2.0 specific params
+    input.generate_audio = params.generateAudio !== false;
+  } else {
+    // WAN 2.7 specific params
+    input.enable_prompt_expansion = true;
+  }
+
   if (params.negativePrompt) {
-    body.negative_prompt = params.negativePrompt;
+    input.negative_prompt = params.negativePrompt;
   }
-
   if (params.seed !== undefined) {
-    body.seed = params.seed;
+    input.seed = params.seed;
   }
 
-  console.log(`[VideoGen] Submitting to ${modelId}: "${params.prompt.slice(0, 80)}..." (${duration}s, ${body.aspect_ratio})`);
+  console.log(`[VideoGen] Submitting to ${modelId}: "${params.prompt.slice(0, 80)}..." (${duration}s, ${input.aspect_ratio})`);
 
+  // Step 1: Submit to queue
   const submitRes = await fetch(submitUrl, {
     method: "POST",
     headers: {
       "Authorization": `Key ${apiKey}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify(input),
   });
 
   if (!submitRes.ok) {
     const errText = await submitRes.text();
-    throw new Error(`Video submit failed (${submitRes.status}): ${errText}`);
+    throw new Error(`Video submit failed (${submitRes.status}): ${errText.slice(0, 500)}`);
   }
 
-  // Handle HTML error responses (CDN/proxy errors)
-  const submitContentType = submitRes.headers.get("content-type") || "";
-  if (!submitContentType.includes("application/json")) {
-    const text = await submitRes.text();
-    throw new Error(`Video API returned non-JSON response (${submitContentType}): ${text.slice(0, 200)}`);
-  }
-
-  const submitData = await submitRes.json();
+  const submitData = await safeJsonParse(submitRes, "Video submit");
   const requestId = submitData.request_id;
 
   if (!requestId) {
-    throw new Error(`Video API did not return a request_id: ${JSON.stringify(submitData).slice(0, 500)}`);
+    throw new Error(`No request_id returned: ${JSON.stringify(submitData).slice(0, 500)}`);
   }
 
   console.log(`[VideoGen] Request submitted: ${requestId}`);
 
-  // Step 2: Poll until completed (video gen takes 30s-5min)
-  const MAX_POLLS = 90; // 7.5 min max
-  const POLL_INTERVAL = 5000; // 5s
+  // Step 2: Poll until completed
+  const MAX_POLLS = 90;
+  const POLL_INTERVAL = 5000;
   let completed = false;
 
   for (let i = 0; i < MAX_POLLS; i++) {
     await new Promise((r) => setTimeout(r, POLL_INTERVAL));
 
     const statusUrl = `${FAL_QUEUE_BASE}/${modelId}/requests/${requestId}/status`;
-    const statusRes = await fetch(statusUrl, {
-      headers: { "Authorization": `Key ${apiKey}` },
-    });
+    try {
+      const statusRes = await fetch(statusUrl, {
+        headers: { "Authorization": `Key ${apiKey}` },
+      });
 
-    if (!statusRes.ok) {
-      console.warn(`[VideoGen] Status poll failed (${statusRes.status})`);
+      if (!statusRes.ok) {
+        console.warn(`[VideoGen] Status poll ${i}: HTTP ${statusRes.status}`);
+        continue;
+      }
+
+      const statusData = await safeJsonParse(statusRes, "Status poll");
+
+      if (statusData.status === "COMPLETED") {
+        console.log(`[VideoGen] Completed after ${((i + 1) * POLL_INTERVAL) / 1000}s`);
+        completed = true;
+        break;
+      }
+
+      if (statusData.status === "FAILED") {
+        throw new Error(`Video generation failed: ${statusData.error || JSON.stringify(statusData)}`);
+      }
+
+      if (i % 6 === 0) {
+        console.log(`[VideoGen] Generating... (${((i + 1) * POLL_INTERVAL) / 1000}s, status: ${statusData.status})`);
+      }
+    } catch (e) {
+      if ((e as Error).message.includes("generation failed")) throw e;
+      console.warn(`[VideoGen] Poll error: ${(e as Error).message}`);
       continue;
-    }
-
-    const statusContentType = statusRes.headers.get("content-type") || "";
-    if (!statusContentType.includes("application/json")) {
-      console.warn(`[VideoGen] Status poll returned non-JSON, retrying...`);
-      continue;
-    }
-
-    const statusData = await statusRes.json();
-
-    if (statusData.status === "COMPLETED") {
-      console.log(`[VideoGen] Generation completed after ${((i + 1) * POLL_INTERVAL) / 1000}s`);
-      completed = true;
-      break;
-    }
-
-    if (statusData.status === "FAILED") {
-      throw new Error(`Video generation failed: ${statusData.error || "Unknown error"}`);
-    }
-
-    // Log progress every 30s
-    if (i % 6 === 0) {
-      const elapsed = ((i + 1) * POLL_INTERVAL) / 1000;
-      console.log(`[VideoGen] Still generating... (${elapsed}s, status: ${statusData.status})`);
     }
   }
 
@@ -168,17 +179,15 @@ export async function generateSeedanceVideo(params: SeedanceGenerateParams): Pro
 
   if (!resultRes.ok) {
     const errText = await resultRes.text();
-    throw new Error(`Video result fetch failed (${resultRes.status}): ${errText}`);
+    throw new Error(`Result fetch failed (${resultRes.status}): ${errText.slice(0, 500)}`);
   }
 
-  const resultData = await resultRes.json();
-
-  // Response format: { video: { url: "..." }, seed: 42 }
+  const resultData = await safeJsonParse(resultRes, "Result fetch");
   const videoUrl = resultData.video?.url;
 
   if (!videoUrl) {
-    console.error(`[VideoGen] No video URL in result: ${JSON.stringify(resultData).slice(0, 1000)}`);
-    throw new Error("Video API returned no video URL");
+    console.error(`[VideoGen] No video URL: ${JSON.stringify(resultData).slice(0, 1000)}`);
+    throw new Error("No video URL in result");
   }
 
   console.log(`[VideoGen] Video ready: ${videoUrl}`);
@@ -186,11 +195,11 @@ export async function generateSeedanceVideo(params: SeedanceGenerateParams): Pro
   // Step 4: Download video
   const downloadRes = await fetch(videoUrl);
   if (!downloadRes.ok) {
-    throw new Error(`Video download failed: ${downloadRes.status}`);
+    throw new Error(`Video download failed: HTTP ${downloadRes.status}`);
   }
 
   const videoBuf = Buffer.from(await downloadRes.arrayBuffer());
-  console.log(`[VideoGen] Downloaded video: ${(videoBuf.length / 1024 / 1024).toFixed(1)}MB`);
+  console.log(`[VideoGen] Downloaded: ${(videoBuf.length / 1024 / 1024).toFixed(1)}MB`);
 
   return {
     videoBase64: videoBuf.toString("base64"),
@@ -230,5 +239,5 @@ Text: SUPER BOLD, extra large, white, thick font weight, centered, high contrast
 Do NOT show real people's faces. Use abstract visuals, motion graphics, silhouettes.`;
 }
 
-export const SEEDANCE_ASPECT_RATIOS = ["16:9", "9:16", "4:3", "3:4", "1:1"] as const;
-export const SEEDANCE_DURATIONS = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] as const;
+export const SEEDANCE_ASPECT_RATIOS = ["16:9", "9:16", "4:3", "3:4", "1:1", "auto"] as const;
+export const SEEDANCE_DURATIONS = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] as const;
