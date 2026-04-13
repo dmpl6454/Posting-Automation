@@ -249,8 +249,8 @@ export async function extractDominantColor(imageUrl: string): Promise<string | n
     const page = await browser.newPage();
     await page.setViewport({ width: 200, height: 200 });
 
-    // @ts-ignore - Image and document are available in puppeteer's browser context
     const color = await page.evaluate(async (url: string) => {
+      // @ts-ignore - Image is available in browser context
       const img = new Image();
       img.crossOrigin = "anonymous";
       await new Promise<void>((resolve, reject) => {
@@ -259,6 +259,7 @@ export async function extractDominantColor(imageUrl: string): Promise<string | n
         img.src = url;
       });
 
+      // @ts-ignore - document is available in browser context
       const canvas = document.createElement("canvas");
       const size = 64;
       canvas.width = size;
