@@ -87,7 +87,7 @@ export async function generateVideo(params: VeoGenerateParams): Promise<VeoResul
     throw new Error(`Veo3 submit failed (${submitRes.status}): ${errText}`);
   }
 
-  const submitData = await submitRes.json();
+  const submitData: any = await submitRes.json();
   const operationName = submitData.name;
 
   if (!operationName) {
@@ -114,7 +114,7 @@ export async function generateVideo(params: VeoGenerateParams): Promise<VeoResul
       continue;
     }
 
-    const pollData = await pollRes.json();
+    const pollData: any = await pollRes.json();
     console.log(`[Veo3] Poll ${i + 1} response: ${JSON.stringify(pollData).slice(0, 500)}`);
 
     if (pollData.done) {
