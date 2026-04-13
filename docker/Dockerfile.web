@@ -24,6 +24,12 @@ RUN pnpm install --frozen-lockfile
 COPY . .
 
 # Generate Prisma client and build
+# Placeholder env vars satisfy module-load-time validation (e.g., PrismaClient constructor,
+# NextAuth provider init). Real values are injected at container runtime via docker-compose.
+ENV DATABASE_URL="postgresql://placeholder:placeholder@localhost:5432/placeholder"
+ENV NEXTAUTH_SECRET="build-time-placeholder"
+ENV NEXTAUTH_URL="http://localhost:3000"
+ENV SKIP_ENV_VALIDATION=1
 RUN pnpm --filter @postautomation/db db:generate
 RUN pnpm --filter @postautomation/web build
 
