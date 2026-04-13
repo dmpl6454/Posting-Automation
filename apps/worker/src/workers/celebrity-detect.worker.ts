@@ -62,7 +62,7 @@ async function detectWithGemini(snippet: string): Promise<CelebrityDetection> {
   );
 
   if (!res.ok) throw new Error(`Gemini ${res.status}`);
-  const data = await res.json();
+  const data: any = await res.json();
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
   return parseDetectionResponse(text);
 }
@@ -84,7 +84,7 @@ async function detectWithOllama(snippet: string): Promise<CelebrityDetection> {
   });
 
   if (!res.ok) throw new Error(`Ollama ${res.status}`);
-  const data = await res.json();
+  const data: any = await res.json();
   return parseDetectionResponse(data.response || "{}");
 }
 
@@ -122,7 +122,7 @@ async function findBrandEmail(domain: string): Promise<string | null> {
     const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
     if (!res.ok) return null;
 
-    const data = await res.json();
+    const data: any = await res.json();
     const emails = data.data?.emails || [];
     const keywords = ["marketing", "brand", "pr", "media", "partner", "collab"];
 
@@ -178,7 +178,7 @@ async function saveSignal(params: {
       signalType: params.signalType,
       score: params.score,
       signalUrl: params.signalUrl || null,
-      signalData: params.signalData || undefined,
+      signalData: (params.signalData as any) || undefined,
       brandWebsite: params.brandWebsite || null,
       brandEmail: params.brandEmail || null,
       brandTwitter: params.brandTwitter || null,
@@ -229,7 +229,7 @@ async function runAdLibraryDetector(orgId: string): Promise<number> {
       });
       if (!res.ok) continue;
 
-      const json = await res.json();
+      const json: any = await res.json();
       const ads = json.data || [];
 
       for (const ad of ads) {
@@ -418,7 +418,7 @@ async function runSocialMediaDetector(orgId: string): Promise<number> {
       }
       if (!res.ok) continue;
 
-      const data = await res.json();
+      const data: any = await res.json();
       const usersMap = new Map<string, any>();
       for (const u of data.includes?.users || []) {
         usersMap.set(u.id, u);

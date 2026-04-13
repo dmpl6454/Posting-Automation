@@ -3,6 +3,124 @@ import { prisma } from "@postautomation/db";
 import { getSocialProvider } from "@postautomation/social";
 import { QUEUE_NAMES, postPublishQueue, type PostPublishJobData, createRedisConnection } from "@postautomation/queue";
 
+// ── Email report after all targets complete ────────────────────────────
+async function sendPublishReportEmail(
+  organizationId: string,
+  postId: string,
+  postContent: string,
+  allTargets: { status: string; publishedUrl: string | null; channel: { platform: string } }[]
+) {
+  try {
+    // Get org owner/admin emails
+    const members = await prisma.organizationMember.findMany({
+      where: { organizationId, role: { in: ["OWNER", "ADMIN"] } },
+      include: { user: { select: { email: true, name: true } } },
+    });
+
+    if (members.length === 0) return;
+
+    // Build target summary
+    const targets = allTargets.map((t) => ({
+      platform: t.channel.platform,
+      url: t.publishedUrl,
+      status: t.status,
+    }));
+
+    const postTitle = postContent.split("\n")[0]?.slice(0, 120) || "Untitled Post";
+    const dashboardUrl = `${process.env.APP_URL || "http://localhost:3000"}/dashboard/posts/${postId}`;
+
+    // Build email HTML inline (avoid cross-package dependency)
+    const published = targets.filter((t) => t.status === "PUBLISHED");
+    const failed = targets.filter((t) => t.status === "FAILED");
+    const summary = `${published.length} published${failed.length ? `, ${failed.length} failed` : ""} across ${targets.length} platform${targets.length > 1 ? "s" : ""}`;
+
+    const linkRows = published
+      .map(
+        (t) =>
+          `<tr>
+            <td style="padding:8px 12px;border-bottom:1px solid #e4e4e7;color:#18181b;font-weight:500;">${t.platform}</td>
+            <td style="padding:8px 12px;border-bottom:1px solid #e4e4e7;">
+              ${t.url ? `<a href="${t.url}" style="color:#2563eb;text-decoration:none;">${t.url}</a>` : '<span style="color:#a1a1aa;">No link available</span>'}
+            </td>
+          </tr>`
+      )
+      .join("");
+
+    const failedSection = failed.length
+      ? `<div style="margin-top:20px;padding:12px 16px;background:#fef2f2;border-radius:6px;border-left:3px solid #ef4444;">
+          <p style="margin:0 0 4px;font-weight:500;color:#991b1b;">Failed platforms:</p>
+          <p style="margin:0;color:#991b1b;font-size:13px;">${failed.map((t) => t.platform).join(", ")}</p>
+        </div>`
+      : "";
+
+    const subject = `Post Published: ${postTitle.slice(0, 60)}${postTitle.length > 60 ? "..." : ""}`;
+
+    const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background-color:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+  <div style="max-width:560px;margin:40px auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+    <div style="background:#18181b;padding:24px 32px;">
+      <h1 style="margin:0;color:#fff;font-size:20px;font-weight:600;">PostAutomation</h1>
+    </div>
+    <div style="padding:32px;">
+      <h2 style="margin:0 0 8px;font-size:18px;color:#18181b;">Post Published</h2>
+      <p style="color:#3f3f46;line-height:1.6;margin:0 0 4px;"><strong>${postTitle.length > 120 ? postTitle.slice(0, 120) + "..." : postTitle}</strong></p>
+      <p style="color:#71717a;font-size:13px;margin:0 0 20px;">${summary}</p>
+      ${published.length > 0 ? `
+      <table style="width:100%;border-collapse:collapse;border:1px solid #e4e4e7;border-radius:6px;overflow:hidden;">
+        <thead>
+          <tr style="background:#f4f4f5;">
+            <th style="padding:10px 12px;text-align:left;font-size:13px;color:#71717a;font-weight:500;">Platform</th>
+            <th style="padding:10px 12px;text-align:left;font-size:13px;color:#71717a;font-weight:500;">Link</th>
+          </tr>
+        </thead>
+        <tbody>${linkRows}</tbody>
+      </table>` : ""}
+      ${failedSection}
+      <div style="text-align:center;margin:24px 0;">
+        <a href="${dashboardUrl}" style="display:inline-block;background:#18181b;color:#fff;padding:12px 32px;border-radius:6px;text-decoration:none;font-weight:500;">View in Dashboard</a>
+      </div>
+    </div>
+    <div style="padding:16px 32px;background:#f4f4f5;text-align:center;font-size:12px;color:#71717a;">
+      <p style="margin:0;">&copy; ${new Date().getFullYear()} PostAutomation. All rights reserved.</p>
+    </div>
+  </div>
+</body></html>`;
+
+    const text = `Post Published: ${postTitle}\n\n${summary}\n\n${published.map((t) => `${t.platform}: ${t.url || "No link"}`).join("\n")}${failed.length ? `\n\nFailed: ${failed.map((t) => t.platform).join(", ")}` : ""}\n\nDashboard: ${dashboardUrl}`;
+
+    // Send via nodemailer (same SMTP config as the API package)
+    let transport: any = null;
+    if (process.env.SMTP_HOST) {
+      try {
+        const nodemailer = require("nodemailer");
+        transport = nodemailer.createTransport({
+          host: process.env.SMTP_HOST,
+          port: parseInt(process.env.SMTP_PORT || "587"),
+          secure: process.env.SMTP_SECURE === "true",
+          auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+        });
+      } catch { /* nodemailer not available */ }
+    }
+
+    const from = process.env.SMTP_FROM || "PostAutomation <noreply@postautomation.app>";
+
+    for (const member of members) {
+      if (!member.user.email) continue;
+      if (transport) {
+        await transport.sendMail({ from, to: member.user.email, subject, html, text });
+        console.log(`[PostPublish] Email report sent to ${member.user.email}`);
+      } else {
+        console.log(`[PostPublish] [Email Preview] To: ${member.user.email} | Subject: ${subject}`);
+        console.log(`[PostPublish] Links: ${published.map((t) => `${t.platform}: ${t.url}`).join(", ")}`);
+      }
+    }
+  } catch (emailErr: any) {
+    // Never let email failure break the publish flow
+    console.warn(`[PostPublish] Email report failed:`, emailErr.message);
+  }
+}
+
 // ── Platform character limits ───────────────────────────────────────────
 const PLATFORM_CHAR_LIMITS: Record<string, number> = {
   TWITTER: 280,
@@ -82,10 +200,9 @@ export function createPostPublishWorker() {
             const clientId = process.env[`${platform}_CLIENT_ID`] || "";
             const clientSecret = process.env[`${platform}_CLIENT_SECRET`] || "";
             if (clientId && clientSecret) {
-              const refreshed = await provider.refreshAccessToken({
-                accessToken: channel.accessToken,
-                refreshToken: channel.refreshToken,
-              }, {
+              const refreshed = await provider.refreshAccessToken(
+                channel.refreshToken!,
+              {
                 clientId,
                 clientSecret,
                 callbackUrl: `${process.env.APP_URL || ""}/api/oauth/callback/${platform.toLowerCase()}`,
@@ -290,7 +407,7 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
             const clientSecret = process.env[`${platform}_CLIENT_SECRET`] || "";
             if (clientId && clientSecret && channel.refreshToken) {
               const refreshed = await provider.refreshAccessToken(
-                { accessToken: channel.accessToken, refreshToken: channel.refreshToken },
+                channel.refreshToken,
                 { clientId, clientSecret, callbackUrl: `${process.env.APP_URL || ""}/api/oauth/callback/${platform.toLowerCase()}`, scopes: [] }
               );
               await prisma.channel.update({
@@ -369,6 +486,7 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
       // 5. Check if all targets are published and update parent post
       const allTargets = await prisma.postTarget.findMany({
         where: { postId: postTarget.postId },
+        include: { channel: { select: { platform: true } } },
       });
       const allPublished = allTargets.every((t) => t.status === "PUBLISHED");
       if (allPublished) {
@@ -376,6 +494,9 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
           where: { id: postTarget.postId },
           data: { status: "PUBLISHED", publishedAt: new Date() },
         });
+
+        // Send email report with all published links
+        await sendPublishReportEmail(postTarget.post.organizationId, postTarget.postId, postTarget.post.content, allTargets);
       }
 
       console.log(`[PostPublish] Successfully published ${postTargetId} to ${platform}`);
@@ -453,10 +574,12 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
       if (isFinalAttempt) {
         const postTarget = await prisma.postTarget.findUnique({
           where: { id: job.data.postTargetId },
+          include: { post: { select: { content: true, organizationId: true } } },
         });
         if (postTarget) {
           const allTargets = await prisma.postTarget.findMany({
             where: { postId: postTarget.postId },
+            include: { channel: { select: { platform: true } } },
           });
           const allDone = allTargets.every((t) => t.status === "PUBLISHED" || t.status === "FAILED");
           const allFailed = allTargets.every((t) => t.status === "FAILED");
@@ -465,6 +588,9 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
               where: { id: postTarget.postId },
               data: { status: allFailed ? "FAILED" : "PUBLISHED" },
             });
+
+            // Send email report with publish results (including failures)
+            await sendPublishReportEmail(postTarget.post.organizationId, postTarget.postId, postTarget.post.content, allTargets);
           }
         }
       }

@@ -449,7 +449,7 @@ export function createListeningSyncWorker() {
               mentionedAt: raw.mentionedAt,
               reach: raw.reach,
               engagements: raw.engagements,
-              metadata: raw.metadata ?? undefined,
+              metadata: (raw.metadata as any) ?? undefined,
             },
           });
 
