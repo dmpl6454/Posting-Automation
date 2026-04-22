@@ -404,9 +404,14 @@ export function createListeningSyncWorker() {
 
       // Determine which platforms to search
       // If user specified platforms, use those; otherwise search all available
-      const platformsToSearch = query.platforms.length > 0
+      // Facebook is excluded from listening sync:
+      //   1. graph.facebook.com/search?type=post requires the `public_content`
+      //      permission (almost never granted to non-media apps).
+      //   2. Every call counts against the per-app rate limit (already at 100%).
+      const platformsToSearch = (query.platforms.length > 0
         ? query.platforms.map((p) => p.toLowerCase())
-        : ["twitter", "reddit", "facebook", "instagram", "linkedin", "tiktok", "news"];
+        : ["twitter", "reddit", "instagram", "linkedin", "tiktok", "news"]
+      ).filter((p) => p !== "facebook");
 
       for (const keyword of query.keywords) {
         // Fetch from all platforms in parallel

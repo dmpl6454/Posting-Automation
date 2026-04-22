@@ -303,7 +303,8 @@ export function createBrandContentSyncWorker() {
         const fetchers: Promise<RawBrandContent[]>[] = [];
         if (tracker.twitterHandle) fetchers.push(fetchTwitterContent(tracker.twitterHandle));
         if (tracker.instagramHandle) fetchers.push(fetchInstagramContent(tracker.instagramHandle, organizationId));
-        if (tracker.facebookPageId) fetchers.push(fetchFacebookContent(tracker.facebookPageId, organizationId));
+        // Facebook excluded: app-level rate limit at 100% — skipping /{pageId}/posts calls
+        // if (tracker.facebookPageId) fetchers.push(fetchFacebookContent(tracker.facebookPageId, organizationId));
         if (tracker.linkedinHandle) fetchers.push(fetchLinkedInContent(tracker.linkedinHandle, organizationId));
         if (tracker.tiktokHandle) fetchers.push(fetchTikTokContent(tracker.tiktokHandle));
 

@@ -56,8 +56,11 @@ export function createAnalyticsSyncWorker() {
     },
     {
       connection: createRedisConnection(),
-      concurrency: 10,
-      limiter: { max: 20, duration: 1000 },
+      // Concurrency 2: prevents 10 simultaneous calls from bypassing the
+      // in-memory usage cache in facebook.provider.ts (race condition where
+      // all jobs pass throttleIfNeeded() before any response comes back).
+      concurrency: 2,
+      limiter: { max: 5, duration: 1000 },
     }
   );
 

@@ -37,15 +37,22 @@ export async function scheduleTokenRefreshes() {
  * Run every 6 hours to collect engagement metrics.
  */
 export async function scheduleAnalyticsSync() {
-  // Get all published post targets from the last 30 days
-  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  // Only sync the last 7 days (30-day window burns FB quota fast).
+  // Facebook is skipped entirely — their Graph API rate-limits are per-app
+  // and analytics calls (insights + reactions) cost 2 calls per post.
+  // Re-enable FACEBOOK once quota resets and a dedicated FB analytics queue
+  // with concurrency=1 is in place.
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
   const publishedTargets = await prisma.postTarget.findMany({
     where: {
       status: "PUBLISHED",
       publishedId: { not: null },
-      publishedAt: { gte: thirtyDaysAgo },
-      channel: { isActive: true },
+      publishedAt: { gte: sevenDaysAgo },
+      channel: {
+        isActive: true,
+        platform: { not: "FACEBOOK" }, // FB excluded — restores quota
+      },
     },
     select: {
       id: true,
