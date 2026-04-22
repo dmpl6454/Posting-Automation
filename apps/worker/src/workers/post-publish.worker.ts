@@ -383,9 +383,18 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
         console.log(`[PostPublish] Error classified as: ${errType}`);
 
         if (errType === "rate_limit") {
-          // Re-queue with exponential backoff delay (2min, 5min, 10min)
-          const delayMs = Math.min(120_000 * Math.pow(2, job.attemptsMade), 600_000);
-          console.log(`[PostPublish] Rate-limited — re-queuing with ${Math.round(delayMs / 1000)}s delay`);
+          // Facebook error 368 (spam throttle) can last hours — use a much longer
+          // backoff for FB. Other platforms use 2min→5min→10min.
+          let delayMs: number;
+          if (platform === "FACEBOOK") {
+            // 30min → 2h → 6h — FB spam blocks don't clear in seconds
+            const fbBackoffs = [30 * 60_000, 2 * 60 * 60_000, 6 * 60 * 60_000];
+            delayMs = fbBackoffs[Math.min(job.attemptsMade, fbBackoffs.length - 1)] ?? 6 * 60 * 60_000;
+          } else {
+            // 2min → 5min → 10min for other platforms
+            delayMs = Math.min(120_000 * Math.pow(2, job.attemptsMade), 600_000);
+          }
+          console.log(`[PostPublish] Rate-limited (${platform}) — re-queuing with ${Math.round(delayMs / 60_000)}min delay`);
           await postPublishQueue.add(
             `retry-ratelimit-${postTargetId}-${Date.now()}`,
             job.data,
@@ -394,7 +403,7 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
           // Mark as SCHEDULED (not FAILED) so the UI shows it's pending
           await prisma.postTarget.update({
             where: { id: postTargetId },
-            data: { status: "SCHEDULED", errorMessage: `Rate-limited, retrying in ${Math.round(delayMs / 1000)}s` },
+            data: { status: "SCHEDULED", errorMessage: `Rate-limited, retrying in ${Math.round(delayMs / 60_000)}min` },
           });
           return; // Don't throw — this is handled
         }
