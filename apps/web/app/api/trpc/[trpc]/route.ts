@@ -4,7 +4,7 @@ import { auth } from "~/lib/auth";
 
 // Allow large payloads (AI image generation returns base64 data)
 export const dynamic = "force-dynamic";
-export const maxDuration = 120; // 2 minutes for AI operations
+export const maxDuration = 600; // 10 minutes — repurpose (carousel/reel/video) can take 5-10 min
 
 const handler = async (req: Request) => {
   const session = await auth();
