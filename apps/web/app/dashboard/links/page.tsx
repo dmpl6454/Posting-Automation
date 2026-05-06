@@ -53,8 +53,11 @@ export default function LinksPage() {
   const [originalUrl, setOriginalUrl] = useState("");
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
+  // organizationId is now derived from session by the backend (security:
+  // previously the client could pass any orgId and read another tenant's
+  // links). The orgId is still in scope here only for the `enabled` flag.
   const { data, isLoading, refetch } = trpc.shortlink.list.useQuery(
-    { organizationId: orgId },
+    {},
     { enabled: !!orgId }
   );
 
@@ -80,7 +83,6 @@ export default function LinksPage() {
   const handleCreate = () => {
     if (!originalUrl) return;
     createLink.mutate({
-      organizationId: orgId,
       originalUrl,
     });
   };

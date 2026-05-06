@@ -1,6 +1,33 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@postautomation/db";
-import { getSocialProvider, FacebookProvider, InstagramProvider, LinkedInProvider } from "@postautomation/social";
+import { getSocialProvider, FacebookProvider, InstagramProvider, LinkedInProvider, verifyState } from "@postautomation/social";
+import { auth } from "~/lib/auth";
+
+// SECURITY: do not reflect raw provider error strings into the redirect URL.
+// They can include access tokens, internal URLs, or upstream debug info.
+// Use opaque codes; log the real message server-side.
+function genericErrorRedirect(code: string): NextResponse {
+  return NextResponse.redirect(
+    `${process.env.APP_URL}/dashboard/channels?error=${encodeURIComponent(code)}`
+  );
+}
+
+async function assertSessionMatchesState(
+  organizationId: string,
+  expectedUserId: string
+): Promise<{ ok: true; userId: string } | { ok: false; reason: string }> {
+  const session = await auth();
+  const userId = (session?.user as any)?.id as string | undefined;
+  if (!userId) return { ok: false, reason: "not_authenticated" };
+  if (userId !== expectedUserId) return { ok: false, reason: "user_mismatch" };
+  // Verify the user is actually a member of the org embedded in state.
+  const membership = await prisma.organizationMember.findUnique({
+    where: { userId_organizationId: { userId, organizationId } },
+    select: { userId: true },
+  });
+  if (!membership) return { ok: false, reason: "not_a_member" };
+  return { ok: true, userId };
+}
 
 export async function GET(
   req: Request,
@@ -10,9 +37,8 @@ export async function GET(
   const error = url.searchParams.get("error");
 
   if (error) {
-    return NextResponse.redirect(
-      `${process.env.APP_URL}/dashboard/channels?error=${encodeURIComponent(error)}`
-    );
+    console.warn(`[oauth/${params.provider}] provider returned error: ${error}`);
+    return genericErrorRedirect("oauth_provider_error");
   }
 
   // ------------------------------------------------------------------
@@ -27,14 +53,21 @@ export async function GET(
   if (isTwitter && oauthVerifier && oauthToken) {
     // OAuth 1.0a Twitter callback
     if (!twitterState) {
-      return NextResponse.redirect(
-        `${process.env.APP_URL}/dashboard/channels?error=missing_twitter_state`
-      );
+      return genericErrorRedirect("missing_state");
     }
 
     try {
-      const organizationId = twitterState.split(":")[1];
-      if (!organizationId) throw new Error("Invalid twitterstate: missing organization ID");
+      // SECURITY: verify the signed state. Throws on tampered/expired state.
+      const statePayload = verifyState(twitterState);
+      const { organizationId, userId: stateUserId } = statePayload;
+
+      // SECURITY: require an authenticated session and verify the user
+      // is the same one who initiated the flow AND is a member of the org.
+      const sessionCheck = await assertSessionMatchesState(organizationId, stateUserId);
+      if (!sessionCheck.ok) {
+        console.warn(`[oauth/twitter] session check failed: ${sessionCheck.reason}`);
+        return genericErrorRedirect(`auth_${sessionCheck.reason}`);
+      }
 
       const platform = "TWITTER";
       const provider = getSocialProvider(platform as any);
@@ -86,9 +119,7 @@ export async function GET(
       );
     } catch (err: any) {
       console.error("Twitter OAuth 1.0a callback error:", err);
-      return NextResponse.redirect(
-        `${process.env.APP_URL}/dashboard/channels?error=${encodeURIComponent(err.message)}`
-      );
+      return genericErrorRedirect("oauth_failed");
     }
   }
 
@@ -99,26 +130,19 @@ export async function GET(
   const state = url.searchParams.get("state");
 
   if (!code || !state) {
-    return NextResponse.redirect(
-      `${process.env.APP_URL}/dashboard/channels?error=missing_params`
-    );
+    return genericErrorRedirect("missing_params");
   }
 
   try {
-    // Extract org ID and optional PKCE verifier from state
-    // State format: "randomhex:orgId" or "randomhex:orgId|pkce:verifier"
-    let codeVerifier: string | undefined;
-    let cleanState = state;
+    // SECURITY: verify the signed state. Throws on tampered or expired state.
+    const statePayload = verifyState(state);
+    const { organizationId, userId: stateUserId, codeVerifier } = statePayload;
 
-    const pkceIndex = state.indexOf("|pkce:");
-    if (pkceIndex !== -1) {
-      codeVerifier = state.slice(pkceIndex + 6);
-      cleanState = state.slice(0, pkceIndex);
-    }
-
-    const organizationId = cleanState.split(":")[1];
-    if (!organizationId) {
-      throw new Error("Invalid state: missing organization ID");
+    // SECURITY: enforce session + membership match.
+    const sessionCheck = await assertSessionMatchesState(organizationId, stateUserId);
+    if (!sessionCheck.ok) {
+      console.warn(`[oauth/${params.provider}] session check failed: ${sessionCheck.reason}`);
+      return genericErrorRedirect(`auth_${sessionCheck.reason}`);
     }
 
     const platform = params.provider.toUpperCase();
@@ -389,8 +413,12 @@ export async function GET(
     );
   } catch (err: any) {
     console.error(`OAuth callback error for ${params.provider}:`, err);
-    return NextResponse.redirect(
-      `${process.env.APP_URL}/dashboard/channels?error=${encodeURIComponent(err.message)}`
-    );
+    // Map known state-verification errors to a slightly more useful code.
+    const code = /State expired/i.test(err?.message)
+      ? "state_expired"
+      : /Invalid state/i.test(err?.message)
+      ? "invalid_state"
+      : "oauth_failed";
+    return genericErrorRedirect(code);
   }
 }

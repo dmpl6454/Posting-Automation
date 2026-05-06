@@ -1,31 +1,28 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { createRouter, protectedProcedure } from "../trpc";
-import { prisma } from "@postautomation/db";
+import { createRouter, orgProcedure } from "../trpc";
 import { rssSyncQueue } from "@postautomation/queue";
 
-export const rssRouter = createRouter({
-  list: protectedProcedure
-    .input(
-      z.object({
-        organizationId: z.string(),
-      })
-    )
-    .query(async ({ input }) => {
-      const feeds = await prisma.rssFeed.findMany({
-        where: { organizationId: input.organizationId },
-        include: {
-          _count: { select: { entries: true } },
-        },
-        orderBy: { createdAt: "desc" },
-      });
-      return feeds;
-    }),
+// SECURITY: every mutation/query is org-scoped via `orgProcedure`. Each
+// lookup adds `organizationId: ctx.organizationId` so a user from org A
+// cannot read/modify org B's RSS feeds (previously this was vulnerable —
+// `findUnique({ where: { id } })` without org scope = IDOR).
 
-  create: protectedProcedure
+export const rssRouter = createRouter({
+  list: orgProcedure.query(async ({ ctx }) => {
+    const feeds = await ctx.prisma.rssFeed.findMany({
+      where: { organizationId: ctx.organizationId },
+      include: {
+        _count: { select: { entries: true } },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    return feeds;
+  }),
+
+  create: orgProcedure
     .input(
       z.object({
-        organizationId: z.string(),
         name: z.string().min(1).max(255),
         url: z.string().url(),
         checkInterval: z.number().min(5).max(1440).default(60),
@@ -34,10 +31,10 @@ export const rssRouter = createRouter({
         promptTemplate: z.string().optional(),
       })
     )
-    .mutation(async ({ input }) => {
-      const feed = await prisma.rssFeed.create({
+    .mutation(async ({ ctx, input }) => {
+      const feed = await ctx.prisma.rssFeed.create({
         data: {
-          organizationId: input.organizationId,
+          organizationId: ctx.organizationId,
           name: input.name,
           url: input.url,
           checkInterval: input.checkInterval,
@@ -49,7 +46,7 @@ export const rssRouter = createRouter({
       return feed;
     }),
 
-  update: protectedProcedure
+  update: orgProcedure
     .input(
       z.object({
         id: z.string(),
@@ -62,31 +59,38 @@ export const rssRouter = createRouter({
         promptTemplate: z.string().nullable().optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
-      const existing = await prisma.rssFeed.findUnique({ where: { id } });
+      // Org-scoped existence check
+      const existing = await ctx.prisma.rssFeed.findFirst({
+        where: { id, organizationId: ctx.organizationId },
+        select: { id: true },
+      });
       if (!existing) {
         throw new TRPCError({ code: "NOT_FOUND", message: "RSS feed not found" });
       }
-      const feed = await prisma.rssFeed.update({
+      const feed = await ctx.prisma.rssFeed.update({
         where: { id },
         data,
       });
       return feed;
     }),
 
-  delete: protectedProcedure
+  delete: orgProcedure
     .input(z.object({ id: z.string() }))
-    .mutation(async ({ input }) => {
-      const existing = await prisma.rssFeed.findUnique({ where: { id: input.id } });
+    .mutation(async ({ ctx, input }) => {
+      const existing = await ctx.prisma.rssFeed.findFirst({
+        where: { id: input.id, organizationId: ctx.organizationId },
+        select: { id: true },
+      });
       if (!existing) {
         throw new TRPCError({ code: "NOT_FOUND", message: "RSS feed not found" });
       }
-      await prisma.rssFeed.delete({ where: { id: input.id } });
+      await ctx.prisma.rssFeed.delete({ where: { id: input.id } });
       return { success: true };
     }),
 
-  getEntries: protectedProcedure
+  getEntries: orgProcedure
     .input(
       z.object({
         feedId: z.string(),
@@ -94,8 +98,16 @@ export const rssRouter = createRouter({
         cursor: z.string().optional(),
       })
     )
-    .query(async ({ input }) => {
-      const entries = await prisma.rssFeedEntry.findMany({
+    .query(async ({ ctx, input }) => {
+      // Verify feed belongs to caller's org before returning entries.
+      const feed = await ctx.prisma.rssFeed.findFirst({
+        where: { id: input.feedId, organizationId: ctx.organizationId },
+        select: { id: true },
+      });
+      if (!feed) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "RSS feed not found" });
+      }
+      const entries = await ctx.prisma.rssFeedEntry.findMany({
         where: { feedId: input.feedId },
         orderBy: { createdAt: "desc" },
         take: input.limit + 1,
@@ -111,21 +123,26 @@ export const rssRouter = createRouter({
       return { entries, nextCursor };
     }),
 
-  checkNow: protectedProcedure
+  checkNow: orgProcedure
     .input(
       z.object({
         feedId: z.string(),
-        organizationId: z.string(),
       })
     )
-    .mutation(async ({ input }) => {
-      const feed = await prisma.rssFeed.findUnique({ where: { id: input.feedId } });
+    .mutation(async ({ ctx, input }) => {
+      // SECURITY: derive organizationId from session, NOT from input —
+      // previously the client could pass an arbitrary organizationId here
+      // and trigger sync jobs against another tenant.
+      const feed = await ctx.prisma.rssFeed.findFirst({
+        where: { id: input.feedId, organizationId: ctx.organizationId },
+        select: { id: true },
+      });
       if (!feed) {
         throw new TRPCError({ code: "NOT_FOUND", message: "RSS feed not found" });
       }
       await rssSyncQueue.add(`rss-sync-${input.feedId}`, {
         feedId: input.feedId,
-        organizationId: input.organizationId,
+        organizationId: ctx.organizationId,
       });
       return { success: true, message: "RSS sync job enqueued" };
     }),

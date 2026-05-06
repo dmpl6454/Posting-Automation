@@ -1,25 +1,28 @@
 import crypto from "crypto";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { createRouter, protectedProcedure } from "../trpc";
-import { prisma } from "@postautomation/db";
+import { createRouter, orgProcedure } from "../trpc";
+
+// SECURITY: every endpoint is org-scoped via `orgProcedure` and looks up
+// short links with `organizationId: ctx.organizationId`. Previously
+// `findUnique({ where: { id } })` allowed any logged-in user to read
+// click analytics or delete other tenants' short links.
 
 export const shortlinkRouter = createRouter({
-  create: protectedProcedure
+  create: orgProcedure
     .input(
       z.object({
-        organizationId: z.string(),
         originalUrl: z.string().url(),
         postId: z.string().optional(),
         expiresAt: z.string().datetime().optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const code = crypto.randomBytes(4).toString("hex");
 
-      const shortLink = await prisma.shortLink.create({
+      const shortLink = await ctx.prisma.shortLink.create({
         data: {
-          organizationId: input.organizationId,
+          organizationId: ctx.organizationId,
           code,
           originalUrl: input.originalUrl,
           postId: input.postId,
@@ -30,17 +33,16 @@ export const shortlinkRouter = createRouter({
       return shortLink;
     }),
 
-  list: protectedProcedure
+  list: orgProcedure
     .input(
       z.object({
-        organizationId: z.string(),
         limit: z.number().min(1).max(100).default(20),
         cursor: z.string().optional(),
       })
     )
-    .query(async ({ input }) => {
-      const links = await prisma.shortLink.findMany({
-        where: { organizationId: input.organizationId },
+    .query(async ({ ctx, input }) => {
+      const links = await ctx.prisma.shortLink.findMany({
+        where: { organizationId: ctx.organizationId },
         orderBy: { createdAt: "desc" },
         take: input.limit + 1,
         ...(input.cursor && { cursor: { id: input.cursor }, skip: 1 }),
@@ -55,21 +57,20 @@ export const shortlinkRouter = createRouter({
       return { links, nextCursor };
     }),
 
-  getStats: protectedProcedure
+  getStats: orgProcedure
     .input(z.object({ id: z.string() }))
-    .query(async ({ input }) => {
-      const shortLink = await prisma.shortLink.findUnique({
-        where: { id: input.id },
+    .query(async ({ ctx, input }) => {
+      const shortLink = await ctx.prisma.shortLink.findFirst({
+        where: { id: input.id, organizationId: ctx.organizationId },
       });
       if (!shortLink) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Short link not found" });
       }
 
-      // Get clicks over the last 7 days grouped by day
       const sevenDaysAgo = new Date();
       sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
-      const clicks = await prisma.shortLinkClick.findMany({
+      const clicks = await ctx.prisma.shortLinkClick.findMany({
         where: {
           shortLinkId: input.id,
           createdAt: { gte: sevenDaysAgo },
@@ -77,7 +78,6 @@ export const shortlinkRouter = createRouter({
         orderBy: { createdAt: "desc" },
       });
 
-      // Group clicks by day
       const clicksByDay: Record<string, number> = {};
       for (let i = 0; i < 7; i++) {
         const date = new Date();
@@ -93,7 +93,6 @@ export const shortlinkRouter = createRouter({
         }
       }
 
-      // Top referers
       const refererCounts: Record<string, number> = {};
       for (const click of clicks) {
         const referer = click.referer || "Direct";
@@ -104,7 +103,6 @@ export const shortlinkRouter = createRouter({
         .slice(0, 10)
         .map(([referer, count]) => ({ referer, count }));
 
-      // Countries
       const countryCounts: Record<string, number> = {};
       for (const click of clicks) {
         const country = click.country || "Unknown";
@@ -126,16 +124,17 @@ export const shortlinkRouter = createRouter({
       };
     }),
 
-  delete: protectedProcedure
+  delete: orgProcedure
     .input(z.object({ id: z.string() }))
-    .mutation(async ({ input }) => {
-      const shortLink = await prisma.shortLink.findUnique({
-        where: { id: input.id },
+    .mutation(async ({ ctx, input }) => {
+      const shortLink = await ctx.prisma.shortLink.findFirst({
+        where: { id: input.id, organizationId: ctx.organizationId },
+        select: { id: true },
       });
       if (!shortLink) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Short link not found" });
       }
-      await prisma.shortLink.delete({ where: { id: input.id } });
+      await ctx.prisma.shortLink.delete({ where: { id: input.id } });
       return { success: true };
     }),
 });

@@ -12,5 +12,15 @@ export type {
   SocialProfile,
   PlatformConstraints,
 } from "./abstract/social.types";
-export { generateState, generateCodeVerifier, generateCodeChallenge, encryptToken, decryptToken } from "./utils/oauth-helper";
+export {
+  generateState,
+  generateCodeVerifier,
+  generateCodeChallenge,
+  signState,
+  verifyState,
+} from "./utils/oauth-helper";
+export type { OAuthStatePayload } from "./utils/oauth-helper";
+// Re-exported from @postautomation/db (the canonical location to avoid
+// a circular dep between db and social).
+export { encryptToken, decryptToken, isEncrypted } from "@postautomation/db";
 export { validateMediaForPlatform } from "./utils/media-validator";

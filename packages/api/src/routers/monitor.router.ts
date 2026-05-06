@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { createRouter, protectedProcedure, publicProcedure } from "../trpc";
+import { createRouter, protectedProcedure, superAdminProcedure } from "../trpc";
 import crypto from "crypto";
 
 /** Generate a fingerprint for deduplication */
@@ -9,8 +9,17 @@ function errorFingerprint(message: string, stack?: string): string {
 }
 
 export const monitorRouter = createRouter({
-  /** Log an error (public — called from frontend error boundary, no auth needed) */
-  logError: publicProcedure
+  /**
+   * Log an error.
+   *
+   * SECURITY: previously this was `publicProcedure` and accepted
+   * client-supplied `organizationId` / `userId` — that allowed any
+   * unauthenticated client to forge error rows attributed to any tenant
+   * (DB junk-fill + audit-log poisoning). It is now `protectedProcedure`,
+   * the org/user are taken from the session only, and the input fields
+   * for `organizationId` / `userId` are removed.
+   */
+  logError: protectedProcedure
     .input(
       z.object({
         source: z.enum(["frontend", "api", "worker", "publish"]),
@@ -20,12 +29,12 @@ export const monitorRouter = createRouter({
         endpoint: z.string().max(500).optional(),
         userAgent: z.string().max(500).optional(),
         metadata: z.record(z.any()).optional(),
-        organizationId: z.string().optional(),
-        userId: z.string().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
       const fp = errorFingerprint(input.message, input.stack);
+      const userId = (ctx.session?.user as any)?.id as string | undefined;
+      const organizationId = (ctx as any).organizationId as string | undefined;
 
       // Deduplicate: if same fingerprint exists in last 24h, increment count
       const existing = await ctx.prisma.errorLog.findFirst({
@@ -57,8 +66,8 @@ export const monitorRouter = createRouter({
           endpoint: input.endpoint,
           userAgent: input.userAgent,
           metadata: input.metadata ?? undefined,
-          organizationId: input.organizationId || ctx.session?.user?.id ? ctx.organizationId : undefined,
-          userId: input.userId || (ctx.session?.user as any)?.id,
+          organizationId,
+          userId,
           fingerprint: fp,
         },
       });
@@ -66,8 +75,13 @@ export const monitorRouter = createRouter({
       return { id: log.id, deduplicated: false };
     }),
 
-  /** List errors (admin/org-scoped) */
-  list: protectedProcedure
+  /**
+   * List errors. Restricted to super-admins because the errorLog table
+   * spans all tenants and may contain sensitive stack traces / PII from
+   * other orgs. Previously `protectedProcedure` allowed any logged-in
+   * user to read the entire error stream.
+   */
+  list: superAdminProcedure
     .input(
       z.object({
         source: z.enum(["frontend", "api", "worker", "publish", "all"]).default("all"),
@@ -99,8 +113,8 @@ export const monitorRouter = createRouter({
       return { errors, nextCursor };
     }),
 
-  /** Get error stats summary */
-  stats: protectedProcedure.query(async ({ ctx }) => {
+  /** Get error stats summary (super-admin only — cross-tenant) */
+  stats: superAdminProcedure.query(async ({ ctx }) => {
     const now = new Date();
     const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
     const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
@@ -132,8 +146,8 @@ export const monitorRouter = createRouter({
     };
   }),
 
-  /** Resolve an error */
-  resolve: protectedProcedure
+  /** Resolve an error (super-admin only — cross-tenant audit data) */
+  resolve: superAdminProcedure
     .input(
       z.object({
         id: z.string(),
@@ -152,8 +166,8 @@ export const monitorRouter = createRouter({
       });
     }),
 
-  /** Bulk resolve errors */
-  bulkResolve: protectedProcedure
+  /** Bulk resolve errors (super-admin only) */
+  bulkResolve: superAdminProcedure
     .input(z.object({ ids: z.array(z.string()) }))
     .mutation(async ({ ctx, input }) => {
       return ctx.prisma.errorLog.updateMany({
@@ -166,8 +180,8 @@ export const monitorRouter = createRouter({
       });
     }),
 
-  /** Export errors as Claude-friendly report */
-  exportForClaude: protectedProcedure
+  /** Export errors as Claude-friendly report (super-admin only) */
+  exportForClaude: superAdminProcedure
     .input(
       z.object({
         unresolvedOnly: z.boolean().default(true),

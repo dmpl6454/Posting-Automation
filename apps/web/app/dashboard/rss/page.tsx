@@ -53,8 +53,10 @@ export default function RssPage() {
   const [autoPost, setAutoPost] = useState(false);
   const [promptTemplate, setPromptTemplate] = useState("");
 
+  // organizationId is derived from session on the backend (security fix:
+  // previously the client could pass any orgId).
   const { data: feeds, isLoading, refetch } = trpc.rss.list.useQuery(
-    { organizationId: orgId },
+    undefined,
     { enabled: !!orgId }
   );
 
@@ -97,7 +99,6 @@ export default function RssPage() {
   const handleCreate = () => {
     if (!name || !url) return;
     createFeed.mutate({
-      organizationId: orgId,
       name,
       url,
       checkInterval,
@@ -232,9 +233,7 @@ export default function RssPage() {
               onToggleExpand={() =>
                 setExpandedFeed(expandedFeed === feed.id ? null : feed.id)
               }
-              onCheckNow={() =>
-                checkNow.mutate({ feedId: feed.id, organizationId: orgId })
-              }
+              onCheckNow={() => checkNow.mutate({ feedId: feed.id })}
               onDelete={() => {
                 if (confirm("Delete this RSS feed and all its entries?")) {
                   deleteFeed.mutate({ id: feed.id });

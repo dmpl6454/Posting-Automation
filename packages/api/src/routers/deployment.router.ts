@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { createRouter, orgProcedure } from "../trpc";
+import { createRouter, orgProcedure, superAdminProcedure } from "../trpc";
 
 export const deploymentRouter = createRouter({
   /** Get current version info */
@@ -81,8 +81,15 @@ export const deploymentRouter = createRouter({
       return deployment;
     }),
 
-  /** Rollback to a specific deployment */
-  rollback: orgProcedure
+  /**
+   * Rollback to a specific deployment.
+   *
+   * SECURITY: previously this was `orgProcedure`, which meant any member
+   * of any organization could roll back the production deployment for the
+   * entire platform (deployments are global, not org-scoped). This is a
+   * super-admin operation only.
+   */
+  rollback: superAdminProcedure
     .input(z.object({ deploymentId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const target = await ctx.prisma.deployment.findUnique({

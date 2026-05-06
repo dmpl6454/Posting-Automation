@@ -3,13 +3,20 @@ import { SignJWT } from "jose";
 import bcrypt from "bcryptjs";
 import { prisma } from "@postautomation/db";
 
-const ADMIN_JWT_SECRET = new TextEncoder().encode(
-  process.env.ADMIN_JWT_SECRET || process.env.NEXTAUTH_SECRET || "admin-secret-key"
-);
+// SECURITY: never fall back to a hardcoded literal. If neither env var
+// is set we throw at request time so admin login fails closed instead of
+// signing tokens with a public, source-controlled secret.
+const _adminSecret = process.env.ADMIN_JWT_SECRET || process.env.NEXTAUTH_SECRET;
+const ADMIN_JWT_SECRET = _adminSecret ? new TextEncoder().encode(_adminSecret) : null;
 const COOKIE_NAME = "admin-token";
 
 export async function POST(request: Request) {
   try {
+    if (!ADMIN_JWT_SECRET) {
+      console.error("[admin/login] ADMIN_JWT_SECRET / NEXTAUTH_SECRET unset — refusing to issue admin tokens");
+      return NextResponse.json({ error: "Server not configured" }, { status: 500 });
+    }
+
     const { email, password } = await request.json();
 
     if (!email || !password) {

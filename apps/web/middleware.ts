@@ -2,9 +2,12 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { jwtVerify } from "jose";
 
-const ADMIN_JWT_SECRET = new TextEncoder().encode(
-  process.env.ADMIN_JWT_SECRET || process.env.NEXTAUTH_SECRET || "admin-secret-key"
-);
+// SECURITY: do NOT fall back to a hardcoded literal — that would allow
+// anyone to forge admin JWTs if the env var is unset. We accept either
+// ADMIN_JWT_SECRET or (the more commonly set) NEXTAUTH_SECRET, but if
+// neither is present we refuse to authenticate any admin tokens at all.
+const _adminSecret = process.env.ADMIN_JWT_SECRET || process.env.NEXTAUTH_SECRET;
+const ADMIN_JWT_SECRET = _adminSecret ? new TextEncoder().encode(_adminSecret) : null;
 const ADMIN_COOKIE = "admin-token";
 
 // Check for NextAuth session cookie (works with both v4 and v5)
@@ -18,6 +21,12 @@ function hasSessionCookie(request: NextRequest): boolean {
 }
 
 async function verifyAdminToken(request: NextRequest) {
+  if (!ADMIN_JWT_SECRET) {
+    // Refuse to verify any token if no secret is configured — this prevents
+    // accepting unsigned/forged tokens in misconfigured environments.
+    console.error("[middleware] ADMIN_JWT_SECRET / NEXTAUTH_SECRET unset — refusing all admin auth");
+    return null;
+  }
   const token = request.cookies.get(ADMIN_COOKIE)?.value;
   if (!token) return null;
   try {

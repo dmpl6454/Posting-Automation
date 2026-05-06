@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
-import { getSocialProvider, getSupportedPlatforms, generateState } from "@postautomation/social";
+import { getSocialProvider, getSupportedPlatforms, signState } from "@postautomation/social";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 import { enforcePlanLimit } from "../middleware/plan-limit.middleware";
 
@@ -64,11 +64,17 @@ export const channelRouter = createRouter({
       await enforcePlanLimit(ctx.organizationId, "channels");
 
       const provider = getSocialProvider(input.platform as any);
-      const state = generateState();
 
-      // Store state in Redis or session for verification
-      // For now, encode org ID in state
-      const stateWithOrg = `${state}:${ctx.organizationId}`;
+      // SECURITY: state must be unforgeable. We sign an HMAC token that
+      // binds {organizationId, userId} together with a TTL so the OAuth
+      // callback can verify (a) the state was issued by us and not crafted
+      // by an attacker, (b) the user completing the flow is the same user
+      // who started it, and (c) the org binding hasn't been swapped.
+      const userId = (ctx.session.user as any).id as string;
+      const signedState = signState({
+        organizationId: ctx.organizationId,
+        userId,
+      });
 
       const platformEnvPrefix = input.platform.toUpperCase();
       const config = {
@@ -79,8 +85,8 @@ export const channelRouter = createRouter({
       };
 
       try {
-        const url = await provider.getOAuthUrl(config, stateWithOrg);
-        return { url, state: stateWithOrg };
+        const url = await provider.getOAuthUrl(config, signedState);
+        return { url, state: signedState };
       } catch (err: any) {
         console.error(`[channel.getOAuthUrl] ${input.platform} failed:`, err.message);
         throw err;

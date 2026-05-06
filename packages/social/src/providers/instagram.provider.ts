@@ -452,7 +452,7 @@ export class InstagramProvider extends SocialProvider {
         body: JSON.stringify({
           media_type: "CAROUSEL",
           caption: payload.content,
-          children: childContainerIds.join(","),
+          children: childContainerIds,
           access_token: tokens.accessToken,
         }),
       }
