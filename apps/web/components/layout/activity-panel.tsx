@@ -76,6 +76,11 @@ function timeAgo(date: Date): string {
 
 export function ActivityPanel() {
   const [expanded, setExpanded] = useState(false);
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 30_000);
+    return () => clearInterval(id);
+  }, []);
 
   // Fetch notifications as activity items
   const { data, isLoading, refetch } = trpc.notification.list.useQuery(
@@ -126,9 +131,13 @@ export function ActivityPanel() {
         id: `pt-${pt.id}`,
         type: pt.status === "PUBLISHED" ? "post.published" : pt.status === "FAILED" ? "post.failed" : "post.scheduled",
         title: pt.status === "PUBLISHED" ? `Published to ${pt.platform}` : pt.status === "FAILED" ? `Failed on ${pt.platform}` : `Scheduled for ${pt.platform}`,
-        body: pt.content?.slice(0, 80) || "",
+        body: pt.content ? (pt.content.length >= 100 ? pt.content.slice(0, 80) + "…" : pt.content) : "",
         status: pt.status === "PUBLISHED" ? "success" : pt.status === "FAILED" ? "error" : "pending",
-        timestamp: new Date(pt.updatedAt),
+        timestamp: new Date(
+          pt.status === "PUBLISHED" ? (pt.publishedAt ?? pt.updatedAt) :
+          pt.status === "SCHEDULED" ? (pt.scheduledAt ?? pt.updatedAt) :
+          pt.updatedAt
+        ),
         link: pt.postId ? `/dashboard/posts/${pt.postId}` : undefined,
         metadata: { postTargetId: pt.id, platform: pt.platform, channelName: pt.channelName },
       });

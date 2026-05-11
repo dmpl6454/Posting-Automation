@@ -5,10 +5,42 @@ import { createRouter, orgProcedure, superAdminProcedure } from "../trpc";
 export const deploymentRouter = createRouter({
   /** Get current version info */
   current: orgProcedure.query(async ({ ctx }) => {
-    const latest = await ctx.prisma.deployment.findFirst({
+    let latest = await ctx.prisma.deployment.findFirst({
       where: { status: "active" },
       orderBy: { createdAt: "desc" },
     });
+
+    // Auto-register the running build if the DB has no record matching the
+    // current commit (handles local/dev builds that never ran deploy.sh).
+    const envHash = process.env.NEXT_PUBLIC_COMMIT_HASH;
+    const envVersion = process.env.NEXT_PUBLIC_APP_VERSION;
+    const hasRealGitInfo =
+      envHash && envHash !== "unknown" &&
+      envVersion && envVersion !== "1.0.0-dev";
+    const notRegistered = !latest || latest.commitHash !== envHash;
+
+    if (hasRealGitInfo && notRegistered) {
+      await ctx.prisma.deployment.updateMany({
+        where: { status: "active" },
+        data: { status: "superseded" },
+      });
+      await ctx.prisma.deployment.create({
+        data: {
+          version: envVersion!,
+          commitHash: envHash!,
+          commitMsg: process.env.NEXT_PUBLIC_COMMIT_MSG || "",
+          branch: process.env.NEXT_PUBLIC_BRANCH || "main",
+          environment: "production",
+          deployedBy: "auto",
+          status: "active",
+        },
+      });
+      latest = await ctx.prisma.deployment.findFirst({
+        where: { status: "active" },
+        orderBy: { createdAt: "desc" },
+      });
+    }
+
     return {
       version: process.env.NEXT_PUBLIC_APP_VERSION || latest?.version || "1.0.0-dev",
       commitHash: process.env.NEXT_PUBLIC_COMMIT_HASH || latest?.commitHash || "unknown",

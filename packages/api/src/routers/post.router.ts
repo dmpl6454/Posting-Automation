@@ -271,7 +271,7 @@ export const postRouter = createRouter({
         },
         include: {
           channel: { select: { name: true, platform: true } },
-          post: { select: { content: true } },
+          post: { select: { content: true, scheduledAt: true } },
         },
         orderBy: { updatedAt: "desc" },
         take: input.limit,
@@ -286,6 +286,8 @@ export const postRouter = createRouter({
         content: t.post.content?.slice(0, 100),
         errorMessage: t.errorMessage,
         publishedAt: t.publishedAt,
+        scheduledAt: t.post.scheduledAt,
+        createdAt: t.createdAt,
         updatedAt: t.updatedAt,
       }));
     }),
