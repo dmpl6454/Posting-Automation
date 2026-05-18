@@ -30,6 +30,8 @@ export { generateNewsCardHtml, generateStaticNewsCreativeHtml } from "./tools/ne
 export type { NewsCardOptions, StaticNewsCreativeOptions } from "./tools/news-card-template";
 export { extractUrlContent } from "./utils/url-extractor";
 export type { ExtractedContent } from "./utils/url-extractor";
+export { generateImageSafe, sanitizePrompt, buildGenericPrompt, isSafetyBlock } from "./utils/safe-image-generator";
+export type { SafeImageParams, SafeImageResult } from "./utils/safe-image-generator";
 export { generateCarouselImages } from "./tools/carousel-generator";
 export type { CarouselResult } from "./tools/carousel-generator";
 export { generateCarouselSlideHtml } from "./tools/carousel-template";

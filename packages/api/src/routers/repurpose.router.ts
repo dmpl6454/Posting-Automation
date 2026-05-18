@@ -93,6 +93,7 @@ export const repurposeRouter = createRouter({
         generateSpeech,
         generateVoiceOverScript,
         generateImage: generateGeminiImage,
+        generateImageSafe,
         generateVideo: generateVeo3Video,
         buildVideoPrompt,
         generateSeedanceVideo,
@@ -332,10 +333,21 @@ Requirements:
           try {
             progress(`Generating image for ${platform}`);
             console.log(`[Repurpose] Generating AI creative for ${platform}...`);
-            const aiResult = await generateGeminiImage({
+            // Use generateImageSafe — auto-sanitizes the prompt on a
+            // safety block (Gemini's `IMAGE_OTHER` finishReason commonly
+            // fires for news content involving political figures or
+            // public personalities) and falls back to DALL-E 3 if Gemini
+            // refuses after sanitization. Returns the first success.
+            const aiResult = await generateImageSafe({
               prompt: imagePrompt,
               aspectRatio: "3:4",
+              title: extracted.title,
+              topic: extracted.siteName || extracted.type || "news",
             });
+
+            if (aiResult.wasSanitized) {
+              console.log(`[Repurpose] ${platform}: image generated via fallback (source=${aiResult.source})`);
+            }
 
             // Apply logo overlay
             const branded = await applyLogoOverlay(aiResult.imageBase64, aiResult.mimeType, 1080, 1350);
@@ -348,11 +360,19 @@ Requirements:
             perPlatformMedia[platform] = { url, mediaId };
             mediaUrls.push(url);
             mediaType = aiResult.mimeType.includes("png") ? "image/png" : "image/jpeg";
-            progress(`Generating image for ${platform}`, "done", "Uploaded to S3");
-            console.log(`[Repurpose] ${platform} creative uploaded: ${url} (mediaId: ${mediaId})`);
+            const statusDetail = aiResult.wasSanitized
+              ? `Uploaded to S3 (via ${aiResult.source})`
+              : "Uploaded to S3";
+            progress(`Generating image for ${platform}`, "done", statusDetail);
+            console.log(`[Repurpose] ${platform} creative uploaded: ${url} (mediaId: ${mediaId}, source: ${aiResult.source})`);
           } catch (e) {
-            progress(`Generating image for ${platform}`, "error", (e as Error).message);
-            console.warn(`[Repurpose] ${platform} AI image failed:`, (e as Error).message);
+            // Friendly user-facing message — strip Google internal error codes
+            const raw = (e as Error).message;
+            const friendly = /IMAGE_OTHER|blocked|safety|policy/i.test(raw)
+              ? "All providers refused to generate this image (topic flagged by safety filters). Try a more general headline."
+              : raw;
+            progress(`Generating image for ${platform}`, "error", friendly);
+            console.warn(`[Repurpose] ${platform} AI image failed:`, raw);
           }
         }
       } else if (input.format === "ai_video") {
@@ -736,9 +756,15 @@ Requirements:
                   await new Promise((r) => setTimeout(r, 2000 * attempt)); // backoff
                   console.log(`[Repurpose] Retrying slide ${slideIdx + 1} (attempt ${attempt + 1})`);
                 }
-                const slideResult = await generateGeminiImage({
+                // Use generateImageSafe so a Gemini safety-block on the
+                // first try auto-falls back through sanitized prompt →
+                // generic prompt → DALL-E. Carousels generating news
+                // content used to drop ~25% of slides to IMAGE_OTHER.
+                const slideResult = await generateImageSafe({
                   prompt,
                   aspectRatio: "3:4",
+                  title: extracted.title,
+                  topic: extracted.siteName || extracted.type || "news",
                 });
                 // Apply logo overlay to each carousel slide
                 const branded = await applyLogoOverlay(slideResult.imageBase64, slideResult.mimeType, 1080, 1350);
