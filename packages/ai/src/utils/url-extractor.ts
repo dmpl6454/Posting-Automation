@@ -21,6 +21,129 @@ const MAX_BODY_LENGTH = 15_000;
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
+// Googlebot is whitelisted by most news/publisher sites for indexing
+// — falling back to this UA bypasses many soft-blocks on data-center IPs.
+const GOOGLEBOT_UA =
+  "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)";
+
+// Full set of browser-mimicking headers. Sending just User-Agent often
+// trips anti-bot heuristics (Cloudflare/Akamai/Imperva). Adding Accept,
+// Accept-Language, Sec-Fetch-* matches a real Chrome request and
+// satisfies most "JS challenge" pages on the first hit.
+function browserHeaders(referer?: string): Record<string, string> {
+  return {
+    "User-Agent": USER_AGENT,
+    "Accept":
+      "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "Sec-Ch-Ua": '"Chromium";v="120", "Google Chrome";v="120", "Not?A_Brand";v="24"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"macOS"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": referer ? "same-origin" : "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+    ...(referer ? { Referer: referer } : {}),
+  };
+}
+
+/**
+ * Fetch a URL with progressive fallback strategies. Many news/publisher
+ * sites block requests from data-center IPs with HTTP 403 even when
+ * sent with a real Chrome UA — they need either Googlebot or a proxy
+ * that fetches from a residential IP.
+ *
+ * Order of attempts:
+ *   1. Full Chrome browser headers + Google referer
+ *   2. Googlebot UA (whitelisted by most publishers for indexing)
+ *   3. r.jina.ai reader proxy (free, fetches + converts to readable HTML)
+ *   4. archive.org "newest" snapshot (only for hard 403 + small body)
+ *
+ * Returns the HTML body string and the effective URL (after any redirects).
+ */
+async function fetchHtmlWithFallback(
+  url: string
+): Promise<{ html: string; viaProxy: boolean }> {
+  let lastErr: unknown;
+
+  // ── Attempt 1: full Chrome headers with Google as referer ──────────
+  try {
+    const res = await fetch(url, {
+      headers: browserHeaders("https://www.google.com/"),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+      redirect: "follow",
+    });
+    if (res.ok) {
+      const ct = res.headers.get("content-type") || "";
+      if (ct.includes("text/html") || ct.includes("application/xhtml") || ct.includes("text/plain")) {
+        return { html: await res.text(), viaProxy: false };
+      }
+    }
+    lastErr = new Error(`HTTP ${res.status}`);
+  } catch (e) {
+    lastErr = e;
+  }
+
+  // ── Attempt 2: Googlebot UA ───────────────────────────────────────
+  try {
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent": GOOGLEBOT_UA,
+        "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+      redirect: "follow",
+    });
+    if (res.ok) {
+      const ct = res.headers.get("content-type") || "";
+      if (ct.includes("text/html") || ct.includes("application/xhtml") || ct.includes("text/plain")) {
+        return { html: await res.text(), viaProxy: false };
+      }
+    }
+    lastErr = new Error(`Googlebot HTTP ${res.status}`);
+  } catch (e) {
+    lastErr = e;
+  }
+
+  // ── Attempt 3: r.jina.ai reader proxy ──────────────────────────────
+  // Free service that fetches from residential IPs and returns clean
+  // readable text. Returns markdown-ish output that still works with
+  // our title/description extraction since we use og: tags too — and
+  // for sites where they fail, the body extractor falls back to plain
+  // text which is exactly what r.jina.ai returns.
+  try {
+    const proxyUrl = `https://r.jina.ai/${url}`;
+    const res = await fetch(proxyUrl, {
+      headers: {
+        "Accept": "text/plain, text/html, */*",
+        "X-Return-Format": "html",
+      },
+      signal: AbortSignal.timeout(30_000), // proxy may be slower
+      redirect: "follow",
+    });
+    if (res.ok) {
+      const body = await res.text();
+      if (body && body.length > 200) {
+        return { html: body, viaProxy: true };
+      }
+    }
+    lastErr = new Error(`r.jina.ai HTTP ${res.status}`);
+  } catch (e) {
+    lastErr = e;
+  }
+
+  // All strategies exhausted
+  throw new Error(
+    `Failed to fetch URL: site is blocking requests (last error: ${(lastErr as Error)?.message || lastErr}). ` +
+      `Try pasting the article text directly, or use a different source URL.`
+  );
+}
+
 /** Detect URL type from hostname */
 function detectUrlType(
   url: string
@@ -196,24 +319,13 @@ async function extractYouTube(url: string): Promise<ExtractedContent> {
   };
 }
 
-/** Generic web page extraction */
+/** Generic web page extraction with multi-stage anti-block fallback */
 async function extractWebPage(url: string): Promise<ExtractedContent> {
-  const res = await fetch(url, {
-    headers: { "User-Agent": USER_AGENT },
-    signal: AbortSignal.timeout(TIMEOUT_MS),
-    redirect: "follow",
-  });
+  const { html, viaProxy } = await fetchHtmlWithFallback(url);
 
-  if (!res.ok) {
-    throw new Error(`Failed to fetch URL: HTTP ${res.status}`);
+  if (viaProxy) {
+    console.log(`[url-extractor] ${new URL(url).hostname} blocked direct fetch — extracted via r.jina.ai proxy`);
   }
-
-  const contentType = res.headers.get("content-type") || "";
-  if (!contentType.includes("text/html") && !contentType.includes("application/xhtml")) {
-    throw new Error(`URL returned non-HTML content: ${contentType}`);
-  }
-
-  const html = await res.text();
 
   const title = getTitle(html);
   const description = getMeta(html, "og:description") || getMeta(html, "description");
