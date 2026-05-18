@@ -94,6 +94,7 @@ export const repurposeRouter = createRouter({
         generateVoiceOverScript,
         generateImage: generateGeminiImage,
         generateImageSafe,
+        enforceNoHashtags,
         generateVideo: generateVeo3Video,
         buildVideoPrompt,
         generateSeedanceVideo,
@@ -328,6 +329,7 @@ Requirements:
 - Relevant visual imagery that ACCURATELY matches the topic and subject
 - Professional layout with strong visual hierarchy
 - Do NOT include any watermarks or stock photo marks
+- Do NOT include any hashtag text (no #word) in the image — hashtags belong in the caption
 - 4:5 portrait aspect ratio`;
 
           try {
@@ -432,7 +434,9 @@ Return ONLY the JSON array, no other text.`;
         let referenceImage: { base64: string; mimeType?: string } | undefined;
         try {
           const refResult = await generateGeminiImage({
-            prompt: `Create a cinematic vertical still frame for a social media video about: "${extracted.title}". ${input.theme} theme, dark background, dramatic lighting, bold white text overlay, modern design. 9:16 portrait vertical.`,
+            prompt: enforceNoHashtags(
+              `Create a cinematic vertical still frame for a social media video about: "${extracted.title}". ${input.theme} theme, dark background, dramatic lighting, bold white text overlay, modern design. 9:16 portrait vertical.`
+            ),
             aspectRatio: "9:16",
           });
           referenceImage = { base64: refResult.imageBase64, mimeType: refResult.mimeType };
@@ -490,7 +494,9 @@ Return ONLY the JSON array, no other text.`;
             for (const point of keyPoints.slice(0, 6)) {
               try {
                 const img = await generateGeminiImage({
-                  prompt: `Create a professional social media slide. Text: "${point}". ${input.theme} theme, cinematic, bold typography, relevant visual background. 4:5 portrait.`,
+                  prompt: enforceNoHashtags(
+                    `Create a professional social media slide. Text: "${point}". ${input.theme} theme, cinematic, bold typography, relevant visual background. 4:5 portrait.`
+                  ),
                   aspectRatio: "3:4",
                 });
                 // Apply logo overlay to fallback reel slides
@@ -707,7 +713,8 @@ Requirements:
 - Professional social media design with gradients and visual hierarchy
 - 4:5 portrait aspect ratio
 - Make it look like a premium Instagram carousel cover
-- Use vibrant, attention-grabbing colors`;
+- Use vibrant, attention-grabbing colors
+- Do NOT include any hashtag text (no #word) in the image — hashtags go in the caption only`;
           } else if (slide.type === "cta") {
             return `Design a social media carousel CTA (call-to-action) slide (last slide of ${allSlides.length}).
 
@@ -718,7 +725,8 @@ Requirements:
 - Clean, minimal design with bold typography
 - Matching color scheme for social media
 - 4:5 portrait aspect ratio
-- Professional, engaging call-to-action design`;
+- Professional, engaging call-to-action design
+- Do NOT include any hashtag text (no #word) in the image`;
           } else {
             return `Design a social media carousel content slide (slide ${i + 1} of ${allSlides.length}).
 
@@ -727,6 +735,7 @@ Content: "${slide.body}"
 
 Requirements:
 - Include the heading "${slide.title}" and content text in the design
+- Do NOT include any hashtag text (no #word) in the image — hashtags belong in the caption only
 - Clean, readable typography with visual hierarchy
 - Subtle visual elements or icons related to the topic
 - Consistent social media carousel design style

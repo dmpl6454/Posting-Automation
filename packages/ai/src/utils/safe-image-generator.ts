@@ -41,6 +41,21 @@ export interface SafeImageResult extends NanoBananaResult {
 }
 
 /**
+ * Append the universal "no hashtags in the image" rule to every prompt.
+ * User preference (memory: no_hashtags_in_image_creatives.md): hashtags
+ * belong in the post caption, never baked into the pixels.
+ */
+const NO_HASHTAG_RULE =
+  "\n\nCRITICAL: Do NOT include hashtag text (no #word, no #hashtags) " +
+  "anywhere in the image. Hashtags belong in the caption, not the visual.";
+
+export function enforceNoHashtags(prompt: string): string {
+  // Avoid double-appending if the caller already includes the rule.
+  if (prompt.includes("Do NOT include hashtag")) return prompt;
+  return prompt + NO_HASHTAG_RULE;
+}
+
+/**
  * Strip names of real people, organizations, and political/sensitive
  * markers from a prompt. Heuristic — not perfect but covers the common
  * Gemini block triggers.
@@ -119,7 +134,11 @@ export function isSafetyBlock(err: unknown): boolean {
  * fail. Logs each retry so operators can see what's happening.
  */
 export async function generateImageSafe(params: SafeImageParams): Promise<SafeImageResult> {
-  const { prompt, aspectRatio = "1:1", referenceImages } = params;
+  const { aspectRatio = "1:1", referenceImages } = params;
+  // Enforce no-hashtags-in-image on every prompt path. The rule is
+  // re-applied after sanitizePrompt and buildGenericPrompt below so the
+  // hashtag instruction always survives downstream rewrites.
+  const prompt = enforceNoHashtags(params.prompt);
   let lastError: unknown;
 
   // ── Attempt 1: original prompt via Gemini ──────────────────────────
@@ -147,7 +166,7 @@ export async function generateImageSafe(params: SafeImageParams): Promise<SafeIm
 
   // ── Attempt 2: sanitized prompt via Gemini ─────────────────────────
   try {
-    const safePrompt = sanitizePrompt(prompt);
+    const safePrompt = enforceNoHashtags(sanitizePrompt(prompt));
     const r = await generateNanoBanana({ prompt: safePrompt, aspectRatio, referenceImages });
     return { ...r, source: "gemini-sanitized", wasSanitized: true };
   } catch (e) {
@@ -161,7 +180,7 @@ export async function generateImageSafe(params: SafeImageParams): Promise<SafeIm
 
   // ── Attempt 3: generic prompt via Gemini ───────────────────────────
   try {
-    const genericPrompt = buildGenericPrompt({ title: params.title, topic: params.topic });
+    const genericPrompt = enforceNoHashtags(buildGenericPrompt({ title: params.title, topic: params.topic }));
     // Reference images (logos) often retain branding info — drop them here.
     const r = await generateNanoBanana({ prompt: genericPrompt, aspectRatio });
     return { ...r, source: "gemini-generic", wasSanitized: true };
@@ -172,7 +191,7 @@ export async function generateImageSafe(params: SafeImageParams): Promise<SafeIm
 
   // ── Attempt 4: DALL-E with sanitized prompt ────────────────────────
   try {
-    const safePrompt = sanitizePrompt(prompt);
+    const safePrompt = enforceNoHashtags(sanitizePrompt(prompt));
     const dalle = await generateImageDallE({
       prompt: safePrompt,
       size: aspectRatioToDallESize(aspectRatio),
