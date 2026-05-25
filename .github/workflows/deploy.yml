@@ -17,5 +17,4 @@ jobs:
           script: |
             cd /home/deploy/postautomation
             bash scripts/deploy.sh update
-          script_stop: true
           command_timeout: 20m
