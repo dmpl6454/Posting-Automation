@@ -195,19 +195,21 @@ cmd_deploy() {
   save_version
   tag_deployment
 
-  # Register deployment in the database via API
+  # Register deployment in the database via API (best-effort; never block the deploy)
   log "Registering deployment in database..."
-  DEPLOY_SECRET=$(grep DEPLOY_SECRET "$ENV_FILE" 2>/dev/null | cut -d= -f2-)
-  APP_URL=$(grep APP_URL "$ENV_FILE" 2>/dev/null | cut -d= -f2- || echo "http://localhost:3000")
-  if [ -n "$DEPLOY_SECRET" ]; then
-    curl -sf -X POST "${APP_URL}/api/deploy/register" \
-      -H "Content-Type: application/json" \
-      -H "x-deploy-secret: ${DEPLOY_SECRET}" \
-      -d "{\"version\":\"${APP_VERSION}\",\"commitHash\":\"${COMMIT_HASH}\",\"commitMsg\":$(echo "$COMMIT_MSG" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().strip()))' 2>/dev/null || echo "\"${COMMIT_MSG}\""),\"branch\":\"${BRANCH}\",\"changelog\":$(echo "$CHANGELOG" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().strip()))' 2>/dev/null || echo "\"\"")}" \
-      >/dev/null 2>&1 && success "Deployment registered in database" || warn "Could not register deployment (API may not be ready)"
-  else
-    warn "DEPLOY_SECRET not set — skipping database registration"
-  fi
+  {
+    DEPLOY_SECRET=$(grep DEPLOY_SECRET "$ENV_FILE" 2>/dev/null | cut -d= -f2-)
+    APP_URL=$(grep APP_URL "$ENV_FILE" 2>/dev/null | cut -d= -f2- || echo "http://localhost:3000")
+    if [ -n "$DEPLOY_SECRET" ]; then
+      curl -sf -X POST "${APP_URL}/api/deploy/register" \
+        -H "Content-Type: application/json" \
+        -H "x-deploy-secret: ${DEPLOY_SECRET}" \
+        -d "{\"version\":\"${APP_VERSION}\",\"commitHash\":\"${COMMIT_HASH}\",\"commitMsg\":$(echo "$COMMIT_MSG" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().strip()))' 2>/dev/null || echo "\"${COMMIT_MSG}\""),\"branch\":\"${BRANCH}\",\"changelog\":$(echo "$CHANGELOG" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().strip()))' 2>/dev/null || echo "\"\"")}" \
+        >/dev/null 2>&1 && success "Deployment registered in database" || warn "Could not register deployment (API may not be ready)"
+    else
+      warn "DEPLOY_SECRET not set — skipping database registration"
+    fi
+  } || warn "Deployment registration step failed (non-fatal)"
 
   # Cleanup old images
   docker image prune -f >/dev/null 2>&1
