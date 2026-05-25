@@ -52,7 +52,7 @@ cmd_setup() {
   cp docker/nginx/nginx-initial.conf docker/nginx/nginx-active.conf
 
   # Temporarily use the initial config
-  docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" build web worker
+  docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" build web worker migrate
 
   # Start with initial config (modify nginx volume temporarily)
   NGINX_CONF="./docker/nginx/nginx-initial.conf"
@@ -178,7 +178,7 @@ cmd_deploy() {
 
   # Build new images
   log "Building Docker images..."
-  docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" build web worker
+  docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" build web worker migrate
 
   # Run migrations
   log "Running database migrations..."
@@ -349,7 +349,7 @@ cmd_rollback() {
 
   # Rebuild and deploy
   log "Rebuilding from ${target_commit}..."
-  docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" build web worker
+  docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" build web worker migrate
   docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" --profile migration run --rm migrate
 
   log "Restarting services..."
