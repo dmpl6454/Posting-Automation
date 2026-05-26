@@ -95,6 +95,10 @@ Filter to one workspace: `pnpm --filter @postautomation/web <cmd>`
 
 3. **Prisma `_AB_unique` on implicit M:N tables**: Newer Prisma drops the redundant `_AB_unique` constraint on implicit join tables. If `prisma db push` fails with `cannot drop index "_XXX_AB_unique" because constraint ... requires it`, run `ALTER TABLE "_XXX" DROP CONSTRAINT "_XXX_AB_unique";` manually, then retry. Safe — the PK already enforces the same uniqueness.
 
+4. **Worker Docker build fails (canvas / pixman-1)**: The worker image build fails with `gyp: Package 'pixman-1' not found` because `canvas@2.11.2` requires native libs not present in the alpine image. This is a pre-existing issue — the worker container keeps running on the previous image. If you need to deploy worker changes, either add the missing libs to `Dockerfile.worker` or replace `canvas` with a server-side alternative. To deploy web/migrate without worker, use: `docker compose -f docker-compose.prod.yml --env-file .env.production build web migrate && docker compose -f docker-compose.prod.yml --env-file .env.production up -d --no-deps web migrate`
+
+5. **`.env.production` symlink lost**: If `.env.production` points to a broken symlink, recreate `.env.prod` from the running container: `docker inspect postautomation-web-1 --format "{{json .Config.Env}}" | python3 -c "import json,sys; [print(e) for e in sorted(json.load(sys.stdin)) if e.split('=')[0] not in {'PATH','NODE_VERSION','YARN_VERSION','PUPPETEER_EXECUTABLE_PATH','PUPPETEER_SKIP_CHROMIUM_DOWNLOAD','SKIP_ENV_VALIDATION','PORT','HOSTNAME','NODE_ENV'}]" > .env.prod`
+
 ## Authentication
 
 NextAuth v5 beta (`next-auth@^5.0.0-beta.25`), PrismaAdapter, JWT sessions (30 days).
