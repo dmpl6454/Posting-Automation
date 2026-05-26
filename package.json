@@ -9,7 +9,7 @@
     "db:migrate": "pnpm --filter @postautomation/db db:migrate",
     "db:push": "pnpm --filter @postautomation/db db:push",
     "db:seed": "pnpm --filter @postautomation/db db:seed",
-    "db:backfill-orgs": "pnpm --filter @postautomation/db exec tsx ../../scripts/backfill-user-orgs.ts",
+    "db:backfill-orgs": "NODE_PATH=packages/db/node_modules tsx scripts/backfill-user-orgs.ts",
     "db:studio": "pnpm --filter @postautomation/db db:studio",
     "test": "turbo test",
     "clean": "turbo clean && rm -rf node_modules"
