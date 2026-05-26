@@ -16,9 +16,7 @@
  *   cd packages/db && pnpm exec tsx ../../scripts/backfill-user-orgs.ts
  */
 
-import { PrismaClient } from "@prisma/client";
-
-const prisma = new PrismaClient();
+import { prisma } from "@postautomation/db";
 
 async function main() {
   console.log("🔍  Finding users with no organisation membership…\n");
@@ -100,6 +98,6 @@ main()
     console.error("Backfill failed:", err);
     process.exit(1);
   })
-  .finally(async () => {
-    await prisma.$disconnect();
+  .finally(() => {
+    process.exit(0);
   });
