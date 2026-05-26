@@ -151,6 +151,34 @@ SMTP_FROM=PostAutomation <hr@digitalsukoon.com>
 - Coverage: `@vitest/coverage-v8`
 - Run all: `pnpm test`
 
+## Roles & Access Control
+
+### Member roles
+`MemberRole` enum (Prisma): `OWNER | ADMIN | MEMBER`. **VIEWER was removed** — never re-add it to the schema without also updating all routers and UI.
+
+- **OWNER**: full access; can transfer ownership, manage billing, remove members, update roles
+- **ADMIN**: same as OWNER except cannot transfer ownership or change billing
+- **MEMBER**: standard access; cannot manage team, billing, webhooks, API keys, audit log, or versions
+- Default role on new sign-up: **OWNER** (auto-created personal workspace)
+
+### Super admin
+`User.isSuperAdmin` (boolean DB column) is a separate concept from org membership roles.
+
+- **How it works**: `orgProcedure` reads `session.user.isSuperAdmin` and passes it as `ctx.isSuperAdmin`; all plan-limit helpers (`requirePlan`, `checkUsageLimit`, `enforcePlanLimit`) accept an optional `isSuperAdmin` flag and return early / return unlimited when true; `planExpiresAt` auto-revert is skipped for superadmin orgs; sidebar lock icons are skipped; superadmins bypass membership checks and can access any org.
+- **Who has it**: `tabish@dashmani.com` — applied directly via psql on 2026-05-26.
+- **Granting on local**: `UPDATE "User" SET "isSuperAdmin" = true WHERE email = 'you@example.com';` in `prisma studio` or psql. Also ensure an OWNER membership exists.
+- **Granting on production** (psql): `ssh posting-automation 'docker exec postautomation-postgres-1 psql -U postgres postautomation -c "UPDATE \"User\" SET \"isSuperAdmin\" = true WHERE email = '\''you@example.com'\'';"'`
+- After granting, the user must **sign out and back in** for the new JWT claim to take effect.
+
+### Plan enforcement
+- `MemberRole` is independent of `Organization.plan`. Plans are `FREE | STARTER | PROFESSIONAL | ENTERPRISE`.
+- Feature gates via `requirePlan(orgId, minPlan, featureName, isSuperAdmin?)` — throws `FORBIDDEN` if org plan is below minimum.
+- Resource limits via `enforcePlanLimit(orgId, resource, isSuperAdmin?)` — throws `FORBIDDEN` if quota exceeded.
+- `planExpiresAt` on `Organization`: if set and in the past, `orgProcedure` silently reverts the org to FREE on next request (except for superadmin orgs).
+- Sidebar shows lock icons for plan-gated nav items (redirects to `/dashboard/settings/billing` when clicked).
+- Team page shows an upgrade CTA banner when the team-member limit is reached.
+- All limits are `-1` (unlimited) on ENTERPRISE and for `postsPerMonth`/`teamMembers` on PROFESSIONAL.
+
 ## Conventions
 
 - TypeScript strict, shared base config in [tsconfig.base.json](tsconfig.base.json)
