@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { trpc } from "~/lib/trpc/client";
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
@@ -104,15 +104,17 @@ const OAUTH_ERROR_MESSAGES: Record<string, string> = {
     "Twitter rejected the initial request. Check that your TWITTER_CLIENT_ID / TWITTER_CLIENT_SECRET are valid.",
 };
 
-export default function ChannelsPage() {
+/**
+ * Reads OAuth-callback `?error=` / `?success=` query params and surfaces
+ * them as toasts. Lives in its own component so we can wrap it in
+ * <Suspense> — `useSearchParams()` would otherwise opt the entire page
+ * out of static generation and break `next build`.
+ */
+function OAuthCallbackToaster({ onConnected }: { onConnected: () => void }) {
   const { toast } = useToast();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { data: channels, isLoading, refetch } = trpc.channel.list.useQuery();
-  const { data: platforms } = trpc.channel.supportedPlatforms.useQuery();
-  const { data: channelGroups, refetch: refetchGroups } = trpc.channelGroup.list.useQuery();
 
-  // Surface OAuth callback outcomes via toast and strip the query params.
   useEffect(() => {
     const errorCode = searchParams.get("error");
     const successCode = searchParams.get("success");
@@ -141,10 +143,19 @@ export default function ChannelsPage() {
         description: `${platformLabel} added successfully.`,
       });
       router.replace("/dashboard/channels");
-      void refetch();
+      onConnected();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
+
+  return null;
+}
+
+export default function ChannelsPage() {
+  const { toast } = useToast();
+  const { data: channels, isLoading, refetch } = trpc.channel.list.useQuery();
+  const { data: platforms } = trpc.channel.supportedPlatforms.useQuery();
+  const { data: channelGroups, refetch: refetchGroups } = trpc.channelGroup.list.useQuery();
 
   // Group management state
   const [newGroupName, setNewGroupName] = useState("");
@@ -381,6 +392,12 @@ export default function ChannelsPage() {
 
   return (
     <div className="space-y-8">
+      {/* OAuth callback ?error / ?success — own Suspense boundary so the
+          page doesn't bail out of static export. */}
+      <Suspense fallback={null}>
+        <OAuthCallbackToaster onConnected={() => void refetch()} />
+      </Suspense>
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
