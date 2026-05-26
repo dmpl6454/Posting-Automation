@@ -1,5 +1,7 @@
 "use client";
 
+import { humanizeError } from "~/lib/errors";
+
 import { useState } from "react";
 import { trpc } from "~/lib/trpc/client";
 import {
@@ -48,7 +50,7 @@ export function CreateOrgDialog({
     onError: (err: any) => {
       toast({
         title: "Failed to create organization",
-        description: err.message,
+        description: humanizeError(err),
         variant: "destructive",
       });
     },

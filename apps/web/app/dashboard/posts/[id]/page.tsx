@@ -1,5 +1,7 @@
 "use client";
 
+import { humanizeError } from "~/lib/errors";
+
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
@@ -81,7 +83,7 @@ export default function PostDetailPage() {
       refetch();
     },
     onError: (err) => {
-      toast({ title: "Update failed", description: err.message, variant: "destructive" });
+      toast({ title: "Update failed", description: humanizeError(err), variant: "destructive" });
     },
   });
 
@@ -91,7 +93,7 @@ export default function PostDetailPage() {
       router.push("/dashboard/posts");
     },
     onError: (err) => {
-      toast({ title: "Delete failed", description: err.message, variant: "destructive" });
+      toast({ title: "Delete failed", description: humanizeError(err), variant: "destructive" });
     },
   });
 
@@ -101,7 +103,7 @@ export default function PostDetailPage() {
       refetch();
     },
     onError: (err) => {
-      toast({ title: "Publish failed", description: err.message, variant: "destructive" });
+      toast({ title: "Publish failed", description: humanizeError(err), variant: "destructive" });
     },
   });
 

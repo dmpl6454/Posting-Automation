@@ -3,6 +3,7 @@ import { TRPCError } from "@trpc/server";
 import bcrypt from "bcryptjs";
 import { createRouter, protectedProcedure } from "../trpc";
 import { sendSms } from "../lib/sms";
+import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 
 export const userRouter = createRouter({
   me: protectedProcedure.query(async ({ ctx }) => {
@@ -27,10 +28,22 @@ export const userRouter = createRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      return ctx.prisma.user.update({
-        where: { id: (ctx.session.user as any).id },
+      const userId = (ctx.session.user as any).id;
+      const updated = await ctx.prisma.user.update({
+        where: { id: userId },
         data: input,
       });
+      // Fix #78: audit log for profile update
+      createAuditLog({
+        userId,
+        action: AUDIT_ACTIONS.USER_PROFILE_UPDATED,
+        entityType: "User",
+        entityId: userId,
+        metadata: { fields: Object.keys(input) },
+      }).catch((err) => {
+        console.error("audit_log_write_failed", { err: err.message, action: AUDIT_ACTIONS.USER_PROFILE_UPDATED });
+      });
+      return updated;
     }),
 
   changePassword: protectedProcedure
@@ -76,9 +89,20 @@ export const userRouter = createRouter({
       }
 
       const hashedPassword = await bcrypt.hash(input.newPassword, 12);
+      const userId = (ctx.session.user as any).id;
       await ctx.prisma.user.update({
-        where: { id: (ctx.session.user as any).id },
+        where: { id: userId },
         data: { password: hashedPassword },
+      });
+
+      // Fix #78: audit log for password change
+      createAuditLog({
+        userId,
+        action: AUDIT_ACTIONS.USER_PASSWORD_CHANGED,
+        entityType: "User",
+        entityId: userId,
+      }).catch((err) => {
+        console.error("audit_log_write_failed", { err: err.message, action: AUDIT_ACTIONS.USER_PASSWORD_CHANGED });
       });
 
       return { success: true };
@@ -162,16 +186,67 @@ export const userRouter = createRouter({
         data: { phone: input.phone, phoneVerified: new Date() },
       });
 
+      // Fix #78: audit log for phone addition
+      createAuditLog({
+        userId,
+        action: AUDIT_ACTIONS.USER_PHONE_ADDED,
+        entityType: "User",
+        entityId: userId,
+      }).catch((err) => {
+        console.error("audit_log_write_failed", { err: err.message, action: AUDIT_ACTIONS.USER_PHONE_ADDED });
+      });
+
       return { success: true };
     }),
 
-  removePhone: protectedProcedure.mutation(async ({ ctx }) => {
-    await ctx.prisma.user.update({
-      where: { id: (ctx.session.user as any).id },
-      data: { phone: null, phoneVerified: null },
-    });
-    return { success: true };
-  }),
+  // Fix #95: phone removal requires OTP re-confirmation
+  removePhone: protectedProcedure
+    .input(z.object({ otp: z.string().length(6) }))
+    .mutation(async ({ ctx, input }) => {
+      const userId = (ctx.session.user as any).id;
+
+      // Look up the user's current phone number
+      const user = await ctx.prisma.user.findUnique({
+        where: { id: userId },
+        select: { phone: true },
+      });
+      if (!user?.phone) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "No phone number to remove." });
+      }
+
+      // Verify OTP sent to this phone
+      const otpRecord = await ctx.prisma.phoneOtp.findFirst({
+        where: {
+          phone: user.phone,
+          used: false,
+          expiresAt: { gt: new Date() },
+        },
+        orderBy: { createdAt: "desc" },
+      });
+      if (!otpRecord) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "OTP not found or expired. Please request a new code." });
+      }
+      const isValid = await bcrypt.compare(input.otp, otpRecord.otp);
+      if (!isValid) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Incorrect OTP. Please try again." });
+      }
+      await ctx.prisma.phoneOtp.update({ where: { id: otpRecord.id }, data: { used: true } });
+
+      await ctx.prisma.user.update({
+        where: { id: userId },
+        data: { phone: null, phoneVerified: null },
+      });
+      // Fix #78: audit log for phone removal
+      createAuditLog({
+        userId,
+        action: AUDIT_ACTIONS.USER_PHONE_REMOVED,
+        entityType: "User",
+        entityId: userId,
+      }).catch((err) => {
+        console.error("audit_log_write_failed", { err: err.message, action: AUDIT_ACTIONS.USER_PHONE_REMOVED });
+      });
+      return { success: true };
+    }),
 
   createOrganization: protectedProcedure
     .input(

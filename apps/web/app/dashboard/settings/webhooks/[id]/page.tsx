@@ -1,5 +1,7 @@
 "use client";
 
+import { humanizeError } from "~/lib/errors";
+
 import { useState } from "react";
 import { useParams } from "next/navigation";
 import { trpc } from "~/lib/trpc/client";
@@ -72,7 +74,7 @@ export default function WebhookDeliveryPage() {
     onError: (err: any) => {
       toast({
         title: "Retry failed",
-        description: err.message,
+        description: humanizeError(err),
         variant: "destructive",
       });
     },

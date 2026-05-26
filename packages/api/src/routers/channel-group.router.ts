@@ -18,11 +18,17 @@ export const channelGroupRouter = createRouter({
   create: orgProcedure
     .input(z.object({ name: z.string().min(1).max(50), color: z.string().optional() }))
     .mutation(async ({ ctx, input }) => {
+      // Fix #20: include channels in return so the UI doesn't dereference undefined
       return ctx.prisma.channelGroup.create({
         data: {
           organizationId: ctx.organizationId,
           name: input.name,
           color: input.color ?? "#6366f1",
+        },
+        include: {
+          channels: {
+            select: { id: true, name: true, platform: true, username: true, avatar: true, isActive: true },
+          },
         },
       });
     }),

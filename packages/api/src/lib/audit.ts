@@ -62,7 +62,32 @@ export const AUDIT_ACTIONS = {
 
   // Billing
   PLAN_CHANGED: "billing.plan_changed",
+  BILLING_CHECKOUT_STARTED: "billing.checkout_started",
   SUBSCRIPTION_CANCELLED: "billing.subscription_cancelled",
+
+  // RSS
+  RSS_FEED_CREATED: "rss.feed_created",
+  RSS_FEED_UPDATED: "rss.feed_updated",
+  RSS_FEED_DELETED: "rss.feed_deleted",
+
+  // Agents
+  AGENT_CREATED: "agent.created",
+  AGENT_UPDATED: "agent.updated",
+  AGENT_DELETED: "agent.deleted",
+  AGENT_TOGGLED: "agent.toggled",
+
+  // Autopilot
+  PIPELINE_TRIGGERED: "autopilot.pipeline_triggered",
+
+  // Listening
+  LISTENING_QUERY_CREATED: "listening.query_created",
+  LISTENING_QUERY_DELETED: "listening.query_deleted",
+
+  // User profile / settings
+  USER_PROFILE_UPDATED: "user.profile_updated",
+  USER_PASSWORD_CHANGED: "user.password_changed",
+  USER_PHONE_ADDED: "user.phone_added",
+  USER_PHONE_REMOVED: "user.phone_removed",
 
   // Organization
   ORG_SETTINGS_UPDATED: "org.settings_updated",

@@ -1,5 +1,7 @@
 "use client";
 
+import { humanizeError } from "~/lib/errors";
+
 import { Trash2, ImageIcon, HardDrive } from "lucide-react";
 import { trpc } from "~/lib/trpc/client";
 import { DataTable, type Column } from "~/components/admin/DataTable";
@@ -42,7 +44,7 @@ export default function AdminMediaPage() {
       toast({ title: "Media deleted" });
     },
     onError: (err) =>
-      toast({ title: "Error", description: err.message, variant: "destructive" }),
+      toast({ title: "Error", description: humanizeError(err), variant: "destructive" }),
   });
 
   const columns: Column<MediaRow>[] = [

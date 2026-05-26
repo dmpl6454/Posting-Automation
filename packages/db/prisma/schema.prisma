@@ -28,6 +28,7 @@ model User {
   memberships OrganizationMember[]
   auditLogs        AuditLog[]
   designTemplates  DesignTemplate[]
+  sentInvites      OrganizationInvite[] @relation("SentInvites")
 
   passwordResetTokens     PasswordResetToken[]
   emailVerificationTokens EmailVerificationToken[]
@@ -117,6 +118,7 @@ model Organization {
   planExpiresAt        DateTime?
 
   members        OrganizationMember[]
+  invites        OrganizationInvite[]
   channels       Channel[]
   channelGroups  ChannelGroup[]
   posts          Post[]
@@ -157,11 +159,28 @@ model OrganizationMember {
   @@index([organizationId])
 }
 
+// Fix #69-71: email invitation flow
+model OrganizationInvite {
+  id             String     @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  email          String
+  role           MemberRole @default(MEMBER)
+  token          String     @unique
+  expiresAt      DateTime
+  invitedById    String
+  invitedBy      User       @relation("SentInvites", fields: [invitedById], references: [id], onDelete: Cascade)
+  acceptedAt     DateTime?
+  createdAt      DateTime   @default(now())
+
+  @@index([organizationId])
+  @@index([email])
+}
+
 enum MemberRole {
   OWNER
   ADMIN
   MEMBER
-  VIEWER
 }
 
 enum PlanType {

@@ -3,9 +3,11 @@
 import Link from "next/link";
 import NextImage from "next/image";
 import { usePathname } from "next/navigation";
+import { useSession } from "next-auth/react";
 import { cn } from "~/lib/utils";
 import { OrgSwitcher } from "~/components/layout/org-switcher";
-import { X } from "lucide-react";
+import { trpc } from "~/lib/trpc/client";
+import { X, Lock } from "lucide-react";
 import { Button } from "~/components/ui/button";
 import {
   LayoutDashboard,
@@ -32,33 +34,52 @@ import {
   Star,
 } from "lucide-react";
 
-const navigation = [
+type MemberRole = "OWNER" | "ADMIN" | "MEMBER";
+type PlanType = "FREE" | "STARTER" | "PROFESSIONAL" | "ENTERPRISE";
+
+const PLAN_ORDER: PlanType[] = ["FREE", "STARTER", "PROFESSIONAL", "ENTERPRISE"];
+
+interface NavItem {
+  name: string;
+  href: string;
+  icon: React.ElementType;
+  /** If set, only users with one of these roles see this item. Omit = everyone. */
+  roles?: MemberRole[];
+  /** If set, show a lock badge unless org plan meets this minimum. */
+  minPlan?: PlanType;
+}
+
+const navigation: NavItem[] = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  { name: "Super Agent", href: "/dashboard/super-agent", icon: Zap },
+  { name: "Super Agent", href: "/dashboard/super-agent", icon: Zap, minPlan: "STARTER" },
   { name: "Content Studio", href: "/dashboard/content-agent", icon: Sparkles },
   { name: "Channels", href: "/dashboard/channels", icon: Share2 },
   { name: "Media", href: "/dashboard/media", icon: Image },
   { name: "Analytics", href: "/dashboard/analytics", icon: BarChart3 },
   { name: "RSS Feeds", href: "/dashboard/rss", icon: Rss },
   { name: "Short Links", href: "/dashboard/links", icon: Link2 },
-  { name: "NewsGrid Bot", href: "/dashboard/newsgrid", icon: Newspaper },
-  { name: "Autopilot", href: "/dashboard/autopilot", icon: Zap },
-  { name: "Listening", href: "/dashboard/listening", icon: Ear },
-  { name: "Campaigns", href: "/dashboard/campaigns", icon: Target },
-  { name: "Brand Leads", href: "/dashboard/brand-leads", icon: Star },
+  { name: "NewsGrid Bot", href: "/dashboard/newsgrid", icon: Newspaper, minPlan: "STARTER" },
+  { name: "Autopilot", href: "/dashboard/autopilot", icon: Zap, minPlan: "STARTER" },
+  { name: "Listening", href: "/dashboard/listening", icon: Ear, minPlan: "STARTER" },
+  { name: "Campaigns", href: "/dashboard/campaigns", icon: Target, minPlan: "PROFESSIONAL" },
+  // Fix #62: sidebar label aligned with page header ("Brand Outreach")
+  { name: "Brand Outreach", href: "/dashboard/brand-leads", icon: Star, minPlan: "PROFESSIONAL" },
   { name: "Approvals", href: "/dashboard/approvals", icon: CheckCircle },
-  { name: "Team", href: "/dashboard/team", icon: Users },
+  // Fix #1: Team visible to OWNER + ADMIN only
+  { name: "Team", href: "/dashboard/team", icon: Users, roles: ["OWNER", "ADMIN"] },
+  // Fix #1: Billing moved to main nav (was in settingsNav — caused double-highlight)
+  { name: "Billing", href: "/dashboard/settings/billing", icon: CreditCard, roles: ["OWNER", "ADMIN"] },
 ];
 
-const settingsNav = [
+const settingsNav: NavItem[] = [
   { name: "Monitoring", href: "/dashboard/monitoring", icon: Monitor },
   { name: "Settings", href: "/dashboard/settings", icon: Settings },
-  { name: "Billing", href: "/dashboard/settings/billing", icon: CreditCard },
-  { name: "Webhooks", href: "/dashboard/settings/webhooks", icon: Webhook },
-  { name: "API Keys", href: "/dashboard/settings/api-keys", icon: Key },
+  // Fix #4: Billing removed from settingsNav (now lives in main nav above)
+  { name: "Webhooks", href: "/dashboard/settings/webhooks", icon: Webhook, roles: ["OWNER", "ADMIN"] },
+  { name: "API Keys", href: "/dashboard/settings/api-keys", icon: Key, roles: ["OWNER", "ADMIN"] },
   { name: "API Docs", href: "/dashboard/settings/api-docs", icon: BookOpen },
-  { name: "Audit Log", href: "/dashboard/settings/audit-log", icon: FileText },
-  { name: "Versions", href: "/dashboard/settings/versions", icon: GitBranch },
+  { name: "Audit Log", href: "/dashboard/settings/audit-log", icon: FileText, roles: ["OWNER", "ADMIN"] },
+  { name: "Versions", href: "/dashboard/settings/versions", icon: GitBranch, roles: ["OWNER", "ADMIN"] },
 ];
 
 interface SidebarProps {
@@ -68,10 +89,30 @@ interface SidebarProps {
 
 export function Sidebar({ open, onClose }: SidebarProps) {
   const pathname = usePathname();
+  const { data: session } = useSession();
+  const role = (session?.user as any)?.role as MemberRole | undefined;
+  const isSuperAdmin = (session?.user as any)?.isSuperAdmin === true;
+  const { data: planData } = trpc.billing.currentPlan.useQuery(undefined, {
+    // Refresh every 5 minutes — plan changes are low-frequency
+    staleTime: 5 * 60 * 1000,
+  });
+  const orgPlan = (planData?.plan ?? "FREE") as PlanType;
+
+  /** Returns true if the org's current plan meets the item's minPlan requirement.
+   *  Super admins always pass — they have unlimited access to all features. */
+  const planAllowed = (item: NavItem) => {
+    if (!item.minPlan) return true;
+    if (isSuperAdmin) return true;
+    return PLAN_ORDER.indexOf(orgPlan) >= PLAN_ORDER.indexOf(item.minPlan);
+  };
 
   const handleNavClick = () => {
     if (onClose) onClose();
   };
+
+  /** Filter items by role gate */
+  const visible = (items: NavItem[]) =>
+    items.filter((n) => !n.roles || (role && n.roles.includes(role)));
 
   const sidebarContent = (
     <>
@@ -110,30 +151,41 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         <div className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
           Main
         </div>
-        {navigation.map((item) => {
+        {visible(navigation).map((item) => {
+          // Fix #4: avoid double-highlight — Settings parent should not match
+          // sub-routes via startsWith since Billing is now a top-level nav item.
           const isActive =
-            pathname === item.href || pathname.startsWith(item.href + "/");
+            pathname === item.href ||
+            (item.href !== "/dashboard/settings" &&
+              item.href !== "/dashboard" &&
+              pathname.startsWith(item.href + "/"));
+          const locked = !planAllowed(item);
           return (
             <Link
               key={item.name}
-              href={item.href}
+              href={locked ? "/dashboard/settings/billing" : item.href}
               onClick={handleNavClick}
               className={cn(
                 "group flex items-center gap-3 rounded-xl px-3 py-2 text-[13px] font-medium transition-all",
-                isActive
+                isActive && !locked
                   ? "bg-foreground/[0.06] text-foreground shadow-sm"
+                  : locked
+                  ? "text-muted-foreground/50 hover:bg-foreground/[0.04] hover:text-muted-foreground"
                   : "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground"
               )}
             >
               <item.icon
                 className={cn(
                   "h-4 w-4 transition-colors",
-                  isActive
+                  isActive && !locked
                     ? "text-foreground"
                     : "text-muted-foreground/70 group-hover:text-foreground"
                 )}
               />
-              {item.name}
+              <span className="flex-1">{item.name}</span>
+              {locked && (
+                <Lock className="h-3 w-3 shrink-0 text-muted-foreground/40" />
+              )}
             </Link>
           );
         })}
@@ -141,7 +193,8 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         <div className="mb-2 mt-6 px-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
           Settings
         </div>
-        {settingsNav.map((item) => {
+        {visible(settingsNav).map((item) => {
+          // Settings sub-pages: exact match only to prevent double-highlight
           const isActive = pathname === item.href;
           return (
             <Link

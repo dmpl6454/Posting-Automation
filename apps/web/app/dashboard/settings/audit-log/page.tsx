@@ -31,6 +31,8 @@ import {
   Filter,
   ChevronDown,
   ChevronUp,
+  Copy,
+  Check,
 } from "lucide-react";
 
 // Action categories for color-coding
@@ -124,6 +126,14 @@ export default function AuditLogPage() {
   const [endDate, setEndDate] = useState("");
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
   const [showFilters, setShowFilters] = useState(false);
+  // Fix #77: copy-to-clipboard state for entity IDs
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  const copyEntityId = (id: string) => {
+    navigator.clipboard.writeText(id);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
+  };
 
   const { data, isLoading } = trpc.audit.list.useQuery({
     page,
@@ -307,13 +317,15 @@ export default function AuditLogPage() {
               )}
             </div>
           ) : (
+            {/* Fix #76: drop hardcoded widths; use a scrollable wrapper with auto-sizing columns */}
+            <div className="max-w-full overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-[180px]">Timestamp</TableHead>
-                  <TableHead className="w-[180px]">User</TableHead>
-                  <TableHead className="w-[180px]">Action</TableHead>
-                  <TableHead className="w-[120px]">Entity</TableHead>
+                  <TableHead className="whitespace-nowrap">Timestamp</TableHead>
+                  <TableHead className="whitespace-nowrap">User</TableHead>
+                  <TableHead className="whitespace-nowrap">Action</TableHead>
+                  <TableHead className="whitespace-nowrap">Entity</TableHead>
                   <TableHead>Details</TableHead>
                 </TableRow>
               </TableHeader>
@@ -357,9 +369,19 @@ export default function AuditLogPage() {
                         {log.entityType}
                       </span>
                       {log.entityId && (
-                        <span className="ml-1 font-mono text-[10px] text-muted-foreground/70">
-                          {log.entityId.slice(0, 8)}...
-                        </span>
+                        // Fix #77: show 8-char prefix, full ID on hover, copy button
+                        <button
+                          className="group ml-1 inline-flex items-center gap-0.5 font-mono text-[10px] text-muted-foreground/70 hover:text-foreground"
+                          title={log.entityId}
+                          onClick={(e: any) => { e.stopPropagation(); copyEntityId(log.entityId); }}
+                        >
+                          <code>{log.entityId.slice(0, 8)}…</code>
+                          {copiedId === log.entityId ? (
+                            <Check className="h-2.5 w-2.5 text-green-500" />
+                          ) : (
+                            <Copy className="h-2.5 w-2.5 opacity-0 group-hover:opacity-100" />
+                          )}
+                        </button>
                       )}
                     </TableCell>
                     <TableCell>
@@ -404,6 +426,7 @@ export default function AuditLogPage() {
                 ))}
               </TableBody>
             </Table>
+            </div>
           )}
         </CardContent>
       </Card>

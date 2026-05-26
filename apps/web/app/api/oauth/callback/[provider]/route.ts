@@ -71,9 +71,19 @@ export async function GET(
 
       const platform = "TWITTER";
       const provider = getSocialProvider(platform as any);
+
+      // Fix #19: guard against missing env vars
+      const twitterClientId = process.env.TWITTER_CLIENT_ID;
+      const twitterClientSecret = process.env.TWITTER_CLIENT_SECRET;
+      if (!twitterClientId || !twitterClientSecret) {
+        return NextResponse.redirect(
+          `${process.env.APP_URL}/dashboard/channels?error=platform_not_configured&platform=twitter`
+        );
+      }
+
       const config = {
-        clientId: process.env.TWITTER_CLIENT_ID || "",
-        clientSecret: process.env.TWITTER_CLIENT_SECRET || "",
+        clientId: twitterClientId,
+        clientSecret: twitterClientSecret,
         callbackUrl: `${process.env.APP_URL}/api/oauth/callback/twitter`,
         scopes: [],
       };
@@ -149,9 +159,19 @@ export async function GET(
     const provider = getSocialProvider(platform as any);
 
     const envPrefix = platform;
+    const oauthClientId = process.env[`${envPrefix}_CLIENT_ID`];
+    const oauthClientSecret = process.env[`${envPrefix}_CLIENT_SECRET`];
+
+    // Fix #19: guard against missing env vars in OAuth callback
+    if (!oauthClientId || !oauthClientSecret) {
+      return NextResponse.redirect(
+        `${process.env.APP_URL}/dashboard/channels?error=platform_not_configured&platform=${params.provider}`
+      );
+    }
+
     const config = {
-      clientId: process.env[`${envPrefix}_CLIENT_ID`] || "",
-      clientSecret: process.env[`${envPrefix}_CLIENT_SECRET`] || "",
+      clientId: oauthClientId,
+      clientSecret: oauthClientSecret,
       callbackUrl: `${process.env.APP_URL}/api/oauth/callback/${params.provider}`,
       scopes: [],
     };

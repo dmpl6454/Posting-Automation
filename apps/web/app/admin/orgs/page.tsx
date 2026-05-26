@@ -1,5 +1,7 @@
 "use client";
 
+import { humanizeError } from "~/lib/errors";
+
 import { useState } from "react";
 import { Trash2 } from "lucide-react";
 import { trpc } from "~/lib/trpc/client";
@@ -43,7 +45,7 @@ export default function AdminOrgsPage() {
       refetch();
       toast({ title: "Plan updated" });
     },
-    onError: (err) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+    onError: (err) => toast({ title: "Error", description: humanizeError(err), variant: "destructive" }),
   });
 
   const deleteOrg = trpc.admin.orgs.delete.useMutation({
@@ -51,7 +53,7 @@ export default function AdminOrgsPage() {
       refetch();
       toast({ title: "Organization deleted" });
     },
-    onError: (err) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+    onError: (err) => toast({ title: "Error", description: humanizeError(err), variant: "destructive" }),
   });
 
   const columns: Column<OrgRow>[] = [

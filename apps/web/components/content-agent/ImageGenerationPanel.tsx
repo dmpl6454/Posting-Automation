@@ -1,5 +1,7 @@
 "use client";
 
+import { humanizeError } from "~/lib/errors";
+
 import { useState, useRef, useCallback, useEffect } from "react";
 import { trpc } from "~/lib/trpc/client";
 import { useActiveTask } from "~/lib/active-task";
@@ -268,7 +270,7 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
       }
     },
     onError: (err: any) => {
-      toast({ title: "Generation failed", description: err.message || "Something went wrong.", variant: "destructive" });
+      toast({ title: "Generation failed", description: humanizeError(err) || "Something went wrong.", variant: "destructive" });
     },
   });
 
@@ -280,13 +282,13 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
       toast({ title: "Image edited!", description: "Your edited image is ready." });
     },
     onError: (err: any) => {
-      toast({ title: "Edit failed", description: err.message || "Something went wrong.", variant: "destructive" });
+      toast({ title: "Edit failed", description: humanizeError(err) || "Something went wrong.", variant: "destructive" });
     },
   });
 
   const saveMutation = trpc.image.saveGenerated.useMutation({
     onSuccess: () => toast({ title: "Saved to media library!" }),
-    onError: (err: any) => toast({ title: "Save failed", description: err.message, variant: "destructive" }),
+    onError: (err: any) => toast({ title: "Save failed", description: humanizeError(err), variant: "destructive" }),
   });
 
   const fileToBase64 = (file: File): Promise<string> =>
@@ -415,7 +417,7 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
         setCarouselImages([...images]);
         addToHistory(imageUrl, `Slide ${i + 1}: ${slidePrompts?.[i] ?? generatePrompt}`);
       } catch (err: any) {
-        toast({ title: `Slide ${i + 1} failed`, description: err.message, variant: "destructive" });
+        toast({ title: `Slide ${i + 1} failed`, description: humanizeError(err), variant: "destructive" });
       }
     }
 

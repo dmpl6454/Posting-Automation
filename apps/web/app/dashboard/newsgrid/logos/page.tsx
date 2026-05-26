@@ -1,5 +1,7 @@
 "use client";
 
+import { humanizeError } from "~/lib/errors";
+
 import { useRef, useState } from "react";
 import { trpc } from "~/lib/trpc/client";
 import { Card, CardContent } from "~/components/ui/card";
@@ -121,7 +123,7 @@ export default function LogoLibraryPage() {
       toast({ title: "Logo assigned to channel" });
     },
     onError: (err) => {
-      toast({ title: "Failed to assign logo", description: err.message, variant: "destructive" });
+      toast({ title: "Failed to assign logo", description: humanizeError(err), variant: "destructive" });
     },
   });
   const deleteLogo = trpc.newsgrid.deleteLogo.useMutation({
@@ -130,7 +132,7 @@ export default function LogoLibraryPage() {
       toast({ title: "Logo deleted" });
     },
     onError: (err) => {
-      toast({ title: "Failed to delete logo", description: err.message, variant: "destructive" });
+      toast({ title: "Failed to delete logo", description: humanizeError(err), variant: "destructive" });
     },
   });
 

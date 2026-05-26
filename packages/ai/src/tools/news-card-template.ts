@@ -206,8 +206,10 @@ export function generateStaticNewsCreativeHtml(options: StaticNewsCreativeOption
     .slice(0, 3)
     .map((w) => w.toLowerCase())
     .join(",");
-  const bgQuery = keywords || "news";
-  const bgUrl = options.backgroundImageUrl || `https://loremflickr.com/1080/1350/${bgQuery}?lock=${seed}`;
+  // Fix #56: use local fallback backgrounds instead of loremflickr.com (external service)
+  const LOCAL_BG_COUNT = 6;
+  const localBg = `/newsgrid-bg/bg-${(seed % LOCAL_BG_COUNT) + 1}.svg`;
+  const bgUrl = options.backgroundImageUrl || localBg;
 
   const words = options.headline.trim().split(/\s+/).length;
   const fontSize = words <= 5 ? 82 : words <= 8 ? 66 : words <= 12 ? 54 : words <= 16 ? 46 : 40;

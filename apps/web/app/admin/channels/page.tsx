@@ -1,5 +1,7 @@
 "use client";
 
+import { humanizeError } from "~/lib/errors";
+
 import { RefreshCw, Unplug } from "lucide-react";
 import { trpc } from "~/lib/trpc/client";
 import { DataTable, type Column } from "~/components/admin/DataTable";
@@ -40,7 +42,7 @@ export default function AdminChannelsPage() {
       }
     },
     onError: (err) =>
-      toast({ title: "Error", description: err.message, variant: "destructive" }),
+      toast({ title: "Error", description: humanizeError(err), variant: "destructive" }),
   });
 
   const disconnect = trpc.admin.channels.disconnect.useMutation({
@@ -49,7 +51,7 @@ export default function AdminChannelsPage() {
       toast({ title: "Channel disconnected" });
     },
     onError: (err) =>
-      toast({ title: "Error", description: err.message, variant: "destructive" }),
+      toast({ title: "Error", description: humanizeError(err), variant: "destructive" }),
   });
 
   const columns: Column<ChannelRow>[] = [

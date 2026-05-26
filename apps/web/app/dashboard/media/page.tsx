@@ -18,7 +18,13 @@ import {
   X,
   Download,
   AlertCircle,
+  ZoomIn,
 } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+} from "~/components/ui/dialog";
 
 const PAGE_SIZE = 40;
 
@@ -28,6 +34,8 @@ export default function MediaPage() {
   const [isUploading, setIsUploading] = useState(false);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  // Fix #37-39: lightbox state
+  const [selectedMedia, setSelectedMedia] = useState<any | null>(null);
   const [typeFilter, setTypeFilter] = useState<"all" | "image" | "video">("all");
   const loadMoreRef = useRef<HTMLDivElement>(null);
 
@@ -195,10 +203,14 @@ export default function MediaPage() {
         </Card>
       ) : (
         <>
+          {/* Fix #37-39: cards are clickable → opens lightbox; videos show controls */}
           <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
             {allItems.map((media: any) => (
               <Card key={media.id} className="group overflow-hidden">
-                <div className="relative aspect-square w-full overflow-hidden bg-muted">
+                <div
+                  className="relative aspect-square w-full cursor-pointer overflow-hidden bg-muted"
+                  onClick={() => setSelectedMedia(media)}
+                >
                   {media.fileType.startsWith("video/") ? (
                     <div className="absolute inset-0 bg-black">
                       <video
@@ -225,7 +237,6 @@ export default function MediaPage() {
                       className="absolute inset-0 h-full w-full object-cover"
                       onError={(e) => {
                         const img = e.target as HTMLImageElement;
-                        // Try original URL if thumbnail fails
                         if (media.thumbnailUrl && img.src === media.thumbnailUrl) {
                           img.src = media.url;
                         } else {
@@ -241,10 +252,15 @@ export default function MediaPage() {
                       }}
                     />
                   )}
+                  {/* Hover overlay hint */}
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/30 opacity-0 transition-opacity group-hover:opacity-100">
+                    <ZoomIn className="h-6 w-6 text-white" />
+                  </div>
                   <div className="absolute right-2 top-2 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
                     <a
                       href={media.url}
                       download={media.fileName}
+                      onClick={(e) => e.stopPropagation()}
                       className="flex h-7 w-7 items-center justify-center rounded-md bg-black/60 text-white hover:bg-black/80 transition-colors"
                     >
                       <Download className="h-3.5 w-3.5" />
@@ -253,7 +269,7 @@ export default function MediaPage() {
                       variant="destructive"
                       size="icon"
                       className="h-7 w-7"
-                      onClick={() => deleteMedia.mutate({ id: media.id })}
+                      onClick={(e) => { e.stopPropagation(); deleteMedia.mutate({ id: media.id }); }}
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </Button>
@@ -275,6 +291,55 @@ export default function MediaPage() {
               </Card>
             ))}
           </div>
+
+          {/* Fix #37-39: lightbox dialog */}
+          <Dialog open={!!selectedMedia} onOpenChange={(open) => !open && setSelectedMedia(null)}>
+            <DialogContent className="max-w-3xl">
+              {selectedMedia && (
+                <>
+                  <div className="flex max-h-[70vh] items-center justify-center overflow-hidden rounded-lg bg-black">
+                    {selectedMedia.fileType.startsWith("video/") ? (
+                      // Fix #38: video with controls in lightbox
+                      <video
+                        src={selectedMedia.url}
+                        controls
+                        autoPlay
+                        className="max-h-[70vh] w-full object-contain"
+                      />
+                    ) : (
+                      // Fix #37: full-size image in lightbox
+                      <img
+                        src={selectedMedia.url}
+                        alt={selectedMedia.fileName}
+                        className="max-h-[70vh] w-full object-contain"
+                      />
+                    )}
+                  </div>
+                  <p className="truncate text-sm font-medium">{selectedMedia.fileName}</p>
+                  <DialogFooter className="gap-2">
+                    <a
+                      href={selectedMedia.url}
+                      download={selectedMedia.fileName}
+                      className="inline-flex h-9 items-center gap-1.5 rounded-md border px-3 text-sm hover:bg-muted"
+                    >
+                      <Download className="h-4 w-4" />
+                      Download
+                    </a>
+                    <Button
+                      variant="destructive"
+                      onClick={() => {
+                        deleteMedia.mutate({ id: selectedMedia.id });
+                        setSelectedMedia(null);
+                      }}
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" />
+                      Delete
+                    </Button>
+                  </DialogFooter>
+                </>
+              )}
+            </DialogContent>
+          </Dialog>
 
           {/* Infinite scroll trigger */}
           <div ref={loadMoreRef} className="flex justify-center py-4">

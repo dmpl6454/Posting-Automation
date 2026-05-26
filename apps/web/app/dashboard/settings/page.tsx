@@ -1,5 +1,7 @@
 "use client";
 
+import { humanizeError } from "~/lib/errors";
+
 import { trpc } from "~/lib/trpc/client";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
@@ -9,8 +11,17 @@ import { Separator } from "~/components/ui/separator";
 import { Skeleton } from "~/components/ui/skeleton";
 import { Badge } from "~/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "~/components/ui/dialog";
 import { useToast } from "~/hooks/use-toast";
 import { useState, useEffect } from "react";
+import { useSession } from "next-auth/react";
 import {
   User, CreditCard, Webhook, Save, Lock,
   Smartphone, CheckCircle2, AlertCircle, Eye, EyeOff, Phone
@@ -20,12 +31,20 @@ import Link from "next/link";
 export default function SettingsPage() {
   const { toast } = useToast();
   const { data: user, isLoading, refetch } = trpc.user.me.useQuery();
+  // Fix #94: use session `update()` to sync name change into the NextAuth session
+  const { update: updateSession } = useSession();
 
   // ── Profile ──────────────────────────────────────────────────
   const [name, setName] = useState("");
   const updateProfile = trpc.user.updateProfile.useMutation({
-    onSuccess: () => { toast({ title: "Profile updated!" }); refetch(); },
-    onError: (err) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+    onSuccess: async (updatedUser) => {
+      // Fix #94: reconcile local state + session so navbar reflects the change immediately
+      setName(updatedUser.name ?? "");
+      await refetch();
+      await updateSession?.();
+      toast({ title: "Profile updated!" });
+    },
+    onError: (err) => toast({ title: "Error", description: humanizeError(err), variant: "destructive" }),
   });
 
   useEffect(() => {
@@ -42,7 +61,7 @@ export default function SettingsPage() {
       toast({ title: "Password updated!" });
       setCurrentPassword(""); setNewPassword(""); setConfirmPassword("");
     },
-    onError: (err) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+    onError: (err) => toast({ title: "Error", description: humanizeError(err), variant: "destructive" }),
   });
 
   const handleChangePassword = () => {
@@ -61,13 +80,16 @@ export default function SettingsPage() {
   const [newPhone, setNewPhone] = useState("");
   const [phoneOtp, setPhoneOtp] = useState("");
   const [phoneStep, setPhoneStep] = useState<"idle" | "verify">("idle");
+  // Fix #95: phone removal OTP re-challenge state
+  const [showRemoveDialog, setShowRemoveDialog] = useState(false);
+  const [removeOtp, setRemoveOtp] = useState("");
 
   const addPhone = trpc.user.addPhone.useMutation({
     onSuccess: () => {
       toast({ title: "OTP sent!", description: "Enter the 6-digit code sent to your phone." });
       setPhoneStep("verify");
     },
-    onError: (err) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+    onError: (err) => toast({ title: "Error", description: humanizeError(err), variant: "destructive" }),
   });
 
   const verifyPhone = trpc.user.verifyPhone.useMutation({
@@ -76,12 +98,25 @@ export default function SettingsPage() {
       setPhoneStep("idle"); setNewPhone(""); setPhoneOtp("");
       refetch();
     },
-    onError: (err) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+    onError: (err) => toast({ title: "Error", description: humanizeError(err), variant: "destructive" }),
   });
 
   const removePhone = trpc.user.removePhone.useMutation({
-    onSuccess: () => { toast({ title: "Phone number removed" }); refetch(); },
-    onError: (err) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+    onSuccess: () => {
+      toast({ title: "Phone number removed" });
+      setShowRemoveDialog(false);
+      setRemoveOtp("");
+      refetch();
+    },
+    onError: (err) => toast({ title: "Error", description: humanizeError(err), variant: "destructive" }),
+  });
+
+  // Fix #95: send OTP to the phone being removed, then show the dialog
+  const requestRemovePhone = trpc.user.addPhone.useMutation({
+    onSuccess: () => {
+      setShowRemoveDialog(true);
+    },
+    onError: (err) => toast({ title: "Error", description: humanizeError(err), variant: "destructive" }),
   });
 
   const initials = (user?.name || "U")
@@ -344,15 +379,19 @@ export default function SettingsPage() {
                         </>
                       )}
                     </Button>
+                    {/* Fix #95: phone removal requires OTP re-confirmation */}
                     {userAny?.phone && (
                       <Button
                         variant="outline"
                         size="sm"
                         className="text-destructive hover:text-destructive"
-                        onClick={() => removePhone.mutate()}
-                        disabled={removePhone.isPending}
+                        onClick={() => {
+                          // Send OTP to the phone being removed, then show dialog
+                          requestRemovePhone.mutate({ phone: userAny.phone });
+                        }}
+                        disabled={requestRemovePhone.isPending || removePhone.isPending}
                       >
-                        Remove Number
+                        {requestRemovePhone.isPending ? "Sending OTP…" : "Remove Number"}
                       </Button>
                     )}
                   </div>
@@ -392,6 +431,46 @@ export default function SettingsPage() {
           </Card>
         </Link>
       </div>
+
+      {/* Fix #95: OTP confirmation dialog for phone removal */}
+      <Dialog open={showRemoveDialog} onOpenChange={(open) => { if (!open) { setShowRemoveDialog(false); setRemoveOtp(""); } }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Confirm Phone Removal</DialogTitle>
+            <DialogDescription>
+              We sent a 6-digit OTP to <strong>{(userAny as any)?.phone}</strong>. Enter it below to confirm removal.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5 py-2">
+            <Label htmlFor="remove-otp">One-Time Code</Label>
+            <Input
+              id="remove-otp"
+              type="text"
+              inputMode="numeric"
+              maxLength={6}
+              value={removeOtp}
+              onChange={(e) => setRemoveOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
+              placeholder="123456"
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => { setShowRemoveDialog(false); setRemoveOtp(""); }}
+              disabled={removePhone.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={removePhone.isPending || removeOtp.length !== 6}
+              onClick={() => removePhone.mutate({ otp: removeOtp })}
+            >
+              {removePhone.isPending ? "Removing…" : "Remove Phone"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -1,5 +1,7 @@
 "use client";
 
+import { humanizeError } from "~/lib/errors";
+
 import { useState } from "react";
 import {
   Shield,
@@ -40,7 +42,7 @@ export default function AdminUsersPage() {
       refetch();
       toast({ title: "Admin status updated" });
     },
-    onError: (err) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+    onError: (err) => toast({ title: "Error", description: humanizeError(err), variant: "destructive" }),
   });
 
   const toggleBan = trpc.admin.users.toggleBan.useMutation({
@@ -48,7 +50,7 @@ export default function AdminUsersPage() {
       refetch();
       toast({ title: "Ban status updated" });
     },
-    onError: (err) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+    onError: (err) => toast({ title: "Error", description: humanizeError(err), variant: "destructive" }),
   });
 
   const deleteUser = trpc.admin.users.delete.useMutation({
@@ -56,7 +58,7 @@ export default function AdminUsersPage() {
       refetch();
       toast({ title: "User deleted" });
     },
-    onError: (err) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+    onError: (err) => toast({ title: "Error", description: humanizeError(err), variant: "destructive" }),
   });
 
   const impersonate = trpc.admin.users.impersonate.useMutation({
@@ -64,7 +66,7 @@ export default function AdminUsersPage() {
       document.cookie = `admin-impersonate=${result.token}; path=/; max-age=3600`;
       window.location.href = "/dashboard";
     },
-    onError: (err) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+    onError: (err) => toast({ title: "Error", description: humanizeError(err), variant: "destructive" }),
   });
 
   const columns: Column<UserRow>[] = [

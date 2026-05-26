@@ -1,5 +1,7 @@
 "use client";
 
+import { humanizeError } from "~/lib/errors";
+
 import { RotateCw, Trash2 } from "lucide-react";
 import { trpc } from "~/lib/trpc/client";
 import { DataTable, type Column } from "~/components/admin/DataTable";
@@ -32,7 +34,7 @@ export default function AdminQueuesPage() {
       toast({ title: "Job queued for retry" });
     },
     onError: (err) =>
-      toast({ title: "Error", description: err.message, variant: "destructive" }),
+      toast({ title: "Error", description: humanizeError(err), variant: "destructive" }),
   });
 
   const deleteJob = trpc.admin.queues.deleteJob.useMutation({
@@ -41,7 +43,7 @@ export default function AdminQueuesPage() {
       toast({ title: "Job deleted" });
     },
     onError: (err) =>
-      toast({ title: "Error", description: err.message, variant: "destructive" }),
+      toast({ title: "Error", description: humanizeError(err), variant: "destructive" }),
   });
 
   const columns: Column<FailedJobRow>[] = [

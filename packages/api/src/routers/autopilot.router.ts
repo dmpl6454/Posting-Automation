@@ -6,10 +6,14 @@ import {
   trendDiscoverQueue,
   createRedisConnection,
 } from "@postautomation/queue";
+import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
+import { requirePlan } from "../middleware/plan-limit.middleware";
 
 export const autopilotRouter = createRouter({
   // Dashboard stats
   overview: orgProcedure.query(async ({ ctx }) => {
+    // Autopilot is a STARTER+ feature
+    await requirePlan(ctx.organizationId, "STARTER", "Autopilot", ctx.isSuperAdmin);
     const now = new Date();
     const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
@@ -298,6 +302,17 @@ export const autopilotRouter = createRouter({
     await trendDiscoverQueue.add(`trend-discover-${pipelineRun.id}`, {
       organizationId: ctx.organizationId,
       pipelineRunId: pipelineRun.id,
+    });
+
+    // Fix #78: audit log for pipeline trigger
+    createAuditLog({
+      organizationId: ctx.organizationId,
+      userId: (ctx.session.user as any).id,
+      action: AUDIT_ACTIONS.PIPELINE_TRIGGERED,
+      entityType: "PipelineRun",
+      entityId: pipelineRun.id,
+    }).catch((err) => {
+      console.error("audit_log_write_failed", { err: err.message, action: AUDIT_ACTIONS.PIPELINE_TRIGGERED });
     });
 
     return pipelineRun;

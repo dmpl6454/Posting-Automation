@@ -41,13 +41,15 @@ export const deploymentRouter = createRouter({
       });
     }
 
+    // Fix #73/#74: DB is the single source of truth.
+    // The env-var block above already auto-registers on first boot so `latest`
+    // will be populated whenever the build has real Git info.
     return {
-      version: process.env.NEXT_PUBLIC_APP_VERSION || latest?.version || "1.0.0-dev",
-      commitHash: process.env.NEXT_PUBLIC_COMMIT_HASH || latest?.commitHash || "unknown",
-      commitDate: process.env.NEXT_PUBLIC_COMMIT_DATE || latest?.createdAt?.toISOString() || "",
-      branch: process.env.NEXT_PUBLIC_BRANCH || latest?.branch || "main",
-      commitMsg: process.env.NEXT_PUBLIC_COMMIT_MSG || latest?.commitMsg || "",
-      buildTime: process.env.NEXT_PUBLIC_BUILD_TIME || "",
+      version: latest?.version || "1.0.0-dev",
+      commitHash: latest?.commitHash || "unknown",
+      commitDate: latest?.createdAt?.toISOString() || "",
+      branch: latest?.branch || "main",
+      commitMsg: latest?.commitMsg || "",
       deploymentId: latest?.id,
     };
   }),

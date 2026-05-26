@@ -195,6 +195,23 @@ export const monitorRouter = createRouter({
         take: input.limit,
       });
 
+      // Fix #67: redact tokens, keys, emails, IPs, JWTs before including in report
+      const REDACTORS: Array<[RegExp, string]> = [
+        [/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer [REDACTED]"],
+        [/(sk|pk)_(test|live)_[A-Za-z0-9]+/g, "[REDACTED_STRIPE_KEY]"],
+        [/AIza[0-9A-Za-z_\-]{35}/g, "[REDACTED_GOOGLE_KEY]"],
+        [/eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+/g, "[REDACTED_JWT]"],
+        [/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, "[REDACTED_EMAIL]"],
+        [/\b\d{12,19}\b/g, "[REDACTED_NUMBER]"],
+        [/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, "[REDACTED_IP]"],
+        [/(AKIA|ASIA)[A-Z0-9]{16}/g, "[REDACTED_AWS_KEY]"],
+        [/ghp_[A-Za-z0-9]{36}/g, "[REDACTED_GH_TOKEN]"],
+        [/xox[baprs]-[A-Za-z0-9\-]+/g, "[REDACTED_SLACK_TOKEN]"],
+      ];
+
+      const redact = (s: string) =>
+        REDACTORS.reduce((acc, [re, rep]) => acc.replace(re, rep), s);
+
       // Format as a structured report for Claude
       const lines = [
         `# Error Report — ${new Date().toISOString().split("T")[0]}`,
@@ -204,10 +221,10 @@ export const monitorRouter = createRouter({
 
       for (const err of errors) {
         lines.push(`## [${err.severity.toUpperCase()}] ${err.source} — ${err.occurrences}x`);
-        lines.push(`**Message:** ${err.message}`);
-        if (err.endpoint) lines.push(`**Endpoint:** ${err.endpoint}`);
-        if (err.stack) lines.push(`**Stack:** \`\`\`\n${err.stack.split("\n").slice(0, 5).join("\n")}\n\`\`\``);
-        if (err.metadata) lines.push(`**Context:** ${JSON.stringify(err.metadata)}`);
+        lines.push(`**Message:** ${redact(err.message)}`);
+        if (err.endpoint) lines.push(`**Endpoint:** ${redact(err.endpoint)}`);
+        if (err.stack) lines.push(`**Stack:** \`\`\`\n${redact(err.stack.split("\n").slice(0, 5).join("\n"))}\n\`\`\``);
+        if (err.metadata) lines.push(`**Context:** ${redact(JSON.stringify(err.metadata))}`);
         lines.push(`**First seen:** ${err.firstSeenAt.toISOString()} | **Last seen:** ${err.lastSeenAt.toISOString()}`);
         lines.push(`**ID:** ${err.id}`);
         lines.push("");

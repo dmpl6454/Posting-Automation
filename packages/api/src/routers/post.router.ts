@@ -72,7 +72,7 @@ export const postRouter = createRouter({
     )
     .mutation(async ({ ctx, input }) => {
       // Enforce plan limit for posts per month
-      await enforcePlanLimit(ctx.organizationId, "postsPerMonth");
+      await enforcePlanLimit(ctx.organizationId, "postsPerMonth", ctx.isSuperAdmin);
 
       const status = input.scheduledAt ? "SCHEDULED" : "DRAFT";
 

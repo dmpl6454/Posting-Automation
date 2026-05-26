@@ -1,5 +1,7 @@
 "use client";
 
+import { humanizeError } from "~/lib/errors";
+
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useActiveTask } from "~/lib/active-task";
@@ -50,6 +52,9 @@ interface ComposeTabProps {
   onExternalMediaConsumed?: () => void;
 }
 
+// Fix #24: sessionStorage key for carrying draft content from GenerateTab / ImageTab
+const COMPOSE_DRAFT_KEY = "compose:draftContent";
+
 export function ComposeTab({ initialContent, initialImage, initialImageMediaId, onPostCreated, externalMediaToAdd, onExternalMediaConsumed }: ComposeTabProps) {
   const router = useRouter();
   const { toast } = useToast();
@@ -70,6 +75,29 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   const videoInputRef = useRef<HTMLInputElement>(null);
   const { addTask, removeTask, getTask } = useActiveTask();
   const TASK_ID = "compose-draft";
+
+  // Fix #24: on mount, read draft content/image from sessionStorage (set by GenerateTab / ImageTab)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!initialContent) {
+      const draft = sessionStorage.getItem(COMPOSE_DRAFT_KEY);
+      if (draft) {
+        setContent(draft);
+        sessionStorage.removeItem(COMPOSE_DRAFT_KEY);
+      }
+    }
+    if (!initialImage) {
+      const imgRaw = sessionStorage.getItem("compose:draftImage");
+      if (imgRaw) {
+        try {
+          const img = JSON.parse(imgRaw) as { url: string; mediaId: string };
+          setPostMedia((prev) => [...prev, { url: img.url, mediaId: img.mediaId }]);
+        } catch {}
+        sessionStorage.removeItem("compose:draftImage");
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Close channel dropdown on click outside
   useEffect(() => {
@@ -151,7 +179,7 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
       onPostCreated?.();
     },
     onError: (err) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
+      toast({ title: "Error", description: humanizeError(err), variant: "destructive" });
     },
   });
   const getUploadUrl = trpc.media.getUploadUrl.useMutation();
@@ -247,7 +275,7 @@ ${content}`;
     } catch (err: any) {
       toast({
         title: "Carousel generation failed",
-        description: err.message || "Please try again.",
+        description: humanizeError(err) || "Please try again.",
         variant: "destructive",
       });
     }
@@ -289,7 +317,7 @@ ${content}`;
         );
       })
       .catch((err) => {
-        toast({ title: "Upload failed", description: err.message, variant: "destructive" });
+        toast({ title: "Upload failed", description: humanizeError(err), variant: "destructive" });
         setPostMedia((prev) =>
           prev.map((item) => (item.url === objectUrl ? { ...item, uploading: false } : item))
         );
@@ -392,7 +420,7 @@ ${content}`;
     } catch (err: any) {
       toast({
         title: "Upload failed",
-        description: err.message || "Failed to upload images. Please try again.",
+        description: humanizeError(err) || "Failed to upload images. Please try again.",
         variant: "destructive",
       });
     } finally {

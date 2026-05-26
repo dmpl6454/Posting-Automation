@@ -1,11 +1,14 @@
 import { z } from "zod";
 import { createRouter, orgProcedure } from "../trpc";
+import { requirePlan } from "../middleware/plan-limit.middleware";
 
 export const campaignRouter = createRouter({
   // ==================== CAMPAIGNS ====================
   list: orgProcedure
     .input(z.object({ status: z.enum(["DRAFT", "ACTIVE", "PAUSED", "COMPLETED", "ARCHIVED"]).optional() }).optional())
     .query(async ({ ctx, input }) => {
+      // Campaigns is a PROFESSIONAL+ feature
+      await requirePlan(ctx.organizationId, "PROFESSIONAL", "Campaigns", ctx.isSuperAdmin);
       return ctx.prisma.campaign.findMany({
         where: { organizationId: ctx.organizationId, ...(input?.status ? { status: input.status } : {}) },
         include: {

@@ -1,5 +1,7 @@
 "use client";
 
+import { humanizeError } from "~/lib/errors";
+
 import { useState } from "react";
 import { trpc } from "~/lib/trpc/client";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "~/components/ui/card";
@@ -32,16 +34,10 @@ import {
   Clock,
 } from "lucide-react";
 
-function getOrgId(): string {
-  if (typeof window !== "undefined") {
-    return localStorage.getItem("currentOrgId") || "";
-  }
-  return "";
-}
+// Fix #44: removed getOrgId() localStorage helper — backend scopes by session
 
 export default function RssPage() {
   const { toast } = useToast();
-  const orgId = getOrgId();
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [expandedFeed, setExpandedFeed] = useState<string | null>(null);
@@ -53,12 +49,8 @@ export default function RssPage() {
   const [autoPost, setAutoPost] = useState(false);
   const [promptTemplate, setPromptTemplate] = useState("");
 
-  // organizationId is derived from session on the backend (security fix:
-  // previously the client could pass any orgId).
-  const { data: feeds, isLoading, refetch } = trpc.rss.list.useQuery(
-    undefined,
-    { enabled: !!orgId }
-  );
+  // Fix #44: removed localStorage orgId gate — backend scopes by session
+  const { data: feeds, isLoading, refetch } = trpc.rss.list.useQuery();
 
   const createFeed = trpc.rss.create.useMutation({
     onSuccess: () => {
@@ -68,7 +60,7 @@ export default function RssPage() {
       toast({ title: "RSS feed added", description: "Your feed has been created successfully." });
     },
     onError: (err) => {
-      toast({ title: "Failed to add feed", description: err.message, variant: "destructive" });
+      toast({ title: "Failed to add feed", description: humanizeError(err), variant: "destructive" });
     },
   });
 
@@ -176,16 +168,21 @@ export default function RssPage() {
               </div>
               {autoPost && (
                 <div className="space-y-1.5">
+                  {/* Fix #41: clearer usage guidance */}
                   <Label htmlFor="prompt-template">AI Prompt Template (optional)</Label>
                   <Textarea
                     id="prompt-template"
                     value={promptTemplate}
                     onChange={(e) => setPromptTemplate(e.target.value)}
-                    placeholder="Create an engaging tweet about: {{title}} - {{summary}}"
+                    // Fix #40: use {title} syntax (not {{title}}) as shown in help text
+                    placeholder="e.g. New on our blog: {title} — {summary}"
                     className="min-h-[80px] resize-none"
                   />
+                  {/* Fix #40/#41: document the template syntax clearly */}
                   <p className="text-xs text-muted-foreground">
-                    Use {"{{title}}"} and {"{{summary}}"} as placeholders
+                    Available variables: <code className="font-mono">{"{title}"}</code>,{" "}
+                    <code className="font-mono">{"{summary}"}</code>,{" "}
+                    <code className="font-mono">{"{link}"}</code>. They are replaced when each feed item is converted into a post.
                   </p>
                 </div>
               )}

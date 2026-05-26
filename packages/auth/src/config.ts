@@ -167,6 +167,19 @@ export const authConfig: NextAuthConfig = {
             }
           }
         }
+
+        // Fix #1 RBAC: load the user's role in their current (first) org so the
+        // sidebar can gate modules. We load the OWNER membership first (most
+        // privileged), then fallback to the earliest membership.
+        const member = await prisma.organizationMember.findFirst({
+          where: { userId: token.id as string },
+          orderBy: [{ role: "asc" }, { createdAt: "asc" }],
+          select: { role: true, organizationId: true },
+        });
+        if (member) {
+          token.role = member.role;
+          token.organizationId = member.organizationId;
+        }
       }
 
       return token;
@@ -176,6 +189,9 @@ export const authConfig: NextAuthConfig = {
         session.user.id = token.id as string;
         (session.user as any).isSuperAdmin = token.isSuperAdmin ?? false;
         (session.user as any).isBanned = token.isBanned ?? false;
+        // Fix #1 RBAC: expose role + organizationId to client components
+        (session.user as any).role = token.role ?? "MEMBER";
+        (session.user as any).organizationId = token.organizationId ?? null;
       }
       return session;
     },

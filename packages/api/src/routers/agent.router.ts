@@ -2,9 +2,12 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
 import { agentRunQueue } from "@postautomation/queue";
+import { requirePlan } from "../middleware/plan-limit.middleware";
 
 export const agentRouter = createRouter({
   list: orgProcedure.query(async ({ ctx }) => {
+    // Super Agent / AI Agents are a STARTER+ feature
+    await requirePlan(ctx.organizationId, "STARTER", "AI Agents", ctx.isSuperAdmin);
     return ctx.prisma.agent.findMany({
       where: { organizationId: ctx.organizationId },
       include: {

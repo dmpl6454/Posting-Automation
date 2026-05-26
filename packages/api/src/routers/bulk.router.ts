@@ -2,6 +2,7 @@ import { z } from "zod";
 import { createRouter, protectedProcedure } from "../trpc";
 import { prisma } from "@postautomation/db";
 import { TRPCError } from "@trpc/server";
+import Papa from "papaparse";
 
 export const bulkRouter = createRouter({
   /**
@@ -107,6 +108,7 @@ export const bulkRouter = createRouter({
    * Import posts from CSV data.
    * Expects first row to be headers: "content", optional "scheduledAt".
    * Creates Post records and links them to specified channels via PostTarget.
+   * Fix #28: uses papaparse for robust multi-line quoted field handling.
    */
   csvImport: protectedProcedure
     .input(
@@ -122,24 +124,37 @@ export const bulkRouter = createRouter({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Organization ID required" });
       }
 
-      const lines = input.csvData.split("\n").filter((line) => line.trim() !== "");
-      if (lines.length < 2) {
+      // Fix #28: replace line-by-line split parser with papaparse
+      const parsed = Papa.parse<Record<string, string>>(input.csvData, {
+        header: true,
+        skipEmptyLines: true,
+        transformHeader: (h) => h.trim().toLowerCase(),
+      });
+
+      if (parsed.errors.length > 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `CSV parse error: ${parsed.errors[0]!.message}`,
+        });
+      }
+
+      const rows = parsed.data;
+
+      if (rows.length === 0) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "CSV must have a header row and at least one data row",
         });
       }
 
-      // Parse header row
-      const headers = parseCSVRow(lines[0] as string).map((h) => h.trim().toLowerCase());
-      const contentIdx = headers.indexOf("content");
-      if (contentIdx === -1) {
+      // Validate that the "content" column exists
+      const firstRow = rows[0];
+      if (!firstRow || !("content" in firstRow)) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: 'CSV must have a "content" column',
         });
       }
-      const scheduledAtIdx = headers.indexOf("scheduledat");
 
       // Validate channels belong to the org
       const channels = await prisma.channel.findMany({
@@ -160,21 +175,17 @@ export const bulkRouter = createRouter({
       let imported = 0;
       const errors: string[] = [];
 
-      for (let i = 1; i < lines.length; i++) {
+      for (let i = 0; i < rows.length; i++) {
         try {
-          const row = parseCSVRow(lines[i] as string);
-          const content = row[contentIdx]?.trim();
+          const row = rows[i]!;
+          const content = row["content"]?.trim();
           if (!content) {
-            errors.push(`Row ${i + 1}: empty content, skipped`);
+            errors.push(`Row ${i + 2}: empty content, skipped`);
             continue;
           }
 
-          let rowScheduledAt: string | undefined;
-          if (scheduledAtIdx !== -1 && row[scheduledAtIdx]?.trim()) {
-            rowScheduledAt = row[scheduledAtIdx]!.trim();
-          } else if (input.scheduledAt) {
-            rowScheduledAt = input.scheduledAt;
-          }
+          const rowScheduledAt =
+            row["scheduledat"]?.trim() || row["scheduledAt"]?.trim() || input.scheduledAt;
 
           const status = rowScheduledAt ? "SCHEDULED" : ("DRAFT" as const);
 
@@ -196,7 +207,7 @@ export const bulkRouter = createRouter({
 
           imported++;
         } catch (err: any) {
-          errors.push(`Row ${i + 1}: ${err.message || "unknown error"}`);
+          errors.push(`Row ${i + 2}: ${err.message || "unknown error"}`);
         }
       }
 
@@ -206,6 +217,9 @@ export const bulkRouter = createRouter({
   /**
    * Export posts as CSV data.
    * Returns a CSV string with columns: content, status, scheduledAt, publishedAt, platforms.
+   * Fix #25: "ALL" status filter treated as no filter.
+   * Fix #26: CRLF line endings + UTF-8 BOM for Excel compatibility.
+   * Fix #27: all fields are properly escaped.
    */
   csvExport: protectedProcedure
     .input(
@@ -225,7 +239,8 @@ export const bulkRouter = createRouter({
         organizationId,
       };
 
-      if (input.status) {
+      // Fix #25: ignore "ALL" — treat it as no filter
+      if (input.status && input.status !== "ALL") {
         where.status = input.status;
       }
 
@@ -248,72 +263,44 @@ export const bulkRouter = createRouter({
       });
 
       // Build CSV string
+      // Fix #27: escape ALL fields, not just content
+      const e = escapeCSVField;
       const csvLines: string[] = [
         "content,status,scheduledAt,publishedAt,platforms",
       ];
 
       for (const post of posts) {
-        const platforms = post.targets
-          .map((t: any) => t.channel.platform)
-          .join(";");
-        const escapedContent = escapeCSVField(post.content);
-        const scheduledAt = post.scheduledAt
-          ? post.scheduledAt.toISOString()
-          : "";
-        const publishedAt = post.publishedAt
-          ? post.publishedAt.toISOString()
-          : "";
+        const platforms = e(
+          post.targets.map((t: any) => t.channel.platform).join(";")
+        );
+        const scheduledAt = e(
+          post.scheduledAt ? post.scheduledAt.toISOString() : ""
+        );
+        const publishedAt = e(
+          post.publishedAt ? post.publishedAt.toISOString() : ""
+        );
 
         csvLines.push(
-          `${escapedContent},${post.status},${scheduledAt},${publishedAt},${platforms}`
+          `${e(post.content)},${e(post.status)},${scheduledAt},${publishedAt},${platforms}`
         );
       }
 
-      return { csv: csvLines.join("\n"), count: posts.length };
+      // Fix #26: CRLF line endings + UTF-8 BOM so Excel opens correctly on Windows
+      return { csv: "﻿" + csvLines.join("\r\n"), count: posts.length };
     }),
 });
 
 /**
- * Parse a single CSV row, handling quoted fields with commas.
- */
-function parseCSVRow(row: string): string[] {
-  const fields: string[] = [];
-  let current = "";
-  let inQuotes = false;
-
-  for (let i = 0; i < row.length; i++) {
-    const char = row[i] as string;
-    if (inQuotes) {
-      if (char === '"') {
-        if (i + 1 < row.length && row[i + 1] === '"') {
-          current += '"';
-          i++;
-        } else {
-          inQuotes = false;
-        }
-      } else {
-        current += char;
-      }
-    } else {
-      if (char === '"') {
-        inQuotes = true;
-      } else if (char === ",") {
-        fields.push(current);
-        current = "";
-      } else {
-        current += char;
-      }
-    }
-  }
-  fields.push(current);
-  return fields;
-}
-
-/**
- * Escape a field for CSV output. Wraps in quotes if it contains commas, quotes, or newlines.
+ * Escape a field for CSV output.
+ * Fix #27: wraps in quotes if it contains commas, quotes, newlines, or carriage returns.
  */
 function escapeCSVField(field: string): string {
-  if (field.includes(",") || field.includes('"') || field.includes("\n")) {
+  if (
+    field.includes(",") ||
+    field.includes('"') ||
+    field.includes("\n") ||
+    field.includes("\r")
+  ) {
     return `"${field.replace(/"/g, '""')}"`;
   }
   return field;

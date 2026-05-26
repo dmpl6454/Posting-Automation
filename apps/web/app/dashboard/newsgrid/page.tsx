@@ -1,5 +1,7 @@
 "use client";
 
+import { humanizeError } from "~/lib/errors";
+
 import { useState, useRef, useCallback, useEffect } from "react";
 import { trpc } from "~/lib/trpc/client";
 import { Button } from "~/components/ui/button";
@@ -13,6 +15,7 @@ import { Switch } from "~/components/ui/switch";
 import { Separator } from "~/components/ui/separator";
 import { useToast } from "~/hooks/use-toast";
 import { MediaPickerDialog } from "~/components/media-picker-dialog";
+import { Alert, AlertDescription } from "~/components/ui/alert";
 import Link from "next/link";
 import {
   Loader2, Zap, CheckCircle2, XCircle, Edit2, Send,
@@ -128,11 +131,10 @@ const StaticNewsCreative = ({
   const fs = (base: number) => Math.round(base * scale);
   const today = date ?? new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 
-  // Keyword-based background photo from headline
+  // Fix #56: use local fallback backgrounds instead of loremflickr.com
   const seed = headline.split("").reduce((a, c) => a + c.charCodeAt(0), 42) % 1000;
-  const stopWords = new Set(["the","a","an","is","are","was","were","in","on","at","to","for","of","and","or","but","with","has","have","had","not","no","this","that","it","its","from","by","as","be","been","will","would","could","should","may","might","can","do","does","did","about","after","all","also","than","then","very","just","over","such","more","most","other","into","out","up","down","so","if","new","says","said"]);
-  const bgKeywords = headline.replace(/[^a-zA-Z\s]/g, "").split(/\s+/).filter((w) => w.length > 2 && !stopWords.has(w.toLowerCase())).slice(0, 3).map((w) => w.toLowerCase()).join(",") || "news";
-  const bgImageUrl = `https://loremflickr.com/540/675/${bgKeywords}?lock=${seed}`;
+  const LOCAL_BG_COUNT = 6;
+  const bgImageUrl = `/newsgrid-bg/bg-${(seed % LOCAL_BG_COUNT) + 1}.svg`;
 
   return (
     <div
@@ -520,7 +522,7 @@ export default function NewsGridPage() {
       setScheduleMap(sm);
       setStep("results");
     },
-    onError: (err) => toast({ title: "Generation failed", description: err.message, variant: "destructive" }),
+    onError: (err) => toast({ title: "Generation failed", description: humanizeError(err), variant: "destructive" }),
   });
 
   const bulkPublish = trpc.newsgrid.bulkPublish.useMutation({
@@ -528,7 +530,7 @@ export default function NewsGridPage() {
       toast({ title: `Published ${data.count} posts`, description: "Posts queued successfully." });
       setResults([]); setStep("form");
     },
-    onError: (err) => toast({ title: "Publish failed", description: err.message, variant: "destructive" }),
+    onError: (err) => toast({ title: "Publish failed", description: humanizeError(err), variant: "destructive" }),
   });
 
   const channels = channelsData ?? [];
@@ -622,6 +624,15 @@ export default function NewsGridPage() {
           )}
         </div>
       </div>
+
+      {/* Fix #55: workflow guidance */}
+      <Alert>
+        <AlertDescription>
+          <strong>How NewsGrid Bot works:</strong> Enter a headline and caption below, pick your channels,
+          then click <em>Generate Posts</em>. The bot creates branded images for each channel using your
+          logos. Review the previews and click <em>Publish</em> to post.
+        </AlertDescription>
+      </Alert>
 
       {step === "form" && (
         <div className="grid gap-6 lg:grid-cols-[1fr_340px]">

@@ -50,16 +50,22 @@ function formatTimeAgo(date: string | Date | null): string {
   return then.toLocaleDateString();
 }
 
-const capabilities = [
-  { icon: PenLine, label: "Create & publish posts", color: "text-blue-500" },
-  { icon: Sparkles, label: "Generate AI content", color: "text-purple-500" },
-  { icon: ImagePlus, label: "Create images & carousels", color: "text-green-500" },
-  { icon: Newspaper, label: "Fetch trending news", color: "text-orange-500" },
-  { icon: Zap, label: "Set up autopilot agents", color: "text-yellow-500" },
-  { icon: Target, label: "Create campaigns & trackers", color: "text-red-500" },
-  { icon: Ear, label: "Monitor social mentions", color: "text-cyan-500" },
-  { icon: BarChart3, label: "Get analytics", color: "text-indigo-500" },
-];
+// Fix #33: icon lookup for capability list (derived from backend SUPPORTED_ACTIONS)
+const CAPABILITY_ICONS: Record<string, React.ElementType> = {
+  create_agent: Zap,
+  generate_content: Sparkles,
+  schedule_post: BarChart3,
+  bulk_schedule: BarChart3,
+  publish_now: PenLine,
+  update_agent: Zap,
+  generate_news_image: ImagePlus,
+  create_campaign: Target,
+  create_brand_tracker: Target,
+  create_listening_query: Ear,
+  update_influencer: Target,
+  trigger_agent_run: Newspaper,
+  get_analytics: BarChart3,
+};
 
 const quickActions = [
   "Create a viral Twitter post about AI trends",
@@ -81,6 +87,9 @@ export default function SuperAgentPage() {
   const executeActionMutation = trpc.chat.executeAction.useMutation();
   const utils = trpc.useUtils();
 
+  // Fix #33: load capability list from backend
+  const { data: capabilitiesData } = trpc.chat.capabilities.useQuery();
+
   /* ── State ── */
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -101,17 +110,32 @@ export default function SuperAgentPage() {
 
   useEffect(() => {
     if (threadData?.messages) {
-      setMessages(
-        threadData.messages.map((m: any) => ({
-          id: m.id,
-          role: m.role,
-          content: m.content,
-          action: (m.metadata as any)?.action || null,
-          createdAt: m.createdAt,
-        }))
-      );
+      const dbMessages = threadData.messages.map((m: any) => ({
+        id: m.id,
+        role: m.role as "user" | "assistant" | "system",
+        content: m.content,
+        action: (m.metadata as any)?.action || null,
+        createdAt: m.createdAt,
+      }));
+
+      // Fix #31: re-inject any pending message that survived a page reload
+      if (activeThreadId && typeof window !== "undefined") {
+        const pendingRaw = localStorage.getItem(`superagent:pending:${activeThreadId}`);
+        if (pendingRaw) {
+          try {
+            const pending = JSON.parse(pendingRaw) as { id: string; role: "user"; content: string; at: number };
+            // Only inject if it's not already in the db messages
+            const alreadyPresent = dbMessages.some((m: Message) => m.content === pending.content && m.role === "user");
+            if (!alreadyPresent) {
+              dbMessages.push({ id: pending.id, role: "user", content: pending.content, action: null, createdAt: new Date(pending.at).toISOString() });
+            }
+          } catch {}
+        }
+      }
+
+      setMessages(dbMessages);
     }
-  }, [threadData]);
+  }, [threadData, activeThreadId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -163,11 +187,19 @@ export default function SuperAgentPage() {
     const userMsg: Message = { id: `user-${Date.now()}`, role: "user", content: text, createdAt: new Date().toISOString() };
     setMessages((prev) => [...prev, userMsg]);
 
+    // Fix #31: persist pending message to localStorage so a page reload mid-stream
+    // doesn't lose the user's message
+    const pendingKey = `superagent:pending:${tid}`;
+    if (typeof window !== "undefined") {
+      localStorage.setItem(pendingKey, JSON.stringify({ id: userMsg.id, role: "user", content: text, at: Date.now() }));
+    }
+
     // Save to DB
     try {
       await sendMessageMutation.mutateAsync({ threadId: tid, content: text });
     } catch {
       setMessages((prev) => prev.filter((m) => m.id !== userMsg.id));
+      if (typeof window !== "undefined") localStorage.removeItem(pendingKey);
       return;
     }
 
@@ -237,6 +269,8 @@ export default function SuperAgentPage() {
     } finally {
       setIsStreaming(false);
       abortRef.current = null;
+      // Fix #31: clear the pending message once streaming is done
+      if (typeof window !== "undefined") localStorage.removeItem(`superagent:pending:${tid}`);
       utils.chat.listThreads.invalidate();
     }
   };
@@ -385,14 +419,17 @@ export default function SuperAgentPage() {
                 </p>
               </div>
 
-              {/* Capabilities */}
+              {/* Capabilities — Fix #33: derived from backend SUPPORTED_ACTIONS */}
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                {capabilities.map(({ icon: Icon, label, color }) => (
-                  <div key={label} className="flex items-center gap-1.5 rounded-lg border bg-background px-3 py-2">
-                    <Icon className={cn("h-3.5 w-3.5", color)} />
-                    <span className="text-[11px] text-muted-foreground">{label}</span>
-                  </div>
-                ))}
+                {(capabilitiesData ?? []).map(({ action, label, color }) => {
+                  const Icon = CAPABILITY_ICONS[action] ?? Sparkles;
+                  return (
+                    <div key={action} className="flex items-center gap-1.5 rounded-lg border bg-background px-3 py-2">
+                      <Icon className={cn("h-3.5 w-3.5", color)} />
+                      <span className="text-[11px] text-muted-foreground">{label}</span>
+                    </div>
+                  );
+                })}
               </div>
 
               {/* Quick actions */}

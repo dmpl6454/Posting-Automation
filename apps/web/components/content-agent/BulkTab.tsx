@@ -1,5 +1,7 @@
 "use client";
 
+import { humanizeError } from "~/lib/errors";
+
 import { useState, useRef, useCallback } from "react";
 import { trpc } from "~/lib/trpc/client";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "~/components/ui/card";
@@ -92,7 +94,7 @@ function BulkScheduleSection() {
       utils.post.list.invalidate();
     },
     onError: (err) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
+      toast({ title: "Error", description: humanizeError(err), variant: "destructive" });
     },
   });
 
@@ -256,7 +258,7 @@ function CSVImportSection() {
       utils.post.list.invalidate();
     },
     onError: (err) => {
-      toast({ title: "Import Failed", description: err.message, variant: "destructive" });
+      toast({ title: "Import Failed", description: humanizeError(err), variant: "destructive" });
     },
   });
 
@@ -466,7 +468,8 @@ function CSVExportSection() {
 
   const csvExport = trpc.bulk.csvExport.useQuery(
     {
-      status: statusFilter || undefined,
+      // Fix #25: "ALL" means no status filter — pass undefined so backend returns all posts
+      status: statusFilter && statusFilter !== "ALL" ? statusFilter : undefined,
       startDate: startDate ? new Date(startDate).toISOString() : undefined,
       endDate: endDate ? new Date(endDate).toISOString() : undefined,
     },
@@ -493,7 +496,7 @@ function CSVExportSection() {
         });
       }
     } catch (err: any) {
-      toast({ title: "Export Failed", description: err.message, variant: "destructive" });
+      toast({ title: "Export Failed", description: humanizeError(err), variant: "destructive" });
     } finally {
       setIsExporting(false);
     }

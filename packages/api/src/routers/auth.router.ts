@@ -205,6 +205,17 @@ export const authRouter = createRouter({
   sendPhoneOtp: publicProcedure
     .input(z.object({ phone: z.string().min(7).max(20) }))
     .mutation(async ({ ctx, input }) => {
+      // Fix #19: surface missing SMS configuration before attempting to send
+      const smsConfigured =
+        (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER) ||
+        process.env.FAST2SMS_API_KEY;
+      if (!smsConfigured) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "SMS service is not configured. Please use email login or contact support.",
+        });
+      }
+
       const user = await ctx.prisma.user.findUnique({
         where: { phone: input.phone },
         select: { id: true, isBanned: true, phoneVerified: true },

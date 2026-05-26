@@ -1,5 +1,7 @@
 "use client";
 
+import { humanizeError } from "~/lib/errors";
+
 import { useState, useRef, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { trpc } from "~/lib/trpc/client";
@@ -106,18 +108,18 @@ export function ImageTab({ onImageGenerated }: ImageTabProps = {}) {
   // tRPC mutations
   const generateMutation = trpc.image.generate.useMutation({
     onError: (err: any) => {
-      toast({ title: "Generation failed", description: err.message || "Something went wrong.", variant: "destructive" });
+      toast({ title: "Generation failed", description: humanizeError(err) || "Something went wrong.", variant: "destructive" });
     },
   });
 
   const editMutation = trpc.image.edit.useMutation({
     onError: (err: any) => {
-      toast({ title: "Edit failed", description: err.message || "Something went wrong.", variant: "destructive" });
+      toast({ title: "Edit failed", description: humanizeError(err) || "Something went wrong.", variant: "destructive" });
     },
   });
 
   const saveMutation = trpc.image.saveGenerated.useMutation({
-    onError: (err: any) => { toast({ title: "Save failed", description: err.message || "Could not save image.", variant: "destructive" }); },
+    onError: (err: any) => { toast({ title: "Save failed", description: humanizeError(err) || "Could not save image.", variant: "destructive" }); },
   });
 
   // Helpers
@@ -333,7 +335,11 @@ export function ImageTab({ onImageGenerated }: ImageTabProps = {}) {
       toast({ title: "Saving image..." });
       const saved = await saveMutation.mutateAsync({ imageBase64, mimeType, fileName: `ai-image-${Date.now()}.png` });
       if (saved?.url) {
-        router.push(`/dashboard/content-agent?tab=compose&aiImage=${encodeURIComponent(saved.url)}&aiMediaId=${encodeURIComponent(saved.id)}`);
+        // Fix #24: pass image reference via sessionStorage instead of URL query string
+        if (typeof window !== "undefined") {
+          sessionStorage.setItem("compose:draftImage", JSON.stringify({ url: saved.url, mediaId: saved.id }));
+        }
+        router.push(`/dashboard/content-agent?tab=compose`);
       } else {
         toast({ title: "Save succeeded but no URL returned", variant: "destructive" });
       }

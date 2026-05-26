@@ -2,6 +2,8 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import crypto from "crypto";
 import { createRouter, orgProcedure } from "../trpc";
+import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
+import { webhookUrlSchema } from "../lib/url-safety";
 
 export const webhookRouter = createRouter({
   list: orgProcedure.query(async ({ ctx }) => {
@@ -14,13 +16,14 @@ export const webhookRouter = createRouter({
   create: orgProcedure
     .input(
       z.object({
-        url: z.string().url(),
+        // Fix #88/#90/#91: SSRF guard — must be HTTPS, no private/loopback addresses
+        url: webhookUrlSchema,
         events: z.array(z.string()).min(1),
       })
     )
     .mutation(async ({ ctx, input }) => {
       const secret = crypto.randomBytes(32).toString("hex");
-      return ctx.prisma.webhook.create({
+      const webhook = await ctx.prisma.webhook.create({
         data: {
           organizationId: ctx.organizationId,
           url: input.url,
@@ -28,6 +31,18 @@ export const webhookRouter = createRouter({
           events: input.events,
         },
       });
+      // Fix #78: audit log for webhook creation
+      createAuditLog({
+        organizationId: ctx.organizationId,
+        userId: (ctx.session.user as any).id,
+        action: AUDIT_ACTIONS.WEBHOOK_CREATED,
+        entityType: "Webhook",
+        entityId: webhook.id,
+        metadata: { url: input.url, events: input.events },
+      }).catch((err) => {
+        console.error("audit_log_write_failed", { err: err.message, action: AUDIT_ACTIONS.WEBHOOK_CREATED });
+      });
+      return webhook;
     }),
 
   delete: orgProcedure
@@ -38,6 +53,17 @@ export const webhookRouter = createRouter({
       });
       if (!webhook) throw new TRPCError({ code: "NOT_FOUND" });
       await ctx.prisma.webhook.delete({ where: { id: input.id } });
+      // Fix #78: audit log for webhook deletion
+      createAuditLog({
+        organizationId: ctx.organizationId,
+        userId: (ctx.session.user as any).id,
+        action: AUDIT_ACTIONS.WEBHOOK_DELETED,
+        entityType: "Webhook",
+        entityId: input.id,
+        metadata: { url: webhook.url },
+      }).catch((err) => {
+        console.error("audit_log_write_failed", { err: err.message, action: AUDIT_ACTIONS.WEBHOOK_DELETED });
+      });
       return { success: true };
     }),
 });

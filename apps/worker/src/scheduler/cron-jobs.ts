@@ -406,6 +406,46 @@ export async function publishScheduledPosts() {
 }
 
 /**
+ * Fix #22/#30: Watchdog for stuck posts.
+ * Any post that has been in PUBLISHING state for > 30 minutes without progress is
+ * considered stuck. We inspect its targets:
+ *   - All targets terminal (PUBLISHED or FAILED) → set post status to match
+ *   - Otherwise → set post to FAILED so users know it needs attention
+ * Runs every 5 minutes.
+ */
+export async function watchdogPublishingPosts() {
+  const stuckThreshold = new Date(Date.now() - 30 * 60 * 1000); // 30 minutes ago
+
+  const stuckPosts = await prisma.post.findMany({
+    where: { status: "PUBLISHING", updatedAt: { lt: stuckThreshold } },
+    include: { targets: { select: { status: true } } },
+  });
+
+  if (stuckPosts.length === 0) return;
+
+  console.log(`[Watchdog] Found ${stuckPosts.length} stuck PUBLISHING post(s)`);
+
+  for (const post of stuckPosts) {
+    const statuses = post.targets.map((t: any) => t.status as string);
+    const allTerminal = statuses.every((s) => s === "PUBLISHED" || s === "FAILED" || s === "CANCELLED");
+    const anyPublished = statuses.some((s) => s === "PUBLISHED");
+
+    if (allTerminal) {
+      const newStatus = anyPublished ? "PUBLISHED" : "FAILED";
+      await prisma.post.update({
+        where: { id: post.id },
+        data: { status: newStatus, publishedAt: anyPublished ? new Date() : undefined },
+      });
+      console.log(`[Watchdog] Post ${post.id}: set to ${newStatus} (all targets terminal)`);
+    } else {
+      // Targets not terminal but post is stuck → fail it so users can retry
+      await prisma.post.update({ where: { id: post.id }, data: { status: "FAILED" } });
+      console.log(`[Watchdog] Post ${post.id}: set to FAILED (stuck with non-terminal targets)`);
+    }
+  }
+}
+
+/**
  * Start all cron jobs
  */
 export function startCronJobs() {
@@ -471,5 +511,10 @@ export function startCronJobs() {
   setInterval(runAutoHealerWithLogging, 10 * 60 * 1000); // every 10 minutes
   setTimeout(runAutoHealerWithLogging, 3 * 60 * 1000); // Start after 3 min warmup
 
+  // Fix #22/#30: watchdog for stuck PUBLISHING posts
+  setInterval(watchdogPublishingPosts, 5 * 60 * 1000); // every 5 minutes
+  setTimeout(watchdogPublishingPosts, 2 * 60 * 1000); // Start after 2 min warmup
+
   console.log("[Cron]   - Auto-healer: every 10 min");
+  console.log("[Cron]   - Publishing watchdog: every 5 min");
 }

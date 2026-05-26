@@ -2,6 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
 import { rssSyncQueue } from "@postautomation/queue";
+import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 
 // SECURITY: every mutation/query is org-scoped via `orgProcedure`. Each
 // lookup adds `organizationId: ctx.organizationId` so a user from org A
@@ -32,6 +33,35 @@ export const rssRouter = createRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // Fix #42/#43: validate that the URL actually returns an RSS/Atom feed
+      try {
+        const res = await fetch(input.url, {
+          method: "GET",
+          signal: AbortSignal.timeout(5000),
+          redirect: "follow",
+          headers: { "User-Agent": "PostAutomation-RSS-Validator/1.0" },
+        });
+        if (!res.ok) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Feed URL responded with HTTP ${res.status}. Please check the URL.`,
+          });
+        }
+        const text = await res.text();
+        if (!/<(rss|feed|channel)\b/i.test(text)) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "URL does not appear to be a valid RSS or Atom feed.",
+          });
+        }
+      } catch (err: any) {
+        if (err instanceof TRPCError) throw err;
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Could not reach the feed URL. Please check it is publicly accessible.",
+        });
+      }
+
       const feed = await ctx.prisma.rssFeed.create({
         data: {
           organizationId: ctx.organizationId,
@@ -42,6 +72,17 @@ export const rssRouter = createRouter({
           targetChannels: input.targetChannels,
           promptTemplate: input.promptTemplate,
         },
+      });
+      // Fix #78: audit log for RSS feed creation
+      createAuditLog({
+        organizationId: ctx.organizationId,
+        userId: (ctx.session.user as any).id,
+        action: AUDIT_ACTIONS.RSS_FEED_CREATED,
+        entityType: "RssFeed",
+        entityId: feed.id,
+        metadata: { name: input.name, url: input.url },
+      }).catch((err) => {
+        console.error("audit_log_write_failed", { err: err.message, action: AUDIT_ACTIONS.RSS_FEED_CREATED });
       });
       return feed;
     }),
@@ -73,6 +114,16 @@ export const rssRouter = createRouter({
         where: { id },
         data,
       });
+      // Fix #78: audit log for RSS feed update
+      createAuditLog({
+        organizationId: ctx.organizationId,
+        userId: (ctx.session.user as any).id,
+        action: AUDIT_ACTIONS.RSS_FEED_UPDATED,
+        entityType: "RssFeed",
+        entityId: id,
+      }).catch((err) => {
+        console.error("audit_log_write_failed", { err: err.message, action: AUDIT_ACTIONS.RSS_FEED_UPDATED });
+      });
       return feed;
     }),
 
@@ -87,6 +138,16 @@ export const rssRouter = createRouter({
         throw new TRPCError({ code: "NOT_FOUND", message: "RSS feed not found" });
       }
       await ctx.prisma.rssFeed.delete({ where: { id: input.id } });
+      // Fix #78: audit log for RSS feed deletion
+      createAuditLog({
+        organizationId: ctx.organizationId,
+        userId: (ctx.session.user as any).id,
+        action: AUDIT_ACTIONS.RSS_FEED_DELETED,
+        entityType: "RssFeed",
+        entityId: input.id,
+      }).catch((err) => {
+        console.error("audit_log_write_failed", { err: err.message, action: AUDIT_ACTIONS.RSS_FEED_DELETED });
+      });
       return { success: true };
     }),
 

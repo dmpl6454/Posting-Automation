@@ -12,6 +12,8 @@ export interface TRPCContext {
   impersonationToken?: string;
   isImpersonating?: boolean;
   adminUserId?: string;
+  /** true when the acting user has isSuperAdmin=true — bypasses all plan/usage limits */
+  isSuperAdmin?: boolean;
 }
 
 export const createTRPCContext = async (opts: {
@@ -111,6 +113,7 @@ export const superAdminProcedure = protectedProcedure.use(({ ctx, next }) => {
 // Require org membership — auto-resolves or creates a default org
 export const orgProcedure = protectedProcedure.use(async ({ ctx, next }) => {
   const userId = (ctx.session.user as any).id;
+  const isSuperAdmin = (ctx.session.user as any)?.isSuperAdmin === true;
   let organizationId = ctx.organizationId;
 
   // If no org ID provided, find the user's first org or create one
@@ -150,14 +153,42 @@ export const orgProcedure = protectedProcedure.use(async ({ ctx, next }) => {
       },
     },
   });
-  if (!membership) {
+
+  // superadmins can access any org even without explicit membership
+  if (!membership && !isSuperAdmin) {
     throw new TRPCError({ code: "FORBIDDEN", message: "Not a member of this organization" });
   }
+
+  // planExpiresAt guard: if a paid plan has lapsed, silently revert to FREE so
+  // plan-limit middleware correctly enforces FREE-tier limits until Stripe webhook
+  // updates the row. We write back to DB so subsequent queries see the correct plan.
+  // Skip for superadmin — their org should never be forcibly downgraded.
+  if (!isSuperAdmin) {
+    const org = await ctx.prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: { plan: true, planExpiresAt: true },
+    });
+    if (
+      org &&
+      org.plan !== "FREE" &&
+      org.planExpiresAt !== null &&
+      org.planExpiresAt < new Date()
+    ) {
+      await ctx.prisma.organization.update({
+        where: { id: organizationId },
+        data: { plan: "FREE", planExpiresAt: null },
+      }).catch((err) => {
+        console.error("plan_expiry_revert_failed", { organizationId, err: err.message });
+      });
+    }
+  }
+
   return next({
     ctx: {
       ...ctx,
       organizationId,
-      membership,
+      membership: membership ?? { role: "OWNER" } as any, // superadmin gets implicit OWNER
+      isSuperAdmin,
     },
   });
 });

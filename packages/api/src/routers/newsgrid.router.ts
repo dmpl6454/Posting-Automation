@@ -2,6 +2,7 @@ import { z } from "zod";
 import { createRouter, orgProcedure } from "../trpc";
 import { TRPCError } from "@trpc/server";
 import { postPublishQueue } from "@postautomation/queue";
+import { requirePlan } from "../middleware/plan-limit.middleware";
 
 // ── tone → CTA mapping ───────────────────────────────────────────────────────
 const TONE_CTA_MAP: Record<string, string[]> = {
@@ -134,6 +135,8 @@ export const newsgridRouter = createRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // NewsGrid Bot is a STARTER+ feature
+      await requirePlan(ctx.organizationId, "STARTER", "NewsGrid Bot", ctx.isSuperAdmin);
       const channels = await ctx.prisma.channel.findMany({
         where: {
           id:             { in: input.channelIds },
@@ -591,6 +594,45 @@ Requirements:
   deleteLogo: orgProcedure
     .input(z.object({ mediaId: z.string() }))
     .mutation(async ({ ctx, input }) => {
+      // Fix #54: null out channel.metadata.logo_path before deleting the media
+      // row so channels don't hold a dangling reference to the deleted image.
+      const media = await ctx.prisma.media.findFirst({
+        where: { id: input.mediaId, organizationId: ctx.organizationId },
+        select: { url: true, channelId: true },
+      });
+
+      if (media?.channelId) {
+        // The media row is directly associated with a channel — clear the logo_path
+        const channel = await ctx.prisma.channel.findFirst({
+          where: { id: media.channelId, organizationId: ctx.organizationId },
+          select: { id: true, metadata: true },
+        });
+        if (channel) {
+          const existing = (channel.metadata as any) ?? {};
+          await ctx.prisma.channel.update({
+            where: { id: channel.id },
+            data: { metadata: { ...existing, logo_path: null } },
+          });
+        }
+      }
+
+      if (media?.url) {
+        // Also scan all channels in the org that reference this URL via metadata.logo_path
+        const channels = await ctx.prisma.channel.findMany({
+          where: { organizationId: ctx.organizationId },
+          select: { id: true, metadata: true },
+        });
+        for (const ch of channels) {
+          if ((ch.metadata as any)?.logo_path === media.url) {
+            const existing = (ch.metadata as any) ?? {};
+            await ctx.prisma.channel.update({
+              where: { id: ch.id },
+              data: { metadata: { ...existing, logo_path: null } },
+            });
+          }
+        }
+      }
+
       await ctx.prisma.media.delete({ where: { id: input.mediaId } });
       return { success: true };
     }),

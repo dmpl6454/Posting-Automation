@@ -4,7 +4,9 @@ import { trpc } from "~/lib/trpc/client";
 import { Badge } from "~/components/ui/badge";
 import { Card } from "~/components/ui/card";
 import { Skeleton } from "~/components/ui/skeleton";
-import { TrendingUp, ExternalLink } from "lucide-react";
+import { TrendingUp, ExternalLink, Info, Clock } from "lucide-react";
+import { Alert, AlertDescription } from "~/components/ui/alert";
+import { formatDistanceToNow } from "date-fns";
 
 function sourceTypeBadge(type: string) {
   const colors: Record<string, string> = {
@@ -57,9 +59,27 @@ export default function TrendingPage() {
   const { data, isLoading } = trpc.autopilot.trendingItems.useQuery({});
 
   const items = (data as any)?.items ?? [];
+  const lastUpdatedAt = items[0]?.updatedAt ?? items[0]?.createdAt ?? null;
 
   return (
     <div className="space-y-4">
+      {/* Fix #50: show last-discovered timestamp and workflow hint */}
+      <Alert>
+        <Info className="h-4 w-4" />
+        <AlertDescription className="flex items-center justify-between gap-4">
+          <span>
+            Trending items are discovered by the Autopilot pipeline. Go to{" "}
+            <a href="/dashboard/autopilot" className="underline underline-offset-2">Autopilot</a>{" "}
+            and click <em>Run Pipeline Now</em> to refresh.
+          </span>
+          {lastUpdatedAt && (
+            <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+              <Clock className="h-3 w-3" />
+              Last discovered {formatDistanceToNow(new Date(lastUpdatedAt), { addSuffix: true })}
+            </span>
+          )}
+        </AlertDescription>
+      </Alert>
       {isLoading ? (
         <div className="space-y-4">
           {Array.from({ length: 5 }).map((_, i) => (

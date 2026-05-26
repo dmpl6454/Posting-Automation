@@ -449,7 +449,7 @@ export default function ChannelsPage() {
                         <>
                           <span className="flex-1 text-sm font-medium">{group.name}</span>
                           <Badge variant="outline" className="text-[10px]">
-                            {group.channels.length} channels
+                            {(group.channels ?? []).length} channels
                           </Badge>
                           <Button
                             size="icon"
@@ -474,7 +474,7 @@ export default function ChannelsPage() {
                     {/* Channel checkboxes */}
                     <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
                       {channels.map((channel: any) => {
-                        const inGroup = group.channels.some((c: any) => c.id === channel.id);
+                        const inGroup = (group.channels ?? []).some((c: any) => c.id === channel.id);
                         return (
                           <label
                             key={channel.id}

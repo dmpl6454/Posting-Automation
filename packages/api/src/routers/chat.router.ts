@@ -3,7 +3,34 @@ import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
 import { agentRunQueue, postPublishQueue } from "@postautomation/queue";
 
+// Fix #33: export supported actions so UI can derive the capability list from backend truth
+export const SUPPORTED_ACTIONS = [
+  { action: "create_agent",             label: "Set up autopilot agents",       description: "Create an AI agent that auto-publishes on a schedule", color: "text-yellow-500" },
+  { action: "generate_content",         label: "Generate AI content",            description: "Use AI to draft posts, captions, and copy", color: "text-purple-500" },
+  { action: "schedule_post",            label: "Schedule a post",                description: "Queue a post for a specific date/time", color: "text-blue-500" },
+  { action: "bulk_schedule",            label: "Bulk schedule posts",            description: "Schedule multiple posts at once from a CSV or list", color: "text-blue-400" },
+  { action: "publish_now",              label: "Create & publish posts",         description: "Immediately publish a post to selected channels", color: "text-blue-500" },
+  { action: "update_agent",             label: "Update an agent",                description: "Change an existing autopilot agent's settings", color: "text-yellow-400" },
+  { action: "generate_news_image",      label: "Create images & carousels",     description: "Generate branded news images for your channels", color: "text-green-500" },
+  { action: "create_campaign",          label: "Create campaigns & trackers",    description: "Track hashtags, keywords, or competitors", color: "text-red-500" },
+  { action: "create_brand_tracker",     label: "Track brands & competitors",     description: "Monitor brand mentions and competitor activity", color: "text-red-400" },
+  { action: "create_listening_query",   label: "Monitor social mentions",        description: "Listen for brand or keyword mentions across platforms", color: "text-cyan-500" },
+  { action: "update_influencer",        label: "Manage brand outreach",          description: "Update influencer or outreach contact details", color: "text-pink-500" },
+  { action: "trigger_agent_run",        label: "Fetch trending news",            description: "Run an agent to discover and post trending topics now", color: "text-orange-500" },
+  { action: "get_analytics",            label: "Get analytics",                  description: "Fetch engagement and performance data for your posts", color: "text-indigo-500" },
+] as const;
+
 export const chatRouter = createRouter({
+  // Fix #33: expose capabilities so the UI doesn't maintain a separate hardcoded list
+  capabilities: orgProcedure.query(() => {
+    return SUPPORTED_ACTIONS.map(({ action, label, description, color }) => ({
+      action,
+      label,
+      description,
+      color,
+    }));
+  }),
+
   listThreads: orgProcedure.query(async ({ ctx }) => {
     return ctx.prisma.chatThread.findMany({
       where: { organizationId: ctx.organizationId },

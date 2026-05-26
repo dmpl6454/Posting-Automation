@@ -1,11 +1,14 @@
 "use client";
 
+import { humanizeError } from "~/lib/errors";
+
 import { useState } from "react";
 import { trpc } from "~/lib/trpc/client";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
 import { Badge } from "~/components/ui/badge";
 import { Skeleton } from "~/components/ui/skeleton";
+import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { useToast } from "~/hooks/use-toast";
 import {
   GitBranch,
@@ -19,6 +22,7 @@ import {
   Copy,
   Check,
   Package,
+  AlertTriangle,
 } from "lucide-react";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
@@ -41,19 +45,29 @@ function timeAgo(date: string | Date): string {
 export default function VersionsPage() {
   const { toast } = useToast();
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  // Fix #75: track a pending rollback target so we can show a banner
+  const [pendingRollback, setPendingRollback] = useState<{
+    version: string;
+    commitHash: string;
+  } | null>(null);
 
   const { data: current, isLoading: currentLoading } = trpc.deployment.current.useQuery();
   const { data: deployments, isLoading: listLoading, refetch } = trpc.deployment.list.useQuery({ limit: 30 });
   const rollback = trpc.deployment.rollback.useMutation({
     onSuccess: (result) => {
+      // Fix #75: honest message — DB-only rollback, user must run deploy script
+      setPendingRollback({
+        version: result.targetVersion,
+        commitHash: result.targetCommit,
+      });
       toast({
-        title: "Rollback initiated",
-        description: result.message,
+        title: "Rollback requested",
+        description: `Rollback to v${result.targetVersion} recorded. Run the deploy script on the server to complete.`,
       });
       refetch();
     },
     onError: (err) => {
-      toast({ title: "Rollback failed", description: err.message, variant: "destructive" });
+      toast({ title: "Rollback failed", description: humanizeError(err), variant: "destructive" });
     },
   });
 
@@ -63,13 +77,18 @@ export default function VersionsPage() {
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  // Current version from build-time env vars (always available, even without DB)
-  const buildVersion = process.env.NEXT_PUBLIC_APP_VERSION || "1.0.0-dev";
-  const buildHash = process.env.NEXT_PUBLIC_COMMIT_HASH || "unknown";
-  const buildDate = process.env.NEXT_PUBLIC_COMMIT_DATE || "";
-  const buildBranch = process.env.NEXT_PUBLIC_BRANCH || "main";
-  const buildMsg = process.env.NEXT_PUBLIC_COMMIT_MSG || "";
-  const buildTime = process.env.NEXT_PUBLIC_BUILD_TIME || "";
+  // Fix #73/#74: build-time env vars are now only used for the "Build" sanity badge.
+  // They are NOT used as a data source for version info — the DB is the authority.
+  const buildHash = process.env.NEXT_PUBLIC_COMMIT_HASH;
+  const buildVersion = process.env.NEXT_PUBLIC_APP_VERSION;
+
+  // Detect if the live container's build hash differs from the active DB record
+  // (e.g. a deploy happened but the DB row hasn't been written yet).
+  const hashMismatch =
+    buildHash &&
+    buildHash !== "unknown" &&
+    current?.commitHash &&
+    current.commitHash !== buildHash;
 
   return (
     <div className="space-y-6">
@@ -81,6 +100,36 @@ export default function VersionsPage() {
         </p>
       </div>
 
+      {/* Fix #75: Pending rollback banner */}
+      {pendingRollback && (
+        <Alert variant="destructive" className="border-orange-500/50 bg-orange-500/10 text-orange-700 dark:text-orange-400">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertTitle>Rollback Pending</AlertTitle>
+          <AlertDescription>
+            Rollback to <code className="font-mono">v{pendingRollback.version}</code> (
+            <code className="font-mono">{pendingRollback.commitHash}</code>) has been recorded in the
+            database. The running containers still serve the old version until you SSH into the server and
+            run:{" "}
+            <code className="inline-block mt-1 rounded bg-orange-500/20 px-1.5 py-0.5 font-mono text-xs">
+              bash scripts/deploy.sh deploy
+            </code>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {/* Fix #73/#74: Hash mismatch warning (DB not yet updated after a recent deploy) */}
+      {hashMismatch && (
+        <Alert className="border-yellow-500/50 bg-yellow-500/10 text-yellow-700 dark:text-yellow-400">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertTitle>Version mismatch detected</AlertTitle>
+          <AlertDescription>
+            The running build hash (<code className="font-mono">{buildHash}</code>) does not match the
+            active deployment in the database (<code className="font-mono">{current?.commitHash}</code>).
+            The deploy script may not have registered this build yet.
+          </AlertDescription>
+        </Alert>
+      )}
+
       {/* Current Version Card */}
       <Card className="border-green-500/20 bg-green-500/[0.02]">
         <CardHeader className="pb-3">
@@ -89,10 +138,18 @@ export default function VersionsPage() {
               <Package className="h-5 w-5 text-green-600" />
               <CardTitle className="text-lg">Current Version</CardTitle>
             </div>
-            <Badge className="bg-green-500/10 text-green-600 border-green-500/20">
-              <CheckCircle2 className="mr-1 h-3 w-3" />
-              Live
-            </Badge>
+            <div className="flex items-center gap-2">
+              {/* Fix #73/#74: small "Build" sanity badge from env vars — not the primary source */}
+              {buildVersion && buildVersion !== "1.0.0-dev" && (
+                <Badge variant="outline" className="text-[10px] text-muted-foreground">
+                  Build {buildVersion}
+                </Badge>
+              )}
+              <Badge className="bg-green-500/10 text-green-600 border-green-500/20">
+                <CheckCircle2 className="mr-1 h-3 w-3" />
+                Live
+              </Badge>
+            </div>
           </div>
         </CardHeader>
         <CardContent>
@@ -102,20 +159,20 @@ export default function VersionsPage() {
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <div>
                 <p className="text-xs text-muted-foreground">Version</p>
-                <p className="text-xl font-bold font-mono">v{current?.version || buildVersion}</p>
+                <p className="text-xl font-bold font-mono">v{current?.version ?? "—"}</p>
               </div>
               <div>
                 <p className="text-xs text-muted-foreground">Commit</p>
                 <div className="flex items-center gap-1.5">
                   <GitCommit className="h-3.5 w-3.5 text-muted-foreground" />
-                  <code className="text-sm font-mono">{current?.commitHash || buildHash}</code>
+                  <code className="text-sm font-mono">{current?.commitHash ?? "unknown"}</code>
                 </div>
               </div>
               <div>
                 <p className="text-xs text-muted-foreground">Branch</p>
                 <div className="flex items-center gap-1.5">
                   <GitBranch className="h-3.5 w-3.5 text-muted-foreground" />
-                  <span className="text-sm">{current?.branch || buildBranch}</span>
+                  <span className="text-sm">{current?.branch ?? "main"}</span>
                 </div>
               </div>
               <div>
@@ -123,14 +180,14 @@ export default function VersionsPage() {
                 <div className="flex items-center gap-1.5">
                   <Clock className="h-3.5 w-3.5 text-muted-foreground" />
                   <span className="text-sm">
-                    {buildTime ? timeAgo(buildTime) : current?.commitDate ? timeAgo(current.commitDate) : "—"}
+                    {current?.commitDate ? timeAgo(current.commitDate) : "—"}
                   </span>
                 </div>
               </div>
-              {(current?.commitMsg || buildMsg) && (
+              {current?.commitMsg && (
                 <div className="sm:col-span-2 lg:col-span-4">
                   <p className="text-xs text-muted-foreground">Last Commit</p>
-                  <p className="text-sm mt-0.5 truncate">{current?.commitMsg || buildMsg}</p>
+                  <p className="text-sm mt-0.5 truncate">{current.commitMsg}</p>
                 </div>
               )}
             </div>
@@ -159,8 +216,6 @@ export default function VersionsPage() {
               <h3 className="mt-4 text-sm font-medium">No deployments recorded yet</h3>
               <p className="mt-1 text-xs text-muted-foreground">
                 Deployments will appear here after the first push to production.
-                <br />
-                The current build version is <code className="font-mono">v{buildVersion}</code> ({buildHash}).
               </p>
             </div>
           ) : (
@@ -228,14 +283,18 @@ export default function VersionsPage() {
                       </p>
                     </div>
 
-                    {/* Rollback button */}
+                    {/* Rollback button — only on non-active, non-already-rolled-back rows */}
                     {!isActive && dep.status !== "rolled_back" && (
                       <Button
                         variant="outline"
                         size="sm"
                         className="shrink-0 gap-1.5"
                         onClick={() => {
-                          if (confirm(`Rollback to v${dep.version} (${dep.commitHash})?`)) {
+                          if (
+                            confirm(
+                              `Request rollback to v${dep.version} (${dep.commitHash})?\n\nNote: you will need to run the deploy script on the server to complete the rollback.`
+                            )
+                          ) {
                             rollback.mutate({ deploymentId: dep.id });
                           }
                         }}

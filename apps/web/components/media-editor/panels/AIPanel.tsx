@@ -1,5 +1,7 @@
 "use client";
 
+import { humanizeError } from "~/lib/errors";
+
 import { useState } from "react";
 import { Canvas, FabricImage } from "fabric";
 import { trpc } from "~/lib/trpc/client";
@@ -55,7 +57,7 @@ export function AIPanel({ canvas, exportCanvasDataUrl }: AIPanelProps) {
     } catch (err: any) {
       toast({
         title: "AI edit failed",
-        description: err.message || "Please try again.",
+        description: humanizeError(err) || "Please try again.",
         variant: "destructive",
       });
     }

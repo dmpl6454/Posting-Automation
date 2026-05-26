@@ -1,8 +1,11 @@
 import { z } from "zod";
 import { createRouter, orgProcedure } from "../trpc";
+import { requirePlan } from "../middleware/plan-limit.middleware";
 
 export const brandLeadsRouter = createRouter({
   stats: orgProcedure.query(async ({ ctx }) => {
+    // Brand Outreach is a PROFESSIONAL+ feature
+    await requirePlan(ctx.organizationId, "PROFESSIONAL", "Brand Outreach", ctx.isSuperAdmin);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 

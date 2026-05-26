@@ -1,5 +1,7 @@
 "use client";
 
+import { humanizeError } from "~/lib/errors";
+
 import { useState, useEffect, useRef, useCallback } from "react";
 import { trpc } from "~/lib/trpc/client";
 import { useActiveTask } from "~/lib/active-task";
@@ -163,7 +165,7 @@ export function RepurposeTab() {
   const createPost = trpc.post.create.useMutation({
     onSuccess: () => {},
     onError: (err) => {
-      toast({ title: "Failed to create post", description: err.message, variant: "destructive" });
+      toast({ title: "Failed to create post", description: humanizeError(err), variant: "destructive" });
     },
   });
 
@@ -178,7 +180,7 @@ export function RepurposeTab() {
       toast({ title: "Content extracted", description: `"${data.title}"` });
     },
     onError: (err) => {
-      toast({ title: "Extraction failed", description: err.message, variant: "destructive" });
+      toast({ title: "Extraction failed", description: humanizeError(err), variant: "destructive" });
     },
   });
 
@@ -189,7 +191,7 @@ export function RepurposeTab() {
       toast({ title: "Content repurposed!" });
     },
     onError: (err) => {
-      toast({ title: "Repurpose failed", description: err.message, variant: "destructive" });
+      toast({ title: "Repurpose failed", description: humanizeError(err), variant: "destructive" });
     },
   });
 
@@ -204,7 +206,7 @@ export function RepurposeTab() {
       });
     },
     onError: (err) => {
-      toast({ title: "Repurpose failed", description: err.message, variant: "destructive" });
+      toast({ title: "Repurpose failed", description: humanizeError(err), variant: "destructive" });
       setProgressSteps((prev) => [...prev, { step: "Request failed", status: "error" as const, detail: err.message, ts: Date.now() }]);
       eventSourceRef.current?.close();
     },

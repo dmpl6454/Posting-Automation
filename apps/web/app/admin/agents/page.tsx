@@ -1,5 +1,7 @@
 "use client";
 
+import { humanizeError } from "~/lib/errors";
+
 import { Power, Trash2 } from "lucide-react";
 import { trpc } from "~/lib/trpc/client";
 import { DataTable, type Column } from "~/components/admin/DataTable";
@@ -31,7 +33,7 @@ export default function AdminAgentsPage() {
       toast({ title: "Agent status updated" });
     },
     onError: (err) =>
-      toast({ title: "Error", description: err.message, variant: "destructive" }),
+      toast({ title: "Error", description: humanizeError(err), variant: "destructive" }),
   });
 
   const deleteAgent = trpc.admin.agents.delete.useMutation({
@@ -40,7 +42,7 @@ export default function AdminAgentsPage() {
       toast({ title: "Agent deleted" });
     },
     onError: (err) =>
-      toast({ title: "Error", description: err.message, variant: "destructive" }),
+      toast({ title: "Error", description: humanizeError(err), variant: "destructive" }),
   });
 
   const columns: Column<AgentRow>[] = [

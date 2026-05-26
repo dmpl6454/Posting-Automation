@@ -61,7 +61,7 @@ export const channelRouter = createRouter({
     .input(z.object({ platform: z.string() }))
     .mutation(async ({ ctx, input }) => {
       // Enforce plan limit for connected channels
-      await enforcePlanLimit(ctx.organizationId, "channels");
+      await enforcePlanLimit(ctx.organizationId, "channels", ctx.isSuperAdmin);
 
       const provider = getSocialProvider(input.platform as any);
 
@@ -77,9 +77,20 @@ export const channelRouter = createRouter({
       });
 
       const platformEnvPrefix = input.platform.toUpperCase();
+      const clientId = process.env[`${platformEnvPrefix}_CLIENT_ID`];
+      const clientSecret = process.env[`${platformEnvPrefix}_CLIENT_SECRET`];
+
+      // Fix #19: surface missing env vars before attempting OAuth redirect
+      if (!clientId || !clientSecret) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `${input.platform} is not configured by the administrator. Please contact support.`,
+        });
+      }
+
       const config = {
-        clientId: process.env[`${platformEnvPrefix}_CLIENT_ID`] || "",
-        clientSecret: process.env[`${platformEnvPrefix}_CLIENT_SECRET`] || "",
+        clientId,
+        clientSecret,
         callbackUrl: `${process.env.APP_URL}/api/oauth/callback/${input.platform.toLowerCase()}`,
         scopes: getDefaultScopes(input.platform),
       };

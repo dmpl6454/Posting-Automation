@@ -89,7 +89,38 @@
       "Bash(python3 -m json.tool)",
       "Bash(git commit -m 'docs\\(CLAUDE\\): fix backfill prod command, remove GitHub from env vars section *)",
       "Bash(rm .github/dependabot.yml)",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "Read(//Users/tabish/Desktop/**)",
+      "Bash(python3 -c ' *)",
+      "Bash(pip3 install *)",
+      "Bash(grep -E \"\\\\.\\(tsx|ts\\)$\")",
+      "Bash(grep -E \"\\\\.\\(tsx?|jsx?\\)$\")",
+      "Bash(grep -E \"\\\\.ts$|\\\\.tsx$\")",
+      "Bash(xargs -I {} basename {})",
+      "Bash(python3)",
+      "Bash(pnpm --filter @postautomation/api add papaparse)",
+      "Bash(pnpm --filter @postautomation/api add -D @types/papaparse)",
+      "Bash(mkdir -p /Users/tabish/Desktop/Dashmani-PostAutomation/apps/web/app/invite/\\\\[token\\\\])",
+      "Bash(xargs -I{} basename {})",
+      "Bash(sed -i '' 's/code: \"FAILED_PRECONDITION\"/code: \"BAD_REQUEST\"/g' /Users/tabish/Desktop/Dashmani-PostAutomation/packages/api/src/routers/auth.router.ts /Users/tabish/Desktop/Dashmani-PostAutomation/packages/api/src/routers/channel.router.ts)",
+      "Bash(sed -i '' 's/code: \"GONE\"/code: \"BAD_REQUEST\"/g' /Users/tabish/Desktop/Dashmani-PostAutomation/packages/api/src/routers/team.router.ts)",
+      "Bash(pnpm lint *)",
+      "Bash(pnpm --filter @postautomation/web lint)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d.get\\('eslintConfig', 'none'\\)\\)\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d.get\\('scripts', {}\\).get\\('lint', 'none'\\)\\)\")",
+      "Bash(pnpm --filter @postautomation/api tsc --noEmit)",
+      "Bash(npx tsc *)",
+      "Bash(NODE_PATH=packages/db/node_modules pnpm exec tsx scripts/grant-superadmin.ts)",
+      "Bash(NODE_PATH=packages/db/node_modules packages/db/node_modules/.bin/tsx scripts/grant-superadmin.ts)",
+      "Bash(NODE_PATH=packages/db/node_modules packages/db/node_modules/.bin/tsx -e ' *)",
+      "Bash(scp scripts/grant-superadmin.ts posting-automation:/home/deploy/postautomation/scripts/grant-superadmin.ts)",
+      "Bash(grep -E \"\\\\.\\(ts|tsx\\)$\")",
+      "Bash(grep -E \"\\\\.router\\\\.ts$\")",
+      "Bash(DATABASE_URL=\"postgresql://postgres:postgres@localhost:5433/postautomation\" npx prisma migrate dev --name \"drop_viewer_role\")",
+      "Bash(npx prisma *)"
+    ],
+    "additionalDirectories": [
+      "/Users/tabish/Desktop/Dashmani-PostAutomation/apps/web/app/invite"
     ]
   }
 }

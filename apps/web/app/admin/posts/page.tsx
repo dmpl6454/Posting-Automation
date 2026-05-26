@@ -1,5 +1,7 @@
 "use client";
 
+import { humanizeError } from "~/lib/errors";
+
 import { useState } from "react";
 import { RotateCw, Eye } from "lucide-react";
 import { trpc } from "~/lib/trpc/client";
@@ -55,7 +57,7 @@ export default function AdminPostsPage() {
       toast({ title: "Post target queued for retry" });
     },
     onError: (err) =>
-      toast({ title: "Error", description: err.message, variant: "destructive" }),
+      toast({ title: "Error", description: humanizeError(err), variant: "destructive" }),
   });
 
   const columns: Column<PostRow>[] = [

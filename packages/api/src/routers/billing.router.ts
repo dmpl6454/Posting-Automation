@@ -3,6 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
 import { PLANS, createCheckoutSession, createCustomerPortalSession } from "@postautomation/billing";
 import { checkUsageLimit } from "../middleware/plan-limit.middleware";
+import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 
 export const billingRouter = createRouter({
   plans: orgProcedure.query(() => {
@@ -28,6 +29,17 @@ export const billingRouter = createRouter({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid plan" });
       }
       const session = await createCheckoutSession(ctx.organizationId, plan.stripePriceId, input.planType);
+      // Fix #78: audit log for checkout start
+      createAuditLog({
+        organizationId: ctx.organizationId,
+        userId: (ctx.session.user as any).id,
+        action: AUDIT_ACTIONS.BILLING_CHECKOUT_STARTED,
+        entityType: "Organization",
+        entityId: ctx.organizationId,
+        metadata: { planType: input.planType },
+      }).catch((err) => {
+        console.error("audit_log_write_failed", { err: err.message, action: AUDIT_ACTIONS.BILLING_CHECKOUT_STARTED });
+      });
       return { url: session.url };
     }),
 
@@ -46,11 +58,11 @@ export const billingRouter = createRouter({
   usage: orgProcedure.query(async ({ ctx }) => {
     const [channels, postsPerMonth, aiImagesPerMonth, aiVideosPerMonth, teamMembers] =
       await Promise.all([
-        checkUsageLimit(ctx.organizationId, "channels"),
-        checkUsageLimit(ctx.organizationId, "postsPerMonth"),
-        checkUsageLimit(ctx.organizationId, "aiImagesPerMonth"),
-        checkUsageLimit(ctx.organizationId, "aiVideosPerMonth"),
-        checkUsageLimit(ctx.organizationId, "teamMembers"),
+        checkUsageLimit(ctx.organizationId, "channels", ctx.isSuperAdmin),
+        checkUsageLimit(ctx.organizationId, "postsPerMonth", ctx.isSuperAdmin),
+        checkUsageLimit(ctx.organizationId, "aiImagesPerMonth", ctx.isSuperAdmin),
+        checkUsageLimit(ctx.organizationId, "aiVideosPerMonth", ctx.isSuperAdmin),
+        checkUsageLimit(ctx.organizationId, "teamMembers", ctx.isSuperAdmin),
       ]);
     return { channels, postsPerMonth, aiImagesPerMonth, aiVideosPerMonth, teamMembers };
   }),

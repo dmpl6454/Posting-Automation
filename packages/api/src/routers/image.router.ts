@@ -43,7 +43,7 @@ export const imageRouter = createRouter({
     )
     .mutation(async ({ ctx, input }) => {
       // Enforce plan limit for AI images per month
-      await enforcePlanLimit(ctx.organizationId, "aiImagesPerMonth");
+      await enforcePlanLimit(ctx.organizationId, "aiImagesPerMonth", ctx.isSuperAdmin);
 
       try {
         if (input.provider === "dall-e") {

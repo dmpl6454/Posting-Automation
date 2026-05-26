@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { trpc } from "~/lib/trpc/client";
 import { useToast } from "~/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "~/components/ui/card";
@@ -206,7 +207,8 @@ export default function AnalyticsPage() {
             <Skeleton className="h-56 w-full rounded-lg" />
           ) : chartData.length > 0 ? (
             <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={chartData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+              {/* Fix #36: changed left margin from -20 to 8 to prevent tooltip clipping */}
+              <BarChart data={chartData} margin={{ top: 4, right: 8, left: 8, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
                 <XAxis
                   dataKey="label"
@@ -215,8 +217,11 @@ export default function AnalyticsPage() {
                   className="text-muted-foreground"
                 />
                 <YAxis tick={{ fontSize: 11 }} allowDecimals={false} className="text-muted-foreground" />
+                {/* Fix #36: allowEscapeViewBox + wrapperStyle prevent clipping at narrow widths */}
                 <Tooltip
                   contentStyle={{ fontSize: 12, borderRadius: 8 }}
+                  wrapperStyle={{ zIndex: 50 }}
+                  allowEscapeViewBox={{ x: true, y: true }}
                   formatter={(v: number) => [v, "Posts"]}
                   labelFormatter={(l) => `Date: ${l}`}
                 />
@@ -228,6 +233,13 @@ export default function AnalyticsPage() {
               <div className="text-center">
                 <BarChart3 className="mx-auto h-8 w-8 text-muted-foreground/30" />
                 <p className="mt-2 text-sm text-muted-foreground">No posts published in this period</p>
+                {/* Fix #34: guide users to create posts */}
+                <Link
+                  href="/dashboard/content-agent"
+                  className="mt-3 inline-block rounded-lg bg-primary px-4 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+                >
+                  Create a post
+                </Link>
               </div>
             </div>
           )}
@@ -411,10 +423,18 @@ export default function AnalyticsPage() {
               </table>
             </div>
           ) : (
+            // Fix #34: empty state includes a CTA to connect channels
             <div className="flex h-48 items-center justify-center">
               <div className="text-center">
                 <Users className="mx-auto h-8 w-8 text-muted-foreground/30" />
                 <p className="mt-2 text-sm text-muted-foreground">No active channels found</p>
+                <p className="mt-1 text-xs text-muted-foreground/70">Connect a channel to see analytics data</p>
+                <Link
+                  href="/dashboard/channels"
+                  className="mt-3 inline-block rounded-lg bg-primary px-4 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+                >
+                  Connect a channel
+                </Link>
               </div>
             </div>
           )}

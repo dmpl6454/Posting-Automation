@@ -1,5 +1,7 @@
 "use client";
 
+import { humanizeError } from "~/lib/errors";
+
 import { useState } from "react";
 import { trpc } from "~/lib/trpc/client";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "~/components/ui/card";
@@ -27,7 +29,7 @@ export default function ApiKeysPage() {
       toast({ title: "API key created" });
     },
     onError: (err) => {
-      toast({ title: "Failed to create API key", description: err.message, variant: "destructive" });
+      toast({ title: "Failed to create API key", description: humanizeError(err), variant: "destructive" });
     },
   });
   const remove = trpc.apikey.delete.useMutation({
@@ -39,7 +41,9 @@ export default function ApiKeysPage() {
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
-    toast({ title: "Copied to clipboard" });
+    // Fix #87: hide the key immediately after copy — shown exactly once
+    setRevealedKey(null);
+    toast({ title: "Key copied", description: "It will not be shown again. Store it in a safe place." });
   };
 
   return (

@@ -533,10 +533,13 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
     else if (errType === "content_too_large") userMessage = "Content exceeds platform character limit.";
     else if (errType === "media_required") userMessage = "This platform requires at least one image or video.";
 
+    // Fix #22: non-final failures should NOT re-set status to PUBLISHING —
+    // that would overwrite a PENDING state and confuse the watchdog.
+    // Only update status to FAILED on the final attempt; otherwise leave it as-is.
     await prisma.postTarget.update({
       where: { id: job.data.postTargetId },
       data: {
-        status: isFinalAttempt ? "FAILED" : "PUBLISHING",
+        ...(isFinalAttempt ? { status: "FAILED" } : {}),
         errorMessage: userMessage,
         retryCount: { increment: 1 },
       },

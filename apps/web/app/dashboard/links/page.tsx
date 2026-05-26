@@ -1,5 +1,7 @@
 "use client";
 
+import { humanizeError } from "~/lib/errors";
+
 import { useState } from "react";
 import { trpc } from "~/lib/trpc/client";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "~/components/ui/card";
@@ -30,12 +32,7 @@ import {
   MousePointerClick,
 } from "lucide-react";
 
-function getOrgId(): string {
-  if (typeof window !== "undefined") {
-    return localStorage.getItem("currentOrgId") || "";
-  }
-  return "";
-}
+// Fix #46: removed localStorage getOrgId() — backend scopes by session
 
 function getBaseUrl(): string {
   if (typeof window !== "undefined") {
@@ -46,20 +43,14 @@ function getBaseUrl(): string {
 
 export default function LinksPage() {
   const { toast } = useToast();
-  const orgId = getOrgId();
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [statsLinkId, setStatsLinkId] = useState<string | null>(null);
   const [originalUrl, setOriginalUrl] = useState("");
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  // organizationId is now derived from session by the backend (security:
-  // previously the client could pass any orgId and read another tenant's
-  // links). The orgId is still in scope here only for the `enabled` flag.
-  const { data, isLoading, refetch } = trpc.shortlink.list.useQuery(
-    {},
-    { enabled: !!orgId }
-  );
+  // Fix #46: removed localStorage orgId gate — backend scopes by session
+  const { data, isLoading, refetch } = trpc.shortlink.list.useQuery({});
 
   const createLink = trpc.shortlink.create.useMutation({
     onSuccess: () => {
@@ -69,7 +60,7 @@ export default function LinksPage() {
       toast({ title: "Short link created" });
     },
     onError: (err) => {
-      toast({ title: "Failed to create link", description: err.message, variant: "destructive" });
+      toast({ title: "Failed to create link", description: humanizeError(err), variant: "destructive" });
     },
   });
 

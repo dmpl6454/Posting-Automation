@@ -10,6 +10,7 @@ import {
 } from "~/components/ui/card";
 import { Badge } from "~/components/ui/badge";
 import { Skeleton } from "~/components/ui/skeleton";
+import { Alert, AlertDescription } from "~/components/ui/alert";
 import {
   TrendingUp,
   ClipboardCheck,
@@ -17,11 +18,20 @@ import {
   Activity,
   Loader2,
   Zap,
+  Info,
 } from "lucide-react";
 
 export default function AutopilotOverviewPage() {
   const { data, isLoading } = trpc.autopilot.overview.useQuery();
   const utils = trpc.useUtils();
+
+  // Fix #52: poll the latest run status so the button spinner stays until the
+  // pipeline actually completes, not just until the enqueue call returns.
+  const { data: latestRun } = trpc.autopilot.pipelineRuns.useQuery(
+    { limit: 1 },
+    { refetchInterval: 5000 }
+  );
+  const latestRunStatus = latestRun?.[0]?.status;
 
   const triggerMutation = trpc.autopilot.triggerPipeline.useMutation({
     onSuccess: () => {
@@ -29,6 +39,10 @@ export default function AutopilotOverviewPage() {
       utils.autopilot.pipelineRuns.invalidate();
     },
   });
+
+  // Fix #52: button is disabled while the mutation is in-flight OR while the
+  // latest run is still running
+  const isRunning = triggerMutation.isPending || latestRunStatus === "RUNNING";
 
   const stats = [
     {
@@ -60,6 +74,20 @@ export default function AutopilotOverviewPage() {
 
   return (
     <div className="space-y-6">
+      {/* Fix #47: workflow guidance banner */}
+      <Alert>
+        <Info className="h-4 w-4" />
+        <AlertDescription>
+          <strong>How Autopilot works:</strong> It runs in 4 stages —{" "}
+          <strong>Discover</strong> trending topics →{" "}
+          <strong>Generate</strong> drafts →{" "}
+          <strong>Review</strong> in the approvals queue →{" "}
+          <strong>Post</strong> approved drafts on schedule.
+          Click <em>Run Pipeline Now</em> to trigger a one-off run; the latest
+          results appear in <em>Trending</em> and <em>Approvals</em>.
+        </AlertDescription>
+      </Alert>
+
       {/* Stat Cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {stats.map((stat) => (
@@ -103,17 +131,18 @@ export default function AutopilotOverviewPage() {
             Manually trigger the autopilot pipeline to discover trending topics,
             generate content, and queue posts for review.
           </p>
+          {/* Fix #52: spinner stays until run status leaves RUNNING */}
           <Button
             onClick={() => triggerMutation.mutate()}
-            disabled={triggerMutation.isPending}
+            disabled={isRunning}
             className="gap-2"
           >
-            {triggerMutation.isPending ? (
+            {isRunning ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
               <Zap className="h-4 w-4" />
             )}
-            Run Pipeline Now
+            {isRunning ? "Pipeline Running…" : "Run Pipeline Now"}
           </Button>
         </CardContent>
       </Card>

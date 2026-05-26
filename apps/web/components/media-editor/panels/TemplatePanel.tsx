@@ -1,5 +1,7 @@
 "use client";
 
+import { humanizeError } from "~/lib/errors";
+
 import { useState } from "react";
 import type { Canvas } from "fabric";
 import { trpc } from "~/lib/trpc/client";
@@ -43,7 +45,7 @@ export function TemplatePanel({
       refetch();
     },
     onError: (err) => {
-      toast({ title: "Save failed", description: err.message, variant: "destructive" });
+      toast({ title: "Save failed", description: humanizeError(err), variant: "destructive" });
     },
   });
 

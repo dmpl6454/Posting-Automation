@@ -1,7 +1,9 @@
 "use client";
 
+import { humanizeError } from "~/lib/errors";
+
 import { useState, useEffect } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { trpc } from "~/lib/trpc/client";
 import { useActiveTask } from "~/lib/active-task";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "~/components/ui/card";
@@ -19,12 +21,16 @@ import {
 import { useToast } from "~/hooks/use-toast";
 import { Sparkles, Copy, Check, Loader2, ArrowRight, Wand2 } from "lucide-react";
 
+// Fix #24: key for passing generated content to Compose tab without URL truncation
+const COMPOSE_DRAFT_KEY = "compose:draftContent";
+
 const platforms = ["TWITTER", "LINKEDIN", "INSTAGRAM", "FACEBOOK", "REDDIT", "YOUTUBE"] as const;
 const tones = ["professional", "casual", "humorous", "formal", "inspiring"] as const;
 const providers = ["openai", "anthropic", "gemini", "grok", "deepseek", "gemma4"] as const;
 
 export function GenerateTab() {
   const { toast } = useToast();
+  const router = useRouter();
   const [prompt, setPrompt] = useState("");
   const [platform, setPlatform] = useState<string>("TWITTER");
   const [tone, setTone] = useState<typeof tones[number]>("professional");
@@ -34,6 +40,14 @@ export function GenerateTab() {
 
   const { addTask, removeTask } = useActiveTask();
 
+  // Fix #24: push content to compose via sessionStorage, not URL query string
+  const handleUseInPost = () => {
+    if (typeof window !== "undefined") {
+      sessionStorage.setItem(COMPOSE_DRAFT_KEY, result);
+    }
+    router.push("/dashboard/content-agent?tab=compose");
+  };
+
   const generate = trpc.ai.generateContent.useMutation({
     onSuccess: (data) => {
       setResult(data.content);
@@ -42,7 +56,7 @@ export function GenerateTab() {
     },
     onError: (err) => {
       removeTask("generate-task");
-      toast({ title: "Generation failed", description: err.message || "Please check your AI provider keys.", variant: "destructive" });
+      toast({ title: "Generation failed", description: humanizeError(err) || "Please check your AI provider keys.", variant: "destructive" });
     },
   });
 
@@ -185,11 +199,10 @@ export function GenerateTab() {
               <Badge variant="outline">
                 {result.length} characters
               </Badge>
-              <Button asChild className="gap-2">
-                <Link href={`/dashboard/content-agent?tab=compose&content=${encodeURIComponent(result)}`}>
-                  Use in Post
-                  <ArrowRight className="h-4 w-4" />
-                </Link>
+              {/* Fix #24: use sessionStorage instead of URL query string */}
+              <Button className="gap-2" onClick={handleUseInPost}>
+                Use in Post
+                <ArrowRight className="h-4 w-4" />
               </Button>
             </div>
           </CardContent>

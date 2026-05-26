@@ -664,14 +664,23 @@ function AuthBadge({ auth }: { auth: string }) {
   );
 }
 
-function ProcedureCard({ procedure, routerName }: { procedure: ProcedureDoc; routerName: string }) {
-  const [expanded, setExpanded] = useState(false);
-
+// Fix #81: `expanded` is now controlled externally so `expandAll` can open all procedures.
+function ProcedureCard({
+  procedure,
+  routerName,
+  expanded,
+  onToggle,
+}: {
+  procedure: ProcedureDoc;
+  routerName: string;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
   return (
     <div className="border rounded-lg">
       <button
         className="flex w-full items-center gap-3 p-4 text-left hover:bg-muted/50 transition-colors"
-        onClick={() => setExpanded(!expanded)}
+        onClick={onToggle}
       >
         {expanded ? (
           <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
@@ -764,6 +773,17 @@ function ProcedureCard({ procedure, routerName }: { procedure: ProcedureDoc; rou
 export default function ApiDocsPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [expandedRouters, setExpandedRouters] = useState<Set<string>>(new Set());
+  // Fix #81: per-procedure expanded state, keyed by "routerName.procedureName"
+  const [expandedProcs, setExpandedProcs] = useState<Set<string>>(new Set());
+
+  const toggleProc = (key: string) => {
+    setExpandedProcs((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
 
   const filteredRouters = useMemo(() => {
     if (!searchQuery.trim()) return routers;
@@ -797,11 +817,16 @@ export default function ApiDocsPage() {
   };
 
   const expandAll = () => {
+    // Fix #81: expand both router sections AND individual procedures
     setExpandedRouters(new Set(routers.map((r) => r.name)));
+    const allProcs = new Set<string>();
+    routers.forEach((r) => r.procedures.forEach((p) => allProcs.add(`${r.name}.${p.name}`)));
+    setExpandedProcs(allProcs);
   };
 
   const collapseAll = () => {
     setExpandedRouters(new Set());
+    setExpandedProcs(new Set());
   };
 
   const handleDownloadSpec = async () => {
@@ -934,13 +959,18 @@ export default function ApiDocsPage() {
                 </CardHeader>
                 {isExpanded && (
                   <CardContent className="space-y-2 pt-0">
-                    {router.procedures.map((proc) => (
-                      <ProcedureCard
-                        key={proc.name}
-                        procedure={proc}
-                        routerName={router.name}
-                      />
-                    ))}
+                    {router.procedures.map((proc) => {
+                      const procKey = `${router.name}.${proc.name}`;
+                      return (
+                        <ProcedureCard
+                          key={proc.name}
+                          procedure={proc}
+                          routerName={router.name}
+                          expanded={expandedProcs.has(procKey)}
+                          onToggle={() => toggleProc(procKey)}
+                        />
+                      );
+                    })}
                   </CardContent>
                 )}
               </Card>

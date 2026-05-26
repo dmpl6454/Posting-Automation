@@ -1,5 +1,7 @@
 "use client";
 
+import { humanizeError } from "~/lib/errors";
+
 import { useState } from "react";
 import { trpc } from "~/lib/trpc/client";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "~/components/ui/card";
@@ -33,7 +35,7 @@ export default function WebhooksPage() {
       toast({ title: "Webhook created" });
     },
     onError: (err) => {
-      toast({ title: "Failed to create webhook", description: err.message, variant: "destructive" });
+      toast({ title: "Failed to create webhook", description: humanizeError(err), variant: "destructive" });
     },
   });
   const remove = trpc.webhook.delete.useMutation({

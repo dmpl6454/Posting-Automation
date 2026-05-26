@@ -1,10 +1,13 @@
 import { z } from "zod";
 import { createRouter, orgProcedure } from "../trpc";
 import { listeningSyncQueue } from "@postautomation/queue";
+import { requirePlan } from "../middleware/plan-limit.middleware";
 
 export const listeningRouter = createRouter({
   // ---- Listening Queries CRUD ----
   listQueries: orgProcedure.query(async ({ ctx }) => {
+    // Listening is a STARTER+ feature
+    await requirePlan(ctx.organizationId, "STARTER", "Listening", ctx.isSuperAdmin);
     return ctx.prisma.listeningQuery.findMany({
       where: { organizationId: ctx.organizationId },
       include: {
