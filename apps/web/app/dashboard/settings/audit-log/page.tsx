@@ -317,7 +317,7 @@ export default function AuditLogPage() {
               )}
             </div>
           ) : (
-            {/* Fix #76: drop hardcoded widths; use a scrollable wrapper with auto-sizing columns */}
+            /* scrollable wrapper — auto-sizing columns, no hardcoded widths */
             <div className="max-w-full overflow-x-auto">
             <Table>
               <TableHeader>

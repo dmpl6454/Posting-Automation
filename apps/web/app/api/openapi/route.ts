@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { auth } from "@postautomation/auth";
+import { auth } from "~/lib/auth";
 import { openApiSpec } from "@postautomation/api";
 
 // Fix #80: serve the spec to authenticated OWNER/ADMIN users; otherwise gate with env var.
