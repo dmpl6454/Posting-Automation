@@ -23,6 +23,7 @@ import {
   Check,
   Package,
   AlertTriangle,
+  Info,
 } from "lucide-react";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
@@ -99,6 +100,16 @@ export default function VersionsPage() {
           Track deployments, view changes, and rollback if needed
         </p>
       </div>
+
+      <Alert>
+        <Info className="h-4 w-4" />
+        <AlertTitle>About Versions</AlertTitle>
+        <AlertDescription>
+          Each deploy is recorded here with commit SHA and timestamp. Click Rollback to mark a prior
+          version as active; the deploy script on the server (<code className="font-mono text-xs">bash scripts/deploy.sh deploy</code>)
+          completes the revert.
+        </AlertDescription>
+      </Alert>
 
       {/* Fix #75: Pending rollback banner */}
       {pendingRollback && (

@@ -7,6 +7,7 @@ import { Badge } from "~/components/ui/badge";
 import { Card } from "~/components/ui/card";
 import { Skeleton } from "~/components/ui/skeleton";
 import { Separator } from "~/components/ui/separator";
+import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import {
   Dialog,
   DialogContent,
@@ -29,6 +30,7 @@ import {
   Clock,
   MessageSquare,
   FileText,
+  Info,
 } from "lucide-react";
 
 type ApprovalStatus = "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED";
@@ -155,6 +157,15 @@ export default function ApprovalsPage() {
           </SelectContent>
         </Select>
       </div>
+
+      <Alert>
+        <Info className="h-4 w-4" />
+        <AlertTitle>How Approvals work</AlertTitle>
+        <AlertDescription>
+          Posts created by Autopilot, scheduled content, or teammates with restricted roles land here for review.
+          Approve to send them to the publishing queue, or reject with a comment to send them back for edits.
+        </AlertDescription>
+      </Alert>
 
       <Separator />
 

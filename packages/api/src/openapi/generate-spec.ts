@@ -19,6 +19,8 @@ interface OpenApiSpec {
   components: {
     securitySchemes: Record<string, any>;
     schemas: Record<string, any>;
+    // Fix #82: shared error responses referenced by every operation.
+    responses?: Record<string, any>;
   };
   security: Array<Record<string, string[]>>;
 }
@@ -30,7 +32,20 @@ export const openApiSpec: OpenApiSpec = {
     description:
       "API documentation for the PostAutomation platform. All endpoints are served via tRPC over HTTP. " +
       "Queries use GET requests with URL-encoded input, mutations use POST requests with JSON body. " +
-      "All requests require a valid session cookie and the x-organization-id header for org-scoped endpoints.",
+      "All requests require a valid session cookie and the x-organization-id header for org-scoped endpoints.\n\n" +
+      "## Authentication\n" +
+      "All endpoints require a NextAuth session cookie (browser flows) OR an API key in the `Authorization: Bearer <key>` header (server-to-server). " +
+      "Org-scoped endpoints additionally require an `x-organization-id` header.\n\n" +
+      "## Error envelope\n" +
+      "All errors follow the tRPC error shape: `{ error: { message, code, data } }`. Standard HTTP status codes are mapped from tRPC codes:\n" +
+      "`BAD_REQUEST → 400`, `UNAUTHORIZED → 401`, `FORBIDDEN → 403`, `NOT_FOUND → 404`, `CONFLICT → 409`, `UNPROCESSABLE_CONTENT → 422`, " +
+      "`TOO_MANY_REQUESTS → 429`, `INTERNAL_SERVER_ERROR → 500`.\n\n" +
+      "## Rate limits (Fix #86)\n" +
+      "- Default: 60 requests/min per user.\n" +
+      "- AI endpoints (`ai.*`, `image.*`): 10 requests/min per user.\n" +
+      "- Webhook deliveries: 100 events/min per organisation.\n" +
+      "- Every response includes `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset` (epoch seconds).\n" +
+      "- Exceeding the limit returns `429 Too Many Requests` with the `Retry-After` header set.\n",
     version: "1.0.0",
   },
   servers: [
@@ -1198,6 +1213,57 @@ export const openApiSpec: OpenApiSpec = {
           username: { type: "string", nullable: true },
           isActive: { type: "boolean" },
         },
+      },
+      // Fix #82: shared error envelope schema.
+      Error: {
+        type: "object",
+        properties: {
+          error: {
+            type: "object",
+            properties: {
+              message: { type: "string" },
+              code: { type: "string" },
+              data: { type: "object", additionalProperties: true, nullable: true },
+            },
+            required: ["message", "code"],
+          },
+        },
+        required: ["error"],
+      },
+    },
+    // Fix #82: canonical responses, $ref'd by every operation.
+    responses: {
+      BadRequest: {
+        description: "Invalid input — schema validation failed.",
+        content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+      },
+      Unauthorized: {
+        description: "Authentication required (missing or invalid session / API key).",
+        content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+      },
+      Forbidden: {
+        description: "Insufficient permissions for this resource.",
+        content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+      },
+      NotFound: {
+        description: "Resource not found.",
+        content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+      },
+      Conflict: {
+        description: "Conflict with the current state of the resource.",
+        content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+      },
+      Unprocessable: {
+        description: "Validation passed but the business rule rejected the request.",
+        content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+      },
+      TooManyRequests: {
+        description: "Rate limit exceeded. Inspect Retry-After header.",
+        content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+      },
+      ServerError: {
+        description: "Unexpected server error.",
+        content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
       },
     },
   },

@@ -6,6 +6,7 @@ import { Button } from "~/components/ui/button";
 import { Badge } from "~/components/ui/badge";
 import { Skeleton } from "~/components/ui/skeleton";
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
+import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import {
   Dialog,
   DialogContent,
@@ -42,6 +43,7 @@ import {
   AlertCircle,
   CheckCircle2,
   Loader2,
+  Info,
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -458,6 +460,15 @@ export default function BrandLeadsPage() {
           )}
         </div>
       </div>
+
+      <Alert>
+        <Info className="h-4 w-4" />
+        <AlertTitle>How Brand Outreach works</AlertTitle>
+        <AlertDescription>
+          Celebrity and brand mentions are detected automatically from your listening queries and campaigns.
+          Each lead shows a signal score; approve high-confidence leads to queue personalised outreach DMs.
+        </AlertDescription>
+      </Alert>
 
       {/* Stats */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

@@ -7,7 +7,8 @@ Guidance for Claude Code when working in this repo.
 **Posting-Automation** — multi-channel social posting platform. Next.js web app + BullMQ worker, backed by Postgres, Redis, and S3-compatible storage. Deployed to a Linode VPS via Docker Compose.
 
 - Repo: https://github.com/dmpl6454/Posting-Automation.git
-- Domains: https://postautomation.in, https://postautomation.co.in (primary SSL: postautomation.co.in)
+- **Canonical domain:** `https://postautomation.co.in` (Google OAuth callback registered here; sitemap, metadataBase, SMTP From all use this host).
+- **Secondary domain:** `https://postautomation.in` — nginx 301-redirects all traffic to `.co.in` (preserves path + query). Do NOT serve the app from `.in` directly; OAuth and session cookies are scoped to the canonical host.
 - Hosting: Linode VPS, deploy user `deploy`, app dir `/home/deploy/postautomation`
 - SSH alias: `posting-automation` (configured in `~/.ssh/config`)
 
@@ -95,7 +96,7 @@ Filter to one workspace: `pnpm --filter @postautomation/web <cmd>`
 
 3. **Prisma `_AB_unique` on implicit M:N tables**: Newer Prisma drops the redundant `_AB_unique` constraint on implicit join tables. If `prisma db push` fails with `cannot drop index "_XXX_AB_unique" because constraint ... requires it`, run `ALTER TABLE "_XXX" DROP CONSTRAINT "_XXX_AB_unique";` manually, then retry. Safe — the PK already enforces the same uniqueness.
 
-4. **Worker Docker build fails (canvas / pixman-1)**: The worker image build fails with `gyp: Package 'pixman-1' not found` because `canvas@2.11.2` requires native libs not present in the alpine image. This is a pre-existing issue — the worker container keeps running on the previous image. If you need to deploy worker changes, either add the missing libs to `Dockerfile.worker` or replace `canvas` with a server-side alternative. To deploy web/migrate without worker, use: `docker compose -f docker-compose.prod.yml --env-file .env.production build web migrate && docker compose -f docker-compose.prod.yml --env-file .env.production up -d --no-deps web migrate`
+4. **Worker Docker build (canvas / pixman-1)**: **Fixed in QA_FIX_PLAN_V2 Module 9** — `docker/Dockerfile.worker` now installs `cairo-dev pango-dev jpeg-dev giflib-dev pixman-dev librsvg-dev build-base python3 pkgconfig` plus runtime libs (`cairo pango jpeg giflib pixman librsvg`). The worker container now builds cleanly with `canvas@2.x`. If a deploy ever proposes dropping the worker container, do NOT do a partial deploy — use the standard `bash scripts/deploy.sh deploy`. The older partial-deploy escape hatch is no longer needed but kept here for emergencies: `docker compose -f docker-compose.prod.yml --env-file .env.production build web migrate && docker compose -f docker-compose.prod.yml --env-file .env.production up -d --no-deps web migrate`
 
 5. **`.env.production` symlink lost**: If `.env.production` points to a broken symlink, recreate `.env.prod` from the running container: `docker inspect postautomation-web-1 --format "{{json .Config.Env}}" | python3 -c "import json,sys; [print(e) for e in sorted(json.load(sys.stdin)) if e.split('=')[0] not in {'PATH','NODE_VERSION','YARN_VERSION','PUPPETEER_EXECUTABLE_PATH','PUPPETEER_SKIP_CHROMIUM_DOWNLOAD','SKIP_ENV_VALIDATION','PORT','HOSTNAME','NODE_ENV'}]" > .env.prod`. **Important:** that recovery captures only what the web container reads at runtime — `DATABASE_URL` and `REDIS_URL` come through, but the raw `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `TWITTER_BEARER_TOKEN`, `OLLAMA_BASE_URL`, and `META_AD_LIBRARY_ACCESS_TOKEN` keys (which compose substitutes at compose-up time) are **not** baked into the container env and will be missing. After running it, also extract those from the worker (`docker exec postautomation-worker-1 env | grep -E "REDIS_URL|DATABASE_URL"` to read the passwords back out of the URLs) and append the five keys to `.env.prod`. Without them, the next deploy will fail with `P1000: Authentication failed against database server` because compose silently substitutes empty strings into `DATABASE_URL`, while the postgres role still expects the original password.
 
@@ -103,7 +104,16 @@ Filter to one workspace: `pnpm --filter @postautomation/web <cmd>`
 
 NextAuth v5 beta (`next-auth@^5.0.0-beta.25`), PrismaAdapter, JWT sessions (30 days).
 
-**Env vars required:** Both `AUTH_SECRET` (v5) and `NEXTAUTH_SECRET` (middleware compat) must be set to the same value.
+**Env vars required (production):** All of these must be set on the server, with `AUTH_SECRET === NEXTAUTH_SECRET`:
+- `AUTH_SECRET` — NextAuth v5 reads this preferentially.
+- `NEXTAUTH_SECRET` — same value (middleware / older import paths still read it).
+- `AUTH_URL=https://postautomation.co.in` — canonical site URL for NextAuth v5.
+- `NEXTAUTH_URL=https://postautomation.co.in` — kept for backwards compat with tRPC client / other callers.
+- `AUTH_TRUST_HOST=true` — also set via `trustHost: true` in [packages/auth/src/config.ts](packages/auth/src/config.ts). Both must agree in proxied deployments.
+
+**Domain canonicalization:** Nginx 301-redirects `postautomation.in` → `postautomation.co.in` so that all OAuth callbacks and session cookies live on the registered domain. Hitting the app directly on `.in` will silently bounce to `.co.in` before any auth logic runs. The Google OAuth client in Cloud Console has exactly two authorised redirect URIs: `https://postautomation.co.in/api/auth/callback/google` and `http://localhost:3000/api/auth/callback/google`.
+
+**Auth error page:** custom page at [apps/web/app/auth/error/page.tsx](apps/web/app/auth/error/page.tsx); declared via `pages.error: "/auth/error"`. Replaces NextAuth's default black "Server error" page. Receives `?error=<code>` and maps each NextAuth error code (Configuration, AccessDenied, OAuthAccountNotLinked, CredentialsSignin, etc.) to a friendly title + description.
 
 **Providers:** Google and Credentials (email/password + phone OTP). GitHub was intentionally removed — Google + credentials covers all use cases.
 

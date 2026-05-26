@@ -113,6 +113,19 @@ const routers: RouterDoc[] = [
         auth: "session+org",
         input: { id: { type: "string", required: true } },
         inputRequired: ["id"],
+        exampleInput: { id: "clxabc123" },
+        exampleOutput: {
+          id: "clxabc123",
+          content: "Hello world!",
+          status: "PUBLISHED",
+          scheduledAt: "2026-05-26T10:00:00.000Z",
+          publishedAt: "2026-05-26T10:00:05.123Z",
+          targets: [
+            { id: "tgt_1", channelId: "ch_1", status: "PUBLISHED", publishedUrl: "https://twitter.com/...", channel: { platform: "TWITTER" } },
+          ],
+          media: [],
+          tags: ["launch"],
+        },
       },
       {
         name: "create",
@@ -183,6 +196,18 @@ const routers: RouterDoc[] = [
         type: "query",
         description: "List all supported social platforms with display names and constraints.",
         auth: "session+org",
+        exampleOutput: [
+          {
+            platform: "TWITTER",
+            displayName: "Twitter / X",
+            constraints: { maxContentLength: 25000, maxMediaCount: 4, supportsThreads: true },
+          },
+          {
+            platform: "LINKEDIN",
+            displayName: "LinkedIn",
+            constraints: { maxContentLength: 3000, maxMediaCount: 9, supportsThreads: false },
+          },
+        ],
       },
       {
         name: "getOAuthUrl",
@@ -367,6 +392,8 @@ const routers: RouterDoc[] = [
         auth: "session+org",
         input: { planType: { type: "string", required: true, enum: ["STARTER", "PROFESSIONAL", "ENTERPRISE"] } },
         inputRequired: ["planType"],
+        exampleInput: { planType: "PROFESSIONAL" },
+        exampleOutput: { url: "https://checkout.stripe.com/c/pay/cs_test_..." },
       },
       {
         name: "createPortalSession",

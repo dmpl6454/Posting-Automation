@@ -24,7 +24,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "~/components/ui/dialog";
-import { Plus, Trash2, Pencil, Bot, Loader2, Play } from "lucide-react";
+import { Plus, Trash2, Pencil, Bot, Loader2, Play, Info } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 
 const TONES = ["professional", "casual", "humorous", "formal", "inspiring"] as const;
 const FREQUENCIES = ["daily", "weekdays", "weekly", "custom"] as const;
@@ -150,6 +151,16 @@ export default function AutopilotAgentsPage() {
           New Agent
         </Button>
       </div>
+
+      <Alert>
+        <Info className="h-4 w-4" />
+        <AlertTitle>How Agents work</AlertTitle>
+        <AlertDescription>
+          Agents are reusable templates that drive Autopilot runs. Each agent has a persona, niche, topics,
+          tone, and a posting schedule. Toggle an agent Active to include it in the next pipeline run, or
+          click Run Now to generate immediately.
+        </AlertDescription>
+      </Alert>
 
       {isLoading ? (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

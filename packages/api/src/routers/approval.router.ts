@@ -246,27 +246,32 @@ export const approvalRouter = createRouter({
         nextCursor = lastItem?.id;
       }
 
-      // Enrich with post data and requester info
-      const enriched = await Promise.all(
-        approvalRequests.map(async (req) => {
-          const [post, requester] = await Promise.all([
-            ctx.prisma.post.findUnique({
-              where: { id: req.postId },
-              select: {
-                id: true,
-                content: true,
-                status: true,
-                createdAt: true,
-              },
-            }),
-            ctx.prisma.user.findUnique({
-              where: { id: req.requestedById },
-              select: { id: true, name: true, email: true, image: true },
-            }),
-          ]);
-          return { ...req, post, requester };
-        })
+      // Enrich with post data and requester info — single batched fetch each
+      // (was N+1: one findUnique per request × 2). See QA_FIX_PLAN_V2 Module 3.
+      const postIds = Array.from(new Set(approvalRequests.map((r) => r.postId)));
+      const requesterIds = Array.from(
+        new Set(approvalRequests.map((r) => r.requestedById))
       );
+
+      const [posts, requesters] = await Promise.all([
+        ctx.prisma.post.findMany({
+          where: { id: { in: postIds } },
+          select: { id: true, content: true, status: true, createdAt: true },
+        }),
+        ctx.prisma.user.findMany({
+          where: { id: { in: requesterIds } },
+          select: { id: true, name: true, email: true, image: true },
+        }),
+      ]);
+
+      const postById = new Map(posts.map((p) => [p.id, p]));
+      const userById = new Map(requesters.map((u) => [u.id, u]));
+
+      const enriched = approvalRequests.map((req) => ({
+        ...req,
+        post: postById.get(req.postId) ?? null,
+        requester: userById.get(req.requestedById) ?? null,
+      }));
 
       return { approvalRequests: enriched, nextCursor };
     }),

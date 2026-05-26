@@ -243,8 +243,9 @@ export default function LinksPage() {
 }
 
 function LinkStats({ linkId }: { linkId: string }) {
+  const [days, setDays] = useState<7 | 30>(7);
   const { data, isLoading } = trpc.shortlink.getStats.useQuery(
-    { id: linkId },
+    { id: linkId, days },
     { enabled: !!linkId }
   );
 
@@ -259,13 +260,40 @@ function LinkStats({ linkId }: { linkId: string }) {
   if (!data) return null;
 
   const maxClicks = Math.max(...data.clicksByDay.map((d) => d.count), 1);
+  const maxHour = Math.max(...data.clicksByHour.map((h) => h.count), 1);
+  const ctr =
+    data.totalClicks > 0 && data.windowClicks >= 0
+      ? `${data.windowClicks} in the last ${data.days} days`
+      : "no recent activity";
 
   return (
     <div className="mt-4 space-y-4 border-t pt-4">
+      {/* Header row with totals + range toggle */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="text-xs font-medium text-muted-foreground">
+            {data.totalClicks} total clicks — {ctr}
+          </p>
+        </div>
+        <div className="flex items-center gap-1">
+          {([7, 30] as const).map((n) => (
+            <Button
+              key={n}
+              variant={days === n ? "secondary" : "ghost"}
+              size="sm"
+              className="h-7 px-2 text-xs"
+              onClick={() => setDays(n)}
+            >
+              Last {n}d
+            </Button>
+          ))}
+        </div>
+      </div>
+
       {/* Clicks Over Time */}
       <div>
         <p className="mb-2 text-xs font-medium text-muted-foreground">
-          Clicks (Last 7 Days) — {data.totalClicks} total
+          Clicks by day
         </p>
         <div className="flex items-end gap-1" style={{ height: 80 }}>
           {data.clicksByDay.map((day) => (
@@ -277,57 +305,87 @@ function LinkStats({ linkId }: { linkId: string }) {
                 }}
                 title={`${day.date}: ${day.count} clicks`}
               />
-              <span className="text-[9px] text-muted-foreground">
-                {new Date(day.date).toLocaleDateString(undefined, {
-                  weekday: "short",
-                })}
-              </span>
+              {days <= 7 ? (
+                <span className="text-[9px] text-muted-foreground">
+                  {new Date(day.date).toLocaleDateString(undefined, {
+                    weekday: "short",
+                  })}
+                </span>
+              ) : null}
             </div>
           ))}
         </div>
       </div>
 
-      {/* Top Referers and Countries */}
-      <div className="grid gap-4 sm:grid-cols-2">
-        {data.topReferers.length > 0 && (
-          <div>
-            <p className="mb-1 text-xs font-medium text-muted-foreground">Top Referers</p>
-            <div className="space-y-1">
-              {data.topReferers.slice(0, 5).map((r) => (
-                <div
-                  key={r.referer}
-                  className="flex items-center justify-between text-xs"
-                >
-                  <span className="truncate text-muted-foreground">
-                    {r.referer}
-                  </span>
-                  <Badge variant="secondary" className="ml-2 text-[10px]">
-                    {r.count}
-                  </Badge>
-                </div>
-              ))}
+      {/* Hour-of-day */}
+      <div>
+        <p className="mb-1 text-xs font-medium text-muted-foreground">
+          Clicks by hour of day (local time)
+        </p>
+        <div className="flex items-end gap-[2px]" style={{ height: 50 }}>
+          {data.clicksByHour.map((h) => (
+            <div
+              key={h.hour}
+              className="flex-1 rounded-t bg-purple-500"
+              style={{ height: `${Math.max((h.count / maxHour) * 40, 2)}px` }}
+              title={`${h.hour}:00 — ${h.count} clicks`}
+            />
+          ))}
+        </div>
+        <div className="mt-1 flex justify-between text-[9px] text-muted-foreground">
+          <span>0h</span>
+          <span>6h</span>
+          <span>12h</span>
+          <span>18h</span>
+          <span>23h</span>
+        </div>
+      </div>
+
+      {/* 4-up breakdown */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {([
+          { title: "Devices", rows: data.devices },
+          { title: "Browsers", rows: data.browsers },
+          { title: "Operating Systems", rows: data.os },
+          { title: "Top Countries", rows: data.topCountries.map((c) => ({ name: c.country, count: c.count })) },
+        ] as const).map((col) =>
+          col.rows.length > 0 ? (
+            <div key={col.title}>
+              <p className="mb-1 text-xs font-medium text-muted-foreground">{col.title}</p>
+              <div className="space-y-1">
+                {col.rows.slice(0, 5).map((r) => (
+                  <div key={r.name} className="flex items-center justify-between text-xs">
+                    <span className="truncate text-muted-foreground">{r.name}</span>
+                    <Badge variant="secondary" className="ml-2 text-[10px]">
+                      {r.count}
+                    </Badge>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
-        )}
-        {data.topCountries.length > 0 && (
-          <div>
-            <p className="mb-1 text-xs font-medium text-muted-foreground">Top Countries</p>
-            <div className="space-y-1">
-              {data.topCountries.slice(0, 5).map((c) => (
-                <div
-                  key={c.country}
-                  className="flex items-center justify-between text-xs"
-                >
-                  <span className="text-muted-foreground">{c.country}</span>
-                  <Badge variant="secondary" className="ml-2 text-[10px]">
-                    {c.count}
-                  </Badge>
-                </div>
-              ))}
-            </div>
-          </div>
+          ) : null
         )}
       </div>
+
+      {/* Top Referers */}
+      {data.topReferers.length > 0 && (
+        <div>
+          <p className="mb-1 text-xs font-medium text-muted-foreground">Top Referers</p>
+          <div className="grid gap-1 sm:grid-cols-2">
+            {data.topReferers.slice(0, 6).map((r) => (
+              <div
+                key={r.referer}
+                className="flex items-center justify-between text-xs"
+              >
+                <span className="truncate text-muted-foreground">{r.referer}</span>
+                <Badge variant="secondary" className="ml-2 text-[10px]">
+                  {r.count}
+                </Badge>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

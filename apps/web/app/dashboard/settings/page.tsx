@@ -20,11 +20,11 @@ import {
   DialogTitle,
 } from "~/components/ui/dialog";
 import { useToast } from "~/hooks/use-toast";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useSession } from "next-auth/react";
 import {
   User, CreditCard, Webhook, Save, Lock,
-  Smartphone, CheckCircle2, AlertCircle, Eye, EyeOff, Phone
+  Smartphone, CheckCircle2, AlertCircle, Eye, EyeOff, Phone, Camera, Loader2
 } from "lucide-react";
 import Link from "next/link";
 
@@ -50,6 +50,44 @@ export default function SettingsPage() {
   useEffect(() => {
     if (user?.name) setName(user.name);
   }, [user]);
+
+  // ── Avatar upload ─────────────────────────────────────────────
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+
+  async function handleAvatarChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || uploadingAvatar) return;
+    setUploadingAvatar(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch("/api/upload/avatar", { method: "POST", body: form });
+      if (!res.ok) {
+        const { error } = await res.json().catch(() => ({ error: "" }));
+        throw new Error(
+          error === "too_large"
+            ? "Image is larger than 2 MB."
+            : error === "bad_type"
+            ? "Only PNG, JPEG, or WebP are supported."
+            : "Upload failed. Please try again."
+        );
+      }
+      const { url } = (await res.json()) as { url: string };
+      await updateProfile.mutateAsync({ image: url });
+      await updateSession?.();
+      toast({ title: "Avatar updated" });
+    } catch (err) {
+      toast({
+        title: "Upload failed",
+        description: humanizeError(err),
+        variant: "destructive",
+      });
+    } finally {
+      setUploadingAvatar(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
 
   // ── Change Password ───────────────────────────────────────────
   const [currentPassword, setCurrentPassword] = useState("");
@@ -150,13 +188,38 @@ export default function SettingsPage() {
           ) : (
             <>
               <div className="flex items-center gap-4">
-                <Avatar className="h-16 w-16">
-                  <AvatarImage src={user?.image || undefined} />
-                  <AvatarFallback className="text-lg">{initials}</AvatarFallback>
-                </Avatar>
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="group relative rounded-full"
+                  disabled={uploadingAvatar}
+                  aria-label="Change avatar"
+                >
+                  <Avatar className="h-16 w-16">
+                    <AvatarImage src={user?.image || undefined} />
+                    <AvatarFallback className="text-lg">{initials}</AvatarFallback>
+                  </Avatar>
+                  <span className="pointer-events-none absolute inset-0 hidden items-center justify-center rounded-full bg-black/55 text-xs text-white group-hover:flex">
+                    {uploadingAvatar ? (
+                      <Loader2 className="h-5 w-5 animate-spin" />
+                    ) : (
+                      <Camera className="h-5 w-5" />
+                    )}
+                  </span>
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  hidden
+                  onChange={handleAvatarChange}
+                />
                 <div>
                   <p className="font-medium">{user?.name || "No name set"}</p>
                   <p className="text-sm text-muted-foreground">{user?.email}</p>
+                  <p className="text-xs text-muted-foreground/70 mt-0.5">
+                    Click avatar to change (PNG, JPEG, WebP — max 2 MB)
+                  </p>
                 </div>
               </div>
               <Separator />

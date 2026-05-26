@@ -79,6 +79,14 @@ export class DiscordProvider extends SocialProvider {
   }
 
   async publishPost(tokens: OAuthTokens, payload: SocialPostPayload): Promise<SocialPostResult> {
+    // Token-based connect (webhook) — tokens.metadata.kind === "webhook" and
+    // accessToken is the full webhook URL. Post directly without OAuth bot
+    // calls. This is the no-developer-portal path.
+    const isWebhook = (tokens as any)?.metadata?.kind === "webhook";
+    if (isWebhook) {
+      return this.publishViaWebhook(tokens, payload);
+    }
+
     const channelId = payload.metadata?.channelId as string;
     if (!channelId) {
       throw new Error("Discord publishPost requires metadata.channelId");
@@ -118,13 +126,64 @@ export class DiscordProvider extends SocialProvider {
     };
   }
 
+  /**
+   * Webhook-based publish path used when the channel was connected via
+   * a webhook URL (token-based flow). POSTs directly to the URL with
+   * `?wait=true` so we get the resulting message back.
+   */
+  private async publishViaWebhook(
+    tokens: OAuthTokens,
+    payload: SocialPostPayload
+  ): Promise<SocialPostResult> {
+    const webhookUrl = tokens.accessToken;
+    const body: Record<string, unknown> = { content: payload.content };
+    if (payload.mediaUrls?.length) {
+      body.embeds = payload.mediaUrls.map((url) => ({ image: { url } }));
+    }
+
+    const res = await fetch(`${webhookUrl}?wait=true`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data: any = await res.json().catch(() => null);
+    if (!res.ok) {
+      throw new Error(`Discord webhook post failed: ${JSON.stringify(data)}`);
+    }
+
+    const channelId = (tokens as any)?.metadata?.channelId ?? data?.channel_id ?? "";
+    const guildId = (tokens as any)?.metadata?.guildId ?? data?.guild_id ?? null;
+    const messageId = data?.id ?? "";
+    return {
+      platformPostId: `${channelId}:${messageId}`,
+      url: guildId
+        ? `https://discord.com/channels/${guildId}/${channelId}/${messageId}`
+        : `https://discord.com/channels/@me/${channelId}/${messageId}`,
+      metadata: data ?? {},
+    };
+  }
+
   async deletePost(tokens: OAuthTokens, platformPostId: string): Promise<void> {
     // platformPostId format: "channelId:messageId"
-    const [channelId, messageId] = platformPostId.split(":");
-    if (!channelId || !messageId) {
+    const [, messageId] = platformPostId.split(":");
+    if (!messageId) {
       throw new Error("Discord deletePost requires platformPostId in format 'channelId:messageId'");
     }
 
+    // Webhook path — DELETE on the webhook URL is supported and only requires the webhook secret itself.
+    const isWebhook = (tokens as any)?.metadata?.kind === "webhook";
+    if (isWebhook) {
+      const webhookUrl = tokens.accessToken;
+      const res = await fetch(`${webhookUrl}/messages/${messageId}`, { method: "DELETE" });
+      if (!res.ok && res.status !== 404) {
+        const data: any = await res.json().catch(() => null);
+        throw new Error(`Discord webhook delete failed: ${JSON.stringify(data)}`);
+      }
+      return;
+    }
+
+    // OAuth bot path
+    const [channelId] = platformPostId.split(":");
     const res = await fetch(
       `${this.API_BASE}/channels/${channelId}/messages/${messageId}`,
       {

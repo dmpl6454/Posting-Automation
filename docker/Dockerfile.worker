@@ -1,6 +1,14 @@
 FROM node:20-alpine AS base
 RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
-RUN apk add --no-cache ffmpeg chromium nss freetype harfbuzz ca-certificates ttf-freefont
+# Runtime: chromium for puppeteer + native libs for the `canvas` npm package
+# (cairo / pango / jpeg / giflib / pixman / librsvg). Build tools (python3,
+# build-base, pkgconfig, *-dev) are required during `pnpm install` because
+# `canvas@2.x` compiles native bindings via node-gyp. Fix Module 9 / QA #N9.
+RUN apk add --no-cache \
+    ffmpeg chromium nss freetype harfbuzz ca-certificates ttf-freefont \
+    cairo pango jpeg giflib pixman librsvg \
+    build-base python3 pkgconfig \
+    cairo-dev pango-dev jpeg-dev giflib-dev pixman-dev librsvg-dev
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 

@@ -5,13 +5,15 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "~/com
 import { Button } from "~/components/ui/button";
 import { Badge } from "~/components/ui/badge";
 import { Skeleton } from "~/components/ui/skeleton";
+import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { useToast } from "~/hooks/use-toast";
-import { CreditCard, CheckCircle, Zap } from "lucide-react";
+import { CreditCard, CheckCircle, Zap, Info } from "lucide-react";
 
 export default function BillingPage() {
   const { toast } = useToast();
   const { data: currentPlan, isLoading } = trpc.billing.currentPlan.useQuery();
   const { data: plans } = trpc.billing.plans.useQuery();
+  const { data: paymentMethod } = trpc.billing.paymentMethod.useQuery();
   const createCheckout = trpc.billing.createCheckout.useMutation({
     onSuccess: (data) => {
       if (data.url) window.location.href = data.url;
@@ -45,6 +47,16 @@ export default function BillingPage() {
         <p className="text-muted-foreground">Manage your subscription and billing</p>
       </div>
 
+      <Alert>
+        <Info className="h-4 w-4" />
+        <AlertTitle>How Billing works</AlertTitle>
+        <AlertDescription>
+          Your subscription is managed through Stripe. Click "Manage Billing" to update your card,
+          change plans, or download invoices. Plan changes take effect immediately; downgrades are
+          prorated automatically.
+        </AlertDescription>
+      </Alert>
+
       {/* Current Plan */}
       <Card>
         <CardContent className="p-6">
@@ -70,6 +82,38 @@ export default function BillingPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Fix #93: Payment Method (display only — updates via Stripe portal) */}
+      {currentPlan?.stripeCustomerId && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">Payment Method</CardTitle>
+            <CardDescription>
+              Card on file with Stripe. Click Manage Billing above to update.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {paymentMethod ? (
+              <div className="flex items-center gap-3">
+                <div className="rounded-md border bg-muted px-3 py-1.5 text-xs font-semibold uppercase tracking-wide">
+                  {paymentMethod.brand}
+                </div>
+                <p className="text-sm">
+                  •••• {paymentMethod.last4}
+                  <span className="ml-3 text-muted-foreground">
+                    expires {String(paymentMethod.expMonth).padStart(2, "0")}/
+                    {paymentMethod.expYear}
+                  </span>
+                </p>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                No card on file. Choose a paid plan below to add one at checkout.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Plans Grid */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

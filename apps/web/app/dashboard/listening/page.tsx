@@ -13,6 +13,7 @@ import { Badge } from "~/components/ui/badge";
 import { Skeleton } from "~/components/ui/skeleton";
 import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
+import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import {
   Dialog,
   DialogContent,
@@ -42,6 +43,7 @@ import {
   Smile,
   Frown,
   Meh,
+  Info,
 } from "lucide-react";
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
@@ -247,6 +249,15 @@ export default function ListeningPage() {
           </DialogContent>
         </Dialog>
       </div>
+
+      <Alert>
+        <Info className="h-4 w-4" />
+        <AlertTitle>How Listening works</AlertTitle>
+        <AlertDescription>
+          Create a query of keywords and platforms to monitor. The system polls each platform on a schedule and
+          captures mentions with sentiment. Click Sync now to refresh; open Alerts to be notified of spikes.
+        </AlertDescription>
+      </Alert>
 
       {/* Alerts Banner */}
       {alerts && alerts.length > 0 && (

@@ -24,6 +24,7 @@ import {
   TableRow,
 } from "~/components/ui/table";
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar";
+import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import {
   ChevronLeft,
   ChevronRight,
@@ -33,6 +34,7 @@ import {
   ChevronUp,
   Copy,
   Check,
+  Info,
 } from "lucide-react";
 
 // Action categories for color-coding
@@ -163,6 +165,16 @@ export default function AuditLogPage() {
           Track all actions and changes across your organization
         </p>
       </div>
+
+      <Alert>
+        <Info className="h-4 w-4" />
+        <AlertTitle>About the audit log</AlertTitle>
+        <AlertDescription>
+          Every significant action — invites, role changes, channel connects, billing events,
+          webhook changes, password updates — is recorded with actor, timestamp, IP, and target.
+          Entries are immutable; use the filters to narrow by user, action, or date.
+        </AlertDescription>
+      </Alert>
 
       {/* Filters */}
       <Card>

@@ -4,6 +4,31 @@ import { createRouter, orgProcedure } from "../trpc";
 import { getSocialProvider, getSupportedPlatforms, signState } from "@postautomation/social";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 import { enforcePlanLimit } from "../middleware/plan-limit.middleware";
+import {
+  TOKEN_PLATFORMS,
+  TOKEN_PLATFORM_SPECS,
+  validateAndBuildChannel,
+  type TokenPlatform,
+} from "../lib/channel-token-validators";
+
+// OAuth platforms that require <PLATFORM>_CLIENT_ID and <PLATFORM>_CLIENT_SECRET
+// env vars before the Connect button can do anything useful. Used by the
+// `platformAuthInfo` query so the UI can show a "Setup required" state
+// instead of a misleading Connect button.
+const OAUTH_PLATFORMS = [
+  "TWITTER",
+  "LINKEDIN",
+  "FACEBOOK",
+  "INSTAGRAM",
+  "REDDIT",
+  "YOUTUBE",
+  "TIKTOK",
+  "PINTEREST",
+  "THREADS",
+  "SLACK",
+] as const;
+
+const TOKEN_PLATFORM_SET = new Set<string>(TOKEN_PLATFORMS);
 
 export const channelRouter = createRouter({
   list: orgProcedure.query(async ({ ctx }) => {
@@ -57,6 +82,54 @@ export const channelRouter = createRouter({
     });
   }),
 
+  /**
+   * Per-platform connection info — tells the UI how to wire the Connect
+   * button. For OAuth platforms, returns whether the operator has set
+   * CLIENT_ID/SECRET env vars. For token platforms, returns the field spec
+   * the dialog should render.
+   */
+  platformAuthInfo: orgProcedure.query(() => {
+    return getSupportedPlatforms().map((platform) => {
+      const provider = getSocialProvider(platform);
+      const platformKey = String(platform);
+
+      if (TOKEN_PLATFORM_SET.has(platformKey)) {
+        const spec = TOKEN_PLATFORM_SPECS[platformKey as TokenPlatform];
+        return {
+          platform,
+          displayName: provider.displayName,
+          authType: "token" as const,
+          configured: true,
+          description: spec.description,
+          helpUrl: spec.helpUrl,
+          helpLinkLabel: spec.helpLinkLabel ?? null,
+          steps: spec.steps,
+          features: spec.features ?? null,
+          fields: spec.fields,
+        };
+      }
+
+      // Default: OAuth platform — check that env vars are set.
+      const clientId = process.env[`${platformKey}_CLIENT_ID`];
+      const clientSecret = process.env[`${platformKey}_CLIENT_SECRET`];
+      const configured = Boolean(clientId && clientSecret);
+      return {
+        platform,
+        displayName: provider.displayName,
+        authType: "oauth" as const,
+        configured,
+        description: configured
+          ? "Click Connect to authorize via the official sign-in flow."
+          : "OAuth credentials not configured — see docs/OAUTH_SETUP.md.",
+        helpUrl: null,
+        helpLinkLabel: null,
+        steps: [] as string[],
+        features: null,
+        fields: [] as never[],
+      };
+    });
+  }),
+
   getOAuthUrl: orgProcedure
     .input(z.object({ platform: z.string() }))
     .mutation(async ({ ctx, input }) => {
@@ -102,6 +175,170 @@ export const channelRouter = createRouter({
         console.error(`[channel.getOAuthUrl] ${input.platform} failed:`, err.message);
         throw err;
       }
+    }),
+
+  /**
+   * Telegram-only: given a bot token, return the list of chats the bot has
+   * recently seen messages in. Lets the user pick a chat from a dropdown
+   * instead of hunting for a numeric chat ID.
+   *
+   * Telegram's getUpdates returns ~24 hours of recent updates. The user must
+   * add the bot to a channel/group as admin AND post a message there for
+   * the chat to appear here.
+   */
+  detectTelegramChats: orgProcedure
+    .input(z.object({ botToken: z.string().min(1) }))
+    .mutation(async ({ input }) => {
+      const botToken = input.botToken.trim();
+      if (!/^\d{6,}:[A-Za-z0-9_-]{20,}$/.test(botToken)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "That doesn't look like a Telegram bot token. Format: 123456789:ABCdef...",
+        });
+      }
+
+      // Verify the token works at all
+      const meRes = await fetch(`https://api.telegram.org/bot${botToken}/getMe`);
+      const meData: any = await meRes.json().catch(() => null);
+      if (!meRes.ok || !meData?.ok) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Telegram rejected that bot token. Double-check it by sending /mybots to @BotFather.",
+        });
+      }
+
+      const updatesRes = await fetch(
+        `https://api.telegram.org/bot${botToken}/getUpdates?allowed_updates=${encodeURIComponent(
+          JSON.stringify(["message", "edited_message", "channel_post", "edited_channel_post", "my_chat_member"])
+        )}`
+      );
+      const updatesData: any = await updatesRes.json().catch(() => null);
+
+      if (!updatesRes.ok || !updatesData?.ok) {
+        // 409 Conflict means a webhook is currently set on the bot — getUpdates won't work
+        if (updatesData?.error_code === 409) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "This bot has a webhook set, which blocks chat detection. Either delete the webhook (DM @BotFather → /mybots → your bot → Edit Webhook → Remove Webhook) or enter the chat ID manually.",
+          });
+        }
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Telegram returned an error fetching chats. Try again in a moment.",
+        });
+      }
+
+      const updates: any[] = updatesData.result ?? [];
+      const seen = new Map<
+        string,
+        { id: string; title: string; type: string; username: string | null }
+      >();
+      for (const u of updates) {
+        const chat =
+          u.message?.chat ??
+          u.channel_post?.chat ??
+          u.edited_message?.chat ??
+          u.edited_channel_post?.chat ??
+          u.my_chat_member?.chat;
+        if (!chat?.id) continue;
+        const id = String(chat.id);
+        if (seen.has(id)) continue;
+        const title: string =
+          chat.title ||
+          [chat.first_name, chat.last_name].filter(Boolean).join(" ") ||
+          (chat.username ? `@${chat.username}` : `Chat ${id}`);
+        seen.set(id, {
+          id,
+          title,
+          type: chat.type as string,
+          username: (chat.username as string | undefined) ?? null,
+        });
+      }
+
+      return {
+        botUsername: meData.result.username as string,
+        botName: (meData.result.first_name as string) || meData.result.username,
+        chats: Array.from(seen.values()),
+      };
+    }),
+
+  /**
+   * Connect a token-based platform (Telegram bot, Discord webhook, Bluesky
+   * app password, Mastodon access token, WordPress app password, etc).
+   *
+   * Validates the credentials by calling the platform's own API, then
+   * upserts the Channel row. No OAuth redirect — the dialog stays in-app.
+   */
+  connectWithToken: orgProcedure
+    .input(
+      z.object({
+        platform: z.enum(TOKEN_PLATFORMS as readonly [string, ...string[]]),
+        credentials: z.record(z.string()),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      await enforcePlanLimit(ctx.organizationId, "channels", ctx.isSuperAdmin);
+
+      const validated = await validateAndBuildChannel(
+        input.platform as TokenPlatform,
+        input.credentials
+      );
+
+      const channel = await ctx.prisma.channel.upsert({
+        where: {
+          organizationId_platform_platformId: {
+            organizationId: ctx.organizationId,
+            platform: input.platform as any,
+            platformId: validated.platformId,
+          },
+        },
+        create: {
+          organizationId: ctx.organizationId,
+          platform: input.platform as any,
+          platformId: validated.platformId,
+          name: validated.name,
+          username: validated.username,
+          avatar: validated.avatar,
+          accessToken: validated.accessToken,
+          refreshToken: validated.refreshToken ?? null,
+          tokenExpiresAt: validated.tokenExpiresAt ?? null,
+          scopes: validated.scopes,
+          metadata: validated.metadata as any,
+          isActive: true,
+        },
+        update: {
+          accessToken: validated.accessToken,
+          refreshToken: validated.refreshToken ?? null,
+          tokenExpiresAt: validated.tokenExpiresAt ?? null,
+          scopes: validated.scopes,
+          metadata: validated.metadata as any,
+          name: validated.name,
+          username: validated.username,
+          avatar: validated.avatar,
+          isActive: true,
+        },
+      });
+
+      createAuditLog({
+        organizationId: ctx.organizationId,
+        userId: (ctx.session.user as any).id,
+        action: AUDIT_ACTIONS.CHANNEL_CONNECTED,
+        entityType: "Channel",
+        entityId: channel.id,
+        metadata: {
+          platform: input.platform,
+          name: validated.name,
+          method: "token",
+        },
+      }).catch((err) => {
+        console.error("audit_log_write_failed", {
+          err: err?.message,
+          action: AUDIT_ACTIONS.CHANNEL_CONNECTED,
+        });
+      });
+
+      return channel;
     }),
 
   disconnect: orgProcedure

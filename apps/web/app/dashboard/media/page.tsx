@@ -7,7 +7,9 @@ import { Button } from "~/components/ui/button";
 import { Badge } from "~/components/ui/badge";
 import { Input } from "~/components/ui/input";
 import { Skeleton } from "~/components/ui/skeleton";
+import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { useToast } from "~/hooks/use-toast";
+import { Info } from "lucide-react";
 import {
   Upload,
   Trash2,
@@ -140,6 +142,15 @@ export default function MediaPage() {
           {isUploading ? "Uploading..." : "Upload"}
         </Button>
       </div>
+
+      <Alert>
+        <Info className="h-4 w-4" />
+        <AlertTitle>How Media works</AlertTitle>
+        <AlertDescription>
+          Upload images, videos, or GIFs to reuse across your posts. Click a tile to preview at full size.
+          Files are private to your organisation; deleting a file does not affect already-published posts.
+        </AlertDescription>
+      </Alert>
 
       {/* Search & Filters */}
       <div className="flex items-center gap-3">

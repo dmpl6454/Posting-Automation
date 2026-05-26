@@ -29,11 +29,15 @@ export class TwitterProvider extends SocialProvider {
 
   /** Create an OAuth 1.0a client using the app's Consumer Key + Secret from env */
   private makeOAuth(tokenSecret = ""): OAuth {
+    const key = process.env.TWITTER_CLIENT_ID;
+    const secret = process.env.TWITTER_CLIENT_SECRET;
+    if (!key || !secret) {
+      throw new Error(
+        "TWITTER_CLIENT_ID / TWITTER_CLIENT_SECRET are not configured"
+      );
+    }
     return new OAuth({
-      consumer: {
-        key: process.env.TWITTER_CLIENT_ID ?? "",
-        secret: process.env.TWITTER_CLIENT_SECRET ?? "",
-      },
+      consumer: { key, secret },
       signature_method: "HMAC-SHA1",
       hash_function(baseString, key) {
         return crypto.createHmac("sha1", key).update(baseString).digest("base64");

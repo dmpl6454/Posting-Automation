@@ -64,6 +64,13 @@ export class WordPressProvider extends SocialProvider {
   }
 
   async publishPost(tokens: OAuthTokens, payload: SocialPostPayload): Promise<SocialPostResult> {
+    // Self-hosted path — connected via Application Password (kind === "self-hosted").
+    // accessToken is base64(username:appPassword), used as `Authorization: Basic <token>`.
+    const isSelfHosted = (tokens as any)?.metadata?.kind === "self-hosted";
+    if (isSelfHosted) {
+      return this.publishSelfHosted(tokens, payload);
+    }
+
     // blog_id comes from channel metadata (stored during OAuth callback)
     const siteId = (payload.metadata as any)?.blog_id || tokens.metadata?.blog_id;
     if (!siteId) throw new Error("WordPress blog_id not found in channel metadata. Re-connect the channel.");
@@ -124,6 +131,20 @@ export class WordPressProvider extends SocialProvider {
   }
 
   async deletePost(tokens: OAuthTokens, platformPostId: string, metadata?: Record<string, unknown>): Promise<void> {
+    const isSelfHosted = (tokens as any)?.metadata?.kind === "self-hosted";
+    if (isSelfHosted) {
+      const siteUrl = (tokens as any)?.metadata?.siteUrl as string;
+      const res = await fetch(`${siteUrl}/wp-json/wp/v2/posts/${platformPostId}?force=true`, {
+        method: "DELETE",
+        headers: { Authorization: `Basic ${tokens.accessToken}` },
+      });
+      if (!res.ok) {
+        const data: any = await res.json().catch(() => null);
+        throw new Error(`WordPress self-hosted delete failed: ${JSON.stringify(data)}`);
+      }
+      return;
+    }
+
     const siteId = (metadata as any)?.blog_id || tokens.metadata?.blog_id;
     if (!siteId) throw new Error("WordPress blog_id not found in channel metadata.");
 
@@ -139,6 +160,88 @@ export class WordPressProvider extends SocialProvider {
       const data: any = await res.json();
       throw new Error(`WordPress delete failed: ${JSON.stringify(data)}`);
     }
+  }
+
+  /**
+   * Self-hosted publish path — uses the WP REST API at /wp-json/wp/v2 with
+   * Basic auth (an Application Password). Media is uploaded to /media first,
+   * then referenced by the post via `featured_media`.
+   */
+  private async publishSelfHosted(
+    tokens: OAuthTokens,
+    payload: SocialPostPayload
+  ): Promise<SocialPostResult> {
+    const siteUrl = (tokens as any)?.metadata?.siteUrl as string;
+    if (!siteUrl) throw new Error("WordPress siteUrl missing from channel metadata. Re-connect the channel.");
+
+    const auth = `Basic ${tokens.accessToken}`;
+
+    let featuredImageId: number | undefined;
+    if (payload.mediaUrls?.length) {
+      const first = payload.mediaUrls[0]!;
+      featuredImageId = await this.uploadSelfHostedMedia(siteUrl, auth, first);
+    }
+
+    const title = (payload.metadata?.title as string) || (payload.content.split("\n")[0] ?? "").slice(0, 200);
+    const status = (payload.metadata?.publishStatus as string) || "publish";
+    const categories = (payload.metadata?.categories as number[]) || [];
+    const tags = (payload.metadata?.tags as number[]) || [];
+
+    const body: Record<string, unknown> = {
+      title,
+      content: payload.content,
+      status,
+    };
+    if (categories.length) body.categories = categories;
+    if (tags.length) body.tags = tags;
+    if (featuredImageId) body.featured_media = featuredImageId;
+
+    const res = await fetch(`${siteUrl}/wp-json/wp/v2/posts`, {
+      method: "POST",
+      headers: {
+        Authorization: auth,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    const data: any = await res.json().catch(() => null);
+    if (!res.ok) {
+      throw new Error(`WordPress self-hosted post failed: ${JSON.stringify(data)}`);
+    }
+
+    return {
+      platformPostId: String(data.id),
+      url: data.link,
+      metadata: { id: data.id, slug: data.slug, status: data.status, siteUrl },
+    };
+  }
+
+  private async uploadSelfHostedMedia(
+    siteUrl: string,
+    auth: string,
+    mediaUrl: string
+  ): Promise<number> {
+    const mediaRes = await fetch(mediaUrl);
+    if (!mediaRes.ok) throw new Error(`Failed to fetch media from ${mediaUrl}`);
+    const buffer = Buffer.from(await mediaRes.arrayBuffer());
+    const mediaType = mediaRes.headers.get("content-type") || "image/jpeg";
+    const filename =
+      mediaUrl.split("/").pop()?.split("?")[0] || `upload.${mediaType.split("/")[1] || "jpg"}`;
+
+    const res = await fetch(`${siteUrl}/wp-json/wp/v2/media`, {
+      method: "POST",
+      headers: {
+        Authorization: auth,
+        "Content-Type": mediaType,
+        "Content-Disposition": `attachment; filename="${filename}"`,
+      },
+      body: buffer,
+    });
+
+    const data: any = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(`WordPress media upload failed: ${JSON.stringify(data)}`);
+    return data.id as number;
   }
 
   async getProfile(tokens: OAuthTokens): Promise<SocialProfile> {

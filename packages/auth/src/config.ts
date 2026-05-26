@@ -229,8 +229,10 @@ export const authConfig: NextAuthConfig = {
       });
     },
   },
+  trustHost: true,
   pages: {
     signIn: "/login",
     newUser: "/register",
+    error: "/auth/error",
   },
 };

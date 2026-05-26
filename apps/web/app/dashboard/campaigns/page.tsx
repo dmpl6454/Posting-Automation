@@ -14,6 +14,7 @@ import { Skeleton } from "~/components/ui/skeleton";
 import { Input } from "~/components/ui/input";
 import { Textarea } from "~/components/ui/textarea";
 import { Label } from "~/components/ui/label";
+import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import {
   Dialog,
   DialogContent,
@@ -46,6 +47,7 @@ import {
   Mail,
   Star,
   Filter,
+  Info,
 } from "lucide-react";
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
@@ -337,6 +339,15 @@ export default function CampaignsPage() {
           )}
         </div>
       </div>
+
+      <Alert>
+        <Info className="h-4 w-4" />
+        <AlertTitle>How Campaigns work</AlertTitle>
+        <AlertDescription>
+          Track brands you want to follow, the influencers around them, and the content they release.
+          Use the Brands tab to add a brand; the system surfaces relevant posts in the Content tab.
+        </AlertDescription>
+      </Alert>
 
       {/* Overview Stats */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
