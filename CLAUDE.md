@@ -77,7 +77,8 @@ Filter to one workspace: `pnpm --filter @postautomation/web <cmd>`
 
 - **Local**: `.env` (gitignored). Template: [.env.example](.env.example).
 - **Production**: `.env.production` on the server (gitignored). Template: [.env.production.example](.env.production.example).
-- Many OAuth/API credentials are intentionally left blank (Google, GitHub, Twitter, LinkedIn, FB, IG, Reddit, YouTube, TikTok, Pinterest, OpenAI, Anthropic, Gemini, Stripe, Resend, Hunter, SMTP, Sentry). The app boots without them; affected features just don't work until filled in.
+- Many OAuth/API credentials are intentionally left blank (Twitter, LinkedIn, FB, IG, Reddit, YouTube, TikTok, Pinterest, OpenAI, Anthropic, Gemini, Stripe, Resend, Hunter, Sentry). The app boots without them; affected features just don't work until filled in.
+- **Configured in production**: `AUTH_GOOGLE_ID/SECRET`, `AUTH_SECRET`/`NEXTAUTH_SECRET`, `SMTP_*` (Google Workspace). GitHub OAuth was removed — not needed.
 
 ## Deployment
 
@@ -109,7 +110,11 @@ NextAuth v5 beta (`next-auth@^5.0.0-beta.25`), PrismaAdapter, JWT sessions (30 d
 - Login page detects OAuth-only users and shows the correct provider button
 - `events.createUser` auto-creates a personal workspace org for new OAuth sign-ups
 
-**Backfill:** If users exist without orgs (e.g. signed up via OAuth before `events.createUser` was added), run `pnpm db:backfill-orgs` once after deploying. On production: `docker compose -f docker-compose.prod.yml exec web pnpm db:backfill-orgs`.
+**Backfill:** If users exist without orgs (e.g. signed up via OAuth before `events.createUser` was added), run `pnpm db:backfill-orgs` once after deploying. The command uses `NODE_PATH=packages/db/node_modules` so `@prisma/client` resolves correctly. On production run it directly via docker exec:
+```bash
+docker exec postautomation-web-1 sh -c 'cd /app && NODE_PATH=/app/packages/db/node_modules /app/packages/db/node_modules/.bin/tsx scripts/backfill-user-orgs.ts'
+```
+Already ran on production 2026-05-26 — all users had orgs, nothing to fix.
 
 ## Email (SMTP)
 
