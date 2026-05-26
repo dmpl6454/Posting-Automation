@@ -3,7 +3,6 @@ import { prisma } from "@postautomation/db";
 import type { NextAuthConfig } from "next-auth";
 import type { Adapter } from "next-auth/adapters";
 import GoogleProvider from "next-auth/providers/google";
-import GitHubProvider from "next-auth/providers/github";
 import CredentialsProvider from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
 
@@ -14,15 +13,11 @@ const prismaAdapter = PrismaAdapter(prisma) as Adapter;
 
 export const authConfig: NextAuthConfig = {
   adapter: prismaAdapter,
+  secret: process.env.AUTH_SECRET ?? process.env.NEXTAUTH_SECRET,
   providers: [
     GoogleProvider({
       clientId: process.env.AUTH_GOOGLE_ID!,
       clientSecret: process.env.AUTH_GOOGLE_SECRET!,
-      allowDangerousEmailAccountLinking: true,
-    }),
-    GitHubProvider({
-      clientId: process.env.AUTH_GITHUB_ID!,
-      clientSecret: process.env.AUTH_GITHUB_SECRET!,
       allowDangerousEmailAccountLinking: true,
     }),
     CredentialsProvider({
@@ -101,8 +96,21 @@ export const authConfig: NextAuthConfig = {
             isSuperAdmin: true,
             isBanned: true,
             deletedAt: true,
+            accounts: { select: { provider: true } },
           },
         });
+
+        // User exists but signed up via OAuth — give a specific, helpful error
+        if (user && !user.password) {
+          const providers = user.accounts.map((a) => a.provider);
+          if (providers.length > 0) {
+            const names = providers
+              .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+              .join(" or ");
+            throw new Error(`oauth_only:${names}`);
+          }
+          return null;
+        }
 
         if (!user?.password) return null;
 
@@ -143,11 +151,21 @@ export const authConfig: NextAuthConfig = {
       if (token.id) {
         const dbUser = await prisma.user.findUnique({
           where: { id: token.id as string },
-          select: { isBanned: true, isSuperAdmin: true },
+          select: { isBanned: true, isSuperAdmin: true, passwordChangedAt: true },
         });
         if (dbUser) {
           token.isSuperAdmin = dbUser.isSuperAdmin;
           token.isBanned = dbUser.isBanned;
+
+          // If the password was changed AFTER this JWT was issued, invalidate it.
+          // This forces re-login after a password reset — equivalent to the
+          // reference app's refreshToken.deleteMany().
+          if (dbUser.passwordChangedAt && token.iat) {
+            const issuedAt = (token.iat as number) * 1000; // JWT iat is in seconds
+            if (dbUser.passwordChangedAt.getTime() > issuedAt) {
+              return null; // NextAuth treats null as an expired session → sign-out
+            }
+          }
         }
       }
 
@@ -160,6 +178,39 @@ export const authConfig: NextAuthConfig = {
         (session.user as any).isBanned = token.isBanned ?? false;
       }
       return session;
+    },
+  },
+  events: {
+    // Called only when a brand-new user row is created by NextAuth (i.e. first OAuth sign-up).
+    // Credentials users get their org in /api/auth/register, so this only runs for Google/GitHub.
+    async createUser({ user }) {
+      const userId = user.id;
+      const userEmail = user.email;
+      if (!userId || !userEmail) return;
+
+      // Guard: skip if they somehow already have a membership (shouldn't happen, but be safe)
+      const existing = await prisma.organizationMember.findFirst({
+        where: { userId },
+      });
+      if (existing) return;
+
+      const slug = (userEmail.split("@")[0] ?? userEmail)
+        .toLowerCase()
+        .replace(/[^a-z0-9-]/g, "-");
+      const displayName = user.name || slug;
+
+      await prisma.organization.create({
+        data: {
+          name: `${displayName}'s Workspace`,
+          slug: `${slug}-${Date.now().toString(36)}`,
+          members: {
+            create: {
+              userId,
+              role: "OWNER",
+            },
+          },
+        },
+      });
     },
   },
   pages: {

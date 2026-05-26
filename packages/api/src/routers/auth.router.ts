@@ -11,14 +11,22 @@ export const authRouter = createRouter({
   requestPasswordReset: publicProcedure
     .input(z.object({ email: z.string().email() }))
     .mutation(async ({ ctx, input }) => {
-      const user = await ctx.prisma.user.findUnique({
-        where: { email: input.email },
+      const normalizedEmail = input.email.toLowerCase().trim();
+      const user = await ctx.prisma.user.findFirst({
+        where: { email: { equals: normalizedEmail, mode: "insensitive" } },
+        select: { id: true, email: true, isBanned: true, deletedAt: true, password: true },
       });
 
-      // Always return success to avoid email enumeration
-      if (!user) {
-        return { success: true };
-      }
+      // Always return success — never leak whether an email exists (privacy invariant)
+      if (!user) return { success: true };
+
+      // Don't issue a reset link for banned or deleted accounts — they can't log in anyway,
+      // so sending a link just creates a confusing "I reset but still can't log in" loop.
+      if (user.isBanned || user.deletedAt) return { success: true };
+
+      // Only accounts with a password can use email/password reset.
+      // OAuth-only users have no password to reset — return silently.
+      if (!user.password) return { success: true };
 
       // Delete any existing reset tokens for this user
       await ctx.prisma.passwordResetToken.deleteMany({
@@ -82,15 +90,26 @@ export const authRouter = createRouter({
       }
 
       const hashedPassword = await bcrypt.hash(input.password, 12);
+      const now = new Date();
 
       await ctx.prisma.user.update({
         where: { id: resetToken.userId },
-        data: { password: hashedPassword },
+        data: {
+          password: hashedPassword,
+          // Stamp the change time — the JWT callback compares this against the
+          // token's iat to invalidate any sessions that existed before the reset.
+          passwordChangedAt: now,
+        },
       });
 
-      // Delete the used token
+      // Mark token as consumed (delete it — single-use enforced)
       await ctx.prisma.passwordResetToken.delete({
         where: { id: resetToken.id },
+      });
+
+      // Force-logout: delete any database sessions (covers non-JWT sessions / future changes)
+      await ctx.prisma.session.deleteMany({
+        where: { userId: resetToken.userId },
       });
 
       return { success: true };

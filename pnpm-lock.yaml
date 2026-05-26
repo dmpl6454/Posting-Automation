@@ -132,7 +132,7 @@ importers:
         version: 14.2.35(@playwright/test@1.58.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       next-auth:
         specifier: ^5.0.0-beta.25
-        version: 5.0.0-beta.30(next@14.2.35(@playwright/test@1.58.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react@18.3.1)
+        version: 5.0.0-beta.30(next@14.2.35(@playwright/test@1.58.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(nodemailer@8.0.8)(react@18.3.1)
       next-themes:
         specifier: ^0.4.4
         version: 0.4.6(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -298,6 +298,9 @@ importers:
       jose:
         specifier: ^6.2.1
         version: 6.2.1
+      nodemailer:
+        specifier: ^8.0.8
+        version: 8.0.8
       superjson:
         specifier: ^2.2.1
         version: 2.2.6
@@ -311,9 +314,12 @@ importers:
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.15
+      '@types/nodemailer':
+        specifier: ^8.0.0
+        version: 8.0.0
       next-auth:
         specifier: ^5.0.0-beta.25
-        version: 5.0.0-beta.30(next@14.2.35(@playwright/test@1.58.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react@18.3.1)
+        version: 5.0.0-beta.30(next@14.2.35(@playwright/test@1.58.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(nodemailer@8.0.8)(react@18.3.1)
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
@@ -334,7 +340,7 @@ importers:
         version: 2.4.3
       next-auth:
         specifier: ^5.0.0-beta.25
-        version: 5.0.0-beta.30(next@14.2.35(@playwright/test@1.58.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react@18.3.1)
+        version: 5.0.0-beta.30(next@14.2.35(@playwright/test@1.58.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(nodemailer@8.0.8)(react@18.3.1)
     devDependencies:
       '@types/bcryptjs':
         specifier: ^2.4.6
@@ -2117,6 +2123,9 @@ packages:
   '@types/node@22.19.15':
     resolution: {integrity: sha512-F0R/h2+dsy5wJAUe3tAU6oqa2qbWY5TpNfL/RGmo1y38hiyO1w3x2jPtt76wmuaJI4DQnOBu21cNXQ2STIUUWg==}
 
+  '@types/nodemailer@8.0.0':
+    resolution: {integrity: sha512-fyf8jWULsCo0d0BuoQ75i6IeoHs47qcqxWc7yUdUcV0pOZGjUTTOvwdG1PRXUDqN/8A64yQdQdnA2pZgcdi+cA==}
+
   '@types/prop-types@15.7.15':
     resolution: {integrity: sha512-F6bEyamV9jKGAFBEmlQnesRPGOQqS2+Uwi0Em15xenOxHaf2hv6L8YCVn3rPdPJOiJfPiCnLIRyvwVaqMY3MIw==}
 
@@ -3453,6 +3462,10 @@ packages:
   node-releases@2.0.36:
     resolution: {integrity: sha512-TdC8FSgHz8Mwtw9g5L4gR/Sh9XhSP/0DEkQxfEFXOpiul5IiHgHan2VhYYb6agDSfp4KuvltmGApc8HMgUrIkA==}
 
+  nodemailer@8.0.8:
+    resolution: {integrity: sha512-p+XsnzXGdtIHXUu2ugxdfG+eX2nehsGhMjW9h0CWj1BhE30hrFz0kh0yIM0/VjUgVsRrDj+80ZO+I1nSkGE4tA==}
+    engines: {node: '>=6.0.0'}
+
   nopt@5.0.0:
     resolution: {integrity: sha512-Tbj67rffqceeLpcRXrT7vKAN8CwfPeIBgM7E6iBkmKLV7bEMwpGgYLGv0jACUsECaa/vuxP0IjEont6umdMgtQ==}
     engines: {node: '>=6'}
@@ -3850,6 +3863,7 @@ packages:
   recharts@2.15.4:
     resolution: {integrity: sha512-UT/q6fwS3c1dHbXv2uFgYJ9BMFHu3fwnd7AYZaEQhXuYQ4hgsxLvsUXzGdKeZrW5xopzDCvuA2N41WJ88I7zIw==}
     engines: {node: '>=14'}
+    deprecated: 1.x and 2.x branches are no longer active. Bump to Recharts v3 to receive latest features and bugfixes. See https://github.com/recharts/recharts/wiki/3.0-migration-guide
     peerDependencies:
       react: ^16.0.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
       react-dom: ^16.0.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
@@ -4290,6 +4304,7 @@ packages:
 
   uuid@10.0.0:
     resolution: {integrity: sha512-8XkAphELsDnEGrDxUOHB3RGvXz6TeuYSGEZBOjtTtPm2lwhGBjLgOzLHB63IUWfBpNucQjND6d3AOudO+H3RWQ==}
+    deprecated: uuid@10 and below is no longer supported.  For ESM codebases, update to uuid@latest.  For CommonJS codebases, use uuid@11 (but be aware this version will likely be deprecated in 2028).
     hasBin: true
 
   uuid@11.1.0:
@@ -4495,13 +4510,15 @@ snapshots:
     optionalDependencies:
       zod: 3.25.76
 
-  '@auth/core@0.41.0(patch_hash=dpd2sbg4kt53by7persadpcbhm)':
+  '@auth/core@0.41.0(patch_hash=dpd2sbg4kt53by7persadpcbhm)(nodemailer@8.0.8)':
     dependencies:
       '@panva/hkdf': 1.2.1
       jose: 6.2.1
       oauth4webapi: 3.8.5
       preact: 10.24.3
       preact-render-to-string: 6.5.11(preact@10.24.3)
+    optionalDependencies:
+      nodemailer: 8.0.8
 
   '@auth/core@0.41.1':
     dependencies:
@@ -6551,6 +6568,10 @@ snapshots:
     dependencies:
       undici-types: 6.21.0
 
+  '@types/nodemailer@8.0.0':
+    dependencies:
+      '@types/node': 22.19.15
+
   '@types/prop-types@15.7.15': {}
 
   '@types/react-dom@18.3.7(@types/react@18.3.28)':
@@ -7861,11 +7882,13 @@ snapshots:
 
   netmask@2.0.2: {}
 
-  next-auth@5.0.0-beta.30(next@14.2.35(@playwright/test@1.58.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react@18.3.1):
+  next-auth@5.0.0-beta.30(next@14.2.35(@playwright/test@1.58.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(nodemailer@8.0.8)(react@18.3.1):
     dependencies:
-      '@auth/core': 0.41.0(patch_hash=dpd2sbg4kt53by7persadpcbhm)
+      '@auth/core': 0.41.0(patch_hash=dpd2sbg4kt53by7persadpcbhm)(nodemailer@8.0.8)
       next: 14.2.35(@playwright/test@1.58.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       react: 18.3.1
+    optionalDependencies:
+      nodemailer: 8.0.8
 
   next-themes@0.4.6(react-dom@18.3.1(react@18.3.1))(react@18.3.1):
     dependencies:
@@ -7914,6 +7937,8 @@ snapshots:
     optional: true
 
   node-releases@2.0.36: {}
+
+  nodemailer@8.0.8: {}
 
   nopt@5.0.0:
     dependencies:

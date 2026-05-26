@@ -13,8 +13,28 @@ export async function POST(req: Request) {
       );
     }
 
-    const existing = await prisma.user.findUnique({ where: { email } });
+    // Normalize email — prevents case-sensitivity duplicates
+    const normalizedEmail = email.toLowerCase().trim();
+
+    const existing = await prisma.user.findFirst({
+      where: { email: { equals: normalizedEmail, mode: "insensitive" } },
+      select: { password: true, accounts: { select: { provider: true } } },
+    });
+
     if (existing) {
+      // Tell the user which OAuth provider to use instead of giving a generic error
+      const oauthProviders = existing.accounts.map((a) => a.provider);
+      if (oauthProviders.length > 0 && !existing.password) {
+        const names = oauthProviders
+          .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+          .join(" or ");
+        return NextResponse.json(
+          {
+            error: `This email is already registered via ${names}. Please sign in using the ${names} button instead.`,
+          },
+          { status: 409 }
+        );
+      }
       return NextResponse.json({ error: "Email already registered" }, { status: 409 });
     }
 
@@ -23,7 +43,7 @@ export async function POST(req: Request) {
     const user = await prisma.user.create({
       data: {
         name,
-        email,
+        email: normalizedEmail,
         password: hashedPassword,
         emailVerified: new Date(),
       },

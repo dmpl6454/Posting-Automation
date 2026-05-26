@@ -1,30 +1,25 @@
-// Nodemailer is optional — only loaded if SMTP is configured
-let transporter: any = null;
+import nodemailer from "nodemailer";
+import type { Transporter } from "nodemailer";
 
-function getTransporter(): any {
-  if (!transporter) {
-    if (!process.env.SMTP_HOST) {
-      console.warn("[Email] No SMTP_HOST configured, emails will be logged to console");
-      return null;
-    }
+let transporter: Transporter | null = null;
 
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const nodemailer = require("nodemailer");
-      transporter = nodemailer.createTransport({
-        host: process.env.SMTP_HOST,
-        port: parseInt(process.env.SMTP_PORT || "587"),
-        secure: process.env.SMTP_SECURE === "true",
-        auth: {
-          user: process.env.SMTP_USER,
-          pass: process.env.SMTP_PASS,
-        },
-      });
-    } catch {
-      console.warn("[Email] nodemailer not installed, emails will be logged to console");
-      return null;
-    }
+function getTransporter(): Transporter | null {
+  if (transporter) return transporter;
+
+  if (!process.env.SMTP_HOST) {
+    return null;
   }
+
+  transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: parseInt(process.env.SMTP_PORT ?? "587"),
+    secure: process.env.SMTP_SECURE === "true", // true = port 465, false = STARTTLS on 587
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS,
+    },
+  });
+
   return transporter;
 }
 
@@ -37,15 +32,15 @@ interface SendEmailOptions {
 
 export async function sendEmail(options: SendEmailOptions): Promise<boolean> {
   const transport = getTransporter();
-  const from = process.env.SMTP_FROM || "PostAutomation <noreply@postautomation.app>";
+  const from = process.env.SMTP_FROM ?? "PostAutomation <noreply@postautomation.co.in>";
 
   if (!transport) {
-    // Dev fallback — log to console
-    console.log("\n[Email Preview]");
-    console.log(`To: ${options.to}`);
-    console.log(`From: ${from}`);
+    // Dev fallback — log to console when SMTP is not configured
+    console.log("\n[Email Preview — SMTP not configured]");
+    console.log(`To:      ${options.to}`);
+    console.log(`From:    ${from}`);
     console.log(`Subject: ${options.subject}`);
-    console.log(`Body:\n${options.text || options.html}\n`);
+    console.log(`Body:\n${options.text ?? options.html}\n`);
     return true;
   }
 
