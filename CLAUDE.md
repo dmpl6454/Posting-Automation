@@ -155,6 +155,30 @@ SMTP_FROM=PostAutomation <hr@digitalsukoon.com>
 - `resetPassword` sets `passwordChangedAt` on the user and deletes all DB sessions
 - JWT callback invalidates any token issued before the most recent `passwordChangedAt` (forces re-login everywhere after a reset)
 
+## Channel Connections
+
+Two connection paths exist:
+
+### Token-based (no operator setup required)
+Users enter their own credentials directly in a dialog. Implemented via `connectWithToken` tRPC mutation + per-platform validators in [packages/api/src/lib/channel-token-validators.ts](packages/api/src/lib/channel-token-validators.ts).
+
+| Platform | What the user provides |
+|----------|----------------------|
+| TELEGRAM | Bot token (from @BotFather) + chat ID (auto-detected via `detectTelegramChats` mutation) |
+| DISCORD | Webhook URL (from Discord channel settings) |
+| BLUESKY | Handle + app password (from Bluesky settings) |
+| MASTODON | Instance URL + access token (from Mastodon developer settings) |
+| WORDPRESS | Site URL + username + application password (self-hosted WP REST API) |
+| MEDIUM | Integration token (from Medium settings) |
+| DEVTO | API key (from dev.to settings) |
+
+### OAuth (operator must register an app per platform)
+Requires `<PLATFORM>_CLIENT_ID` and `<PLATFORM>_CLIENT_SECRET` env vars. Until set, the Connect button shows "Setup required". Guide: [docs/OAUTH_SETUP.md](docs/OAUTH_SETUP.md).
+
+Platforms: TWITTER, LINKEDIN, FACEBOOK, INSTAGRAM, REDDIT, YOUTUBE, TIKTOK, PINTEREST, THREADS, SLACK.
+
+The `platformAuthInfo` tRPC query tells the UI which type each platform is and whether OAuth platforms are configured.
+
 ## Patched dependencies
 
 - `@auth/core@0.41.0` — see [patches/@auth__core@0.41.0.patch](patches/). Applied automatically via pnpm `patchedDependencies` on install.
