@@ -24,13 +24,15 @@ import { useState, useEffect, useRef } from "react";
 import { useSession } from "next-auth/react";
 import {
   User, CreditCard, Webhook, Save, Lock,
-  Smartphone, CheckCircle2, AlertCircle, Eye, EyeOff, Phone, Camera, Loader2
+  Smartphone, CheckCircle2, AlertCircle, Eye, EyeOff, Phone, Camera, Loader2,
+  Sparkles, Video, ImageIcon, MessageSquare
 } from "lucide-react";
 import Link from "next/link";
 
 export default function SettingsPage() {
   const { toast } = useToast();
   const { data: user, isLoading, refetch } = trpc.user.me.useQuery();
+  const { data: aiConfig } = trpc.ai.getConfig.useQuery();
   // Fix #94: use session `update()` to sync name change into the NextAuth session
   const { update: updateSession } = useSession();
 
@@ -462,6 +464,113 @@ export default function SettingsPage() {
               )}
             </>
           )}
+        </CardContent>
+      </Card>
+
+      {/* ── AI Providers Status ─────────────────────────────────── */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2">
+            <Sparkles className="h-5 w-5 text-purple-500" />
+            AI Providers
+          </CardTitle>
+          <CardDescription>
+            Read-only status of AI provider API keys configured by your administrator.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* Text / Chat */}
+          <div>
+            <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide">
+              <MessageSquare className="h-3.5 w-3.5" />
+              Text &amp; Chat
+            </div>
+            <div className="grid gap-2 sm:grid-cols-3">
+              {([
+                { label: "OpenAI (GPT-4)",       key: "openai"    },
+                { label: "Anthropic (Claude)",    key: "anthropic" },
+                { label: "Google Gemini 2.5",     key: "gemini"    },
+                { label: "Google Gemma 4",        key: "gemma4"    },
+                { label: "xAI Grok 3",            key: "grok"      },
+                { label: "DeepSeek",              key: "deepseek"  },
+              ] as const).map(({ label, key }) => {
+                const ok = aiConfig?.[key];
+                return (
+                  <div key={key} className="flex items-center justify-between rounded-lg border px-3 py-2">
+                    <span className="text-sm">{label}</span>
+                    {ok === undefined ? (
+                      <span className="text-xs text-muted-foreground">…</span>
+                    ) : ok ? (
+                      <Badge variant="outline" className="text-[10px] border-emerald-300 text-emerald-600 dark:border-emerald-700 dark:text-emerald-400">✓ Active</Badge>
+                    ) : (
+                      <Badge variant="outline" className="text-[10px] text-muted-foreground">Not configured</Badge>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Image Generation */}
+          <div>
+            <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide">
+              <ImageIcon className="h-3.5 w-3.5" />
+              Image Generation
+            </div>
+            <div className="grid gap-2 sm:grid-cols-3">
+              {([
+                { label: "Nano Banana (Gemini)",  key: "imageNanoBanana" },
+                { label: "DALL-E 3 (OpenAI)",     key: "imageDalle"      },
+                { label: "Meta AI (FLUX.1)",       key: "imageMeta"       },
+              ] as const).map(({ label, key }) => {
+                const ok = aiConfig?.[key];
+                return (
+                  <div key={key} className="flex items-center justify-between rounded-lg border px-3 py-2">
+                    <span className="text-sm">{label}</span>
+                    {ok === undefined ? (
+                      <span className="text-xs text-muted-foreground">…</span>
+                    ) : ok ? (
+                      <Badge variant="outline" className="text-[10px] border-emerald-300 text-emerald-600 dark:border-emerald-700 dark:text-emerald-400">✓ Active</Badge>
+                    ) : (
+                      <Badge variant="outline" className="text-[10px] text-muted-foreground">Not configured</Badge>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Video Generation */}
+          <div>
+            <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide">
+              <Video className="h-3.5 w-3.5" />
+              Video Generation
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {([
+                { label: "Veo 3 (Google)",        key: "videoVeo"      },
+                { label: "Seedance 2.0 (fal.ai)", key: "videoSeedance" },
+              ] as const).map(({ label, key }) => {
+                const ok = aiConfig?.[key];
+                return (
+                  <div key={key} className="flex items-center justify-between rounded-lg border px-3 py-2">
+                    <span className="text-sm">{label}</span>
+                    {ok === undefined ? (
+                      <span className="text-xs text-muted-foreground">…</span>
+                    ) : ok ? (
+                      <Badge variant="outline" className="text-[10px] border-emerald-300 text-emerald-600 dark:border-emerald-700 dark:text-emerald-400">✓ Active</Badge>
+                    ) : (
+                      <Badge variant="outline" className="text-[10px] text-muted-foreground">Not configured</Badge>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <p className="text-xs text-muted-foreground pt-1">
+            AI keys are managed server-side by your administrator. Contact them to enable additional providers.
+          </p>
         </CardContent>
       </Card>
 

@@ -5,6 +5,7 @@ import type { Adapter } from "next-auth/adapters";
 import GoogleProvider from "next-auth/providers/google";
 import CredentialsProvider from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
+import { getPreauthOrgData } from "@postautomation/db";
 
 // Wrap PrismaAdapter to skip createUser/createSession for credentials provider
 // This is required because NextAuth v5 beta + PrismaAdapter tries to create
@@ -215,10 +216,12 @@ export const authConfig: NextAuthConfig = {
         .replace(/[^a-z0-9-]/g, "-");
       const displayName = user.name || slug;
 
+      const preauthData = getPreauthOrgData(userEmail);
       await prisma.organization.create({
         data: {
           name: `${displayName}'s Workspace`,
           slug: `${slug}-${Date.now().toString(36)}`,
+          ...(preauthData ?? {}),
           members: {
             create: {
               userId,

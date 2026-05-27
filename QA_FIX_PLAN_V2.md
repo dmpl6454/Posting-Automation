@@ -1055,3 +1055,64 @@ Update imports: `import { createCanvas, loadImage } from "@napi-rs/canvas";` (AP
 7. **Module 9** (worker Docker build). Own PR (Dockerfile + lockfile changes).
 
 After each PR: deploy to staging if available; run the Part 3 smoke checklist; ship.
+
+---
+
+# Part 6 — Post-QA fixes (2026-05-27, uncommitted as of writing)
+
+These issues were found during YouTube OAuth setup and Content Studio testing.
+
+## Fix A — YouTube OAuth scope insufficient (RESOLVED)
+
+**File:** `packages/api/src/routers/channel.router.ts:387`
+
+**Problem:** `getDefaultScopes()` only included `youtube.upload`. The provider's `getProfile()` calls `youtube/v3/channels?mine=true` (channels.list API) which requires a read scope. Result: 403 `ACCESS_TOKEN_SCOPE_INSUFFICIENT` on every connect attempt.
+
+**Fix:** Added `youtube.readonly` to the YOUTUBE scope array:
+```ts
+YOUTUBE: [
+  "https://www.googleapis.com/auth/youtube.upload",
+  "https://www.googleapis.com/auth/youtube.readonly", // channels.list needs this
+],
+```
+
+**Also required in Google Cloud Console:** Both scopes must be added to the OAuth consent screen → Data access. The YouTube account being connected must have a YouTube channel (empty accounts return `items: []` → second error: "no channel found").
+
+## Fix B — Upload failed toast (RESOLVED)
+
+**File:** `apps/web/app/api/upload/route.ts:89-90`
+
+**Problem:** Route reads `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` with `|| S3_ACCESS_KEY || S3_SECRET_KEY` fallbacks. Local `.env` only had the short-name variants → S3 client got empty credentials → every upload failed.
+
+**Fix:** Added `S3_ACCESS_KEY_ID=minioadmin` and `S3_SECRET_ACCESS_KEY=minioadmin` to local `.env`. The code fallback already handles production (which uses full AWS key names). Also: MinIO bucket `postautomation-media` did not exist locally — created it:
+```bash
+docker exec dashmani-postautomation-minio-1 mc mb local/postautomation-media
+docker exec dashmani-postautomation-minio-1 mc anonymous set download local/postautomation-media
+```
+
+## Fix C — Channels dropdown only visible after click (RESOLVED)
+
+**File:** `apps/web/components/content-agent/ComposeTab.tsx`
+
+**Problem:** The channel picker dropdown was gated on `channelDropdownOpen` state, which only became `true` on `onFocus`. Users couldn't see any channels until clicking the search box.
+
+**Fix:** Changed condition to `(channelDropdownOpen || channels?.length)` so channels display as soon as data loads. Also added `onClick` handler to the input so clicking it always opens the dropdown.
+
+## Fix D — Post-publish worker ignores isActive flag (RESOLVED)
+
+**File:** `apps/worker/src/workers/post-publish.worker.ts`
+
+**Problem:** Worker fetched channel then went straight to publishing — never checked `channel.isActive`. Disabling a channel in the UI had no effect on queued posts.
+
+**Fix:** Added guard immediately after channel fetch:
+```ts
+if (!channel.isActive) {
+  await prisma.postTarget.update({
+    where: { id: postTargetId },
+    data: { status: "FAILED", errorMessage: "Channel is inactive. Re-enable it in the Channels page to publish." },
+  });
+  return;
+}
+```
+
+Cron jobs (token refresh, analytics, brand sync, listening) already respected `isActive`; this brings post publishing into alignment.

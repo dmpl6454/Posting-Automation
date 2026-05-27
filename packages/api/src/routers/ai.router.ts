@@ -55,4 +55,45 @@ export const aiRouter = createRouter({
       });
       return { optimized };
     }),
+
+  /** Returns which AI providers are configured (have a non-empty API key).
+   *  Single source of truth for all provider-gating UI across the app.
+   */
+  getConfig: orgProcedure.query(() => {
+    const googleKey = !!(process.env.GOOGLE_GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY);
+
+    // Text / chat providers
+    const openai    = !!process.env.OPENAI_API_KEY;
+    const anthropic = !!process.env.ANTHROPIC_API_KEY;
+    const gemini    = googleKey;
+    const gemma4    = googleKey;   // same Google key as Gemini
+    const grok      = !!process.env.XAI_API_KEY;
+    const deepseek  = !!process.env.DEEPSEEK_API_KEY;
+
+    // Image generation providers
+    const imageNanoBanana = googleKey;   // Nano Banana 2 / Pro
+    const imageDalle      = openai;      // DALL-E 3
+    const imageMeta       = !!process.env.TOGETHER_API_KEY;   // FLUX.1
+
+    // Video generation providers
+    const videoVeo      = googleKey;     // Veo 3
+    const videoSeedance = !!(process.env.FAL_KEY || process.env.FAL_API_KEY);  // Seedance 2.0
+
+    // Convenience flags
+    const anyTextConfigured  = openai || anthropic || gemini || gemma4 || grok || deepseek;
+    const anyImageConfigured = imageNanoBanana || imageDalle || imageMeta;
+    const anyVideoConfigured = videoVeo || videoSeedance;
+    const anyConfigured      = anyTextConfigured;
+
+    return {
+      // Text providers
+      openai, anthropic, gemini, gemma4, grok, deepseek,
+      // Image providers
+      imageNanoBanana, imageDalle, imageMeta,
+      // Video providers
+      videoVeo, videoSeedance,
+      // Convenience
+      anyConfigured, anyTextConfigured, anyImageConfigured, anyVideoConfigured,
+    };
+  }),
 });

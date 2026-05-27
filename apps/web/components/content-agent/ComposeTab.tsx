@@ -185,6 +185,7 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   const getUploadUrl = trpc.media.getUploadUrl.useMutation();
   const saveGeneratedImage = trpc.image.saveGenerated.useMutation();
   const generateAI = trpc.ai.generateContent.useMutation();
+  const { data: aiConfig } = trpc.ai.getConfig.useQuery();
   const generateCarousel = trpc.post.generateCarousel.useMutation();
   const [isGeneratingCarousel, setIsGeneratingCarousel] = useState(false);
   const [carouselSlideCount, setCarouselSlideCount] = useState(5);
@@ -193,7 +194,17 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
 
   const handleAIGenerate = async () => {
     if (!content) return;
+    if (!aiConfig?.anyConfigured) {
+      toast({
+        title: "AI not configured",
+        description: "No AI provider API key is set. Add OPENAI_API_KEY, ANTHROPIC_API_KEY, or GOOGLE_GEMINI_API_KEY to your environment.",
+        variant: "destructive",
+      });
+      return;
+    }
     setIsGenerating(true);
+    // Pick the first available provider
+    const provider = aiConfig.anthropic ? "anthropic" : aiConfig.openai ? "openai" : "gemini";
     try {
       const enhancePrompt = `ENHANCE the following social media post for better engagement. IMPORTANT RULES:
 1. Do NOT change the core meaning or topic
@@ -206,30 +217,39 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
 
 Original post:
 ${content}`;
-      const result = await generateAI.mutateAsync({ prompt: enhancePrompt, provider: "anthropic" });
+      const result = await generateAI.mutateAsync({ prompt: enhancePrompt, provider });
       setContent(result.content);
       toast({ title: "Content enhanced!", description: "AI verified and improved your content." });
-    } catch {
-      toast({ title: "AI generation failed", description: "Please try again.", variant: "destructive" });
+    } catch (err: any) {
+      toast({ title: "AI generation failed", description: humanizeError(err) || "Please try again.", variant: "destructive" });
     }
     setIsGenerating(false);
   };
 
   const handleCreateWithAI = async () => {
     if (!aiPrompt.trim()) return;
+    if (!aiConfig?.anyConfigured) {
+      toast({
+        title: "AI not configured",
+        description: "No AI provider API key is set. Add OPENAI_API_KEY, ANTHROPIC_API_KEY, or GOOGLE_GEMINI_API_KEY to your environment.",
+        variant: "destructive",
+      });
+      return;
+    }
     setIsCreatingWithAI(true);
+    const provider = aiConfig.anthropic ? "anthropic" : aiConfig.openai ? "openai" : "gemini";
     try {
       const selectedPlatform = channels?.find((ch: any) => selectedChannels.includes(ch.id))?.platform as string | undefined;
       const result = await generateAI.mutateAsync({
         prompt: aiPrompt,
-        provider: "anthropic",
+        provider,
         platform: selectedPlatform || undefined,
       });
       setContent(result.content);
       setAiPrompt("");
       toast({ title: "Content created!", description: "AI generated your post. You can edit it before publishing." });
-    } catch {
-      toast({ title: "AI generation failed", description: "Please try again.", variant: "destructive" });
+    } catch (err: any) {
+      toast({ title: "AI generation failed", description: humanizeError(err) || "Please try again.", variant: "destructive" });
     }
     setIsCreatingWithAI(false);
   };
@@ -464,9 +484,16 @@ ${content}`;
           {/* Create with AI */}
           <Card className="border-purple-200 bg-gradient-to-r from-purple-50/50 to-blue-50/50 dark:border-purple-900 dark:from-purple-950/20 dark:to-blue-950/20">
             <CardHeader className="pb-3">
-              <div className="flex items-center gap-2">
-                <Sparkles className="h-4 w-4 text-purple-500" />
-                <CardTitle className="text-base">Create with AI</CardTitle>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="h-4 w-4 text-purple-500" />
+                  <CardTitle className="text-base">Create with AI</CardTitle>
+                </div>
+                {aiConfig?.anyConfigured && (
+                  <span className="text-[11px] text-muted-foreground">
+                    via {aiConfig.anthropic ? "Claude" : aiConfig.openai ? "GPT-4" : "Gemini"}
+                  </span>
+                )}
               </div>
               <CardDescription>Describe what you want to post and AI will write it for you</CardDescription>
             </CardHeader>
@@ -487,8 +514,9 @@ ${content}`;
                 />
                 <Button
                   onClick={handleCreateWithAI}
-                  disabled={!aiPrompt.trim() || isCreatingWithAI}
+                  disabled={!aiPrompt.trim() || isCreatingWithAI || !aiConfig?.anyConfigured}
                   className="gap-1.5 bg-purple-600 hover:bg-purple-700"
+                  title={!aiConfig?.anyConfigured ? "No AI provider configured — add an API key to enable" : undefined}
                 >
                   {isCreatingWithAI ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -506,20 +534,28 @@ ${content}`;
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-base">Content</CardTitle>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleAIGenerate}
-                  disabled={isGenerating || !content}
-                  className="gap-1.5"
-                >
-                  {isGenerating ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Sparkles className="h-3.5 w-3.5 text-purple-500" />
+                <div className="flex items-center gap-2">
+                  {aiConfig?.anyConfigured && (
+                    <span className="text-[11px] text-muted-foreground">
+                      via {aiConfig.anthropic ? "Claude" : aiConfig.openai ? "GPT-4" : "Gemini"}
+                    </span>
                   )}
-                  {isGenerating ? "Enhancing..." : "Enhance with AI"}
-                </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleAIGenerate}
+                    disabled={isGenerating || !content || !aiConfig?.anyConfigured}
+                    className="gap-1.5"
+                    title={!aiConfig?.anyConfigured ? "No AI provider configured — add an API key to enable" : undefined}
+                  >
+                    {isGenerating ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Sparkles className={`h-3.5 w-3.5 ${aiConfig?.anyConfigured ? "text-purple-500" : "text-muted-foreground"}`} />
+                    )}
+                    {isGenerating ? "Enhancing..." : "Enhance with AI"}
+                  </Button>
+                </div>
               </div>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -786,15 +822,16 @@ ${content}`;
                     <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
                     <Input
                       value={channelSearch}
-                      onChange={(e) => setChannelSearch(e.target.value)}
+                      onChange={(e) => { setChannelSearch(e.target.value); setChannelDropdownOpen(true); }}
                       placeholder="Search channels by name, platform, or @handle..."
                       className="h-9 pl-8 text-sm"
                       onFocus={() => setChannelDropdownOpen(true)}
+                      onClick={() => setChannelDropdownOpen(true)}
                     />
                   </div>
 
-                  {/* Dropdown results — shows when searching or focused */}
-                  {channelDropdownOpen && (() => {
+                  {/* Dropdown results — always visible when section is active */}
+                  {(channelDropdownOpen || channels?.length) && (() => {
                     const recentSet = new Set(recentlyUsedIds || []);
                     const allFiltered = channels?.filter((channel: any) => {
                       const matchesSearch =

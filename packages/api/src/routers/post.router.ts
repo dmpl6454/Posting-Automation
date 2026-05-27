@@ -74,6 +74,15 @@ export const postRouter = createRouter({
       // Enforce plan limit for posts per month
       await enforcePlanLimit(ctx.organizationId, "postsPerMonth", ctx.isSuperAdmin);
 
+      // Reject past scheduled dates (allow up to 60s in the past for clock skew)
+      if (input.scheduledAt) {
+        const scheduled = new Date(input.scheduledAt);
+        const now = new Date(Date.now() - 60_000);
+        if (scheduled < now) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Scheduled time cannot be in the past." });
+        }
+      }
+
       const status = input.scheduledAt ? "SCHEDULED" : "DRAFT";
 
       const post = await ctx.prisma.post.create({
@@ -268,6 +277,8 @@ export const postRouter = createRouter({
       const targets = await ctx.prisma.postTarget.findMany({
         where: {
           post: { organizationId: ctx.organizationId },
+          // Exclude pure drafts — only show targets that have been acted on
+          status: { not: "DRAFT" },
         },
         include: {
           channel: { select: { name: true, platform: true } },

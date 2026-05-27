@@ -105,6 +105,25 @@ export function ImageTab({ onImageGenerated }: ImageTabProps = {}) {
   // History
   const [history, setHistory] = useState<HistoryItem[]>([]);
 
+  // AI provider config — used to gate unconfigured image providers
+  const { data: aiConfig } = trpc.ai.getConfig.useQuery();
+
+  // Auto-correct image provider default if Nano Banana (Gemini) isn't configured
+  useEffect(() => {
+    if (!aiConfig) return;
+    const providerOk: Record<string, boolean> = {
+      "nano-banana":     aiConfig.imageNanoBanana,
+      "nano-banana-pro": aiConfig.imageNanoBanana,
+      "dall-e":          aiConfig.imageDalle,
+      "meta-ai":         aiConfig.imageMeta,
+    };
+    if (!providerOk[imageProvider]) {
+      const first = (["nano-banana", "nano-banana-pro", "dall-e", "meta-ai"] as const)
+        .find((p) => providerOk[p]);
+      if (first) setImageProvider(first);
+    }
+  }, [aiConfig]);
+
   // tRPC mutations
   const generateMutation = trpc.image.generate.useMutation({
     onError: (err: any) => {
@@ -480,24 +499,38 @@ export function ImageTab({ onImageGenerated }: ImageTabProps = {}) {
                 <CardHeader className="pb-3"><CardTitle className="text-base">AI Provider</CardTitle></CardHeader>
                 <CardContent>
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                    {[
-                      { value: "nano-banana", label: "Nano Banana", sub: "Gemini" },
-                      { value: "nano-banana-pro", label: "Nano Banana Pro", sub: "Gemini Pro" },
-                      { value: "dall-e", label: "DALL-E 3", sub: "OpenAI" },
-                      { value: "meta-ai", label: "Meta AI", sub: "FLUX.1" },
-                    ].map((p) => (
+                    {([
+                      { value: "nano-banana",     label: "Nano Banana",     sub: "Gemini",     configured: aiConfig?.imageNanoBanana },
+                      { value: "nano-banana-pro", label: "Nano Banana Pro", sub: "Gemini Pro", configured: aiConfig?.imageNanoBanana },
+                      { value: "dall-e",          label: "DALL-E 3",        sub: "OpenAI",     configured: aiConfig?.imageDalle },
+                      { value: "meta-ai",         label: "Meta AI",         sub: "FLUX.1",     configured: aiConfig?.imageMeta },
+                    ] as const).map((p) => (
                       <button
                         key={p.value}
                         type="button"
+                        disabled={p.configured === false}
                         onClick={() => setImageProvider(p.value as typeof imageProvider)}
-                        className={`flex flex-col items-center rounded-lg border px-3 py-2.5 text-xs transition-all ${
-                          imageProvider === p.value
+                        title={p.configured === false ? "Not configured — API key missing" : undefined}
+                        className={`relative flex flex-col items-center rounded-lg border px-3 py-2.5 text-xs transition-all ${
+                          p.configured === false
+                            ? "cursor-not-allowed border-border opacity-40"
+                            : imageProvider === p.value
                             ? "border-primary bg-primary/5 text-primary ring-1 ring-primary"
                             : "border-border text-muted-foreground hover:border-muted-foreground/50 hover:bg-muted/50"
                         }`}
                       >
                         <span className="font-semibold">{p.label}</span>
                         <span className="text-[10px] opacity-70">{p.sub}</span>
+                        {p.configured === false && (
+                          <span className="absolute -top-1.5 -right-1.5 rounded-full bg-muted px-1 text-[9px] text-muted-foreground leading-4">
+                            ✗
+                          </span>
+                        )}
+                        {p.configured === true && imageProvider === p.value && (
+                          <span className="absolute -top-1.5 -right-1.5 rounded-full bg-emerald-100 dark:bg-emerald-900/40 px-1 text-[9px] text-emerald-600 leading-4">
+                            ✓
+                          </span>
+                        )}
                       </button>
                     ))}
                   </div>

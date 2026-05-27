@@ -129,8 +129,8 @@ export function ActivityPanel() {
       if (existing) continue;
       activities.push({
         id: `pt-${pt.id}`,
-        type: pt.status === "PUBLISHED" ? "post.published" : pt.status === "FAILED" ? "post.failed" : "post.scheduled",
-        title: pt.status === "PUBLISHED" ? `Published to ${pt.platform}` : pt.status === "FAILED" ? `Failed on ${pt.platform}` : `Scheduled for ${pt.platform}`,
+        type: pt.status === "PUBLISHED" ? "post.published" : pt.status === "FAILED" ? "post.failed" : pt.status === "DRAFT" ? "post.draft" : "post.scheduled",
+        title: pt.status === "PUBLISHED" ? `Published to ${pt.platform}` : pt.status === "FAILED" ? `Failed on ${pt.platform}` : pt.status === "DRAFT" ? `Saved as draft for ${pt.platform}` : pt.status === "PUBLISHING" ? `Publishing to ${pt.platform}` : `Scheduled for ${pt.platform}`,
         body: pt.content ? (pt.content.length >= 100 ? pt.content.slice(0, 80) + "…" : pt.content) : "",
         status: pt.status === "PUBLISHED" ? "success" : pt.status === "FAILED" ? "error" : "pending",
         timestamp: new Date(

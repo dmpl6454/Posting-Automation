@@ -77,7 +77,13 @@ export async function POST(req: Request) {
   const orgId = membership.organizationId;
   const key = `${orgId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
 
-  const buffer = Buffer.from(await file.arrayBuffer());
+  let buffer: Buffer;
+  try {
+    buffer = Buffer.from(await file.arrayBuffer());
+  } catch (err: any) {
+    console.error("[upload] Failed to read file body:", err?.message ?? err);
+    return NextResponse.json({ error: `Failed to read file: ${err?.message ?? "body too large or corrupted"}` }, { status: 413 });
+  }
 
   const BUCKET = process.env.S3_BUCKET || "postautomation-media";
 
@@ -86,20 +92,26 @@ export async function POST(req: Request) {
     endpoint: process.env.S3_ENDPOINT || undefined,
     forcePathStyle: true,
     credentials: {
+      // Support both naming conventions: S3_ACCESS_KEY_ID (AWS standard) and S3_ACCESS_KEY (MinIO convention)
       accessKeyId: process.env.S3_ACCESS_KEY_ID || process.env.S3_ACCESS_KEY || "",
       secretAccessKey: process.env.S3_SECRET_ACCESS_KEY || process.env.S3_SECRET_KEY || "",
     },
   });
 
-  await s3.send(
-    new PutObjectCommand({
-      Bucket: BUCKET,
-      Key: key,
-      Body: buffer,
-      ContentType: file.type,
-      ContentLength: buffer.length,
-    })
-  );
+  try {
+    await s3.send(
+      new PutObjectCommand({
+        Bucket: BUCKET,
+        Key: key,
+        Body: buffer,
+        ContentType: file.type,
+        ContentLength: buffer.length,
+      })
+    );
+  } catch (err: any) {
+    console.error("[upload] S3 PutObject failed:", err?.message ?? err, "| bucket:", BUCKET, "| key:", key);
+    return NextResponse.json({ error: `Storage upload failed: ${err?.message ?? "unknown S3 error"}` }, { status: 502 });
+  }
 
   const publicUrl = process.env.S3_PUBLIC_URL
     ? `${process.env.S3_PUBLIC_URL}/${key}`

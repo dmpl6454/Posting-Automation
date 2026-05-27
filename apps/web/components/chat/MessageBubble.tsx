@@ -1,6 +1,6 @@
 "use client";
 
-import { Bot, User, Info, ImageIcon } from "lucide-react";
+import { Bot, User, Info, ImageIcon, Zap } from "lucide-react";
 import { ContentActionBar } from "./ContentActionBar";
 import { FileAttachmentList } from "./FileAttachment";
 import { cn } from "~/lib/utils";
@@ -163,6 +163,23 @@ export function MessageBubble({ message, onExecuteAction, isExecuting }: Message
               className="rounded-lg max-w-full"
               style={{ maxHeight: 400 }}
             />
+          </div>
+        )}
+
+        {/* "Answered by" provider chip — only for assistant messages with a known provider */}
+        {!isUser && message.metadata?.provider && message.id !== "streaming" && (
+          <div className="mt-2 flex items-center gap-1 opacity-60">
+            <Zap className="h-2.5 w-2.5" />
+            <span className="text-[10px]">
+              {({
+                openai:    "GPT-4",
+                anthropic: "Claude",
+                gemini:    "Gemini",
+                gemma4:    "Gemma 4",
+                grok:      "Grok 3",
+                deepseek:  "DeepSeek",
+              } as Record<string, string>)[message.metadata.provider as string] ?? message.metadata.provider}
+            </span>
           </div>
         )}
       </div>

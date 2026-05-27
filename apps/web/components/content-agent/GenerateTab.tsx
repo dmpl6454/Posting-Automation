@@ -48,6 +48,22 @@ export function GenerateTab() {
     router.push("/dashboard/content-agent?tab=compose");
   };
 
+  const { data: aiConfig } = trpc.ai.getConfig.useQuery();
+
+  // Auto-correct default provider to first configured one (avoids landing on unconfigured gemma4)
+  useEffect(() => {
+    if (!aiConfig) return;
+    const providerConfigured: Record<string, boolean> = {
+      gemma4: aiConfig.gemma4, openai: aiConfig.openai, anthropic: aiConfig.anthropic,
+      gemini: aiConfig.gemini, grok: aiConfig.grok, deepseek: aiConfig.deepseek,
+    };
+    if (!providerConfigured[provider]) {
+      const first = (["gemma4","gemini","anthropic","openai","grok","deepseek"] as const)
+        .find((p) => providerConfigured[p]);
+      if (first) setProvider(first);
+    }
+  }, [aiConfig]);
+
   const generate = trpc.ai.generateContent.useMutation({
     onSuccess: (data) => {
       setResult(data.content);
@@ -76,6 +92,14 @@ export function GenerateTab() {
 
   const handleGenerate = () => {
     if (!prompt) return;
+    if (!aiConfig?.anyConfigured) {
+      toast({
+        title: "AI not configured",
+        description: "No AI provider API key is set. Add OPENAI_API_KEY, ANTHROPIC_API_KEY, or GOOGLE_GEMINI_API_KEY to your environment.",
+        variant: "destructive",
+      });
+      return;
+    }
     generate.mutate({ prompt, platform, tone, provider });
   };
 
@@ -137,14 +161,31 @@ export function GenerateTab() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="openai">OpenAI (GPT-4)</SelectItem>
-                  <SelectItem value="anthropic">Anthropic (Claude)</SelectItem>
-                  <SelectItem value="gemini">Google (Gemini)</SelectItem>
-                  <SelectItem value="grok">xAI (Grok)</SelectItem>
-                  <SelectItem value="deepseek">DeepSeek</SelectItem>
-                  <SelectItem value="gemma4">Google (Gemma 4)</SelectItem>
+                  {([
+                    { value: "gemma4",    label: "Google (Gemma 4)",      configured: aiConfig?.gemma4 },
+                    { value: "gemini",    label: "Google (Gemini 2.5)",    configured: aiConfig?.gemini },
+                    { value: "anthropic", label: "Anthropic (Claude)",     configured: aiConfig?.anthropic },
+                    { value: "openai",    label: "OpenAI (GPT-4)",         configured: aiConfig?.openai },
+                    { value: "grok",      label: "xAI (Grok 3)",           configured: aiConfig?.grok },
+                    { value: "deepseek",  label: "DeepSeek",               configured: aiConfig?.deepseek },
+                  ] as const).map(({ value, label, configured }) => (
+                    <SelectItem key={value} value={value} disabled={configured === false}>
+                      <span className="flex items-center gap-2">
+                        {label}
+                        {configured === false && (
+                          <span className="text-[10px] text-muted-foreground font-normal">Not configured</span>
+                        )}
+                        {configured === true && (
+                          <span className="text-[10px] text-emerald-500 font-normal">✓</span>
+                        )}
+                      </span>
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
+              <p className="text-[11px] text-muted-foreground">
+                Only providers with a configured API key are selectable.
+              </p>
             </div>
           </div>
 
@@ -160,8 +201,9 @@ export function GenerateTab() {
 
           <Button
             onClick={handleGenerate}
-            disabled={!prompt || generate.isPending}
+            disabled={!prompt || generate.isPending || !aiConfig?.anyConfigured}
             className="w-full gap-2"
+            title={!aiConfig?.anyConfigured ? "No AI provider configured — add an API key to enable" : undefined}
           >
             {generate.isPending ? (
               <Loader2 className="h-4 w-4 animate-spin" />

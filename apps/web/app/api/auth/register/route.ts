@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { prisma } from "@postautomation/db";
+import { getPreauthOrgData } from "@postautomation/db";
 
 export async function POST(req: Request) {
   try {
@@ -49,12 +50,14 @@ export async function POST(req: Request) {
       },
     });
 
-    // Auto-create a personal organization
+    // Auto-create a personal organization (pre-authorised emails get ENTERPRISE trial)
     const slug = email.split("@")[0].toLowerCase().replace(/[^a-z0-9-]/g, "-");
+    const preauthData = getPreauthOrgData(email);
     await prisma.organization.create({
       data: {
         name: `${name || slug}'s Workspace`,
         slug: `${slug}-${Date.now().toString(36)}`,
+        ...(preauthData ?? {}),
         members: {
           create: {
             userId: user.id,

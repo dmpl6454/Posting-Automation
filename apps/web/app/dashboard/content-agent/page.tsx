@@ -7,11 +7,9 @@ import {
   Repeat2,
   ImagePlus,
   Layers,
-  MessageSquare,
   PenLine,
 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "~/components/ui/tabs";
-import { ChatLayout } from "~/components/chat/ChatLayout";
 import { GenerateTab } from "~/components/content-agent/GenerateTab";
 import { RepurposeTab } from "~/components/content-agent/RepurposeTab";
 import { ImageTab } from "~/components/content-agent/ImageTab";
@@ -20,7 +18,6 @@ import { ComposeTab } from "~/components/content-agent/ComposeTab";
 import { CalendarTab } from "~/components/content-agent/CalendarTab";
 import { BulkTab } from "~/components/content-agent/BulkTab";
 import { Button } from "~/components/ui/button";
-import { cn } from "~/lib/utils";
 
 const tabs = [
   { id: "compose", label: "Compose", icon: PenLine },
@@ -39,14 +36,11 @@ function ContentStudioInner() {
   const [activeTab, setActiveTab] = useState(composeContent || composeImage ? "compose" : initialTab);
   const [postCreated, setPostCreated] = useState(0);
   const [showCalendar, setShowCalendar] = useState(false);
-  const [chatOpen, setChatOpen] = useState(false);
   const [pendingMedia, setPendingMedia] = useState<{ dataUrl: string } | null>(null);
 
   return (
-    <div className="flex h-[calc(100vh-4rem)] overflow-hidden">
-      {/* ── Main content (scrollable) ── */}
-      <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-4xl space-y-4 p-4">
+    <div className="h-[calc(100vh-4rem)] overflow-y-auto">
+      <div className="mx-auto max-w-4xl space-y-4 p-4">
           {/* Header */}
           <div>
             <h1 className="text-xl font-bold tracking-tight">Content Studio</h1>
@@ -135,28 +129,6 @@ function ContentStudioInner() {
           ) : (
             <CalendarTab />
           )}
-        </div>
-      </div>
-
-      {/* ── AI Chat sidebar (collapsible) ── */}
-      <div
-        className={cn(
-          "flex flex-col border-l bg-background transition-all duration-200",
-          chatOpen ? "w-[380px]" : "w-10"
-        )}
-      >
-        <button
-          onClick={() => setChatOpen((o) => !o)}
-          className="flex h-10 w-full items-center justify-center border-b hover:bg-muted"
-          title="AI Chat"
-        >
-          <MessageSquare className="h-4 w-4" />
-        </button>
-        {chatOpen && (
-          <div className="flex-1 overflow-hidden">
-            <ChatLayout />
-          </div>
-        )}
       </div>
     </div>
   );

@@ -2,6 +2,26 @@ import { Worker, type Job, UnrecoverableError } from "bullmq";
 import { prisma } from "@postautomation/db";
 import { getSocialProvider } from "@postautomation/social";
 import { QUEUE_NAMES, postPublishQueue, type PostPublishJobData, createRedisConnection } from "@postautomation/queue";
+import IORedis from "ioredis";
+
+// Redis pub/sub publisher for upload progress SSE
+const progressPublisher = new IORedis(process.env.REDIS_URL || "redis://localhost:6379", {
+  maxRetriesPerRequest: null,
+  enableReadyCheck: false,
+});
+
+/** Persist + broadcast upload progress (0-100) for a PostTarget */
+async function reportProgress(postTargetId: string, percent: number): Promise<void> {
+  try {
+    await prisma.postTarget.update({
+      where: { id: postTargetId },
+      data: { uploadProgress: percent },
+    });
+    await progressPublisher.publish(`progress-notify:${postTargetId}`, JSON.stringify({ percent }));
+  } catch {
+    // Non-fatal — progress reporting should never block publishing
+  }
+}
 
 // ── Email report after all targets complete ────────────────────────────
 async function sendPublishReportEmail(
@@ -167,6 +187,13 @@ export function createPostPublishWorker() {
       const { postTargetId, channelId, platform } = job.data;
       console.log(`[PostPublish] Processing job ${job.id} for target ${postTargetId} (attempt ${job.attemptsMade + 1})`);
 
+      // 0. Guard: if PostTarget was deleted (orphan job), exit cleanly
+      const targetExists = await prisma.postTarget.findUnique({ where: { id: postTargetId }, select: { id: true } });
+      if (!targetExists) {
+        console.warn(`[PostPublish] PostTarget ${postTargetId} no longer exists — skipping orphan job ${job.id}`);
+        return;
+      }
+
       // 1. Mark as PUBLISHING
       await prisma.postTarget.update({
         where: { id: postTargetId },
@@ -185,6 +212,16 @@ export function createPostPublishWorker() {
           },
         }),
       ]);
+
+      // 3a. Guard: skip publishing to inactive channels
+      if (!channel.isActive) {
+        console.warn(`[PostPublish] Channel ${channelId} (${platform}) is inactive — skipping publish`);
+        await prisma.postTarget.update({
+          where: { id: postTargetId },
+          data: { status: "FAILED", errorMessage: "Channel is inactive. Re-enable it in the Channels page to publish." },
+        });
+        return;
+      }
 
       // 3. Get provider and check token expiry
       const provider = getSocialProvider(platform as any);
@@ -350,11 +387,14 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
       try {
         console.log(`[PostPublish] Publishing to ${platform} via ${provider.displayName} (mediaUrls: ${mediaUrls.length})`);
 
+        // Build progress callback — only meaningful for media-heavy platforms (YouTube etc.)
+        const onProgress = (percent: number) => reportProgress(postTargetId, percent);
+
         // Retry up to 3 times for transient network errors (fetch timeouts under heavy load)
         let lastErr: any;
         for (let attempt = 1; attempt <= 3; attempt++) {
           try {
-            result = await provider.publishPost(tokens, { content: publishContent, mediaUrls, mediaTypes, metadata: channelMetadata });
+            result = await provider.publishPost(tokens, { content: publishContent, mediaUrls, mediaTypes, metadata: channelMetadata, onProgress });
             lastErr = null;
             break;
           } catch (e: any) {
@@ -454,7 +494,7 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
         throw new Error("Publish returned no result");
       }
 
-      // 4. Mark as PUBLISHED
+      // 4. Mark as PUBLISHED (clear uploadProgress — no longer needed)
       const updatedTarget = await prisma.postTarget.update({
         where: { id: postTargetId },
         data: {
@@ -462,6 +502,7 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
           publishedId: result.platformPostId,
           publishedUrl: result.url,
           publishedAt: new Date(),
+          uploadProgress: null,
           metadata: (result.metadata ?? undefined) as any,
         },
       });
@@ -515,97 +556,116 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
       connection: createRedisConnection(),
       concurrency: 3,
       limiter: { max: 3, duration: 5000 }, // max 3 publishes per 5 seconds to avoid rate limits
+      stalledInterval: 30_000,  // check for stalled jobs every 30s
+      maxStalledCount: 2,       // move to failed after 2 stall cycles (not infinite retry)
     }
   );
 
   worker.on("failed", async (job, err) => {
     if (!job) return;
-    const errType = classifyError(err.message);
-    console.error(`[PostPublish] Job ${job.id} failed (attempt ${job.attemptsMade}/${job.opts?.attempts ?? 1}, type: ${errType}):`, err.message);
+    try {
+      const errType = classifyError(err.message);
+      console.error(`[PostPublish] Job ${job.id} failed (attempt ${job.attemptsMade}/${job.opts?.attempts ?? 1}, type: ${errType}):`, err.message);
 
-    const isFinalAttempt = job.attemptsMade >= (job.opts?.attempts ?? 1);
+      const isFinalAttempt = job.attemptsMade >= (job.opts?.attempts ?? 1);
 
-    // Build user-friendly error message
-    let userMessage = err.message;
-    if (errType === "rate_limit") userMessage = "Platform rate limit hit. Will retry automatically.";
-    else if (errType === "token_expired") userMessage = "Access token expired. Please reconnect this channel in Settings.";
-    else if (errType === "permission") userMessage = "Missing permissions. Check app permissions in platform developer console.";
-    else if (errType === "content_too_large") userMessage = "Content exceeds platform character limit.";
-    else if (errType === "media_required") userMessage = "This platform requires at least one image or video.";
+      // Build user-friendly error message
+      let userMessage = err.message;
+      if (errType === "rate_limit") userMessage = "Platform rate limit hit. Will retry automatically.";
+      else if (errType === "token_expired") userMessage = "Access token expired. Please reconnect this channel in Settings.";
+      else if (errType === "permission") userMessage = "Missing permissions. Check app permissions in platform developer console.";
+      else if (errType === "content_too_large") userMessage = "Content exceeds platform character limit.";
+      else if (errType === "media_required") userMessage = "This platform requires at least one image or video.";
 
-    // Fix #22: non-final failures should NOT re-set status to PUBLISHING —
-    // that would overwrite a PENDING state and confuse the watchdog.
-    // Only update status to FAILED on the final attempt; otherwise leave it as-is.
-    await prisma.postTarget.update({
-      where: { id: job.data.postTargetId },
-      data: {
-        ...(isFinalAttempt ? { status: "FAILED" } : {}),
-        errorMessage: userMessage,
-        retryCount: { increment: 1 },
-      },
-    });
-
-    // Log to ErrorLog for monitoring dashboard
-    if (isFinalAttempt) {
+      // Update PostTarget — guard against P2025 (target may have been deleted)
       try {
-        const fp = require("crypto").createHash("md5").update(`${err.message}::${job.data.platform}`).digest("hex");
-        const existing = await prisma.errorLog.findFirst({
-          where: { fingerprint: fp, resolved: false, lastSeenAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
+        await prisma.postTarget.update({
+          where: { id: job.data.postTargetId },
+          data: {
+            ...(isFinalAttempt ? { status: "FAILED" } : {}),
+            errorMessage: userMessage,
+            retryCount: { increment: 1 },
+          },
         });
-        if (existing) {
-          await prisma.errorLog.update({
-            where: { id: existing.id },
-            data: { occurrences: { increment: 1 }, lastSeenAt: new Date() },
-          });
+      } catch (dbErr: any) {
+        if (dbErr?.code === "P2025") {
+          console.warn(`[PostPublish] PostTarget ${job.data.postTargetId} no longer exists — skipping error write`);
         } else {
-          await prisma.errorLog.create({
-            data: {
-              source: "publish",
-              severity: errType === "rate_limit" ? "warning" : "error",
-              message: userMessage,
-              stack: err.stack?.slice(0, 5000),
-              endpoint: `PostPublish/${job.data.platform}`,
-              organizationId: job.data.organizationId,
-              fingerprint: fp,
-              metadata: {
-                platform: job.data.platform,
-                postId: job.data.postId,
-                postTargetId: job.data.postTargetId,
-                channelId: job.data.channelId,
-                errorType: errType,
-                attempts: job.attemptsMade,
-              },
-            },
-          });
+          console.error(`[PostPublish] Failed to update PostTarget:`, dbErr?.message);
         }
-      } catch { /* never let monitoring break the worker */ }
-    }
+      }
+
+      // Log to ErrorLog for monitoring dashboard
+      if (isFinalAttempt) {
+        try {
+          const fp = require("crypto").createHash("md5").update(`${err.message}::${job.data.platform}`).digest("hex");
+          const existing = await prisma.errorLog.findFirst({
+            where: { fingerprint: fp, resolved: false, lastSeenAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
+          });
+          if (existing) {
+            await prisma.errorLog.update({
+              where: { id: existing.id },
+              data: { occurrences: { increment: 1 }, lastSeenAt: new Date() },
+            });
+          } else {
+            await prisma.errorLog.create({
+              data: {
+                source: "publish",
+                severity: errType === "rate_limit" ? "warning" : "error",
+                message: userMessage,
+                stack: err.stack?.slice(0, 5000),
+                endpoint: `PostPublish/${job.data.platform}`,
+                organizationId: job.data.organizationId,
+                fingerprint: fp,
+                metadata: {
+                  platform: job.data.platform,
+                  postId: job.data.postId,
+                  postTargetId: job.data.postTargetId,
+                  channelId: job.data.channelId,
+                  errorType: errType,
+                  attempts: job.attemptsMade,
+                },
+              },
+            });
+          }
+        } catch (logErr: any) {
+          console.warn(`[PostPublish] ErrorLog write failed:`, logErr?.message);
+        }
+      }
 
       // If this was the final attempt, check if ALL targets have failed/completed
       // and update parent post status accordingly
       if (isFinalAttempt) {
-        const postTarget = await prisma.postTarget.findUnique({
-          where: { id: job.data.postTargetId },
-          include: { post: { select: { content: true, organizationId: true } } },
-        });
-        if (postTarget) {
-          const allTargets = await prisma.postTarget.findMany({
-            where: { postId: postTarget.postId },
-            include: { channel: { select: { platform: true } } },
+        try {
+          const postTarget = await prisma.postTarget.findUnique({
+            where: { id: job.data.postTargetId },
+            include: { post: { select: { content: true, organizationId: true } } },
           });
-          const allDone = allTargets.every((t) => t.status === "PUBLISHED" || t.status === "FAILED");
-          const allFailed = allTargets.every((t) => t.status === "FAILED");
-          if (allDone) {
-            await prisma.post.update({
-              where: { id: postTarget.postId },
-              data: { status: allFailed ? "FAILED" : "PUBLISHED" },
+          if (postTarget) {
+            const allTargets = await prisma.postTarget.findMany({
+              where: { postId: postTarget.postId },
+              include: { channel: { select: { platform: true } } },
             });
+            const allDone = allTargets.every((t) => t.status === "PUBLISHED" || t.status === "FAILED");
+            const allFailed = allTargets.every((t) => t.status === "FAILED");
+            if (allDone) {
+              await prisma.post.update({
+                where: { id: postTarget.postId },
+                data: { status: allFailed ? "FAILED" : "PUBLISHED" },
+              });
 
-            // Send email report with publish results (including failures)
-            await sendPublishReportEmail(postTarget.post.organizationId, postTarget.postId, postTarget.post.content, allTargets);
+              // Send email report with publish results (including failures)
+              await sendPublishReportEmail(postTarget.post.organizationId, postTarget.postId, postTarget.post.content, allTargets);
+            }
           }
+        } catch (finalErr: any) {
+          console.warn(`[PostPublish] Failed to update parent post status:`, finalErr?.message);
         }
       }
+    } catch (handlerErr: any) {
+      // Never let the failed handler itself crash the worker
+      console.error(`[PostPublish] Unhandled error in failed handler for job ${job.id}:`, handlerErr?.message);
+    }
   });
 
   worker.on("completed", (job) => {

@@ -128,3 +128,4 @@ export const prisma = basePrisma.$extends({
 
 export * from "@prisma/client";
 export type { PrismaClient } from "@prisma/client";
+export { getPreauthOrgData, PREAUTH_EMAILS } from "./preauth";

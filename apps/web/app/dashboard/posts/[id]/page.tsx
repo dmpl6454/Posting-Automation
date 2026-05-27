@@ -53,7 +53,15 @@ export default function PostDetailPage() {
   const { toast } = useToast();
   const postId = params.id as string;
 
-  const { data: post, isLoading, refetch } = trpc.post.getById.useQuery({ id: postId });
+  const isPublishing = (post: any) =>
+    post?.status === "PUBLISHING" || post?.targets?.some((t: any) => t.status === "PUBLISHING");
+
+  const { data: post, isLoading, refetch } = trpc.post.getById.useQuery(
+    { id: postId },
+    // Poll every 3s while any target is PUBLISHING so the progress bar updates live.
+    // react-query v5: refetchInterval callback receives the Query object, not the data directly.
+    { refetchInterval: (query) => (isPublishing((query as any).state?.data) ? 3000 : false) }
+  );
 
   const [content, setContent] = useState("");
   const [tags, setTags] = useState("");
@@ -299,8 +307,9 @@ export default function PostDetailPage() {
               return (
                 <div
                   key={target.id}
-                  className="flex items-center justify-between rounded-lg border p-3"
+                  className="rounded-lg border p-3 space-y-2"
                 >
+                  <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-muted">
                       <TargetStatusIcon
@@ -357,6 +366,30 @@ export default function PostDetailPage() {
                       </a>
                     )}
                   </div>
+                  </div>
+                  {/* Upload progress bar — shown while PUBLISHING with a known % */}
+                  {target.status === "PUBLISHING" && target.uploadProgress != null && (
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-xs text-muted-foreground">
+                        <span>Uploading…</span>
+                        <span>{target.uploadProgress}%</span>
+                      </div>
+                      <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                        <div
+                          className="h-full rounded-full bg-primary transition-all duration-500"
+                          style={{ width: `${target.uploadProgress}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+                  {target.status === "PUBLISHING" && target.uploadProgress == null && (
+                    <div className="space-y-1">
+                      <div className="text-xs text-muted-foreground">Publishing…</div>
+                      <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                        <div className="h-full w-full rounded-full bg-primary/40 animate-pulse" />
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -406,9 +439,17 @@ export default function PostDetailPage() {
                   key={attachment.id}
                   className="flex items-center gap-3 rounded-lg border p-3"
                 >
-                  {attachment.media.thumbnailUrl ? (
+                  {attachment.media.fileType?.startsWith("video/") ? (
+                    <video
+                      src={`${attachment.media.url}#t=0.5`}
+                      className="h-14 w-14 rounded-md object-cover bg-muted"
+                      muted
+                      preload="metadata"
+                      playsInline
+                    />
+                  ) : attachment.media.url ? (
                     <img
-                      src={attachment.media.thumbnailUrl}
+                      src={attachment.media.url}
                       alt={attachment.media.fileName}
                       className="h-14 w-14 rounded-md object-cover"
                     />
@@ -568,7 +609,7 @@ export default function PostDetailPage() {
             </Button>
           )}
 
-          {/* Publish All — for DRAFT, SCHEDULED */}
+          {/* Publish Now — for DRAFT (immediate); Publish All — for SCHEDULED (re-queue immediately) */}
           {(post.status === "DRAFT" || post.status === "SCHEDULED") && (
             <Button onClick={handlePublishAll} disabled={publishNow.isPending}>
               {publishNow.isPending ? (
@@ -576,7 +617,7 @@ export default function PostDetailPage() {
               ) : (
                 <Send className="mr-2 h-4 w-4" />
               )}
-              Publish All Channels
+              {post.status === "DRAFT" ? "Publish Now" : "Publish All Channels"}
             </Button>
           )}
 

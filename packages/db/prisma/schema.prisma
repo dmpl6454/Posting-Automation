@@ -288,15 +288,16 @@ model Post {
 }
 
 model PostTarget {
-  id           String     @id @default(cuid())
-  postId       String
-  channelId    String
-  status       PostStatus @default(DRAFT)
-  publishedId  String?
-  publishedUrl String?
-  errorMessage String?    @db.Text
-  retryCount   Int        @default(0)
-  metadata     Json?
+  id             String     @id @default(cuid())
+  postId         String
+  channelId      String
+  status         PostStatus @default(DRAFT)
+  publishedId    String?
+  publishedUrl   String?
+  errorMessage   String?    @db.Text
+  retryCount     Int        @default(0)
+  uploadProgress Int?       // 0-100, set during media upload phases
+  metadata       Json?
 
   post    Post    @relation(fields: [postId], references: [id], onDelete: Cascade)
   channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)

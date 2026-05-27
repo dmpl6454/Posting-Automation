@@ -138,3 +138,11 @@ async function shutdown() {
 
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
+
+// Prevent orphan job errors or transient failures from killing the whole process
+process.on("unhandledRejection", (reason: any, promise) => {
+  console.error("[Worker] Unhandled rejection (process kept alive):", reason?.message ?? reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[Worker] Uncaught exception (process kept alive):", err?.message ?? err);
+});

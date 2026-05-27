@@ -3,6 +3,8 @@ export interface SocialPostPayload {
   mediaUrls?: string[];
   mediaTypes?: string[]; // MIME types corresponding to mediaUrls, e.g. ["video/mp4"]
   metadata?: Record<string, unknown>;
+  /** Optional progress callback — called with 0–100 during media upload phases */
+  onProgress?: (percent: number) => void | Promise<void>;
 }
 
 export interface SocialPostResult {

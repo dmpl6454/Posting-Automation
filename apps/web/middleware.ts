@@ -66,13 +66,15 @@ export async function middleware(request: NextRequest) {
   response.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
 
   // Content Security Policy
+  // media-src + img-src must allow http: in dev (MinIO on localhost:9000) and https: in prod (S3/CDN)
   const csp = [
     "default-src 'self'",
     "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob: https:",
+    "img-src 'self' data: blob: http: https:",
+    "media-src 'self' blob: http: https:",
     "font-src 'self' data:",
-    "connect-src 'self' https: wss:",
+    "connect-src 'self' http: https: wss:",
     "frame-ancestors 'none'",
   ].join("; ");
   response.headers.set("Content-Security-Policy", csp);

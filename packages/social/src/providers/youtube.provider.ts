@@ -130,7 +130,9 @@ export class YouTubeProvider extends SocialProvider {
     return {
       id: channel.id,
       name: channel.snippet.title,
-      username: channel.snippet.customUrl,
+      // YouTube returns customUrl with a leading "@" (e.g. "@tabishmukaddam").
+      // Strip it so the UI can safely prepend its own "@" without doubling.
+      username: channel.snippet.customUrl?.replace(/^@+/, "") ?? undefined,
       avatar: channel.snippet.thumbnails?.default?.url,
     };
   }
@@ -174,31 +176,24 @@ export class YouTubeProvider extends SocialProvider {
     const tags = (payload.metadata?.tags as string[]) || [];
     const privacyStatus = (payload.metadata?.privacyStatus as string) || "public";
     const categoryId = (payload.metadata?.categoryId as string) || "22"; // 22 = People & Blogs
+    const onProgress = payload.onProgress;
 
-    // Download the video file
+    // Download the video file (progress: 0→10%)
+    await onProgress?.(5);
     const videoRes = await fetch(videoUrl);
     if (!videoRes.ok) throw new Error(`Failed to download video from ${videoUrl}`);
     const videoBuffer = Buffer.from(await videoRes.arrayBuffer());
     const videoContentType = videoRes.headers.get("content-type") || "video/mp4";
+    const totalBytes = videoBuffer.length;
+    await onProgress?.(10);
 
     // Step 1: Initiate resumable upload
     const metadata = {
-      snippet: {
-        title,
-        description,
-        tags,
-        categoryId,
-      },
-      status: {
-        privacyStatus,
-        selfDeclaredMadeForKids: false,
-      },
+      snippet: { title, description, tags, categoryId },
+      status: { privacyStatus, selfDeclaredMadeForKids: false },
     };
 
-    const uploadParams = new URLSearchParams({
-      uploadType: "resumable",
-      part: "snippet,status",
-    });
+    const uploadParams = new URLSearchParams({ uploadType: "resumable", part: "snippet,status" });
 
     const initRes = await fetch(
       `https://www.googleapis.com/upload/youtube/v3/videos?${uploadParams.toString()}`,
@@ -207,7 +202,7 @@ export class YouTubeProvider extends SocialProvider {
         headers: {
           Authorization: `Bearer ${tokens.accessToken}`,
           "Content-Type": "application/json; charset=UTF-8",
-          "X-Upload-Content-Length": videoBuffer.length.toString(),
+          "X-Upload-Content-Length": totalBytes.toString(),
           "X-Upload-Content-Type": videoContentType,
         },
         body: JSON.stringify(metadata),
@@ -222,23 +217,55 @@ export class YouTubeProvider extends SocialProvider {
     const uploadUrl = initRes.headers.get("location");
     if (!uploadUrl) throw new Error("YouTube upload init failed: no upload URL returned");
 
-    // Step 2: Upload the video bytes to the resumable upload URL
-    const uploadRes = await fetch(uploadUrl, {
-      method: "PUT",
-      headers: {
-        "Content-Type": videoContentType,
-        "Content-Length": videoBuffer.length.toString(),
-      },
-      body: videoBuffer,
-    });
+    // Step 2: Chunked upload — 4MB chunks with progress callbacks (10→95%)
+    const CHUNK_SIZE = 4 * 1024 * 1024; // 4MB per chunk (YouTube minimum is 256KB, recommend ≥1MB)
+    let bytesSent = 0;
+    let finalData: any = null;
 
-    const data: any = await uploadRes.json();
-    if (!uploadRes.ok) throw new Error(`YouTube video upload failed: ${JSON.stringify(data)}`);
+    while (bytesSent < totalBytes) {
+      const chunkEnd = Math.min(bytesSent + CHUNK_SIZE, totalBytes);
+      const chunk = videoBuffer.slice(bytesSent, chunkEnd);
+      const chunkSize = chunk.length;
+
+      const chunkRes = await fetch(uploadUrl, {
+        method: "PUT",
+        headers: {
+          "Content-Type": videoContentType,
+          "Content-Length": chunkSize.toString(),
+          "Content-Range": `bytes ${bytesSent}-${chunkEnd - 1}/${totalBytes}`,
+        },
+        body: chunk,
+      });
+
+      bytesSent = chunkEnd;
+
+      // 308 Resume Incomplete = chunk accepted, more to send
+      // 200/201 = upload complete
+      if (chunkRes.status === 308) {
+        // Report progress: 10% base + up to 85% for upload phase
+        const uploadPct = Math.round((bytesSent / totalBytes) * 85);
+        await onProgress?.(10 + uploadPct);
+        continue;
+      }
+
+      if (chunkRes.status === 200 || chunkRes.status === 201) {
+        finalData = await chunkRes.json();
+        break;
+      }
+
+      // Error on this chunk
+      const errBody = await chunkRes.json().catch(() => ({ error: `HTTP ${chunkRes.status}` }));
+      throw new Error(`YouTube video upload failed on chunk (bytes ${bytesSent}/${totalBytes}): ${JSON.stringify(errBody)}`);
+    }
+
+    if (!finalData) throw new Error("YouTube upload completed but returned no data");
+
+    await onProgress?.(100);
 
     return {
-      platformPostId: data.id,
-      url: `https://www.youtube.com/watch?v=${data.id}`,
-      metadata: data,
+      platformPostId: finalData.id,
+      url: `https://www.youtube.com/watch?v=${finalData.id}`,
+      metadata: finalData,
     };
   }
 
