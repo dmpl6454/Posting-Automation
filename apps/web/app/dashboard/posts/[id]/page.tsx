@@ -52,16 +52,42 @@ export default function PostDetailPage() {
   const router = useRouter();
   const { toast } = useToast();
   const postId = params.id as string;
+  // Per-target SSE-driven progress: postTargetId → percent (0-100)
+  const [liveProgress, setLiveProgress] = useState<Record<string, number>>({});
 
   const isPublishing = (post: any) =>
     post?.status === "PUBLISHING" || post?.targets?.some((t: any) => t.status === "PUBLISHING");
 
   const { data: post, isLoading, refetch } = trpc.post.getById.useQuery(
     { id: postId },
-    // Poll every 3s while any target is PUBLISHING so the progress bar updates live.
-    // react-query v5: refetchInterval callback receives the Query object, not the data directly.
-    { refetchInterval: (query) => (isPublishing((query as any).state?.data) ? 3000 : false) }
+    // Poll every 2s while any target is PUBLISHING so status changes appear quickly.
+    { refetchInterval: (query) => (isPublishing((query as any).state?.data) ? 2000 : false) }
   );
+
+  // Subscribe to SSE progress events for each PUBLISHING target
+  useEffect(() => {
+    if (!post?.targets) return;
+    const publishingTargets = post.targets.filter((t: any) => t.status === "PUBLISHING");
+    if (publishingTargets.length === 0) return;
+
+    const sources: EventSource[] = [];
+    for (const target of publishingTargets) {
+      const es = new EventSource(`/api/progress?id=${target.id}`);
+      es.onmessage = (e) => {
+        try {
+          const { percent } = JSON.parse(e.data);
+          if (typeof percent === "number") {
+            setLiveProgress((prev) => ({ ...prev, [target.id]: percent }));
+            // Once at 100, trigger a final refetch so status flips to PUBLISHED
+            if (percent >= 100) refetch();
+          }
+        } catch {}
+      };
+      es.onerror = () => es.close();
+      sources.push(es);
+    }
+    return () => sources.forEach((es) => es.close());
+  }, [post?.targets?.map((t: any) => t.id + t.status).join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [content, setContent] = useState("");
   const [tags, setTags] = useState("");
@@ -367,29 +393,34 @@ export default function PostDetailPage() {
                     )}
                   </div>
                   </div>
-                  {/* Upload progress bar — shown while PUBLISHING with a known % */}
-                  {target.status === "PUBLISHING" && target.uploadProgress != null && (
-                    <div className="space-y-1">
-                      <div className="flex items-center justify-between text-xs text-muted-foreground">
-                        <span>Uploading…</span>
-                        <span>{target.uploadProgress}%</span>
+                  {/* Upload progress bar — live via SSE; falls back to DB-polled value */}
+                  {target.status === "PUBLISHING" && (() => {
+                    const pct = liveProgress[target.id] ?? target.uploadProgress;
+                    if (pct != null) {
+                      return (
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between text-xs text-muted-foreground">
+                            <span>Uploading…</span>
+                            <span>{pct}%</span>
+                          </div>
+                          <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                            <div
+                              className="h-full rounded-full bg-primary transition-all duration-300"
+                              style={{ width: `${pct}%` }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    }
+                    return (
+                      <div className="space-y-1">
+                        <div className="text-xs text-muted-foreground">Publishing…</div>
+                        <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                          <div className="h-full w-full rounded-full bg-primary/40 animate-pulse" />
+                        </div>
                       </div>
-                      <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                        <div
-                          className="h-full rounded-full bg-primary transition-all duration-500"
-                          style={{ width: `${target.uploadProgress}%` }}
-                        />
-                      </div>
-                    </div>
-                  )}
-                  {target.status === "PUBLISHING" && target.uploadProgress == null && (
-                    <div className="space-y-1">
-                      <div className="text-xs text-muted-foreground">Publishing…</div>
-                      <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                        <div className="h-full w-full rounded-full bg-primary/40 animate-pulse" />
-                      </div>
-                    </div>
-                  )}
+                    );
+                  })()}
                 </div>
               );
             })}

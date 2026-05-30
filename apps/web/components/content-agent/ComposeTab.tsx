@@ -349,6 +349,10 @@ ${content}`;
     if (!files) return;
     Array.from(files).forEach((file) => {
       if (!file.type.startsWith("image/")) return;
+      if (file.size > 50 * 1024 * 1024) {
+        toast({ title: "Image too large", description: "Images must be under 50MB.", variant: "destructive" });
+        return;
+      }
       const url = URL.createObjectURL(file);
       setPostMedia((prev) => [...prev, { url, file, uploading: true }]);
       startAutoUpload(file, url);
