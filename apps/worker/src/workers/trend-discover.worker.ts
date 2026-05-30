@@ -221,11 +221,22 @@ export function createTrendDiscoverWorker() {
         );
       }
 
-      // 5. Update PipelineRun with discovery count
+      // 5. Update PipelineRun with discovery count (and total so content-generate can mark COMPLETED)
       await prisma.pipelineRun.update({
         where: { id: pipelineRunId },
-        data: { itemsDiscovered },
+        data: {
+          itemsDiscovered,
+          totalItems: newItemIds.length,
+          // If nothing was discovered, mark complete immediately
+          ...(newItemIds.length === 0
+            ? { status: "COMPLETED", completedAt: new Date() }
+            : {}),
+        },
       });
+
+      if (newItemIds.length === 0) {
+        console.log(`[TrendDiscover] No new items — pipeline ${pipelineRunId} marked COMPLETED`);
+      }
 
       console.log(
         `[TrendDiscover] Done. ${itemsDiscovered} new items discovered, ${newItemIds.length} queued for scoring`,

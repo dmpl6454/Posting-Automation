@@ -292,6 +292,17 @@ export const autopilotRouter = createRouter({
 
   // Manual trigger
   triggerPipeline: orgProcedure.mutation(async ({ ctx }) => {
+    const agentCount = await ctx.prisma.agent.count({
+      where: { organizationId: ctx.organizationId, isActive: true },
+    });
+
+    if (agentCount === 0) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "No active agents configured. Create and activate at least one agent before running the pipeline.",
+      });
+    }
+
     const pipelineRun = await ctx.prisma.pipelineRun.create({
       data: {
         organizationId: ctx.organizationId,

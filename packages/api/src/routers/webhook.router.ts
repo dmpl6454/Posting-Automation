@@ -5,8 +5,15 @@ import { createRouter, orgProcedure } from "../trpc";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 import { webhookUrlSchema } from "../lib/url-safety";
 
+function requireOwnerOrAdmin(role: string | undefined) {
+  if (role !== "OWNER" && role !== "ADMIN") {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Only OWNER or ADMIN members can manage webhooks." });
+  }
+}
+
 export const webhookRouter = createRouter({
   list: orgProcedure.query(async ({ ctx }) => {
+    requireOwnerOrAdmin(ctx.membership.role);
     return ctx.prisma.webhook.findMany({
       where: { organizationId: ctx.organizationId },
       orderBy: { createdAt: "desc" },
@@ -22,6 +29,7 @@ export const webhookRouter = createRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      requireOwnerOrAdmin(ctx.membership.role);
       const secret = crypto.randomBytes(32).toString("hex");
       const webhook = await ctx.prisma.webhook.create({
         data: {
@@ -48,6 +56,7 @@ export const webhookRouter = createRouter({
   delete: orgProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
+      requireOwnerOrAdmin(ctx.membership.role);
       const webhook = await ctx.prisma.webhook.findFirst({
         where: { id: input.id, organizationId: ctx.organizationId },
       });

@@ -27,12 +27,16 @@ interface ActiveTaskContextValue {
 
 const ActiveTaskContext = createContext<ActiveTaskContextValue | null>(null);
 
-const STORAGE_KEY = "pa-active-tasks";
+const BASE_STORAGE_KEY = "pa-active-tasks";
 
-function loadTasks(): ActiveTask[] {
+function storageKey(userId?: string | null) {
+  return userId ? `${BASE_STORAGE_KEY}:${userId}` : BASE_STORAGE_KEY;
+}
+
+function loadTasks(userId?: string | null): ActiveTask[] {
   if (typeof window === "undefined") return [];
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey(userId));
     if (!raw) return [];
     const tasks = JSON.parse(raw) as ActiveTask[];
     // Expire tasks older than 24 hours
@@ -43,26 +47,26 @@ function loadTasks(): ActiveTask[] {
   }
 }
 
-function saveTasks(tasks: ActiveTask[]) {
+function saveTasks(tasks: ActiveTask[], userId?: string | null) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+    localStorage.setItem(storageKey(userId), JSON.stringify(tasks));
   } catch {}
 }
 
-export function ActiveTaskProvider({ children }: { children: ReactNode }) {
+export function ActiveTaskProvider({ children, userId }: { children: ReactNode; userId?: string | null }) {
   const [tasks, setTasks] = useState<ActiveTask[]>([]);
 
-  // Load from localStorage on mount
+  // Load from localStorage on mount and whenever userId changes (account switch)
   useEffect(() => {
-    setTasks(loadTasks());
-  }, []);
+    setTasks(loadTasks(userId));
+  }, [userId]);
 
   // Persist whenever tasks change
   useEffect(() => {
-    if (tasks.length > 0 || localStorage.getItem(STORAGE_KEY)) {
-      saveTasks(tasks);
+    if (tasks.length > 0 || localStorage.getItem(storageKey(userId))) {
+      saveTasks(tasks, userId);
     }
-  }, [tasks]);
+  }, [tasks, userId]);
 
   const addTask = useCallback((task: ActiveTask) => {
     setTasks((prev) => {

@@ -216,6 +216,9 @@ services:
       TWITTER_BEARER_TOKEN: ${TWITTER_BEARER_TOKEN}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL}
       OLLAMA_DETECT_MODEL: ${OLLAMA_DETECT_MODEL:-llama3.3:70b}
+      # Required for decrypting channel tokens stored by the web container
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY}
     depends_on:
       postgres:
         condition: service_healthy

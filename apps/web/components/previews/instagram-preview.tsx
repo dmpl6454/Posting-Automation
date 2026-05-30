@@ -160,9 +160,9 @@ export function InstagramPreview({
           </button>
         </div>
 
-        {/* Likes */}
+        {/* Likes — preview only, not real data */}
         <div className="px-3 pt-2">
-          <p className="text-sm font-semibold text-foreground">128 likes</p>
+          <p className="text-sm font-semibold text-muted-foreground/50 italic text-xs">Preview only</p>
         </div>
 
         {/* Caption */}
@@ -179,10 +179,10 @@ export function InstagramPreview({
           )}
         </div>
 
-        {/* View comments */}
+        {/* View comments placeholder */}
         <div className="px-3 pb-1">
-          <p className="text-sm text-muted-foreground">
-            View all 14 comments
+          <p className="text-xs text-muted-foreground/40 italic">
+            Comments will appear after publishing
           </p>
         </div>
 

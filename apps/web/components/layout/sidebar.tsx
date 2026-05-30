@@ -77,7 +77,7 @@ const settingsNav: NavItem[] = [
   // Fix #4: Billing removed from settingsNav (now lives in main nav above)
   { name: "Webhooks", href: "/dashboard/settings/webhooks", icon: Webhook, roles: ["OWNER", "ADMIN"] },
   { name: "API Keys", href: "/dashboard/settings/api-keys", icon: Key, roles: ["OWNER", "ADMIN"] },
-  { name: "API Docs", href: "/dashboard/settings/api-docs", icon: BookOpen },
+  { name: "API Docs", href: "/dashboard/settings/api-docs", icon: BookOpen, roles: ["OWNER", "ADMIN"] },
   { name: "Audit Log", href: "/dashboard/settings/audit-log", icon: FileText, roles: ["OWNER", "ADMIN"] },
   { name: "Versions", href: "/dashboard/settings/versions", icon: GitBranch, roles: ["OWNER", "ADMIN"] },
 ];

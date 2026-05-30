@@ -8,8 +8,15 @@ import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 
 const apiRateLimited = orgProcedure.use(createRateLimitMiddleware(apiRateLimiter));
 
+function requireOwnerOrAdmin(role: string | undefined) {
+  if (role !== "OWNER" && role !== "ADMIN") {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Only OWNER or ADMIN members can manage API keys." });
+  }
+}
+
 export const apikeyRouter = createRouter({
   list: orgProcedure.query(async ({ ctx }) => {
+    requireOwnerOrAdmin(ctx.membership.role);
     const keys = await ctx.prisma.apiKey.findMany({
       where: { organizationId: ctx.organizationId },
       orderBy: { createdAt: "desc" },
@@ -35,6 +42,7 @@ export const apikeyRouter = createRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      requireOwnerOrAdmin(ctx.membership.role);
       const plainKey = `pa_${crypto.randomBytes(32).toString("hex")}`;
       const keyHash = crypto.createHash("sha256").update(plainKey).digest("hex");
 
@@ -69,6 +77,7 @@ export const apikeyRouter = createRouter({
   delete: orgProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
+      requireOwnerOrAdmin(ctx.membership.role);
       const apiKey = await ctx.prisma.apiKey.findFirst({
         where: { id: input.id, organizationId: ctx.organizationId },
       });

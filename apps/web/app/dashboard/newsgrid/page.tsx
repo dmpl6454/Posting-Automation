@@ -779,7 +779,7 @@ export default function NewsGridPage() {
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-base">
-                  Instagram Channels
+                  Channels
                   {selectedChannelIds.size > 0 && (
                     <Badge className="ml-2" variant="secondary">{selectedChannelIds.size} selected</Badge>
                   )}

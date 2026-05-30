@@ -835,6 +835,7 @@ model PipelineRun {
   completedAt     DateTime?
   status          String    @default("RUNNING")
   itemsDiscovered Int       @default(0)
+  totalItems      Int       @default(0)
   itemsScored     Int       @default(0)
   postsGenerated  Int       @default(0)
   postsApproved   Int       @default(0)

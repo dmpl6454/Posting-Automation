@@ -265,9 +265,9 @@ export function createContentGenerateWorker() {
           );
         }
 
-        // 14. Update PipelineRun counters (skip if pipeline run doesn't exist)
+        // 14. Update PipelineRun counters; mark COMPLETED if all items are done
         try {
-          await prisma.pipelineRun.update({
+          const updated = await prisma.pipelineRun.update({
             where: { id: pipelineRunId },
             data: {
               postsGenerated: { increment: 1 },
@@ -276,6 +276,14 @@ export function createContentGenerateWorker() {
                 : {}),
             },
           });
+          const done = updated.postsGenerated + updated.postsFailed;
+          if (updated.totalItems > 0 && done >= updated.totalItems && updated.status === "RUNNING") {
+            await prisma.pipelineRun.update({
+              where: { id: pipelineRunId },
+              data: { status: "COMPLETED", completedAt: new Date() },
+            });
+            console.log(`[ContentGenerate] Pipeline ${pipelineRunId} COMPLETED (${done}/${updated.totalItems} items)`);
+          }
         } catch {}
 
 
@@ -306,12 +314,18 @@ export function createContentGenerateWorker() {
           });
 
           try {
-            await prisma.pipelineRun.update({
+            const updated = await prisma.pipelineRun.update({
               where: { id: pipelineRunId },
-              data: {
-                postsFailed: { increment: 1 },
-              },
+              data: { postsFailed: { increment: 1 } },
             });
+            const done = updated.postsGenerated + updated.postsFailed;
+            if (updated.totalItems > 0 && done >= updated.totalItems && updated.status === "RUNNING") {
+              await prisma.pipelineRun.update({
+                where: { id: pipelineRunId },
+                data: { status: "COMPLETED", completedAt: new Date() },
+              });
+              console.log(`[ContentGenerate] Pipeline ${pipelineRunId} COMPLETED with errors (${done}/${updated.totalItems} items)`);
+            }
           } catch {}
         } catch (updateErr) {
           console.error(

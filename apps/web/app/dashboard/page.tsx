@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { trpc } from "~/lib/trpc/client";
 import { Badge } from "~/components/ui/badge";
 import { Skeleton } from "~/components/ui/skeleton";
@@ -24,10 +25,24 @@ import {
   Ear,
   Target,
   Star,
+  Lock,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
+import { useSession } from "next-auth/react";
 
-const featureCards = [
+type PlanType = "FREE" | "STARTER" | "PROFESSIONAL" | "ENTERPRISE";
+const PLAN_ORDER: PlanType[] = ["FREE", "STARTER", "PROFESSIONAL", "ENTERPRISE"];
+
+const featureCards: {
+  href: string;
+  icon: React.ElementType;
+  title: string;
+  desc: string;
+  accentFrom: string;
+  accentTo: string;
+  glowColor: string;
+  minPlan?: PlanType;
+}[] = [
   {
     href: "/dashboard/super-agent",
     icon: Zap,
@@ -36,6 +51,7 @@ const featureCards = [
     accentFrom: "from-violet-500",
     accentTo: "to-purple-500",
     glowColor: "violet",
+    minPlan: "STARTER",
   },
   {
     href: "/dashboard/content-agent",
@@ -63,6 +79,7 @@ const featureCards = [
     accentFrom: "from-rose-500",
     accentTo: "to-orange-400",
     glowColor: "rose",
+    minPlan: "STARTER",
   },
   {
     href: "/dashboard/autopilot",
@@ -72,6 +89,7 @@ const featureCards = [
     accentFrom: "from-amber-500",
     accentTo: "to-yellow-400",
     glowColor: "amber",
+    minPlan: "STARTER",
   },
   {
     href: "/dashboard/listening",
@@ -81,6 +99,7 @@ const featureCards = [
     accentFrom: "from-teal-500",
     accentTo: "to-emerald-400",
     glowColor: "teal",
+    minPlan: "STARTER",
   },
   {
     href: "/dashboard/campaigns",
@@ -90,6 +109,7 @@ const featureCards = [
     accentFrom: "from-indigo-500",
     accentTo: "to-sky-400",
     glowColor: "indigo",
+    minPlan: "PROFESSIONAL",
   },
   {
     href: "/dashboard/brand-leads",
@@ -99,13 +119,25 @@ const featureCards = [
     accentFrom: "from-yellow-500",
     accentTo: "to-orange-400",
     glowColor: "yellow",
+    minPlan: "PROFESSIONAL",
   },
 ];
 
 export default function DashboardPage() {
+  const router = useRouter();
+  const { data: session } = useSession();
+  const isSuperAdmin = (session?.user as any)?.isSuperAdmin === true;
   const { data: user, isLoading: userLoading } = trpc.user.me.useQuery();
   const { data: stats, isLoading: statsLoading } = trpc.analytics.dashboardStats.useQuery();
   const { data: activity, isLoading: activityLoading } = trpc.analytics.recentActivity.useQuery({ limit: 5 });
+  const { data: planData } = trpc.billing.currentPlan.useQuery(undefined, { staleTime: 5 * 60 * 1000 });
+  const orgPlan = (planData?.plan ?? "FREE") as PlanType;
+
+  const planAllowed = (minPlan?: PlanType) => {
+    if (!minPlan) return true;
+    if (isSuperAdmin) return true;
+    return PLAN_ORDER.indexOf(orgPlan) >= PLAN_ORDER.indexOf(minPlan);
+  };
 
   const statItems = [
     {
@@ -204,35 +236,57 @@ export default function DashboardPage() {
           AI Tools
         </h2>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {featureCards.map((card) => (
-            <Link
-              key={card.href}
-              href={card.href}
-              className="group relative flex items-center gap-4 overflow-hidden rounded-2xl border border-black/[0.06] bg-white/60 p-5 shadow-sm transition-all hover:shadow-xl hover:shadow-black/[0.08] active:scale-[0.98] dark:border-white/[0.08] dark:bg-white/[0.04] dark:hover:shadow-black/20"
-              style={{
-                backdropFilter: "blur(20px) saturate(180%)",
-                WebkitBackdropFilter: "blur(20px) saturate(180%)",
-              }}
-            >
-              {/* Liquid glass gradient overlay */}
-              <div className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${card.accentFrom}/[0.08] ${card.accentTo}/[0.04] opacity-60 transition-opacity group-hover:opacity-100 dark:${card.accentFrom}/[0.06] dark:${card.accentTo}/[0.03]`} />
-              {/* Top highlight for glass effect */}
-              <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-black/[0.06] to-transparent dark:via-white/20" />
-              {/* Animated glow on hover */}
-              <div className={`pointer-events-none absolute -inset-1 bg-gradient-to-br ${card.accentFrom}/20 ${card.accentTo}/10 opacity-0 blur-2xl transition-opacity duration-500 group-hover:opacity-60`} />
-
-              <div
-                className={`relative flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br ${card.accentFrom} ${card.accentTo} shadow-lg`}
+          {featureCards.map((card) => {
+            const locked = !planAllowed(card.minPlan);
+            const CardWrapper = locked ? "button" : Link;
+            const wrapperProps = locked
+              ? { onClick: () => router.push("/dashboard/settings/billing"), type: "button" as const }
+              : { href: card.href };
+            return (
+              <CardWrapper
+                key={card.href}
+                {...(wrapperProps as any)}
+                className={`group relative flex w-full items-center gap-4 overflow-hidden rounded-2xl border p-5 shadow-sm transition-all text-left ${
+                  locked
+                    ? "cursor-pointer border-black/[0.06] bg-white/40 opacity-70 dark:border-white/[0.08] dark:bg-white/[0.02]"
+                    : "border-black/[0.06] bg-white/60 hover:shadow-xl hover:shadow-black/[0.08] active:scale-[0.98] dark:border-white/[0.08] dark:bg-white/[0.04] dark:hover:shadow-black/20"
+                }`}
+                style={{
+                  backdropFilter: "blur(20px) saturate(180%)",
+                  WebkitBackdropFilter: "blur(20px) saturate(180%)",
+                }}
               >
-                <card.icon className="h-6 w-6 text-white" />
-              </div>
-              <div className="relative flex-1 min-w-0">
-                <p className="text-sm font-semibold">{card.title}</p>
-                <p className="text-xs text-muted-foreground mt-0.5">{card.desc}</p>
-              </div>
-              <ArrowRight className="relative h-4 w-4 text-muted-foreground/30 transition-all group-hover:translate-x-1 group-hover:text-muted-foreground" />
-            </Link>
-          ))}
+                {/* Liquid glass gradient overlay */}
+                <div className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${card.accentFrom}/[0.08] ${card.accentTo}/[0.04] opacity-60 transition-opacity group-hover:opacity-100 dark:${card.accentFrom}/[0.06] dark:${card.accentTo}/[0.03]`} />
+                {/* Top highlight for glass effect */}
+                <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-black/[0.06] to-transparent dark:via-white/20" />
+                {!locked && (
+                  <div className={`pointer-events-none absolute -inset-1 bg-gradient-to-br ${card.accentFrom}/20 ${card.accentTo}/10 opacity-0 blur-2xl transition-opacity duration-500 group-hover:opacity-60`} />
+                )}
+
+                <div
+                  className={`relative flex h-12 w-12 shrink-0 items-center justify-center rounded-xl shadow-lg ${locked ? "bg-muted" : `bg-gradient-to-br ${card.accentFrom} ${card.accentTo}`}`}
+                >
+                  {locked ? (
+                    <Lock className="h-5 w-5 text-muted-foreground" />
+                  ) : (
+                    <card.icon className="h-6 w-6 text-white" />
+                  )}
+                </div>
+                <div className="relative flex-1 min-w-0">
+                  <p className="text-sm font-semibold">{card.title}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {locked ? `Upgrade to ${card.minPlan} to unlock` : card.desc}
+                  </p>
+                </div>
+                {locked ? (
+                  <Lock className="relative h-4 w-4 text-muted-foreground/40" />
+                ) : (
+                  <ArrowRight className="relative h-4 w-4 text-muted-foreground/30 transition-all group-hover:translate-x-1 group-hover:text-muted-foreground" />
+                )}
+              </CardWrapper>
+            );
+          })}
         </div>
       </div>
 

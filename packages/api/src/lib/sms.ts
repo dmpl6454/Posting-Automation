@@ -12,8 +12,8 @@ async function sendViaTwilio(to: string, body: string): Promise<void> {
   const from = process.env.TWILIO_PHONE_NUMBER;
 
   if (!accountSid || !authToken || !from) {
-    console.log(`[SMS/Twilio] Not configured. To: ${to} | Body: ${body}`);
-    return;
+    console.error(`[SMS/Twilio] Not configured — TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER must all be set.`);
+    throw new Error("SMS service is not configured. Please contact the administrator.");
   }
 
   const res = await fetch(
@@ -41,8 +41,8 @@ async function sendViaFast2SMS(to: string, body: string): Promise<void> {
   const apiKey = process.env.FAST2SMS_API_KEY;
 
   if (!apiKey) {
-    console.log(`[SMS/Fast2SMS] Not configured. To: ${to} | Body: ${body}`);
-    return;
+    console.error(`[SMS/Fast2SMS] Not configured — FAST2SMS_API_KEY must be set.`);
+    throw new Error("SMS service is not configured. Please contact the administrator.");
   }
 
   // Strip country code for Fast2SMS (expects 10-digit Indian number)

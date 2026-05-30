@@ -50,15 +50,19 @@ function decryptChannelRow<T extends Record<string, any> | null>(row: T): T {
   if (typeof out.accessToken === "string") {
     try {
       out.accessToken = decryptToken(out.accessToken);
-    } catch {
-      /* leave as-is */
+    } catch (err) {
+      if (out.accessToken.startsWith("enc:v1:")) {
+        console.error("[DB] CRITICAL: Failed to decrypt channel accessToken — TOKEN_ENCRYPTION_KEY or NEXTAUTH_SECRET mismatch. Token will be sent as ciphertext and will fail.", err);
+      }
     }
   }
   if (typeof out.refreshToken === "string") {
     try {
       out.refreshToken = decryptToken(out.refreshToken);
-    } catch {
-      /* leave as-is */
+    } catch (err) {
+      if (out.refreshToken.startsWith("enc:v1:")) {
+        console.error("[DB] CRITICAL: Failed to decrypt channel refreshToken — TOKEN_ENCRYPTION_KEY or NEXTAUTH_SECRET mismatch. OAuth refresh will fail with invalid_grant.", err);
+      }
     }
   }
   return out as T;
