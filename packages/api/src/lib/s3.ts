@@ -17,6 +17,28 @@ export function getS3Client(): S3Client {
   });
 }
 
+/**
+ * S3 client used for minting presigned URLs that will be loaded by the browser.
+ * Uses S3_PRESIGN_ENDPOINT (or S3_PUBLIC_URL stripped of trailing bucket path)
+ * so the signed URL host is reachable from the user's browser, not just the
+ * Docker network. Falls back to the internal endpoint for dev.
+ */
+export function getS3PresignClient(): S3Client {
+  const presignEndpoint = process.env.S3_PRESIGN_ENDPOINT
+    ?? process.env.S3_PUBLIC_URL?.replace(/\/[^/]+$/, "")  // strip trailing /<bucket>
+    ?? process.env.S3_ENDPOINT;
+
+  return new S3Client({
+    region: process.env.S3_REGION || "us-east-1",
+    endpoint: presignEndpoint,
+    forcePathStyle: true,
+    credentials: {
+      accessKeyId: process.env.S3_ACCESS_KEY_ID || process.env.S3_ACCESS_KEY || "",
+      secretAccessKey: process.env.S3_SECRET_ACCESS_KEY || process.env.S3_SECRET_KEY || "",
+    },
+  });
+}
+
 export const BUCKET = process.env.S3_BUCKET || "postautomation-media";
 
 /**

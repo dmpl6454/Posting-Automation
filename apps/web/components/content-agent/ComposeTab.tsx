@@ -62,7 +62,7 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   const [selectedChannels, setSelectedChannels] = useState<string[]>([]);
   const [scheduledAt, setScheduledAt] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
-  const [postMedia, setPostMedia] = useState<{ url: string; mediaId?: string; file?: File; uploading?: boolean }[]>([]);
+  const [postMedia, setPostMedia] = useState<{ url: string; mediaId?: string; file?: File; uploading?: boolean; progress?: number }[]>([]);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingImageIndex, setEditingImageIndex] = useState<number | null>(null);
   const [editorPreview, setEditorPreview] = useState<string | null>(null);
@@ -187,6 +187,11 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   const generateAI = trpc.ai.generateContent.useMutation();
   const { data: aiConfig } = trpc.ai.getConfig.useQuery();
   const generateCarousel = trpc.post.generateCarousel.useMutation();
+  // Multipart upload mutations — used by uploadFileToS3 below
+  const uploadInitiate = trpc.upload.initiate.useMutation();
+  const uploadSignPart = trpc.upload.signPart.useMutation();
+  const uploadComplete = trpc.upload.complete.useMutation();
+  const uploadAbort = trpc.upload.abort.useMutation();
   const [isGeneratingCarousel, setIsGeneratingCarousel] = useState(false);
   const [carouselSlideCount, setCarouselSlideCount] = useState(5);
   const [aiPrompt, setAiPrompt] = useState("");
@@ -330,10 +335,10 @@ ${content}`;
   };
 
   const startAutoUpload = (file: File, objectUrl: string) => {
-    uploadFileToS3(file)
+    uploadFileToS3(file, objectUrl)
       .then((mediaId) => {
         setPostMedia((prev) =>
-          prev.map((item) => (item.url === objectUrl ? { ...item, mediaId, uploading: false } : item))
+          prev.map((item) => (item.url === objectUrl ? { ...item, mediaId, uploading: false, progress: 100 } : item))
         );
       })
       .catch((err) => {
@@ -365,8 +370,8 @@ ${content}`;
     if (!files) return;
     Array.from(files).forEach((file) => {
       if (!file.type.startsWith("video/")) return;
-      if (file.size > 500 * 1024 * 1024) {
-        toast({ title: "Video too large", description: "Videos must be under 500MB.", variant: "destructive" });
+      if (file.size > 5 * 1024 * 1024 * 1024) {
+        toast({ title: "Video too large", description: "Videos must be under 5GB.", variant: "destructive" });
         return;
       }
       const url = URL.createObjectURL(file);
@@ -381,17 +386,41 @@ ${content}`;
     setShowMediaPicker(false);
   };
 
-  const uploadFileToS3 = async (file: File): Promise<string> => {
-    // Upload through the Next.js server proxy to avoid browser→MinIO CORS issues
-    const form = new FormData();
-    form.append("file", file);
-    const res = await fetch("/api/upload", { method: "POST", body: form });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error((err as any).error || "Upload failed");
+  const uploadFileToS3 = async (file: File, objectUrl?: string): Promise<string> => {
+    // Small files (≤8MB) use the legacy single-shot endpoint — faster and no CORS prerequisite.
+    // Larger files use direct-to-S3 multipart uploads (browser → S3) so we don't buffer
+    // multi-GB videos in the Next.js process memory.
+    const MULTIPART_THRESHOLD = 8 * 1024 * 1024;
+
+    if (file.size <= MULTIPART_THRESHOLD) {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch("/api/upload", { method: "POST", body: form });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as any).error || "Upload failed");
+      }
+      const data = await res.json();
+      return data.id;
     }
-    const data = await res.json();
-    return data.id;
+
+    const { uploadFileMultipart } = await import("~/lib/upload-multipart");
+    const result = await uploadFileMultipart({
+      file,
+      onProgress: (percent) => {
+        if (!objectUrl) return;
+        setPostMedia((prev) =>
+          prev.map((item) => (item.url === objectUrl ? { ...item, progress: percent } : item))
+        );
+      },
+      api: {
+        initiate: (input) => uploadInitiate.mutateAsync(input),
+        signPart: (input) => uploadSignPart.mutateAsync(input),
+        complete: (input) => uploadComplete.mutateAsync(input),
+        abort: (input) => uploadAbort.mutateAsync(input),
+      },
+    });
+    return result.id;
   };
 
   const handleSubmit = async (publishNow: boolean) => {
@@ -407,6 +436,11 @@ ${content}`;
     const stillUploading = postMedia.some((item) => item.uploading);
     if (stillUploading) {
       toast({ title: "Please wait", description: "Media is still uploading...", variant: "destructive" });
+      return;
+    }
+
+    if (youtubeBlockReason) {
+      toast({ title: "Cannot publish to YouTube", description: youtubeBlockReason, variant: "destructive" });
       return;
     }
 
@@ -460,6 +494,25 @@ ${content}`;
         .map((ch: any) => (ch.platform as string).toLowerCase())
         .filter((p: string, i: number, arr: string[]) => arr.indexOf(p) === i)
     : [];
+
+  // YouTube only accepts video uploads — gate the UI to prevent invalid combinations.
+  const hasYouTube = selectedPlatforms.includes("youtube");
+  const hasVideoAttached = postMedia.some((m) => {
+    const t = m.file?.type ?? "";
+    return t.startsWith("video/") || /\.(mp4|webm|mov|m4v|ogv)(\?|$)/i.test(m.url);
+  });
+  const hasImageAttached = postMedia.some((m) => {
+    const t = m.file?.type ?? "";
+    return t.startsWith("image/") || /\.(jpe?g|png|gif|webp|avif)(\?|$)/i.test(m.url);
+  });
+  // Block publish if YouTube is selected with: (a) no video, or (b) any image attached
+  const youtubeBlockReason = hasYouTube
+    ? !hasVideoAttached
+      ? "YouTube requires a video. Attach an MP4/WebM/MOV before publishing."
+      : hasImageAttached
+        ? "YouTube does not accept images. Remove image attachments before publishing."
+        : null
+    : null;
 
   return (
     <div className="mx-auto max-w-6xl space-y-6">
@@ -615,9 +668,19 @@ ${content}`;
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-base">Media</CardTitle>
-              <CardDescription>Attach images or videos to your post</CardDescription>
+              <CardDescription>
+                {hasYouTube ? "YouTube requires a video upload (MP4, WebM, or MOV)" : "Attach images or videos to your post"}
+              </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
+              {hasYouTube && (
+                <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300">
+                  <Video className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+                  <span>
+                    YouTube channel selected. Only video uploads are supported — images and text-only posts cannot be published to YouTube.
+                  </span>
+                </div>
+              )}
               <div className="flex gap-2">
                 <input
                   ref={fileInputRef}
@@ -634,17 +697,19 @@ ${content}`;
                   className="hidden"
                   onChange={handleVideoUpload}
                 />
+                {!hasYouTube && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="flex-1 gap-1.5"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <Upload className="h-3.5 w-3.5" />
+                    Image
+                  </Button>
+                )}
                 <Button
-                  variant="outline"
-                  size="sm"
-                  className="flex-1 gap-1.5"
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  <Upload className="h-3.5 w-3.5" />
-                  Image
-                </Button>
-                <Button
-                  variant="outline"
+                  variant={hasYouTube ? "default" : "outline"}
                   size="sm"
                   className="flex-1 gap-1.5"
                   onClick={() => videoInputRef.current?.click()}
@@ -662,7 +727,8 @@ ${content}`;
                   Library
                 </Button>
               </div>
-              {/* Generate Carousel */}
+              {/* Generate Carousel — hidden when YouTube is the target since YT does not support image carousels */}
+              {!hasYouTube && (
               <div className="flex items-center gap-2">
                 <Button
                   variant="outline"
@@ -694,6 +760,7 @@ ${content}`;
                   ))}
                 </select>
               </div>
+              )}
               {postMedia.length > 0 && (
                 <div className="flex gap-2 overflow-x-auto pb-1">
                   {postMedia.map((item, idx) => {
@@ -708,9 +775,14 @@ ${content}`;
                               muted
                               preload="metadata"
                             />
-                            <div className="absolute inset-0 flex items-center justify-center">
+                            <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-black/40">
                               {item.uploading ? (
-                                <Loader2 className="h-6 w-6 animate-spin text-white drop-shadow" />
+                                <>
+                                  <Loader2 className="h-5 w-5 animate-spin text-white drop-shadow" />
+                                  {typeof item.progress === "number" && (
+                                    <span className="text-[10px] font-medium text-white drop-shadow">{item.progress}%</span>
+                                  )}
+                                </>
                               ) : (
                                 <Film className="h-6 w-6 text-white drop-shadow" />
                               )}
@@ -976,15 +1048,17 @@ ${content}`;
               variant="secondary"
               onClick={() => handleSubmit(false)}
               disabled={
-                !content || selectedChannels.length === 0 || !scheduledAt || createPost.isPending || isUploading
+                !content || selectedChannels.length === 0 || !scheduledAt || createPost.isPending || isUploading || !!youtubeBlockReason
               }
+              title={youtubeBlockReason ?? undefined}
             >
               <Clock className="mr-2 h-4 w-4" />
               Schedule
             </Button>
             <Button
               onClick={() => handleSubmit(true)}
-              disabled={!content || selectedChannels.length === 0 || createPost.isPending || isUploading}
+              disabled={!content || selectedChannels.length === 0 || createPost.isPending || isUploading || !!youtubeBlockReason}
+              title={youtubeBlockReason ?? undefined}
             >
               {(createPost.isPending || isUploading) ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -994,6 +1068,11 @@ ${content}`;
               {isUploading ? "Uploading..." : "Publish Now"}
             </Button>
           </div>
+          {youtubeBlockReason && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-300">
+              {youtubeBlockReason}
+            </div>
+          )}
           </>
           )}
         </div>

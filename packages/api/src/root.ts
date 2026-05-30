@@ -34,6 +34,7 @@ import { deploymentRouter } from "./routers/deployment.router";
 import { campaignRouter } from "./routers/campaign.router";
 import { listeningRouter } from "./routers/listening.router";
 import { brandLeadsRouter } from "./routers/brand-leads.router";
+import { uploadRouter } from "./routers/upload.router";
 
 export const appRouter = createRouter({
   user: userRouter,
@@ -71,6 +72,7 @@ export const appRouter = createRouter({
   campaign: campaignRouter,
   listening: listeningRouter,
   brandLeads: brandLeadsRouter,
+  upload: uploadRouter,
 });
 
 export type AppRouter = typeof appRouter;

@@ -6,6 +6,7 @@ import { TwitterPreview } from "./twitter-preview";
 import { LinkedInPreview } from "./linkedin-preview";
 import { FacebookPreview } from "./facebook-preview";
 import { InstagramPreview } from "./instagram-preview";
+import { YouTubePreview } from "./youtube-preview";
 import { GenericPreview } from "./generic-preview";
 import type { PostPreviewProps } from "./twitter-preview";
 
@@ -14,6 +15,7 @@ type Platform =
   | "linkedin"
   | "facebook"
   | "instagram"
+  | "youtube"
   | string;
 
 interface PostPreviewSwitcherProps extends PostPreviewProps {
@@ -26,6 +28,7 @@ const PLATFORM_LABELS: Record<string, string> = {
   linkedin: "LinkedIn",
   facebook: "Facebook",
   instagram: "Instagram",
+  youtube: "YouTube",
 };
 
 function getPlatformLabel(platform: string): string {
@@ -42,6 +45,8 @@ function renderPreview(platform: string, props: PostPreviewProps) {
       return <FacebookPreview {...props} />;
     case "instagram":
       return <InstagramPreview {...props} />;
+    case "youtube":
+      return <YouTubePreview {...props} />;
     default:
       return <GenericPreview {...props} platformName={getPlatformLabel(platform)} />;
   }
@@ -66,7 +71,7 @@ export function PostPreviewSwitcher({
     timestamp,
   };
 
-  const availablePlatforms = platforms ?? (platform ? [platform] : ["instagram", "facebook", "twitter", "linkedin"]);
+  const availablePlatforms = platforms ?? (platform ? [platform] : ["instagram", "facebook", "twitter", "linkedin", "youtube"]);
 
   const [activePlatform, setActivePlatform] = useState<string>(
     availablePlatforms[0] || "twitter"
