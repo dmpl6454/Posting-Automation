@@ -421,28 +421,44 @@ export class InstagramProvider extends SocialProvider {
     igUserId: string
   ): Promise<SocialPostResult> {
     const mediaUrls = payload.mediaUrls!;
+    const mediaTypes = payload.mediaTypes ?? [];
 
     // Step 1: Create individual item containers (children of the carousel)
-    const childContainerIds = await Promise.all(
-      mediaUrls.map(async (url) => {
-        const res = await fetch(
-          `${this.graphBaseUrl}/${this.apiVersion}/${igUserId}/media`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              image_url: url,
-              is_carousel_item: true,
-              access_token: tokens.accessToken,
-            }),
-          }
-        );
+    // Video children require video_url + media_type=VIDEO and must wait for processing.
+    const childContainerIds: string[] = [];
+    for (let i = 0; i < mediaUrls.length; i++) {
+      const url = mediaUrls[i]!;
+      const mime = mediaTypes[i] ?? "";
+      const isChildVideo = mime.startsWith("video/") || /\.(mp4|mov|avi|mkv|webm)(\?|$)/i.test(url);
 
-        const data: any = await res.json();
-        if (!res.ok) throw new Error(`Instagram carousel item upload failed: ${JSON.stringify(data)}`);
-        return data.id;
-      })
-    );
+      const childParams: Record<string, unknown> = { is_carousel_item: true, access_token: tokens.accessToken };
+      if (isChildVideo) {
+        childParams["video_url"] = url;
+        childParams["media_type"] = "VIDEO";
+      } else {
+        childParams["image_url"] = url;
+      }
+
+      const res = await fetch(
+        `${this.graphBaseUrl}/${this.apiVersion}/${igUserId}/media`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(childParams),
+        }
+      );
+
+      const data: any = await res.json();
+      if (!res.ok) throw new Error(`Instagram carousel item upload failed: ${JSON.stringify(data)}`);
+      const childId: string = data.id;
+
+      // Video children must be fully processed before the carousel container can be created
+      if (isChildVideo) {
+        await this.waitForMediaReady(tokens, childId);
+      }
+
+      childContainerIds.push(childId);
+    }
 
     // Step 2: Create the carousel container
     const carouselRes = await fetch(
