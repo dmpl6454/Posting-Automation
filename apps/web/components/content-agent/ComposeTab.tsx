@@ -71,7 +71,7 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   const [channelSearch, setChannelSearch] = useState("");
   const [channelDropdownOpen, setChannelDropdownOpen] = useState(false);
   const [formatByChannelId, setFormatByChannelId] = useState<Record<string, string>>({});
-  const [ytMetadata, setYtMetadata] = useState<{ title?: string; privacyStatus?: string }>({});
+  const [ytMetadata, setYtMetadata] = useState<{ title?: string; privacyStatus?: "public" | "unlisted" | "private" }>({});
   const channelSectionRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
