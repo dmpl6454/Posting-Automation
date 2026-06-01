@@ -132,23 +132,9 @@ export const postRouter = createRouter({
         },
       });
 
-      // If scheduled, enqueue publish jobs
-      if (status === "SCHEDULED" && input.scheduledAt) {
-        const delay = new Date(input.scheduledAt).getTime() - Date.now();
-        for (const target of post.targets) {
-          await postPublishQueue.add(
-            `publish-${target.id}`,
-            {
-              postId: post.id,
-              postTargetId: target.id,
-              channelId: target.channelId,
-              platform: target.channel.platform,
-              organizationId: ctx.organizationId,
-            },
-            { delay: Math.max(delay, 0), attempts: 3, backoff: { type: "exponential", delay: 30000 } }
-          );
-        }
-      }
+      // Scheduled posts are picked up by the publishScheduledPosts cron (runs every 2 min).
+      // Do NOT enqueue here — doing so creates a second job with a different jobId that
+      // BullMQ cannot dedupe against the cron's job, causing duplicate publishing.
 
       // Fire-and-forget audit log
       createAuditLog({

@@ -1,6 +1,6 @@
 import { Queue, type DefaultJobOptions } from "bullmq";
 import { redisConnection } from "./connection";
-import type { PostPublishJobData, TokenRefreshJobData, AnalyticsSyncJobData, MediaProcessJobData, WebhookDeliveryJobData, RssSyncJobData, NotificationSendJobData, AgentRunJobData, TrendDiscoverJobData, TrendScoreJobData, ContentGenerateJobData, AutopilotScheduleJobData, ListeningSyncJobData, SentimentAnalysisJobData, CampaignAnalyticsSyncJobData, OutreachSendJobData, OutreachPollJobData } from "./types";
+import type { PostPublishJobData, TokenRefreshJobData, AnalyticsSyncJobData, MediaProcessJobData, WebhookDeliveryJobData, RssSyncJobData, NotificationSendJobData, AgentRunJobData, TrendDiscoverJobData, TrendScoreJobData, ContentGenerateJobData, AutopilotScheduleJobData, ListeningSyncJobData, SentimentAnalysisJobData, CampaignAnalyticsSyncJobData, BrandContentSyncJobData, OutreachSendJobData, OutreachPollJobData } from "./types";
 
 /** Default retry config: 3 attempts with exponential backoff (30s base) */
 const DEFAULT_JOB_OPTS: DefaultJobOptions = {
@@ -35,6 +35,7 @@ export const QUEUE_NAMES = {
   CAMPAIGN_ANALYTICS_SYNC: "campaign-analytics-sync",
   OUTREACH_SEND: "outreach-send",
   OUTREACH_POLL: "outreach-poll",
+  BRAND_CONTENT_SYNC: "brand-content-sync",
 } as const;
 
 export const postPublishQueue = createQueue<PostPublishJobData>(QUEUE_NAMES.POST_PUBLISH);
@@ -54,3 +55,4 @@ export const sentimentAnalysisQueue = createQueue<SentimentAnalysisJobData>(QUEU
 export const campaignAnalyticsSyncQueue = createQueue<CampaignAnalyticsSyncJobData>(QUEUE_NAMES.CAMPAIGN_ANALYTICS_SYNC);
 export const outreachSendQueue = createQueue<OutreachSendJobData>(QUEUE_NAMES.OUTREACH_SEND);
 export const outreachPollQueue = createQueue<OutreachPollJobData>(QUEUE_NAMES.OUTREACH_POLL);
+export const brandContentSyncQueue = createQueue<BrandContentSyncJobData>(QUEUE_NAMES.BRAND_CONTENT_SYNC);

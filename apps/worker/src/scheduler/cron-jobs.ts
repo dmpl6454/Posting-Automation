@@ -1,5 +1,5 @@
 import { prisma } from "@postautomation/db";
-import { tokenRefreshQueue, analyticsSyncQueue, agentRunQueue, trendDiscoverQueue, listeningSyncQueue, campaignAnalyticsSyncQueue, outreachPollQueue, postPublishQueue } from "@postautomation/queue";
+import { tokenRefreshQueue, analyticsSyncQueue, agentRunQueue, trendDiscoverQueue, listeningSyncQueue, campaignAnalyticsSyncQueue, brandContentSyncQueue, outreachPollQueue, postPublishQueue } from "@postautomation/queue";
 import { runAutoHealerWithLogging } from "../workers/auto-healer.worker";
 import { runCelebrityDetectors } from "../workers/celebrity-detect.worker";
 
@@ -285,7 +285,7 @@ export async function scheduleCampaignAnalyticsSync() {
 
 /**
  * Sync brand content: fetch new content from tracked brands and discover influencers.
- * Run every 4 hours (shares queue with campaign analytics sync).
+ * Run every 4 hours on the dedicated BRAND_CONTENT_SYNC queue.
  */
 export async function scheduleBrandContentSync() {
   // Get all orgs that have active brand trackers
@@ -297,9 +297,9 @@ export async function scheduleBrandContentSync() {
 
   let queued = 0;
   for (const { organizationId } of orgsWithTrackers) {
-    await campaignAnalyticsSyncQueue.add(
+    await brandContentSyncQueue.add(
       `brand-sync-cron-${organizationId}`,
-      { organizationId, campaignId: "" },
+      { organizationId },
       { jobId: `brand-sync-cron-${organizationId}-${Date.now()}`, removeOnComplete: true, removeOnFail: 100 }
     );
     queued++;

@@ -3,7 +3,7 @@ import { prisma } from "@postautomation/db";
 import type { MentionSource } from "@postautomation/db";
 import {
   QUEUE_NAMES,
-  type CampaignAnalyticsSyncJobData,
+  type BrandContentSyncJobData,
   createRedisConnection,
 } from "@postautomation/queue";
 
@@ -274,13 +274,13 @@ async function fetchTikTokContent(handle: string): Promise<RawBrandContent[]> {
 }
 
 // ---------------------------------------------------------------------------
-// Worker — reuses CAMPAIGN_ANALYTICS_SYNC queue for brand content sync
+// Worker — dedicated BRAND_CONTENT_SYNC queue (was incorrectly sharing CAMPAIGN_ANALYTICS_SYNC)
 // ---------------------------------------------------------------------------
 
 export function createBrandContentSyncWorker() {
-  const worker = new Worker<CampaignAnalyticsSyncJobData>(
-    QUEUE_NAMES.CAMPAIGN_ANALYTICS_SYNC,
-    async (job: Job<CampaignAnalyticsSyncJobData>) => {
+  const worker = new Worker<BrandContentSyncJobData>(
+    QUEUE_NAMES.BRAND_CONTENT_SYNC,
+    async (job: Job<BrandContentSyncJobData>) => {
       const { campaignId, organizationId } = job.data;
       console.log(`[BrandContentSync] Processing campaign ${campaignId || "all"} for org ${organizationId}`);
 
