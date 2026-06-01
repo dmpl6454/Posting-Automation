@@ -187,22 +187,20 @@ export function createPostPublishWorker() {
       const { postTargetId, channelId, platform } = job.data;
       console.log(`[PostPublish] Processing job ${job.id} for target ${postTargetId} (attempt ${job.attemptsMade + 1})`);
 
-      // 0. Guard: if PostTarget was deleted (orphan job), exit cleanly
-      const targetExists = await prisma.postTarget.findUnique({ where: { id: postTargetId }, select: { id: true } });
-      if (!targetExists) {
-        console.warn(`[PostPublish] PostTarget ${postTargetId} no longer exists — skipping orphan job ${job.id}`);
+      // 0. Atomic idempotency claim — only transitions SCHEDULED/FAILED/DRAFT → PUBLISHING.
+      // If the target is already PUBLISHING/PUBLISHED or doesn't exist, skip silently.
+      const claim = await prisma.postTarget.updateMany({
+        where: { id: postTargetId, status: { in: ["SCHEDULED", "FAILED", "DRAFT"] } },
+        data: { status: "PUBLISHING" },
+      });
+      if (claim.count === 0) {
+        console.warn(`[PostPublish] target ${postTargetId} already claimed or published — skipping duplicate job ${job.id}`);
         return;
       }
 
-      // 1. Mark as PUBLISHING
-      await prisma.postTarget.update({
-        where: { id: postTargetId },
-        data: { status: "PUBLISHING" },
-      });
-
-      // 2. Get channel and post data
+      // 2. Get channel and post data — scope channel to the job's org (defense-in-depth)
       const [channel, postTarget] = await Promise.all([
-        prisma.channel.findUniqueOrThrow({ where: { id: channelId } }),
+        prisma.channel.findFirst({ where: { id: channelId, organizationId: job.data.organizationId } }),
         prisma.postTarget.findUniqueOrThrow({
           where: { id: postTargetId },
           include: {
@@ -213,7 +211,27 @@ export function createPostPublishWorker() {
         }),
       ]);
 
-      // 3a. Guard: skip publishing to inactive channels
+      // 2b. publishedId short-circuit — if already published in a previous attempt, skip provider call
+      if (postTarget.publishedId) {
+        console.log(`[PostPublish] target ${postTargetId} already has publishedId ${postTarget.publishedId} — marking PUBLISHED, skipping re-publish`);
+        await prisma.postTarget.update({
+          where: { id: postTargetId },
+          data: { status: "PUBLISHED" },
+        });
+        return;
+      }
+
+      // 3a. Guard: channel not found or belongs to wrong org
+      if (!channel) {
+        console.warn(`[PostPublish] Channel ${channelId} not found for org ${job.data.organizationId} — skipping`);
+        await prisma.postTarget.update({
+          where: { id: postTargetId },
+          data: { status: "FAILED", errorMessage: "Channel not found for this organization." },
+        });
+        return;
+      }
+
+      // 3b. Guard: skip publishing to inactive channels
       if (!channel.isActive) {
         console.warn(`[PostPublish] Channel ${channelId} (${platform}) is inactive — skipping publish`);
         await prisma.postTarget.update({
@@ -277,9 +295,14 @@ export function createPostPublishWorker() {
       let mediaUrls = postTarget.post.mediaAttachments.map((m) => m.media.url);
       const mediaTypes = postTarget.post.mediaAttachments.map((m) => m.media.fileType);
 
-      // Pass channel metadata so providers can use platform-specific IDs
-      // (e.g. igUserId for Instagram, pageId for Facebook)
+      // Build merged provider metadata: post intent → target overrides → format → channel IDs (wins)
       const channelMetadata = (channel.metadata ?? {}) as Record<string, unknown>;
+      const providerMetadata: Record<string, unknown> = {
+        ...((postTarget.post.metadata as object) || {}),
+        ...((postTarget.metadata as object) || {}),
+        ...(postTarget.format ? { format: postTarget.format } : {}),
+        ...channelMetadata, // pageId/igUserId/logo_path MUST win — kept last
+      };
 
       // Auto-add channel logo watermark + optional text overlay on videos
       const hasVideo = mediaTypes.some((t) => t?.startsWith("video/"));
@@ -394,7 +417,7 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
         let lastErr: any;
         for (let attempt = 1; attempt <= 3; attempt++) {
           try {
-            result = await provider.publishPost(tokens, { content: publishContent, mediaUrls, mediaTypes, metadata: channelMetadata, onProgress });
+            result = await provider.publishPost(tokens, { content: publishContent, mediaUrls, mediaTypes, metadata: providerMetadata, onProgress });
             lastErr = null;
             break;
           } catch (e: any) {
@@ -470,7 +493,7 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
               // Retry immediately with fresh token
               result = await provider.publishPost(
                 { accessToken: refreshed.accessToken, refreshToken: refreshed.refreshToken ?? channel.refreshToken ?? undefined },
-                { content: publishContent, mediaUrls, mediaTypes, metadata: channelMetadata }
+                { content: publishContent, mediaUrls, mediaTypes, metadata: providerMetadata, onProgress: (percent: number) => reportProgress(postTargetId, percent) }
               );
               console.log(`[PostPublish] Retry with fresh token succeeded`);
             } else {
@@ -484,7 +507,7 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
           // Aggressively truncate and retry
           const aggressiveContent = truncateForPlatform(publishContent, platform);
           console.log(`[PostPublish] Content too large — retrying with aggressive truncation`);
-          result = await provider.publishPost(tokens, { content: aggressiveContent.slice(0, Math.floor(aggressiveContent.length * 0.7)), mediaUrls, mediaTypes, metadata: channelMetadata });
+          result = await provider.publishPost(tokens, { content: aggressiveContent.slice(0, Math.floor(aggressiveContent.length * 0.7)), mediaUrls, mediaTypes, metadata: providerMetadata });
         } else {
           throw publishErr; // Unknown or unrecoverable — rethrow
         }
@@ -494,18 +517,26 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
         throw new Error("Publish returned no result");
       }
 
-      // 4. Mark as PUBLISHED (clear uploadProgress — no longer needed)
-      const updatedTarget = await prisma.postTarget.update({
-        where: { id: postTargetId },
-        data: {
-          status: "PUBLISHED",
-          publishedId: result.platformPostId,
-          publishedUrl: result.url,
-          publishedAt: new Date(),
-          uploadProgress: null,
-          metadata: (result.metadata ?? undefined) as any,
-        },
-      });
+      // 4. Mark as PUBLISHED — isolated try/catch so a DB hiccup here doesn't cause
+      // BullMQ to retry and re-call provider.publishPost() for an already-published post.
+      let updatedTarget: Awaited<ReturnType<typeof prisma.postTarget.update>>;
+      try {
+        updatedTarget = await prisma.postTarget.update({
+          where: { id: postTargetId },
+          data: {
+            status: "PUBLISHED",
+            publishedId: result.platformPostId,
+            publishedUrl: result.url,
+            publishedAt: new Date(),
+            uploadProgress: null,
+            metadata: (result.metadata ?? undefined) as any,
+          },
+        });
+      } catch (dbErr: any) {
+        console.error(`[PostPublish] DB write PUBLISHED failed for ${postTargetId}: ${dbErr.message} — post was published on platform but status not persisted`);
+        // Do not rethrow — BullMQ must not retry (would re-publish)
+        return result;
+      }
 
       // 4b. Fetch & save initial analytics snapshot (best-effort)
       if (result.platformPostId) {
@@ -533,20 +564,24 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
         }
       }
 
-      // 5. Check if all targets are published and update parent post
-      const allTargets = await prisma.postTarget.findMany({
-        where: { postId: postTarget.postId },
-        include: { channel: { select: { platform: true } } },
-      });
-      const allPublished = allTargets.every((t) => t.status === "PUBLISHED");
-      if (allPublished) {
-        await prisma.post.update({
-          where: { id: postTarget.postId },
-          data: { status: "PUBLISHED", publishedAt: new Date() },
+      // 5. Check if all targets are published and update parent post (best-effort)
+      try {
+        const allTargets = await prisma.postTarget.findMany({
+          where: { postId: postTarget.postId },
+          include: { channel: { select: { platform: true } } },
         });
+        const allPublished = allTargets.every((t) => t.status === "PUBLISHED");
+        if (allPublished) {
+          await prisma.post.update({
+            where: { id: postTarget.postId },
+            data: { status: "PUBLISHED", publishedAt: new Date() },
+          });
 
-        // Send email report with all published links
-        await sendPublishReportEmail(postTarget.post.organizationId, postTarget.postId, postTarget.post.content, allTargets);
+          // Send email report with all published links
+          await sendPublishReportEmail(postTarget.post.organizationId, postTarget.postId, postTarget.post.content, allTargets);
+        }
+      } catch (aggregateErr: any) {
+        console.warn(`[PostPublish] Post aggregation step failed for ${postTargetId}: ${aggregateErr.message}`);
       }
 
       console.log(`[PostPublish] Successfully published ${postTargetId} to ${platform}`);

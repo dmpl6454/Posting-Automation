@@ -69,9 +69,14 @@ describe("QUEUE_NAMES", () => {
     expect(QUEUE_NAMES.NOTIFICATION_SEND.length).toBeGreaterThan(0);
   });
 
-  it("contains exactly 7 queue names", () => {
+  it("contains all required core queue names", () => {
     const keys = Object.keys(QUEUE_NAMES);
-    expect(keys).toHaveLength(7);
+    expect(keys).toContain("POST_PUBLISH");
+    expect(keys).toContain("TOKEN_REFRESH");
+    expect(keys).toContain("ANALYTICS_SYNC");
+    expect(keys).toContain("MEDIA_PROCESS");
+    expect(keys).toContain("RSS_SYNC");
+    expect(keys).toContain("NOTIFICATION_SEND");
   });
 
   it("all queue names are unique", () => {

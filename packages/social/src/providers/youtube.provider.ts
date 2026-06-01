@@ -172,7 +172,10 @@ export class YouTubeProvider extends SocialProvider {
   private async uploadVideo(tokens: OAuthTokens, payload: SocialPostPayload): Promise<SocialPostResult> {
     const videoUrl = payload.mediaUrls![0]!;
     const title = (payload.metadata?.title as string) || payload.content.slice(0, 100);
-    const description = payload.content;
+    const isShort = String(payload.metadata?.format ?? "").toUpperCase() === "SHORT";
+    const description = isShort && !payload.content.includes("#Shorts")
+      ? `${payload.content}\n#Shorts`
+      : payload.content;
     const tags = (payload.metadata?.tags as string[]) || [];
     const privacyStatus = (payload.metadata?.privacyStatus as string) || "public";
     const categoryId = (payload.metadata?.categoryId as string) || "22"; // 22 = People & Blogs

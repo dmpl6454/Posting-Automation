@@ -70,6 +70,8 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   const [isUploading, setIsUploading] = useState(false);
   const [channelSearch, setChannelSearch] = useState("");
   const [channelDropdownOpen, setChannelDropdownOpen] = useState(false);
+  const [formatByChannelId, setFormatByChannelId] = useState<Record<string, string>>({});
+  const [ytMetadata, setYtMetadata] = useState<{ title?: string; privacyStatus?: string }>({});
   const channelSectionRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
@@ -474,6 +476,8 @@ ${content}`;
         channelIds: selectedChannels,
         scheduledAt: publishNow ? new Date().toISOString() : scheduledAt || undefined,
         ...(mediaIds.length > 0 && { mediaIds }),
+        ...(Object.keys(formatByChannelId).length > 0 && { formatByChannelId }),
+        ...(Object.keys(ytMetadata).length > 0 && { metadata: ytMetadata }),
       });
     } catch (err: any) {
       toast({
@@ -497,6 +501,7 @@ ${content}`;
 
   // YouTube only accepts video uploads — gate the UI to prevent invalid combinations.
   const hasYouTube = selectedPlatforms.includes("youtube");
+  const hasInstagram = selectedPlatforms.includes("instagram");
   const hasVideoAttached = postMedia.some((m) => {
     const t = m.file?.type ?? "";
     return t.startsWith("video/") || /\.(mp4|webm|mov|m4v|ogv)(\?|$)/i.test(m.url);
@@ -980,6 +985,62 @@ ${content}`;
               )}
             </CardContent>
           </Card>
+
+          {/* Post Format — shown when YouTube or Instagram+video channels are selected */}
+          {(hasYouTube && hasVideoAttached) || (hasInstagram && hasVideoAttached) ? (
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">Post Format</CardTitle>
+                <CardDescription>Choose how this video will be posted per platform</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {channels?.filter((ch: any) => selectedChannels.includes(ch.id) && ["YOUTUBE", "INSTAGRAM"].includes(ch.platform)).map((ch: any) => {
+                  const options = ch.platform === "YOUTUBE"
+                    ? [{ value: "VIDEO", label: "Video" }, { value: "SHORT", label: "Short" }]
+                    : [{ value: "REEL", label: "Reel" }, { value: "STORY", label: "Story" }];
+                  const current = formatByChannelId[ch.id] ?? options[0]!.value;
+                  return (
+                    <div key={ch.id} className="flex items-center justify-between gap-3">
+                      <span className="text-sm text-muted-foreground min-w-0 truncate">{ch.name}</span>
+                      <div className="flex gap-1 flex-shrink-0">
+                        {options.map((opt) => (
+                          <button
+                            key={opt.value}
+                            type="button"
+                            onClick={() => setFormatByChannelId((prev) => ({ ...prev, [ch.id]: opt.value }))}
+                            className={`rounded px-3 py-1 text-xs font-medium border transition-colors ${current === opt.value ? "bg-primary text-primary-foreground border-primary" : "border-border text-muted-foreground hover:bg-accent"}`}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+                {hasYouTube && (
+                  <div className="mt-2 space-y-2 border-t pt-2">
+                    <p className="text-xs text-muted-foreground font-medium">YouTube options</p>
+                    <input
+                      type="text"
+                      placeholder="Video title (defaults to first 100 chars of content)"
+                      className="w-full rounded border border-border bg-background px-2 py-1.5 text-sm"
+                      value={ytMetadata.title ?? ""}
+                      onChange={(e) => setYtMetadata((prev) => ({ ...prev, title: e.target.value || undefined }))}
+                    />
+                    <select
+                      className="w-full rounded border border-border bg-background px-2 py-1.5 text-sm"
+                      value={ytMetadata.privacyStatus ?? "public"}
+                      onChange={(e) => setYtMetadata((prev) => ({ ...prev, privacyStatus: e.target.value }))}
+                    >
+                      <option value="public">Public</option>
+                      <option value="unlisted">Unlisted</option>
+                      <option value="private">Private</option>
+                    </select>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          ) : null}
 
           {/* Schedule */}
           <Card>

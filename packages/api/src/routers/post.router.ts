@@ -68,6 +68,13 @@ export const postRouter = createRouter({
         aiGenerated: z.boolean().default(false),
         aiProvider: z.string().optional(),
         aiPrompt: z.string().optional(),
+        formatByChannelId: z.record(z.enum(["FEED", "REEL", "STORY", "SHORT", "VIDEO", "CAROUSEL"])).optional(),
+        metadata: z.object({
+          title: z.string().optional(),
+          tags: z.array(z.string()).optional(),
+          privacyStatus: z.enum(["public", "unlisted", "private"]).optional(),
+          videoOverlayText: z.string().optional(),
+        }).passthrough().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -83,6 +90,15 @@ export const postRouter = createRouter({
         }
       }
 
+      // Validate every channelId belongs to this organization before persisting
+      const ownedChannels = await ctx.prisma.channel.findMany({
+        where: { id: { in: input.channelIds }, organizationId: ctx.organizationId },
+        select: { id: true },
+      });
+      if (ownedChannels.length !== new Set(input.channelIds).size) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "One or more channels do not belong to this organization." });
+      }
+
       const status = input.scheduledAt ? "SCHEDULED" : "DRAFT";
 
       const post = await ctx.prisma.post.create({
@@ -96,10 +112,12 @@ export const postRouter = createRouter({
           aiGenerated: input.aiGenerated,
           aiProvider: input.aiProvider,
           aiPrompt: input.aiPrompt,
+          metadata: (input.metadata ?? undefined) as any,
           targets: {
             create: input.channelIds.map((channelId) => ({
               channelId,
               status,
+              format: (input.formatByChannelId?.[channelId] ?? null) as any,
             })),
           },
           ...(input.mediaIds?.length && {
@@ -123,23 +141,9 @@ export const postRouter = createRouter({
         },
       });
 
-      // If scheduled, enqueue publish jobs
-      if (status === "SCHEDULED" && input.scheduledAt) {
-        const delay = new Date(input.scheduledAt).getTime() - Date.now();
-        for (const target of post.targets) {
-          await postPublishQueue.add(
-            `publish-${target.id}`,
-            {
-              postId: post.id,
-              postTargetId: target.id,
-              channelId: target.channelId,
-              platform: target.channel.platform,
-              organizationId: ctx.organizationId,
-            },
-            { delay: Math.max(delay, 0), attempts: 3, backoff: { type: "exponential", delay: 30000 } }
-          );
-        }
-      }
+      // Scheduled posts are picked up by the publishScheduledPosts cron (runs every 2 min).
+      // Do NOT enqueue here — doing so creates a second job with a different jobId that
+      // BullMQ cannot dedupe against the cron's job, causing duplicate publishing.
 
       // Fire-and-forget audit log
       createAuditLog({

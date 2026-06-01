@@ -288,15 +288,16 @@ model Post {
 }
 
 model PostTarget {
-  id             String     @id @default(cuid())
+  id             String      @id @default(cuid())
   postId         String
   channelId      String
-  status         PostStatus @default(DRAFT)
+  status         PostStatus  @default(DRAFT)
+  format         PostFormat?
   publishedId    String?
   publishedUrl   String?
-  errorMessage   String?    @db.Text
-  retryCount     Int        @default(0)
-  uploadProgress Int?       // 0-100, set during media upload phases
+  errorMessage   String?     @db.Text
+  retryCount     Int         @default(0)
+  uploadProgress Int?        // 0-100, set during media upload phases
   metadata       Json?
 
   post    Post    @relation(fields: [postId], references: [id], onDelete: Cascade)
@@ -317,6 +318,15 @@ enum PostStatus {
   PUBLISHED
   FAILED
   CANCELLED
+}
+
+enum PostFormat {
+  FEED
+  REEL
+  STORY
+  SHORT
+  VIDEO
+  CAROUSEL
 }
 
 // ==================== MEDIA ====================

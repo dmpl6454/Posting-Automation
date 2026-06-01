@@ -2,7 +2,6 @@ import { Worker, type Job } from "bullmq";
 import { prisma } from "@postautomation/db";
 import {
   QUEUE_NAMES,
-  postPublishQueue,
   type AutopilotScheduleJobData,
   createRedisConnection,
 } from "@postautomation/queue";
@@ -139,28 +138,9 @@ export function createAutopilotScheduleWorker() {
           data: { status: "SCHEDULED" },
         });
 
-        // 9. Queue POST_PUBLISH jobs for each target with delay = scheduledAt - now
-        const delayMs = Math.max(scheduledAt.getTime() - Date.now(), 0);
-
-        for (const target of post.targets) {
-          if (!target.channel) continue;
-
-          await postPublishQueue.add(
-            `publish-${target.id}`,
-            {
-              postId: post.id,
-              postTargetId: target.id,
-              channelId: target.channelId,
-              platform: target.channel.platform,
-              organizationId,
-            },
-            {
-              delay: delayMs,
-              removeOnComplete: true,
-              removeOnFail: 100,
-            },
-          );
-        }
+        // 9. (no-op) Jobs for scheduled targets are picked up by the publishScheduledPosts cron
+        //    (runs every 2 min). Enqueueing here with a different jobId would create a duplicate
+        //    alongside the cron's job, causing the post to be published twice.
 
         // 10. Update AutopilotPost status to SCHEDULED
         await prisma.autopilotPost.update({
