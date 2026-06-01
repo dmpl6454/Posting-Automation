@@ -799,7 +799,7 @@ export default function ChannelsPage() {
                         ? "No developer app needed"
                         : needsSetup
                         ? "OAuth credentials missing"
-                        : `Max ${p.constraints.maxContentLength} chars`}
+                        : "Click to connect"}
                     </p>
                   </div>
                   {needsSetup ? (
