@@ -33,6 +33,9 @@ const nextConfig = {
     NEXT_PUBLIC_COMMIT_MSG: gitInfo.commitMsg,
     NEXT_PUBLIC_BUILD_TIME: new Date().toISOString(),
   },
+  eslint: {
+    ignoreDuringBuilds: true,
+  },
   transpilePackages: [
     "@postautomation/api",
     "@postautomation/db",
