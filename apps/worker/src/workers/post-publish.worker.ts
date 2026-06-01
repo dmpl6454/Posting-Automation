@@ -295,9 +295,14 @@ export function createPostPublishWorker() {
       let mediaUrls = postTarget.post.mediaAttachments.map((m) => m.media.url);
       const mediaTypes = postTarget.post.mediaAttachments.map((m) => m.media.fileType);
 
-      // Pass channel metadata so providers can use platform-specific IDs
-      // (e.g. igUserId for Instagram, pageId for Facebook)
+      // Build merged provider metadata: post intent → target overrides → format → channel IDs (wins)
       const channelMetadata = (channel.metadata ?? {}) as Record<string, unknown>;
+      const providerMetadata: Record<string, unknown> = {
+        ...((postTarget.post.metadata as object) || {}),
+        ...((postTarget.metadata as object) || {}),
+        ...(postTarget.format ? { format: postTarget.format } : {}),
+        ...channelMetadata, // pageId/igUserId/logo_path MUST win — kept last
+      };
 
       // Auto-add channel logo watermark + optional text overlay on videos
       const hasVideo = mediaTypes.some((t) => t?.startsWith("video/"));
@@ -412,7 +417,7 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
         let lastErr: any;
         for (let attempt = 1; attempt <= 3; attempt++) {
           try {
-            result = await provider.publishPost(tokens, { content: publishContent, mediaUrls, mediaTypes, metadata: channelMetadata, onProgress });
+            result = await provider.publishPost(tokens, { content: publishContent, mediaUrls, mediaTypes, metadata: providerMetadata, onProgress });
             lastErr = null;
             break;
           } catch (e: any) {
@@ -488,7 +493,7 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
               // Retry immediately with fresh token
               result = await provider.publishPost(
                 { accessToken: refreshed.accessToken, refreshToken: refreshed.refreshToken ?? channel.refreshToken ?? undefined },
-                { content: publishContent, mediaUrls, mediaTypes, metadata: channelMetadata }
+                { content: publishContent, mediaUrls, mediaTypes, metadata: providerMetadata, onProgress: (percent: number) => reportProgress(postTargetId, percent) }
               );
               console.log(`[PostPublish] Retry with fresh token succeeded`);
             } else {
@@ -502,7 +507,7 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
           // Aggressively truncate and retry
           const aggressiveContent = truncateForPlatform(publishContent, platform);
           console.log(`[PostPublish] Content too large — retrying with aggressive truncation`);
-          result = await provider.publishPost(tokens, { content: aggressiveContent.slice(0, Math.floor(aggressiveContent.length * 0.7)), mediaUrls, mediaTypes, metadata: channelMetadata });
+          result = await provider.publishPost(tokens, { content: aggressiveContent.slice(0, Math.floor(aggressiveContent.length * 0.7)), mediaUrls, mediaTypes, metadata: providerMetadata });
         } else {
           throw publishErr; // Unknown or unrecoverable — rethrow
         }

@@ -108,7 +108,8 @@ export class InstagramProvider extends SocialProvider {
 
     if (isVideo) {
       containerParams["video_url"] = mediaUrl;
-      containerParams["media_type"] = "REELS"; // Instagram supports REELS for video
+      const fmt = String(payload.metadata?.format ?? "REEL").toUpperCase();
+      containerParams["media_type"] = fmt === "STORY" ? "STORIES" : "REELS";
     } else {
       containerParams["image_url"] = mediaUrl;
     }

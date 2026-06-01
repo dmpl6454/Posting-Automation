@@ -68,6 +68,13 @@ export const postRouter = createRouter({
         aiGenerated: z.boolean().default(false),
         aiProvider: z.string().optional(),
         aiPrompt: z.string().optional(),
+        formatByChannelId: z.record(z.enum(["FEED", "REEL", "STORY", "SHORT", "VIDEO", "CAROUSEL"])).optional(),
+        metadata: z.object({
+          title: z.string().optional(),
+          tags: z.array(z.string()).optional(),
+          privacyStatus: z.enum(["public", "unlisted", "private"]).optional(),
+          videoOverlayText: z.string().optional(),
+        }).passthrough().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -105,10 +112,12 @@ export const postRouter = createRouter({
           aiGenerated: input.aiGenerated,
           aiProvider: input.aiProvider,
           aiPrompt: input.aiPrompt,
+          metadata: (input.metadata ?? undefined) as any,
           targets: {
             create: input.channelIds.map((channelId) => ({
               channelId,
               status,
+              format: (input.formatByChannelId?.[channelId] ?? null) as any,
             })),
           },
           ...(input.mediaIds?.length && {
