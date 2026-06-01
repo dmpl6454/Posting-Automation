@@ -102,6 +102,10 @@ const OAUTH_ERROR_MESSAGES: Record<string, string> = {
     "You switched organisations during the flow. Please retry from the original workspace.",
   twitter_request_token_failed:
     "Twitter rejected the initial request. Check that your TWITTER_CLIENT_ID / TWITTER_CLIENT_SECRET are valid.",
+  fb_no_pages:
+    "No Facebook Page found on your account. PostAutomation posts to Pages, not personal profiles — create or get admin access to a Facebook Page, then reconnect.",
+  ig_no_business_account:
+    "No Instagram Business account found. Convert your Instagram account to Professional/Business and link it to a Facebook Page you manage, then reconnect.",
 };
 
 /**

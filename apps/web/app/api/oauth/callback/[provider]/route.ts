@@ -172,7 +172,9 @@ export async function GET(
     const config = {
       clientId: oauthClientId,
       clientSecret: oauthClientSecret,
-      callbackUrl: `${process.env.APP_URL}/api/oauth/callback/${params.provider}`,
+      // Must byte-match the redirect_uri used at authorize time, which lowercases
+      // the provider (see channel.router.ts getOAuthUrl). Meta rejects mismatches.
+      callbackUrl: `${process.env.APP_URL}/api/oauth/callback/${params.provider.toLowerCase()}`,
       scopes: [],
     };
 
@@ -186,38 +188,15 @@ export async function GET(
       const pages = await provider.getPages(tokens);
 
       if (pages.length === 0) {
-        // No pages found — save user account as fallback
-        await prisma.channel.upsert({
-          where: {
-            organizationId_platform_platformId: {
-              organizationId,
-              platform: "FACEBOOK",
-              platformId: profile.id,
-            },
-          },
-          update: {
-            accessToken: tokens.accessToken,
-            refreshToken: tokens.refreshToken || null,
-            tokenExpiresAt: tokens.expiresAt || null,
-            scopes: tokens.scopes || [],
-            name: profile.name,
-            username: profile.username || null,
-            avatar: profile.avatar || null,
-            isActive: true,
-          },
-          create: {
-            organizationId,
-            platform: "FACEBOOK",
-            platformId: profile.id,
-            name: profile.name,
-            username: profile.username || null,
-            avatar: profile.avatar || null,
-            accessToken: tokens.accessToken,
-            refreshToken: tokens.refreshToken || null,
-            tokenExpiresAt: tokens.expiresAt || null,
-            scopes: tokens.scopes || [],
-          },
-        });
+        // A Facebook user account cannot post to a feed via the Graph API —
+        // posting requires a Page the user administers. Surface this clearly
+        // instead of creating an unusable channel.
+        console.warn(
+          "[oauth/facebook] connected user administers no Facebook Pages"
+        );
+        return NextResponse.redirect(
+          `${process.env.APP_URL}/dashboard/channels?error=fb_no_pages&platform=facebook`
+        );
       } else {
         // Save each Facebook Page as a separate channel
         for (const page of pages) {
@@ -266,7 +245,12 @@ export async function GET(
       const igAccounts = await provider.getAllInstagramAccounts(tokens);
 
       if (igAccounts.length === 0) {
-        throw new Error("No Instagram Business Account found. Ensure a Facebook Page is connected to an Instagram Professional account.");
+        console.warn(
+          "[oauth/instagram] connected user has no IG Business Account linked to a Page"
+        );
+        return NextResponse.redirect(
+          `${process.env.APP_URL}/dashboard/channels?error=ig_no_business_account&platform=instagram`
+        );
       }
 
       for (const ig of igAccounts) {
