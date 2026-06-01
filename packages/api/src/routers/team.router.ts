@@ -188,8 +188,12 @@ export const teamRouter = createRouter({
       if (ctx.membership.role !== "OWNER") {
         throw new TRPCError({ code: "FORBIDDEN", message: "Only owners can change roles" });
       }
+      const target = await ctx.prisma.organizationMember.findFirst({
+        where: { id: input.memberId, organizationId: ctx.organizationId },
+      });
+      if (!target) throw new TRPCError({ code: "NOT_FOUND", message: "Member not found." });
       const updated = await ctx.prisma.organizationMember.update({
-        where: { id: input.memberId },
+        where: { id: target.id },
         data: { role: input.role },
       });
 
@@ -259,15 +263,18 @@ export const teamRouter = createRouter({
       if (ctx.membership.role !== "OWNER" && ctx.membership.role !== "ADMIN") {
         throw new TRPCError({ code: "FORBIDDEN" });
       }
-      const member = await ctx.prisma.organizationMember.findUnique({ where: { id: input.memberId } });
-      if (member?.role === "OWNER") {
+      const member = await ctx.prisma.organizationMember.findFirst({
+        where: { id: input.memberId, organizationId: ctx.organizationId },
+      });
+      if (!member) throw new TRPCError({ code: "NOT_FOUND", message: "Member not found." });
+      if (member.role === "OWNER") {
         // Fix #72: guard against orphaning the org
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "Cannot remove the owner. Transfer ownership first or delete the organization.",
         });
       }
-      await ctx.prisma.organizationMember.delete({ where: { id: input.memberId } });
+      await ctx.prisma.organizationMember.delete({ where: { id: member.id } });
 
       createAuditLog({
         organizationId: ctx.organizationId,

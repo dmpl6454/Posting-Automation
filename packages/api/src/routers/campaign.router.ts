@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
 import { requirePlan } from "../middleware/plan-limit.middleware";
 
@@ -204,17 +205,20 @@ export const campaignRouter = createRouter({
     }))
     .mutation(async ({ ctx, input }) => {
       const { id, lastContactedAt, ...data } = input;
-      return ctx.prisma.influencer.update({
-        where: { id },
+      const result = await ctx.prisma.influencer.updateMany({
+        where: { id, organizationId: ctx.organizationId },
         data: {
           ...data,
           ...(lastContactedAt ? { lastContactedAt: new Date(lastContactedAt) } : {}),
         },
       });
+      if (result.count === 0) throw new TRPCError({ code: "NOT_FOUND" });
+      return ctx.prisma.influencer.findFirstOrThrow({ where: { id, organizationId: ctx.organizationId } });
     }),
 
   deleteInfluencer: orgProcedure.input(z.object({ id: z.string() })).mutation(async ({ ctx, input }) => {
-    await ctx.prisma.influencer.delete({ where: { id: input.id } });
+    const result = await ctx.prisma.influencer.deleteMany({ where: { id: input.id, organizationId: ctx.organizationId } });
+    if (result.count === 0) throw new TRPCError({ code: "NOT_FOUND" });
     return { success: true };
   }),
 

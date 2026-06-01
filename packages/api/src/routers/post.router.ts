@@ -83,6 +83,15 @@ export const postRouter = createRouter({
         }
       }
 
+      // Validate every channelId belongs to this organization before persisting
+      const ownedChannels = await ctx.prisma.channel.findMany({
+        where: { id: { in: input.channelIds }, organizationId: ctx.organizationId },
+        select: { id: true },
+      });
+      if (ownedChannels.length !== new Set(input.channelIds).size) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "One or more channels do not belong to this organization." });
+      }
+
       const status = input.scheduledAt ? "SCHEDULED" : "DRAFT";
 
       const post = await ctx.prisma.post.create({

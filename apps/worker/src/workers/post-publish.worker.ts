@@ -200,9 +200,9 @@ export function createPostPublishWorker() {
         data: { status: "PUBLISHING" },
       });
 
-      // 2. Get channel and post data
+      // 2. Get channel and post data — scope channel to the job's org (defense-in-depth)
       const [channel, postTarget] = await Promise.all([
-        prisma.channel.findUniqueOrThrow({ where: { id: channelId } }),
+        prisma.channel.findFirst({ where: { id: channelId, organizationId: job.data.organizationId } }),
         prisma.postTarget.findUniqueOrThrow({
           where: { id: postTargetId },
           include: {
@@ -213,7 +213,17 @@ export function createPostPublishWorker() {
         }),
       ]);
 
-      // 3a. Guard: skip publishing to inactive channels
+      // 3a. Guard: channel not found or belongs to wrong org
+      if (!channel) {
+        console.warn(`[PostPublish] Channel ${channelId} not found for org ${job.data.organizationId} — skipping`);
+        await prisma.postTarget.update({
+          where: { id: postTargetId },
+          data: { status: "FAILED", errorMessage: "Channel not found for this organization." },
+        });
+        return;
+      }
+
+      // 3b. Guard: skip publishing to inactive channels
       if (!channel.isActive) {
         console.warn(`[PostPublish] Channel ${channelId} (${platform}) is inactive — skipping publish`);
         await prisma.postTarget.update({

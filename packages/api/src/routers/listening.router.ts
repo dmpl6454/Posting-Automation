@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
 import { listeningSyncQueue } from "@postautomation/queue";
 import { requirePlan } from "../middleware/plan-limit.middleware";
@@ -97,12 +98,10 @@ export const listeningRouter = createRouter({
       })
     )
     .query(async ({ ctx, input }) => {
-      // Verify query belongs to org if specified
+      // Scope to org whether or not a specific queryId is provided
       const queryFilter = input.queryId
-        ? { listeningQueryId: input.queryId }
-        : {
-            listeningQuery: { organizationId: ctx.organizationId },
-          };
+        ? { listeningQueryId: input.queryId, listeningQuery: { organizationId: ctx.organizationId } }
+        : { listeningQuery: { organizationId: ctx.organizationId } };
 
       const mentions = await ctx.prisma.mention.findMany({
         where: {
@@ -136,7 +135,7 @@ export const listeningRouter = createRouter({
       const since = new Date(Date.now() - input.days * 24 * 60 * 60 * 1000);
 
       const queryFilter = input.queryId
-        ? { listeningQueryId: input.queryId }
+        ? { listeningQueryId: input.queryId, listeningQuery: { organizationId: ctx.organizationId } }
         : { listeningQuery: { organizationId: ctx.organizationId } };
 
       const [positive, negative, neutral, mixed, total] = await Promise.all([
@@ -233,7 +232,7 @@ export const listeningRouter = createRouter({
     )
     .query(async ({ ctx, input }) => {
       const queryFilter = input.queryId
-        ? { listeningQueryId: input.queryId }
+        ? { listeningQueryId: input.queryId, listeningQuery: { organizationId: ctx.organizationId } }
         : { listeningQuery: { organizationId: ctx.organizationId } };
 
       return ctx.prisma.sentimentAlert.findMany({
@@ -252,10 +251,12 @@ export const listeningRouter = createRouter({
   markAlertRead: orgProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      return ctx.prisma.sentimentAlert.update({
-        where: { id: input.id },
+      const result = await ctx.prisma.sentimentAlert.updateMany({
+        where: { id: input.id, listeningQuery: { organizationId: ctx.organizationId } },
         data: { isRead: true },
       });
+      if (result.count === 0) throw new TRPCError({ code: "NOT_FOUND" });
+      return { success: true };
     }),
 
   // ---- Source Breakdown ----
@@ -270,7 +271,7 @@ export const listeningRouter = createRouter({
       const since = new Date(Date.now() - input.days * 24 * 60 * 60 * 1000);
 
       const queryFilter = input.queryId
-        ? { listeningQueryId: input.queryId }
+        ? { listeningQueryId: input.queryId, listeningQuery: { organizationId: ctx.organizationId } }
         : { listeningQuery: { organizationId: ctx.organizationId } };
 
       const mentions = await ctx.prisma.mention.groupBy({
