@@ -25,6 +25,10 @@ out/
 .claude/settings.local.json
 .claude/plans/
 .claude/worktrees/
+.claude/skills/
+.claude/scheduled_tasks.lock
+.agents/
+skills-lock.json
 
 # Testing
 coverage/
