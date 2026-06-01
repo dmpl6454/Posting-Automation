@@ -1,4 +1,8 @@
 import type { SocialPlatform } from "@postautomation/db";
+import { execFileSync } from "child_process";
+import { writeFileSync, unlinkSync, mkdirSync, existsSync } from "fs";
+import { join } from "path";
+import crypto from "crypto";
 import { SocialProvider } from "../abstract/social.abstract";
 import type {
   SocialPostPayload,
@@ -9,6 +13,74 @@ import type {
   SocialProfile,
   PlatformConstraints,
 } from "../abstract/social.types";
+
+export interface ShortVideoProbe {
+  width: number;
+  height: number;
+  durationSec: number;
+}
+
+export const SHORT_MAX_DURATION_SEC = 180;
+
+/** Append #Shorts to the description for Short uploads, without duplicating it. */
+export function buildShortDescription(content: string, isShort: boolean): string {
+  if (!isShort) return content;
+  if (/#shorts\b/i.test(content)) return content;
+  return `${content}\n#Shorts`;
+}
+
+/**
+ * Throw a clear, actionable error if a video chosen as a Short cannot be
+ * classified as one by YouTube (landscape, or longer than 3 minutes).
+ */
+export function assertShortDimensions(probe: ShortVideoProbe): void {
+  if (probe.width > probe.height) {
+    throw new Error(
+      `This video is ${probe.width}x${probe.height} (landscape). YouTube only treats vertical or square videos as Shorts. ` +
+        `Upload a 9:16 vertical video, or post it as a regular Video instead.`
+    );
+  }
+  if (probe.durationSec > SHORT_MAX_DURATION_SEC) {
+    const mins = Math.floor(probe.durationSec / 60);
+    const secs = Math.round(probe.durationSec % 60);
+    throw new Error(
+      `This video is ${mins}m ${secs}s long. YouTube Shorts must be 3 minutes (180s) or shorter. ` +
+        `Trim the video, or post it as a regular Video instead.`
+    );
+  }
+}
+
+async function probeVideo(buffer: Buffer, contentType: string): Promise<ShortVideoProbe> {
+  const TMP_DIR = "/tmp/yt-probe";
+  if (!existsSync(TMP_DIR)) mkdirSync(TMP_DIR, { recursive: true });
+  const ext = contentType.includes("quicktime") ? "mov" : "mp4";
+  const tmpPath = join(TMP_DIR, `${crypto.randomBytes(8).toString("hex")}.${ext}`);
+  try {
+    writeFileSync(tmpPath, buffer);
+    const out = execFileSync(
+      "ffprobe",
+      [
+        "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=width,height:format=duration",
+        "-of", "json",
+        tmpPath,
+      ],
+      { encoding: "utf8" }
+    );
+    const parsed = JSON.parse(out);
+    const stream = parsed.streams?.[0] ?? {};
+    const width = Number(stream.width) || 0;
+    const height = Number(stream.height) || 0;
+    const durationSec = Number(parsed.format?.duration) || 0;
+    if (!width || !height) {
+      throw new Error("Could not read video dimensions for Shorts validation.");
+    }
+    return { width, height, durationSec };
+  } finally {
+    try { unlinkSync(tmpPath); } catch { /* best-effort cleanup */ }
+  }
+}
 
 export class YouTubeProvider extends SocialProvider {
   readonly platform: SocialPlatform = "YOUTUBE";
@@ -173,9 +245,7 @@ export class YouTubeProvider extends SocialProvider {
     const videoUrl = payload.mediaUrls![0]!;
     const title = (payload.metadata?.title as string) || payload.content.slice(0, 100);
     const isShort = String(payload.metadata?.format ?? "").toUpperCase() === "SHORT";
-    const description = isShort && !payload.content.includes("#Shorts")
-      ? `${payload.content}\n#Shorts`
-      : payload.content;
+    const description = buildShortDescription(payload.content, isShort);
     const tags = (payload.metadata?.tags as string[]) || [];
     const privacyStatus = (payload.metadata?.privacyStatus as string) || "public";
     const categoryId = (payload.metadata?.categoryId as string) || "22"; // 22 = People & Blogs
@@ -188,6 +258,14 @@ export class YouTubeProvider extends SocialProvider {
     const videoBuffer = Buffer.from(await videoRes.arrayBuffer());
     const videoContentType = videoRes.headers.get("content-type") || "video/mp4";
     const totalBytes = videoBuffer.length;
+
+    // For Shorts, validate the file actually qualifies BEFORE uploading, so we
+    // never silently publish a landscape/long video that YouTube treats as a
+    // normal video. (No API flag forces "Short"; classification is by the file.)
+    if (isShort) {
+      const probe = await probeVideo(videoBuffer, videoContentType);
+      assertShortDimensions(probe);
+    }
     await onProgress?.(10);
 
     // Step 1: Initiate resumable upload
