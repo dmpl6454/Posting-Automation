@@ -104,7 +104,7 @@ describe("Content Generation Chain", () => {
         string,
         string
       >;
-      expect(invokeArg.charLimit).toBe("280");
+      expect(invokeArg.charLimit).toBe(String(PLATFORM_CHAR_LIMITS["TWITTER"]));
     });
 
     it("should use custom charLimit when provided", async () => {
@@ -324,8 +324,8 @@ describe("Content Generation Chain", () => {
   // ── Platform Constants ────────────────────────────────────────────
 
   describe("PLATFORM_CHAR_LIMITS", () => {
-    it("should have Twitter limit of 280", () => {
-      expect(PLATFORM_CHAR_LIMITS["TWITTER"]).toBe(280);
+    it("should have Twitter limit of 25000 (X Premium)", () => {
+      expect(PLATFORM_CHAR_LIMITS["TWITTER"]).toBe(25000);
     });
 
     it("should have Instagram limit of 2200", () => {

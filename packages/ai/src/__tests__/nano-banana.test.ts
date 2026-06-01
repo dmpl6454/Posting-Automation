@@ -221,12 +221,13 @@ describe("Nano Banana Provider", () => {
     });
 
     it("should throw when the API returns an error status", async () => {
+      // Use 400 (not retried) so we don't need to exhaust all 3 retry slots
       mockFetch.mockResolvedValueOnce(
-        mockResponse({ error: "quota exceeded" }, 429)
+        mockResponse({ error: "bad request" }, 400)
       );
 
       await expect(generateImage({ prompt: "test" })).rejects.toThrow(
-        /Nano Banana API error \(429\)/
+        /Nano Banana API error \(400\)/
       );
     });
 
@@ -335,7 +336,7 @@ describe("Nano Banana Provider", () => {
 
       await expect(
         editImage({ prompt: "edit", imageBase64: "data" })
-      ).rejects.toThrow(/Nano Banana edit API error \(400\)/);
+      ).rejects.toThrow(/Nano Banana API error \(400\)/);
     });
 
     it("should use a custom model for editing", async () => {

@@ -16,14 +16,15 @@ import { MastodonProvider } from "../providers/mastodon.provider";
 import { BlueskyProvider } from "../providers/bluesky.provider";
 import { MediumProvider } from "../providers/medium.provider";
 import { DevtoProvider } from "../providers/devto.provider";
+import { WordPressProvider } from "../providers/wordpress.provider";
 
-// All 16 platforms with their expected class, displayName, and key constraint values
+// All 17 platforms with their expected class, displayName, and key constraint values
 const platformExpectations = [
   {
     platform: "TWITTER" as const,
     ProviderClass: TwitterProvider,
     displayName: "Twitter / X",
-    maxContentLength: 280,
+    maxContentLength: 25000, // X Premium
     maxMediaCount: 4,
   },
   {
@@ -131,6 +132,13 @@ const platformExpectations = [
     maxContentLength: 100000,
     maxMediaCount: 0,
   },
+  {
+    platform: "WORDPRESS" as const,
+    ProviderClass: WordPressProvider,
+    displayName: "WordPress",
+    maxContentLength: 100000,
+    maxMediaCount: 50,
+  },
 ];
 
 describe("getSocialProvider", () => {
@@ -198,9 +206,9 @@ describe("getSocialProvider", () => {
 });
 
 describe("getSupportedPlatforms", () => {
-  it("returns all 16 supported platforms", () => {
+  it("returns all 17 supported platforms", () => {
     const platforms = getSupportedPlatforms();
-    expect(platforms).toHaveLength(16);
+    expect(platforms).toHaveLength(17);
   });
 
   it("includes every expected platform", () => {

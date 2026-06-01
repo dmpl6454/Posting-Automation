@@ -17,8 +17,9 @@ describe("SocialProvider.validateContent", () => {
 
     it("returns no errors when content is exactly at maxContentLength", () => {
       const provider = getSocialProvider("TWITTER");
+      const limit = provider.constraints.maxContentLength;
       const payload: SocialPostPayload = {
-        content: "a".repeat(280),
+        content: "a".repeat(limit),
       };
 
       const errors = provider.validateContent(payload);
@@ -27,13 +28,14 @@ describe("SocialProvider.validateContent", () => {
 
     it("returns an error when content exceeds maxContentLength", () => {
       const provider = getSocialProvider("TWITTER");
+      const limit = provider.constraints.maxContentLength; // 25000 (X Premium)
       const payload: SocialPostPayload = {
-        content: "a".repeat(281),
+        content: "a".repeat(limit + 1),
       };
 
       const errors = provider.validateContent(payload);
       expect(errors).toHaveLength(1);
-      expect(errors[0]).toContain("280");
+      expect(errors[0]).toContain(String(limit));
       expect(errors[0]).toContain("Twitter / X");
     });
 
@@ -116,9 +118,11 @@ describe("SocialProvider.validateContent", () => {
 
     it("can return both content length and media count errors simultaneously", () => {
       const provider = getSocialProvider("TWITTER");
+      const limit = provider.constraints.maxContentLength;
+      const max = provider.constraints.maxMediaCount;
       const payload: SocialPostPayload = {
-        content: "a".repeat(281),
-        mediaUrls: Array.from({ length: 5 }, (_, i) => `https://example.com/${i}.jpg`),
+        content: "a".repeat(limit + 1),
+        mediaUrls: Array.from({ length: max + 1 }, (_, i) => `https://example.com/${i}.jpg`),
       };
 
       const errors = provider.validateContent(payload);
