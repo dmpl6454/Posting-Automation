@@ -70,7 +70,7 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   const [isUploading, setIsUploading] = useState(false);
   const [channelSearch, setChannelSearch] = useState("");
   const [channelDropdownOpen, setChannelDropdownOpen] = useState(false);
-  const [formatByChannelId, setFormatByChannelId] = useState<Record<string, string>>({});
+  const [formatByChannelId, setFormatByChannelId] = useState<Record<string, "FEED" | "REEL" | "STORY" | "SHORT" | "VIDEO" | "CAROUSEL">>({});
   const [ytMetadata, setYtMetadata] = useState<{ title?: string; privacyStatus?: "public" | "unlisted" | "private" }>({});
   const channelSectionRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -995,7 +995,7 @@ ${content}`;
               </CardHeader>
               <CardContent className="space-y-3">
                 {channels?.filter((ch: any) => selectedChannels.includes(ch.id) && ["YOUTUBE", "INSTAGRAM"].includes(ch.platform)).map((ch: any) => {
-                  const options = ch.platform === "YOUTUBE"
+                  const options: { value: "FEED" | "REEL" | "STORY" | "SHORT" | "VIDEO" | "CAROUSEL"; label: string }[] = ch.platform === "YOUTUBE"
                     ? [{ value: "VIDEO", label: "Video" }, { value: "SHORT", label: "Short" }]
                     : [{ value: "REEL", label: "Reel" }, { value: "STORY", label: "Story" }];
                   const current = formatByChannelId[ch.id] ?? options[0]!.value;
@@ -1030,7 +1030,7 @@ ${content}`;
                     <select
                       className="w-full rounded border border-border bg-background px-2 py-1.5 text-sm"
                       value={ytMetadata.privacyStatus ?? "public"}
-                      onChange={(e) => setYtMetadata((prev) => ({ ...prev, privacyStatus: e.target.value }))}
+                      onChange={(e) => setYtMetadata((prev) => ({ ...prev, privacyStatus: e.target.value as "public" | "unlisted" | "private" }))}
                     >
                       <option value="public">Public</option>
                       <option value="unlisted">Unlisted</option>
