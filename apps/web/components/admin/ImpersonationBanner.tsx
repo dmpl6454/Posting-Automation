@@ -12,6 +12,12 @@ export function ImpersonationBanner() {
     onSuccess: () => {
       document.cookie =
         "admin-impersonate=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+      // While impersonating, OrgInit stored the impersonated user's org in
+      // localStorage. If we leave it, the admin's own subsequent requests keep
+      // sending that stale org as x-organization-id — which then mismatches the
+      // admin's real channels and breaks publishing ("channels do not belong to
+      // this organization"). Clear it so OrgInit re-seeds the admin's own org.
+      localStorage.removeItem("currentOrgId");
       setIsImpersonating(false);
       router.push("/admin/users");
     },
