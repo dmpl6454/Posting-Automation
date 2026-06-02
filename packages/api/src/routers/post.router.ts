@@ -96,6 +96,21 @@ export const postRouter = createRouter({
         select: { id: true },
       });
       if (ownedChannels.length !== new Set(input.channelIds).size) {
+        // TEMP DIAGNOSTIC (remove after debugging the cross-org publish issue):
+        // print the active org vs the requested channels' real orgs so we can see
+        // the exact mismatch instead of guessing.
+        const requested = await ctx.prisma.channel.findMany({
+          where: { id: { in: input.channelIds } },
+          select: { id: true, name: true, platform: true, organizationId: true },
+        });
+        console.error("[createPost mismatch]", JSON.stringify({
+          ctxOrganizationId: ctx.organizationId,
+          isSuperAdmin: ctx.isSuperAdmin,
+          userId: (ctx.session.user as any)?.id,
+          requestedChannelIds: input.channelIds,
+          requestedChannels: requested,
+          ownedCount: ownedChannels.length,
+        }));
         throw new TRPCError({ code: "FORBIDDEN", message: "One or more channels do not belong to this organization." });
       }
 
