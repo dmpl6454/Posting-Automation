@@ -225,6 +225,15 @@ export function createContentGenerateWorker() {
         });
 
         for (const channel of channels) {
+          // Autopilot generates still images only, never video. YouTube requires a
+          // video file to publish, so an image-only YouTube target always fails at
+          // publish time. Skip it until autopilot can produce video.
+          if (channel.platform === "YOUTUBE") {
+            console.warn(
+              `[ContentGenerate] Skipping YOUTUBE channel ${channel.id} — autopilot produces images, not video`
+            );
+            continue;
+          }
           await prisma.postTarget.create({
             data: {
               postId: post.id,

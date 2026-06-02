@@ -152,12 +152,22 @@ export class YouTubeProvider extends SocialProvider {
   }
 
   async publishPost(tokens: OAuthTokens, payload: SocialPostPayload): Promise<SocialPostResult> {
-    // If a video file URL is provided, upload it as a YouTube video
     if (payload.mediaUrls?.length) {
+      // Route on media TYPE, not just presence. The video-upload path POSTs the
+      // file to YouTube's resumable VIDEO endpoint — feeding it an image (e.g. an
+      // autopilot-generated PNG) makes YouTube reject the upload. Gate explicitly
+      // so we fail with a clear message instead of corrupting the upload.
+      const firstType = payload.mediaTypes?.[0] ?? "";
+      if (!firstType.startsWith("video/")) {
+        throw new Error(
+          `YouTube requires a video file to publish. Received media of type "${firstType || "unknown"}". ` +
+            `Image-only posts cannot be published to YouTube — attach an MP4 video instead.`
+        );
+      }
       return this.uploadVideo(tokens, payload);
     }
 
-    // No video — create a community post via YouTube Data API activities.insert
+    // No media — create a community post via YouTube Data API activities.insert
     // Note: Community posts require the channel to have the Community tab enabled
     return this.createCommunityPost(tokens, payload);
   }

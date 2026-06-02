@@ -225,6 +225,14 @@ export function createAgentRunWorker() {
           const mediaRequiredPlatforms = ["INSTAGRAM", "FACEBOOK"];
           for (let chIdx = 0; chIdx < uniqueChannels.length; chIdx++) {
             const channel = uniqueChannels[chIdx]!;
+            // Autopilot only generates still images, never video. YouTube requires
+            // a video file, so an image-only YouTube target would always fail at
+            // publish time (the PNG gets POSTed to YouTube's video endpoint and
+            // rejected). Skip it until autopilot can produce video.
+            if (channel.platform === "YOUTUBE") {
+              console.warn(`[AgentRun] Skipping YOUTUBE — autopilot produces images, not video`);
+              continue;
+            }
             if (!mediaId && mediaRequiredPlatforms.includes(channel.platform)) {
               console.warn(`[AgentRun] Skipping ${channel.platform} — no image`);
               continue;
