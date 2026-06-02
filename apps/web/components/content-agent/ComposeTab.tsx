@@ -64,6 +64,11 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   const [scheduledAt, setScheduledAt] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [postMedia, setPostMedia] = useState<{ url: string; mediaId?: string; file?: File; uploading?: boolean; progress?: number }[]>([]);
+  // Aspect ratio of the first attached video (width/height). Null until measured.
+  // Used to block non-vertical videos chosen as YouTube Shorts before publishing,
+  // since YouTube only treats 9:16 vertical/square clips as Shorts and the worker
+  // would otherwise reject a landscape Short after a slow upload.
+  const [videoAspect, setVideoAspect] = useState<number | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingImageIndex, setEditingImageIndex] = useState<number | null>(null);
   const [editorPreview, setEditorPreview] = useState<string | null>(null);
@@ -185,8 +190,33 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
       return reconciled.length === prev.length ? prev : reconciled;
     });
   }, [channels]);
+
+  // Measure the first attached video's aspect ratio so we can warn about
+  // non-vertical Shorts before publishing.
+  useEffect(() => {
+    const videoItem = postMedia.find((m) => {
+      const t = m.file?.type ?? "";
+      return t.startsWith("video/") || /\.(mp4|webm|mov|m4v|ogv)(\?|$)/i.test(m.url);
+    });
+    if (!videoItem) {
+      setVideoAspect(null);
+      return;
+    }
+    const el = document.createElement("video");
+    el.preload = "metadata";
+    el.onloadedmetadata = () => {
+      if (el.videoWidth > 0 && el.videoHeight > 0) {
+        setVideoAspect(el.videoWidth / el.videoHeight);
+      }
+    };
+    el.src = videoItem.url;
+    return () => {
+      el.onloadedmetadata = null;
+      el.src = "";
+    };
+  }, [postMedia]);
   const createPost = trpc.post.create.useMutation({
-    onSuccess: () => {
+    onSuccess: (post: any) => {
       toast({ title: "Post created!", description: "Your post has been saved successfully." });
       // Invalidate recently used cache so it refreshes
       utils.channel.recentlyUsed.invalidate();
@@ -196,6 +226,10 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
       setPostMedia([]);
       removeTask(TASK_ID);
       onPostCreated?.();
+      // Open the post's detail page so the live upload/publish progress and final
+      // status are visible immediately — instead of leaving the user on compose
+      // with no indication of where the post went.
+      if (post?.id) router.push(`/dashboard/posts/${post.id}`);
     },
     onError: (err) => {
       toast({ title: "Error", description: humanizeError(err), variant: "destructive" });
@@ -527,13 +561,24 @@ ${content}`;
     const t = m.file?.type ?? "";
     return t.startsWith("image/") || /\.(jpe?g|png|gif|webp|avif)(\?|$)/i.test(m.url);
   });
-  // Block publish if YouTube is selected with: (a) no video, or (b) any image attached
+  // Is any selected YouTube channel set to publish as a Short?
+  const youtubeShortSelected = (channels as any[] | undefined)?.some(
+    (ch) => ch.platform === "YOUTUBE" && selectedChannels.includes(ch.id) && formatByChannelId[ch.id] === "SHORT"
+  ) ?? false;
+  // A Short must be vertical/square (height >= width). videoAspect = width/height,
+  // so a Short requires aspect <= 1. Landscape (aspect > 1) can't become a Short.
+  const shortNeedsVertical = youtubeShortSelected && hasVideoAttached && videoAspect !== null && videoAspect > 1;
+
+  // Block publish if YouTube is selected with: (a) no video, (b) any image attached,
+  // or (c) a non-vertical video chosen as a Short.
   const youtubeBlockReason = hasYouTube
     ? !hasVideoAttached
       ? "YouTube requires a video. Attach an MP4/WebM/MOV before publishing."
       : hasImageAttached
         ? "YouTube does not accept images. Remove image attachments before publishing."
-        : null
+        : shortNeedsVertical
+          ? "This video is landscape — YouTube Shorts must be vertical (9:16). Switch the format to “Video”, or attach a vertical clip."
+          : null
     : null;
 
   return (
