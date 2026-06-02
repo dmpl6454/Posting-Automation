@@ -509,7 +509,19 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
           console.log(`[PostPublish] Content too large — retrying with aggressive truncation`);
           result = await provider.publishPost(tokens, { content: aggressiveContent.slice(0, Math.floor(aggressiveContent.length * 0.7)), mediaUrls, mediaTypes, metadata: providerMetadata });
         } else {
-          throw publishErr; // Unknown or unrecoverable — rethrow
+          // Unknown / unrecoverable error (e.g. a landscape video rejected by the
+          // Shorts validator). Retrying re-runs the SAME input and fails identically,
+          // but the retry's claim guard sees the target still PUBLISHING and skips it
+          // as a "duplicate" — so the worker.on("failed") final-attempt FAILED write
+          // never fires and the target is orphaned at PUBLISHING forever (UI shows
+          // "perpetually publishing"). Mark FAILED here, before throwing, so the DB
+          // reaches a terminal state, the UI stops polling, and the user sees the
+          // actionable error with a Retry button.
+          await prisma.postTarget.update({
+            where: { id: postTargetId },
+            data: { status: "FAILED", errorMessage: errMsg },
+          }).catch((e: any) => console.error(`[PostPublish] failed to mark target FAILED:`, e?.message));
+          throw publishErr; // rethrow so BullMQ records the job failure + error log
         }
       }
 
