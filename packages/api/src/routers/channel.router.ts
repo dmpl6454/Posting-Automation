@@ -381,8 +381,11 @@ function getDefaultScopes(platform: string): string[] {
   const scopeMap: Record<string, string[]> = {
     TWITTER: ["tweet.read", "tweet.write", "media.write", "users.read", "offline.access"],
     LINKEDIN: ["openid", "profile", "w_member_social", "w_organization_social", "r_organization_social"],
-    FACEBOOK: ["public_profile", "email", "pages_show_list", "pages_manage_posts", "pages_read_engagement"],
-    INSTAGRAM: ["public_profile", "email", "pages_show_list", "pages_read_engagement", "instagram_basic", "instagram_content_publish", "instagram_manage_comments", "business_management"],
+    // `email` intentionally omitted: sign-in is via Google, and the FB/IG
+    // providers never read the FB-provided email. Dropping it slims the Meta
+    // App Review surface (one fewer permission to get Advanced Access for).
+    FACEBOOK: ["public_profile", "pages_show_list", "pages_manage_posts", "pages_read_engagement"],
+    INSTAGRAM: ["public_profile", "pages_show_list", "pages_read_engagement", "instagram_basic", "instagram_content_publish", "instagram_manage_comments", "business_management"],
     REDDIT: ["submit", "identity", "read"],
     YOUTUBE: [
       "https://www.googleapis.com/auth/youtube.upload",
