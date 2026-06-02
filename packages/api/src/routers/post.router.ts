@@ -96,22 +96,18 @@ export const postRouter = createRouter({
         select: { id: true },
       });
       if (ownedChannels.length !== new Set(input.channelIds).size) {
-        // TEMP DIAGNOSTIC (remove after debugging the cross-org publish issue):
-        // print the active org vs the requested channels' real orgs so we can see
-        // the exact mismatch instead of guessing.
-        const requested = await ctx.prisma.channel.findMany({
-          where: { id: { in: input.channelIds } },
-          select: { id: true, name: true, platform: true, organizationId: true },
+        // Identify which requested IDs are invalid (deleted, or belong to another
+        // org). Stale IDs commonly come from a restored draft referencing a channel
+        // that was since disconnected/reconnected (new id). Name them so the error
+        // is actionable instead of a vague "wrong organization".
+        const ownedSet = new Set(ownedChannels.map((c) => c.id));
+        const invalidIds = [...new Set(input.channelIds)].filter((id) => !ownedSet.has(id));
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            `Some selected channels are no longer available (they were removed or reconnected): ` +
+            `${invalidIds.join(", ")}. Please re-select your channels and try again.`,
         });
-        console.error("[createPost mismatch]", JSON.stringify({
-          ctxOrganizationId: ctx.organizationId,
-          isSuperAdmin: ctx.isSuperAdmin,
-          userId: (ctx.session.user as any)?.id,
-          requestedChannelIds: input.channelIds,
-          requestedChannels: requested,
-          ownedCount: ownedChannels.length,
-        }));
-        throw new TRPCError({ code: "FORBIDDEN", message: "One or more channels do not belong to this organization." });
       }
 
       const status = input.scheduledAt ? "SCHEDULED" : "DRAFT";

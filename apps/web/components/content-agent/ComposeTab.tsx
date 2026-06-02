@@ -169,6 +169,22 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   const { data: channels, isLoading: channelsLoading } = trpc.channel.list.useQuery();
   const { data: recentlyUsedIds } = trpc.channel.recentlyUsed.useQuery();
   const utils = trpc.useUtils();
+
+  // Reconcile the selected channels against the live (org-scoped) channel list.
+  // A restored draft or stale UI state can hold channel IDs that no longer exist
+  // — e.g. a channel that was deleted, or disconnected+reconnected (which mints a
+  // NEW id). Submitting those phantom IDs makes post.create reject the whole
+  // request with "One or more channels do not belong to this organization."
+  // Drop any selected ID that isn't in the current channel list so only real,
+  // owned channels are ever submitted.
+  useEffect(() => {
+    if (!channels) return;
+    const liveIds = new Set((channels as any[]).map((c) => c.id));
+    setSelectedChannels((prev) => {
+      const reconciled = prev.filter((id) => liveIds.has(id));
+      return reconciled.length === prev.length ? prev : reconciled;
+    });
+  }, [channels]);
   const createPost = trpc.post.create.useMutation({
     onSuccess: () => {
       toast({ title: "Post created!", description: "Your post has been saved successfully." });
