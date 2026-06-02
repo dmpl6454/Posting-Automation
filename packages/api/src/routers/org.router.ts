@@ -3,48 +3,43 @@ import { createRouter, protectedProcedure } from "../trpc";
 export const orgRouter = createRouter({
   // Get the current user's active organization.
   //
-  // Honors the x-organization-id header (ctx.organizationId) when the user can
-  // actually access that org — a member, or a superadmin. This makes OrgInit
-  // reconcile to the user's SELECTED org rather than always snapping back to the
-  // first membership (which previously fought the org switcher and let a stale
-  // org — e.g. left over from impersonation — silently win). On any miss
-  // (no header, header points at an org the user can't access, or a deleted
-  // org) we degrade to the first membership; we never throw, so OrgInit can
-  // always converge without a reload loop. Authorization is unchanged: this is
-  // display/canonical-org state only — orgProcedure + the createPost
-  // channel-ownership check remain the real IDOR gates.
+  // Honors the x-organization-id header (ctx.organizationId) ONLY when the user
+  // is an actual MEMBER of that org. This makes a deliberate org switch (which
+  // the switcher only offers among the user's memberships) authoritative,
+  // instead of always snapping back to the first membership and fighting the
+  // switcher.
+  //
+  // We intentionally do NOT add a superadmin bypass here: a superadmin's *home*
+  // context must default to their own membership org. Otherwise a stale
+  // localStorage value (e.g. an org left over from a stopped impersonation
+  // session) would be honored — since superadmins can access any org — and the
+  // superadmin would get silently stuck in that org and never self-heal,
+  // publishing to the wrong org. Superadmins still get genuine cross-org access
+  // at the API layer (orgProcedure allows it) and operate inside other orgs via
+  // impersonation (the deliberate, banner-flagged path) — not via stale headers.
+  //
+  // On any miss (no header, non-member org, deleted org) we degrade to the first
+  // membership and never throw, so OrgInit always converges without a reload
+  // loop. Authorization is unchanged: this is display/canonical-org state only —
+  // orgProcedure + the createPost channel-ownership check remain the IDOR gates.
   current: protectedProcedure.query(async ({ ctx }) => {
     const userId = (ctx.session.user as any).id;
-    const isSuperAdmin = (ctx.session.user as any)?.isSuperAdmin === true;
     const headerOrgId = ctx.organizationId;
 
     if (headerOrgId) {
-      const canAccess = isSuperAdmin
-        ? true
-        : (await ctx.prisma.organizationMember.findUnique({
-            where: { userId_organizationId: { userId, organizationId: headerOrgId } },
-            select: { organizationId: true },
-          })) !== null;
-
-      if (canAccess) {
-        const org = await ctx.prisma.organization.findUnique({
-          where: { id: headerOrgId },
-        });
-        if (org) {
-          // role from membership if any (superadmin without membership → OWNER)
-          const m = await ctx.prisma.organizationMember.findUnique({
-            where: { userId_organizationId: { userId, organizationId: headerOrgId } },
-            select: { role: true },
-          });
-          return {
-            id: org.id,
-            name: org.name,
-            slug: org.slug,
-            role: m?.role ?? ("OWNER" as const),
-          };
-        }
+      const headerMembership = await ctx.prisma.organizationMember.findUnique({
+        where: { userId_organizationId: { userId, organizationId: headerOrgId } },
+        include: { organization: true },
+      });
+      if (headerMembership) {
+        return {
+          id: headerMembership.organization.id,
+          name: headerMembership.organization.name,
+          slug: headerMembership.organization.slug,
+          role: headerMembership.role,
+        };
       }
-      // header org not accessible or missing → fall through to first membership
+      // header org is not one the user belongs to → fall through to first membership
     }
 
     const membership = await ctx.prisma.organizationMember.findFirst({
