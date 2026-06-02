@@ -8,6 +8,7 @@ import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { Textarea } from "~/components/ui/textarea";
 import { Label } from "~/components/ui/label";
+import { DateTimePicker } from "~/components/ui/datetime-picker";
 import { Badge } from "~/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~/components/ui/select";
@@ -1030,10 +1031,9 @@ export default function NewsGridPage() {
                           )}
                           <div className="space-y-1.5">
                             <Label className="text-xs">Schedule Time (optional)</Label>
-                            <Input
-                              type="datetime-local"
+                            <DateTimePicker
                               value={scheduleMap[r.channelId] ?? ""}
-                              onChange={(e) => setScheduleMap((p) => ({ ...p, [r.channelId]: e.target.value }))}
+                              onChange={(val) => setScheduleMap((p) => ({ ...p, [r.channelId]: val }))}
                               min={new Date().toISOString().slice(0, 16)}
                               className="text-xs"
                             />

@@ -9,6 +9,7 @@ import { Button } from "~/components/ui/button";
 import { Badge } from "~/components/ui/badge";
 import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
+import { DateTimePicker } from "~/components/ui/datetime-picker";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "~/components/ui/tabs";
 import {
   Table,
@@ -136,11 +137,10 @@ function BulkScheduleSection() {
         <div className="flex items-end gap-4">
           <div className="flex-1">
             <Label htmlFor="bulk-schedule-date">Schedule Date & Time</Label>
-            <Input
+            <DateTimePicker
               id="bulk-schedule-date"
-              type="datetime-local"
               value={scheduledAt}
-              onChange={(e) => setScheduledAt(e.target.value)}
+              onChange={setScheduledAt}
               className="mt-1"
             />
           </div>
@@ -428,11 +428,10 @@ function CSVImportSection() {
             <Label htmlFor="import-schedule-date">
               Default Schedule (for rows without scheduledAt)
             </Label>
-            <Input
+            <DateTimePicker
               id="import-schedule-date"
-              type="datetime-local"
               value={globalScheduledAt}
-              onChange={(e) => setGlobalScheduledAt(e.target.value)}
+              onChange={setGlobalScheduledAt}
               className="mt-1 max-w-xs"
             />
           </div>

@@ -12,6 +12,7 @@ import { Badge } from "~/components/ui/badge";
 import { Textarea } from "~/components/ui/textarea";
 import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
+import { DateTimePicker } from "~/components/ui/datetime-picker";
 import { Separator } from "~/components/ui/separator";
 import { Skeleton } from "~/components/ui/skeleton";
 import { useToast } from "~/hooks/use-toast";
@@ -557,11 +558,10 @@ export default function PostDetailPage() {
                 <Label htmlFor="schedule-date" className="sr-only">
                   Schedule date
                 </Label>
-                <Input
+                <DateTimePicker
                   id="schedule-date"
-                  type="datetime-local"
                   value={scheduledAt}
-                  onChange={(e) => handleScheduleChange(e.target.value)}
+                  onChange={handleScheduleChange}
                   min={new Date().toISOString().slice(0, 16)}
                 />
               </div>

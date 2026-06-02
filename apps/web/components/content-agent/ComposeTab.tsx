@@ -11,6 +11,7 @@ import { Button } from "~/components/ui/button";
 import { Textarea } from "~/components/ui/textarea";
 import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
+import { DateTimePicker } from "~/components/ui/datetime-picker";
 import { Badge } from "~/components/ui/badge";
 import { Separator } from "~/components/ui/separator";
 import { useToast } from "~/hooks/use-toast";
@@ -1054,11 +1055,10 @@ ${content}`;
                   <Label htmlFor="schedule-date" className="sr-only">
                     Schedule date
                   </Label>
-                  <Input
+                  <DateTimePicker
                     id="schedule-date"
-                    type="datetime-local"
                     value={scheduledAt}
-                    onChange={(e) => setScheduledAt(e.target.value)}
+                    onChange={setScheduledAt}
                     min={new Date().toISOString().slice(0, 16)}
                   />
                 </div>

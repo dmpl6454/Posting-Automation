@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "~/com
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
+import { DateTimePicker } from "~/components/ui/datetime-picker";
 import { Badge } from "~/components/ui/badge";
 import { Skeleton } from "~/components/ui/skeleton";
 import { useToast } from "~/hooks/use-toast";
@@ -100,10 +101,11 @@ export default function ApiKeysPage() {
           </div>
           <div className="space-y-1.5">
             <Label>Expiration (optional)</Label>
-            <Input
-              type="datetime-local"
+            <DateTimePicker
               value={expiresAt}
-              onChange={(e) => setExpiresAt(e.target.value)}
+              onChange={setExpiresAt}
+              min={new Date().toISOString().slice(0, 16)}
+              placeholder="No expiration"
             />
           </div>
           <Button
