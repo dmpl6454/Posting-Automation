@@ -384,6 +384,33 @@ export const channelRouter = createRouter({
       return { success: true };
     }),
 
+  bulkDisconnect: orgProcedure
+    .input(z.object({ channelIds: z.array(z.string()).min(1).max(100) }))
+    .mutation(async ({ ctx, input }) => {
+      // Fetch the to-be-deleted channels scoped to the org (for audit + count)
+      const channels = await ctx.prisma.channel.findMany({
+        where: { id: { in: input.channelIds }, organizationId: ctx.organizationId },
+        select: { id: true, platform: true, name: true },
+      });
+      const result = await ctx.prisma.channel.deleteMany({
+        where: { id: { in: input.channelIds }, organizationId: ctx.organizationId },
+      });
+
+      // Fire-and-forget audit per deleted channel
+      for (const ch of channels) {
+        createAuditLog({
+          organizationId: ctx.organizationId,
+          userId: (ctx.session.user as any).id,
+          action: AUDIT_ACTIONS.CHANNEL_DISCONNECTED,
+          entityType: "Channel",
+          entityId: ch.id,
+          metadata: { platform: ch.platform, name: ch.name, bulk: true },
+        }).catch(() => {});
+      }
+
+      return { deleted: result.count };
+    }),
+
   toggleActive: orgProcedure
     .input(z.object({ channelId: z.string() }))
     .mutation(async ({ ctx, input }) => {
