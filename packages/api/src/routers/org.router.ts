@@ -1,3 +1,4 @@
+import { ensurePersonalOrg } from "@postautomation/db";
 import { createRouter, protectedProcedure } from "../trpc";
 
 export const orgRouter = createRouter({
@@ -12,11 +13,12 @@ export const orgRouter = createRouter({
   // We intentionally do NOT add a superadmin bypass here: a superadmin's *home*
   // context must default to their own membership org. Otherwise a stale
   // localStorage value (e.g. an org left over from a stopped impersonation
-  // session) would be honored — since superadmins can access any org — and the
-  // superadmin would get silently stuck in that org and never self-heal,
-  // publishing to the wrong org. Superadmins still get genuine cross-org access
-  // at the API layer (orgProcedure allows it) and operate inside other orgs via
-  // impersonation (the deliberate, banner-flagged path) — not via stale headers.
+  // session) would be honored and the superadmin would get silently stuck in
+  // that org and never self-heal, publishing to the wrong org. Hard isolation
+  // is now in effect: orgProcedure no longer bypasses the membership check for
+  // superadmins, so a superadmin reaches another org ONLY via impersonation
+  // (the deliberate, banner-flagged path that swaps the acting session user) —
+  // not via an orgProcedure bypass and not via stale headers.
   //
   // On any miss (no header, non-member org, deleted org) we degrade to the first
   // membership and never throw, so OrgInit always converges without a reload
@@ -44,6 +46,12 @@ export const orgRouter = createRouter({
 
     const membership = await ctx.prisma.organizationMember.findFirst({
       where: { userId },
+      // S1: deterministic fallback org, identical to trpc.ts (orgProcedure) and
+      // user.router (me). MemberRole is a Postgres enum, so role asc sorts by
+      // declaration order (OWNER < ADMIN < MEMBER), preferring the owned org;
+      // createdAt asc breaks ties to the oldest membership. Keeps the canonical
+      // "current" org in agreement with the OrgSwitcher default (memberships[0]).
+      orderBy: [{ role: "asc" }, { createdAt: "asc" }],
       include: { organization: true },
     });
 
@@ -56,21 +64,11 @@ export const orgRouter = createRouter({
       };
     }
 
-    // Auto-create a default organization
+    // S2: idempotent single-org provisioning. Reuses an existing personal org
+    // (same userId) instead of creating a duplicate, so OAuth signup +
+    // credentials register for the same person never diverge into two orgs.
     const userEmail = (ctx.session.user as any).email || "user";
-    const orgName = `${userEmail.split("@")[0]}'s Workspace`;
-    const org = await ctx.prisma.organization.create({
-      data: {
-        name: orgName,
-        slug: `org-${userId.slice(0, 8)}-${Date.now()}`,
-        members: {
-          create: {
-            userId,
-            role: "OWNER",
-          },
-        },
-      },
-    });
+    const org = await ensurePersonalOrg(ctx.prisma, userId, userEmail);
 
     return {
       id: org.id,

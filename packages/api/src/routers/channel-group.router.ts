@@ -64,6 +64,13 @@ export const channelGroupRouter = createRouter({
         where: { id: input.groupId, organizationId: ctx.organizationId },
       });
       if (!group) throw new TRPCError({ code: "NOT_FOUND" });
+      // Security: validate the channel belongs to this org before connecting it,
+      // otherwise an arbitrary cross-org channelId could be added to the group (IDOR).
+      const channel = await ctx.prisma.channel.findFirst({
+        where: { id: input.channelId, organizationId: ctx.organizationId },
+        select: { id: true },
+      });
+      if (!channel) throw new TRPCError({ code: "NOT_FOUND", message: "Channel not found in this workspace." });
       return ctx.prisma.channelGroup.update({
         where: { id: input.groupId },
         data: { channels: { connect: { id: input.channelId } } },
@@ -78,6 +85,13 @@ export const channelGroupRouter = createRouter({
         where: { id: input.groupId, organizationId: ctx.organizationId },
       });
       if (!group) throw new TRPCError({ code: "NOT_FOUND" });
+      // Security: validate the channel belongs to this org before disconnecting it,
+      // mirroring addChannel so arbitrary cross-org channelIds are rejected (IDOR).
+      const channel = await ctx.prisma.channel.findFirst({
+        where: { id: input.channelId, organizationId: ctx.organizationId },
+        select: { id: true },
+      });
+      if (!channel) throw new TRPCError({ code: "NOT_FOUND", message: "Channel not found in this workspace." });
       return ctx.prisma.channelGroup.update({
         where: { id: input.groupId },
         data: { channels: { disconnect: { id: input.channelId } } },

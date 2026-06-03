@@ -30,10 +30,11 @@ export const agentRouter = createRouter({
         },
       });
       // Resolve channel details from channelIds
+      // SECURITY: scope to the current org so foreign channel ids are dropped (IDOR fix)
       let channels: any[] = [];
       if (agent && agent.channelIds.length > 0) {
         channels = await ctx.prisma.channel.findMany({
-          where: { id: { in: agent.channelIds } },
+          where: { id: { in: agent.channelIds }, organizationId: ctx.organizationId },
           select: { id: true, name: true, platform: true, username: true },
         });
       }
@@ -60,6 +61,19 @@ export const agentRouter = createRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // SECURITY: ensure every channelId belongs to the current org (IDOR fix).
+      // Dedup first so repeated ids in the input don't trip the count check.
+      const ids = [...new Set(input.channelIds)];
+      const valid = await ctx.prisma.channel.findMany({
+        where: { id: { in: ids }, organizationId: ctx.organizationId },
+        select: { id: true },
+      });
+      if (valid.length !== ids.length) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "One or more channels do not belong to this workspace.",
+        });
+      }
       const agent = await ctx.prisma.agent.create({
         data: {
           organizationId: ctx.organizationId,
@@ -103,6 +117,22 @@ export const agentRouter = createRouter({
       });
       if (!existing) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Agent not found" });
+      }
+      // SECURITY: when channelIds are being changed, ensure they all belong to the
+      // current org (IDOR fix). Skip when no channelIds were provided.
+      if (data.channelIds && data.channelIds.length > 0) {
+        // Dedup first so repeated ids in the input don't trip the count check.
+        const ids = [...new Set(data.channelIds)];
+        const valid = await ctx.prisma.channel.findMany({
+          where: { id: { in: ids }, organizationId: ctx.organizationId },
+          select: { id: true },
+        });
+        if (valid.length !== ids.length) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "One or more channels do not belong to this workspace.",
+          });
+        }
       }
       return ctx.prisma.agent.update({
         where: { id },
