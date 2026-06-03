@@ -17,6 +17,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "~/components/ui/dialog";
+import { Checkbox } from "~/components/ui/checkbox";
 import { useToast } from "~/hooks/use-toast";
 import { humanizeError } from "~/lib/errors";
 import {
@@ -188,6 +189,32 @@ export default function ChannelsPage() {
       refetch();
       toast({ title: "Channel updated" });
     },
+  });
+
+  // Bulk-select + delete state
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+
+  const toggleSelected = (channelId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(channelId)) next.delete(channelId);
+      else next.add(channelId);
+      return next;
+    });
+  };
+
+  const clearSelection = () => setSelectedIds(new Set());
+
+  const bulkDisconnect = trpc.channel.bulkDisconnect.useMutation({
+    onSuccess: (r) => {
+      toast({ title: `Deleted ${r.deleted} channel${r.deleted === 1 ? "" : "(s)"}` });
+      setSelectedIds(new Set());
+      setBulkDeleteOpen(false);
+      refetch();
+    },
+    onError: (e) =>
+      toast({ variant: "destructive", title: humanizeError(e) }),
   });
 
   const createGroup = trpc.channelGroup.create.useMutation({
@@ -402,20 +429,51 @@ export default function ChannelsPage() {
         <OAuthCallbackToaster onConnected={() => void refetch()} />
       </Suspense>
 
+      {/* Floating bulk-action bar — only when something is selected */}
+      {selectedIds.size > 0 && (
+        <div className="fixed inset-x-0 bottom-6 z-50 flex justify-center px-4">
+          <div className="flex items-center gap-3 rounded-full border bg-background/95 px-4 py-2 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-background/80">
+            <span className="text-sm font-medium">
+              {selectedIds.size} selected
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={clearSelection}
+              disabled={bulkDisconnect.isPending}
+            >
+              Clear
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => setBulkDeleteOpen(true)}
+              disabled={bulkDisconnect.isPending}
+            >
+              <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+              Delete Selected
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Channels</h1>
           <p className="text-muted-foreground">
-            Connect and manage your social media accounts
+            Connect and manage the social media accounts in this workspace
           </p>
         </div>
         {totalChannels > 0 && (
           <div className="flex items-center gap-3">
-            <div className="text-right">
+            <div
+              className="text-right"
+              title="Counts reflect only the active workspace"
+            >
               <p className="text-2xl font-bold">{totalChannels}</p>
               <p className="text-xs text-muted-foreground">
-                {activeChannels} active
+                {activeChannels} active in this workspace
               </p>
             </div>
           </div>
@@ -454,13 +512,71 @@ export default function ChannelsPage() {
             ).length;
             const info = PLATFORM_DISPLAY[platform];
 
+            // Per-platform selection state for the select-all checkbox
+            const selectedInPlatform = platformChannels.filter((c: any) =>
+              selectedIds.has(c.id)
+            ).length;
+            const allSelected =
+              platformChannels.length > 0 &&
+              selectedInPlatform === platformChannels.length;
+            const someSelected =
+              selectedInPlatform > 0 && !allSelected;
+
+            const toggleSelectAllInPlatform = () => {
+              setSelectedIds((prev) => {
+                const next = new Set(prev);
+                if (allSelected) {
+                  // Deselect all in this platform
+                  for (const c of platformChannels) next.delete((c as any).id);
+                } else {
+                  // Select all in this platform
+                  for (const c of platformChannels) next.add((c as any).id);
+                }
+                return next;
+              });
+            };
+
             return (
               <Card key={platform} className="overflow-hidden">
-                {/* Accordion Header */}
-                <button
-                  onClick={() => toggleExpanded(platform)}
+                {/* Accordion Header — a div (not a button) so the select-all
+                    Checkbox and the Add button can nest without invalid
+                    button-in-button HTML. The icon/title region carries the
+                    expand/collapse click + keyboard handlers. */}
+                <div
                   className="flex w-full items-center gap-4 p-4 text-left transition-colors hover:bg-muted/50"
                 >
+                  {/* Select-all-in-platform checkbox — sibling of the toggle
+                      region, never a descendant of a button */}
+                  <Checkbox
+                    checked={allSelected}
+                    onCheckedChange={toggleSelectAllInPlatform}
+                    className={`shrink-0 ${
+                      someSelected
+                        ? "border-primary bg-primary/40 text-primary-foreground"
+                        : ""
+                    }`}
+                    aria-label={`Select all ${info?.name ?? platform} channels`}
+                    title={
+                      allSelected
+                        ? "Deselect all"
+                        : someSelected
+                        ? "Select all (some selected)"
+                        : "Select all"
+                    }
+                  />
+
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => toggleExpanded(platform)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        toggleExpanded(platform);
+                      }
+                    }}
+                    className="flex min-w-0 flex-1 items-center gap-4 text-left"
+                  >
                   <PlatformIcon platform={platform} size="lg" />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
@@ -486,27 +602,25 @@ export default function ChannelsPage() {
                     </p>
                   </div>
 
-                  {/* Add More Button */}
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="mr-2 shrink-0"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleConnect(platform);
-                    }}
-                  >
-                    <Plus className="mr-1 h-3.5 w-3.5" />
-                    Add
-                  </Button>
-
-                  {/* Expand/Collapse Icon */}
+                  {/* Expand/Collapse Icon (inside the clickable toggle region) */}
                   {isExpanded ? (
                     <ChevronDown className="h-5 w-5 shrink-0 text-muted-foreground" />
                   ) : (
                     <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground" />
                   )}
-                </button>
+                  </div>
+
+                  {/* Add More Button — sibling of the toggle region */}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mr-2 shrink-0"
+                    onClick={() => handleConnect(platform)}
+                  >
+                    <Plus className="mr-1 h-3.5 w-3.5" />
+                    Add
+                  </Button>
+                </div>
 
                 {/* Accordion Content — Channel List */}
                 {isExpanded && (
@@ -518,6 +632,14 @@ export default function ChannelsPage() {
                           idx < platformChannels.length - 1 ? "border-b" : ""
                         }`}
                       >
+                        {/* Select checkbox */}
+                        <Checkbox
+                          checked={selectedIds.has(channel.id)}
+                          onCheckedChange={() => toggleSelected(channel.id)}
+                          className="shrink-0"
+                          aria-label={`Select ${channel.name}`}
+                        />
+
                         {/* Avatar */}
                         {channel.avatar ? (
                           <img
@@ -1038,6 +1160,51 @@ export default function ChannelsPage() {
               </DialogFooter>
             </>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Bulk-delete confirm dialog ─────────────────────────────────── */}
+      <Dialog
+        open={bulkDeleteOpen}
+        onOpenChange={(open) => {
+          if (!bulkDisconnect.isPending) setBulkDeleteOpen(open);
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-destructive" />
+              Delete {selectedIds.size} channel
+              {selectedIds.size === 1 ? "" : "(s)"}?
+            </DialogTitle>
+            <DialogDescription>
+              This cannot be undone. The selected channels will be disconnected
+              and removed from this workspace.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setBulkDeleteOpen(false)}
+              disabled={bulkDisconnect.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() =>
+                bulkDisconnect.mutate({ channelIds: [...selectedIds] })
+              }
+              disabled={bulkDisconnect.isPending}
+            >
+              {bulkDisconnect.isPending ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Trash2 className="mr-2 h-4 w-4" />
+              )}
+              Delete
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
