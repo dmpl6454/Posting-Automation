@@ -5,7 +5,7 @@ import type { Adapter } from "next-auth/adapters";
 import GoogleProvider from "next-auth/providers/google";
 import CredentialsProvider from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
-import { getPreauthOrgData } from "@postautomation/db";
+import { ensurePersonalOrg } from "@postautomation/db";
 
 // Wrap PrismaAdapter to skip createUser/createSession for credentials provider
 // This is required because NextAuth v5 beta + PrismaAdapter tries to create
@@ -205,31 +205,10 @@ export const authConfig: NextAuthConfig = {
       const userEmail = user.email;
       if (!userId || !userEmail) return;
 
-      // Guard: skip if they somehow already have a membership (shouldn't happen, but be safe)
-      const existing = await prisma.organizationMember.findFirst({
-        where: { userId },
-      });
-      if (existing) return;
-
-      const slug = (userEmail.split("@")[0] ?? userEmail)
-        .toLowerCase()
-        .replace(/[^a-z0-9-]/g, "-");
-      const displayName = user.name || slug;
-
-      const preauthData = getPreauthOrgData(userEmail);
-      await prisma.organization.create({
-        data: {
-          name: `${displayName}'s Workspace`,
-          slug: `${slug}-${Date.now().toString(36)}`,
-          ...(preauthData ?? {}),
-          members: {
-            create: {
-              userId,
-              role: "OWNER",
-            },
-          },
-        },
-      });
+      // S2: idempotent single-org provisioning. If this person already OWNs an
+      // org (e.g. they registered with credentials first, same email), reuse it
+      // instead of minting a duplicate personal org.
+      await ensurePersonalOrg(prisma, userId, userEmail);
     },
   },
   trustHost: true,

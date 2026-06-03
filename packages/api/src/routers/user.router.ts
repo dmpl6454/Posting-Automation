@@ -12,6 +12,13 @@ export const userRouter = createRouter({
       include: {
         memberships: {
           include: { organization: true },
+          // S1: deterministic ordering so memberships[0] (the OrgSwitcher's
+          // default) matches the server-side fallback in trpc.ts (orgProcedure)
+          // and org.router (current). MemberRole is a Postgres enum, so role asc
+          // sorts by declaration order (OWNER < ADMIN < MEMBER), preferring the
+          // owned org; createdAt asc breaks ties to the oldest membership.
+          // MUST stay identical to trpc.ts and org.router.
+          orderBy: [{ role: "asc" }, { createdAt: "asc" }],
         },
       },
     });

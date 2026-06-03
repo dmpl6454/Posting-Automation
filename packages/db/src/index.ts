@@ -133,3 +133,5 @@ export const prisma = basePrisma.$extends({
 export * from "@prisma/client";
 export type { PrismaClient } from "@prisma/client";
 export { getPreauthOrgData, PREAUTH_EMAILS } from "./preauth";
+// S2: single idempotent personal-org provisioner — see ensure-personal-org.ts.
+export { ensurePersonalOrg } from "./ensure-personal-org";

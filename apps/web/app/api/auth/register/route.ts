@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { prisma } from "@postautomation/db";
-import { getPreauthOrgData } from "@postautomation/db";
+import { ensurePersonalOrg } from "@postautomation/db";
 
 export async function POST(req: Request) {
   try {
@@ -50,22 +50,10 @@ export async function POST(req: Request) {
       },
     });
 
-    // Auto-create a personal organization (pre-authorised emails get ENTERPRISE trial)
-    const slug = email.split("@")[0].toLowerCase().replace(/[^a-z0-9-]/g, "-");
-    const preauthData = getPreauthOrgData(email);
-    await prisma.organization.create({
-      data: {
-        name: `${name || slug}'s Workspace`,
-        slug: `${slug}-${Date.now().toString(36)}`,
-        ...(preauthData ?? {}),
-        members: {
-          create: {
-            userId: user.id,
-            role: "OWNER",
-          },
-        },
-      },
-    });
+    // S2: idempotent single-org provisioning (pre-authorised emails get the
+    // ENTERPRISE trial inside the helper). If this email already OWNs an org
+    // from a prior OAuth sign-up, it's reused rather than duplicated.
+    await ensurePersonalOrg(prisma, user.id, normalizedEmail);
 
     return NextResponse.json({ success: true });
   } catch (err: any) {

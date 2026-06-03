@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@postautomation/db";
+import { prisma, encryptToken } from "@postautomation/db";
 import { getSocialProvider, FacebookProvider, InstagramProvider, LinkedInProvider, verifyState } from "@postautomation/social";
 import { auth } from "~/lib/auth";
 
@@ -216,7 +216,11 @@ export async function GET(
               name: page.name,
               avatar: page.avatar || null,
               isActive: true,
-              metadata: { pageId: page.id, userAccessToken: tokens.accessToken },
+              // SECURITY: encrypt the long-lived user token at rest in metadata
+              // (the accessToken column is encrypted via the Prisma extension; metadata is not).
+              // NOTE: userAccessToken is stored encrypted; any future reader MUST decryptToken()
+              // it before use. It is currently written here but read nowhere.
+              metadata: { pageId: page.id, userAccessToken: encryptToken(tokens.accessToken) },
             },
             create: {
               organizationId,
@@ -228,7 +232,11 @@ export async function GET(
               refreshToken: page.accessToken,
               tokenExpiresAt: null,
               scopes: tokens.scopes || [],
-              metadata: { pageId: page.id, userAccessToken: tokens.accessToken },
+              // SECURITY: encrypt the long-lived user token at rest in metadata
+              // (the accessToken column is encrypted via the Prisma extension; metadata is not).
+              // NOTE: userAccessToken is stored encrypted; any future reader MUST decryptToken()
+              // it before use. It is currently written here but read nowhere.
+              metadata: { pageId: page.id, userAccessToken: encryptToken(tokens.accessToken) },
             },
           });
         }

@@ -2,7 +2,7 @@ import { initTRPC, TRPCError } from "@trpc/server";
 import type { Session } from "next-auth";
 import superjson from "superjson";
 import { ZodError } from "zod";
-import { prisma } from "@postautomation/db";
+import { prisma, ensurePersonalOrg } from "@postautomation/db";
 import { jwtVerify } from "jose";
 
 export interface TRPCContext {
@@ -120,27 +120,22 @@ export const orgProcedure = protectedProcedure.use(async ({ ctx, next }) => {
   if (!organizationId) {
     const existingMembership = await ctx.prisma.organizationMember.findFirst({
       where: { userId },
+      // S1: deterministic fallback org. MemberRole is a Postgres enum, so
+      // role asc sorts by declaration order (OWNER < ADMIN < MEMBER), preferring
+      // the owned org; createdAt asc breaks ties to the oldest membership.
+      // MUST stay identical to user.router (me) and org.router (current).
+      orderBy: [{ role: "asc" }, { createdAt: "asc" }],
       select: { organizationId: true },
     });
 
     if (existingMembership) {
       organizationId = existingMembership.organizationId;
     } else {
-      // Auto-create a default organization for the user
+      // S2: idempotent single-org provisioning — reuse an existing personal org
+      // (same userId) instead of minting a duplicate. Shares the deterministic
+      // selection used by the fallback above so we converge on one org.
       const userEmail = (ctx.session.user as any).email || "user";
-      const orgName = `${userEmail.split("@")[0]}'s Workspace`;
-      const org = await ctx.prisma.organization.create({
-        data: {
-          name: orgName,
-          slug: `org-${userId.slice(0, 8)}-${Date.now()}`,
-          members: {
-            create: {
-              userId,
-              role: "OWNER",
-            },
-          },
-        },
-      });
+      const org = await ensurePersonalOrg(ctx.prisma, userId, userEmail);
       organizationId = org.id;
     }
   }
@@ -154,8 +149,10 @@ export const orgProcedure = protectedProcedure.use(async ({ ctx, next }) => {
     },
   });
 
-  // superadmins can access any org even without explicit membership
-  if (!membership && !isSuperAdmin) {
+  // Hard org isolation: a real membership is required for every actor — superadmin
+  // does NOT bypass membership here (plan/billing exemptions are preserved below via
+  // isSuperAdmin in ctx). superAdminProcedure / /admin routers are unaffected.
+  if (!membership) {
     throw new TRPCError({ code: "FORBIDDEN", message: "Not a member of this organization" });
   }
 
@@ -187,7 +184,10 @@ export const orgProcedure = protectedProcedure.use(async ({ ctx, next }) => {
     ctx: {
       ...ctx,
       organizationId,
-      membership: membership ?? { role: "OWNER" } as any, // superadmin gets implicit OWNER
+      // Hard isolation: membership is guaranteed non-null by the gate above (no
+      // superadmin implicit-OWNER carve-out). isSuperAdmin stays in ctx purely for
+      // the plan/usage-limit exemptions consumed by downstream middleware.
+      membership,
       isSuperAdmin,
     },
   });

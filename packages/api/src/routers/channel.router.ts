@@ -144,6 +144,27 @@ export const channelRouter = createRouter({
       // by an attacker, (b) the user completing the flow is the same user
       // who started it, and (c) the org binding hasn't been swapped.
       const userId = (ctx.session.user as any).id as string;
+
+      // SECURITY: pin the signed OAuth state to a *validated* membership.
+      // Defense-in-depth — orgProcedure already rejects non-members after the
+      // hard-isolation change, but connecting a channel writes a Channel row
+      // bound to ctx.organizationId, so we re-verify here with a connect-
+      // specific error. No superadmin carve-out (hard isolation, no
+      // connect-on-behalf): a superadmin may only connect channels for orgs
+      // they are a real member of.
+      const membership = await ctx.prisma.organizationMember.findUnique({
+        where: {
+          userId_organizationId: { userId, organizationId: ctx.organizationId },
+        },
+      });
+      if (!membership) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "You are not a member of this workspace; switch workspaces to connect a channel here.",
+        });
+      }
+
       const signedState = signState({
         organizationId: ctx.organizationId,
         userId,
