@@ -1,6 +1,19 @@
 {
   "$schema": "https://turbo.build/schema.json",
   "globalDependencies": ["**/.env.*local"],
+  "globalEnv": [
+    "NODE_ENV",
+    "DATABASE_URL",
+    "REDIS_URL",
+    "NEXTAUTH_SECRET",
+    "AUTH_SECRET",
+    "NEXTAUTH_URL",
+    "AUTH_URL",
+    "AUTH_TRUST_HOST",
+    "S3_*",
+    "AWS_*",
+    "SMTP_*"
+  ],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
@@ -8,7 +21,8 @@
     },
     "dev": {
       "cache": false,
-      "persistent": true
+      "persistent": true,
+      "passThroughEnv": ["*"]
     },
     "lint": {
       "dependsOn": ["^build"]
