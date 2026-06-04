@@ -51,9 +51,9 @@ export default function BillingPage() {
         <Info className="h-4 w-4" />
         <AlertTitle>How Billing works</AlertTitle>
         <AlertDescription>
-          Your subscription is managed through Stripe. Click "Manage Billing" to update your card,
-          change plans, or download invoices. Plan changes take effect immediately; downgrades are
-          prorated automatically.
+          {currentPlan?.stripeCustomerId
+            ? `Your subscription is managed through Stripe. Click "Manage Billing" to update your card, change plans, or download invoices. Plan changes take effect immediately; downgrades are prorated automatically.`
+            : `Your subscription is managed through Stripe. Choose a paid plan below to start a subscription. Once subscribed, a "Manage Billing" button will appear here to update your card, change plans, or download invoices.`}
         </AlertDescription>
       </Alert>
 
