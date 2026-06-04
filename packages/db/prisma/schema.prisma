@@ -1001,8 +1001,8 @@ model Campaign {
   description    String?        @db.Text
   status         CampaignStatus @default(DRAFT)
   hashtags       String[]
-  trackingUrls   String[]
-  targetChannels String[]       // Channel IDs
+  trackingUrls   String[]       @default([])
+  targetChannels String[]       @default([]) // Channel IDs
   budget         Float?
   currency       String         @default("USD")
   goalType       String?        // "awareness", "engagement", "traffic", "conversions"
