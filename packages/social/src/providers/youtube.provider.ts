@@ -340,7 +340,19 @@ export class YouTubeProvider extends SocialProvider {
       }
 
       if (chunkRes.status === 200 || chunkRes.status === 201) {
-        finalData = await chunkRes.json();
+        try {
+          finalData = await chunkRes.json();
+        } catch {
+          // Empty/truncated 2xx body — try to recover the video id from the
+          // Location header (?v=<id>) before giving up with a clear error.
+          const loc = chunkRes.headers.get("location") || "";
+          const vidMatch = loc.match(/[?&]v=([^&]+)/);
+          if (vidMatch?.[1]) {
+            finalData = { id: vidMatch[1] };
+          } else {
+            throw new Error("YouTube upload completed but returned no parseable body");
+          }
+        }
         break;
       }
 
