@@ -1,6 +1,8 @@
 "use client";
 
 import { trpc } from "~/lib/trpc/client";
+import { humanizeError } from "~/lib/errors";
+import { useToast } from "~/hooks/use-toast";
 import { Button } from "~/components/ui/button";
 import {
   Card,
@@ -22,6 +24,7 @@ import {
 } from "lucide-react";
 
 export default function AutopilotOverviewPage() {
+  const { toast } = useToast();
   const { data, isLoading } = trpc.autopilot.overview.useQuery();
   const utils = trpc.useUtils();
 
@@ -37,6 +40,15 @@ export default function AutopilotOverviewPage() {
     onSuccess: () => {
       utils.autopilot.overview.invalidate();
       utils.autopilot.pipelineRuns.invalidate();
+    },
+    // BUG-02: surface server errors (e.g. "No active agents configured…") that
+    // were previously swallowed, leaving the click with no visible feedback.
+    onError: (err) => {
+      toast({
+        title: "Could not run pipeline",
+        description: humanizeError(err),
+        variant: "destructive",
+      });
     },
   });
 
