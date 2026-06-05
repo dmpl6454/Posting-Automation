@@ -221,13 +221,23 @@ export function createTrendDiscoverWorker() {
         );
       }
 
-      // 5. Update PipelineRun with discovery count (and total so content-generate can mark COMPLETED)
+      // 5. Update PipelineRun with discovery count.
+      //
+      // NOTE: `totalItems` is NOT the discovered-item count. Most discovered
+      // items match zero agents (or hit per-agent daily quota), so only a
+      // subset become AutopilotPosts — and AutopilotPosts (not TrendingItems)
+      // are what the content-generate stage processes and counts toward
+      // completion. Setting totalItems = newItemIds.length here caused the run
+      // to hang in RUNNING forever whenever fewer posts were generated than
+      // items discovered (ADD-1). Instead, `itemsDiscovered` is the scoring
+      // denominator and trend-score accumulates the authoritative `totalItems`
+      // by incrementing it per AutopilotPost it creates.
       await prisma.pipelineRun.update({
         where: { id: pipelineRunId },
         data: {
           itemsDiscovered,
-          totalItems: newItemIds.length,
-          // If nothing was discovered, mark complete immediately
+          // If nothing was discovered, there is nothing to score or generate —
+          // mark the run complete immediately.
           ...(newItemIds.length === 0
             ? { status: "COMPLETED", completedAt: new Date() }
             : {}),

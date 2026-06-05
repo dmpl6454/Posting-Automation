@@ -174,13 +174,42 @@ export function createTrendScoreWorker() {
         },
       });
 
-      // 6. Update PipelineRun: increment itemsScored
-      await prisma.pipelineRun.update({
+      // 6. Update PipelineRun atomically:
+      //    - itemsScored += 1 (one more item finished scoring)
+      //    - totalItems  += matchCount (this item produced `matchCount`
+      //      AutopilotPosts, each of which becomes a content-generate job).
+      //      Accumulating here makes totalItems the true count of posts the
+      //      pipeline must generate, fixing the hang where totalItems was the
+      //      (larger) discovered-item count (ADD-1).
+      const run = await prisma.pipelineRun.update({
         where: { id: pipelineRunId },
         data: {
           itemsScored: { increment: 1 },
+          ...(matchCount > 0 ? { totalItems: { increment: matchCount } } : {}),
         },
       });
+
+      // 7. Settle the run once scoring is fully done (this was the last item).
+      //    Because trend-score jobs run concurrently and content-generate jobs
+      //    may finish before scoring does, content-generate must NOT mark the
+      //    run COMPLETED until scoring has finished (totalItems is final).
+      //    Here — the moment scoring completes — we close out the run if it is
+      //    already satisfiable:
+      //      a) nothing matched (totalItems === 0): complete immediately;
+      //      b) every matched post already generated/failed: complete now,
+      //         covering the race where the last generate finished first.
+      if (run.itemsScored >= run.itemsDiscovered && run.status === "RUNNING") {
+        const done = run.postsGenerated + run.postsFailed;
+        if (run.totalItems === 0 || done >= run.totalItems) {
+          await prisma.pipelineRun.update({
+            where: { id: pipelineRunId },
+            data: { status: "COMPLETED", completedAt: new Date() },
+          });
+          console.log(
+            `[TrendScore] Scoring complete; pipeline ${pipelineRunId} COMPLETED (${done}/${run.totalItems} posts)`,
+          );
+        }
+      }
 
       console.log(
         `[TrendScore] Done. Item ${trendingItemId} scored ${maxScore}, ${matchCount} agent matches`,

@@ -224,6 +224,7 @@ export function createContentGenerateWorker() {
           },
         });
 
+        let createdTargets = 0;
         for (const channel of channels) {
           // Autopilot generates still images only, never video. YouTube requires a
           // video file to publish, so an image-only YouTube target always fails at
@@ -241,6 +242,64 @@ export function createContentGenerateWorker() {
               status: "DRAFT",
             },
           });
+          createdTargets++;
+        }
+
+        // BUG-06: If every channel was skipped (e.g. a YouTube-only agent —
+        // autopilot can't post video), the post has zero PostTargets and can
+        // never publish. Don't leave a dangling "publishable" post: mark both
+        // the Post and the AutopilotPost FAILED with a clear reason, count it
+        // toward the run as a failure, and stop here so we don't queue a
+        // schedule job for an unpublishable post.
+        if (createdTargets === 0) {
+          const reason =
+            "No publishable channels: autopilot produces images, but the agent's only channels need video (e.g. YouTube). Add an image-capable channel or enable video generation.";
+          console.warn(
+            `[ContentGenerate] Agent ${agent.id} produced a post with no publishable channels; marking FAILED. ${reason}`,
+          );
+          await prisma.post.update({
+            where: { id: post.id },
+            data: { status: "FAILED" },
+          });
+          await prisma.autopilotPost.update({
+            where: { id: autopilotPostId },
+            data: {
+              status: "FAILED",
+              errorMessage: reason.slice(0, 2000),
+            },
+          });
+          // Count this item as failed so the run's completion math still
+          // reaches totalItems (ADD-1), then settle the run if appropriate.
+          try {
+            const updated = await prisma.pipelineRun.update({
+              where: { id: pipelineRunId },
+              data: { postsFailed: { increment: 1 } },
+            });
+            const done = updated.postsGenerated + updated.postsFailed;
+            const scoringDone = updated.itemsScored >= updated.itemsDiscovered;
+            if (
+              scoringDone &&
+              updated.totalItems > 0 &&
+              done >= updated.totalItems &&
+              updated.status === "RUNNING"
+            ) {
+              await prisma.pipelineRun.update({
+                where: { id: pipelineRunId },
+                data: { status: "COMPLETED", completedAt: new Date() },
+              });
+              console.log(
+                `[ContentGenerate] Pipeline ${pipelineRunId} COMPLETED (${done}/${updated.totalItems} items)`,
+              );
+            }
+          } catch {}
+
+          return {
+            postId: post.id,
+            autopilotPostId,
+            status: "FAILED",
+            channelCount: 0,
+            reason,
+          };
         }
 
         // 11. Determine review status
@@ -286,7 +345,19 @@ export function createContentGenerateWorker() {
             },
           });
           const done = updated.postsGenerated + updated.postsFailed;
-          if (updated.totalItems > 0 && done >= updated.totalItems && updated.status === "RUNNING") {
+          // Only complete once scoring has finished (itemsScored >=
+          // itemsDiscovered) so totalItems is final — trend-score accumulates
+          // totalItems as it matches items, so completing on a partial total
+          // would close the run early (ADD-1). If a generate job finishes after
+          // scoring is already done, this closes the run; otherwise the last
+          // trend-score job closes it.
+          const scoringDone = updated.itemsScored >= updated.itemsDiscovered;
+          if (
+            scoringDone &&
+            updated.totalItems > 0 &&
+            done >= updated.totalItems &&
+            updated.status === "RUNNING"
+          ) {
             await prisma.pipelineRun.update({
               where: { id: pipelineRunId },
               data: { status: "COMPLETED", completedAt: new Date() },
@@ -328,7 +399,15 @@ export function createContentGenerateWorker() {
               data: { postsFailed: { increment: 1 } },
             });
             const done = updated.postsGenerated + updated.postsFailed;
-            if (updated.totalItems > 0 && done >= updated.totalItems && updated.status === "RUNNING") {
+            // See success-path note: gate completion on scoring being finished
+            // so totalItems is final before we close the run (ADD-1).
+            const scoringDone = updated.itemsScored >= updated.itemsDiscovered;
+            if (
+              scoringDone &&
+              updated.totalItems > 0 &&
+              done >= updated.totalItems &&
+              updated.status === "RUNNING"
+            ) {
               await prisma.pipelineRun.update({
                 where: { id: pipelineRunId },
                 data: { status: "COMPLETED", completedAt: new Date() },
