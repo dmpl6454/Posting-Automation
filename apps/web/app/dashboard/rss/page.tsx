@@ -73,6 +73,12 @@ export default function RssPage() {
 
   const checkNow = trpc.rss.checkNow.useMutation({
     onSuccess: () => {
+      refetch();
+      // The check is async (worker pulls entries after the mutation returns),
+      // so refetch again shortly to surface the new entry count / "Checked" time.
+      setTimeout(() => {
+        refetch();
+      }, 3000);
       toast({ title: "Sync started", description: "RSS feed check has been queued." });
     },
     onError: () => {
