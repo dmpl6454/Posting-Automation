@@ -47,6 +47,16 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(new URL("/dashboard", request.url));
   }
 
+  // BUG-15: redirect UNAUTHENTICATED users away from the app shell to /login.
+  // tRPC already authorizes data server-side, but without this the dashboard
+  // shell still rendered (HTTP 200) for anonymous visitors. Preserve the
+  // originally-requested path as ?callbackUrl so login can bounce back.
+  if (!isAuthenticated && pathname.startsWith("/dashboard")) {
+    const loginUrl = new URL("/login", request.url);
+    loginUrl.searchParams.set("callbackUrl", pathname + request.nextUrl.search);
+    return NextResponse.redirect(loginUrl);
+  }
+
   // Admin route guard — uses custom admin JWT cookie (bypasses NextAuth)
   if (pathname.startsWith("/admin") && pathname !== "/admin/login") {
     const admin = await verifyAdminToken(request);
