@@ -111,7 +111,7 @@ export function MediaPickerDialog({
                 ? `No results for "${deferredSearch}"`
                 : `No ${mediaType === "all" ? "media" : mediaType + "s"} in your library yet.`}
             </p>
-            {deferredSearch && (
+            {deferredSearch ? (
               <Button
                 variant="ghost"
                 size="sm"
@@ -120,6 +120,23 @@ export function MediaPickerDialog({
               >
                 Clear search
               </Button>
+            ) : (
+              // ADD-2: an empty library was a dead end (icon + text, no action).
+              // Point users to the Media Library where they can upload, instead
+              // of leaving them stuck in the picker.
+              <>
+                <p className="mt-1 text-xs text-muted-foreground/70">
+                  Upload files in the Media Library, then pick them here.
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-3"
+                  onClick={() => window.open("/dashboard/media", "_blank", "noopener")}
+                >
+                  Go to Media Library
+                </Button>
+              </>
             )}
           </div>
         ) : (
