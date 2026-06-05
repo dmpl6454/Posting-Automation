@@ -42,12 +42,13 @@ type PostRow = {
 
 export default function AdminPostsPage() {
   const { toast } = useToast();
-  const [status, setStatus] = useState<string>("");
-  const [organizationId, setOrganizationId] = useState<string>("");
+  const [status, setStatus] = useState<string>("all");
+  const [organizationId, setOrganizationId] = useState<string>("all");
 
   const { data, isLoading, refetch } = trpc.admin.posts.list.useQuery({
-    status: (status as (typeof STATUSES)[number]) || undefined,
-    organizationId: organizationId || undefined,
+    status:
+      status === "all" ? undefined : (status as (typeof STATUSES)[number]),
+    organizationId: organizationId === "all" ? undefined : organizationId,
     limit: 50,
   });
 
@@ -151,7 +152,7 @@ export default function AdminPostsPage() {
             <SelectValue placeholder="All statuses" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="">All statuses</SelectItem>
+            <SelectItem value="all">All statuses</SelectItem>
             {STATUSES.map((s) => (
               <SelectItem key={s} value={s}>
                 {s}
@@ -165,7 +166,7 @@ export default function AdminPostsPage() {
             <SelectValue placeholder="All organizations" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="">All organizations</SelectItem>
+            <SelectItem value="all">All organizations</SelectItem>
             {/* Unique orgs from current data */}
             {data?.items
               ?.reduce<Array<{ id: string; name: string }>>((acc, post) => {
