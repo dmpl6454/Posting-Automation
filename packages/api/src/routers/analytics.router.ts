@@ -218,32 +218,50 @@ export const analyticsRouter = createRouter({
       })
     )
     .query(async ({ ctx, input }) => {
+      // BUG-09: normalise the window to whole days. Previously `from`/`to`
+      // carried a time-of-day (Date.now() - 30d … now), so the day-stepping
+      // loop below could finish just before `to` and drop TODAY's column
+      // (the tester saw the x-axis end before today). Anchor `from` to the
+      // start of its day and `to` to the END of today so the range is
+      // inclusive of the current day.
       const from = input.from ? new Date(input.from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
       const to = input.to ? new Date(input.to) : new Date();
+      from.setHours(0, 0, 0, 0);
+      to.setHours(23, 59, 59, 999);
 
       const posts = await ctx.prisma.post.findMany({
         where: {
           organizationId: ctx.organizationId,
           status: "PUBLISHED",
-          publishedAt: { gte: from, lte: to },
+          // A PUBLISHED post should always have publishedAt; fall back to
+          // updatedAt for older/lagged rows so they still appear on the chart.
+          OR: [
+            { publishedAt: { gte: from, lte: to } },
+            { publishedAt: null, updatedAt: { gte: from, lte: to } },
+          ],
         },
-        select: { publishedAt: true },
-        orderBy: { publishedAt: "asc" },
+        select: { publishedAt: true, updatedAt: true },
+        orderBy: { updatedAt: "asc" },
       });
 
       const grouped: Record<string, number> = {};
       for (const post of posts) {
-        if (!post.publishedAt) continue;
-        const day = post.publishedAt.toISOString().split("T")[0]!;
+        const when = post.publishedAt ?? post.updatedAt;
+        if (!when) continue;
+        const day = when.toISOString().split("T")[0]!;
         grouped[day] = (grouped[day] ?? 0) + 1;
       }
 
       const result: { date: string; posts: number }[] = [];
+      // Iterate by calendar day at noon UTC to avoid DST/time-of-day drift,
+      // up to and including today.
       const current = new Date(from);
-      while (current <= to) {
+      current.setUTCHours(12, 0, 0, 0);
+      const end = new Date(to);
+      while (current <= end) {
         const key = current.toISOString().split("T")[0]!;
         result.push({ date: key, posts: grouped[key] ?? 0 });
-        current.setDate(current.getDate() + 1);
+        current.setUTCDate(current.getUTCDate() + 1);
       }
       return result;
     }),
