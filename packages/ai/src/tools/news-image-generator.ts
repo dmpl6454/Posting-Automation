@@ -83,7 +83,20 @@ export async function generateStaticNewsCreativeImage(
   try {
     const page = await browser.newPage();
     await page.setViewport({ width: 1080, height: 1350 });
-    await page.setContent(html, { waitUntil: "networkidle0", timeout: 15000 });
+    // Use `load` (fires once inline images decode), NOT `networkidle0`: a large
+    // base64 data-URL background — e.g. a ~5MB gpt-image-1 photo — is inline,
+    // not a network request, so `networkidle0`'s quiet-network heuristic never
+    // settles and times out. If even `load` times out (very large bg), proceed
+    // to screenshot anyway — the DOM is already set, so we still get a render
+    // rather than failing the whole creative.
+    try {
+      await page.setContent(html, { waitUntil: "load", timeout: 30000 });
+    } catch (e) {
+      console.warn(`[news-creative] setContent wait timed out, screenshotting current state:`, (e as Error).message);
+      await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 5000 }).catch(() => {});
+    }
+    // Give the background image a moment to paint before capture.
+    await new Promise((r) => setTimeout(r, 400));
 
     const screenshotBuffer = await page.screenshot({
       type: "jpeg",

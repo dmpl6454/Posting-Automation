@@ -4,7 +4,8 @@ import { createRouter, protectedProcedure, orgProcedure } from "../trpc";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import crypto from "crypto";
 import { pushProgress, finishProgress } from "../lib/progress";
-import { toFriendlyAIError, isMissingAIKeyError } from "../lib/ai-errors";
+import { toFriendlyAIError, isMissingAIKeyError, friendlyAIMessage } from "../lib/ai-errors";
+import { requirePlan } from "../middleware/plan-limit.middleware";
 
 // S3 helpers
 function getS3Client(): S3Client {
@@ -69,7 +70,11 @@ export const repurposeRouter = createRouter({
         progressId: z.string().optional(),
         format: z.enum(["static", "carousel", "reel", "ai_video", "seedance_video"]),
         targetPlatforms: z.array(z.string()).min(1).max(16),
-        provider: z.enum(["openai", "anthropic", "gemini", "grok", "deepseek", "gemma4"]).default("gemini"),
+        // Default to OpenAI for TEXT generation: the Google-family providers
+        // (gemini/gemma4) share the project that is currently on a billing
+        // hold (403 "Lightning dunning"), which would kill caption generation
+        // before any media work. OpenAI is the verified-working default.
+        provider: z.enum(["openai", "anthropic", "gemini", "grok", "deepseek", "gemma4"]).default("openai"),
         channelName: z.string().optional().default(""),
         channelHandle: z.string().optional().default(""),
         logoUrl: z.string().optional().default(""),
@@ -81,18 +86,19 @@ export const repurposeRouter = createRouter({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      // Seedance & AI video are Pro/Enterprise only
+      // Seedance & AI video are Pro/Enterprise only. Use the shared plan helper
+      // so superadmins (ctx.isSuperAdmin) bypass the gate — matching every
+      // other plan gate in the codebase. The previous hand-rolled
+      // `org.plan === "FREE"||"STARTER"` check was the SOLE gate that ignored
+      // isSuperAdmin, which wrongly blocked tabish@dashmani.com (a superadmin
+      // whose personal org is on FREE) from AI video.
       if (input.format === "seedance_video" || input.format === "ai_video") {
-        const org = await ctx.prisma.organization.findUniqueOrThrow({
-          where: { id: ctx.organizationId },
-          select: { plan: true },
-        });
-        if (org.plan === "FREE" || org.plan === "STARTER") {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "AI video generation is available on Professional and Enterprise plans. Please upgrade to access this feature.",
-          });
-        }
+        await requirePlan(
+          ctx.organizationId,
+          "PROFESSIONAL",
+          "AI video generation",
+          ctx.isSuperAdmin,
+        );
       }
 
       const {
@@ -110,10 +116,40 @@ export const repurposeRouter = createRouter({
         generateSeedanceVideo,
         buildSeedancePrompt,
         overlayLogoOnImage,
+        generateStaticNewsCreativeImage,
+        extractDominantColor,
       } = await import("@postautomation/ai");
 
       const userId = (ctx.session.user as any).id as string;
       const organizationId = ctx.organizationId;
+
+      // Text-provider resilience: caption/brief generation is a hard
+      // requirement for the whole flow. If the chosen provider fails (e.g. the
+      // Google-family gemini/gemma4 providers share a billing-held project →
+      // 403), retry once with OpenAI before giving up. Mirrors the image
+      // fallback philosophy so a single provider outage never kills repurpose.
+      async function repurposeContentResilient(
+        args: Parameters<typeof repurposeContent>[0],
+      ): Promise<Awaited<ReturnType<typeof repurposeContent>>> {
+        try {
+          return await repurposeContent(args);
+        } catch (e) {
+          if (args.provider === "openai") throw e; // already on the fallback
+          console.warn(`[Repurpose] Caption gen via ${args.provider} failed (${(e as Error).message.slice(0, 80)}), retrying with OpenAI`);
+          return await repurposeContent({ ...args, provider: "openai" });
+        }
+      }
+      async function generateContentResilient(
+        args: Parameters<typeof generateContent>[0],
+      ): Promise<string> {
+        try {
+          return await generateContent(args);
+        } catch (e) {
+          if (args.provider === "openai") throw e;
+          console.warn(`[Repurpose] generateContent via ${args.provider} failed (${(e as Error).message.slice(0, 80)}), retrying with OpenAI`);
+          return await generateContent({ ...args, provider: "openai" });
+        }
+      }
 
       // Resolve logo: prefer input.logoUrl → DB media (category: "logo") → channel avatar
       let resolvedLogoUrl = input.logoUrl || "";
@@ -176,6 +212,73 @@ export const repurposeRouter = createRouter({
           console.warn(`[Repurpose] Logo overlay failed, using original:`, (e as Error).message);
           return { imageBase64, mimeType: imgMimeType };
         }
+      }
+
+      // Resolve a brand accent color from the logo once (reused by every
+      // headline creative). Falls back to the template default on failure.
+      let resolvedBrandColor: string | null = input.accentColor || null;
+      if (!resolvedBrandColor && resolvedLogoUrl) {
+        try {
+          resolvedBrandColor = await extractDominantColor(resolvedLogoUrl);
+          if (resolvedBrandColor) console.log(`[Repurpose] Brand color from logo: ${resolvedBrandColor}`);
+        } catch {
+          /* use template default */
+        }
+      }
+
+      // Map a content category to a news-card template style. Keeps the
+      // baked-headline creative on-brand per topic (the same renderer NewsGrid
+      // and the autopilot worker use).
+      function pickTemplate(category: string): "breaking_news" | "viral_entertainment" | "cinematic" | "luxury_news" | "magazine" {
+        const c = (category || "").toLowerCase();
+        if (c.includes("entertain") || c.includes("celebrit") || c.includes("bollywood") || c.includes("film")) return "viral_entertainment";
+        if (c.includes("politic") || c.includes("crime") || c.includes("breaking")) return "breaking_news";
+        if (c.includes("lifestyle") || c.includes("fashion") || c.includes("luxury")) return "luxury_news";
+        if (c.includes("business") || c.includes("tech")) return "magazine";
+        return "cinematic";
+      }
+
+      /**
+       * Build a branded "static news creative": deterministic headline text +
+       * logo/handle baked onto the image via the Puppeteer news-card template
+       * (matches the company's static-post format). The AI image is used only
+       * as the background photo. If AI background generation fails (e.g. the
+       * Google billing hold), the template still renders with a stock
+       * background — so a branded creative is ALWAYS produced, never nothing.
+       */
+      async function buildHeadlineCreative(
+        bgPrompt: string,
+        headline: string,
+        category: string,
+      ): Promise<{ imageBase64: string; mimeType: string; bgSource: "ai" | "stock" }> {
+        const template = pickTemplate(category);
+        // Try to generate a relevant AI background (no text — the template
+        // bakes the headline). generateImageSafe now has a working OpenAI
+        // fallback, so this succeeds even while Gemini billing is on hold.
+        let backgroundImageUrl: string | undefined;
+        let bgSource: "ai" | "stock" = "stock";
+        try {
+          const bg = await generateImageSafe({
+            prompt: `${bgPrompt}\n\nIMPORTANT: produce a clean BACKGROUND photo only — NO text, words, letters, numbers, logos, or watermarks. Dark/moody tones so white text overlaid on top stays readable.`,
+            aspectRatio: "3:4",
+            title: headline,
+            topic: category || "news",
+          });
+          backgroundImageUrl = `data:${bg.mimeType};base64,${bg.imageBase64}`;
+          bgSource = "ai";
+        } catch (e) {
+          console.warn(`[Repurpose] AI background failed, using stock template bg:`, (e as Error).message);
+        }
+        const creative = await generateStaticNewsCreativeImage({
+          headline,
+          channelName: displayName,
+          handle,
+          logoUrl: resolvedLogoUrl || null,
+          template,
+          ...(backgroundImageUrl ? { backgroundImageUrl } : {}),
+          ...(resolvedBrandColor ? { brandColor: resolvedBrandColor } : {}),
+        });
+        return { imageBase64: creative.imageBase64, mimeType: creative.mimeType, bgSource };
       }
 
       // Progress tracking — fire-and-forget, never blocks
@@ -265,7 +368,7 @@ Provide a JSON response:
 
 Return ONLY the JSON, no other text.`;
 
-        const briefResponse = await generateContent({
+        const briefResponse = await generateContentResilient({
           provider: input.provider,
           platform: "INSTAGRAM",
           userPrompt: understandPrompt,
@@ -300,16 +403,16 @@ KEYWORDS: ${(brief.keywords || []).join(", ")}`;
       const sourceText = `${contentBrief}\n\n---\n\nTitle: ${extracted.title}\n\n${extracted.body.slice(0, 5000)}`;
       let platformContent: Awaited<ReturnType<typeof repurposeContent>>;
       try {
-        platformContent = await repurposeContent({
+        platformContent = await repurposeContentResilient({
           originalContent: sourceText,
           targetPlatforms: input.targetPlatforms,
           provider: input.provider,
         });
       } catch (e) {
         // Core caption generation is required for the whole flow — if the AI
-        // provider isn't configured, fail with the friendly message rather
-        // than a raw 500 (ADD-5 / repurpose end-to-end).
-        progress("Generating captions", "error", (e as Error).message);
+        // provider isn't configured (even after the OpenAI fallback), fail
+        // with the friendly message rather than a raw 500 (ADD-5).
+        progress("Generating captions", "error", friendlyAIMessage(e));
         throw toFriendlyAIError(e);
       }
       progress("Generating captions for " + input.targetPlatforms.length + " platforms", "done", Object.keys(platformContent).join(", "));
@@ -322,92 +425,51 @@ KEYWORDS: ${(brief.keywords || []).join(", ")}`;
       const perPlatformMedia: Record<string, { url: string; mediaId: string }> = {};
 
       if (input.format === "static") {
-        // Generate a UNIQUE AI-designed creative per platform
+        // Build ONE branded headline creative (deterministic headline + logo/
+        // handle baked on via the news-card template — the company's static
+        // format) and reuse it for every selected platform. The format is
+        // identical per platform; only the caption text differs, so a single
+        // 1080×1350 render is correct and avoids N redundant Puppeteer passes.
         const contentSummary = extracted.body.slice(0, 600) || extracted.description || extracted.title;
+        const category = /CATEGORY:\s*([^\n]+)/i.exec(contentBrief)?.[1]?.trim() || extracted.type || "news";
 
-        const platformStyles: Record<string, string> = {
-          INSTAGRAM: "Instagram-style visual storytelling with bold typography, vibrant colors, cinematic imagery, 4:5 portrait, trendy design with gradients and modern aesthetics",
-          FACEBOOK: "Facebook news-style creative with professional layout, clean typography, engaging hero image, informative design that drives engagement and shares",
-          TWITTER: "Bold, attention-grabbing Twitter/X graphic with impactful headline, high-contrast design, minimal text, punchy visual that stops the scroll",
-          LINKEDIN: "Professional LinkedIn post design with corporate aesthetics, clean layout, business-focused imagery, subtle gradients, executive look and feel",
-          YOUTUBE: "YouTube thumbnail-style design with dramatic visuals, bold text overlay, high contrast colors, expressive imagery that makes people click",
-          TIKTOK: "TikTok-style vibrant creative with Gen-Z aesthetics, bold neon accents, dynamic layout, trendy and eye-catching mobile-first design",
-          THREADS: "Minimalist Threads-style design with clean typography, subtle aesthetics, modern and understated elegance, conversation-starting visual",
-          PINTEREST: "Pinterest-optimized pin design with beautiful imagery, aspirational aesthetics, elegant typography, lifestyle visual appeal",
-          REDDIT: "Informative infographic-style design with data-focused layout, clear hierarchy, educational visual that adds value to discussion",
-        };
-
-        const defaultStyle = "Professional social media creative with bold typography, modern design, vibrant colors, and engaging visual hierarchy";
-
-        // Generate one unique image per selected platform
-        for (const platform of input.targetPlatforms) {
-          const style = platformStyles[platform] || defaultStyle;
-          const imagePrompt = `Create a professional social media post image.
+        const bgPrompt = `Create a cinematic, high-quality BACKGROUND photo for a social post about:
 
 ${contentBrief}
 
 Topic: "${extracted.title}"
 Context: ${contentSummary.slice(0, 400)}
 
-Design style: ${style}
+Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g. "Imran Khan, Bollywood actor" → Bollywood/film imagery, NOT politics). Photorealistic or editorial illustration, dramatic lighting, strong mood, relevant to the topic.`;
 
-IMPORTANT: Use the SUBJECT and CONTEXT above to understand exactly who/what this is about.
-For example, if the subject is "Imran Khan, Bollywood actor" — show imagery related to Bollywood/movies, NOT politics.
-If the subject is "Imran Khan, former PM of Pakistan" — show imagery related to politics/cricket, NOT Bollywood.
+        try {
+          progress("Generating creative");
+          console.log(`[Repurpose] Building branded headline creative (category=${category})...`);
+          const creative = await buildHeadlineCreative(bgPrompt, extracted.title, category);
 
-Requirements:
-- Visually stunning, premium quality design
-- Include headline text "${extracted.title.slice(0, 60)}" integrated into the design
-- Relevant visual imagery that ACCURATELY matches the topic and subject
-- Professional layout with strong visual hierarchy
-- Do NOT include any watermarks or stock photo marks
-- Do NOT include any hashtag text (no #word) in the image — hashtags belong in the caption
-- 4:5 portrait aspect ratio`;
-
-          try {
-            progress(`Generating image for ${platform}`);
-            console.log(`[Repurpose] Generating AI creative for ${platform}...`);
-            // Use generateImageSafe — auto-sanitizes the prompt on a
-            // safety block (Gemini's `IMAGE_OTHER` finishReason commonly
-            // fires for news content involving political figures or
-            // public personalities) and falls back to DALL-E 3 if Gemini
-            // refuses after sanitization. Returns the first success.
-            const aiResult = await generateImageSafe({
-              prompt: imagePrompt,
-              aspectRatio: "3:4",
-              title: extracted.title,
-              topic: extracted.siteName || extracted.type || "news",
-            });
-
-            if (aiResult.wasSanitized) {
-              console.log(`[Repurpose] ${platform}: image generated via fallback (source=${aiResult.source})`);
-            }
-
-            // Apply logo overlay
-            const branded = await applyLogoOverlay(aiResult.imageBase64, aiResult.mimeType, 1080, 1350);
-
-            const { url, mediaId } = await uploadAndCreateMedia(
-              branded.imageBase64,
-              branded.mimeType,
-              platform.toLowerCase(),
-            );
+          const { url, mediaId } = await uploadAndCreateMedia(
+            creative.imageBase64,
+            creative.mimeType,
+            "static",
+          );
+          mediaUrls.push(url);
+          mediaType = creative.mimeType.includes("png") ? "image/png" : "image/jpeg";
+          // Same creative for every platform (caption differs per platform).
+          for (const platform of input.targetPlatforms) {
             perPlatformMedia[platform] = { url, mediaId };
-            mediaUrls.push(url);
-            mediaType = aiResult.mimeType.includes("png") ? "image/png" : "image/jpeg";
-            const statusDetail = aiResult.wasSanitized
-              ? `Uploaded to S3 (via ${aiResult.source})`
-              : "Uploaded to S3";
-            progress(`Generating image for ${platform}`, "done", statusDetail);
-            console.log(`[Repurpose] ${platform} creative uploaded: ${url} (mediaId: ${mediaId}, source: ${aiResult.source})`);
-          } catch (e) {
-            // Friendly user-facing message — strip Google internal error codes
-            const raw = (e as Error).message;
-            const friendly = /IMAGE_OTHER|blocked|safety|policy/i.test(raw)
-              ? "All providers refused to generate this image (topic flagged by safety filters). Try a more general headline."
-              : raw;
-            progress(`Generating image for ${platform}`, "error", friendly);
-            console.warn(`[Repurpose] ${platform} AI image failed:`, raw);
           }
+          progress(
+            "Generating creative",
+            "done",
+            creative.bgSource === "ai" ? "Uploaded to S3" : "Uploaded to S3 (stock background — AI image unavailable)",
+          );
+          console.log(`[Repurpose] Static creative uploaded: ${url} (mediaId: ${mediaId}, bg: ${creative.bgSource})`);
+        } catch (e) {
+          // The template renderer itself failed (Puppeteer/asset issue). This
+          // is the genuine no-image case — surface it loudly (Fix 4) but with
+          // a sanitized message (no raw provider internals / project IDs).
+          progress("Generating creative", "error", friendlyAIMessage(e));
+          console.error(`[Repurpose] Static creative FAILED:`, (e as Error).message);
         }
       } else if (input.format === "ai_video") {
         // ── Veo3 Ultra AI Video Generation ─────────────────────────────
@@ -427,7 +489,7 @@ Return ONLY the JSON array, no other text.`;
         let keyPoints: string[] = [];
         progress("Extracting key points for video scenes");
         try {
-          const kpResponse = await generateContent({
+          const kpResponse = await generateContentResilient({
             provider: input.provider,
             platform: "INSTAGRAM",
             userPrompt: slidePrompt,
@@ -438,7 +500,7 @@ Return ONLY the JSON array, no other text.`;
           if (arrMatch) keyPoints = JSON.parse(arrMatch[0]);
           progress("Extracting key points for video scenes", "done", `${keyPoints.length} scenes`);
         } catch (e) {
-          progress("Extracting key points for video scenes", "error", (e as Error).message);
+          progress("Extracting key points for video scenes", "error", friendlyAIMessage(e));
           console.warn(`[Repurpose] Key point extraction failed:`, (e as Error).message);
         }
 
@@ -516,7 +578,7 @@ Return ONLY the JSON array, no other text.`;
           progress("Generating AI video with Veo3 Ultra (1-3 min)", "done", `${(videoBuf.length / 1024 / 1024).toFixed(1)}MB uploaded`);
           console.log(`[Repurpose] Veo3 video uploaded: ${videoUrl} (${(videoBuf.length / 1024 / 1024).toFixed(1)}MB)`);
         } catch (e) {
-          progress("Generating AI video with Veo3 Ultra (1-3 min)", "error", (e as Error).message);
+          progress("Generating AI video with Veo3 Ultra (1-3 min)", "error", friendlyAIMessage(e));
           progress("Falling back to slideshow reel");
           console.error(`[Repurpose] Veo3 generation failed, falling back to slideshow reel:`, (e as Error).message);
 
@@ -601,7 +663,7 @@ Return ONLY the JSON array, no other text.`;
 
         let keyPoints: string[] = [];
         try {
-          const kpResponse = await generateContent({
+          const kpResponse = await generateContentResilient({
             provider: input.provider,
             platform: "INSTAGRAM",
             userPrompt: slidePrompt,
@@ -612,7 +674,7 @@ Return ONLY the JSON array, no other text.`;
           if (arrMatch) keyPoints = JSON.parse(arrMatch[0]);
           progress("Extracting key points for video scenes", "done", `${keyPoints.length} scenes`);
         } catch (e) {
-          progress("Extracting key points for video scenes", "error", (e as Error).message);
+          progress("Extracting key points for video scenes", "error", friendlyAIMessage(e));
         }
 
         if (keyPoints.length === 0) {
@@ -665,7 +727,7 @@ Return ONLY the JSON array, no other text.`;
           progress("Generating AI video with Seedance 2.0 (30s-3min)", "done", `${(videoBuf.length / 1024 / 1024).toFixed(1)}MB uploaded`);
           console.log(`[Repurpose] Seedance video uploaded: ${videoUrl} (${(videoBuf.length / 1024 / 1024).toFixed(1)}MB)`);
         } catch (e) {
-          progress("Generating AI video with Seedance 2.0 (30s-3min)", "error", (e as Error).message);
+          progress("Generating AI video with Seedance 2.0 (30s-3min)", "error", friendlyAIMessage(e));
           console.error(`[Repurpose] Seedance generation failed:`, (e as Error).message);
           // No fallback — Seedance failure is final for this format
         }
@@ -686,7 +748,7 @@ Return ONLY the JSON array, no other text.`;
 
         let slideData: Array<{ title: string; body: string }> = [];
         try {
-          const slideResponse = await generateContent({
+          const slideResponse = await generateContentResilient({
             provider: input.provider,
             platform: "INSTAGRAM",
             userPrompt: slidePrompt,
@@ -790,6 +852,26 @@ Requirements:
           const batchEnd = Math.min(batchStart + BATCH_SIZE, slidePrompts.length);
           const batchPromises = slidePrompts.slice(batchStart, batchEnd).map(async (prompt, batchIdx) => {
             const slideIdx = batchStart + batchIdx;
+            const slideMeta = allSlides[slideIdx];
+            // COVER slide gets the deterministic headline creative (baked
+            // headline + logo/handle via the news-card template) so the
+            // carousel cover matches the company's static-post format and is
+            // resilient to the AI image being unavailable. Content/CTA slides
+            // keep the AI-image + logo-watermark path.
+            if (slideMeta?.type === "cover") {
+              try {
+                const category = /CATEGORY:\s*([^\n]+)/i.exec(contentBrief)?.[1]?.trim() || extracted.type || "news";
+                const cover = await buildHeadlineCreative(
+                  `Cinematic background photo for: "${slideMeta.title}". ${contentBrief}`,
+                  slideMeta.title,
+                  category,
+                );
+                return { slideIdx, imageBase64: cover.imageBase64, mimeType: cover.mimeType };
+              } catch (e) {
+                console.warn(`[Repurpose] Cover slide failed:`, (e as Error).message);
+                return null;
+              }
+            }
             // Retry up to 2 times per slide
             for (let attempt = 0; attempt < 3; attempt++) {
               try {
@@ -921,7 +1003,7 @@ Requirements:
             progress("Stitching reel video from slides", "done", "Video uploaded");
             console.log(`[Repurpose] Reel video uploaded: ${mediaUrls[0]}`);
           } catch (e) {
-            progress("Stitching reel video from slides", "error", (e as Error).message);
+            progress("Stitching reel video from slides", "error", friendlyAIMessage(e));
             console.warn(`[Repurpose] Reel generation failed, falling back to carousel:`, (e as Error).message);
             mediaUrls = uploadedUrls;
           }
@@ -930,7 +1012,21 @@ Requirements:
         }
       }
 
-      if (pid) finishProgress(pid, "done", `${Object.keys(platformContent).length} captions, ${mediaUrls.length} media`).catch(() => {});
+      // Fail loudly (Fix 4): every format is expected to produce at least one
+      // media asset. If captions generated but ALL media generation failed,
+      // do NOT report a false success — the previous behaviour returned an
+      // empty mediaUrls with a green "done" status, so the UI silently showed
+      // captions and nothing else. Surface it as a real failure instead.
+      const mediaFailed = mediaUrls.length === 0;
+      if (pid) {
+        finishProgress(
+          pid,
+          mediaFailed ? "error" : "done",
+          mediaFailed
+            ? `Captions generated, but ${input.format} media could not be produced — check the activity log above for the provider error.`
+            : `${Object.keys(platformContent).length} captions, ${mediaUrls.length} media`,
+        ).catch(() => {});
+      }
 
       return {
         extracted: {
@@ -946,6 +1042,8 @@ Requirements:
         mediaMap: perPlatformMedia,
         mediaType,
         format: input.format,
+        // Truthful signal for the UI: captions exist but no media was produced.
+        mediaFailed,
       };
     }),
 });
