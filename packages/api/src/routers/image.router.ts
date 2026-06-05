@@ -12,6 +12,7 @@ import { aiRateLimiter } from "../middleware/rate-limit";
 import { uploadBase64ToS3 } from "../lib/s3";
 import { mediaProcessQueue } from "@postautomation/queue";
 import { enforcePlanLimit } from "../middleware/plan-limit.middleware";
+import { toFriendlyAIError } from "../lib/ai-errors";
 
 const aiRateLimited = orgProcedure.use(createRateLimitMiddleware(aiRateLimiter));
 
@@ -94,10 +95,10 @@ export const imageRouter = createRouter({
         };
       } catch (error: any) {
         console.error("[image.generate] Error:", error.message || error);
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: error.message || "Failed to generate image",
-        });
+        // ADD-5: missing-key errors → friendly "AI Provider Not Configured"
+        // (PRECONDITION_FAILED); other errors keep their message. Existing
+        // TRPCErrors (e.g. the DALL-E edit BAD_REQUEST) pass through untouched.
+        throw toFriendlyAIError(error);
       }
     }),
 
@@ -144,11 +145,9 @@ export const imageRouter = createRouter({
           description: result.text,
         };
       } catch (error: any) {
-        if (error instanceof TRPCError) throw error;
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: error.message || "Failed to edit image",
-        });
+        // toFriendlyAIError re-throws existing TRPCErrors untouched and maps
+        // missing-key errors to a friendly PRECONDITION_FAILED (ADD-5).
+        throw toFriendlyAIError(error);
       }
     }),
 
