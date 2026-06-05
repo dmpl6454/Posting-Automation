@@ -25,6 +25,8 @@ const gitInfo = getGitInfo();
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // BUG-17: stop advertising the framework via the X-Powered-By: Next.js header.
+  poweredByHeader: false,
   env: {
     NEXT_PUBLIC_APP_VERSION: gitInfo.version,
     NEXT_PUBLIC_COMMIT_HASH: gitInfo.commitHash,
