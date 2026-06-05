@@ -54,6 +54,8 @@ async function fetchGoogleNews(keyword: string, lang: string): Promise<RawMentio
         authorAvatar: null,
         content: title,
         mentionedAt: pubDate ? new Date(pubDate) : new Date(),
+        // Google News RSS carries no audience or interaction metrics — reach
+        // and engagements are inherently unavailable for this source.
         reach: 0,
         engagements: 0,
       });
@@ -195,6 +197,9 @@ async function fetchFacebookMentions(keyword: string, organizationId: string): P
             authorAvatar: null,
             content: post.message.slice(0, 500),
             mentionedAt: new Date(post.created_time),
+            // reach (impressions) is not exposed by the Graph /search endpoint;
+            // it requires per-post Insights with the page token. Documented
+            // limitation, not a missing-data bug — engagements ARE populated.
             reach: 0,
             engagements: (post.reactions?.summary?.total_count || 0) + (post.comments?.summary?.total_count || 0) + (post.shares?.count || 0),
             metadata: { platform: "facebook" },
@@ -246,6 +251,10 @@ async function fetchInstagramMentions(keyword: string, organizationId: string): 
             authorAvatar: null,
             content: post.caption.slice(0, 500),
             mentionedAt: new Date(post.timestamp),
+            // reach/impressions need the IG Insights endpoint (permission-gated
+            // and only for the account's own media, not hashtag search results),
+            // so it stays 0 as a documented limitation — engagements (likes +
+            // comments) ARE populated from the available fields.
             reach: 0,
             engagements: (post.like_count || 0) + (post.comments_count || 0),
             metadata: { platform: "instagram", mediaUrl: post.media_url },
@@ -289,6 +298,36 @@ async function fetchLinkedInMentions(keyword: string, organizationId: string): P
           const text = post.commentary || post.content?.article?.description || "";
           if (!text.toLowerCase().includes(keyword.toLowerCase())) continue;
 
+          // BUG-10: the /rest/posts response carries no engagement counts
+          // inline — LinkedIn exposes them via a separate socialActions lookup
+          // keyed by the post URN. Enrich best-effort; if the call fails or the
+          // scope isn't granted, degrade to 0 rather than block the mention.
+          let engagements = 0;
+          if (post.id) {
+            try {
+              const urn = encodeURIComponent(post.id);
+              const saRes = await fetch(
+                `https://api.linkedin.com/rest/socialActions/${urn}`,
+                {
+                  headers: {
+                    Authorization: `Bearer ${channel.accessToken}`,
+                    "LinkedIn-Version": "202401",
+                    "X-Restli-Protocol-Version": "2.0.0",
+                  },
+                  signal: AbortSignal.timeout(10_000),
+                },
+              );
+              if (saRes.ok) {
+                const sa = (await saRes.json()) as any;
+                const likes = sa.likesSummary?.totalLikes ?? sa.likesSummary?.aggregatedTotalLikes ?? 0;
+                const comments = sa.commentsSummary?.aggregatedTotalComments ?? sa.commentsSummary?.totalFirstLevelComments ?? 0;
+                engagements = (likes || 0) + (comments || 0);
+              }
+            } catch {
+              // socialActions unavailable — leave engagements at 0.
+            }
+          }
+
           mentions.push({
             source: "LINKEDIN",
             sourceUrl: null,
@@ -297,8 +336,11 @@ async function fetchLinkedInMentions(keyword: string, organizationId: string): P
             authorAvatar: null,
             content: text.slice(0, 500),
             mentionedAt: new Date(post.createdAt || Date.now()),
+            // reach (impressions) requires the organizationalEntityShareStatistics
+            // API + r_organization_social scope; not fetched here, so it stays 0
+            // as a documented limitation rather than a fabricated value.
             reach: 0,
-            engagements: 0,
+            engagements,
             metadata: { platform: "linkedin", postUrn: post.id },
           });
         }
