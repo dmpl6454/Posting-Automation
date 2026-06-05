@@ -82,16 +82,19 @@ export function ActivityPanel() {
     return () => clearInterval(id);
   }, []);
 
-  // Fetch notifications as activity items
+  // Fetch notifications as activity items.
+  // ADD-7: this panel already refetches on SSE push (see effect below), so
+  // polling is only a fallback — widened 10s→60s to cut redundant traffic.
   const { data, isLoading, refetch } = trpc.notification.list.useQuery(
     { limit: 30 },
-    { refetchInterval: 10_000 }
+    { refetchInterval: 60_000 }
   );
 
-  // Also fetch recent post targets for publish status
+  // Also fetch recent post targets for publish status.
+  // ADD-7: widened 15s→60s (SSE drives the real-time updates).
   const postActivity = trpc.post.recentActivity.useQuery(
     { limit: 20 },
-    { refetchInterval: 15_000 }
+    { refetchInterval: 60_000 }
   );
 
   // Listen for SSE events to trigger refetch

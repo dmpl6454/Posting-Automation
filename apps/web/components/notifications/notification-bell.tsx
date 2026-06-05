@@ -34,9 +34,10 @@ export function NotificationBell() {
   const router = useRouter();
   const utils = trpc.useUtils();
 
+  // ADD-7: unread-count poll widened 30s→60s to reduce background traffic.
   const { data: unreadData } = trpc.notification.unreadCount.useQuery(
     undefined,
-    { refetchInterval: 30000 }
+    { refetchInterval: 60_000 }
   );
 
   const { data: listData, isLoading } = trpc.notification.list.useQuery({
