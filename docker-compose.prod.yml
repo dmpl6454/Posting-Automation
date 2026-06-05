@@ -90,6 +90,16 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.web
+      # BUG-14: pass git metadata into the build so the Versions page shows a
+      # real commit/version instead of "unknown" / "1.0.0-dev". The Alpine
+      # build image has no `git` binary, so next.config.mjs can't shell out —
+      # deploy.sh exports these vars and compose interpolates them here.
+      args:
+        COMMIT_HASH: ${COMMIT_HASH:-unknown}
+        COMMIT_DATE: ${COMMIT_DATE:-}
+        BRANCH: ${BRANCH:-main}
+        COMMIT_MSG: ${COMMIT_MSG:-}
+        APP_VERSION: ${APP_VERSION:-}
     restart: unless-stopped
     expose:
       - "3000"

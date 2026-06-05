@@ -23,6 +23,21 @@ RUN pnpm install --frozen-lockfile
 # Copy source code
 COPY . .
 
+# BUG-14: deploy git metadata. The Alpine build image has no `git`, so
+# next.config.mjs's git shell-out fails and falls back to "unknown"/"1.0.0-dev".
+# deploy.sh / compose pass these as build args; we surface them as build-time
+# NEXT_PUBLIC_* env so next.config.mjs reads real values (see getGitInfo()).
+ARG COMMIT_HASH=unknown
+ARG COMMIT_DATE=
+ARG BRANCH=main
+ARG COMMIT_MSG=
+ARG APP_VERSION=
+ENV BUILD_COMMIT_HASH=${COMMIT_HASH}
+ENV BUILD_COMMIT_DATE=${COMMIT_DATE}
+ENV BUILD_BRANCH=${BRANCH}
+ENV BUILD_COMMIT_MSG=${COMMIT_MSG}
+ENV BUILD_APP_VERSION=${APP_VERSION}
+
 # Generate Prisma client and build
 # Placeholder env vars satisfy module-load-time validation (e.g., PrismaClient constructor,
 # NextAuth provider init). Real values are injected at container runtime via docker-compose.
