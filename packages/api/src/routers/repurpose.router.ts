@@ -4,7 +4,7 @@ import { createRouter, protectedProcedure, orgProcedure } from "../trpc";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import crypto from "crypto";
 import { pushProgress, finishProgress } from "../lib/progress";
-import { toFriendlyAIError, isMissingAIKeyError } from "../lib/ai-errors";
+import { toFriendlyAIError, isMissingAIKeyError, friendlyAIMessage } from "../lib/ai-errors";
 import { requirePlan } from "../middleware/plan-limit.middleware";
 
 // S3 helpers
@@ -412,7 +412,7 @@ KEYWORDS: ${(brief.keywords || []).join(", ")}`;
         // Core caption generation is required for the whole flow — if the AI
         // provider isn't configured (even after the OpenAI fallback), fail
         // with the friendly message rather than a raw 500 (ADD-5).
-        progress("Generating captions", "error", (e as Error).message);
+        progress("Generating captions", "error", friendlyAIMessage(e));
         throw toFriendlyAIError(e);
       }
       progress("Generating captions for " + input.targetPlatforms.length + " platforms", "done", Object.keys(platformContent).join(", "));
@@ -466,10 +466,10 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
           console.log(`[Repurpose] Static creative uploaded: ${url} (mediaId: ${mediaId}, bg: ${creative.bgSource})`);
         } catch (e) {
           // The template renderer itself failed (Puppeteer/asset issue). This
-          // is the genuine no-image case — surface it loudly (Fix 4).
-          const raw = (e as Error).message;
-          progress("Generating creative", "error", raw);
-          console.error(`[Repurpose] Static creative FAILED:`, raw);
+          // is the genuine no-image case — surface it loudly (Fix 4) but with
+          // a sanitized message (no raw provider internals / project IDs).
+          progress("Generating creative", "error", friendlyAIMessage(e));
+          console.error(`[Repurpose] Static creative FAILED:`, (e as Error).message);
         }
       } else if (input.format === "ai_video") {
         // ── Veo3 Ultra AI Video Generation ─────────────────────────────
@@ -500,7 +500,7 @@ Return ONLY the JSON array, no other text.`;
           if (arrMatch) keyPoints = JSON.parse(arrMatch[0]);
           progress("Extracting key points for video scenes", "done", `${keyPoints.length} scenes`);
         } catch (e) {
-          progress("Extracting key points for video scenes", "error", (e as Error).message);
+          progress("Extracting key points for video scenes", "error", friendlyAIMessage(e));
           console.warn(`[Repurpose] Key point extraction failed:`, (e as Error).message);
         }
 
@@ -578,7 +578,7 @@ Return ONLY the JSON array, no other text.`;
           progress("Generating AI video with Veo3 Ultra (1-3 min)", "done", `${(videoBuf.length / 1024 / 1024).toFixed(1)}MB uploaded`);
           console.log(`[Repurpose] Veo3 video uploaded: ${videoUrl} (${(videoBuf.length / 1024 / 1024).toFixed(1)}MB)`);
         } catch (e) {
-          progress("Generating AI video with Veo3 Ultra (1-3 min)", "error", (e as Error).message);
+          progress("Generating AI video with Veo3 Ultra (1-3 min)", "error", friendlyAIMessage(e));
           progress("Falling back to slideshow reel");
           console.error(`[Repurpose] Veo3 generation failed, falling back to slideshow reel:`, (e as Error).message);
 
@@ -674,7 +674,7 @@ Return ONLY the JSON array, no other text.`;
           if (arrMatch) keyPoints = JSON.parse(arrMatch[0]);
           progress("Extracting key points for video scenes", "done", `${keyPoints.length} scenes`);
         } catch (e) {
-          progress("Extracting key points for video scenes", "error", (e as Error).message);
+          progress("Extracting key points for video scenes", "error", friendlyAIMessage(e));
         }
 
         if (keyPoints.length === 0) {
@@ -727,7 +727,7 @@ Return ONLY the JSON array, no other text.`;
           progress("Generating AI video with Seedance 2.0 (30s-3min)", "done", `${(videoBuf.length / 1024 / 1024).toFixed(1)}MB uploaded`);
           console.log(`[Repurpose] Seedance video uploaded: ${videoUrl} (${(videoBuf.length / 1024 / 1024).toFixed(1)}MB)`);
         } catch (e) {
-          progress("Generating AI video with Seedance 2.0 (30s-3min)", "error", (e as Error).message);
+          progress("Generating AI video with Seedance 2.0 (30s-3min)", "error", friendlyAIMessage(e));
           console.error(`[Repurpose] Seedance generation failed:`, (e as Error).message);
           // No fallback — Seedance failure is final for this format
         }
@@ -1003,7 +1003,7 @@ Requirements:
             progress("Stitching reel video from slides", "done", "Video uploaded");
             console.log(`[Repurpose] Reel video uploaded: ${mediaUrls[0]}`);
           } catch (e) {
-            progress("Stitching reel video from slides", "error", (e as Error).message);
+            progress("Stitching reel video from slides", "error", friendlyAIMessage(e));
             console.warn(`[Repurpose] Reel generation failed, falling back to carousel:`, (e as Error).message);
             mediaUrls = uploadedUrls;
           }
