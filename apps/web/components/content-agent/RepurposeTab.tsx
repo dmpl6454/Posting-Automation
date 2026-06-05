@@ -76,7 +76,9 @@ export function RepurposeTab() {
 
   // Options
   const [format, setFormat] = useState<"static" | "carousel" | "reel" | "ai_video" | "seedance_video">("static");
-  const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>(["INSTAGRAM", "TWITTER", "LINKEDIN"]);
+  // No platforms pre-selected — the user explicitly picks targets (the
+  // Generate button stays disabled until at least one is chosen).
+  const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
   const [provider, setProvider] = useState<typeof providers[number]>("gemma4");
   const [theme, setTheme] = useState<"dark" | "light" | "gradient">("dark");
   const [voiceOver, setVoiceOver] = useState(true);
@@ -91,6 +93,7 @@ export function RepurposeTab() {
     mediaMap?: Record<string, { url: string; mediaId: string }>;
     mediaType: string;
     format: string;
+    mediaFailed?: boolean;
   } | null>(null);
   const [copiedPlatform, setCopiedPlatform] = useState<string | null>(null);
 
@@ -154,12 +157,8 @@ export function RepurposeTab() {
     !channelSearch || c.name?.toLowerCase().includes(channelSearch.toLowerCase()) || c.username?.toLowerCase().includes(channelSearch.toLowerCase()) || c.platform?.toLowerCase().includes(channelSearch.toLowerCase())
   );
 
-  // Auto-select first channel when channels load
-  useEffect(() => {
-    if (activeChannels.length > 0 && selectedChannelIds.length === 0) {
-      setSelectedChannelIds([activeChannels[0].id]);
-    }
-  }, [activeChannels.length]);
+  // No channel pre-selected — the user explicitly chooses which channel(s) to
+  // publish to (previously the first channel was auto-selected).
 
   // Create post mutation
   const createPost = trpc.post.create.useMutation({
@@ -200,10 +199,21 @@ export function RepurposeTab() {
     onSuccess: (data) => {
       setResults(data);
       const mediaCount = data.mediaUrls.length;
-      toast({
-        title: "Content repurposed!",
-        description: `${Object.keys(data.platformContent).length} captions + ${mediaCount} ${data.format === "reel" ? "video" : mediaCount === 1 ? "image" : "slides"} generated.`,
-      });
+      // Be honest: if captions generated but media failed, this is NOT a clean
+      // success — show a warning toast that points at the activity log, not a
+      // misleading "Content repurposed!" (Fix 4).
+      if (data.mediaFailed) {
+        toast({
+          title: "Captions ready — image/video failed",
+          description: `${Object.keys(data.platformContent).length} captions generated, but the ${data.format === "reel" || data.format === "ai_video" ? "video" : "image"} could not be produced. See the activity log for the provider error.`,
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Content repurposed!",
+          description: `${Object.keys(data.platformContent).length} captions + ${mediaCount} ${data.format === "reel" ? "video" : mediaCount === 1 ? "image" : "slides"} generated.`,
+        });
+      }
     },
     onError: (err) => {
       toast({ title: "Repurpose failed", description: humanizeError(err), variant: "destructive" });
@@ -657,6 +667,22 @@ export function RepurposeTab() {
                   </div>
                 </div>
               </CardContent>
+            </Card>
+          )}
+
+          {/* Media-generation failure notice (Fix 4): captions exist but the
+              image/video could not be produced. Never silently show nothing. */}
+          {results.mediaFailed && results.mediaUrls.length === 0 && (
+            <Card className="border-destructive/50 bg-destructive/5">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base flex items-center gap-2 text-destructive">
+                  <AlertTriangle className="h-4 w-4" />
+                  {results.format === "reel" || results.format === "ai_video" || results.format === "seedance_video" ? "Video" : results.format === "carousel" ? "Carousel" : "Image"} could not be generated
+                </CardTitle>
+                <CardDescription>
+                  Your captions are ready below, but the {results.format === "reel" || results.format === "ai_video" || results.format === "seedance_video" ? "video" : "image"} generation failed. Check the activity log above for the exact provider error (commonly an AI image/video provider key or billing issue). You can still copy the captions and add your own media.
+                </CardDescription>
+              </CardHeader>
             </Card>
           )}
 
