@@ -117,8 +117,14 @@ get_version_info() {
   COMMIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
   COMMIT_MSG=$(git log -1 --format=%s 2>/dev/null || echo "manual deploy")
   BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
+  COMMIT_DATE=$(git log -1 --format=%cI 2>/dev/null || echo "")
   COMMIT_COUNT=$(git rev-list --count HEAD 2>/dev/null || echo "0")
   APP_VERSION="1.0.${COMMIT_COUNT}"
+  # BUG-14: export so `docker compose build` interpolates them into the web
+  # service's build args (docker-compose.prod.yml → Dockerfile.web → Next).
+  # Without this the Alpine build image (no `git`) produced commit "unknown"
+  # and version "1.0.0-dev" on the Versions page.
+  export COMMIT_HASH COMMIT_MSG BRANCH COMMIT_DATE APP_VERSION
   # Changelog: commits since last deploy tag
   LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
   if [ -n "$LAST_TAG" ]; then

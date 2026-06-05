@@ -1,6 +1,21 @@
 import { execSync } from "child_process";
 
 function getGitInfo() {
+  // BUG-14: in the Docker build there is no `git` binary, so the shell-out
+  // below throws and we'd fall back to "unknown"/"1.0.0-dev" — which is what
+  // the Versions page showed in production. deploy.sh passes the real values
+  // as build args (Dockerfile.web → BUILD_* env), so prefer those first.
+  const env = process.env;
+  if (env.BUILD_COMMIT_HASH && env.BUILD_COMMIT_HASH !== "unknown") {
+    return {
+      version: env.BUILD_APP_VERSION || "1.0.0",
+      commitHash: env.BUILD_COMMIT_HASH,
+      commitDate: env.BUILD_COMMIT_DATE || new Date().toISOString(),
+      branch: env.BUILD_BRANCH || "main",
+      commitMsg: env.BUILD_COMMIT_MSG || "",
+    };
+  }
+
   try {
     const commitHash = execSync("git rev-parse --short HEAD", { encoding: "utf-8" }).trim();
     const commitDate = execSync("git log -1 --format=%cI", { encoding: "utf-8" }).trim();
