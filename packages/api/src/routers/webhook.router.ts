@@ -2,6 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import crypto from "crypto";
 import { createRouter, orgProcedure } from "../trpc";
+import { requirePlan } from "../middleware/plan-limit.middleware";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 import { webhookUrlSchema } from "../lib/url-safety";
 
@@ -30,6 +31,10 @@ export const webhookRouter = createRouter({
     )
     .mutation(async ({ ctx, input }) => {
       requireOwnerOrAdmin(ctx.membership.role);
+      // ADD-6: server-side plan gate (mirrors apikey.router). Webhooks are a
+      // Professional+ integration capability; enforce here so a lower-plan user
+      // can't create one via a direct tRPC call. (Superadmins bypass.)
+      await requirePlan(ctx.organizationId, "PROFESSIONAL", "Webhooks", ctx.isSuperAdmin);
       const secret = crypto.randomBytes(32).toString("hex");
       const webhook = await ctx.prisma.webhook.create({
         data: {

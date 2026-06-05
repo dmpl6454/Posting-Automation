@@ -4,6 +4,7 @@ import crypto from "crypto";
 import { createRouter, orgProcedure } from "../trpc";
 import { apiRateLimiter } from "../middleware/rate-limit";
 import { createRateLimitMiddleware } from "../middleware/rate-limit.middleware";
+import { requirePlan } from "../middleware/plan-limit.middleware";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 
 const apiRateLimited = orgProcedure.use(createRateLimitMiddleware(apiRateLimiter));
@@ -43,6 +44,11 @@ export const apikeyRouter = createRouter({
     )
     .mutation(async ({ ctx, input }) => {
       requireOwnerOrAdmin(ctx.membership.role);
+      // ADD-6: server-side plan gate. The UI surfaces API keys to OWNER/ADMIN
+      // only, but lower-plan users could still call this mutation directly.
+      // Programmatic API access is a Professional+ capability; gate it here so
+      // the limit can't be bypassed via direct tRPC calls. (Superadmins bypass.)
+      await requirePlan(ctx.organizationId, "PROFESSIONAL", "API access", ctx.isSuperAdmin);
       const plainKey = `pa_${crypto.randomBytes(32).toString("hex")}`;
       const keyHash = crypto.createHash("sha256").update(plainKey).digest("hex");
 
