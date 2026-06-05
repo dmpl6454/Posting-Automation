@@ -52,54 +52,71 @@ const features = [
   },
 ];
 
+// BUG-04 / ADD-11: plan names + prices kept in sync with the in-app billing
+// tiers (packages/billing/src/plans.ts): Free $0 / Starter $20 / Professional
+// $40 / Enterprise $90. Previously the landing advertised Starter(free) / Pro
+// $20 / Business $40, so "Starter" meant a different thing on the site vs the
+// app and the tier count differed.
 const plans = [
   {
-    name: "Starter",
-    price: "Free",
+    name: "Free",
+    price: "$0",
     period: "",
     description: "For individuals getting started",
     features: [
       "3 social channels",
-      "30 scheduled posts/month",
-      "Basic AI generation",
-      "Media library (100 MB)",
+      "30 posts/month",
+      "50 AI images/month",
+      "Basic scheduling",
     ],
     cta: "Get Started",
     href: "/register",
     highlighted: false,
   },
   {
-    name: "Pro",
+    name: "Starter",
     price: "$20",
     period: "/month",
     description: "For creators and small teams",
     features: [
       "10 social channels",
-      "Unlimited scheduled posts",
-      "Advanced AI (GPT-4 + Claude)",
-      "AI image generation",
-      "Team collaboration (3 seats)",
+      "500 posts/month",
+      "AI content generation",
+      "100 AI images/month",
+      "3 team members",
+    ],
+    cta: "Start Free Trial",
+    href: "/register",
+    highlighted: false,
+  },
+  {
+    name: "Professional",
+    price: "$40",
+    period: "/month",
+    description: "For growing businesses",
+    features: [
+      "30 social channels",
+      "Unlimited posts",
+      "AI content & image generation",
+      "300 AI images/month",
+      "Unlimited team members",
       "Analytics dashboard",
-      "CSV import/export",
     ],
     cta: "Start Free Trial",
     href: "/register",
     highlighted: true,
   },
   {
-    name: "Business",
-    price: "$40",
+    name: "Enterprise",
+    price: "$90",
     period: "/month",
-    description: "For growing businesses",
+    description: "For teams that need it all",
     features: [
-      "25 social channels",
+      "100 social channels",
       "Unlimited everything",
-      "All AI providers",
-      "Approval workflows",
-      "Team collaboration (10 seats)",
       "Priority support",
-      "API access",
-      "Custom webhooks",
+      "Custom integrations",
+      "SSO & advanced security",
     ],
     cta: "Start Free Trial",
     href: "/register",
@@ -332,7 +349,7 @@ export default function HomePage() {
             </p>
           </div>
 
-          <div className="mt-16 grid gap-6 lg:grid-cols-3">
+          <div className="mt-16 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
             {plans.map((plan) => (
               <div
                 key={plan.name}
@@ -507,19 +524,25 @@ export default function HomePage() {
                 "@type": "Offer",
                 price: "0",
                 priceCurrency: "USD",
-                name: "Starter",
+                name: "Free",
               },
               {
                 "@type": "Offer",
                 price: "20",
                 priceCurrency: "USD",
-                name: "Pro",
+                name: "Starter",
               },
               {
                 "@type": "Offer",
                 price: "40",
                 priceCurrency: "USD",
-                name: "Business",
+                name: "Professional",
+              },
+              {
+                "@type": "Offer",
+                price: "90",
+                priceCurrency: "USD",
+                name: "Enterprise",
               },
             ],
           }),
