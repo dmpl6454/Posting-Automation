@@ -4,6 +4,7 @@ import { createRouter, protectedProcedure, orgProcedure } from "../trpc";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import crypto from "crypto";
 import { pushProgress, finishProgress } from "../lib/progress";
+import { toFriendlyAIError, isMissingAIKeyError } from "../lib/ai-errors";
 
 // S3 helpers
 function getS3Client(): S3Client {
@@ -33,22 +34,31 @@ export const repurposeRouter = createRouter({
       })
     )
     .mutation(async ({ input }) => {
-      const { repurposeContent } = await import("@postautomation/ai");
-      const result = await repurposeContent({
-        originalContent: input.originalContent,
-        targetPlatforms: input.targetPlatforms,
-        provider: input.provider,
-      });
-      return { platformContent: result };
+      try {
+        const { repurposeContent } = await import("@postautomation/ai");
+        const result = await repurposeContent({
+          originalContent: input.originalContent,
+          targetPlatforms: input.targetPlatforms,
+          provider: input.provider,
+        });
+        return { platformContent: result };
+      } catch (e) {
+        // ADD-5: friendly "AI Provider Not Configured" instead of raw 500.
+        throw toFriendlyAIError(e);
+      }
     }),
 
   /** Extract content from a URL */
   extractUrl: protectedProcedure
     .input(z.object({ url: z.string().url() }))
     .mutation(async ({ input }) => {
-      const { extractUrlContent } = await import("@postautomation/ai");
-      const content = await extractUrlContent(input.url);
-      return content;
+      try {
+        const { extractUrlContent } = await import("@postautomation/ai");
+        const content = await extractUrlContent(input.url);
+        return content;
+      } catch (e) {
+        throw toFriendlyAIError(e);
+      }
     }),
 
   /** Repurpose from URL — generates caption + media (static/carousel/reel) */
@@ -207,7 +217,20 @@ export const repurposeRouter = createRouter({
       // 1. Extract content from URL
       progress("Extracting content from URL");
       console.log(`[Repurpose] Extracting content from: ${input.url}`);
-      const extracted = await extractUrlContent(input.url);
+      let extracted;
+      try {
+        extracted = await extractUrlContent(input.url);
+      } catch (e) {
+        // Surface a clear, actionable error for the two failure modes here:
+        // a missing AI key (→ friendly "not configured") or an unreachable /
+        // unparseable URL — instead of a raw 500 (ADD-5 / repurpose e2e).
+        if (isMissingAIKeyError(e)) throw toFriendlyAIError(e);
+        progress("Extracting content from URL", "error", (e as Error).message);
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Couldn't read that URL. Make sure it's a public, reachable page. (${(e as Error).message})`,
+        });
+      }
       progress("Extracting content from URL", "done", `"${extracted.title}" (${extracted.body.length} chars)`);
       console.log(`[Repurpose] Extracted: "${extracted.title}" (${extracted.body.length} chars)`);
 
@@ -275,11 +298,20 @@ KEYWORDS: ${(brief.keywords || []).join(", ")}`;
       // 3. Generate platform-specific captions WITH content brief for accuracy
       progress("Generating captions for " + input.targetPlatforms.length + " platforms");
       const sourceText = `${contentBrief}\n\n---\n\nTitle: ${extracted.title}\n\n${extracted.body.slice(0, 5000)}`;
-      const platformContent = await repurposeContent({
-        originalContent: sourceText,
-        targetPlatforms: input.targetPlatforms,
-        provider: input.provider,
-      });
+      let platformContent: Awaited<ReturnType<typeof repurposeContent>>;
+      try {
+        platformContent = await repurposeContent({
+          originalContent: sourceText,
+          targetPlatforms: input.targetPlatforms,
+          provider: input.provider,
+        });
+      } catch (e) {
+        // Core caption generation is required for the whole flow — if the AI
+        // provider isn't configured, fail with the friendly message rather
+        // than a raw 500 (ADD-5 / repurpose end-to-end).
+        progress("Generating captions", "error", (e as Error).message);
+        throw toFriendlyAIError(e);
+      }
       progress("Generating captions for " + input.targetPlatforms.length + " platforms", "done", Object.keys(platformContent).join(", "));
 
       // 4. Generate media based on format
