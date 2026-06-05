@@ -86,10 +86,11 @@ export function DateTimePicker({
 
   const handleDateSelect = (selected: Date | undefined) => {
     if (!selected) return;
-    // Keep the existing time when only the date changes; default to next round
-    // hour if no time chosen yet.
+    // Keep the existing time when only the date changes; default to the next
+    // round hour if no time chosen yet, so a freshly-picked date lands in the
+    // future (avoids same-hour expiry for api-key expiry, etc.).
     const now = new Date();
-    const h = date ? hour : now.getHours();
+    const h = date ? hour : (now.getHours() + 1) % 24;
     const mi = date ? minute : 0;
     emit(selected, h, mi);
   };
