@@ -79,7 +79,10 @@ export function RepurposeTab() {
   // No platforms pre-selected — the user explicitly picks targets (the
   // Generate button stays disabled until at least one is chosen).
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
-  const [provider, setProvider] = useState<typeof providers[number]>("gemma4");
+  // Default to OpenAI for text generation — the Google-family providers
+  // (gemini/gemma4) currently share a billing-held project (403). The backend
+  // also falls back to OpenAI automatically if a chosen provider fails.
+  const [provider, setProvider] = useState<typeof providers[number]>("openai");
   const [theme, setTheme] = useState<"dark" | "light" | "gradient">("dark");
   const [voiceOver, setVoiceOver] = useState(true);
   const [voiceType, setVoiceType] = useState<string>("nova");

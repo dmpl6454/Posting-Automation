@@ -70,7 +70,11 @@ export const repurposeRouter = createRouter({
         progressId: z.string().optional(),
         format: z.enum(["static", "carousel", "reel", "ai_video", "seedance_video"]),
         targetPlatforms: z.array(z.string()).min(1).max(16),
-        provider: z.enum(["openai", "anthropic", "gemini", "grok", "deepseek", "gemma4"]).default("gemini"),
+        // Default to OpenAI for TEXT generation: the Google-family providers
+        // (gemini/gemma4) share the project that is currently on a billing
+        // hold (403 "Lightning dunning"), which would kill caption generation
+        // before any media work. OpenAI is the verified-working default.
+        provider: z.enum(["openai", "anthropic", "gemini", "grok", "deepseek", "gemma4"]).default("openai"),
         channelName: z.string().optional().default(""),
         channelHandle: z.string().optional().default(""),
         logoUrl: z.string().optional().default(""),
@@ -118,6 +122,34 @@ export const repurposeRouter = createRouter({
 
       const userId = (ctx.session.user as any).id as string;
       const organizationId = ctx.organizationId;
+
+      // Text-provider resilience: caption/brief generation is a hard
+      // requirement for the whole flow. If the chosen provider fails (e.g. the
+      // Google-family gemini/gemma4 providers share a billing-held project →
+      // 403), retry once with OpenAI before giving up. Mirrors the image
+      // fallback philosophy so a single provider outage never kills repurpose.
+      async function repurposeContentResilient(
+        args: Parameters<typeof repurposeContent>[0],
+      ): Promise<Awaited<ReturnType<typeof repurposeContent>>> {
+        try {
+          return await repurposeContent(args);
+        } catch (e) {
+          if (args.provider === "openai") throw e; // already on the fallback
+          console.warn(`[Repurpose] Caption gen via ${args.provider} failed (${(e as Error).message.slice(0, 80)}), retrying with OpenAI`);
+          return await repurposeContent({ ...args, provider: "openai" });
+        }
+      }
+      async function generateContentResilient(
+        args: Parameters<typeof generateContent>[0],
+      ): Promise<string> {
+        try {
+          return await generateContent(args);
+        } catch (e) {
+          if (args.provider === "openai") throw e;
+          console.warn(`[Repurpose] generateContent via ${args.provider} failed (${(e as Error).message.slice(0, 80)}), retrying with OpenAI`);
+          return await generateContent({ ...args, provider: "openai" });
+        }
+      }
 
       // Resolve logo: prefer input.logoUrl → DB media (category: "logo") → channel avatar
       let resolvedLogoUrl = input.logoUrl || "";
@@ -336,7 +368,7 @@ Provide a JSON response:
 
 Return ONLY the JSON, no other text.`;
 
-        const briefResponse = await generateContent({
+        const briefResponse = await generateContentResilient({
           provider: input.provider,
           platform: "INSTAGRAM",
           userPrompt: understandPrompt,
@@ -371,15 +403,15 @@ KEYWORDS: ${(brief.keywords || []).join(", ")}`;
       const sourceText = `${contentBrief}\n\n---\n\nTitle: ${extracted.title}\n\n${extracted.body.slice(0, 5000)}`;
       let platformContent: Awaited<ReturnType<typeof repurposeContent>>;
       try {
-        platformContent = await repurposeContent({
+        platformContent = await repurposeContentResilient({
           originalContent: sourceText,
           targetPlatforms: input.targetPlatforms,
           provider: input.provider,
         });
       } catch (e) {
         // Core caption generation is required for the whole flow — if the AI
-        // provider isn't configured, fail with the friendly message rather
-        // than a raw 500 (ADD-5 / repurpose end-to-end).
+        // provider isn't configured (even after the OpenAI fallback), fail
+        // with the friendly message rather than a raw 500 (ADD-5).
         progress("Generating captions", "error", (e as Error).message);
         throw toFriendlyAIError(e);
       }
@@ -457,7 +489,7 @@ Return ONLY the JSON array, no other text.`;
         let keyPoints: string[] = [];
         progress("Extracting key points for video scenes");
         try {
-          const kpResponse = await generateContent({
+          const kpResponse = await generateContentResilient({
             provider: input.provider,
             platform: "INSTAGRAM",
             userPrompt: slidePrompt,
@@ -631,7 +663,7 @@ Return ONLY the JSON array, no other text.`;
 
         let keyPoints: string[] = [];
         try {
-          const kpResponse = await generateContent({
+          const kpResponse = await generateContentResilient({
             provider: input.provider,
             platform: "INSTAGRAM",
             userPrompt: slidePrompt,
@@ -716,7 +748,7 @@ Return ONLY the JSON array, no other text.`;
 
         let slideData: Array<{ title: string; body: string }> = [];
         try {
-          const slideResponse = await generateContent({
+          const slideResponse = await generateContentResilient({
             provider: input.provider,
             platform: "INSTAGRAM",
             userPrompt: slidePrompt,
