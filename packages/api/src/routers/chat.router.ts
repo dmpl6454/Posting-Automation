@@ -2,6 +2,35 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
 import { agentRunQueue, postPublishQueue } from "@postautomation/queue";
+import { requirePlan, enforcePlanLimit } from "../middleware/plan-limit.middleware";
+import type { PrismaClient } from "@postautomation/db";
+
+/**
+ * Throws unless every channelId belongs to the given org.
+ * Mirrors the validation block in post.router.ts:create — prevents the Super
+ * Agent from targeting another org's channels (IDOR) via AI-supplied IDs.
+ * Audit fix 2026-06-06.
+ */
+export async function assertChannelsOwned(
+  prisma: PrismaClient,
+  organizationId: string,
+  channelIds: string[]
+): Promise<void> {
+  const ids = [...new Set((channelIds || []).filter(Boolean))];
+  if (ids.length === 0) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Select at least one channel to post to." });
+  }
+  const owned = await prisma.channel.findMany({
+    where: { id: { in: ids }, organizationId },
+    select: { id: true },
+  });
+  if (owned.length !== ids.length) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "One or more selected channels do not belong to your workspace.",
+    });
+  }
+}
 
 // Fix #33: export supported actions so UI can derive the capability list from backend truth
 export const SUPPORTED_ACTIONS = [
@@ -199,7 +228,9 @@ export const chatRouter = createRouter({
 
       switch (input.actionType) {
         case "create_agent": {
+          await requirePlan(ctx.organizationId, "STARTER", "Autopilot agents", ctx.isSuperAdmin);
           const p = input.payload as any;
+          await assertChannelsOwned(ctx.prisma, ctx.organizationId, p.channelIds || []);
           const agent = await ctx.prisma.agent.create({
             data: {
               organizationId: ctx.organizationId,
@@ -246,7 +277,9 @@ export const chatRouter = createRouter({
         }
 
         case "schedule_post": {
+          await enforcePlanLimit(ctx.organizationId, "postsPerMonth", ctx.isSuperAdmin);
           const p = input.payload as any;
+          await assertChannelsOwned(ctx.prisma, ctx.organizationId, p.channelIds || []);
           const userId = (ctx.session.user as any).id;
           const post = await ctx.prisma.post.create({
             data: {
@@ -288,6 +321,8 @@ export const chatRouter = createRouter({
 
           const createdPosts = [];
           for (const item of posts) {
+            await enforcePlanLimit(ctx.organizationId, "postsPerMonth", ctx.isSuperAdmin);
+            await assertChannelsOwned(ctx.prisma, ctx.organizationId, item.channelIds || []);
             const post = await ctx.prisma.post.create({
               data: {
                 organizationId: ctx.organizationId,
@@ -324,7 +359,9 @@ export const chatRouter = createRouter({
         }
 
         case "publish_now": {
+          await enforcePlanLimit(ctx.organizationId, "postsPerMonth", ctx.isSuperAdmin);
           const p = input.payload as any;
+          await assertChannelsOwned(ctx.prisma, ctx.organizationId, p.channelIds || []);
           const userId = (ctx.session.user as any).id;
 
           // Create post and immediately queue for publishing
@@ -393,6 +430,7 @@ export const chatRouter = createRouter({
         }
 
         case "generate_news_image": {
+          await enforcePlanLimit(ctx.organizationId, "aiImagesPerMonth", ctx.isSuperAdmin);
           const p = input.payload as any;
 
           // Dynamically import directly from the file to avoid pulling in LangChain + full AI package
