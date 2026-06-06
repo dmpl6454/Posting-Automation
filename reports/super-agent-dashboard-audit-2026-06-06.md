@@ -220,4 +220,13 @@ All actioned fixes were implemented, type-checked, unit-tested (465 passing incl
 | (addendum) show available channels + agent clarity | welcome header lists connected channels + plain-English capabilities | `75ea11a` |
 | (clarity) layman descriptions + empty states | dashboard cards, Content Studio per-tab helper, Analytics/Media headers | `1b89c22`, `70adf05` |
 
-**Deferred (by design / low value, not fixed):** #11 untyped `executeAction` payloads (loose `any`; functional), #13 Sync Now 8s-timeout race (cosmetic staleness), #15 media editor image-only (Fabric.js limitation), #17 S3 pre-flight validation (already surfaces a 502). None block the modules from working as intended.
+**Previously-deferred items — now ALSO fixed (commit `d79d53a`):**
+
+| Finding | Fix |
+|---|---|
+| #11 untyped `executeAction` payloads | `requireText()` guards on schedule/bulk/publish (`content`) + generate_news_image (`headline`) → clean `BAD_REQUEST` instead of opaque Prisma error |
+| #13 Sync Now fixed-8s race | staggered refetches (4s/9s/15s) + honest "nothing to sync" when `queued=0` |
+| #15 media editor image-only | labeled "images only" with guidance to attach videos from the Media page (Fabric.js can't composite video — by-design, now clear) |
+| #17 S3 pre-flight | `isS3Configured()` pre-flight (503 with clear msg) + avatar route wraps body-read & `s3.send()` in try/catch (was an unhandled throw); +4 tests |
+
+**Status: every actionable finding is resolved.** 469 unit tests pass; `next build` clean; re-verified e2e via Playwright (no regression) + avatar error path confirmed live.
