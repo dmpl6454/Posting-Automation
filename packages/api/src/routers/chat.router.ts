@@ -32,6 +32,17 @@ export async function assertChannelsOwned(
   }
 }
 
+/**
+ * Assert a payload field is a non-empty string, else throw a clean BAD_REQUEST
+ * instead of letting an undefined reach Prisma as an opaque error (audit #11).
+ */
+function requireText(value: unknown, field: string): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: `Missing required "${field}" — ask the agent to include it.` });
+  }
+  return value;
+}
+
 // Fix #33: export supported actions so UI can derive the capability list from backend truth
 export const SUPPORTED_ACTIONS = [
   { action: "create_agent",             label: "Set up autopilot agents",       description: "Create an AI agent that auto-publishes on a schedule", color: "text-yellow-500" },
@@ -279,6 +290,7 @@ export const chatRouter = createRouter({
         case "schedule_post": {
           await enforcePlanLimit(ctx.organizationId, "postsPerMonth", ctx.isSuperAdmin);
           const p = input.payload as any;
+          requireText(p.content, "content");
           await assertChannelsOwned(ctx.prisma, ctx.organizationId, p.channelIds || []);
           const userId = (ctx.session.user as any).id;
           const post = await ctx.prisma.post.create({
@@ -321,6 +333,7 @@ export const chatRouter = createRouter({
 
           const createdPosts = [];
           for (const item of posts) {
+            requireText(item.content, "content");
             await enforcePlanLimit(ctx.organizationId, "postsPerMonth", ctx.isSuperAdmin);
             await assertChannelsOwned(ctx.prisma, ctx.organizationId, item.channelIds || []);
             const post = await ctx.prisma.post.create({
@@ -361,6 +374,7 @@ export const chatRouter = createRouter({
         case "publish_now": {
           await enforcePlanLimit(ctx.organizationId, "postsPerMonth", ctx.isSuperAdmin);
           const p = input.payload as any;
+          requireText(p.content, "content");
           await assertChannelsOwned(ctx.prisma, ctx.organizationId, p.channelIds || []);
           const userId = (ctx.session.user as any).id;
 
@@ -432,6 +446,7 @@ export const chatRouter = createRouter({
         case "generate_news_image": {
           await enforcePlanLimit(ctx.organizationId, "aiImagesPerMonth", ctx.isSuperAdmin);
           const p = input.payload as any;
+          requireText(p.headline, "headline");
 
           // Dynamically import directly from the file to avoid pulling in LangChain + full AI package
           const { generateNewsImage } = await import("@postautomation/ai/src/tools/news-image-generator");

@@ -112,9 +112,16 @@ export default function AnalyticsPage() {
   const utils = trpc.useUtils();
   const triggerSync = trpc.analytics.triggerSync.useMutation({
     onSuccess: (data) => {
-      toast({ title: "Analytics sync started", description: `Queued ${data.queued} posts for refresh. Data will update shortly.` });
-      setSyncing(false);
-      setTimeout(() => { void utils.analytics.invalidate(); }, 8000);
+      if (data.queued === 0) {
+        toast({ title: "Nothing to sync", description: "No published posts in the last 30 days to refresh yet." });
+        setSyncing(false);
+        return;
+      }
+      toast({ title: "Analytics sync started", description: `Refreshing ${data.queued} post${data.queued === 1 ? "" : "s"}. Numbers update as each one completes.` });
+      // Worker jobs finish at different times; refetch a few times instead of a single
+      // fixed cliff so slow syncs still surface without leaving stale data (audit #13).
+      [4000, 9000, 15000].forEach((ms) => setTimeout(() => { void utils.analytics.invalidate(); }, ms));
+      setTimeout(() => setSyncing(false), 4000);
     },
     onError: () => {
       toast({ title: "Sync failed", description: "Could not queue analytics sync.", variant: "destructive" });

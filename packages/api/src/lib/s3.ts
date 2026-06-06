@@ -42,6 +42,18 @@ export function getS3PresignClient(): S3Client {
 export const BUCKET = process.env.S3_BUCKET || "postautomation-media";
 
 /**
+ * Returns true when at least one access-key var and one secret var are set.
+ * The client falls back to "" otherwise, which makes uploads fail with an
+ * opaque error — callers should pre-flight this and return a clear message.
+ * Audit fix 2026-06-06 (#17).
+ */
+export function isS3Configured(): boolean {
+  const key = process.env.S3_ACCESS_KEY_ID || process.env.S3_ACCESS_KEY || "";
+  const secret = process.env.S3_SECRET_ACCESS_KEY || process.env.S3_SECRET_KEY || "";
+  return key.length > 0 && secret.length > 0;
+}
+
+/**
  * Build the public URL for an S3 object given its key.
  */
 export function getPublicUrl(key: string): string {
