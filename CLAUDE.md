@@ -209,6 +209,27 @@ The repurpose flow ([packages/api/src/routers/repurpose.router.ts](packages/api/
 - **Error messages:** all AI failures route through `friendlyAIMessage` / `toFriendlyAIError` ([packages/api/src/lib/ai-errors.ts](packages/api/src/lib/ai-errors.ts)) — billing/permission/quota 403s become "temporarily unavailable", NEVER leak raw Google project IDs / `PERMISSION_DENIED` JSON. When all media fails the mutation returns `mediaFailed: true` (honest toast + UI failure card), not a false "success".
 - **⚠️ Google Cloud billing hold (project `518560861182`):** native Gemini images + **Veo3 video** currently 403 with "Lightning dunning decision is deny … PERMISSION_DENIED" — a billing/dunning suspension, NOT a code bug. Static + carousel work via the OpenAI/gpt-image-1 fallback; **native Veo3 video stays dead until billing is resolved in Cloud Console** (project owned by admin@dashmani.com). No code change fixes the billing hold.
 
+## Super Agent (chat assistant) — read before touching chat.router or super-agent UI
+
+The Super Agent ([apps/web/app/dashboard/super-agent/page.tsx](apps/web/app/dashboard/super-agent/page.tsx), [packages/api/src/routers/chat.router.ts](packages/api/src/routers/chat.router.ts), prompt in [packages/ai/src/prompts/chat-agent.prompt.ts](packages/ai/src/prompts/chat-agent.prompt.ts)) is a conversational agent that emits ` ```action ` blocks. The streaming route ([apps/web/app/api/chat/stream/route.ts](apps/web/app/api/chat/stream/route.ts)) only *parses* the action and forwards it in the `done` SSE event; the **client** decides execution. Invariants (audit fix 2026-06-06, PR for `fix/audit-2026-06-06`):
+
+- **Every `executeAction` case is plan-gated + channel-ownership-validated. Do NOT remove these.** `create_agent` → `requirePlan(STARTER)`; `schedule_post`/`bulk_schedule`/`publish_now` → `enforcePlanLimit(postsPerMonth)`; `generate_news_image` → `enforcePlanLimit(aiImagesPerMonth)`. All pass `ctx.isSuperAdmin`. Before 2026-06-06 the agent had ZERO gating — a FREE user could create STARTER agents and exceed quotas via chat.
+- **`assertChannelsOwned(prisma, orgId, channelIds)`** (exported from `chat.router.ts`) runs before any action that writes channel targets — closes a cross-org IDOR where AI-supplied `channelIds` were written without an org check. Mirrors the block in `post.router.ts:create`. Keep it on `create_agent`/`schedule_post`/`bulk_schedule`/`publish_now`.
+- **`publish_now` is NOT auto-executed.** It renders an explicit "Publish now" button with an "immediate, cannot be undone" warning, like every other action. Do NOT re-add the `if (event.action?.type === "publish_now") executeAction(...)` auto-fire — it pushed live posts with no review.
+- **Media attachments:** the chat input has a paperclip (uploads via `/api/upload`, which returns `{ id, url, fileName, fileType }`) and a Media Library picker (`MediaPickerDialog`, whose `onSelect` is `(url, fileName, mediaId?)` — NOT an object). Attachments are sent as `sendMessage({ attachmentMediaIds })` (the backend already persisted these). The welcome screen lists the user's connected channels (`trpc.channel.list`, fields `name`/`username`/`platform`) so it's obvious where posts can go.
+- **`get_analytics`** returns post counts AND an engagement summary (impressions/likes/comments/shares/reach) summed from the latest `AnalyticsSnapshot` per published target — the SAME source as `analytics.engagement`, so chat and dashboard agree.
+- Regression tests: [packages/api/src/__tests__/chat-action-gating.test.ts](packages/api/src/__tests__/chat-action-gating.test.ts) (plan matrix), [chat-channel-ownership.test.ts](packages/api/src/__tests__/chat-channel-ownership.test.ts) (IDOR guard).
+
+## Routing / deep-link contract (Content Studio)
+
+`/dashboard/content-agent` reads **`?tab=`** (values: `compose | create | repurpose | bulk`) and **`?view=`** (`posts | calendar`) and **`?subTab=image`** (opens the Image generator under `create`). It also accepts legacy `?expanded=` as a fallback for `?tab=`. **Cards and redirects MUST emit `?tab=`/`?view=`, never `?expanded=` or a non-existent tab id.** Before 2026-06-06 the dashboard Repurpose/Bulk cards emitted `?expanded=` (silently landed on Compose) and `/dashboard/ai`→`?tab=generate`, `/dashboard/image-studio`→`?tab=image`, `/dashboard/posts`→`?tab=posts`, `/dashboard/calendar`→`?tab=calendar` all pointed at tab ids that don't exist. Fixed: cards use `?tab=repurpose|bulk`; redirect shims use `?tab=create`/`?tab=create&subTab=image`/`?view=posts`/`?view=calendar`.
+
+## Analytics — date handling
+
+- **Date ranges are UTC.** The date-range picker builds `YYYY-MM-DDT00:00:00.000Z` / `…T23:59:59.999Z` so a non-UTC user's "today" doesn't shift a day. The `postsOverTime` query already used `setUTCHours`; do NOT reintroduce local-time `new Date(value).toISOString()` on the date inputs (it parses as local midnight → off-by-one for e.g. UTC+5:30).
+- **`perChannelStats` raw SQL uses `COALESCE(p."publishedAt", p."updatedAt")`** in its date predicates so PUBLISHED posts with a NULL `publishedAt` aren't silently dropped.
+- The Channel Performance card shows a distinct "connected but no engagement synced yet" banner (vs. the "no channels connected" empty state) when all channels have zero metrics — so pending FB/IG Advanced Access reads as "not synced", not "zero performance".
+
 ## Patched dependencies
 
 - `@auth/core@0.41.0` — see [patches/@auth__core@0.41.0.patch](patches/). Applied automatically via pnpm `patchedDependencies` on install.
