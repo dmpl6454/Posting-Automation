@@ -433,11 +433,29 @@ KEYWORDS: ${(brief.keywords || []).join(", ")}`;
         const contentSummary = extracted.body.slice(0, 600) || extracted.description || extracted.title;
         const category = /CATEGORY:\s*([^\n]+)/i.exec(contentBrief)?.[1]?.trim() || extracted.type || "news";
 
+        // Headline for the baked overlay: prefer the AI-derived SUBJECT over a
+        // generic site/listing <title>. Feeding a homepage/section URL (e.g.
+        // indianexpress.com) yields a useless page title like "Latest News
+        // Today, Breaking News ... | The Indian Express"; the content brief's
+        // SUBJECT (e.g. "India's GDP and Economic Growth") is far better. Use
+        // the title only when it looks like a real, specific headline.
+        const briefSubject = /SUBJECT:\s*([^\n]+)/i.exec(contentBrief)?.[1]?.trim() || "";
+        const looksGenericTitle =
+          /\|\s*\w|breaking news|top headlines|latest news|home\s*[-|]|homepage/i.test(extracted.title) ||
+          extracted.title.length > 90;
+        const headlineForCreative =
+          looksGenericTitle && briefSubject && briefSubject.length > 3
+            ? briefSubject.replace(/\s*[-–—,]\s*(bollywood actor|politician|.*)$/i, "").trim() || briefSubject
+            : extracted.title;
+        if (headlineForCreative !== extracted.title) {
+          console.log(`[Repurpose] Using AI subject as headline ("${headlineForCreative}") instead of generic title ("${extracted.title.slice(0, 50)}...")`);
+        }
+
         const bgPrompt = `Create a cinematic, high-quality BACKGROUND photo for a social post about:
 
 ${contentBrief}
 
-Topic: "${extracted.title}"
+Topic: "${headlineForCreative}"
 Context: ${contentSummary.slice(0, 400)}
 
 Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g. "Imran Khan, Bollywood actor" → Bollywood/film imagery, NOT politics). Photorealistic or editorial illustration, dramatic lighting, strong mood, relevant to the topic.`;
@@ -445,7 +463,7 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
         try {
           progress("Generating creative");
           console.log(`[Repurpose] Building branded headline creative (category=${category})...`);
-          const creative = await buildHeadlineCreative(bgPrompt, extracted.title, category);
+          const creative = await buildHeadlineCreative(bgPrompt, headlineForCreative, category);
 
           const { url, mediaId } = await uploadAndCreateMedia(
             creative.imageBase64,
@@ -701,6 +719,9 @@ Return ONLY the JSON array, no other text.`;
             prompt: videoPrompt,
             duration: 8,
             aspectRatio: "9:16",
+            // Live progress so the UI never looks frozen during the long poll.
+            onProgress: ({ elapsedSeconds, status }) =>
+              progress("Generating AI video with Seedance 2.0 (30s-3min)", "running", `${elapsedSeconds}s — ${status}`),
           });
 
           const s3 = getS3Client();

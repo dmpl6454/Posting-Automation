@@ -12,8 +12,16 @@
 
 const FAL_QUEUE_BASE = "https://queue.fal.run";
 
+// fal.ai model endpoint IDs. Seedance 2.0 is published under the BARE
+// `bytedance/...` namespace — NOT `fal-ai/bytedance/...`. The old
+// `fal-ai/bytedance/seedance-2.0/text-to-video` ID does not exist: the queue
+// accepted the submit but instant-"COMPLETED" it with 0.027s inference, empty
+// logs, and a 404 result ("Path /seedance-2.0/text-to-video not found") — i.e.
+// it silently never generated. Verified live: the corrected ID runs real
+// inference (~3 min) and returns a video URL.
 const MODELS = {
-  seedance2: "fal-ai/bytedance/seedance-2.0/text-to-video",
+  seedance2: "bytedance/seedance-2.0/text-to-video",
+  seedance2Fast: "bytedance/seedance-2.0/fast/text-to-video",
   wan27: "fal-ai/wan/v2.7/text-to-video",
 } as const;
 
@@ -35,6 +43,8 @@ export interface SeedanceGenerateParams {
   negativePrompt?: string;
   /** Generate audio (Seedance 2.0 only) */
   generateAudio?: boolean;
+  /** Optional callback fired on each poll so callers can surface live progress. */
+  onProgress?: (p: { elapsedSeconds: number; status: string }) => void;
 }
 
 export interface SeedanceResult {
@@ -124,26 +134,49 @@ export async function generateSeedanceVideo(params: SeedanceGenerateParams): Pro
     throw new Error(`No request_id returned: ${JSON.stringify(submitData).slice(0, 500)}`);
   }
 
-  console.log(`[VideoGen] Request submitted: ${requestId}`);
+  // CRITICAL: use the canonical status_url / response_url that fal.ai returns
+  // in the submit response — do NOT reconstruct the path from `modelId`.
+  // fal.ai's queue API uses the APP PREFIX for status/result (e.g.
+  // `fal-ai/bytedance/requests/{id}/status`), NOT the full model path
+  // (`fal-ai/bytedance/seedance-2.0/text-to-video/...`). Rebuilding it from
+  // modelId produced HTTP 405 on every poll → 7.5-min "perpetual generating"
+  // timeout. The submit response carries the correct URLs; trust them.
+  const statusUrl: string =
+    submitData.status_url || `${FAL_QUEUE_BASE}/${modelId}/requests/${requestId}/status`;
+  const responseUrl: string =
+    submitData.response_url || `${FAL_QUEUE_BASE}/${modelId}/requests/${requestId}`;
+
+  console.log(`[VideoGen] Request submitted: ${requestId} (status: ${statusUrl})`);
 
   // Step 2: Poll until completed
   const MAX_POLLS = 90;
   const POLL_INTERVAL = 5000;
   let completed = false;
+  let consecutivePollErrors = 0;
 
   for (let i = 0; i < MAX_POLLS; i++) {
     await new Promise((r) => setTimeout(r, POLL_INTERVAL));
 
-    const statusUrl = `${FAL_QUEUE_BASE}/${modelId}/requests/${requestId}/status`;
     try {
       const statusRes = await fetch(statusUrl, {
         headers: { "Authorization": `Key ${apiKey}` },
       });
 
       if (!statusRes.ok) {
-        console.warn(`[VideoGen] Status poll ${i}: HTTP ${statusRes.status}`);
+        consecutivePollErrors++;
+        console.warn(`[VideoGen] Status poll ${i}: HTTP ${statusRes.status} (${consecutivePollErrors} in a row)`);
+        // Fail fast on a persistent client-side error (e.g. 401/403/404/405):
+        // these never self-resolve, so polling 90× is pointless. A 5xx /
+        // transient error is allowed to retry.
+        if (statusRes.status < 500 && consecutivePollErrors >= 3) {
+          const body = await statusRes.text().catch(() => "");
+          throw new Error(
+            `Video status check failed (HTTP ${statusRes.status}). The video provider rejected the status request. ${body.slice(0, 200)}`,
+          );
+        }
         continue;
       }
+      consecutivePollErrors = 0;
 
       const statusData = await safeJsonParse(statusRes, "Status poll");
 
@@ -157,11 +190,16 @@ export async function generateSeedanceVideo(params: SeedanceGenerateParams): Pro
         throw new Error(`Video generation failed: ${statusData.error || JSON.stringify(statusData)}`);
       }
 
-      if (i % 6 === 0) {
-        console.log(`[VideoGen] Generating... (${((i + 1) * POLL_INTERVAL) / 1000}s, status: ${statusData.status})`);
+      // Surface progress on every poll so the UI/logs never look frozen.
+      const elapsed = Math.round(((i + 1) * POLL_INTERVAL) / 1000);
+      if (params.onProgress) {
+        params.onProgress({ elapsedSeconds: elapsed, status: statusData.status || "IN_QUEUE" });
+      }
+      if (i % 4 === 0) {
+        console.log(`[VideoGen] Generating... (${elapsed}s, status: ${statusData.status})`);
       }
     } catch (e) {
-      if ((e as Error).message.includes("generation failed")) throw e;
+      if ((e as Error).message.includes("generation failed") || (e as Error).message.includes("status check failed")) throw e;
       console.warn(`[VideoGen] Poll error: ${(e as Error).message}`);
       continue;
     }
@@ -172,7 +210,7 @@ export async function generateSeedanceVideo(params: SeedanceGenerateParams): Pro
   }
 
   // Step 3: Fetch result
-  const resultUrl = `${FAL_QUEUE_BASE}/${modelId}/requests/${requestId}`;
+  const resultUrl = responseUrl;
   const resultRes = await fetch(resultUrl, {
     headers: { "Authorization": `Key ${apiKey}` },
   });
