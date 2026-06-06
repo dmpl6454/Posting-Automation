@@ -50,6 +50,10 @@ export function UploadsPanel({ canvas }: UploadsPanelProps) {
   return (
     <div className="space-y-4">
       <h3 className="text-sm font-semibold">Upload</h3>
+      <p className="text-xs text-muted-foreground">
+        The design editor works with images only. To post a video, upload it from the
+        Media page and attach it directly to your post.
+      </p>
       <input
         ref={fileInputRef}
         type="file"
@@ -66,7 +70,7 @@ export function UploadsPanel({ canvas }: UploadsPanelProps) {
         Upload Image
       </Button>
 
-      <h3 className="text-sm font-semibold">Media Library</h3>
+      <h3 className="text-sm font-semibold">Image Library</h3>
       {isLoading ? (
         <div className="flex justify-center py-4">
           <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />

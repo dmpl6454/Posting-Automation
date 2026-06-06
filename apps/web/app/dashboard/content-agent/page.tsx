@@ -32,10 +32,12 @@ function ContentStudioInner() {
   const composeImage = searchParams.get("aiImage") || undefined;
   const composeMediaId = searchParams.get("aiMediaId") || undefined;
 
-  const initialTab = searchParams.get("tab") || "compose";
+  // Accept ?tab= (canonical) and ?expanded= (legacy dashboard cards) — audit fix 2026-06-06
+  const initialTab = searchParams.get("tab") || searchParams.get("expanded") || "compose";
   const [activeTab, setActiveTab] = useState(composeContent || composeImage ? "compose" : initialTab);
   const [postCreated, setPostCreated] = useState(0);
-  const [showCalendar, setShowCalendar] = useState(false);
+  // ?view=calendar deep-links (legacy /dashboard/calendar) open the calendar view
+  const [showCalendar, setShowCalendar] = useState(searchParams.get("view") === "calendar");
   const [pendingMedia, setPendingMedia] = useState<{ dataUrl: string } | null>(null);
 
   return (
@@ -60,6 +62,14 @@ function ContentStudioInner() {
               ))}
             </TabsList>
 
+            {/* Layman helper — what the active tab does (audit clarity 2026-06-06) */}
+            <p className="mt-2 text-xs text-muted-foreground">
+              {activeTab === "compose" && "Write a post, attach media, pick channels, and schedule or publish."}
+              {activeTab === "create" && "Let AI draft captions or generate an image for your post."}
+              {activeTab === "repurpose" && "Paste a URL — AI turns it into captions and media you can post."}
+              {activeTab === "bulk" && "Create or import many posts at once (CSV) and schedule them."}
+            </p>
+
             <TabsContent value="compose" className="mt-4">
               <ComposeTab
                 initialContent={composeContent}
@@ -72,7 +82,8 @@ function ContentStudioInner() {
             </TabsContent>
 
             <TabsContent value="create" className="mt-4">
-              <Tabs defaultValue="content" className="w-full">
+              {/* ?subTab=image (from /dashboard/image-studio) opens the Image generator */}
+              <Tabs defaultValue={searchParams.get("subTab") === "image" ? "image" : "content"} className="w-full">
                 <TabsList className="grid w-full grid-cols-2 mb-4">
                   <TabsTrigger value="content" className="gap-1.5 text-xs">
                     <Sparkles className="h-3.5 w-3.5" />

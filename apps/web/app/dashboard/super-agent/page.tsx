@@ -6,6 +6,7 @@ import { Button } from "~/components/ui/button";
 import { Badge } from "~/components/ui/badge";
 import { Textarea } from "~/components/ui/textarea";
 import { cn } from "~/lib/utils";
+import { MediaPickerDialog } from "~/components/media-picker-dialog";
 import {
   Send,
   Loader2,
@@ -24,6 +25,9 @@ import {
   Target,
   Ear,
   Newspaper,
+  Paperclip,
+  Image as ImageIcon,
+  X as XIcon,
 } from "lucide-react";
 
 /* ── Types ── */
@@ -89,6 +93,8 @@ export default function SuperAgentPage() {
 
   // Fix #33: load capability list from backend
   const { data: capabilitiesData } = trpc.chat.capabilities.useQuery();
+  // Show the user which channels are available to post to (audit clarity 2026-06-06)
+  const { data: channels } = trpc.channel.list.useQuery();
 
   /* ── State ── */
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
@@ -97,10 +103,14 @@ export default function SuperAgentPage() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  // Media attachments the user adds via upload or the library picker (audit fix 2026-06-06)
+  const [attachments, setAttachments] = useState<{ mediaId: string; url: string; fileType: string }[]>([]);
+  const [showMediaPicker, setShowMediaPicker] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   /* ── Load thread messages ── */
   const { data: threadData } = trpc.chat.getThread.useQuery(
@@ -165,6 +175,26 @@ export default function SuperAgentPage() {
   );
 
   /* ── Send message ── */
+  // Upload an image/video and attach it to the next message (audit fix 2026-06-06)
+  const handleFileUpload = useCallback(async (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    try {
+      const res = await fetch("/api/upload", { method: "POST", body: form });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || "Upload failed");
+      }
+      const { id, url, fileType } = await res.json();
+      setAttachments((prev) => [...prev, { mediaId: id, url, fileType: fileType || file.type }]);
+    } catch (e: any) {
+      setMessages((prev) => [
+        ...prev,
+        { id: `err-${Date.now()}`, role: "system", content: `Upload failed: ${e.message}` },
+      ]);
+    }
+  }, []);
+
   const handleSend = async (content?: string) => {
     const text = (content || input).trim();
     if (!text || isStreaming) return;
@@ -194,9 +224,13 @@ export default function SuperAgentPage() {
       localStorage.setItem(pendingKey, JSON.stringify({ id: userMsg.id, role: "user", content: text, at: Date.now() }));
     }
 
+    // Snapshot + clear attachments so the next message starts fresh
+    const attachmentMediaIds = attachments.map((a) => a.mediaId);
+    setAttachments([]);
+
     // Save to DB
     try {
-      await sendMessageMutation.mutateAsync({ threadId: tid, content: text });
+      await sendMessageMutation.mutateAsync({ threadId: tid, content: text, attachmentMediaIds });
     } catch {
       setMessages((prev) => prev.filter((m) => m.id !== userMsg.id));
       if (typeof window !== "undefined") localStorage.removeItem(pendingKey);
@@ -247,7 +281,8 @@ export default function SuperAgentPage() {
                 },
               ]);
               setStreamingContent("");
-              if (event.action?.type === "publish_now") executeAction(event.action);
+              // publish_now is NOT auto-executed — it renders an explicit confirm
+              // button with a warning (audit fix 2026-06-06), like every other action.
             } else if (event.type === "error") {
               setMessages((prev) => [
                 ...prev,
@@ -255,7 +290,10 @@ export default function SuperAgentPage() {
               ]);
               setStreamingContent("");
             }
-          } catch {}
+          } catch (e) {
+            // Don't silently swallow a malformed SSE event — log it (audit fix 2026-06-06)
+            console.error("[super-agent] dropped malformed SSE event", e);
+          }
         }
       }
     } catch (error: any) {
@@ -414,9 +452,28 @@ export default function SuperAgentPage() {
               <div className="text-center">
                 <h2 className="text-xl font-bold">What can I help you with?</h2>
                 <p className="mt-1 max-w-md text-sm text-muted-foreground">
-                  I can execute any task on your platform — create posts, generate images,
-                  set up agents, monitor brands, and more. Just tell me what you need.
+                  Tell me what you want in plain English. I can <strong>generate captions &amp; images</strong>,{" "}
+                  <strong>attach your own photos or videos</strong> (use the paperclip below), and{" "}
+                  <strong>schedule or publish posts</strong> to your channels.
                 </p>
+              </div>
+
+              {/* Connected channels — make it obvious where posts can go (audit clarity 2026-06-06) */}
+              <div className="flex max-w-md flex-wrap items-center justify-center gap-1.5">
+                {(channels ?? []).length === 0 ? (
+                  <a href="/dashboard/channels" className="text-xs font-medium text-violet-600 underline">
+                    Connect a channel to start posting →
+                  </a>
+                ) : (
+                  <>
+                    <span className="text-[11px] text-muted-foreground">Available channels:</span>
+                    {(channels ?? []).map((c) => (
+                      <Badge key={c.id} variant="secondary" className="text-[10px]">
+                        {c.name || c.username || c.platform}
+                      </Badge>
+                    ))}
+                  </>
+                )}
               </div>
 
               {/* Capabilities — Fix #33: derived from backend SUPPORTED_ACTIONS */}
@@ -480,23 +537,31 @@ export default function SuperAgentPage() {
                   >
                     <div className="whitespace-pre-wrap text-sm leading-relaxed">{msg.content}</div>
                     {msg.action && (
-                      <div className="mt-3 flex items-center gap-2 border-t border-foreground/10 pt-2">
-                        <Badge variant="outline" className="text-[10px]">
-                          {msg.action.type.replace(/_/g, " ")}
-                        </Badge>
-                        <Button
-                          size="sm"
-                          className="h-6 gap-1 text-xs bg-violet-600 hover:bg-violet-700 text-white"
-                          onClick={() => executeAction(msg.action!)}
-                          disabled={executeActionMutation.isPending}
-                        >
-                          {executeActionMutation.isPending ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                          ) : (
-                            <CheckCircle2 className="h-3 w-3" />
-                          )}
-                          Execute
-                        </Button>
+                      <div className="mt-3 border-t border-foreground/10 pt-2">
+                        {msg.action.type === "publish_now" && (
+                          <div className="mb-2 flex items-center gap-1.5 rounded-md bg-amber-500/10 px-2 py-1 text-[11px] text-amber-700 dark:text-amber-400">
+                            <AlertCircle className="h-3 w-3 shrink-0" />
+                            This will publish immediately to your selected channels. It cannot be undone.
+                          </div>
+                        )}
+                        <div className="flex items-center gap-2">
+                          <Badge variant="outline" className="text-[10px]">
+                            {msg.action.type.replace(/_/g, " ")}
+                          </Badge>
+                          <Button
+                            size="sm"
+                            className="h-6 gap-1 text-xs bg-violet-600 hover:bg-violet-700 text-white"
+                            onClick={() => executeAction(msg.action!)}
+                            disabled={executeActionMutation.isPending}
+                          >
+                            {executeActionMutation.isPending ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <CheckCircle2 className="h-3 w-3" />
+                            )}
+                            {msg.action.type === "publish_now" ? "Publish now" : "Execute"}
+                          </Button>
+                        </div>
                       </div>
                     )}
                   </div>
@@ -540,30 +605,102 @@ export default function SuperAgentPage() {
 
         {/* ── Input Bar ── */}
         <div className="border-t bg-background p-3">
-          <div className="mx-auto flex max-w-3xl items-end gap-2">
-            <Textarea
-              ref={textareaRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Tell me what to do..."
-              className="min-h-[48px] max-h-[160px] resize-none rounded-xl"
-              rows={1}
-            />
-            <Button
-              onClick={() => handleSend()}
-              disabled={!input.trim() || isStreaming}
-              className="h-12 w-12 shrink-0 rounded-xl bg-violet-600 hover:bg-violet-700"
-            >
-              {isStreaming ? (
-                <Loader2 className="h-5 w-5 animate-spin" />
-              ) : (
-                <Send className="h-5 w-5" />
-              )}
-            </Button>
+          <div className="mx-auto max-w-3xl">
+            {/* Attachment thumbnails (audit fix 2026-06-06) */}
+            {attachments.length > 0 && (
+              <div className="mb-2 flex flex-wrap gap-2">
+                {attachments.map((a, i) => (
+                  <div key={a.mediaId} className="relative h-14 w-14 overflow-hidden rounded-md border">
+                    {a.fileType.startsWith("video") ? (
+                      <video src={a.url} className="h-full w-full object-cover" />
+                    ) : (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={a.url} alt="attachment" className="h-full w-full object-cover" />
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
+                      className="absolute right-0 top-0 rounded-bl bg-black/60 p-0.5 text-white"
+                      aria-label="Remove attachment"
+                    >
+                      <XIcon className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="flex items-end gap-2">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*,video/*"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void handleFileUpload(f);
+                  e.target.value = "";
+                }}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                title="Upload an image or video"
+                className="h-12 w-12 shrink-0 rounded-xl"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isStreaming}
+              >
+                <Paperclip className="h-5 w-5" />
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                title="Choose from your Media Library"
+                className="h-12 w-12 shrink-0 rounded-xl"
+                onClick={() => setShowMediaPicker(true)}
+                disabled={isStreaming}
+              >
+                <ImageIcon className="h-5 w-5" />
+              </Button>
+              <Textarea
+                ref={textareaRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="Tell me what to do..."
+                className="min-h-[48px] max-h-[160px] resize-none rounded-xl"
+                rows={1}
+              />
+              <Button
+                onClick={() => handleSend()}
+                disabled={!input.trim() || isStreaming}
+                className="h-12 w-12 shrink-0 rounded-xl bg-violet-600 hover:bg-violet-700"
+              >
+                {isStreaming ? (
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                ) : (
+                  <Send className="h-5 w-5" />
+                )}
+              </Button>
+            </div>
           </div>
         </div>
       </div>
+
+      {/* Media Library picker — adds an existing upload as an attachment */}
+      <MediaPickerDialog
+        open={showMediaPicker}
+        onOpenChange={setShowMediaPicker}
+        onSelect={(url, _fileName, mediaId) => {
+          if (mediaId) {
+            const isVideo = /\.(mp4|mov|webm|m4v|avi)$/i.test(url) || /\.(mp4|mov|webm|m4v|avi)$/i.test(_fileName);
+            setAttachments((prev) => [...prev, { mediaId, url, fileType: isVideo ? "video" : "image" }]);
+          }
+          setShowMediaPicker(false);
+        }}
+      />
     </div>
   );
 }

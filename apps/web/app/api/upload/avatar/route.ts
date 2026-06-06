@@ -26,7 +26,20 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "bad_type" }, { status: 415 });
   }
 
-  const buffer = Buffer.from(await file.arrayBuffer());
+  // Pre-flight: surface a clear config error instead of a silent/opaque S3 failure (audit #17)
+  const accessKeyId = process.env.S3_ACCESS_KEY_ID || process.env.S3_ACCESS_KEY || "";
+  const secretAccessKey = process.env.S3_SECRET_ACCESS_KEY || process.env.S3_SECRET_KEY || "";
+  if (!accessKeyId || !secretAccessKey) {
+    console.error("[upload/avatar] S3 credentials are not configured (S3_ACCESS_KEY_ID/S3_SECRET_ACCESS_KEY)");
+    return NextResponse.json({ error: "Storage is not configured. Contact your administrator." }, { status: 503 });
+  }
+
+  let buffer: Buffer;
+  try {
+    buffer = Buffer.from(await file.arrayBuffer());
+  } catch (err: any) {
+    return NextResponse.json({ error: `Failed to read file: ${err?.message ?? "body too large or corrupted"}` }, { status: 413 });
+  }
   const ext = file.type === "image/png" ? "png" : file.type === "image/webp" ? "webp" : "jpg";
   const key = `avatars/${userId}-${Date.now()}.${ext}`;
 
@@ -35,21 +48,23 @@ export async function POST(req: Request) {
     region: process.env.S3_REGION || "us-east-1",
     endpoint: process.env.S3_ENDPOINT || undefined,
     forcePathStyle: true,
-    credentials: {
-      accessKeyId: process.env.S3_ACCESS_KEY_ID || process.env.S3_ACCESS_KEY || "",
-      secretAccessKey: process.env.S3_SECRET_ACCESS_KEY || process.env.S3_SECRET_KEY || "",
-    },
+    credentials: { accessKeyId, secretAccessKey },
   });
 
-  await s3.send(
-    new PutObjectCommand({
-      Bucket: BUCKET,
-      Key: key,
-      Body: buffer,
-      ContentType: file.type,
-      ContentLength: buffer.length,
-    })
-  );
+  try {
+    await s3.send(
+      new PutObjectCommand({
+        Bucket: BUCKET,
+        Key: key,
+        Body: buffer,
+        ContentType: file.type,
+        ContentLength: buffer.length,
+      })
+    );
+  } catch (err: any) {
+    console.error("[upload/avatar] S3 upload failed:", err?.message);
+    return NextResponse.json({ error: `Storage upload failed: ${err?.message ?? "unknown S3 error"}` }, { status: 502 });
+  }
 
   const url = process.env.S3_PUBLIC_URL
     ? `${process.env.S3_PUBLIC_URL}/${key}`

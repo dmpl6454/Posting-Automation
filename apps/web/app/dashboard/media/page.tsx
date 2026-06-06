@@ -123,7 +123,7 @@ export default function MediaPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Media Library</h1>
           <p className="text-muted-foreground">
-            Upload and manage your media files
+            Upload images &amp; videos, then attach them to any post
             {allItems.length > 0 && (
               <span className="ml-1">({allItems.length}{hasNextPage ? "+" : ""} files)</span>
             )}
