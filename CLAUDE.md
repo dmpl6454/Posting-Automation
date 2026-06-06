@@ -79,7 +79,7 @@ Filter to one workspace: `pnpm --filter @postautomation/web <cmd>`
 - **Local**: `.env` (gitignored). Template: [.env.example](.env.example).
 - **Production**: `.env.production` on the server (gitignored). Template: [.env.production.example](.env.production.example).
 - Many OAuth/API credentials are intentionally left blank (Twitter, LinkedIn, FB, IG, Reddit, YouTube, TikTok, Pinterest, OpenAI, Anthropic, Gemini, Stripe, Resend, Hunter, Sentry). The app boots without them; affected features just don't work until filled in.
-- **Configured in production**: `AUTH_GOOGLE_ID/SECRET`, `AUTH_SECRET`/`NEXTAUTH_SECRET`, `SMTP_*` (Google Workspace). GitHub OAuth was removed — not needed.
+- **Configured in production**: `AUTH_GOOGLE_ID/SECRET`, `AUTH_SECRET`/`NEXTAUTH_SECRET`, `SMTP_*` (Google Workspace), `TWITTER_CLIENT_ID/SECRET` (live — Consumer Key/Secret, public posting active), plus the Meta + YouTube OAuth creds. GitHub OAuth was removed — not needed. (TikTok creds intentionally unset — blocked by the India ban; see Channel Connections → TikTok specifics.)
 
 ## Deployment
 
@@ -186,6 +186,25 @@ Platforms: TWITTER, LINKEDIN, FACEBOOK, INSTAGRAM, REDDIT, YOUTUBE, TIKTOK, PINT
 The `platformAuthInfo` tRPC query tells the UI which type each platform is and whether OAuth platforms are configured.
 
 **YouTube specifics:** Uses the same Google Cloud project as Google sign-in (`Post Automation Web` OAuth client) but needs a separate set of env vars (`YOUTUBE_CLIENT_ID` / `YOUTUBE_CLIENT_SECRET`). The app requests two scopes: `youtube.upload` (for posting) AND `youtube.readonly` (required by `getProfile` → `channels.list` API — without it you get 403 PERMISSION_DENIED). Redirect URI: `${APP_URL}/api/oauth/callback/youtube`. Google's OAuth consent screen must be in "Testing" mode with the user's account added as a test user, or "In production" (requires Google verification for sensitive scopes, ~1–2 weeks).
+
+**Twitter / X specifics — LIVE in production for all users (2026-06-06):**
+
+- **Protocol is OAuth 1.0a, NOT OAuth 2.0.** [twitter.provider.ts](packages/social/src/providers/twitter.provider.ts) reads `TWITTER_CLIENT_ID` / `TWITTER_CLIENT_SECRET` as the **Consumer Key + Secret** (the "OAuth 1.0 Keys → Consumer Key" in the X Developer Console — **NOT** the "OAuth 2.0 Keys → Client ID", which is a different `UWZ5...`-style base64 value that will 401 against `oauth/request_token`). The connect flow is 3-legged: request_token → user authorize → access_token, HMAC-SHA1 signed. Tokens never expire (`refreshAccessToken` throws by design).
+- **The scope arrays in `getDefaultScopes` (`tweet.read`, etc.) are decorative for Twitter** — OAuth 1.0a sends no per-request scopes; permissions are fixed at app-registration time ("Read and write" in the portal). Don't "fix" them.
+- **Request-token secret is held in process memory** ([oauth1a-temp-store.ts](packages/social/src/utils/oauth1a-temp-store.ts), 10-min TTL). Fine on the single-container prod deploy; would break under horizontal scaling / mid-flow restart. Symptom: "request token secret not found or expired" on a clean connect attempt → just retry.
+- **Public, multi-user posting = a BILLING gate, not a free review (unlike FB/YT).** Every post by every user is billed to the operator's enrolled X account; there is NO free "submit for review → open to public" path.
+  - **App is on "Pay Per Use" and was MOVED from the Development → Production environment slot** (X Console → Apps → Move). This unlocked authorization for arbitrary (non-test) users. The move keeps the same keys/app ID (no redeploy needed). **Verified 2026-06-06:** a second, ordinary Twitter account connected + posted successfully.
+  - On Pay Per Use, posting **draws down a loaded credit balance** — a saved card alone is NOT enough; credits must be purchased (Billing → Credits) or every post fails with `{"title":"CreditsDepleted", .../2/problems/credits}`. The alternative is a flat subscription tier (**Basic ~$100/mo ≈ 50k writes/mo**, Pro ~$5k/mo). The per-org `enforcePlanLimit(postsPerMonth)` is what protects the shared quota from one org draining it.
+- **Account:** dev account `@admnaccn` (X account id `2063190127115968512`, project `33027825`). Redirect URIs registered (both): `http://localhost:3000/api/oauth/callback/twitter` and `https://postautomation.co.in/api/oauth/callback/twitter`. App permissions: Read and write; type: Web App.
+- **Token invalidation:** regenerating the Consumer Key/Secret in the portal invalidates ALL stored Twitter tokens → users must reconnect (the OAuth 1.0a analogue of the YT `invalid_grant` quirk).
+- **Analytics needs a paid tier:** `getPostAnalytics` hits `/2/tweets/{id}?tweet.fields=public_metrics` which 403s on Free; posting works regardless.
+- Full operator guide: [docs/TWITTER_TIKTOK_SETUP.md](docs/TWITTER_TIKTOK_SETUP.md).
+
+**TikTok specifics — code-ready, but BLOCKED by the India ban (2026-06-06):**
+
+- **Code is complete and fixed** (commit on `fix/audit-2026-06-06`): env var standardized to `TIKTOK_CLIENT_ID` (the OAuth connect/publish paths + the "Setup required" gate read `${PLATFORM}_CLIENT_ID`; the value pasted is still TikTok's "Client Key"; analytics workers keep a `TIKTOK_CLIENT_ID || TIKTOK_CLIENT_KEY` fallback) and `getDefaultScopes` now has `TIKTOK: ["user.info.basic", "video.publish", "video.upload"]` (was empty `[]` → authorize URL had `scope=""` → TikTok rejected it). Provider is video-only (`PULL_FROM_URL` Direct Post, 287 MB, no programmatic delete).
+- **🚫 Cannot be set up or used from India.** TikTok has been banned in India since 2020-06-29. `developers.tiktok.com` is unreachable from an Indian IP, so the operator cannot register the app / get the Client Key / pass the Content Posting API audit; and Indian end users are blocked regardless. **TikTok is shelved for this (India-based) operation** unless run via a non-India developer egress AND targeting a non-India user base. No code change fixes this — it's a geo/legal block.
+- **Sandbox/audit gate (if ever pursued abroad):** until the Content Posting API review is approved, the app is an *unaudited client* — test users only + all posts forced `SELF_ONLY` (private). Provider defaults `privacy_level: SELF_ONLY`; public posting needs `payload.metadata.privacyLevel` plumbed from the compose UI post-approval. This is TikTok's analogue of Meta Advanced Access.
 
 ### Facebook / Instagram (Meta) specifics — read before debugging FB/IG
 

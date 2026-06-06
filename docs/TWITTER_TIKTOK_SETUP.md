@@ -1,5 +1,9 @@
 # Connecting Twitter & TikTok (connect + posting), like FB and YouTube
 
+> **STATUS (updated 2026-06-06):**
+> - **Twitter/X — ✅ LIVE in production for all users.** Consumer Key/Secret set, app moved to the Pay-Per-Use **Production** environment, public connect + posting verified end-to-end. Ongoing requirement: keep X API **credits** loaded (or move to a Basic/Pro subscription) — posting is billed per the operator's enrolled X account. See §3 + the CLAUDE.md "Twitter / X specifics" section.
+> - **TikTok — ✅ code fixed (env var + scopes, committed), but 🚫 BLOCKED by the India ban.** `developers.tiktok.com` is unreachable from India and Indian users are blocked, so it cannot be registered or used for this India-based operation. The §4/§5 code work below is **already done**; what remains is purely the (currently impossible-from-India) TikTok app registration + Content Posting API audit. Shelved unless run via a non-India egress targeting a non-India audience.
+
 This guide explains how to make **Twitter/X** and **TikTok** work end-to-end — channel
 connect *and* posting — the same way Facebook/Instagram and YouTube already do.
 
