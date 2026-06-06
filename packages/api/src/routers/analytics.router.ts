@@ -314,8 +314,10 @@ export const analyticsRouter = createRouter({
               INNER JOIN "PostTarget" pt ON pt.id = a2."postTargetId"
               INNER JOIN "Post" p ON p.id = pt."postId"
               WHERE pt."channelId" = $1
-                AND p."publishedAt" >= $2
-                AND p."publishedAt" <= $3
+                -- Fall back to updatedAt when publishedAt is NULL so PUBLISHED
+                -- posts missing a timestamp aren't silently dropped (audit fix 2026-06-06).
+                AND COALESCE(p."publishedAt", p."updatedAt") >= $2
+                AND COALESCE(p."publishedAt", p."updatedAt") <= $3
               GROUP BY a2."postTargetId"
             ) latest ON a."postTargetId" = latest."postTargetId" AND a."snapshotAt" = latest.max_snap`,
             channel.id,

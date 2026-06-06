@@ -85,14 +85,16 @@ function DateRangePicker({
         <input
           type="date"
           value={from.slice(0, 10)}
-          onChange={(e) => onChange(new Date(e.target.value).toISOString(), to)}
+          // Parse the date input as UTC midnight, not local — otherwise a UTC+5:30
+          // user's "today" shifts a day and posts drop out (audit fix 2026-06-06).
+          onChange={(e) => onChange(e.target.value ? new Date(`${e.target.value}T00:00:00.000Z`).toISOString() : from, to)}
           className="text-xs border rounded-md px-2 py-1 bg-background"
         />
         <span className="text-xs text-muted-foreground">–</span>
         <input
           type="date"
           value={to.slice(0, 10)}
-          onChange={(e) => onChange(from, new Date(e.target.value).toISOString())}
+          onChange={(e) => onChange(from, e.target.value ? new Date(`${e.target.value}T23:59:59.999Z`).toISOString() : to)}
           className="text-xs border rounded-md px-2 py-1 bg-background"
         />
       </div>
@@ -148,13 +150,22 @@ export default function AnalyticsPage() {
     label: format(new Date(d.date), "MMM d"),
   }));
 
+  // Channels are connected but no engagement has synced yet — distinct from
+  // "no channels connected" so we don't imply zero performance (audit fix 2026-06-06).
+  const hasChannels = !!channelStats && channelStats.length > 0;
+  const noEngagementYet =
+    hasChannels &&
+    channelStats!.every(
+      (ch) => (ch.impressions + ch.reach + ch.likes + ch.comments + ch.shares) === 0
+    );
+
   return (
     <div className="space-y-8">
       {/* Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Analytics</h1>
-          <p className="text-muted-foreground">Track your social media performance across all platforms</p>
+          <p className="text-muted-foreground">See how your posts perform — reach, likes, comments &amp; shares across your channels</p>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
           <DateRangePicker
@@ -344,6 +355,13 @@ export default function AnalyticsPage() {
           <CardDescription>Metrics per connected channel</CardDescription>
         </CardHeader>
         <CardContent className="p-0">
+          {noEngagementYet && (
+            <div className="m-4 mb-0 rounded-md bg-blue-500/10 px-3 py-2 text-xs text-blue-700 dark:text-blue-400">
+              Your channels are connected, but no engagement data has synced yet. Some platforms
+              (e.g. Facebook/Instagram) only report metrics after a sync cycle and once permissions
+              are approved. Try “Sync Now” above, or check back later.
+            </div>
+          )}
           {channelLoading ? (
             <div className="space-y-2 p-6">
               {[1, 2, 3].map((i) => <Skeleton key={i} className="h-12 rounded-lg" />)}

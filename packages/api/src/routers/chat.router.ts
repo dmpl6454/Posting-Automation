@@ -635,7 +635,7 @@ export const chatRouter = createRouter({
         }
 
         case "get_analytics": {
-          const [totalPosts, published, scheduled, channels, recentPosts] = await Promise.all([
+          const [totalPosts, published, scheduled, channels, recentPosts, publishedTargets] = await Promise.all([
             ctx.prisma.post.count({ where: { organizationId: ctx.organizationId } }),
             ctx.prisma.post.count({ where: { organizationId: ctx.organizationId, status: "PUBLISHED" } }),
             ctx.prisma.post.count({ where: { organizationId: ctx.organizationId, status: "SCHEDULED" } }),
@@ -646,9 +646,45 @@ export const chatRouter = createRouter({
               take: 5,
               select: { id: true, content: true, status: true, createdAt: true },
             }),
+            ctx.prisma.postTarget.findMany({
+              where: { post: { organizationId: ctx.organizationId }, status: "PUBLISHED" },
+              select: { id: true },
+            }),
           ]);
 
-          const summary = `📊 Dashboard Summary:\n- Total posts: ${totalPosts}\n- Published: ${published}\n- Scheduled: ${scheduled}\n- Active channels: ${channels}\n\nRecent posts:\n${recentPosts.map((p) => `  • [${p.status}] ${p.content.slice(0, 60)}...`).join("\n")}`;
+          // Engagement summary so chat matches the dashboard — sum the latest
+          // AnalyticsSnapshot per published target (same source as analytics.engagement).
+          let engagement = { impressions: 0, likes: 0, comments: 0, shares: 0, reach: 0 };
+          const targetIds = publishedTargets.map((t) => t.id);
+          if (targetIds.length > 0) {
+            const rows: Array<{ impressions: bigint; likes: bigint; comments: bigint; shares: bigint; reach: bigint }> =
+              await (ctx.prisma.$queryRawUnsafe as any)(
+                `SELECT
+                  COALESCE(SUM(a.impressions), 0) as impressions,
+                  COALESCE(SUM(a.likes), 0) as likes,
+                  COALESCE(SUM(a.comments), 0) as comments,
+                  COALESCE(SUM(a.shares), 0) as shares,
+                  COALESCE(SUM(a.reach), 0) as reach
+                FROM "AnalyticsSnapshot" a
+                INNER JOIN (
+                  SELECT "postTargetId", MAX("snapshotAt") as max_snapshot
+                  FROM "AnalyticsSnapshot"
+                  WHERE "postTargetId" = ANY($1::text[])
+                  GROUP BY "postTargetId"
+                ) latest ON a."postTargetId" = latest."postTargetId" AND a."snapshotAt" = latest.max_snapshot`,
+                targetIds
+              );
+            const r = rows[0];
+            engagement = {
+              impressions: Number(r?.impressions ?? 0),
+              likes: Number(r?.likes ?? 0),
+              comments: Number(r?.comments ?? 0),
+              shares: Number(r?.shares ?? 0),
+              reach: Number(r?.reach ?? 0),
+            };
+          }
+
+          const summary = `📊 Dashboard Summary:\n- Total posts: ${totalPosts}\n- Published: ${published}\n- Scheduled: ${scheduled}\n- Active channels: ${channels}\n\nEngagement (all published posts):\n- Impressions: ${engagement.impressions}\n- Likes: ${engagement.likes}\n- Comments: ${engagement.comments}\n- Shares: ${engagement.shares}\n- Reach: ${engagement.reach}\n\nRecent posts:\n${recentPosts.map((p) => `  • [${p.status}] ${p.content.slice(0, 60)}...`).join("\n")}`;
 
           await ctx.prisma.chatMessage.create({
             data: {
@@ -659,7 +695,7 @@ export const chatRouter = createRouter({
             },
           });
 
-          return { type: "analytics_fetched", totalPosts, published, scheduled, channels };
+          return { type: "analytics_fetched", totalPosts, published, scheduled, channels, engagement };
         }
 
         default:
