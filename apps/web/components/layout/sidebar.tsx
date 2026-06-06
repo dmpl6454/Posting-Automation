@@ -60,7 +60,7 @@ const navigation: NavItem[] = [
   { name: "Short Links", href: "/dashboard/links", icon: Link2 },
   { name: "NewsGrid Bot", href: "/dashboard/newsgrid", icon: Newspaper, minPlan: "STARTER" },
   { name: "Autopilot", href: "/dashboard/autopilot", icon: Zap, minPlan: "STARTER" },
-  { name: "Listening", href: "/dashboard/listening", icon: Ear, minPlan: "STARTER" },
+  { name: "Social Listening", href: "/dashboard/listening", icon: Ear, minPlan: "STARTER" },
   { name: "Campaigns", href: "/dashboard/campaigns", icon: Target, minPlan: "PROFESSIONAL" },
   // Fix #62: sidebar label aligned with page header ("Brand Outreach")
   { name: "Brand Outreach", href: "/dashboard/brand-leads", icon: Star, minPlan: "PROFESSIONAL" },

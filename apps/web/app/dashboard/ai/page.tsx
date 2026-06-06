@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
 
 export default function AIStudioRedirect() {
-  redirect("/dashboard/content-agent?tab=generate");
+  redirect("/dashboard/content-agent?tab=create");
 }

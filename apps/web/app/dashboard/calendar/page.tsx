@@ -7,7 +7,7 @@ import { useRouter } from "next/navigation";
 export default function CalendarRedirect() {
   const router = useRouter();
   useEffect(() => {
-    router.replace("/dashboard/content-agent?tab=calendar");
+    router.replace("/dashboard/content-agent?view=calendar");
   }, [router]);
   return null;
 }
