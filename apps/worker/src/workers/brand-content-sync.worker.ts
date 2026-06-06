@@ -220,7 +220,10 @@ async function fetchLinkedInContent(handle: string, orgId: string): Promise<RawB
 
 /** Fetch TikTok user videos */
 async function fetchTikTokContent(handle: string): Promise<RawBrandContent[]> {
-  const clientKey = process.env.TIKTOK_CLIENT_KEY;
+  // Standardized on TIKTOK_CLIENT_ID (matches the OAuth connect/publish paths,
+  // which read `${PLATFORM}_CLIENT_ID`). Falls back to the legacy TIKTOK_CLIENT_KEY
+  // name so existing deployments keep working. The value is TikTok's Client Key.
+  const clientKey = process.env.TIKTOK_CLIENT_ID || process.env.TIKTOK_CLIENT_KEY;
   const clientSecret = process.env.TIKTOK_CLIENT_SECRET;
   if (!clientKey || !clientSecret || !handle) return [];
   const items: RawBrandContent[] = [];
