@@ -25,3 +25,32 @@ describe("buildStaticCreative", () => {
     expect(html).not.toContain(`<b>"x"</b>`);
   });
 });
+
+describe("hook_bars style", () => {
+  it("renders both bars + highlight markup + optional inset", () => {
+    const html = buildStaticCreative({
+      style: "hook_bars",
+      headline: "TMC's Jahangir Khan arrested near Nepal border",
+      hookLine: "TMC ka **Pushpa** kaise jhukega nahi 🚨",
+      channelName: "NewsPage",
+      brandColor: "#e11d48",
+      logoPosition: "top-right",
+      bgImageUrl: "data:image/png;base64,AAAA",
+      secondaryImageUrl: "data:image/png;base64,BBBB",
+    });
+    expect(html).toContain("Nepal border");
+    expect(html).toContain(`color:#e11d48`);
+    expect(html).toContain("Pushpa");
+    expect(html).toContain("data:image/png;base64,BBBB");
+  });
+  it("omits inset when no secondaryImageUrl", () => {
+    const html = buildStaticCreative({
+      style: "hook_bars",
+      headline: "Headline only",
+      hookLine: "Hook!",
+      channelName: "NewsPage",
+      logoPosition: "top-right",
+    });
+    expect(html).not.toContain("inset-cutout");
+  });
+});

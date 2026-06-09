@@ -108,6 +108,38 @@ ${opts.handle ? `<div class="handle">${escapeHtml(opts.handle)}</div>` : ""}
 </body></html>`;
 }
 
+function buildHookBars(opts: StaticCreativeOptions): string {
+  const accent = opts.brandColor || DEFAULT_ACCENT;
+  const bg = opts.bgImageUrl
+    ? `background-image:url(${opts.bgImageUrl});background-size:cover;background-position:center;`
+    : `background:linear-gradient(135deg,#222,#111);`;
+  const corner = opts.logoPosition === "top-left" ? "left:40px;" : "right:40px;";
+  const hookHtml = opts.hookLine ? renderHighlightMarkup(opts.hookLine, accent) : "";
+  const inset = opts.secondaryImageUrl
+    ? `<img class="inset-cutout" src="${opts.secondaryImageUrl}" style="position:absolute;bottom:330px;right:60px;width:300px;height:300px;border-radius:50%;object-fit:cover;border:6px solid #fff;box-shadow:0 8px 30px rgba(0,0,0,0.5);" />`
+    : "";
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+${FONT_IMPORT}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{width:${CANVAS.width}px;height:${CANVAS.height}px;overflow:hidden;position:relative;font-family:'Inter',system-ui,sans-serif;background:#000;}
+.bg{position:absolute;inset:0;${bg}}
+.logo{position:absolute;top:36px;${corner}}
+.bars{position:absolute;left:36px;right:36px;bottom:48px;display:flex;flex-direction:column;gap:14px;}
+.bar{background:#fff;border-radius:10px;padding:18px 24px;box-shadow:0 6px 24px rgba(0,0,0,0.35);}
+.hook{font-size:40px;font-weight:800;line-height:1.15;color:#111;}
+.headline{font-size:44px;font-weight:800;line-height:1.12;color:#111;}
+.headline .accent{color:${accent};}
+</style></head><body>
+<div class="bg"></div>
+<div class="logo">${logoHtml(opts, 56)}</div>
+${inset}
+<div class="bars">
+  ${hookHtml ? `<div class="bar"><div class="hook">${hookHtml}</div></div>` : ""}
+  <div class="bar"><div class="headline">${escapeHtml(opts.headline)}</div></div>
+</div>
+</body></html>`;
+}
+
 function notImplemented(style: string): never {
   throw new Error(`creative style "${style}" not implemented yet`);
 }
@@ -117,7 +149,7 @@ export function buildStaticCreative(opts: StaticCreativeOptions): string {
     case "premium_editorial":
       return buildPremiumEditorial(opts);
     case "hook_bars":
-      return notImplemented("hook_bars");
+      return buildHookBars(opts);
     case "tweet_card":
       return notImplemented("tweet_card");
     case "bold_typographic":
