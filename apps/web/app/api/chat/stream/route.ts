@@ -52,13 +52,32 @@ export async function POST(req: Request) {
     where: { threadId: body.threadId },
     orderBy: { createdAt: "asc" },
     take: 50,
-    select: { role: true, content: true, metadata: true },
+    select: {
+      role: true,
+      content: true,
+      metadata: true,
+      attachments: {
+        select: { media: { select: { url: true, fileType: true } } },
+      },
+    },
   });
 
-  const messages: AIChatMessage[] = dbMessages.map((m) => ({
-    role: m.role as "user" | "assistant" | "system",
-    content: m.content,
-  }));
+  const messages: AIChatMessage[] = dbMessages.map((m) => {
+    const imgs = (m.attachments ?? [])
+      .map((a) => a.media)
+      .filter((md): md is { url: string; fileType: string } => !!md && typeof md.fileType === "string" && md.fileType.startsWith("image"))
+      .map((md) => md.url);
+    if (m.role === "user" && imgs.length > 0) {
+      return {
+        role: "user" as const,
+        content: [
+          { type: "text" as const, text: m.content || "(see attached image)" },
+          ...imgs.map((url) => ({ type: "image_url" as const, image_url: { url } })),
+        ],
+      };
+    }
+    return { role: m.role as "user" | "assistant" | "system", content: m.content };
+  });
 
   // Load full platform context for the agent
   const [channels, agents, campaigns, listeningQueries, influencers, recentPosts, postStats, org] = await Promise.all([
@@ -105,10 +124,22 @@ export async function POST(req: Request) {
 
   // Detect trending news intent from the last user message
   const lastUserMessage = messages.filter((m) => m.role === "user").pop();
+  const lastText =
+    lastUserMessage == null
+      ? ""
+      : typeof lastUserMessage.content === "string"
+        ? lastUserMessage.content
+        : lastUserMessage.content
+            .map((p) => (p.type === "text" ? p.text : ""))
+            .join(" ");
+  const hasImageAttachments =
+    !!lastUserMessage &&
+    typeof lastUserMessage.content !== "string" &&
+    lastUserMessage.content.some((p) => p.type === "image_url");
   let trendingNews: Array<{ title: string; source: string; link: string; summary: string }> | undefined;
 
   if (lastUserMessage) {
-    const trendingIntent = detectTrendingIntent(lastUserMessage.content);
+    const trendingIntent = detectTrendingIntent(lastText);
     if (trendingIntent) {
       try {
         const headlines = await fetchTrendingNews(trendingIntent.topic, 10, trendingIntent.region);
@@ -136,10 +167,13 @@ export async function POST(req: Request) {
       .pop();
     const lastMeta = lastAssistantMsg?.metadata as Record<string, unknown> | null;
     provider = await routeProvider(
-      lastUserMessage?.content ?? "",
+      lastText,
       {
-        threadHistory: messages.slice(-6),
-        hasAttachments: false,
+        threadHistory: messages.slice(-6).map((m) => ({
+          role: m.role,
+          content: typeof m.content === "string" ? m.content : m.content.map((p) => (p.type === "text" ? p.text : "")).join(" "),
+        })),
+        hasAttachments: hasImageAttachments,
         agentNiche: thread.agent?.niche || undefined,
         lastProvider: (lastMeta?.provider as AIProvider) ?? undefined,
       }
@@ -152,8 +186,10 @@ export async function POST(req: Request) {
   const writer = writable.getWriter();
   const encoder = new TextEncoder();
 
-  // Ordered by reliability — only the first non-failed provider is tried (max 1 fallback)
-  const FALLBACK_PRIORITY: AIProvider[] = ["openai", "anthropic", "grok", "deepseek", "gemini", "gemma4"];
+  // Vision-capable only when images are attached (grok/deepseek/gemma4 have no vision API).
+  const FALLBACK_PRIORITY: AIProvider[] = hasImageAttachments
+    ? ["gemini", "openai", "anthropic"]
+    : ["openai", "anthropic", "grok", "deepseek", "gemini", "gemma4"];
 
   const streamResponse = async () => {
     let fullResponse = "";

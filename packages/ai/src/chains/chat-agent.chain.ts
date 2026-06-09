@@ -5,9 +5,13 @@ import { callGemma4 } from "../providers/gemma4.provider";
 import { CHAT_AGENT_SYSTEM_PROMPT } from "../prompts/chat-agent.prompt";
 import type { AIProvider } from "../types";
 
+export type ChatMessageContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
 export interface ChatMessage {
   role: "user" | "assistant" | "system";
-  content: string;
+  content: string | ChatMessageContentPart[];
 }
 
 export interface ChatContext {
@@ -151,6 +155,18 @@ function buildContextString(context: ChatContext): string {
   return parts.join("\n");
 }
 
+async function fetchImageAsBase64(url: string): Promise<{ data: string; mimeType: string } | null> {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const mimeType = res.headers.get("content-type") || "image/jpeg";
+    const buf = Buffer.from(await res.arrayBuffer());
+    return { data: buf.toString("base64"), mimeType };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Stream chat responses using LangChain (OpenAI/Anthropic).
  * Returns an async generator that yields text chunks.
@@ -174,11 +190,11 @@ export async function* streamChatAgent(
     const langchainMessages = [
       new SystemMessage(systemPrompt),
       ...messages.map((m) => {
-        if (m.role === "user") return new HumanMessage(m.content);
+        if (m.role === "user") return new HumanMessage({ content: m.content as any });
         // Treat both "assistant" and "system" DB messages as AI messages
         // so system notes (action confirmations, etc.) stay in context
         // but never appear as a second SystemMessage.
-        return new AIMessage(m.content);
+        return new AIMessage(typeof m.content === "string" ? m.content : "");
       }),
     ];
 
@@ -187,28 +203,47 @@ export async function* streamChatAgent(
       const text = typeof chunk.content === "string" ? chunk.content : "";
       if (text) yield text;
     }
-  } else {
-    // Gemini: non-streaming fallback (generate full response)
-    // Map system messages to "System note" so the model knows they are
-    // not part of the user/assistant conversation but still has context.
+  } else if (provider === "gemma4") {
+    // Gemma4: text-only, non-streaming fallback
     const formattedMessages = messages
       .map((m) => {
-        if (m.role === "user") return `User: ${m.content}`;
-        if (m.role === "system") return `System note: ${m.content}`;
-        return `Assistant: ${m.content}`;
+        const text = typeof m.content === "string" ? m.content : m.content.map((p) => (p.type === "text" ? p.text : "")).join(" ");
+        if (m.role === "user") return `User: ${text}`;
+        if (m.role === "system") return `System note: ${text}`;
+        return `Assistant: ${text}`;
       })
       .join("\n\n");
 
     const fullPrompt = `${systemPrompt}\n\n${formattedMessages}\n\nAssistant:`;
-    const response = provider === "gemma4"
-      ? await callGemma4(fullPrompt)
-      : await callGemini(fullPrompt);
+    const response = await callGemma4(fullPrompt);
 
     // Yield in chunks to simulate streaming
     const words = response.split(" ");
     for (let i = 0; i < words.length; i += 3) {
       yield words.slice(i, i + 3).join(" ") + " ";
     }
+  } else {
+    // Gemini branch — supports multimodal via inlineData parts.
+    const contents: any[] = [{ role: "user", parts: [{ text: systemPrompt }] }];
+    for (const m of messages) {
+      const role = m.role === "assistant" ? "model" : "user";
+      if (typeof m.content === "string") {
+        contents.push({ role, parts: [{ text: m.content }] });
+      } else {
+        const parts: any[] = [];
+        for (const part of m.content) {
+          if (part.type === "text") parts.push({ text: part.text });
+          else if (part.type === "image_url") {
+            const img = await fetchImageAsBase64(part.image_url.url);
+            if (img) parts.push({ inlineData: { mimeType: img.mimeType, data: img.data } });
+          }
+        }
+        contents.push({ role, parts });
+      }
+    }
+    const text = await callGemini(contents as any, { temperature: 0.7 });
+    yield text;
+    return;
   }
 }
 
