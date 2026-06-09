@@ -6,9 +6,16 @@
  * also fetches any already-pushed steps on connect (catch-up).
  */
 
+import { auth } from "~/lib/auth";
+
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
+  const session = await auth();
+  if (!session?.user?.id) {
+    return new Response("Unauthorized", { status: 401 });
+  }
+
   const { searchParams } = new URL(request.url);
   const id = searchParams.get("id");
 
