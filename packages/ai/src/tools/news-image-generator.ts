@@ -1,6 +1,7 @@
 import puppeteer from "puppeteer";
 import { generateNewsCardHtml, generateStaticNewsCreativeHtml, type NewsCardOptions, type StaticNewsCreativeOptions } from "./news-card-template";
 import { generateImageDallE } from "../providers/dalle.provider";
+import { buildStaticCreative, type StaticCreativeOptions } from "./creative-templates";
 
 export interface NewsImageResult {
   imageBase64: string;
@@ -107,6 +108,44 @@ export async function generateStaticNewsCreativeImage(
     return {
       imageBase64: screenshotBuffer as string,
       mimeType: "image/jpeg",
+      width: 1080,
+      height: 1350,
+      style: "news_card",
+    };
+  } finally {
+    await browser.close();
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Styled Creative — render a chosen CreativeStyle to PNG via Puppeteer
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Render a styled social creative (4 selectable styles) to PNG. Same Puppeteer
+ * config as generateStaticNewsCreativeImage: waitUntil "load" (inline data-URL
+ * backgrounds never settle networkidle0), screenshot even if the wait times out.
+ */
+export async function generateStyledCreativeImage(
+  options: StaticCreativeOptions
+): Promise<NewsImageResult> {
+  const html = buildStaticCreative(options);
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+  });
+  try {
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1080, height: 1350 });
+    try {
+      await page.setContent(html, { waitUntil: "load", timeout: 30000 });
+    } catch (e) {
+      console.warn(`[creative] setContent wait timed out, screenshotting anyway:`, (e as Error).message);
+    }
+    const screenshotBuffer = await page.screenshot({ type: "png", encoding: "base64" });
+    return {
+      imageBase64: screenshotBuffer as string,
+      mimeType: "image/png",
       width: 1080,
       height: 1350,
       style: "news_card",

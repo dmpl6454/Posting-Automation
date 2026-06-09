@@ -435,6 +435,12 @@ function getDefaultScopes(platform: string): string[] {
     FACEBOOK: ["public_profile", "pages_show_list", "pages_manage_posts", "pages_read_engagement"],
     INSTAGRAM: ["public_profile", "pages_show_list", "pages_read_engagement", "instagram_basic", "instagram_content_publish", "instagram_manage_comments", "business_management"],
     REDDIT: ["submit", "identity", "read"],
+    // TikTok Content Posting API. `video.publish` = Direct Post (what publishPost
+    // uses via PULL_FROM_URL); `video.upload` = upload-to-drafts; `user.info.basic`
+    // backs getProfile (/v2/user/info/). The provider joins these with "," (TikTok's
+    // required separator). Until the app's Content Posting API audit is approved,
+    // TikTok runs as an unaudited client: test users only + posts forced SELF_ONLY.
+    TIKTOK: ["user.info.basic", "video.publish", "video.upload"],
     YOUTUBE: [
       "https://www.googleapis.com/auth/youtube.upload",
       // channels.list (used by getProfile to fetch channel name/avatar) needs a read scope;

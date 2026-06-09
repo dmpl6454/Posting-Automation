@@ -358,8 +358,10 @@ async function fetchLinkedInMentions(keyword: string, organizationId: string): P
 async function fetchTikTokMentions(keyword: string): Promise<RawMention[]> {
   const mentions: RawMention[] = [];
   try {
-    // TikTok Research API for keyword search (if available)
-    const clientKey = process.env.TIKTOK_CLIENT_KEY;
+    // TikTok Research API for keyword search (if available).
+    // Standardized on TIKTOK_CLIENT_ID (matches OAuth connect/publish), with a
+    // legacy TIKTOK_CLIENT_KEY fallback. The value is TikTok's Client Key.
+    const clientKey = process.env.TIKTOK_CLIENT_ID || process.env.TIKTOK_CLIENT_KEY;
     const clientSecret = process.env.TIKTOK_CLIENT_SECRET;
     if (!clientKey || !clientSecret) return [];
 

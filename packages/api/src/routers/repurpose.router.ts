@@ -78,6 +78,10 @@ export const repurposeRouter = createRouter({
         channelName: z.string().optional().default(""),
         channelHandle: z.string().optional().default(""),
         logoUrl: z.string().optional().default(""),
+        creativeStyle: z
+          .enum(["premium_editorial", "hook_bars", "tweet_card", "bold_typographic"])
+          .default("premium_editorial"),
+        logoPosition: z.enum(["top-left", "top-right"]).default("top-right"),
         accentColor: z.string().nullish(),
         theme: z.enum(["dark", "light", "gradient"]).default("dark"),
         voiceOver: z.boolean().default(false),
@@ -116,7 +120,7 @@ export const repurposeRouter = createRouter({
         generateSeedanceVideo,
         buildSeedancePrompt,
         overlayLogoOnImage,
-        generateStaticNewsCreativeImage,
+        generateStyledCreativeImage,
         extractDominantColor,
       } = await import("@postautomation/ai");
 
@@ -226,16 +230,22 @@ export const repurposeRouter = createRouter({
         }
       }
 
-      // Map a content category to a news-card template style. Keeps the
-      // baked-headline creative on-brand per topic (the same renderer NewsGrid
-      // and the autopilot worker use).
-      function pickTemplate(category: string): "breaking_news" | "viral_entertainment" | "cinematic" | "luxury_news" | "magazine" {
-        const c = (category || "").toLowerCase();
-        if (c.includes("entertain") || c.includes("celebrit") || c.includes("bollywood") || c.includes("film")) return "viral_entertainment";
-        if (c.includes("politic") || c.includes("crime") || c.includes("breaking")) return "breaking_news";
-        if (c.includes("lifestyle") || c.includes("fashion") || c.includes("luxury")) return "luxury_news";
-        if (c.includes("business") || c.includes("tech")) return "magazine";
-        return "cinematic";
+      // Fetch the brand logo once as a reference image so Gemini can style the
+      // AI background to match the brand (B4). Gemini-only — the OpenAI fallback
+      // ignores it; the logo is baked deterministically by the template either
+      // way. A fetch failure degrades silently to no-reference.
+      const brandReferenceImages: Array<{ base64: string; mimeType?: string }> = [];
+      if (resolvedLogoUrl) {
+        try {
+          const r = await fetch(resolvedLogoUrl);
+          if (r.ok) {
+            const mime = r.headers.get("content-type") || "image/png";
+            const b64 = Buffer.from(await r.arrayBuffer()).toString("base64");
+            if (b64.length > 0) brandReferenceImages.push({ base64: b64, mimeType: mime });
+          }
+        } catch (e) {
+          console.warn(`[Repurpose] Logo reference fetch failed (continuing without):`, (e as Error).message);
+        }
       }
 
       /**
@@ -251,31 +261,38 @@ export const repurposeRouter = createRouter({
         headline: string,
         category: string,
       ): Promise<{ imageBase64: string; mimeType: string; bgSource: "ai" | "stock" }> {
-        const template = pickTemplate(category);
         // Try to generate a relevant AI background (no text — the template
         // bakes the headline). generateImageSafe now has a working OpenAI
         // fallback, so this succeeds even while Gemini billing is on hold.
         let backgroundImageUrl: string | undefined;
         let bgSource: "ai" | "stock" = "stock";
+        // Brand-style conditioning: pass the channel logo as a reference image so
+        // Gemini (Nano Banana) styles the AI BACKGROUND to match the brand. This
+        // is Gemini-only — the OpenAI fallback ignores references (it has no
+        // image-input path), and the logo itself is always baked deterministically
+        // by the template regardless. A fetch failure just degrades to no-reference.
+        const referenceImages = brandReferenceImages;
         try {
           const bg = await generateImageSafe({
             prompt: `${bgPrompt}\n\nIMPORTANT: produce a clean BACKGROUND photo only — NO text, words, letters, numbers, logos, or watermarks. Dark/moody tones so white text overlaid on top stays readable.`,
             aspectRatio: "3:4",
             title: headline,
             topic: category || "news",
+            ...(referenceImages.length ? { referenceImages } : {}),
           });
           backgroundImageUrl = `data:${bg.mimeType};base64,${bg.imageBase64}`;
           bgSource = "ai";
         } catch (e) {
           console.warn(`[Repurpose] AI background failed, using stock template bg:`, (e as Error).message);
         }
-        const creative = await generateStaticNewsCreativeImage({
+        const creative = await generateStyledCreativeImage({
+          style: input.creativeStyle,
           headline,
           channelName: displayName,
           handle,
           logoUrl: resolvedLogoUrl || null,
-          template,
-          ...(backgroundImageUrl ? { backgroundImageUrl } : {}),
+          logoPosition: input.logoPosition,
+          ...(backgroundImageUrl ? { bgImageUrl: backgroundImageUrl } : {}),
           ...(resolvedBrandColor ? { brandColor: resolvedBrandColor } : {}),
         });
         return { imageBase64: creative.imageBase64, mimeType: creative.mimeType, bgSource };
@@ -420,9 +437,22 @@ KEYWORDS: ${(brief.keywords || []).join(", ")}`;
       // 4. Generate media based on format
       const displayName = channelName || extracted.siteName || "Channel";
       const handle = channelHandle || displayName;
+
+      // Cap headlines so the template's word-count font sizing stays readable
+      // (≥16 words renders at 40px). Applies to all formats.
+      const capHeadline = (text: string): string => {
+        const words = text.trim().split(/\s+/);
+        let out = words.slice(0, 12).join(" ");
+        if (out.length > 80) out = out.slice(0, 80).replace(/\s+\S*$/, "");
+        return out.trim();
+      };
+
       let mediaUrls: string[] = [];
       let mediaType = "image/jpeg";
       const perPlatformMedia: Record<string, { url: string; mediaId: string }> = {};
+      // Ordered slide media IDs for carousel posts (post.create needs real
+      // Media rows, not raw S3 urls). Empty for non-carousel formats.
+      const carouselMediaIds: string[] = [];
 
       if (input.format === "static") {
         // Build ONE branded headline creative (deterministic headline + logo/
@@ -451,11 +481,31 @@ KEYWORDS: ${(brief.keywords || []).join(", ")}`;
           console.log(`[Repurpose] Using AI subject as headline ("${headlineForCreative}") instead of generic title ("${extracted.title.slice(0, 50)}...")`);
         }
 
+        let headlineForCreativeFinal = headlineForCreative;
+        if (extracted.type === "social") {
+          // Social captions are not article titles — synthesize a concise headline
+          // from the caption/body rather than dumping the raw caption (which may be
+          // a long emoji-laden sentence) into the headline slot.
+          try {
+            const synth = await generateContentResilient({
+              provider: input.provider,
+              platform: "INSTAGRAM",
+              userPrompt: `Write ONE concise, punchy news-style headline (max 10 words, no hashtags, no emojis) summarizing this social post. Return ONLY the headline text.\n\nPost: ${(extracted.body || extracted.description || extracted.title).slice(0, 800)}`,
+              tone: "professional",
+            });
+            const cleaned = synth.replace(/^["']|["']$/g, "").replace(/\n[\s\S]*$/, "").trim();
+            if (cleaned.length > 3) headlineForCreativeFinal = cleaned;
+          } catch (e) {
+            console.warn(`[Repurpose] Social headline synthesis failed, using extracted title:`, (e as Error).message);
+          }
+        }
+        headlineForCreativeFinal = capHeadline(headlineForCreativeFinal);
+
         const bgPrompt = `Create a cinematic, high-quality BACKGROUND photo for a social post about:
 
 ${contentBrief}
 
-Topic: "${headlineForCreative}"
+Topic: "${headlineForCreativeFinal}"
 Context: ${contentSummary.slice(0, 400)}
 
 Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g. "Imran Khan, Bollywood actor" → Bollywood/film imagery, NOT politics). Photorealistic or editorial illustration, dramatic lighting, strong mood, relevant to the topic.`;
@@ -463,7 +513,7 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
         try {
           progress("Generating creative");
           console.log(`[Repurpose] Building branded headline creative (category=${category})...`);
-          const creative = await buildHeadlineCreative(bgPrompt, headlineForCreative, category);
+          const creative = await buildHeadlineCreative(bgPrompt, headlineForCreativeFinal, category);
 
           const { url, mediaId } = await uploadAndCreateMedia(
             creative.imageBase64,
@@ -802,8 +852,9 @@ Return ONLY the JSON array, no other text.`;
         const uploadedUrls: string[] = [];
 
         // Build all slide texts: cover + content + CTA
+        const coverHeadline = capHeadline(extracted.title);
         const allSlides = [
-          { type: "cover", title: extracted.title, body: extracted.description?.slice(0, 100) || "" },
+          { type: "cover", title: coverHeadline, body: extracted.description?.slice(0, 100) || "" },
           ...slideData.map((d, i) => ({ type: "content", title: d.title, body: d.body })),
           { type: "cta", title: "Follow for More", body: "" },
         ];
@@ -935,7 +986,8 @@ Requirements:
           console.log(`[Repurpose] Batch ${batchNum} done (${batchOk}/${batchEnd - batchStart} slides)`);
         }
 
-        // Upload all successfully generated slides to S3
+        // Upload all successfully generated slides to S3 AND create a Media row
+        // per slide so post.create can attach them (carousel publish fix).
         for (let i = 0; i < slideImages.length; i++) {
           const slide = slideImages[i];
           if (!slide) continue;
@@ -944,11 +996,30 @@ Requirements:
           const key = `repurpose/carousel-${Date.now()}-${i}-${crypto.randomBytes(3).toString("hex")}.${ext}`;
           const buf = Buffer.from(slide.imageBase64, "base64");
           await s3.send(new PutObjectCommand({ Bucket: BUCKET, Key: key, Body: buf, ContentType: contentType }));
-          uploadedUrls.push(getPublicUrl(key));
+          const slideUrl = getPublicUrl(key);
+          uploadedUrls.push(slideUrl);
+          const media = await ctx.prisma.media.create({
+            data: {
+              organizationId,
+              uploadedById: userId,
+              fileName: `carousel-${Date.now()}-${i}.${ext}`,
+              fileType: contentType,
+              fileSize: buf.length,
+              url: slideUrl,
+            },
+          });
+          carouselMediaIds.push(media.id);
         }
 
         progress(`Generating ${allSlides.length} carousel slides`, "done", `${uploadedUrls.length} uploaded`);
         console.log(`[Repurpose] ${uploadedUrls.length}/${allSlides.length} carousel slides uploaded`);
+
+        if (carouselMediaIds.length > 0) {
+          const first = { url: uploadedUrls[0]!, mediaId: carouselMediaIds[0]! };
+          for (const platform of input.targetPlatforms) {
+            perPlatformMedia[platform] = first;
+          }
+        }
 
         if (input.format === "reel") {
           // Stitch slides into video with optional voice-over + background music
@@ -1019,8 +1090,30 @@ Requirements:
             const videoKey = `repurpose/reel-${Date.now()}-${crypto.randomBytes(4).toString("hex")}.mp4`;
             const videoBuf = Buffer.from(reelResult.videoBase64, "base64");
             await s3.send(new PutObjectCommand({ Bucket: BUCKET, Key: videoKey, Body: videoBuf, ContentType: "video/mp4" }));
-            mediaUrls = [getPublicUrl(videoKey)];
+            const videoUrl = getPublicUrl(videoKey);
+            mediaUrls = [videoUrl];
             mediaType = "video/mp4";
+            // The publishable asset is the VIDEO, not the slide images. Create a
+            // Media row for it and make it the sole attachable media so the UI
+            // (which prefers carouselMediaIds) attaches the reel video — NOT the
+            // N intermediate slide images. On reel failure we fall through to the
+            // catch and keep the slide carouselMediaIds (degrades to a carousel).
+            const videoMedia = await ctx.prisma.media.create({
+              data: {
+                organizationId,
+                uploadedById: userId,
+                fileName: `reel-${Date.now()}.mp4`,
+                fileType: "video/mp4",
+                fileSize: videoBuf.length,
+                url: videoUrl,
+                duration: slideImages.length * 3,
+              },
+            });
+            carouselMediaIds.length = 0;
+            carouselMediaIds.push(videoMedia.id);
+            for (const platform of input.targetPlatforms) {
+              perPlatformMedia[platform] = { url: videoUrl, mediaId: videoMedia.id };
+            }
             progress("Stitching reel video from slides", "done", "Video uploaded");
             console.log(`[Repurpose] Reel video uploaded: ${mediaUrls[0]}`);
           } catch (e) {
@@ -1061,6 +1154,7 @@ Requirements:
         platformContent,
         mediaUrls,
         mediaMap: perPlatformMedia,
+        carouselMediaIds,
         mediaType,
         format: input.format,
         // Truthful signal for the UI: captions exist but no media was produced.

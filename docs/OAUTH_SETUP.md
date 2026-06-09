@@ -175,11 +175,13 @@ TWITTER_CLIENT_SECRET="your-api-key-secret"
    https://postautomation.co.in/api/oauth/callback/tiktok
    ```
 5. Copy from the app's main page:
-   - **Client Key** → `TIKTOK_CLIENT_KEY`
+   - **Client Key** → `TIKTOK_CLIENT_ID`  (yes — TikTok labels it "Client Key", but the env var is `TIKTOK_CLIENT_ID`)
    - **Client Secret** → `TIKTOK_CLIENT_SECRET`
 6. Submit **Content Posting API** for review. TikTok typically wants a demo video showing your app uploading content.
 
-> Note: The codebase uses `client_key` (TikTok's specific naming) — not `client_id`. The env var name reflects this.
+> **Env var naming:** TikTok labels its app credential a "Client Key", but you must store it as **`TIKTOK_CLIENT_ID`** (not `TIKTOK_CLIENT_KEY`). The OAuth connect, token-exchange, and publish paths all read `${PLATFORM}_CLIENT_ID`, and the "Setup required" gate checks `TIKTOK_CLIENT_ID` specifically — so the wrong name leaves TikTok stuck on "Setup required" forever. The provider maps `clientId → client_key` internally on the wire, so the protocol is correct. (The legacy `TIKTOK_CLIENT_KEY` name is still accepted as a fallback by the analytics workers, but new setups should use `TIKTOK_CLIENT_ID`.)
+>
+> **Sandbox / audit gate:** until the Content Posting API review is approved, the app is an *unaudited client* — only registered test users can authorize, and **all posts are forced to private (`SELF_ONLY`)** regardless of the requested privacy. This is TikTok's analogue of Meta's Advanced Access. After approval, a privacy selector must be plumbed from the compose UI into `payload.metadata.privacyLevel` to post publicly.
 
 ### 7. Facebook + Instagram (2-6 weeks, Meta Business Verification)
 

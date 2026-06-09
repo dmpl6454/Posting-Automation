@@ -155,11 +155,16 @@ export default function SuperAgentPage() {
   const executeAction = useCallback(
     async (action: { type: string; payload: Record<string, unknown> }) => {
       if (!activeThreadId) return;
+      const postActions = ["publish_now", "schedule_post", "bulk_schedule"];
+      let payload = action.payload;
+      if (postActions.includes(action.type) && attachments.length > 0 && !("mediaIds" in payload)) {
+        payload = { ...payload, mediaIds: attachments.map((a) => a.mediaId) };
+      }
       try {
         await executeActionMutation.mutateAsync({
           threadId: activeThreadId,
           actionType: action.type as any,
-          payload: action.payload,
+          payload,
         });
         utils.chat.getThread.invalidate({ id: activeThreadId });
         utils.chat.listThreads.invalidate();
@@ -171,7 +176,7 @@ export default function SuperAgentPage() {
         ]);
       }
     },
-    [activeThreadId, executeActionMutation, utils]
+    [activeThreadId, executeActionMutation, utils, attachments]
   );
 
   /* ── Send message ── */

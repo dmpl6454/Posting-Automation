@@ -1,5 +1,4 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
-import type { Tool } from "@google/generative-ai";
+import { GoogleGenerativeAI, type Tool, type Content } from "@google/generative-ai";
 
 const MODEL_NAME = "gemini-2.5-flash";
 
@@ -24,7 +23,7 @@ function getClient(): GoogleGenerativeAI {
  * Designed to be a drop-in alternative alongside LangChain OpenAI/Anthropic providers.
  */
 export async function callGemini(
-  prompt: string,
+  promptOrContents: string | Content[],
   options: { temperature?: number; maxTokens?: number; grounded?: boolean } = {}
 ): Promise<string> {
   const client = getClient();
@@ -44,7 +43,9 @@ export async function callGemini(
     ...(tools.length > 0 ? { tools } : {}),
   });
 
-  const result = await model.generateContent(prompt);
+  const result = await model.generateContent(
+    Array.isArray(promptOrContents) ? { contents: promptOrContents } : promptOrContents
+  );
   const response = result.response;
   return response.text();
 }

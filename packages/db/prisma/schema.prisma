@@ -28,6 +28,7 @@ model User {
   memberships OrganizationMember[]
   auditLogs        AuditLog[]
   designTemplates  DesignTemplate[]
+  creativeTemplates CreativeTemplate[]
   sentInvites      OrganizationInvite[] @relation("SentInvites")
 
   passwordResetTokens     PasswordResetToken[]
@@ -133,6 +134,7 @@ model Organization {
   accountGroups   AccountGroup[]
   pipelineRuns    PipelineRun[]
   designTemplates    DesignTemplate[]
+  creativeTemplates  CreativeTemplate[]
   listeningQueries   ListeningQuery[]
   campaigns               Campaign[]
   brandTrackers           BrandTracker[]
@@ -350,6 +352,7 @@ model Media {
   organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   postMedia       PostMedia[]
   chatAttachments ChatAttachment[]
+  creativeTemplates CreativeTemplate[]
 
   createdAt DateTime @default(now())
 
@@ -893,6 +896,25 @@ model DesignTemplate {
   @@index([organizationId])
   @@index([isGlobal])
   @@index([category])
+}
+
+model CreativeTemplate {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  style          String // "premium_editorial" | "hook_bars" | "tweet_card" | "bold_typographic"
+  logoMediaId    String?
+  logoMedia      Media?       @relation(fields: [logoMediaId], references: [id], onDelete: SetNull)
+  logoPosition   String       @default("top-right")
+  brandColor     String?
+  channelId      String?
+  createdById    String
+  createdBy      User         @relation(fields: [createdById], references: [id])
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId])
 }
 
 // ==================== SOCIAL LISTENING & MONITORING ====================

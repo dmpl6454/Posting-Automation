@@ -18,6 +18,42 @@ export interface ExtractedContent {
 const TIMEOUT_MS = 15_000;
 const MAX_BODY_LENGTH = 15_000;
 
+/** Decode HTML entities (named + numeric decimal + hex, incl. emoji) so raw
+ *  `&quot;`/`&#x1f37f;`/`&#8217;` never reach the creative template. */
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ",
+  ldquo: "“", rdquo: "”", lsquo: "'", rsquo: "'",
+  hellip: "…", mdash: "—", ndash: "–", copy: "©", reg: "®", trade: "™",
+};
+
+/** Normalize Unicode typographic quotes / dashes to plain ASCII equivalents
+ *  so decoded social-media text is safe for template rendering. */
+const UNICODE_NORMALIZE: Record<number, string> = {
+  0x2018: "'", 0x2019: "'", // ' ' left/right single quotation mark → apostrophe
+  0x201c: "“", 0x201d: "”", // preserve " " as-is (already ASCII-safe)
+};
+
+export function decodeEntities(input: string): string {
+  if (!input) return input;
+  return input
+    // hex: &#x1f37f;
+    .replace(/&#x([0-9a-fA-F]+);/g, (_m, hex) => {
+      try {
+        const cp = parseInt(hex, 16);
+        return UNICODE_NORMALIZE[cp] ?? String.fromCodePoint(cp);
+      } catch { return _m; }
+    })
+    // decimal: &#8217;
+    .replace(/&#(\d+);/g, (_m, dec) => {
+      try {
+        const cp = parseInt(dec, 10);
+        return UNICODE_NORMALIZE[cp] ?? String.fromCodePoint(cp);
+      } catch { return _m; }
+    })
+    // named: &amp; &quot; ...
+    .replace(/&([a-zA-Z]+);/g, (_m, name) => NAMED_ENTITIES[name] ?? _m);
+}
+
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
@@ -168,7 +204,7 @@ function getYouTubeVideoId(url: string): string | null {
 
 /** Minimal HTML tag stripper */
 function stripHtml(html: string): string {
-  return html
+  const stripped = html
     .replace(/<script[\s\S]*?<\/script>/gi, "")
     .replace(/<style[\s\S]*?<\/style>/gi, "")
     .replace(/<nav[\s\S]*?<\/nav>/gi, "")
@@ -176,14 +212,9 @@ function stripHtml(html: string): string {
     .replace(/<header[\s\S]*?<\/header>/gi, "")
     .replace(/<aside[\s\S]*?<\/aside>/gi, "")
     .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
     .replace(/\s+/g, " ")
     .trim();
+  return decodeEntities(stripped);
 }
 
 /** Extract meta tag content from raw HTML */
@@ -197,7 +228,7 @@ function getMeta(html: string, property: string): string {
   ];
   for (const re of patterns) {
     const m = html.match(re);
-    if (m?.[1]) return m[1];
+    if (m?.[1]) return decodeEntities(m[1]);
   }
   return "";
 }
@@ -209,7 +240,7 @@ function getTitle(html: string): string {
   const tw = getMeta(html, "twitter:title");
   if (tw) return tw;
   const match = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  return match?.[1]?.trim() || "";
+  return decodeEntities(match?.[1]?.trim() || "");
 }
 
 /** Extract main images from HTML */
@@ -738,3 +769,6 @@ export async function extractUrlContent(url: string): Promise<ExtractedContent> 
 
   return extractWebPage(url);
 }
+
+/** @internal test-only access to private extractors */
+export const __test__ = { getMeta, getTitle, stripHtml };

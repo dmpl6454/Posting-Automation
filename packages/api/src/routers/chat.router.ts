@@ -33,6 +33,25 @@ export async function assertChannelsOwned(
 }
 
 /**
+ * Throws unless every mediaId belongs to the given org.
+ * Prevents the Super Agent from attaching another org's media to a post (IDOR).
+ */
+export async function assertMediaOwned(
+  prisma: PrismaClient,
+  organizationId: string,
+  mediaIds: string[]
+): Promise<void> {
+  if (!mediaIds || mediaIds.length === 0) return;
+  const owned = await prisma.media.findMany({
+    where: { id: { in: mediaIds }, organizationId },
+    select: { id: true },
+  });
+  if (owned.length !== new Set(mediaIds).size) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Some media are not in this organization." });
+  }
+}
+
+/**
  * Assert a payload field is a non-empty string, else throw a clean BAD_REQUEST
  * instead of letting an undefined reach Prisma as an opaque error (audit #11).
  */
@@ -292,6 +311,8 @@ export const chatRouter = createRouter({
           const p = input.payload as any;
           requireText(p.content, "content");
           await assertChannelsOwned(ctx.prisma, ctx.organizationId, p.channelIds || []);
+          const mediaIds: string[] = Array.isArray(p.mediaIds) ? p.mediaIds : [];
+          await assertMediaOwned(ctx.prisma, ctx.organizationId, mediaIds);
           const userId = (ctx.session.user as any).id;
           const post = await ctx.prisma.post.create({
             data: {
@@ -307,6 +328,11 @@ export const chatRouter = createRouter({
                   status: "SCHEDULED",
                 })),
               },
+              ...(mediaIds.length && {
+                mediaAttachments: {
+                  create: mediaIds.map((mediaId: string, index: number) => ({ mediaId, order: index })),
+                },
+              }),
             },
           });
 
@@ -336,6 +362,8 @@ export const chatRouter = createRouter({
             requireText(item.content, "content");
             await enforcePlanLimit(ctx.organizationId, "postsPerMonth", ctx.isSuperAdmin);
             await assertChannelsOwned(ctx.prisma, ctx.organizationId, item.channelIds || []);
+            const itemMediaIds: string[] = Array.isArray(item.mediaIds) ? item.mediaIds : [];
+            await assertMediaOwned(ctx.prisma, ctx.organizationId, itemMediaIds);
             const post = await ctx.prisma.post.create({
               data: {
                 organizationId: ctx.organizationId,
@@ -350,6 +378,11 @@ export const chatRouter = createRouter({
                     status: "SCHEDULED",
                   })),
                 },
+                ...(itemMediaIds.length && {
+                  mediaAttachments: {
+                    create: itemMediaIds.map((mediaId: string, index: number) => ({ mediaId, order: index })),
+                  },
+                }),
               },
             });
             createdPosts.push(post);
@@ -376,6 +409,8 @@ export const chatRouter = createRouter({
           const p = input.payload as any;
           requireText(p.content, "content");
           await assertChannelsOwned(ctx.prisma, ctx.organizationId, p.channelIds || []);
+          const mediaIds: string[] = Array.isArray(p.mediaIds) ? p.mediaIds : [];
+          await assertMediaOwned(ctx.prisma, ctx.organizationId, mediaIds);
           const userId = (ctx.session.user as any).id;
 
           // Create post and immediately queue for publishing
@@ -393,6 +428,11 @@ export const chatRouter = createRouter({
                   status: "SCHEDULED",
                 })),
               },
+              ...(mediaIds.length && {
+                mediaAttachments: {
+                  create: mediaIds.map((mediaId: string, index: number) => ({ mediaId, order: index })),
+                },
+              }),
             },
             include: { targets: { include: { channel: true } } },
           });

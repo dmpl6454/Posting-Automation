@@ -5,9 +5,13 @@ import { callGemma4 } from "../providers/gemma4.provider";
 import { CHAT_AGENT_SYSTEM_PROMPT } from "../prompts/chat-agent.prompt";
 import type { AIProvider } from "../types";
 
+export type ChatMessageContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
 export interface ChatMessage {
   role: "user" | "assistant" | "system";
-  content: string;
+  content: string | ChatMessageContentPart[];
 }
 
 export interface ChatContext {
@@ -152,6 +156,90 @@ function buildContextString(context: ChatContext): string {
 }
 
 /**
+ * Host allowlist for server-side image fetches (SSRF guard). Attachment URLs
+ * are written by our own org-scoped S3/MinIO upload flow, so the only legitimate
+ * hosts are the configured S3 public/endpoint hosts. We fail closed: anything
+ * not on the allowlist (and any private/loopback/link-local host) is rejected.
+ */
+function hostOf(value: string | undefined): string | null {
+  if (!value) return null;
+  try {
+    return new URL(value.startsWith("http") ? value : `https://${value}`).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+const IMAGE_FETCH_ALLOWED_HOSTS: Set<string> = new Set(
+  [hostOf(process.env.S3_PUBLIC_URL), hostOf(process.env.S3_ENDPOINT), "s3.amazonaws.com"].filter(
+    (h): h is string => !!h,
+  ),
+);
+
+function isPrivateOrLoopbackHost(rawHost: string): boolean {
+  // Strip IPv6 brackets: "[::1]" → "::1"
+  const host = rawHost.replace(/^\[|\]$/g, "").toLowerCase();
+  if (host === "localhost" || host === "0.0.0.0" || host === "::" || host === "::1") return true;
+  // IPv4 private / loopback / link-local (covers cloud metadata 169.254.169.254)
+  if (
+    /^127\./.test(host) ||
+    /^10\./.test(host) ||
+    /^192\.168\./.test(host) ||
+    /^169\.254\./.test(host) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(host)
+  ) {
+    return true;
+  }
+  // IPv6 unique-local (fc00::/7 → fc/fd), link-local (fe80::/10), and
+  // IPv4-mapped private ranges (::ffff:10.x / ::ffff:192.168.x / ::ffff:127.x).
+  if (/^f[cd][0-9a-f]*:/.test(host) || /^fe[89ab][0-9a-f]*:/.test(host)) return true;
+  if (/^::ffff:(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host)) return true;
+  return false;
+}
+
+/** @internal exported for SSRF-guard unit tests */
+export function __isAllowedImageUrl(url: string): boolean {
+  return isAllowedImageUrl(url);
+}
+
+function isAllowedImageUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return false;
+  const host = parsed.hostname.toLowerCase();
+  if (isPrivateOrLoopbackHost(host)) return false;
+  // Truly fail closed: only ever fetch from a configured S3 host. If the
+  // allowlist is empty (misconfig), fetch nothing — Gemini just answers from
+  // text. Never fall back to "any https host" (that would re-open SSRF).
+  return IMAGE_FETCH_ALLOWED_HOSTS.has(host);
+}
+
+async function fetchImageAsBase64(url: string): Promise<{ data: string; mimeType: string } | null> {
+  if (!isAllowedImageUrl(url)) {
+    console.warn(`[chat-agent] image fetch blocked (host not allowlisted / private): ${url.slice(0, 80)}`);
+    return null;
+  }
+  try {
+    // redirect:"manual" so a 30x cannot bounce the request to an internal target.
+    const res = await fetch(url, { redirect: "manual" });
+    if (!res.ok) {
+      console.warn(`[chat-agent] image fetch for Gemini failed: HTTP ${res.status} for ${url.slice(0, 80)}`);
+      return null;
+    }
+    const mimeType = res.headers.get("content-type") || "image/jpeg";
+    const buf = Buffer.from(await res.arrayBuffer());
+    return { data: buf.toString("base64"), mimeType };
+  } catch (e) {
+    console.warn(`[chat-agent] image fetch for Gemini threw: ${(e as Error).message} for ${url.slice(0, 80)}`);
+    return null;
+  }
+}
+
+/**
  * Stream chat responses using LangChain (OpenAI/Anthropic).
  * Returns an async generator that yields text chunks.
  */
@@ -174,11 +262,11 @@ export async function* streamChatAgent(
     const langchainMessages = [
       new SystemMessage(systemPrompt),
       ...messages.map((m) => {
-        if (m.role === "user") return new HumanMessage(m.content);
+        if (m.role === "user") return new HumanMessage({ content: m.content as any });
         // Treat both "assistant" and "system" DB messages as AI messages
         // so system notes (action confirmations, etc.) stay in context
         // but never appear as a second SystemMessage.
-        return new AIMessage(m.content);
+        return new AIMessage(typeof m.content === "string" ? m.content : "");
       }),
     ];
 
@@ -187,28 +275,47 @@ export async function* streamChatAgent(
       const text = typeof chunk.content === "string" ? chunk.content : "";
       if (text) yield text;
     }
-  } else {
-    // Gemini: non-streaming fallback (generate full response)
-    // Map system messages to "System note" so the model knows they are
-    // not part of the user/assistant conversation but still has context.
+  } else if (provider === "gemma4") {
+    // Gemma4: text-only, non-streaming fallback
     const formattedMessages = messages
       .map((m) => {
-        if (m.role === "user") return `User: ${m.content}`;
-        if (m.role === "system") return `System note: ${m.content}`;
-        return `Assistant: ${m.content}`;
+        const text = typeof m.content === "string" ? m.content : m.content.map((p) => (p.type === "text" ? p.text : "")).join(" ");
+        if (m.role === "user") return `User: ${text}`;
+        if (m.role === "system") return `System note: ${text}`;
+        return `Assistant: ${text}`;
       })
       .join("\n\n");
 
     const fullPrompt = `${systemPrompt}\n\n${formattedMessages}\n\nAssistant:`;
-    const response = provider === "gemma4"
-      ? await callGemma4(fullPrompt)
-      : await callGemini(fullPrompt);
+    const response = await callGemma4(fullPrompt);
 
     // Yield in chunks to simulate streaming
     const words = response.split(" ");
     for (let i = 0; i < words.length; i += 3) {
       yield words.slice(i, i + 3).join(" ") + " ";
     }
+  } else {
+    // Gemini branch — supports multimodal via inlineData parts.
+    const contents: any[] = [{ role: "user", parts: [{ text: systemPrompt }] }];
+    for (const m of messages) {
+      const role = m.role === "assistant" ? "model" : "user";
+      if (typeof m.content === "string") {
+        contents.push({ role, parts: [{ text: m.content }] });
+      } else {
+        const parts: any[] = [];
+        for (const part of m.content) {
+          if (part.type === "text") parts.push({ text: part.text });
+          else if (part.type === "image_url") {
+            const img = await fetchImageAsBase64(part.image_url.url);
+            if (img) parts.push({ inlineData: { mimeType: img.mimeType, data: img.data } });
+          }
+        }
+        contents.push({ role, parts });
+      }
+    }
+    const text = await callGemini(contents as any, { temperature: 0.7 });
+    yield text;
+    return;
   }
 }
 
