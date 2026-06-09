@@ -158,11 +158,15 @@ function buildContextString(context: ChatContext): string {
 async function fetchImageAsBase64(url: string): Promise<{ data: string; mimeType: string } | null> {
   try {
     const res = await fetch(url);
-    if (!res.ok) return null;
+    if (!res.ok) {
+      console.warn(`[chat-agent] image fetch for Gemini failed: HTTP ${res.status} for ${url.slice(0, 80)}`);
+      return null;
+    }
     const mimeType = res.headers.get("content-type") || "image/jpeg";
     const buf = Buffer.from(await res.arrayBuffer());
     return { data: buf.toString("base64"), mimeType };
-  } catch {
+  } catch (e) {
+    console.warn(`[chat-agent] image fetch for Gemini threw: ${(e as Error).message} for ${url.slice(0, 80)}`);
     return null;
   }
 }
