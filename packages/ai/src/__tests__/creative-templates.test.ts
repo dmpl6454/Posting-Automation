@@ -85,3 +85,60 @@ describe("tweet_card style", () => {
     expect(html).not.toContain("verified-tick");
   });
 });
+
+describe("creative-templates security (XSS / CSS injection)", () => {
+  it("rejects a malicious brandColor and falls back to a default", () => {
+    const html = buildStaticCreative({
+      style: "premium_editorial",
+      headline: "x",
+      channelName: "Brand",
+      logoPosition: "top-right",
+      brandColor: "red;}</style><script>alert(1)</script>",
+    });
+    expect(html).not.toContain("<script>alert(1)</script>");
+    // The injected payload must not appear; the document's own </style> closing tag is fine.
+    expect(html).not.toContain("red;}</style><script>");
+  });
+  it("accepts a valid hex brandColor unchanged", () => {
+    const html = buildStaticCreative({
+      style: "premium_editorial",
+      headline: "x",
+      channelName: "Brand",
+      logoPosition: "top-right",
+      brandColor: "#e11d48",
+    });
+    expect(html).toContain("#e11d48");
+  });
+  it("drops a malicious bgImageUrl (CSS url breakout)", () => {
+    const html = buildStaticCreative({
+      style: "premium_editorial",
+      headline: "x",
+      channelName: "Brand",
+      logoPosition: "top-right",
+      bgImageUrl: `https://x/a.png);}</style><script>alert(1)</script>`,
+    });
+    expect(html).not.toContain("<script>alert(1)</script>");
+    // The injected payload must not appear; the document's own </style> closing tag is fine.
+    expect(html).not.toContain(`https://x/a.png);}</style>`);
+  });
+  it("accepts a valid https bgImageUrl and a data:image url", () => {
+    const a = buildStaticCreative({
+      style: "premium_editorial", headline: "x", channelName: "B", logoPosition: "top-right",
+      bgImageUrl: "https://cdn.example.com/photo_1.png?x=1",
+    });
+    expect(a).toContain("https://cdn.example.com/photo_1.png?x=1");
+    const b = buildStaticCreative({
+      style: "premium_editorial", headline: "x", channelName: "B", logoPosition: "top-right",
+      bgImageUrl: "data:image/png;base64,AAAA",
+    });
+    expect(b).toContain("data:image/png;base64,AAAA");
+  });
+  it("drops a malicious secondaryImageUrl in hook_bars/tweet_card", () => {
+    const html = buildStaticCreative({
+      style: "tweet_card", headline: "x", channelName: "B", handle: "@b", logoPosition: "top-left",
+      bgImageUrl: "data:image/png;base64,AAAA",
+      secondaryImageUrl: `"><script>alert(1)</script>`,
+    });
+    expect(html).not.toContain("<script>alert(1)</script>");
+  });
+});
