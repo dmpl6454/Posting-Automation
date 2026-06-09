@@ -176,16 +176,30 @@ const IMAGE_FETCH_ALLOWED_HOSTS: Set<string> = new Set(
   ),
 );
 
-function isPrivateOrLoopbackHost(host: string): boolean {
-  if (host === "localhost" || host === "0.0.0.0" || host === "::1") return true;
-  // IPv4 private / loopback / link-local ranges (covers cloud metadata 169.254.169.254)
-  return (
+function isPrivateOrLoopbackHost(rawHost: string): boolean {
+  // Strip IPv6 brackets: "[::1]" → "::1"
+  const host = rawHost.replace(/^\[|\]$/g, "").toLowerCase();
+  if (host === "localhost" || host === "0.0.0.0" || host === "::" || host === "::1") return true;
+  // IPv4 private / loopback / link-local (covers cloud metadata 169.254.169.254)
+  if (
     /^127\./.test(host) ||
     /^10\./.test(host) ||
     /^192\.168\./.test(host) ||
     /^169\.254\./.test(host) ||
     /^172\.(1[6-9]|2\d|3[01])\./.test(host)
-  );
+  ) {
+    return true;
+  }
+  // IPv6 unique-local (fc00::/7 → fc/fd), link-local (fe80::/10), and
+  // IPv4-mapped private ranges (::ffff:10.x / ::ffff:192.168.x / ::ffff:127.x).
+  if (/^f[cd][0-9a-f]*:/.test(host) || /^fe[89ab][0-9a-f]*:/.test(host)) return true;
+  if (/^::ffff:(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host)) return true;
+  return false;
+}
+
+/** @internal exported for SSRF-guard unit tests */
+export function __isAllowedImageUrl(url: string): boolean {
+  return isAllowedImageUrl(url);
 }
 
 function isAllowedImageUrl(url: string): boolean {
@@ -198,10 +212,10 @@ function isAllowedImageUrl(url: string): boolean {
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return false;
   const host = parsed.hostname.toLowerCase();
   if (isPrivateOrLoopbackHost(host)) return false;
-  // Fail closed: only fetch from a configured S3 host. If none configured
-  // (misconfig), allow only https to avoid blocking prod while staying safe.
-  if (IMAGE_FETCH_ALLOWED_HOSTS.size > 0) return IMAGE_FETCH_ALLOWED_HOSTS.has(host);
-  return parsed.protocol === "https:";
+  // Truly fail closed: only ever fetch from a configured S3 host. If the
+  // allowlist is empty (misconfig), fetch nothing — Gemini just answers from
+  // text. Never fall back to "any https host" (that would re-open SSRF).
+  return IMAGE_FETCH_ALLOWED_HOSTS.has(host);
 }
 
 async function fetchImageAsBase64(url: string): Promise<{ data: string; mimeType: string } | null> {
