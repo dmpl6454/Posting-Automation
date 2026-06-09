@@ -513,7 +513,11 @@ export const chatRouter = createRouter({
             throw new TRPCError({ code: "BAD_REQUEST", message: "No agent linked to this thread" });
           }
           const updated = await ctx.prisma.agent.update({
-            where: { id: thread.agentId },
+            // Org-scope the where clause (N7): the thread is org-scoped but the
+            // agent record was not re-validated, so an AI-driven action could
+            // mutate another org's agent. Prisma throws P2025 if the agent is
+            // not in this org — the desired deny.
+            where: { id: thread.agentId, organizationId: ctx.organizationId },
             data: {
               ...(p.name && { name: p.name }),
               ...(p.niche && { niche: p.niche }),
@@ -622,6 +626,17 @@ export const chatRouter = createRouter({
 
         case "create_brand_tracker": {
           const p = input.payload as any;
+          // Verify an AI-supplied campaignId belongs to this org before
+          // associating it (N8): otherwise a cross-org campaign could be linked
+          // / leaked onto the new BrandTracker. Absent campaignId is fine.
+          if (p.campaignId) {
+            const camp = await ctx.prisma.campaign.findFirst({
+              where: { id: p.campaignId, organizationId: ctx.organizationId },
+            });
+            if (!camp) {
+              throw new TRPCError({ code: "FORBIDDEN", message: "Campaign not found in this workspace" });
+            }
+          }
           const brand = await ctx.prisma.brandTracker.create({
             data: {
               organizationId: ctx.organizationId,
