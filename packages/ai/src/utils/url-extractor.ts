@@ -204,7 +204,7 @@ function getYouTubeVideoId(url: string): string | null {
 
 /** Minimal HTML tag stripper */
 function stripHtml(html: string): string {
-  return html
+  const stripped = html
     .replace(/<script[\s\S]*?<\/script>/gi, "")
     .replace(/<style[\s\S]*?<\/style>/gi, "")
     .replace(/<nav[\s\S]*?<\/nav>/gi, "")
@@ -212,14 +212,9 @@ function stripHtml(html: string): string {
     .replace(/<header[\s\S]*?<\/header>/gi, "")
     .replace(/<aside[\s\S]*?<\/aside>/gi, "")
     .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
     .replace(/\s+/g, " ")
     .trim();
+  return decodeEntities(stripped);
 }
 
 /** Extract meta tag content from raw HTML */
@@ -233,7 +228,7 @@ function getMeta(html: string, property: string): string {
   ];
   for (const re of patterns) {
     const m = html.match(re);
-    if (m?.[1]) return m[1];
+    if (m?.[1]) return decodeEntities(m[1]);
   }
   return "";
 }
@@ -245,7 +240,7 @@ function getTitle(html: string): string {
   const tw = getMeta(html, "twitter:title");
   if (tw) return tw;
   const match = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  return match?.[1]?.trim() || "";
+  return decodeEntities(match?.[1]?.trim() || "");
 }
 
 /** Extract main images from HTML */
@@ -774,3 +769,6 @@ export async function extractUrlContent(url: string): Promise<ExtractedContent> 
 
   return extractWebPage(url);
 }
+
+/** @internal test-only access to private extractors */
+export const __test__ = { getMeta, getTitle, stripHtml };
