@@ -78,6 +78,10 @@ export const repurposeRouter = createRouter({
         channelName: z.string().optional().default(""),
         channelHandle: z.string().optional().default(""),
         logoUrl: z.string().optional().default(""),
+        creativeStyle: z
+          .enum(["premium_editorial", "hook_bars", "tweet_card", "bold_typographic"])
+          .default("premium_editorial"),
+        logoPosition: z.enum(["top-left", "top-right"]).default("top-right"),
         accentColor: z.string().nullish(),
         theme: z.enum(["dark", "light", "gradient"]).default("dark"),
         voiceOver: z.boolean().default(false),
@@ -117,6 +121,7 @@ export const repurposeRouter = createRouter({
         buildSeedancePrompt,
         overlayLogoOnImage,
         generateStaticNewsCreativeImage,
+        generateStyledCreativeImage,
         extractDominantColor,
       } = await import("@postautomation/ai");
 
@@ -251,7 +256,6 @@ export const repurposeRouter = createRouter({
         headline: string,
         category: string,
       ): Promise<{ imageBase64: string; mimeType: string; bgSource: "ai" | "stock" }> {
-        const template = pickTemplate(category);
         // Try to generate a relevant AI background (no text — the template
         // bakes the headline). generateImageSafe now has a working OpenAI
         // fallback, so this succeeds even while Gemini billing is on hold.
@@ -269,13 +273,14 @@ export const repurposeRouter = createRouter({
         } catch (e) {
           console.warn(`[Repurpose] AI background failed, using stock template bg:`, (e as Error).message);
         }
-        const creative = await generateStaticNewsCreativeImage({
+        const creative = await generateStyledCreativeImage({
+          style: input.creativeStyle,
           headline,
           channelName: displayName,
           handle,
           logoUrl: resolvedLogoUrl || null,
-          template,
-          ...(backgroundImageUrl ? { backgroundImageUrl } : {}),
+          logoPosition: input.logoPosition,
+          ...(backgroundImageUrl ? { bgImageUrl: backgroundImageUrl } : {}),
           ...(resolvedBrandColor ? { brandColor: resolvedBrandColor } : {}),
         });
         return { imageBase64: creative.imageBase64, mimeType: creative.mimeType, bgSource };
