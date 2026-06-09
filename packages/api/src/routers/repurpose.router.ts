@@ -425,6 +425,16 @@ KEYWORDS: ${(brief.keywords || []).join(", ")}`;
       // 4. Generate media based on format
       const displayName = channelName || extracted.siteName || "Channel";
       const handle = channelHandle || displayName;
+
+      // Cap headlines so the template's word-count font sizing stays readable
+      // (≥16 words renders at 40px). Applies to all formats.
+      const capHeadline = (text: string): string => {
+        const words = text.trim().split(/\s+/);
+        let out = words.slice(0, 12).join(" ");
+        if (out.length > 80) out = out.slice(0, 80).replace(/\s+\S*$/, "");
+        return out.trim();
+      };
+
       let mediaUrls: string[] = [];
       let mediaType = "image/jpeg";
       const perPlatformMedia: Record<string, { url: string; mediaId: string }> = {};
@@ -459,11 +469,31 @@ KEYWORDS: ${(brief.keywords || []).join(", ")}`;
           console.log(`[Repurpose] Using AI subject as headline ("${headlineForCreative}") instead of generic title ("${extracted.title.slice(0, 50)}...")`);
         }
 
+        let headlineForCreativeFinal = headlineForCreative;
+        if (extracted.type === "social") {
+          // Social captions are not article titles — synthesize a concise headline
+          // from the caption/body rather than dumping the raw caption (which may be
+          // a long emoji-laden sentence) into the headline slot.
+          try {
+            const synth = await generateContentResilient({
+              provider: input.provider,
+              platform: "INSTAGRAM",
+              userPrompt: `Write ONE concise, punchy news-style headline (max 10 words, no hashtags, no emojis) summarizing this social post. Return ONLY the headline text.\n\nPost: ${(extracted.body || extracted.description || extracted.title).slice(0, 800)}`,
+              tone: "professional",
+            });
+            const cleaned = synth.replace(/^["']|["']$/g, "").replace(/\n[\s\S]*$/, "").trim();
+            if (cleaned.length > 3) headlineForCreativeFinal = cleaned;
+          } catch (e) {
+            console.warn(`[Repurpose] Social headline synthesis failed, using extracted title:`, (e as Error).message);
+          }
+        }
+        headlineForCreativeFinal = capHeadline(headlineForCreativeFinal);
+
         const bgPrompt = `Create a cinematic, high-quality BACKGROUND photo for a social post about:
 
 ${contentBrief}
 
-Topic: "${headlineForCreative}"
+Topic: "${headlineForCreativeFinal}"
 Context: ${contentSummary.slice(0, 400)}
 
 Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g. "Imran Khan, Bollywood actor" → Bollywood/film imagery, NOT politics). Photorealistic or editorial illustration, dramatic lighting, strong mood, relevant to the topic.`;
@@ -471,7 +501,7 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
         try {
           progress("Generating creative");
           console.log(`[Repurpose] Building branded headline creative (category=${category})...`);
-          const creative = await buildHeadlineCreative(bgPrompt, headlineForCreative, category);
+          const creative = await buildHeadlineCreative(bgPrompt, headlineForCreativeFinal, category);
 
           const { url, mediaId } = await uploadAndCreateMedia(
             creative.imageBase64,
@@ -810,8 +840,9 @@ Return ONLY the JSON array, no other text.`;
         const uploadedUrls: string[] = [];
 
         // Build all slide texts: cover + content + CTA
+        const coverHeadline = capHeadline(extracted.title);
         const allSlides = [
-          { type: "cover", title: extracted.title, body: extracted.description?.slice(0, 100) || "" },
+          { type: "cover", title: coverHeadline, body: extracted.description?.slice(0, 100) || "" },
           ...slideData.map((d, i) => ({ type: "content", title: d.title, body: d.body })),
           { type: "cta", title: "Follow for More", body: "" },
         ];
