@@ -4,6 +4,8 @@ import { createRouter, orgProcedure } from "../trpc";
 import { agentRunQueue, postPublishQueue } from "@postautomation/queue";
 import { requirePlan, enforcePlanLimit } from "../middleware/plan-limit.middleware";
 import type { PrismaClient } from "@postautomation/db";
+import crypto from "crypto";
+import { uploadBase64ToS3 } from "../lib/s3";
 
 /**
  * Throws unless every channelId belongs to the given org.
@@ -60,6 +62,47 @@ function requireText(value: unknown, field: string): string {
     throw new TRPCError({ code: "BAD_REQUEST", message: `Missing required "${field}" — ask the agent to include it.` });
   }
   return value;
+}
+
+/**
+ * Upload generated image bytes to S3 and create the backing Media row with the
+ * S3 PUBLIC URL (not a multi-MB data: URL). Fix N2: storing a data URL broke
+ * later publishes (providers `fetch(media.url)` expecting an HTTP URL) and
+ * bloated the Postgres text column. Mirrors repurpose.router's upload pattern.
+ * If S3 is unconfigured the upload fails loudly — we never fall back to a data URL.
+ */
+export async function storeGeneratedNewsImage(
+  prisma: PrismaClient,
+  args: {
+    organizationId: string;
+    uploadedById: string;
+    imageBase64: string;
+    mimeType: string;
+    width?: number;
+    height?: number;
+  }
+): Promise<{ mediaId: string; url: string }> {
+  const ext = args.mimeType.includes("png") ? "png" : "jpg";
+  const contentType = args.mimeType.includes("png") ? "image/png" : "image/jpeg";
+  const key = `chat-news/news-${Date.now()}-${crypto.randomBytes(3).toString("hex")}.${ext}`;
+
+  const url = await uploadBase64ToS3({ base64: args.imageBase64, mimeType: contentType, key });
+  const fileSize = Buffer.from(args.imageBase64, "base64").length;
+
+  const media = await prisma.media.create({
+    data: {
+      organizationId: args.organizationId,
+      uploadedById: args.uploadedById,
+      fileName: `news-${Date.now()}.${ext}`,
+      fileType: contentType,
+      fileSize,
+      url,
+      width: args.width,
+      height: args.height,
+    },
+  });
+
+  return { mediaId: media.id, url };
 }
 
 // Fix #33: export supported actions so UI can derive the capability list from backend truth
@@ -512,24 +555,18 @@ export const chatRouter = createRouter({
             platform,
           });
 
-          // Save image as Media
-          const imageBuffer = Buffer.from(imageResult.imageBase64, "base64");
-          const fileName = `news-${Date.now()}.png`;
-
-          const dataUrl = `data:${imageResult.mimeType};base64,${imageResult.imageBase64}`;
-
-          const media = await ctx.prisma.media.create({
-            data: {
-              organizationId: ctx.organizationId,
-              uploadedById: (ctx.session.user as any).id,
-              fileName,
-              fileType: imageResult.mimeType,
-              fileSize: imageBuffer.length,
-              url: dataUrl,
-              width: imageResult.width,
-              height: imageResult.height,
-            },
+          // Upload image bytes to S3 and store the public URL (NOT a data URL):
+          // social providers fetch(media.url) on publish, and a data URL bloats
+          // the Postgres text column. Fix N2.
+          const { mediaId, url: imageUrl } = await storeGeneratedNewsImage(ctx.prisma, {
+            organizationId: ctx.organizationId,
+            uploadedById: (ctx.session.user as any).id,
+            imageBase64: imageResult.imageBase64,
+            mimeType: imageResult.mimeType,
+            width: imageResult.width,
+            height: imageResult.height,
           });
+          const media = { id: mediaId };
 
           // Attach to a system message in the thread
           await ctx.prisma.chatMessage.create({
@@ -552,7 +589,7 @@ export const chatRouter = createRouter({
           return {
             type: "news_image_generated",
             mediaId: media.id,
-            imageUrl: dataUrl,
+            imageUrl,
             style,
             content: p.content,
           };
