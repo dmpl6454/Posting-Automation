@@ -428,6 +428,9 @@ KEYWORDS: ${(brief.keywords || []).join(", ")}`;
       let mediaUrls: string[] = [];
       let mediaType = "image/jpeg";
       const perPlatformMedia: Record<string, { url: string; mediaId: string }> = {};
+      // Ordered slide media IDs for carousel posts (post.create needs real
+      // Media rows, not raw S3 urls). Empty for non-carousel formats.
+      const carouselMediaIds: string[] = [];
 
       if (input.format === "static") {
         // Build ONE branded headline creative (deterministic headline + logo/
@@ -940,7 +943,8 @@ Requirements:
           console.log(`[Repurpose] Batch ${batchNum} done (${batchOk}/${batchEnd - batchStart} slides)`);
         }
 
-        // Upload all successfully generated slides to S3
+        // Upload all successfully generated slides to S3 AND create a Media row
+        // per slide so post.create can attach them (carousel publish fix).
         for (let i = 0; i < slideImages.length; i++) {
           const slide = slideImages[i];
           if (!slide) continue;
@@ -949,11 +953,30 @@ Requirements:
           const key = `repurpose/carousel-${Date.now()}-${i}-${crypto.randomBytes(3).toString("hex")}.${ext}`;
           const buf = Buffer.from(slide.imageBase64, "base64");
           await s3.send(new PutObjectCommand({ Bucket: BUCKET, Key: key, Body: buf, ContentType: contentType }));
-          uploadedUrls.push(getPublicUrl(key));
+          const slideUrl = getPublicUrl(key);
+          uploadedUrls.push(slideUrl);
+          const media = await ctx.prisma.media.create({
+            data: {
+              organizationId,
+              uploadedById: userId,
+              fileName: `carousel-${Date.now()}-${i}.${ext}`,
+              fileType: contentType,
+              fileSize: buf.length,
+              url: slideUrl,
+            },
+          });
+          carouselMediaIds.push(media.id);
         }
 
         progress(`Generating ${allSlides.length} carousel slides`, "done", `${uploadedUrls.length} uploaded`);
         console.log(`[Repurpose] ${uploadedUrls.length}/${allSlides.length} carousel slides uploaded`);
+
+        if (carouselMediaIds.length > 0) {
+          const first = { url: uploadedUrls[0]!, mediaId: carouselMediaIds[0]! };
+          for (const platform of input.targetPlatforms) {
+            perPlatformMedia[platform] = first;
+          }
+        }
 
         if (input.format === "reel") {
           // Stitch slides into video with optional voice-over + background music
@@ -1066,6 +1089,7 @@ Requirements:
         platformContent,
         mediaUrls,
         mediaMap: perPlatformMedia,
+        carouselMediaIds,
         mediaType,
         format: input.format,
         // Truthful signal for the UI: captions exist but no media was produced.
