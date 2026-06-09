@@ -27,6 +27,7 @@ import { adminRouter } from "./routers/admin";
 import { autopilotRouter } from "./routers/autopilot.router";
 import { accountGroupRouter } from "./routers/account-group.router";
 import { designTemplateRouter } from "./routers/design-template.router";
+import { creativeTemplateRouter } from "./routers/creative-template.router";
 import { channelGroupRouter } from "./routers/channel-group.router";
 import { newsgridRouter } from "./routers/newsgrid.router";
 import { monitorRouter } from "./routers/monitor.router";
@@ -65,6 +66,7 @@ export const appRouter = createRouter({
   autopilot: autopilotRouter,
   accountGroup: accountGroupRouter,
   designTemplate: designTemplateRouter,
+  creativeTemplate: creativeTemplateRouter,
   channelGroup: channelGroupRouter,
   newsgrid: newsgridRouter,
   monitor: monitorRouter,
