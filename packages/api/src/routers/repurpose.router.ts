@@ -120,7 +120,6 @@ export const repurposeRouter = createRouter({
         generateSeedanceVideo,
         buildSeedancePrompt,
         overlayLogoOnImage,
-        generateStaticNewsCreativeImage,
         generateStyledCreativeImage,
         extractDominantColor,
       } = await import("@postautomation/ai");
@@ -231,16 +230,22 @@ export const repurposeRouter = createRouter({
         }
       }
 
-      // Map a content category to a news-card template style. Keeps the
-      // baked-headline creative on-brand per topic (the same renderer NewsGrid
-      // and the autopilot worker use).
-      function pickTemplate(category: string): "breaking_news" | "viral_entertainment" | "cinematic" | "luxury_news" | "magazine" {
-        const c = (category || "").toLowerCase();
-        if (c.includes("entertain") || c.includes("celebrit") || c.includes("bollywood") || c.includes("film")) return "viral_entertainment";
-        if (c.includes("politic") || c.includes("crime") || c.includes("breaking")) return "breaking_news";
-        if (c.includes("lifestyle") || c.includes("fashion") || c.includes("luxury")) return "luxury_news";
-        if (c.includes("business") || c.includes("tech")) return "magazine";
-        return "cinematic";
+      // Fetch the brand logo once as a reference image so Gemini can style the
+      // AI background to match the brand (B4). Gemini-only — the OpenAI fallback
+      // ignores it; the logo is baked deterministically by the template either
+      // way. A fetch failure degrades silently to no-reference.
+      const brandReferenceImages: Array<{ base64: string; mimeType?: string }> = [];
+      if (resolvedLogoUrl) {
+        try {
+          const r = await fetch(resolvedLogoUrl);
+          if (r.ok) {
+            const mime = r.headers.get("content-type") || "image/png";
+            const b64 = Buffer.from(await r.arrayBuffer()).toString("base64");
+            if (b64.length > 0) brandReferenceImages.push({ base64: b64, mimeType: mime });
+          }
+        } catch (e) {
+          console.warn(`[Repurpose] Logo reference fetch failed (continuing without):`, (e as Error).message);
+        }
       }
 
       /**
@@ -261,12 +266,19 @@ export const repurposeRouter = createRouter({
         // fallback, so this succeeds even while Gemini billing is on hold.
         let backgroundImageUrl: string | undefined;
         let bgSource: "ai" | "stock" = "stock";
+        // Brand-style conditioning: pass the channel logo as a reference image so
+        // Gemini (Nano Banana) styles the AI BACKGROUND to match the brand. This
+        // is Gemini-only — the OpenAI fallback ignores references (it has no
+        // image-input path), and the logo itself is always baked deterministically
+        // by the template regardless. A fetch failure just degrades to no-reference.
+        const referenceImages = brandReferenceImages;
         try {
           const bg = await generateImageSafe({
             prompt: `${bgPrompt}\n\nIMPORTANT: produce a clean BACKGROUND photo only — NO text, words, letters, numbers, logos, or watermarks. Dark/moody tones so white text overlaid on top stays readable.`,
             aspectRatio: "3:4",
             title: headline,
             topic: category || "news",
+            ...(referenceImages.length ? { referenceImages } : {}),
           });
           backgroundImageUrl = `data:${bg.mimeType};base64,${bg.imageBase64}`;
           bgSource = "ai";
