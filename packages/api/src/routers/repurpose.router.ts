@@ -3,7 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { createRouter, protectedProcedure, orgProcedure } from "../trpc";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import crypto from "crypto";
-import { pushProgress, finishProgress } from "../lib/progress";
+import { pushProgress, finishProgress, scopedProgressId } from "../lib/progress";
 import { toFriendlyAIError, isMissingAIKeyError, friendlyAIMessage } from "../lib/ai-errors";
 import { requirePlan } from "../middleware/plan-limit.middleware";
 
@@ -317,8 +317,11 @@ export const repurposeRouter = createRouter({
         return { imageBase64: creative.imageBase64, mimeType: creative.mimeType, bgSource };
       }
 
-      // Progress tracking — fire-and-forget, never blocks
-      const pid = input.progressId;
+      // Progress tracking — fire-and-forget, never blocks.
+      // Scope the client-supplied id by the authenticated userId so the Redis
+      // keys/channels are per-user (closes a cross-tenant IDOR — the reader in
+      // apps/web/app/api/progress/route.ts scopes by session.user.id identically).
+      const pid = input.progressId ? scopedProgressId(userId, input.progressId) : undefined;
       const progress = (step: string, status: "running" | "done" | "error" | "skipped" = "running", detail?: string) => {
         if (pid) pushProgress(pid, step, status, detail).catch(() => {});
       };
