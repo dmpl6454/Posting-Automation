@@ -1078,8 +1078,30 @@ Requirements:
             const videoKey = `repurpose/reel-${Date.now()}-${crypto.randomBytes(4).toString("hex")}.mp4`;
             const videoBuf = Buffer.from(reelResult.videoBase64, "base64");
             await s3.send(new PutObjectCommand({ Bucket: BUCKET, Key: videoKey, Body: videoBuf, ContentType: "video/mp4" }));
-            mediaUrls = [getPublicUrl(videoKey)];
+            const videoUrl = getPublicUrl(videoKey);
+            mediaUrls = [videoUrl];
             mediaType = "video/mp4";
+            // The publishable asset is the VIDEO, not the slide images. Create a
+            // Media row for it and make it the sole attachable media so the UI
+            // (which prefers carouselMediaIds) attaches the reel video — NOT the
+            // N intermediate slide images. On reel failure we fall through to the
+            // catch and keep the slide carouselMediaIds (degrades to a carousel).
+            const videoMedia = await ctx.prisma.media.create({
+              data: {
+                organizationId,
+                uploadedById: userId,
+                fileName: `reel-${Date.now()}.mp4`,
+                fileType: "video/mp4",
+                fileSize: videoBuf.length,
+                url: videoUrl,
+                duration: slideImages.length * 3,
+              },
+            });
+            carouselMediaIds.length = 0;
+            carouselMediaIds.push(videoMedia.id);
+            for (const platform of input.targetPlatforms) {
+              perPlatformMedia[platform] = { url: videoUrl, mediaId: videoMedia.id };
+            }
             progress("Stitching reel video from slides", "done", "Video uploaded");
             console.log(`[Repurpose] Reel video uploaded: ${mediaUrls[0]}`);
           } catch (e) {
