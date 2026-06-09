@@ -54,3 +54,34 @@ describe("hook_bars style", () => {
     expect(html).not.toContain("inset-cutout");
   });
 });
+
+describe("tweet_card style", () => {
+  it("renders brand name, handle, verified tick, text, and image pair", () => {
+    const html = buildStaticCreative({
+      style: "tweet_card",
+      headline: "Garret this, Dean that... Honestly i just want Conrad Fisher back!!!",
+      channelName: "Moviefied Bollywood",
+      handle: "@moviefiedbollywood",
+      verified: true,
+      logoPosition: "top-left",
+      bgImageUrl: "data:image/png;base64,AAAA",
+      secondaryImageUrl: "data:image/png;base64,BBBB",
+    });
+    expect(html).toContain("Moviefied Bollywood");
+    expect(html).toContain("@moviefiedbollywood");
+    expect(html).toContain("Conrad Fisher back");
+    expect(html).toContain("verified-tick");
+    expect(html).toContain("data:image/png;base64,AAAA");
+    expect(html).toContain("data:image/png;base64,BBBB");
+  });
+  it("omits verified tick when verified is false", () => {
+    const html = buildStaticCreative({
+      style: "tweet_card",
+      headline: "x",
+      channelName: "Brand",
+      handle: "@brand",
+      logoPosition: "top-left",
+    });
+    expect(html).not.toContain("verified-tick");
+  });
+});
