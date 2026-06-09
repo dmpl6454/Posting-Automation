@@ -106,6 +106,10 @@ export default function SuperAgentPage() {
   // Media attachments the user adds via upload or the library picker (audit fix 2026-06-06)
   const [attachments, setAttachments] = useState<{ mediaId: string; url: string; fileType: string }[]>([]);
   const [showMediaPicker, setShowMediaPicker] = useState(false);
+  // A1: per-message lock so an action button can't be re-clicked after it
+  // succeeds (would create duplicate LIVE posts). Keyed on the message id, which
+  // is also sent as clientActionId for server-side idempotency.
+  const [executedActionIds, setExecutedActionIds] = useState<Set<string>>(new Set());
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -153,8 +157,11 @@ export default function SuperAgentPage() {
 
   /* ── Execute action ── */
   const executeAction = useCallback(
-    async (action: { type: string; payload: Record<string, unknown> }) => {
+    async (action: { type: string; payload: Record<string, unknown> }, msgId: string) => {
       if (!activeThreadId) return;
+      // A1: don't re-fire an action that already ran (defensive — the button is
+      // also disabled). The server dedupes on clientActionId regardless.
+      if (executedActionIds.has(msgId)) return;
       const postActions = ["publish_now", "schedule_post", "bulk_schedule"];
       let payload = action.payload;
       if (postActions.includes(action.type) && attachments.length > 0 && !("mediaIds" in payload)) {
@@ -165,7 +172,9 @@ export default function SuperAgentPage() {
           threadId: activeThreadId,
           actionType: action.type as any,
           payload,
+          clientActionId: msgId,
         });
+        setExecutedActionIds((prev) => new Set(prev).add(msgId));
         utils.chat.getThread.invalidate({ id: activeThreadId });
         utils.chat.listThreads.invalidate();
         utils.agent.list.invalidate();
@@ -176,7 +185,7 @@ export default function SuperAgentPage() {
         ]);
       }
     },
-    [activeThreadId, executeActionMutation, utils, attachments]
+    [activeThreadId, executeActionMutation, utils, attachments, executedActionIds]
   );
 
   /* ── Send message ── */
@@ -553,19 +562,26 @@ export default function SuperAgentPage() {
                           <Badge variant="outline" className="text-[10px]">
                             {msg.action.type.replace(/_/g, " ")}
                           </Badge>
-                          <Button
-                            size="sm"
-                            className="h-6 gap-1 text-xs bg-violet-600 hover:bg-violet-700 text-white"
-                            onClick={() => executeAction(msg.action!)}
-                            disabled={executeActionMutation.isPending}
-                          >
-                            {executeActionMutation.isPending ? (
-                              <Loader2 className="h-3 w-3 animate-spin" />
-                            ) : (
+                          {executedActionIds.has(msg.id) ? (
+                            <span className="flex items-center gap-1 rounded-md bg-emerald-500/10 px-2 py-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-400">
                               <CheckCircle2 className="h-3 w-3" />
-                            )}
-                            {msg.action.type === "publish_now" ? "Publish now" : "Execute"}
-                          </Button>
+                              Done
+                            </span>
+                          ) : (
+                            <Button
+                              size="sm"
+                              className="h-6 gap-1 text-xs bg-violet-600 hover:bg-violet-700 text-white"
+                              onClick={() => executeAction(msg.action!, msg.id)}
+                              disabled={executeActionMutation.isPending || executedActionIds.has(msg.id)}
+                            >
+                              {executeActionMutation.isPending ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <CheckCircle2 className="h-3 w-3" />
+                              )}
+                              {msg.action.type === "publish_now" ? "Publish now" : "Execute"}
+                            </Button>
+                          )}
                         </div>
                       </div>
                     )}

@@ -65,6 +65,32 @@ function requireText(value: unknown, field: string): string {
 }
 
 /**
+ * A1 idempotency: returns true if a previous executeAction in this thread already
+ * recorded a result ChatMessage stamped with this clientActionId. The dedupe is
+ * keyed on (threadId + clientActionId) — a NEW action (new message id) is never
+ * blocked, and the same button can't double-fire a LIVE post.
+ *
+ * `ChatMessage.metadata` is `Json?` on Postgres, so the JSON-path filter
+ * `metadata: { path: ["executedActionId"], equals: ... }` is supported natively
+ * by prisma-client-js.
+ */
+export async function isActionAlreadyExecuted(
+  prisma: PrismaClient,
+  threadId: string,
+  clientActionId: string | undefined
+): Promise<boolean> {
+  if (!clientActionId) return false;
+  const dupe = await prisma.chatMessage.findFirst({
+    where: {
+      threadId,
+      metadata: { path: ["executedActionId"], equals: clientActionId },
+    },
+    select: { id: true },
+  });
+  return dupe !== null;
+}
+
+/**
  * Upload generated image bytes to S3 and create the backing Media row with the
  * S3 PUBLIC URL (not a multi-MB data: URL). Fix N2: storing a data URL broke
  * later publishes (providers `fetch(media.url)` expecting an HTTP URL) and
@@ -289,6 +315,11 @@ export const chatRouter = createRouter({
           "trigger_agent_run", "get_analytics",
         ]),
         payload: z.record(z.unknown()),
+        // A1: optional per-message id from the client. When set, the
+        // post-creating cases (publish_now/schedule_post/bulk_schedule) dedupe
+        // on (threadId + clientActionId) so re-clicking the same action button
+        // can't create duplicate LIVE posts (no server idempotency before this).
+        clientActionId: z.string().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -350,6 +381,10 @@ export const chatRouter = createRouter({
         }
 
         case "schedule_post": {
+          // A1: short-circuit if this exact action button was already executed.
+          if (await isActionAlreadyExecuted(ctx.prisma, input.threadId, input.clientActionId)) {
+            return { type: "already_executed" };
+          }
           await enforcePlanLimit(ctx.organizationId, "postsPerMonth", ctx.isSuperAdmin);
           const p = input.payload as any;
           requireText(p.content, "content");
@@ -384,7 +419,7 @@ export const chatRouter = createRouter({
               threadId: input.threadId,
               role: "system",
               content: `Post scheduled for ${post.scheduledAt?.toLocaleString() || "soon"}.`,
-              metadata: { type: "post_scheduled", postId: post.id },
+              metadata: { type: "post_scheduled", postId: post.id, executedActionId: input.clientActionId },
             },
           });
 
@@ -392,6 +427,10 @@ export const chatRouter = createRouter({
         }
 
         case "bulk_schedule": {
+          // A1: short-circuit if this exact action button was already executed.
+          if (await isActionAlreadyExecuted(ctx.prisma, input.threadId, input.clientActionId)) {
+            return { type: "already_executed" };
+          }
           const p = input.payload as any;
           const userId = (ctx.session.user as any).id;
           const posts = p.posts || [];
@@ -440,7 +479,7 @@ export const chatRouter = createRouter({
               threadId: input.threadId,
               role: "system",
               content: `${createdPosts.length} posts scheduled:\n${summary}`,
-              metadata: { type: "bulk_scheduled", postIds: createdPosts.map((p) => p.id) },
+              metadata: { type: "bulk_scheduled", postIds: createdPosts.map((p) => p.id), executedActionId: input.clientActionId },
             },
           });
 
@@ -448,6 +487,11 @@ export const chatRouter = createRouter({
         }
 
         case "publish_now": {
+          // A1: short-circuit if this exact action button was already executed —
+          // re-clicking "Publish now" must NOT create a second LIVE post.
+          if (await isActionAlreadyExecuted(ctx.prisma, input.threadId, input.clientActionId)) {
+            return { type: "already_executed" };
+          }
           await enforcePlanLimit(ctx.organizationId, "postsPerMonth", ctx.isSuperAdmin);
           const p = input.payload as any;
           requireText(p.content, "content");
@@ -491,7 +535,9 @@ export const chatRouter = createRouter({
                 platform: target.channel.platform,
                 organizationId: ctx.organizationId,
               },
-              { delay: 0 }
+              // B4: match compose (post.router.ts) — retry transient publish
+              // failures instead of failing on the first hiccup.
+              { delay: 0, attempts: 3, backoff: { type: "exponential", delay: 30000 } }
             );
           }
 
@@ -500,7 +546,7 @@ export const chatRouter = createRouter({
               threadId: input.threadId,
               role: "system",
               content: `Post published to ${post.targets.map((t) => t.channel.name || t.channel.platform).join(", ")}.`,
-              metadata: { type: "post_published", postId: post.id },
+              metadata: { type: "post_published", postId: post.id, executedActionId: input.clientActionId },
             },
           });
 
