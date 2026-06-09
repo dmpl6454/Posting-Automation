@@ -155,9 +155,63 @@ function buildContextString(context: ChatContext): string {
   return parts.join("\n");
 }
 
-async function fetchImageAsBase64(url: string): Promise<{ data: string; mimeType: string } | null> {
+/**
+ * Host allowlist for server-side image fetches (SSRF guard). Attachment URLs
+ * are written by our own org-scoped S3/MinIO upload flow, so the only legitimate
+ * hosts are the configured S3 public/endpoint hosts. We fail closed: anything
+ * not on the allowlist (and any private/loopback/link-local host) is rejected.
+ */
+function hostOf(value: string | undefined): string | null {
+  if (!value) return null;
   try {
-    const res = await fetch(url);
+    return new URL(value.startsWith("http") ? value : `https://${value}`).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+const IMAGE_FETCH_ALLOWED_HOSTS: Set<string> = new Set(
+  [hostOf(process.env.S3_PUBLIC_URL), hostOf(process.env.S3_ENDPOINT), "s3.amazonaws.com"].filter(
+    (h): h is string => !!h,
+  ),
+);
+
+function isPrivateOrLoopbackHost(host: string): boolean {
+  if (host === "localhost" || host === "0.0.0.0" || host === "::1") return true;
+  // IPv4 private / loopback / link-local ranges (covers cloud metadata 169.254.169.254)
+  return (
+    /^127\./.test(host) ||
+    /^10\./.test(host) ||
+    /^192\.168\./.test(host) ||
+    /^169\.254\./.test(host) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(host)
+  );
+}
+
+function isAllowedImageUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return false;
+  const host = parsed.hostname.toLowerCase();
+  if (isPrivateOrLoopbackHost(host)) return false;
+  // Fail closed: only fetch from a configured S3 host. If none configured
+  // (misconfig), allow only https to avoid blocking prod while staying safe.
+  if (IMAGE_FETCH_ALLOWED_HOSTS.size > 0) return IMAGE_FETCH_ALLOWED_HOSTS.has(host);
+  return parsed.protocol === "https:";
+}
+
+async function fetchImageAsBase64(url: string): Promise<{ data: string; mimeType: string } | null> {
+  if (!isAllowedImageUrl(url)) {
+    console.warn(`[chat-agent] image fetch blocked (host not allowlisted / private): ${url.slice(0, 80)}`);
+    return null;
+  }
+  try {
+    // redirect:"manual" so a 30x cannot bounce the request to an internal target.
+    const res = await fetch(url, { redirect: "manual" });
     if (!res.ok) {
       console.warn(`[chat-agent] image fetch for Gemini failed: HTTP ${res.status} for ${url.slice(0, 80)}`);
       return null;
