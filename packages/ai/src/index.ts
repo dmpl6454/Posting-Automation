@@ -3,7 +3,7 @@ export { suggestHashtags } from "./chains/hashtag-suggestion.chain";
 export { optimizeContent } from "./chains/schedule-optimization.chain";
 export { repurposeContent } from "./chains/content-repurpose.chain";
 export type { RepurposeParams } from "./chains/content-repurpose.chain";
-export { streamChatAgent, chatAgent, parseActions, cleanResponseText } from "./chains/chat-agent.chain";
+export { streamChatAgent, chatAgent, parseActions, cleanResponseText, withIdempotencyKey } from "./chains/chat-agent.chain";
 export type { ChatMessage as AIChatMessage, ChatContext, ChatAgentAction, ChatActionType } from "./chains/chat-agent.chain";
 export { getModel, isLangChainProvider, isGoogleNativeProvider } from "./providers/provider.factory";
 export { callGemma4 } from "./providers/gemma4.provider";

@@ -35,9 +35,16 @@ interface Message {
   id: string;
   role: "user" | "assistant" | "system";
   content: string;
-  action?: { type: string; payload: Record<string, unknown> } | null;
+  // A1 followup: `idempotencyKey` is a STABLE uuid stamped server-side at action
+  // creation; it lives inside metadata.action so it survives a getThread refetch.
+  action?: { type: string; payload: Record<string, unknown>; idempotencyKey?: string } | null;
   createdAt?: string | Date;
 }
+
+// A1 followup: the STABLE key used for BOTH the executedActionIds lock and the
+// clientActionId sent to the server. Falls back to the (ephemeral) message id for
+// legacy messages persisted before idempotencyKey existed.
+const actionKey = (msg: Message): string => msg.action?.idempotencyKey ?? msg.id;
 
 /* ── Helpers ── */
 function formatTimeAgo(date: string | Date | null): string {
@@ -124,13 +131,29 @@ export default function SuperAgentPage() {
 
   useEffect(() => {
     if (threadData?.messages) {
-      const dbMessages = threadData.messages.map((m: any) => ({
+      const dbMessages: Message[] = threadData.messages.map((m: any) => ({
         id: m.id,
         role: m.role as "user" | "assistant" | "system",
         content: m.content,
         action: (m.metadata as any)?.action || null,
         createdAt: m.createdAt,
       }));
+
+      // A1 followup: re-seed the "Done" lock from PERSISTED markers so it survives
+      // a getThread refetch. Every executeAction stamps the result ChatMessage with
+      // metadata.executedActionId === <the action's idempotencyKey>. Collect every
+      // such marker present in the thread; an action is "done" iff its
+      // idempotencyKey is in that set. Without this, the refetch (triggered by the
+      // success path's invalidate) would drop the in-memory lock and re-enable the
+      // button — letting a re-click create a SECOND LIVE post.
+      const executedMarkers = new Set<string>();
+      for (const m of threadData.messages as any[]) {
+        const marker = (m.metadata as any)?.executedActionId;
+        if (typeof marker === "string" && marker) executedMarkers.add(marker);
+      }
+      if (executedMarkers.size > 0) {
+        setExecutedActionIds((prev) => new Set([...prev, ...executedMarkers]));
+      }
 
       // Fix #31: re-inject any pending message that survived a page reload
       if (activeThreadId && typeof window !== "undefined") {
@@ -157,11 +180,17 @@ export default function SuperAgentPage() {
 
   /* ── Execute action ── */
   const executeAction = useCallback(
-    async (action: { type: string; payload: Record<string, unknown> }, msgId: string) => {
-      if (!activeThreadId) return;
-      // A1: don't re-fire an action that already ran (defensive — the button is
-      // also disabled). The server dedupes on clientActionId regardless.
-      if (executedActionIds.has(msgId)) return;
+    async (msg: Message) => {
+      if (!activeThreadId || !msg.action) return;
+      const action = msg.action;
+      // A1 followup: the lock key AND the clientActionId are the STABLE
+      // idempotencyKey (falls back to msg.id for legacy messages). This key lives
+      // in the persisted metadata.action, so it's identical before AND after a
+      // getThread refetch — the server marker stamped on success will match.
+      const key = actionKey(msg);
+      // Don't re-fire an action that already ran (defensive — the button is also
+      // disabled). The server dedupes on clientActionId regardless.
+      if (executedActionIds.has(key)) return;
       const postActions = ["publish_now", "schedule_post", "bulk_schedule"];
       let payload = action.payload;
       if (postActions.includes(action.type) && attachments.length > 0 && !("mediaIds" in payload)) {
@@ -172,9 +201,10 @@ export default function SuperAgentPage() {
           threadId: activeThreadId,
           actionType: action.type as any,
           payload,
-          clientActionId: msgId,
+          clientActionId: key,
         });
-        setExecutedActionIds((prev) => new Set(prev).add(msgId));
+        // Success-only add — a FAILED publish must NOT lock the button.
+        setExecutedActionIds((prev) => new Set(prev).add(key));
         utils.chat.getThread.invalidate({ id: activeThreadId });
         utils.chat.listThreads.invalidate();
         utils.agent.list.invalidate();
@@ -562,7 +592,7 @@ export default function SuperAgentPage() {
                           <Badge variant="outline" className="text-[10px]">
                             {msg.action.type.replace(/_/g, " ")}
                           </Badge>
-                          {executedActionIds.has(msg.id) ? (
+                          {executedActionIds.has(actionKey(msg)) ? (
                             <span className="flex items-center gap-1 rounded-md bg-emerald-500/10 px-2 py-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-400">
                               <CheckCircle2 className="h-3 w-3" />
                               Done
@@ -571,8 +601,8 @@ export default function SuperAgentPage() {
                             <Button
                               size="sm"
                               className="h-6 gap-1 text-xs bg-violet-600 hover:bg-violet-700 text-white"
-                              onClick={() => executeAction(msg.action!, msg.id)}
-                              disabled={executeActionMutation.isPending || executedActionIds.has(msg.id)}
+                              onClick={() => executeAction(msg)}
+                              disabled={executeActionMutation.isPending || executedActionIds.has(actionKey(msg))}
                             >
                               {executeActionMutation.isPending ? (
                                 <Loader2 className="h-3 w-3 animate-spin" />

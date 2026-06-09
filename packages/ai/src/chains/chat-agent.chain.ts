@@ -51,6 +51,17 @@ export type ChatActionType =
 export interface ChatAgentAction {
   type: ChatActionType;
   payload: Record<string, unknown>;
+  /**
+   * A1 followup: a stable idempotency key generated ONCE when the action is first
+   * parsed from the model output. It is sent in the SSE `done` event AND persisted
+   * into the assistant ChatMessage.metadata.action, so it survives the
+   * streaming→persisted message-id transition (the ephemeral `ai-<ts>` id is
+   * replaced by the DB id on the next getThread refetch). The client uses this key
+   * as BOTH the executedActionIds lock key AND the clientActionId sent to the
+   * server, so a re-click after a refetch short-circuits server-side instead of
+   * creating a second LIVE post.
+   */
+  idempotencyKey?: string;
 }
 
 /**
@@ -70,6 +81,24 @@ export function parseActions(text: string): ChatAgentAction | null {
     // Invalid JSON in action block
   }
   return null;
+}
+
+/**
+ * Attach a STABLE idempotency key to a parsed action (A1 followup).
+ *
+ * Pure helper so the same key is guaranteed to be used for BOTH the SSE `done`
+ * event and the persisted `metadata.action` — call this ONCE per assistant
+ * message, then send + persist the returned object. Returns `null` unchanged so
+ * the caller can pass through "no action" responses. If the action already has a
+ * key (defensive — e.g. re-processing) it is preserved rather than regenerated.
+ */
+export function withIdempotencyKey(
+  action: ChatAgentAction | null,
+  generateKey: () => string = () => globalThis.crypto.randomUUID()
+): ChatAgentAction | null {
+  if (!action) return null;
+  if (action.idempotencyKey) return action;
+  return { ...action, idempotencyKey: generateKey() };
 }
 
 /**
