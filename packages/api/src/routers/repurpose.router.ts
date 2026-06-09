@@ -122,7 +122,7 @@ export const repurposeRouter = createRouter({
         overlayLogoOnImage,
         generateStyledCreativeImage,
         extractDominantColor,
-        isAllowedImageUrl,
+        isPublicImageUrl,
       } = await import("@postautomation/ai");
 
       const userId = (ctx.session.user as any).id as string;
@@ -187,6 +187,20 @@ export const repurposeRouter = createRouter({
         }
       }
 
+      // SSRF chokepoint: `resolvedLogoUrl` is user-influenced (input.logoUrl /
+      // template logoMedia.url / channel avatar) and is fetched + rendered
+      // server-side downstream (reference fetch, extractDominantColor,
+      // buildHeadlineCreative, applyLogoOverlay → overlayLogoOnImage). Validate
+      // ONCE here so every downstream use is safe. Logos may live on external
+      // public CDNs, so the looser `isPublicImageUrl` (public hosts allowed,
+      // private/loopback/metadata/internal blocked) is used — NOT the strict S3
+      // allowlist (which would silently drop legit external logos). A blocked
+      // URL degrades gracefully to the no-logo path.
+      if (resolvedLogoUrl && !isPublicImageUrl(resolvedLogoUrl)) {
+        console.warn("[repurpose] logo URL blocked (private/internal host) — dropping logo");
+        resolvedLogoUrl = "";
+      }
+
       console.log(`[Repurpose] Logo config: logoUrl="${resolvedLogoUrl?.slice(0, 60) || ""}", channelName="${channelName}", handle="${channelHandle}"`);
 
       // Helper: apply logo overlay to a generated image
@@ -235,14 +249,12 @@ export const repurposeRouter = createRouter({
       // AI background to match the brand (B4). Gemini-only — the OpenAI fallback
       // ignores it; the logo is baked deterministically by the template either
       // way. A fetch failure degrades silently to no-reference.
+      // NOTE: `resolvedLogoUrl` was validated at the SSRF chokepoint above
+      // (`isPublicImageUrl`) and cleared if it pointed at a private/internal
+      // host, so it is safe to fetch here when truthy. A fetch failure degrades
+      // silently to the no-reference path.
       const brandReferenceImages: Array<{ base64: string; mimeType?: string }> = [];
-      if (resolvedLogoUrl && !isAllowedImageUrl(resolvedLogoUrl)) {
-        // SSRF guard: only fetch logos from allowlisted S3 hosts. A disallowed
-        // URL (private/metadata/arbitrary host) degrades gracefully to the same
-        // no-reference path as a fetch failure — no logo conditioning, but the
-        // creative still renders.
-        console.warn(`[Repurpose] Logo reference fetch blocked (host not allowlisted / private): ${resolvedLogoUrl.slice(0, 80)}`);
-      } else if (resolvedLogoUrl) {
+      if (resolvedLogoUrl) {
         try {
           const r = await fetch(resolvedLogoUrl);
           if (r.ok) {

@@ -76,6 +76,36 @@ export function isAllowedImageUrl(url: string): boolean {
 }
 
 /**
+ * Looser guard for LOGO / brand-avatar URLs. Unlike `isAllowedImageUrl`, this
+ * does NOT restrict to the S3 allowlist — logos and channel avatars can
+ * legitimately live on external public CDNs (NewsGrid / autopilot use channel
+ * avatar URLs). It still fails closed against SSRF: only `data:image` URLs and
+ * `https:` URLs whose host is NOT a private/loopback/link-local/metadata host
+ * are allowed. `http:` (non-TLS) is rejected.
+ *
+ * Returns true iff:
+ *  - a `data:image/(png|jpeg|jpg|webp|gif);base64,...` URL, OR
+ *  - an `https:` URL whose host is a public (non-private/loopback/metadata) host.
+ */
+export function isPublicImageUrl(url: string): boolean {
+  // Inline base64 image data — no network fetch, safe by construction.
+  if (/^data:image\/(png|jpeg|jpg|webp|gif);base64,/i.test(url)) return true;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  // TLS only — block plaintext http: even for public hosts.
+  if (parsed.protocol !== "https:") return false;
+  const host = parsed.hostname.toLowerCase();
+  if (isPrivateOrLoopbackHost(host)) return false;
+  // Any public host is allowed (external CDNs included). No S3 allowlist.
+  return true;
+}
+
+/**
  * SSRF-safe fetch for image URLs. Throws if the URL is not allowed by
  * `isAllowedImageUrl`. Uses `redirect: "manual"` so a 30x cannot bounce the
  * request to an internal target, and aborts after `timeoutMs` (default 10s).

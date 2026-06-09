@@ -2,7 +2,7 @@ import puppeteer from "puppeteer";
 import { generateNewsCardHtml, generateStaticNewsCreativeHtml, type NewsCardOptions, type StaticNewsCreativeOptions } from "./news-card-template";
 import { generateImageDallE } from "../providers/dalle.provider";
 import { buildStaticCreative, type StaticCreativeOptions } from "./creative-templates";
-import { isAllowedImageUrl } from "../utils/safe-fetch-url";
+import { isPublicImageUrl } from "../utils/safe-fetch-url";
 
 export interface NewsImageResult {
   imageBase64: string;
@@ -198,8 +198,14 @@ export async function overlayLogoOnImage(options: LogoOverlayOptions): Promise<{
   const dataUrl = `data:${mimeType};base64,${imageBase64}`;
   const initial = (channelName?.[0] ?? "C").toUpperCase();
 
-  const logoHtml = logoUrl
-    ? `<img src="${logoUrl}" style="width:48px;height:48px;border-radius:12px;object-fit:cover;border:2px solid rgba(255,255,255,0.2);flex-shrink:0;" crossorigin="anonymous" />`
+  // SSRF guard: the logo URL is rendered as `<img src>` inside a headless
+  // browser, so a private/metadata/internal host must never be fetched
+  // server-side. Public CDN logos are allowed; a blocked URL falls back to the
+  // same initial-letter avatar as the no-logo path (graceful).
+  const safeLogoUrl = logoUrl && isPublicImageUrl(logoUrl) ? logoUrl : null;
+
+  const logoHtml = safeLogoUrl
+    ? `<img src="${safeLogoUrl}" style="width:48px;height:48px;border-radius:12px;object-fit:cover;border:2px solid rgba(255,255,255,0.2);flex-shrink:0;" crossorigin="anonymous" />`
     : `<div style="width:48px;height:48px;border-radius:12px;background:${accentColor};display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:20px;flex-shrink:0;">${initial}</div>`;
 
   const nameHtml = channelName
@@ -294,9 +300,11 @@ export async function generateNewsImage(
  */
 export async function extractDominantColor(imageUrl: string): Promise<string | null> {
   // SSRF guard: this loads `imageUrl` inside a headless browser, so a private/
-  // metadata/arbitrary host must never be fetched. Callers fall back to a
-  // default accent color on null.
-  if (!isAllowedImageUrl(imageUrl)) return null;
+  // metadata/internal host must never be fetched. Logos legitimately live on
+  // external public CDNs, so we use the looser `isPublicImageUrl` (public hosts
+  // allowed, internal blocked) — not the strict S3 allowlist. Callers fall back
+  // to a default accent color on null.
+  if (!isPublicImageUrl(imageUrl)) return null;
   const browser = await puppeteer.launch({
     headless: true,
     args: ["--no-sandbox", "--disable-setuid-sandbox"],

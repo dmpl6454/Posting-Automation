@@ -48,6 +48,46 @@ describe("isAllowedImageUrl (shared SSRF guard)", () => {
   });
 });
 
+describe("isPublicImageUrl (looser logo guard — public CDNs allowed, internal blocked)", () => {
+  async function load() {
+    return (await import("../utils/safe-fetch-url")).isPublicImageUrl;
+  }
+
+  it("allows a public non-S3 CDN host over https", async () => {
+    const isPublic = await load();
+    expect(isPublic("https://cdn.example.com/logo.png")).toBe(true);
+  });
+
+  it("allows the configured S3 public host", async () => {
+    const isPublic = await load();
+    expect(isPublic("https://media.postautomation.co.in/postautomation-media/x.png")).toBe(true);
+  });
+
+  it("allows data:image/...;base64 URLs", async () => {
+    const isPublic = await load();
+    expect(isPublic("data:image/png;base64,AAAA")).toBe(true);
+  });
+
+  it("blocks non-TLS http (even for a public host)", async () => {
+    const isPublic = await load();
+    expect(isPublic("http://cdn.example.com/x")).toBe(false);
+  });
+
+  it("blocks loopback / private / link-local / metadata IPs and localhost", async () => {
+    const isPublic = await load();
+    expect(isPublic("http://169.254.169.254/x")).toBe(false);
+    expect(isPublic("http://10.0.0.5/x")).toBe(false);
+    expect(isPublic("http://[::1]/x")).toBe(false);
+    expect(isPublic("http://localhost/x")).toBe(false);
+    expect(isPublic("https://[fd00::1]/x")).toBe(false);
+  });
+
+  it("blocks non-http(s) schemes", async () => {
+    const isPublic = await load();
+    expect(isPublic("file:///etc/passwd")).toBe(false);
+  });
+});
+
 describe("safeFetchImage", () => {
   async function load() {
     return (await import("../utils/safe-fetch-url")).safeFetchImage;
