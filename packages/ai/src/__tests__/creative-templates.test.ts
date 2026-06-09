@@ -142,3 +142,19 @@ describe("creative-templates security (XSS / CSS injection)", () => {
     expect(html).not.toContain("<script>alert(1)</script>");
   });
 });
+
+describe("bold_typographic style", () => {
+  it("renders large headline on brand background with corner logo", () => {
+    const html = buildStaticCreative({
+      style: "bold_typographic",
+      headline: "This month's biggest releases.",
+      channelName: "Moviefied",
+      handle: "@moviefied",
+      brandColor: "#e11d48",
+      logoPosition: "top-left",
+    });
+    expect(html).toContain("biggest releases");
+    expect(html).toContain("Moviefied");
+    expect(html).toContain("#e11d48");
+  });
+});

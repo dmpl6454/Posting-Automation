@@ -196,8 +196,28 @@ ${imgPair}
 </body></html>`;
 }
 
-function notImplemented(style: string): never {
-  throw new Error(`creative style "${style}" not implemented yet`);
+function buildBoldTypographic(opts: StaticCreativeOptions): string {
+  const accent = safeColor(opts.brandColor);
+  const words = opts.headline.trim().split(/\s+/).length;
+  const fs = words <= 4 ? 130 : words <= 7 ? 104 : words <= 11 ? 82 : 64;
+  const corner = opts.logoPosition === "top-left" ? "left:56px;" : "right:56px;";
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+${FONT_IMPORT}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{width:${CANVAS.width}px;height:${CANVAS.height}px;overflow:hidden;position:relative;font-family:'Inter',system-ui,sans-serif;background:#0d0d12;display:flex;align-items:center;padding:0 64px;}
+.accent-band{position:absolute;top:0;left:0;width:14px;height:100%;background:${accent};}
+.logo{position:absolute;top:56px;${corner}display:flex;align-items:center;gap:14px;}
+.brand-tag{color:rgba(255,255,255,0.75);font-size:22px;font-weight:600;}
+.headline{color:#fff;font-size:${fs}px;font-weight:900;line-height:1.02;letter-spacing:-0.03em;}
+.rule{position:absolute;bottom:96px;left:64px;width:80px;height:5px;background:${accent};border-radius:3px;}
+.name{position:absolute;bottom:48px;left:64px;color:rgba(255,255,255,0.7);font-size:24px;font-weight:600;}
+</style></head><body>
+<div class="accent-band"></div>
+<div class="logo">${logoHtml(opts, 52)}${opts.handle ? `<span class="brand-tag">${escapeHtml(opts.handle)}</span>` : ""}</div>
+<div class="headline">${escapeHtml(opts.headline)}</div>
+<div class="rule"></div>
+<div class="name">${escapeHtml(opts.channelName)}</div>
+</body></html>`;
 }
 
 export function buildStaticCreative(opts: StaticCreativeOptions): string {
@@ -209,7 +229,7 @@ export function buildStaticCreative(opts: StaticCreativeOptions): string {
     case "tweet_card":
       return buildTweetCard(opts);
     case "bold_typographic":
-      return notImplemented("bold_typographic");
+      return buildBoldTypographic(opts);
     default:
       return buildPremiumEditorial(opts);
   }
