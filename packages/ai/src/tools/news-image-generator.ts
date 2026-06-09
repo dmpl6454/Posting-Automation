@@ -2,6 +2,7 @@ import puppeteer from "puppeteer";
 import { generateNewsCardHtml, generateStaticNewsCreativeHtml, type NewsCardOptions, type StaticNewsCreativeOptions } from "./news-card-template";
 import { generateImageDallE } from "../providers/dalle.provider";
 import { buildStaticCreative, type StaticCreativeOptions } from "./creative-templates";
+import { isAllowedImageUrl } from "../utils/safe-fetch-url";
 
 export interface NewsImageResult {
   imageBase64: string;
@@ -292,6 +293,10 @@ export async function generateNewsImage(
  * Returns a hex color string like "#e11d48", or null if extraction fails.
  */
 export async function extractDominantColor(imageUrl: string): Promise<string | null> {
+  // SSRF guard: this loads `imageUrl` inside a headless browser, so a private/
+  // metadata/arbitrary host must never be fetched. Callers fall back to a
+  // default accent color on null.
+  if (!isAllowedImageUrl(imageUrl)) return null;
   const browser = await puppeteer.launch({
     headless: true,
     args: ["--no-sandbox", "--disable-setuid-sandbox"],

@@ -122,6 +122,7 @@ export const repurposeRouter = createRouter({
         overlayLogoOnImage,
         generateStyledCreativeImage,
         extractDominantColor,
+        isAllowedImageUrl,
       } = await import("@postautomation/ai");
 
       const userId = (ctx.session.user as any).id as string;
@@ -235,7 +236,13 @@ export const repurposeRouter = createRouter({
       // ignores it; the logo is baked deterministically by the template either
       // way. A fetch failure degrades silently to no-reference.
       const brandReferenceImages: Array<{ base64: string; mimeType?: string }> = [];
-      if (resolvedLogoUrl) {
+      if (resolvedLogoUrl && !isAllowedImageUrl(resolvedLogoUrl)) {
+        // SSRF guard: only fetch logos from allowlisted S3 hosts. A disallowed
+        // URL (private/metadata/arbitrary host) degrades gracefully to the same
+        // no-reference path as a fetch failure — no logo conditioning, but the
+        // creative still renders.
+        console.warn(`[Repurpose] Logo reference fetch blocked (host not allowlisted / private): ${resolvedLogoUrl.slice(0, 80)}`);
+      } else if (resolvedLogoUrl) {
         try {
           const r = await fetch(resolvedLogoUrl);
           if (r.ok) {
