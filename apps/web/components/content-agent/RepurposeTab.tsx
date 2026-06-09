@@ -55,9 +55,9 @@ const providers = ["openai", "anthropic", "gemini", "grok", "deepseek", "gemma4"
 const FORMAT_OPTIONS = [
   { id: "static" as const, label: "Static Post", icon: Image, desc: "Single branded image + caption" },
   { id: "carousel" as const, label: "Carousel", icon: Layers, desc: "Multi-slide carousel post" },
-  { id: "reel" as const, label: "Reel / Video", icon: Film, desc: "Slideshow video from key points" },
-  { id: "ai_video" as const, label: "AI Video (Veo3)", icon: Video, desc: "AI-generated cinematic video with text & music" },
-  { id: "seedance_video" as const, label: "Seedance 2.0", icon: Video, desc: "ByteDance cinematic video with native audio & 2K", badge: "NEW" },
+  { id: "reel" as const, label: "Slideshow Reel", icon: Film, desc: "Your key points become video slides with optional voiceover + music" },
+  { id: "seedance_video" as const, label: "AI Video", icon: Video, desc: "Real AI-generated cinematic footage with native audio", badge: "NEW" },
+  { id: "ai_video" as const, label: "AI Video (Veo3)", icon: Video, desc: "Temporarily unavailable", disabled: true, badge: "SOON" },
 ];
 
 const THEMES = [
@@ -87,6 +87,11 @@ export function RepurposeTab() {
   const [voiceOver, setVoiceOver] = useState(true);
   const [voiceType, setVoiceType] = useState<string>("nova");
   const [bgMusic, setBgMusic] = useState(true);
+  const [creativeStyle, setCreativeStyle] = useState<"premium_editorial" | "hook_bars" | "tweet_card" | "bold_typographic">("premium_editorial");
+  const [logoPosition, setLogoPosition] = useState<"top-left" | "top-right">("top-right");
+  const [logoUrl, setLogoUrl] = useState<string>("");
+  const [logoMediaId, setLogoMediaId] = useState<string>("");
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
 
   // Results
   const [results, setResults] = useState<{
@@ -94,6 +99,7 @@ export function RepurposeTab() {
     platformContent: Record<string, string>;
     mediaUrls: string[];
     mediaMap?: Record<string, { url: string; mediaId: string }>;
+    carouselMediaIds?: string[];
     mediaType: string;
     format: string;
     mediaFailed?: boolean;
@@ -151,6 +157,9 @@ export function RepurposeTab() {
 
   // Channel info (for branding + publishing)
   const { data: channels } = trpc.channel.list.useQuery();
+  const { data: creativeTemplates } = trpc.creativeTemplate.list.useQuery();
+  const createTemplate = trpc.creativeTemplate.create.useMutation();
+  const utils = trpc.useUtils();
   const activeChannels = (channels as any[])?.filter((c: any) => c.isActive) || [];
   const primaryChannel = activeChannels[0];
   const [selectedChannelIds, setSelectedChannelIds] = useState<string[]>([]);
@@ -246,12 +255,14 @@ export function RepurposeTab() {
         channelHandle: selectedChannelIds.length > 0
           ? activeChannels.find((c: any) => c.id === selectedChannelIds[0])?.username || ""
           : primaryChannel?.username || "",
-        logoUrl: (() => {
+        logoUrl: logoUrl || (() => {
           const ch = selectedChannelIds.length > 0
             ? activeChannels.find((c: any) => c.id === selectedChannelIds[0])
             : primaryChannel;
           return ch?.avatar || "";
         })(),
+        creativeStyle,
+        logoPosition,
         theme,
         voiceOver: (format === "reel" || format === "ai_video" || format === "seedance_video") ? voiceOver : false,
         voiceType: voiceType as any,
@@ -373,12 +384,14 @@ export function RepurposeTab() {
                   {FORMAT_OPTIONS.map(({ id, label, icon: Icon, desc, ...rest }) => (
                     <button
                       key={id}
-                      onClick={() => setFormat(id)}
+                      disabled={(rest as any).disabled}
+                      title={(rest as any).disabled ? "Temporarily unavailable (billing)" : undefined}
+                      onClick={() => { if (!(rest as any).disabled) setFormat(id); }}
                       className={`relative flex flex-col items-center gap-1.5 rounded-lg border p-3 text-center transition-all ${
                         format === id
                           ? "border-primary bg-primary/5 ring-1 ring-primary"
                           : "border-border hover:border-primary/50"
-                      }`}
+                      } ${(rest as any).disabled ? "opacity-40 cursor-not-allowed" : ""}`}
                     >
                       {"badge" in rest && (rest as any).badge && (
                         <span className="absolute -top-1.5 -right-1.5 rounded-full bg-gradient-to-r from-purple-600 to-pink-500 px-1.5 py-0.5 text-[9px] font-bold text-white shadow-sm">
@@ -392,6 +405,111 @@ export function RepurposeTab() {
                   ))}
                 </div>
               </div>
+
+              {/* Creative style + brand reference (static + carousel cover) */}
+              {(format === "static" || format === "carousel") && (
+                <div className="space-y-2">
+                  <Label>Creative Style</Label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {[
+                      { id: "premium_editorial", label: "Premium Editorial" },
+                      { id: "hook_bars", label: "Hook + Headline" },
+                      { id: "tweet_card", label: "Tweet / Post Card" },
+                      { id: "bold_typographic", label: "Bold Typographic" },
+                    ].map((s) => (
+                      <button
+                        key={s.id}
+                        type="button"
+                        onClick={() => setCreativeStyle(s.id as typeof creativeStyle)}
+                        className={`rounded-lg border px-3 py-2 text-xs font-medium ${creativeStyle === s.id ? "border-primary bg-primary/10" : "border-border"}`}
+                      >
+                        {s.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <Label className="pt-2 block">Brand Reference (optional)</Label>
+                  {creativeTemplates && creativeTemplates.length > 0 && (
+                    <Select
+                      value={selectedTemplateId}
+                      onValueChange={(id) => {
+                        setSelectedTemplateId(id);
+                        const t = creativeTemplates.find((x) => x.id === id);
+                        if (t) {
+                          setCreativeStyle(t.style as typeof creativeStyle);
+                          setLogoPosition((t.logoPosition as "top-left" | "top-right") ?? "top-right");
+                          setLogoUrl(t.logoMedia?.url ?? "");
+                          setLogoMediaId(t.logoMediaId ?? "");
+                        }
+                      }}
+                    >
+                      <SelectTrigger><SelectValue placeholder="Use a saved brand template…" /></SelectTrigger>
+                      <SelectContent>
+                        {creativeTemplates.map((t) => (
+                          <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      id="logo-upload"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = "";
+                        if (!file) return;
+                        const fd = new FormData();
+                        fd.append("file", file);
+                        fd.append("category", "logo");
+                        const res = await fetch("/api/upload", { method: "POST", body: fd });
+                        if (res.ok) {
+                          const { id, url } = await res.json();
+                          setLogoUrl(url); setLogoMediaId(id);
+                        } else {
+                          toast({ title: "Logo upload failed", variant: "destructive" });
+                        }
+                      }}
+                    />
+                    <Button type="button" variant="outline" size="sm" onClick={() => document.getElementById("logo-upload")?.click()}>
+                      {logoUrl ? "Change logo" : "Upload logo"}
+                    </Button>
+                    {logoUrl && <img src={logoUrl} alt="logo" className="h-8 w-8 rounded object-contain border" />}
+                    <Select value={logoPosition} onValueChange={(v) => setLogoPosition(v as "top-left" | "top-right")}>
+                      <SelectTrigger className="w-36"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="top-right">Logo top-right</SelectItem>
+                        <SelectItem value="top-left">Logo top-left</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {logoUrl && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={async () => {
+                        const name = window.prompt("Name this brand template:");
+                        if (!name) return;
+                        await createTemplate.mutateAsync({
+                          name,
+                          style: creativeStyle,
+                          logoMediaId: logoMediaId || undefined,
+                          logoPosition,
+                        });
+                        utils.creativeTemplate.list.invalidate();
+                        toast({ title: "Brand template saved" });
+                      }}
+                    >
+                      Save as template
+                    </Button>
+                  )}
+                </div>
+              )}
 
               {/* Theme (for carousel/reel) */}
               {(format === "carousel" || format === "reel" || format === "ai_video") && (
@@ -877,7 +995,9 @@ export function RepurposeTab() {
 
                     // Collect all media IDs
                     const mediaIds: string[] = [];
-                    if (results.mediaMap) {
+                    if (results.carouselMediaIds && results.carouselMediaIds.length > 0) {
+                      mediaIds.push(...results.carouselMediaIds);
+                    } else if (results.mediaMap) {
                       const seen = new Set<string>();
                       for (const m of Object.values(results.mediaMap)) {
                         if (m.mediaId && !seen.has(m.mediaId)) {
