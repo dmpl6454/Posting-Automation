@@ -77,6 +77,20 @@ export function capHookLine(raw: string): string {
 }
 
 /**
+ * Cap a headline to ≤12 words and ≤80 visible characters so the creative
+ * template's word-count font sizing stays readable (≥16 words renders at 40px).
+ * Applies to all formats. Hoisted to module level (E3b) so the standalone
+ * `regenerateImage` mutation can reuse the SAME capping logic as the repurpose
+ * flow. Pure + exported for unit testing.
+ */
+export function capHeadline(text: string): string {
+  const words = text.trim().split(/\s+/);
+  let out = words.slice(0, 12).join(" ");
+  if (out.length > 80) out = out.slice(0, 80).replace(/\s+\S*$/, "");
+  return out.trim();
+}
+
+/**
  * Force the AI-extracted carousel content slides to EXACTLY `target` items so the
  * user's chosen "Content slides" count is honoured regardless of how many points
  * the model actually returned (E2). Strategy: slice if too long; if too short,
@@ -157,10 +171,17 @@ export async function renderStaticCreative(args: {
   hookLine?: string;
   slideRole?: "cover" | "body" | "cta";
   body?: string;
+  /**
+   * A pre-existing photo (e.g. the real article image) to use as the creative
+   * background. Used as the DEFAULT bg; the AI-generation block below overrides
+   * it only for styles that need an AI photo (premium_editorial / tweet_card),
+   * and on AI failure we fall back to this passed-in photo.
+   */
+  bgImageUrl?: string;
   browser?: unknown;
 }): Promise<{ imageBase64: string; mimeType: string; bgSource: "ai" | "stock" }> {
   const { generateImageSafe, generateStyledCreativeImage } = args.ai;
-  let backgroundImageUrl: string | undefined;
+  let backgroundImageUrl: string | undefined = args.bgImageUrl;
   let bgSource: "ai" | "stock" = "stock";
   const referenceImages = args.referenceImages ?? [];
 
@@ -185,6 +206,8 @@ export async function renderStaticCreative(args: {
       backgroundImageUrl = `data:${bg.mimeType};base64,${bg.imageBase64}`;
       bgSource = "ai";
     } catch (e) {
+      // AI failure → fall back to the passed-in real photo (if any), not nothing.
+      backgroundImageUrl = args.bgImageUrl ?? backgroundImageUrl;
       console.warn(`[Repurpose] AI background failed, using stock template bg:`, (e as Error).message);
     }
   }
@@ -731,14 +754,8 @@ KEYWORDS: ${(brief.keywords || []).join(", ")}`;
       const displayName = channelName || extracted.siteName || "Channel";
       const handle = channelHandle || displayName;
 
-      // Cap headlines so the template's word-count font sizing stays readable
-      // (≥16 words renders at 40px). Applies to all formats.
-      const capHeadline = (text: string): string => {
-        const words = text.trim().split(/\s+/);
-        let out = words.slice(0, 12).join(" ");
-        if (out.length > 80) out = out.slice(0, 80).replace(/\s+\S*$/, "");
-        return out.trim();
-      };
+      // Headlines are capped via the module-level `capHeadline` (hoisted so the
+      // regenerateImage mutation reuses the same logic — ≤12 words / ≤80 chars).
 
       let mediaUrls: string[] = [];
       let mediaType = "image/jpeg";

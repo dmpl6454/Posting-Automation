@@ -188,9 +188,11 @@ function buildHookBars(opts: StaticCreativeOptions): string {
   const accent = safeColor(opts.brandColor);
   const tokens = themeTokens(opts.theme ?? "light", opts.brandColor ?? DEFAULT_ACCENT);
   const safeBg = safeImageUrl(opts.bgImageUrl);
+  // No photo → a BRAND-ACCENT gradient (never a flat near-white fill, which read
+  // as "blank"). Reuses the gradient-theme pattern from themeTokens.
   const bg = safeBg
-    ? `background-image:url("${safeBg}");background-size:cover;background-position:center;`
-    : `background:${tokens.bgFallback};`;
+    ? `background-image:url('${safeBg}');background-size:cover;background-position:center;`
+    : `background:linear-gradient(135deg, ${accent}, #11131a);`;
   const corner = opts.logoPosition === "top-left" ? "left:40px;" : "right:40px;";
   const hookHtml = opts.hookLine ? renderHighlightMarkup(opts.hookLine, accent) : "";
   const safeInset = safeImageUrl(opts.secondaryImageUrl);
@@ -264,20 +266,28 @@ ${imgPair}
 
 function buildBoldTypographic(opts: StaticCreativeOptions): string {
   const accent = safeColor(opts.brandColor);
-  const tokens = themeTokens(opts.theme ?? "light", opts.brandColor ?? DEFAULT_ACCENT);
   const words = opts.headline.trim().split(/\s+/).length;
   const fs = words <= 4 ? 130 : words <= 7 ? 104 : words <= 11 ? 82 : 64;
   const corner = opts.logoPosition === "top-left" ? "left:56px;" : "right:56px;";
+  const safeBg = safeImageUrl(opts.bgImageUrl);
+  // With a real photo: cover it + a dark scrim so the headline stays legible
+  // (white over the scrim). No photo: a brand-accent gradient (never flat).
+  const bgLayer = safeBg
+    ? `background-image:linear-gradient(rgba(0,0,0,0.55),rgba(0,0,0,0.55)),url('${safeBg}');background-size:cover;background-position:center;`
+    : `background:linear-gradient(135deg, ${accent}, #11131a);`;
+  // Text + brand-tag must read against the scrim/gradient → keep them light.
+  const textColor = "#ffffff";
+  const subTextColor = "rgba(255,255,255,0.8)";
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
 ${FONT_IMPORT}
 *{margin:0;padding:0;box-sizing:border-box;}
-body{width:${CANVAS.width}px;height:${CANVAS.height}px;overflow:hidden;position:relative;font-family:'Inter',system-ui,sans-serif;background:${tokens.bgFallback};display:flex;align-items:center;padding:0 64px;}
+body{width:${CANVAS.width}px;height:${CANVAS.height}px;overflow:hidden;position:relative;font-family:'Inter',system-ui,sans-serif;${bgLayer}display:flex;align-items:center;padding:0 64px;}
 .accent-band{position:absolute;top:0;left:0;width:14px;height:100%;background:${accent};}
 .logo{position:absolute;top:56px;${corner}display:flex;align-items:center;gap:14px;}
-.brand-tag{color:${tokens.subTextColor};font-size:22px;font-weight:600;}
-.headline{color:${tokens.textColor};font-size:${fs}px;font-weight:900;line-height:1.02;letter-spacing:-0.03em;}
+.brand-tag{color:${subTextColor};font-size:22px;font-weight:600;}
+.headline{color:${textColor};font-size:${fs}px;font-weight:900;line-height:1.02;letter-spacing:-0.03em;}
 .rule{position:absolute;bottom:96px;left:64px;width:80px;height:5px;background:${accent};border-radius:3px;}
-.name{position:absolute;bottom:48px;left:64px;color:${tokens.subTextColor};font-size:24px;font-weight:600;}
+.name{position:absolute;bottom:48px;left:64px;color:${subTextColor};font-size:24px;font-weight:600;}
 </style></head><body>
 <div class="accent-band"></div>
 <div class="logo">${logoHtml(opts, 52)}${opts.handle ? `<span class="brand-tag">${escapeHtml(opts.handle)}</span>` : ""}</div>
