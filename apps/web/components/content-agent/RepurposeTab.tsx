@@ -107,6 +107,12 @@ export function RepurposeTab() {
   // E3a: free-text aesthetic/style notes appended to the AI background prompt.
   const [imageContext, setImageContext] = useState<string>("");
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
+  // E4: user-attached image(s) for a STATIC repurpose. When set, these BECOME
+  // the post media and the AI image generation is skipped (captions still
+  // generate). Each entry carries the Media id + url (for preview).
+  const [userMedia, setUserMedia] = useState<{ id: string; url: string }[]>([]);
+  // Whether the user's own image replaces the AI image (static format only).
+  const useOwnImage = format === "static" && userMedia.length > 0;
 
   // Results
   const [results, setResults] = useState<{
@@ -438,6 +444,9 @@ export function RepurposeTab() {
         accentColor: accentColor || undefined,
         aestheticRefUrl: aestheticRefUrl || undefined,
         imageContext: imageContext || undefined,
+        // E4: when the user attached their own image (static only), send the
+        // media ids so the router uses them and skips AI image generation.
+        userMediaIds: useOwnImage ? userMedia.map((m) => m.id) : undefined,
         slideCount,
         videoDuration,
         // Seedance generates its own native audio, so the voiceOver/bgMusic
@@ -584,8 +593,70 @@ export function RepurposeTab() {
                 </div>
               </div>
 
-              {/* Creative style + brand reference (static + carousel cover) */}
-              {(format === "static" || format === "carousel") && (
+              {/* E4: Attach your own image (STATIC only). When set, it becomes the
+                  post media and the AI image generation is skipped — captions are
+                  still generated. */}
+              {format === "static" && (
+                <div className="space-y-2">
+                  <Label>Attach your own image (optional)</Label>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      id="user-media-upload"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const files = Array.from(e.target.files ?? []);
+                        e.target.value = "";
+                        for (const file of files) {
+                          if (userMedia.length >= 10) break;
+                          const fd = new FormData();
+                          fd.append("file", file);
+                          const res = await fetch("/api/upload", { method: "POST", body: fd });
+                          if (res.ok) {
+                            const { id, url } = await res.json();
+                            setUserMedia((prev) => (prev.length >= 10 ? prev : [...prev, { id, url }]));
+                          } else {
+                            toast({ title: "Image upload failed", variant: "destructive" });
+                          }
+                        }
+                      }}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => document.getElementById("user-media-upload")?.click()}
+                    >
+                      {userMedia.length > 0 ? "Add another image" : "Upload your own image"}
+                    </Button>
+                    {userMedia.map((m, i) => (
+                      <div key={m.id} className="relative">
+                        <img src={m.url} alt="attached" className="h-12 w-12 rounded object-cover border" />
+                        <button
+                          type="button"
+                          aria-label="Remove image"
+                          onClick={() => setUserMedia((prev) => prev.filter((_, idx) => idx !== i))}
+                          className="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[10px] text-white"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  {useOwnImage && (
+                    <p className="text-[10px] text-muted-foreground">
+                      Using your uploaded image — captions will still be generated. AI styling is skipped.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Creative style + brand reference (static + carousel cover).
+                  Hidden when the user attached their own static image (no AI
+                  image is generated, so the styling controls are irrelevant). */}
+              {((format === "static" && !useOwnImage) || format === "carousel") && (
                 <div className="space-y-2">
                   <Label>Creative Style</Label>
                   <div className="grid grid-cols-2 gap-2">
@@ -793,8 +864,9 @@ export function RepurposeTab() {
                 </div>
               )}
 
-              {/* Theme (static + carousel + slide-based video formats) */}
-              {(format === "static" || format === "carousel" || format === "reel" || format === "ai_video") && (
+              {/* Theme (static + carousel + slide-based video formats). Hidden
+                  for an own-image static post — theme only styles the AI image. */}
+              {((format === "static" && !useOwnImage) || format === "carousel" || format === "reel" || format === "ai_video") && (
                 <div className="space-y-2">
                   <Label>{format === "static" ? "Background Theme" : "Slide Theme"}</Label>
                   <div className="flex gap-2">

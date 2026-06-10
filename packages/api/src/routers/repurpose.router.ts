@@ -327,6 +327,11 @@ export const repurposeRouter = createRouter({
         // E2: how many CONTENT slides a carousel has (cover + cta added around
         // these → total = slideCount + 2). Default 5 preserves prior behaviour.
         slideCount: z.number().int().min(3).max(10).default(5),
+        // E4: user-attached image(s). When set on a STATIC repurpose, these
+        // BECOME the post media and the AI image generation is SKIPPED (captions
+        // still generate). IDOR-sensitive — org-scoped before use in the static
+        // branch. STATIC only for now (carousel/video attach is future).
+        userMediaIds: z.array(z.string()).max(10).optional(),
         theme: z.enum(["dark", "light", "gradient"]).default("light"),
         // D7a: user-selectable Seedance AI-video clip length (seconds). The
         // provider supports 2–12s; default 8 preserves the prior hardcoded value.
@@ -742,7 +747,48 @@ KEYWORDS: ${(brief.keywords || []).join(", ")}`;
       // Media rows, not raw S3 urls). Empty for non-carousel formats.
       const carouselMediaIds: string[] = [];
 
-      if (input.format === "static") {
+      if (input.format === "static" && input.userMediaIds?.length) {
+        // ── E4: user attached their own image(s) ─────────────────────────────
+        // The uploaded image BECOMES the post media — SKIP the AI image
+        // generation entirely (captions were already generated above and are
+        // returned regardless). STATIC only.
+        //
+        // IDOR guard (MANDATORY, runs BEFORE the media is used): the AI-/UI-
+        // supplied ids must all resolve org-scoped, or we throw FORBIDDEN.
+        // We also need the urls for `mediaUrls`/`mediaMap`, so we fetch the
+        // rows directly (org-scoped) rather than calling the void-returning
+        // `assertMediaOwned` helper.
+        const requestedIds = input.userMediaIds;
+        const owned = await ctx.prisma.media.findMany({
+          where: { id: { in: requestedIds }, organizationId },
+          select: { id: true, url: true },
+        });
+        if (owned.length !== new Set(requestedIds).size) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "One or more attached images were not found in this workspace",
+          });
+        }
+        // Order the owned rows to match the user's id order (findMany order is
+        // not guaranteed). A missing id is impossible here (count check above).
+        const byId = new Map(owned.map((m) => [m.id, m.url]));
+        const orderedUrls = requestedIds.map((id) => byId.get(id)!);
+
+        mediaUrls = orderedUrls;
+        for (let i = 0; i < requestedIds.length; i++) {
+          carouselMediaIds.push(requestedIds[i]!);
+        }
+        // Heuristic content-type for the UI badge — user uploads are typically
+        // png/jpg; the first url's extension is good enough (the real fileType
+        // lives on the Media row that publish reads).
+        mediaType = /\.png(\?|$)/i.test(orderedUrls[0] || "") ? "image/png" : "image/jpeg";
+        const firstMedia = { url: orderedUrls[0]!, mediaId: requestedIds[0]! };
+        for (const platform of input.targetPlatforms) {
+          perPlatformMedia[platform] = firstMedia;
+        }
+        progress("Using your uploaded image", "done", `${requestedIds.length} attached`);
+        console.log(`[Repurpose] Using ${requestedIds.length} user-attached image(s) — skipping AI generation`);
+      } else if (input.format === "static") {
         // Build ONE branded headline creative (deterministic headline + logo/
         // handle baked on via the news-card template — the company's static
         // format) and reuse it for every selected platform. The format is
