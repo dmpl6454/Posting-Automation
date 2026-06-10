@@ -101,3 +101,40 @@ export interface OutreachSendJobData {
 export interface OutreachPollJobData {
   organizationId: string;
 }
+
+/**
+ * Job data for offloading Content Studio video generation to the worker.
+ *
+ * The worker re-runs the heavy reel-stitch / Seedance generation, uploads the
+ * result to S3, and publishes progress + the final media to the userId-scoped
+ * progress channel (`progress:{progressId}`) the repurpose UI subscribes to.
+ *
+ * Field mapping:
+ * - `reel`  → `generateReelVideo` (ReelOptions): worker downloads `slideUrls`
+ *   → base64 `slideImages`; `voiceOver`/`bgMusic`/`voiceType`/`voiceScript`
+ *   drive TTS + background music before stitching.
+ * - `seedance` → `buildSeedancePrompt` + `generateSeedanceVideo`
+ *   (SeedanceGenerateParams): `scenes` = key points, `title`/`description`
+ *   = content brief, `duration` = clip length in seconds.
+ */
+export interface RepurposeVideoJobData {
+  userId: string;
+  organizationId: string;
+  /** Already userId-scoped progress id (scopedProgressId(userId, rawId)). */
+  progressId: string;
+  format: "reel" | "seedance_video";
+  theme: "dark" | "light" | "gradient";
+  reel?: {
+    slideUrls: string[];
+    voiceOver: boolean;
+    bgMusic: boolean;
+    voiceType?: string;
+    voiceScript?: string;
+  };
+  seedance?: {
+    scenes: string[];
+    title: string;
+    description: string;
+    duration: number;
+  };
+}

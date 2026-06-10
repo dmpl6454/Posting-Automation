@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { scopedProgressId } from "../lib/progress";
+import { scopedProgressId } from "@postautomation/queue";
 
 /**
  * Regression test for the cross-tenant IDOR fix on the progress SSE stream.

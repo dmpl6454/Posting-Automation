@@ -3,7 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { createRouter, protectedProcedure, orgProcedure } from "../trpc";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import crypto from "crypto";
-import { pushProgress, finishProgress, scopedProgressId } from "../lib/progress";
+import { pushProgress, finishProgress, scopedProgressId } from "@postautomation/queue";
 import { toFriendlyAIError, isMissingAIKeyError, friendlyAIMessage } from "../lib/ai-errors";
 import { requirePlan } from "../middleware/plan-limit.middleware";
 
