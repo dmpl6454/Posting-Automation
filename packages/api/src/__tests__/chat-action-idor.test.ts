@@ -87,7 +87,7 @@ describe("executeAction cross-org IDOR guards (N7/N8)", () => {
       payload: { name: "Renamed" },
     });
     expect(mock.agentUpdate).toHaveBeenCalledTimes(1);
-    const arg = mock.agentUpdate.mock.calls[0][0];
+    const arg = mock.agentUpdate.mock.calls[0]![0];
     expect(arg.where).toMatchObject({ id: AGENT_ID, organizationId: ORG_ID });
   });
 
@@ -102,7 +102,7 @@ describe("executeAction cross-org IDOR guards (N7/N8)", () => {
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
     // The campaign was looked up org-scoped...
     expect(mock.campaignFindFirst).toHaveBeenCalledTimes(1);
-    expect(mock.campaignFindFirst.mock.calls[0][0].where).toMatchObject({
+    expect(mock.campaignFindFirst.mock.calls[0]![0].where).toMatchObject({
       id: "campaign-other-org",
       organizationId: ORG_ID,
     });
@@ -121,7 +121,7 @@ describe("executeAction cross-org IDOR guards (N7/N8)", () => {
     });
     expect(res).toMatchObject({ type: "brand_tracker_created" });
     expect(mock.brandTrackerCreate).toHaveBeenCalledTimes(1);
-    expect(mock.brandTrackerCreate.mock.calls[0][0].data).toMatchObject({
+    expect(mock.brandTrackerCreate.mock.calls[0]![0].data).toMatchObject({
       organizationId: ORG_ID,
       campaignId: "campaign-mine",
     });
@@ -137,6 +137,6 @@ describe("executeAction cross-org IDOR guards (N7/N8)", () => {
     expect(res).toMatchObject({ type: "brand_tracker_created" });
     expect(mock.campaignFindFirst).not.toHaveBeenCalled();
     expect(mock.brandTrackerCreate).toHaveBeenCalledTimes(1);
-    expect(mock.brandTrackerCreate.mock.calls[0][0].data.campaignId).toBeUndefined();
+    expect(mock.brandTrackerCreate.mock.calls[0]![0].data.campaignId).toBeUndefined();
   });
 });

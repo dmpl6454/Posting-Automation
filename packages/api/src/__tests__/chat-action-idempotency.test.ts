@@ -27,7 +27,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 /* ── Queue mock: capture postPublishQueue.add calls so we can assert options ── */
-const postPublishAdd = vi.fn(async () => undefined);
+const postPublishAdd = vi.fn(async (..._a: any[]) => undefined);
 vi.mock("@postautomation/queue", () => ({
   postPublishQueue: { add: (...a: any[]) => postPublishAdd(...a) },
   agentRunQueue: { add: vi.fn(async () => undefined) },
@@ -131,7 +131,7 @@ describe("publish_now server idempotency (A1)", () => {
     expect(postCreate).not.toHaveBeenCalled();
     expect(postPublishAdd).not.toHaveBeenCalled();
     // The dedupe query must be keyed on (thread + clientActionId).
-    const dedupeArgs = chatMessageFindFirst.mock.calls[0][0];
+    const dedupeArgs = chatMessageFindFirst.mock.calls[0]![0];
     expect(dedupeArgs.where.threadId).toBe(THREAD_ID);
     expect(dedupeArgs.where.metadata).toMatchObject({ path: ["executedActionId"], equals: "m1" });
   });
@@ -146,7 +146,7 @@ describe("publish_now server idempotency (A1)", () => {
     expect(postCreate).toHaveBeenCalledTimes(1);
 
     // The result ChatMessage must carry executedActionId so the next call dedupes.
-    const sysMsgCreateArgs = chatMessageCreate.mock.calls[0][0];
+    const sysMsgCreateArgs = chatMessageCreate.mock.calls[0]![0];
     expect(sysMsgCreateArgs.data.metadata).toMatchObject({ type: "post_published", executedActionId: "m1" });
   });
 
@@ -168,7 +168,7 @@ describe("publish_now queue retries (B4)", () => {
     await caller.executeAction(publishNowInput({ clientActionId: "m1" }));
 
     expect(postPublishAdd).toHaveBeenCalledTimes(1);
-    const opts = postPublishAdd.mock.calls[0][2];
+    const opts = postPublishAdd.mock.calls[0]![2];
     expect(opts).toMatchObject({ attempts: 3, backoff: { type: "exponential", delay: 30000 } });
   });
 });
