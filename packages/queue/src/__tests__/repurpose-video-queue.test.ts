@@ -44,7 +44,7 @@ describe("repurposeVideoQueue", () => {
     const job: RepurposeVideoJobData = {
       userId: "u1",
       organizationId: "org1",
-      progressId: "u1:rep-1",
+      progressId: "rep-1",
       format: "reel",
       theme: "dark",
       reel: {
@@ -63,7 +63,7 @@ describe("repurposeVideoQueue", () => {
     const job: RepurposeVideoJobData = {
       userId: "u1",
       organizationId: "org1",
-      progressId: "u1:rep-2",
+      progressId: "rep-2",
       format: "seedance_video",
       theme: "gradient",
       seedance: {

@@ -120,7 +120,14 @@ export interface OutreachPollJobData {
 export interface RepurposeVideoJobData {
   userId: string;
   organizationId: string;
-  /** Already userId-scoped progress id (scopedProgressId(userId, rawId)). */
+  /**
+   * RAW client progress id (e.g. `rep-<ts>-<6char>`) — NOT pre-scoped.
+   * The producer enqueues `input.progressId` verbatim; the worker scopes it
+   * EXACTLY ONCE via `scopedProgressId(userId, progressId)` so the resulting
+   * key matches the SSE reader (apps/web/app/api/progress/route.ts), which also
+   * scopes the raw `rep-` id a single time. Do NOT pass a pre-scoped id here or
+   * the worker would double-scope (`userId:userId:rep-...`) and never match.
+   */
   progressId: string;
   format: "reel" | "seedance_video";
   theme: "dark" | "light" | "gradient";

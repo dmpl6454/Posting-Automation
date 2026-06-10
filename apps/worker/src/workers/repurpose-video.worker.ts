@@ -1,5 +1,5 @@
 import { Worker, type Job } from "bullmq";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { writeFileSync, readFileSync, mkdirSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -19,7 +19,7 @@ import {
   generateSeedanceVideo,
   buildSeedancePrompt,
 } from "@postautomation/ai";
-import { buildVideoReadyDetail, friendlyVideoError } from "../lib/repurpose-video";
+import { buildVideoReadyDetail, friendlyVideoError, escapeDrawText } from "../lib/repurpose-video";
 
 // ── S3 (identical config to media-process.worker.ts) ─────────────────────
 const s3 = new S3Client({
@@ -64,16 +64,6 @@ async function downloadToBase64(url: string): Promise<{ imageBase64: string; mim
   return { imageBase64: buf.toString("base64"), mimeType };
 }
 
-/** Escape a caption string for ffmpeg `drawtext` (mirrors video-overlay.ts). */
-function escapeDrawText(text: string): string {
-  return text
-    .replace(/\\/g, "\\\\\\\\")
-    .replace(/'/g, "’")
-    .replace(/:/g, "\\:")
-    .replace(/\[/g, "\\[")
-    .replace(/\]/g, "\\]");
-}
-
 /**
  * Burn CLEAN caption text onto the Seedance-generated MP4 via an ffmpeg
  * `drawtext` pass. Seedance garbles any in-video text, so we generate with NO
@@ -103,8 +93,32 @@ function burnCaptionsOnVideo(videoBuf: Buffer, lines: string[]): Buffer {
       })
       .join(",");
 
-    const cmd = `ffmpeg -y -i "${inputPath}" -vf "${drawtexts}" -map 0:v -map 0:a? -codec:a copy -preset ultrafast -movflags +faststart "${outputPath}"`;
-    execSync(cmd, { timeout: 180_000, stdio: "pipe" });
+    // SECURITY: run ffmpeg with execFileSync (NO shell) so attacker-influenceable
+    // caption text (from the user-supplied URL's article) can never reach /bin/sh.
+    // Each flag/value is its own array element; the `-vf` filter is ONE unquoted
+    // element (no shell quoting needed); paths are their own unquoted elements.
+    execFileSync(
+      "ffmpeg",
+      [
+        "-y",
+        "-i",
+        inputPath,
+        "-vf",
+        drawtexts,
+        "-map",
+        "0:v",
+        "-map",
+        "0:a?",
+        "-codec:a",
+        "copy",
+        "-preset",
+        "ultrafast",
+        "-movflags",
+        "+faststart",
+        outputPath,
+      ],
+      { timeout: 180_000, stdio: "pipe" }
+    );
 
     if (!existsSync(outputPath)) {
       throw new Error("ffmpeg failed to produce captioned video");
@@ -122,8 +136,11 @@ export function createRepurposeVideoWorker() {
     QUEUE_NAMES.REPURPOSE_VIDEO,
     async (job: Job<RepurposeVideoJobData>) => {
       const { userId, organizationId, format, theme } = job.data;
-      // job.data.progressId is ALREADY scopedProgressId(userId, rawId) per the
-      // job-data contract, but re-scope defensively to match the SSE reader.
+      // job.data.progressId is the RAW client id (`rep-...`, NOT pre-scoped) per
+      // the job-data contract. Scope it EXACTLY ONCE here to match the SSE reader
+      // (apps/web/app/api/progress/route.ts), which also scopes the raw `rep-` id
+      // a single time as `${userId}:${id}`. Scoping twice would yield
+      // `userId:userId:rep-...` and never match the reader's key.
       const scoped = scopedProgressId(userId, job.data.progressId);
       console.log(`[RepurposeVideo] Processing job ${job.id}: format=${format} for org ${organizationId}`);
 
@@ -169,8 +186,30 @@ export function createRepurposeVideoWorker() {
               const musicDir = join(tmpdir(), `bgmusic-${crypto.randomBytes(4).toString("hex")}`);
               mkdirSync(musicDir, { recursive: true });
               const musicPath = join(musicDir, "bg.mp3");
-              execSync(
-                `ffmpeg -y -f lavfi -i "sine=frequency=110:duration=${dur}" -f lavfi -i "sine=frequency=165:duration=${dur}" -filter_complex "[0:a][1:a]amix=inputs=2,volume=0.3,afade=t=in:d=1,afade=t=out:st=${dur - 1}:d=1[out]" -map "[out]" -c:a libmp3lame -b:a 128k "${musicPath}"`,
+              // execFileSync (NO shell) — `dur` is a number, but keep the no-shell
+              // invariant consistent across every ffmpeg call in this worker.
+              execFileSync(
+                "ffmpeg",
+                [
+                  "-y",
+                  "-f",
+                  "lavfi",
+                  "-i",
+                  `sine=frequency=110:duration=${dur}`,
+                  "-f",
+                  "lavfi",
+                  "-i",
+                  `sine=frequency=165:duration=${dur}`,
+                  "-filter_complex",
+                  `[0:a][1:a]amix=inputs=2,volume=0.3,afade=t=in:d=1,afade=t=out:st=${dur - 1}:d=1[out]`,
+                  "-map",
+                  "[out]",
+                  "-c:a",
+                  "libmp3lame",
+                  "-b:a",
+                  "128k",
+                  musicPath,
+                ],
                 { timeout: 30_000, stdio: "pipe" }
               );
               bgMusicBase64 = readFileSync(musicPath).toString("base64");
@@ -184,7 +223,11 @@ export function createRepurposeVideoWorker() {
             slideImages,
             slideDuration: 3,
             width: 1080,
-            height: theme === "gradient" ? 1920 : 1350,
+            // Parity with the original synchronous reel branch (repurpose.router.ts):
+            // slides are rendered at 1080×1350 (4:5), so the reel height is a FIXED
+            // 1350 regardless of theme. Full 9:16 (1080×1920) would require
+            // regenerating slides at that size — out of scope here.
+            height: 1350,
             voiceOverBase64,
             bgMusicBase64,
             bgMusicVolume: 0.15,
