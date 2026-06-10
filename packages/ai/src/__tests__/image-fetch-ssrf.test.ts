@@ -133,4 +133,15 @@ describe("safeFetchPublicImage", () => {
     expect(result).toEqual({ base64: "XXXX", mimeType: "image/png" });
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("rejects a data:image/svg+xml URL (defense-in-depth, no fetch)", async () => {
+    const safeFetchPublicImage = await load();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    // SVG can carry script; the data: branch mime allowlist must reject it
+    // even if the upstream isPublicImageUrl gate is ever loosened.
+    const result = await safeFetchPublicImage("data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=");
+    expect(result).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

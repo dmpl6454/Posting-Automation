@@ -146,7 +146,7 @@ export async function safeFetchPublicImage(
   if (!isPublicImageUrl(url)) return null;
   if (url.startsWith("data:image/")) {
     const [, mimeType = "image/png", b64 = ""] =
-      url.match(/^data:(image\/[a-zA-Z+]+);base64,(.*)$/s) ?? [];
+      url.match(/^data:(image\/(?:png|jpe?g|webp|gif));base64,(.*)$/s) ?? [];
     return b64 ? { base64: b64, mimeType } : null;
   }
   const maxBytes = opts?.maxBytes ?? 8 * 1024 * 1024;
