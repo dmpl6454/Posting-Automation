@@ -1,11 +1,11 @@
 import { prisma } from "@postautomation/db";
 import {
   contentGenerateQueue,
-  postPublishQueue,
   autopilotScheduleQueue,
 } from "@postautomation/queue";
 import { S3Client, HeadBucketCommand } from "@aws-sdk/client-s3";
 import IORedis from "ioredis";
+import { shouldReapPublishing } from "../lib/publish-recovery";
 
 // ---------------------------------------------------------------------------
 // Error classification
@@ -289,8 +289,13 @@ export async function runAutoHealer(): Promise<HealerResult> {
     }
   }
 
-  // 5. Check for stuck PUBLISHING posts (post targets stuck in PUBLISHING > 30min)
-  const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000);
+  // 5. Reap stuck PUBLISHING posts (post targets stuck in PUBLISHING > 30min).
+  // Do NOT re-queue: the publish worker's claim guard only transitions
+  // SCHEDULED/FAILED/DRAFT → PUBLISHING, so a re-queued job on a PUBLISHING
+  // target is silently skipped (claim.count === 0) and never rescues anything.
+  // The target is orphaned, so mark it FAILED with an actionable message instead.
+  const now = new Date();
+  const thirtyMinAgo = new Date(now.getTime() - 30 * 60 * 1000);
   const stuckPublishing = await prisma.postTarget.findMany({
     where: {
       status: "PUBLISHING",
@@ -298,29 +303,24 @@ export async function runAutoHealer(): Promise<HealerResult> {
     },
     select: {
       id: true,
-      postId: true,
-      channelId: true,
-      post: { select: { organizationId: true } },
-      channel: { select: { platform: true } },
+      status: true,
+      updatedAt: true,
     },
     take: 20,
   });
 
   if (stuckPublishing.length > 0) {
-    console.log(`[AutoHealer] Found ${stuckPublishing.length} stuck PUBLISHING post targets, re-queuing`);
+    console.log(`[AutoHealer] Found ${stuckPublishing.length} stuck PUBLISHING post targets, marking FAILED`);
     for (const target of stuckPublishing) {
+      if (!shouldReapPublishing(target, now)) continue;
       try {
-        await postPublishQueue.add(
-          `autohealer-publish-${target.id}`,
-          {
-            postId: target.postId,
-            postTargetId: target.id,
-            channelId: target.channelId,
-            platform: target.channel.platform,
-            organizationId: target.post.organizationId,
+        await prisma.postTarget.update({
+          where: { id: target.id },
+          data: {
+            status: "FAILED",
+            errorMessage: "Publishing stuck for over 30 minutes — please retry",
           },
-          { removeOnComplete: true, removeOnFail: 100 },
-        );
+        });
       } catch {}
     }
   }

@@ -3,6 +3,7 @@ import { prisma } from "@postautomation/db";
 import { getSocialProvider } from "@postautomation/social";
 import { QUEUE_NAMES, postPublishQueue, type PostPublishJobData, createRedisConnection } from "@postautomation/queue";
 import IORedis from "ioredis";
+import { markTargetFailed } from "../lib/publish-recovery";
 
 // Redis pub/sub publisher for upload progress SSE
 const progressPublisher = new IORedis(process.env.REDIS_URL || "redis://localhost:6379", {
@@ -500,14 +501,25 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
               throw publishErr; // Can't refresh — rethrow original error
             }
           } catch (refreshRetryErr: any) {
-            // Mark with clear message about token issue
-            throw new Error(`Token expired and refresh failed: ${refreshRetryErr.message}. Reconnect this channel in Settings.`);
+            // Mark FAILED before throwing — otherwise the target stays at PUBLISHING,
+            // the BullMQ retry's claim guard skips it as a "duplicate" (claim.count === 0),
+            // and it's orphaned at PUBLISHING forever. Mirrors the generic else branch below.
+            const tokenErrMsg = `Token expired and refresh failed: ${refreshRetryErr.message}. Reconnect this channel in Settings.`;
+            await markTargetFailed(prisma, postTargetId, tokenErrMsg);
+            throw new Error(tokenErrMsg);
           }
         } else if (errType === "content_too_large") {
           // Aggressively truncate and retry
           const aggressiveContent = truncateForPlatform(publishContent, platform);
           console.log(`[PostPublish] Content too large — retrying with aggressive truncation`);
-          result = await provider.publishPost(tokens, { content: aggressiveContent.slice(0, Math.floor(aggressiveContent.length * 0.7)), mediaUrls, mediaTypes, metadata: providerMetadata });
+          try {
+            result = await provider.publishPost(tokens, { content: aggressiveContent.slice(0, Math.floor(aggressiveContent.length * 0.7)), mediaUrls, mediaTypes, metadata: providerMetadata });
+          } catch (truncateRetryErr: any) {
+            // The truncated retry also failed — mark FAILED before propagating so the
+            // target doesn't orphan at PUBLISHING (same reasoning as the else branch).
+            await markTargetFailed(prisma, postTargetId, truncateRetryErr?.message ?? errMsg);
+            throw truncateRetryErr;
+          }
         } else {
           // Unknown / unrecoverable error (e.g. a landscape video rejected by the
           // Shorts validator). Retrying re-runs the SAME input and fails identically,
