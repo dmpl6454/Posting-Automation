@@ -337,6 +337,74 @@ export function RepurposeTab() {
     },
   });
 
+  // E3b — per-image "Regenerate": re-roll JUST the static image / a carousel
+  // slide's image without re-running the whole repurpose flow. `regenTarget`
+  // tracks which card is loading: "static" for the single image, or the slide
+  // index for a carousel slide (so each button shows its own spinner).
+  const [regenTarget, setRegenTarget] = useState<"static" | number | null>(null);
+  const regenerateImage = trpc.repurpose.regenerateImage.useMutation();
+
+  // Resolve the channel name/handle/avatar the same way handleGenerate does, so
+  // the regenerated creative keeps the same branding as the original.
+  const resolveBranding = () => {
+    const ch = selectedChannelIds.length > 0
+      ? activeChannels.find((c: any) => c.id === selectedChannelIds[0])
+      : primaryChannel;
+    return {
+      channelName: ch?.name || "Channel",
+      channelHandle: ch?.username || "",
+      logoUrl: logoUrl || ch?.avatar || undefined,
+    };
+  };
+
+  const handleRegenerate = async (target: "static" | number) => {
+    if (!results) return;
+    // Headline: prefer the extracted title (what the original creative used).
+    const headline = (results.extracted?.title || "").trim();
+    if (!headline) {
+      toast({ title: "Can't regenerate", description: "No headline found for this image.", variant: "destructive" });
+      return;
+    }
+    const { channelName, channelHandle, logoUrl: brandLogo } = resolveBranding();
+    setRegenTarget(target);
+    try {
+      const res = await regenerateImage.mutateAsync({
+        headline,
+        creativeStyle,
+        theme,
+        logoUrl: brandLogo,
+        logoPosition,
+        accentColor: accentColor || undefined,
+        imageContext: imageContext || undefined,
+        aestheticRefUrl: aestheticRefUrl || undefined,
+        channelName,
+        channelHandle,
+      });
+      // Swap the displayed image (and its Media id for publish) in `results`.
+      setResults((prev) => {
+        if (!prev) return prev;
+        const nextUrls = [...prev.mediaUrls];
+        const idx = target === "static" ? 0 : target;
+        nextUrls[idx] = res.url;
+        const nextCarouselIds = prev.carouselMediaIds ? [...prev.carouselMediaIds] : undefined;
+        if (nextCarouselIds && idx < nextCarouselIds.length) nextCarouselIds[idx] = res.mediaId;
+        // For a single static image also refresh the per-platform mediaMap so the
+        // "Create Draft" path attaches the NEW image.
+        let nextMap = prev.mediaMap;
+        if (target === "static" && nextMap) {
+          nextMap = { ...nextMap };
+          for (const k of Object.keys(nextMap)) nextMap[k] = { url: res.url, mediaId: res.mediaId };
+        }
+        return { ...prev, mediaUrls: nextUrls, carouselMediaIds: nextCarouselIds, mediaMap: nextMap };
+      });
+      toast({ title: "Image regenerated" });
+    } catch (err: any) {
+      toast({ title: "Regenerate failed", description: humanizeError(err), variant: "destructive" });
+    } finally {
+      setRegenTarget(null);
+    }
+  };
+
   const handleExtractPreview = () => {
     if (!url) return;
     extractMutation.mutate({ url });
@@ -1086,14 +1154,31 @@ export function RepurposeTab() {
                       alt="Generated post"
                       className="w-full max-w-xs rounded-xl shadow-lg"
                     />
-                    <a
-                      href={results.mediaUrls[0]}
-                      download={`repurposed-image-${Date.now()}.png`}
-                      className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-muted transition-colors"
-                    >
-                      <Download className="h-4 w-4" />
-                      Download Image
-                    </a>
+                    <div className="flex items-center gap-2">
+                      <a
+                        href={results.mediaUrls[0]}
+                        download={`repurposed-image-${Date.now()}.png`}
+                        className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-muted transition-colors"
+                      >
+                        <Download className="h-4 w-4" />
+                        Download Image
+                      </a>
+                      {/* E3b: re-roll just this image (plan-gated server-side). */}
+                      <button
+                        type="button"
+                        onClick={() => handleRegenerate("static")}
+                        disabled={regenTarget !== null}
+                        title="Generate a new version of this image"
+                        className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-muted transition-colors disabled:opacity-60"
+                      >
+                        {regenTarget === "static" ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <RefreshCw className="h-4 w-4" />
+                        )}
+                        Regenerate
+                      </button>
+                    </div>
                   </div>
                 ) : (
                   <div className="space-y-3">
@@ -1116,6 +1201,22 @@ export function RepurposeTab() {
                             >
                               <Download className="h-3.5 w-3.5" />
                             </a>
+                            {/* E3b: re-roll the carousel COVER (slide 0) image only. */}
+                            {i === 0 && (
+                              <button
+                                type="button"
+                                onClick={() => handleRegenerate(0)}
+                                disabled={regenTarget !== null}
+                                title="Generate a new cover image"
+                                className="absolute bottom-2 left-2 rounded-full bg-black/60 p-2 text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/80 disabled:opacity-100"
+                              >
+                                {regenTarget === 0 ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <RefreshCw className="h-3.5 w-3.5" />
+                                )}
+                              </button>
+                            )}
                           </div>
                         </div>
                       ))}
