@@ -35,6 +35,41 @@ export function compactSlides<T>(slideImages: (T | undefined | null)[]): T[] {
   return slideImages.filter((s): s is T => Boolean(s));
 }
 
+/**
+ * Whether a creative style needs a (slow) AI-generated photo background.
+ *
+ * `hook_bars` and `bold_typographic` are TEXT-FIRST styles that render entirely
+ * from theme tokens + brand color + typography (Task 1 gave them solid/gradient
+ * fallbacks), so we SKIP the `generateImageSafe` call for them — a big latency
+ * win. `premium_editorial` and `tweet_card` keep the AI photo background. Any
+ * unknown/future style defaults to `true` (safe: render with a background).
+ * Pure + exported for unit testing.
+ */
+export function styleNeedsAiBackground(style: string): boolean {
+  return style !== "hook_bars" && style !== "bold_typographic";
+}
+
+/**
+ * Cap a punchy hook line to ≤7 words and ≤60 visible characters WHILE
+ * preserving any `**...**` emphasis markup. A naive substring/word cut could
+ * split a `**word**` pair and leave a dangling `**`; this drops any trailing
+ * unbalanced marker cleanly so the downstream `renderHighlightMarkup` never
+ * sees a half-open span. Pure + exported for unit testing.
+ */
+export function capHookLine(raw: string): string {
+  let out = raw.trim().split(/\s+/).filter(Boolean).slice(0, 7).join(" ");
+  if (out.length > 60) {
+    out = out.slice(0, 60).replace(/\s+\S*$/, "").trim();
+  }
+  // Drop a dangling (odd) `**` marker so highlight spans stay balanced.
+  const markers = out.match(/\*\*/g) || [];
+  if (markers.length % 2 === 1) {
+    const lastIdx = out.lastIndexOf("**");
+    out = (out.slice(0, lastIdx) + out.slice(lastIdx + 2)).trim();
+  }
+  return out.trim();
+}
+
 export const repurposeRouter = createRouter({
   repurpose: protectedProcedure
     .input(
@@ -289,6 +324,7 @@ export const repurposeRouter = createRouter({
         bgPrompt: string,
         headline: string,
         category: string,
+        hookLine?: string,
       ): Promise<{ imageBase64: string; mimeType: string; bgSource: "ai" | "stock" }> {
         // Try to generate a relevant AI background (no text — the template
         // bakes the headline). generateImageSafe now has a working OpenAI
@@ -301,18 +337,34 @@ export const repurposeRouter = createRouter({
         // image-input path), and the logo itself is always baked deterministically
         // by the template regardless. A fetch failure just degrades to no-reference.
         const referenceImages = brandReferenceImages;
-        try {
-          const bg = await generateImageSafe({
-            prompt: `${bgPrompt}\n\nIMPORTANT: produce a clean BACKGROUND photo only — NO text, words, letters, numbers, logos, or watermarks. Dark/moody tones so white text overlaid on top stays readable.`,
-            aspectRatio: "3:4",
-            title: headline,
-            topic: category || "news",
-            ...(referenceImages.length ? { referenceImages } : {}),
-          });
-          backgroundImageUrl = `data:${bg.mimeType};base64,${bg.imageBase64}`;
-          bgSource = "ai";
-        } catch (e) {
-          console.warn(`[Repurpose] AI background failed, using stock template bg:`, (e as Error).message);
+        // Text-first styles (hook_bars / bold_typographic) render entirely from
+        // theme + brand color + typography — skip the slow AI background entirely
+        // (a big latency win) and pass NO bgImageUrl. premium_editorial and
+        // tweet_card keep the AI photo background.
+        if (styleNeedsAiBackground(input.creativeStyle)) {
+          // Theme-aware lighting descriptor for the background photo. The old
+          // unconditional "Dark/moody … white text stays readable" suffix is now
+          // conditioned on the theme so a light/gradient creative gets a matching
+          // bright/vibrant background.
+          const themeBgDescriptor =
+            input.theme === "light"
+              ? "bright, airy, well-lit, clean"
+              : input.theme === "gradient"
+                ? "vibrant, colorful, dramatic lighting"
+                : "dark, moody, dramatic";
+          try {
+            const bg = await generateImageSafe({
+              prompt: `${bgPrompt}\n\nIMPORTANT: produce a clean BACKGROUND photo only — NO text, words, letters, numbers, logos, or watermarks. ${themeBgDescriptor} tones.`,
+              aspectRatio: "3:4",
+              title: headline,
+              topic: category || "news",
+              ...(referenceImages.length ? { referenceImages } : {}),
+            });
+            backgroundImageUrl = `data:${bg.mimeType};base64,${bg.imageBase64}`;
+            bgSource = "ai";
+          } catch (e) {
+            console.warn(`[Repurpose] AI background failed, using stock template bg:`, (e as Error).message);
+          }
         }
         const creative = await generateStyledCreativeImage({
           style: input.creativeStyle,
@@ -321,6 +373,8 @@ export const repurposeRouter = createRouter({
           handle,
           logoUrl: resolvedLogoUrl || null,
           logoPosition: input.logoPosition,
+          theme: input.theme,
+          ...(hookLine ? { hookLine } : {}),
           ...(backgroundImageUrl ? { bgImageUrl: backgroundImageUrl } : {}),
           ...(resolvedBrandColor ? { brandColor: resolvedBrandColor } : {}),
         });
@@ -542,10 +596,31 @@ Context: ${contentSummary.slice(0, 400)}
 
 Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g. "Imran Khan, Bollywood actor" → Bollywood/film imagery, NOT politics). Photorealistic or editorial illustration, dramatic lighting, strong mood, relevant to the topic.`;
 
+        // Hook line for the `hook_bars` style ONLY — a short punchy hook with one
+        // or two **brand-highlighted** words that renderHighlightMarkup turns into
+        // accent-color spans. This adds one AI text call, strictly gated on the
+        // style so no other style pays for it. Never fails the whole repurpose:
+        // on any error we fall back to no hook line.
+        let hookLine: string | undefined;
+        if (input.creativeStyle === "hook_bars") {
+          try {
+            const rawHook = await generateContentResilient({
+              provider: input.provider,
+              platform: "INSTAGRAM",
+              userPrompt: `Write a 4-7 word punchy hook for a social post about: ${headlineForCreativeFinal}. Wrap ONE or TWO key words in **double asterisks** for emphasis. Output ONLY the hook line, no quotes.`,
+              tone: "professional",
+            });
+            const trimmedHook = rawHook.replace(/^["']|["']$/g, "").replace(/\n[\s\S]*$/, "").trim();
+            if (trimmedHook.length > 0) hookLine = capHookLine(trimmedHook);
+          } catch (e) {
+            console.warn(`[Repurpose] Hook line generation failed, rendering without hook:`, (e as Error).message);
+          }
+        }
+
         try {
           progress("Generating creative");
           console.log(`[Repurpose] Building branded headline creative (category=${category})...`);
-          const creative = await buildHeadlineCreative(bgPrompt, headlineForCreativeFinal, category);
+          const creative = await buildHeadlineCreative(bgPrompt, headlineForCreativeFinal, category, hookLine);
 
           const { url, mediaId } = await uploadAndCreateMedia(
             creative.imageBase64,
