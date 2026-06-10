@@ -56,6 +56,30 @@ export function styleNeedsAiBackground(style: string): boolean {
 }
 
 /**
+ * Pick the article's own photo (og:image, first in `extracted.images`) to use as
+ * the static-creative BACKGROUND. The locked product decision: hook+headline
+ * styles should sit on the real article photo (the templates render a
+ * scrim/branded gradient fallback when none is supplied). For AI-background
+ * styles (premium_editorial / tweet_card) this becomes the harmless DEFAULT that
+ * the AI overrides — and the AI-failure catch falls back to it.
+ *
+ * https-only: the downstream `safeImageUrl` in creative-templates accepts only
+ * `https://` or `data:image` (NOT `http://`), so an http og:image would be
+ * silently dropped there anyway. `isAllowed` is the `isPublicImageUrl` SSRF gate.
+ * Pure + exported for unit testing.
+ */
+export function pickArticleBgImage(
+  images: string[] | undefined,
+  isAllowed: (u: string) => boolean,
+): string | undefined {
+  if (!images) return undefined;
+  for (const u of images) {
+    if (typeof u === "string" && u.startsWith("https://") && isAllowed(u)) return u;
+  }
+  return undefined;
+}
+
+/**
  * Cap a punchy hook line to ≤7 words and ≤60 visible characters WHILE
  * preserving any `**...**` emphasis markup. A naive substring/word cut could
  * split a `**word**` pair and leave a dangling `**`; this drops any trailing
@@ -584,6 +608,11 @@ export const repurposeRouter = createRouter({
           // Pass-through shared browser. Typed off launchCreativeBrowser's return
           // so the api package never names "puppeteer" directly (it isn't a dep).
           browser?: Awaited<ReturnType<typeof launchCreativeBrowser>>;
+          // The article's own photo (og:image) to use as the creative background.
+          // Becomes the renderer's DEFAULT bg: AI overrides it for AI-background
+          // styles, but for hook_bars/bold_typographic (AI skipped) it IS the bg —
+          // so those styles no longer render "blank". Pass-through, no fetch here.
+          bgImageUrl?: string;
         },
       ): Promise<{ imageBase64: string; mimeType: string; bgSource: "ai" | "stock" }> {
         // Delegate to the module-level renderer (E3b) so the repurpose flow and
@@ -608,6 +637,7 @@ export const repurposeRouter = createRouter({
           ...(extra?.slideRole ? { slideRole: extra.slideRole } : {}),
           ...(extra?.body !== undefined ? { body: extra.body } : {}),
           ...(extra?.browser ? { browser: extra.browser } : {}),
+          ...(extra?.bgImageUrl ? { bgImageUrl: extra.bgImageUrl } : {}),
         });
       }
 
@@ -885,10 +915,25 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
           }
         }
 
+        // Use the article's OWN photo (og:image, first in extracted.images) as the
+        // creative background. For hook_bars/bold_typographic (AI background
+        // skipped by design) this is what stops the creative rendering "blank" — it
+        // becomes the real backdrop behind the bars/headline. For the AI-background
+        // styles it's the harmless DEFAULT the AI overrides (and the AI-failure
+        // fallback). SSRF-gated by isPublicImageUrl; https-only (safeImageUrl drops
+        // http:// downstream anyway).
+        const articleBg = pickArticleBgImage(extracted.images, isPublicImageUrl);
+
         try {
           progress("Generating creative");
-          console.log(`[Repurpose] Building branded headline creative (category=${category})...`);
-          const creative = await buildHeadlineCreative(bgPromptWithContext, headlineForCreativeFinal, category, hookLine);
+          console.log(`[Repurpose] Building branded headline creative (category=${category}, articleBg=${articleBg ? "yes" : "none"})...`);
+          const creative = await buildHeadlineCreative(
+            bgPromptWithContext,
+            headlineForCreativeFinal,
+            category,
+            hookLine,
+            articleBg ? { bgImageUrl: articleBg } : undefined,
+          );
 
           const { url, mediaId } = await uploadAndCreateMedia(
             creative.imageBase64,
