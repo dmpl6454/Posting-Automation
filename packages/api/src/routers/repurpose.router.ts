@@ -80,6 +80,70 @@ export function pickArticleBgImage(
 }
 
 /**
+ * Camera/composition angles cycled across carousel slides so each AI background
+ * looks visually DISTINCT instead of "same person, same scene" on every slide.
+ * Indexed modulo the list so any slide count is covered.
+ */
+const SLIDE_ANGLES = [
+  "wide establishing shot",
+  "close-up detail / texture",
+  "overhead flat-lay composition",
+  "abstract geometric pattern",
+  "environment / location shot",
+] as const;
+
+/** Pick the camera/composition angle for slide N (wraps around). Pure + exported. */
+export function slideAngleDescriptor(slideIdx: number): string {
+  return SLIDE_ANGLES[slideIdx % SLIDE_ANGLES.length]!;
+}
+
+/**
+ * Build a PER-SLIDE carousel AI-background prompt that varies by slide (R3). The
+ * old code appended the FULL shared `contentBrief` (incl. `SUBJECT: <full named
+ * person>` + a single `VISUAL:`) to every slide with only a 3–6-word title
+ * varying — so every slide's prompt was ~95% identical and rendered the same
+ * person/scene. This builder instead:
+ *   - cycles a distinct camera/composition `angle` per slide,
+ *   - uses the slide's OWN title + body (the per-slide content), and
+ *   - includes ONLY the CATEGORY/TONE lines from the brief (`categoryTone`),
+ *     dropping the repeated SUBJECT/VISUAL that caused the sameness,
+ *   - explicitly asks the model to make each scene DISTINCT.
+ * The result still flows through the caller's `append` (= `appendImageContext`)
+ * so the user's style notes reach `sanitizePrompt` inside `generateImageSafe`.
+ * Pure + exported for unit testing.
+ */
+export function buildCarouselSlidePrompt(
+  opts: {
+    slideTitle: string;
+    slideBody?: string;
+    slideIdx: number;
+    totalSlides: number;
+    categoryTone: string;
+    imageContext?: string;
+  },
+  append: (base: string, ctx?: string) => string,
+): string {
+  const angle = slideAngleDescriptor(opts.slideIdx);
+  const base =
+    `Cinematic background photo, ${angle}, visually depicting: "${opts.slideTitle}".` +
+    (opts.slideBody ? ` ${opts.slideBody}` : "") +
+    ` ${opts.categoryTone}` +
+    ` Slide ${opts.slideIdx + 1} of ${opts.totalSlides}. Make this scene visually DISTINCT from the other slides.`;
+  return append(base, opts.imageContext);
+}
+
+/**
+ * Unconditional real-person guard appended to EVERY static-creative AI-background
+ * prompt (R3). Mirrors the clause in `seedance.provider.ts`. MUST be on the
+ * prompt unconditionally because the prod image path bypasses `sanitizePrompt`'s
+ * safety-only guard (the Gemini billing-403 doesn't match `isSafetyBlock`, so a
+ * raw prompt carrying a real named subject goes straight to gpt-image-1, which
+ * then renders that real person). Exported for unit testing.
+ */
+export const NO_REAL_PERSON_CLAUSE =
+  " Do NOT depict any specific, real, named public figure or recognizable real person; use only anonymous, generic, non-identifiable people.";
+
+/**
  * Cap a punchy hook line to ≤7 words and ≤60 visible characters WHILE
  * preserving any `**...**` emphasis markup. A naive substring/word cut could
  * split a `**word**` pair and leave a dangling `**`; this drops any trailing
@@ -221,7 +285,10 @@ export async function renderStaticCreative(args: {
           : "dark, moody, dramatic";
     try {
       const bg = await generateImageSafe({
-        prompt: `${args.bgPrompt}\n\nIMPORTANT: produce a clean BACKGROUND photo only — NO text, words, letters, numbers, logos, or watermarks. ${themeBgDescriptor} tones.`,
+        // NO_REAL_PERSON_CLAUSE is UNCONDITIONAL (always on the prompt): the prod
+        // image path bypasses sanitizePrompt's safety-only guard, so this is the
+        // only thing stopping a real named subject from being rendered.
+        prompt: `${args.bgPrompt}\n\nIMPORTANT: produce a clean BACKGROUND photo only — NO text, words, letters, numbers, logos, or watermarks. ${themeBgDescriptor} tones.${NO_REAL_PERSON_CLAUSE}`,
         aspectRatio: "3:4",
         title: args.headline,
         topic: args.category || "news",
@@ -1304,6 +1371,20 @@ Return ONLY the JSON array, no other text.`;
         const BATCH_SIZE = 3;
         const DELAY_BETWEEN_BATCHES = 3000; // 3s between batches
         const category = /CATEGORY:\s*([^\n]+)/i.exec(contentBrief)?.[1]?.trim() || extracted.type || "news";
+        // ONLY the CATEGORY/TONE lines of the brief (computed once) — NOT the full
+        // SUBJECT/VISUAL brief. Feeding the whole brief per slide is exactly what
+        // made every slide's prompt ~95% identical (same SUBJECT person each time).
+        const categoryTone = [
+          contentBrief.match(/CATEGORY:[^\n]*/)?.[0],
+          contentBrief.match(/TONE:[^\n]*/)?.[0],
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .trim();
+        // LOCKED decision: the COVER slide sits on the real article photo (the
+        // same source the static-post cover uses). Body/cta slides keep the
+        // per-slide variety AI background (cta skips AI entirely in the renderer).
+        const coverArticleBg = pickArticleBgImage(extracted.images, isPublicImageUrl);
 
         const carouselBrowser = await launchCreativeBrowser();
         try {
@@ -1322,10 +1403,22 @@ Return ONLY the JSON array, no other text.`;
               // going, exactly like the previous resilience.
               try {
                 const headline = slideMeta.title;
-                const bgPrompt = appendImageContext(
-                  `Cinematic background photo for: "${slideMeta.title}". ${contentBrief}`,
-                  input.imageContext,
+                // Per-slide variety: distinct camera angle + the slide's OWN
+                // title/body + only CATEGORY/TONE (not the repeated full brief).
+                const bgPrompt = buildCarouselSlidePrompt(
+                  {
+                    slideTitle: slideMeta.title,
+                    slideBody: slideMeta.body,
+                    slideIdx,
+                    totalSlides: allSlides.length,
+                    categoryTone,
+                    imageContext: input.imageContext,
+                  },
+                  appendImageContext,
                 );
+                // Cover gets the real article photo (locked decision); body/cta
+                // keep the AI variety background.
+                const isCover = slideRole === "cover" || slideIdx === 0;
                 const creative = await buildHeadlineCreative(
                   bgPrompt,
                   headline,
@@ -1334,6 +1427,7 @@ Return ONLY the JSON array, no other text.`;
                   {
                     slideRole,
                     ...(slideRole === "body" ? { body: slideMeta.body } : {}),
+                    ...(isCover && coverArticleBg ? { bgImageUrl: coverArticleBg } : {}),
                     browser: carouselBrowser,
                   },
                 );
