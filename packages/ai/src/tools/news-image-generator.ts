@@ -12,6 +12,20 @@ export interface NewsImageResult {
   style: "news_card" | "ai_generated";
 }
 
+/**
+ * Launch a Puppeteer browser with the SAME options every creative generator in
+ * this module uses (headless + sandbox-off args). Exported so a caller (e.g. the
+ * carousel renderer) can launch ONE browser and reuse it across many slides via
+ * the `browser` option on generateStyledCreativeImage / overlayLogoOnImage —
+ * instead of cold-booting Chrome per slide. The caller MUST close it.
+ */
+export async function launchCreativeBrowser(): Promise<import("puppeteer").Browser> {
+  return puppeteer.launch({
+    headless: true,
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+  });
+}
+
 export async function generateNewsCardImage(
   options: NewsCardOptions
 ): Promise<NewsImageResult> {
@@ -126,17 +140,25 @@ export async function generateStaticNewsCreativeImage(
  * Render a styled social creative (4 selectable styles) to PNG. Same Puppeteer
  * config as generateStaticNewsCreativeImage: waitUntil "load" (inline data-URL
  * backgrounds never settle networkidle0), screenshot even if the wait times out.
+ *
+ * Optionally accepts a shared `browser`: when provided, this opens (and closes)
+ * only a NEW PAGE on the caller's browser — it never launches or closes the
+ * browser (the caller owns its lifecycle). This lets a carousel render all N
+ * slides on ONE browser instead of cold-booting Chrome per slide. When omitted,
+ * the function self-launches + self-closes exactly as before (back-compat — the
+ * static single-image path and all other callers are unaffected).
  */
 export async function generateStyledCreativeImage(
-  options: StaticCreativeOptions
+  options: StaticCreativeOptions & { browser?: import("puppeteer").Browser }
 ): Promise<NewsImageResult> {
-  const html = buildStaticCreative(options);
-  const browser = await puppeteer.launch({
+  const { browser: sharedBrowser, ...creativeOptions } = options;
+  const html = buildStaticCreative(creativeOptions);
+  const browser = sharedBrowser ?? (await puppeteer.launch({
     headless: true,
     args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
+  }));
+  const page = await browser.newPage();
   try {
-    const page = await browser.newPage();
     await page.setViewport({ width: 1080, height: 1350 });
     try {
       await page.setContent(html, { waitUntil: "load", timeout: 30000 });
@@ -156,7 +178,10 @@ export async function generateStyledCreativeImage(
       style: "news_card",
     };
   } finally {
-    await browser.close();
+    // Always close the page. Only close the browser when WE launched it; if a
+    // shared browser was passed, the caller owns its lifecycle.
+    await page.close().catch(() => {});
+    if (!sharedBrowser) await browser.close();
   }
 }
 
@@ -183,6 +208,12 @@ export interface LogoOverlayOptions {
   accentColor?: string;
   /** Opacity of the branding bar background (0-1, default 0.85) */
   opacity?: number;
+  /**
+   * Optional shared Puppeteer browser. When provided, only a new page is opened
+   * + closed here; the browser is owned by the caller (not launched/closed).
+   * When omitted, the function self-launches + self-closes (back-compat).
+   */
+  browser?: import("puppeteer").Browser;
 }
 
 export async function overlayLogoOnImage(options: LogoOverlayOptions): Promise<{ imageBase64: string; mimeType: string }> {
@@ -192,6 +223,7 @@ export async function overlayLogoOnImage(options: LogoOverlayOptions): Promise<{
     position = "bottom-left",
     accentColor = "#e11d48",
     opacity = 0.85,
+    browser: sharedBrowser,
   } = options;
 
   // If no logo and no channel name, return original image
@@ -243,13 +275,13 @@ body{width:${width}px;height:${height}px;overflow:hidden;position:relative;font-
 </div>
 </body></html>`;
 
-  const browser = await puppeteer.launch({
+  const browser = sharedBrowser ?? (await puppeteer.launch({
     headless: true,
     args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
+  }));
 
+  const page = await browser.newPage();
   try {
-    const page = await browser.newPage();
     await page.setViewport({ width, height });
     // Use `load` (NOT `networkidle0`): the bg is an inline data-URL and the only
     // network request is the Google-Fonts @import, so `networkidle0` never settles
@@ -276,7 +308,9 @@ body{width:${width}px;height:${height}px;overflow:hidden;position:relative;font-
       mimeType,
     };
   } finally {
-    await browser.close();
+    // Always close the page; only close the browser when WE launched it.
+    await page.close().catch(() => {});
+    if (!sharedBrowser) await browser.close();
   }
 }
 

@@ -10,8 +10,23 @@ export type CreativeStyle =
   | "tweet_card"
   | "bold_typographic";
 
+/** Visual theme. Light is the default (read at builder time). */
+export type CreativeTheme = "dark" | "light" | "gradient";
+
 export interface StaticCreativeOptions {
   style: CreativeStyle;
+  /** Visual theme. Defaults to "light" where read. */
+  theme?: CreativeTheme;
+  /**
+   * Carousel slide role. Undefined → cover behavior (the static single-image
+   * path + carousel cover). "body" → the same brand chrome with a large
+   * multi-line body paragraph as the focus. "cta" → the same chrome with a
+   * "Follow for more" call-to-action as the focus. This keeps every slide in a
+   * carousel visually consistent (one template, one grammar).
+   */
+  slideRole?: "cover" | "body" | "cta";
+  /** Body paragraph text for a "body" slide (escaped). Falls back to headline. */
+  body?: string;
   headline: string;
   /** Optional punchy hook line (hook_bars). Supports **word** highlight markup. */
   hookLine?: string;
@@ -64,6 +79,51 @@ export function renderHighlightMarkup(text: string, accent: string): string {
     .replace(/==([^=]+)==/g, `<span style="color:${safe}">$1</span>`);
 }
 
+export interface ThemeTokens {
+  /** CSS background value used when no photo is present. */
+  bgFallback: string;
+  /** Bottom-up scrim gradient layered over the photo so text stays legible. */
+  scrim: string;
+  /** Primary text color. */
+  textColor: string;
+  /** Muted/secondary text color (labels, handles). */
+  subTextColor: string;
+}
+
+/**
+ * Theme palette derived from a theme name + a brand accent. Pure: the accent is
+ * sanitized via `safeColor` so a malicious value can never break out of CSS.
+ * "light" is the project default (the user complained creatives were too dark).
+ */
+export function themeTokens(theme: CreativeTheme, accent: string): ThemeTokens {
+  const safe = safeColor(accent);
+  switch (theme) {
+    case "dark":
+      return {
+        bgFallback: "linear-gradient(135deg,#1a1a2e,#16213e)",
+        scrim: "linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.25) 50%, rgba(0,0,0,0) 100%)",
+        textColor: "#ffffff",
+        subTextColor: "rgba(255,255,255,0.75)",
+      };
+    case "gradient":
+      return {
+        bgFallback: `linear-gradient(135deg, ${safe}, #11131a)`,
+        scrim: "linear-gradient(to top, rgba(0,0,0,0.6) 0%, rgba(0,0,0,0.2) 50%, rgba(0,0,0,0) 100%)",
+        textColor: "#ffffff",
+        subTextColor: "rgba(255,255,255,0.8)",
+      };
+    case "light":
+    default:
+      return {
+        bgFallback: "#f7f7f8",
+        scrim:
+          "linear-gradient(to top, rgba(255,255,255,0.62) 0%, rgba(255,255,255,0.15) 45%, rgba(255,255,255,0) 100%)",
+        textColor: "#0f1419",
+        subTextColor: "#5b6470",
+      };
+  }
+}
+
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 function fmtDate(date?: string): string {
   return (
@@ -93,24 +153,25 @@ function logoHtml(opts: StaticCreativeOptions, size: number): string {
 // ── Style builders ────────────────────────────────────────────────────────
 function buildPremiumEditorial(opts: StaticCreativeOptions): string {
   const accent = safeColor(opts.brandColor);
+  const tokens = themeTokens(opts.theme ?? "light", opts.brandColor ?? DEFAULT_ACCENT);
   const fs = headlineFontSize(opts.headline);
   const safeBg = safeImageUrl(opts.bgImageUrl);
   const bg = safeBg
     ? `background-image:url("${safeBg}");background-size:cover;background-position:center;`
-    : `background:linear-gradient(135deg,#1a1a2e,#16213e);`;
+    : `background:${tokens.bgFallback};`;
   const corner = opts.logoPosition === "top-left" ? "left:48px;" : "right:48px;";
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
 ${FONT_IMPORT}
 *{margin:0;padding:0;box-sizing:border-box;}
-body{width:${CANVAS.width}px;height:${CANVAS.height}px;overflow:hidden;position:relative;font-family:'Inter',system-ui,sans-serif;background:#000;-webkit-font-smoothing:antialiased;}
+body{width:${CANVAS.width}px;height:${CANVAS.height}px;overflow:hidden;position:relative;font-family:'Inter',system-ui,sans-serif;background:${tokens.bgFallback};-webkit-font-smoothing:antialiased;}
 .bg{position:absolute;inset:0;${bg}}
-.scrim{position:absolute;inset:0;background:linear-gradient(to top,rgba(0,0,0,0.92) 0%,rgba(0,0,0,0.55) 40%,rgba(0,0,0,0.15) 70%,rgba(0,0,0,0.35) 100%);}
+.scrim{position:absolute;inset:0;background:${tokens.scrim};}
 .logo{position:absolute;top:44px;${corner}}
 .block{position:absolute;left:56px;right:56px;bottom:96px;}
-.label{font-style:italic;font-size:26px;font-weight:600;color:rgba(255,255,255,0.92);letter-spacing:0.01em;}
+.label{font-style:italic;font-size:26px;font-weight:600;color:${tokens.subTextColor};letter-spacing:0.01em;}
 .rule{width:64px;height:4px;background:${accent};border-radius:2px;margin:14px 0 22px;}
-.headline{color:#fff;font-size:${fs}px;font-weight:800;line-height:1.08;letter-spacing:-0.02em;word-break:break-word;}
-.handle{position:absolute;bottom:44px;left:56px;color:rgba(255,255,255,0.6);font-size:20px;font-weight:500;}
+.headline{color:${tokens.textColor};font-size:${fs}px;font-weight:800;line-height:1.08;letter-spacing:-0.02em;word-break:break-word;}
+.handle{position:absolute;bottom:44px;left:56px;color:${tokens.subTextColor};font-size:20px;font-weight:500;}
 </style></head><body>
 <div class="bg"></div><div class="scrim"></div>
 <div class="logo">${logoHtml(opts, 64)}</div>
@@ -125,10 +186,11 @@ ${opts.handle ? `<div class="handle">${escapeHtml(opts.handle)}</div>` : ""}
 
 function buildHookBars(opts: StaticCreativeOptions): string {
   const accent = safeColor(opts.brandColor);
+  const tokens = themeTokens(opts.theme ?? "light", opts.brandColor ?? DEFAULT_ACCENT);
   const safeBg = safeImageUrl(opts.bgImageUrl);
   const bg = safeBg
     ? `background-image:url("${safeBg}");background-size:cover;background-position:center;`
-    : `background:linear-gradient(135deg,#222,#111);`;
+    : `background:${tokens.bgFallback};`;
   const corner = opts.logoPosition === "top-left" ? "left:40px;" : "right:40px;";
   const hookHtml = opts.hookLine ? renderHighlightMarkup(opts.hookLine, accent) : "";
   const safeInset = safeImageUrl(opts.secondaryImageUrl);
@@ -138,7 +200,7 @@ function buildHookBars(opts: StaticCreativeOptions): string {
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
 ${FONT_IMPORT}
 *{margin:0;padding:0;box-sizing:border-box;}
-body{width:${CANVAS.width}px;height:${CANVAS.height}px;overflow:hidden;position:relative;font-family:'Inter',system-ui,sans-serif;background:#000;}
+body{width:${CANVAS.width}px;height:${CANVAS.height}px;overflow:hidden;position:relative;font-family:'Inter',system-ui,sans-serif;background:${tokens.bgFallback};}
 .bg{position:absolute;inset:0;${bg}}
 .logo{position:absolute;top:36px;${corner}}
 .bars{position:absolute;left:36px;right:36px;bottom:48px;display:flex;flex-direction:column;gap:14px;}
@@ -159,6 +221,10 @@ ${inset}
 
 function buildTweetCard(opts: StaticCreativeOptions): string {
   const accent = opts.brandColor && /^#[0-9a-fA-F]{3,8}$/.test(opts.brandColor) ? opts.brandColor : "#1d9bf0";
+  const theme = opts.theme ?? "light";
+  const tokens = themeTokens(theme, opts.brandColor ?? DEFAULT_ACCENT);
+  // Tweet card is a surface: light keeps the white card; dark/gradient flip to a dark card.
+  const surface = theme === "light" ? "#ffffff" : tokens.bgFallback;
   const tick = opts.verified
     ? `<svg class="verified-tick" width="26" height="26" viewBox="0 0 24 24" fill="${accent}"><path d="M22.5 12.5c0-1.58-.875-2.95-2.148-3.6.154-.435.238-.905.238-1.4 0-2.21-1.71-3.998-3.818-3.998-.47 0-.92.084-1.336.25C14.818 2.415 13.51 1.5 12 1.5s-2.816.917-3.437 2.25c-.415-.165-.866-.25-1.336-.25-2.11 0-3.818 1.79-3.818 4 0 .494.083.964.237 1.4-1.272.65-2.147 2.018-2.147 3.6 0 1.495.782 2.798 1.942 3.486-.02.16-.032.322-.032.486 0 2.21 1.708 4 3.818 4 .47 0 .92-.086 1.335-.25.62 1.334 1.926 2.25 3.437 2.25 1.512 0 2.818-.916 3.437-2.25.415.163.865.248 1.336.248 2.11 0 3.818-1.79 3.818-4 0-.164-.012-.326-.032-.486 1.16-.688 1.943-1.99 1.943-3.486zm-6.616-3.334l-4.334 6.5c-.145.217-.382.334-.625.334-.143 0-.288-.04-.416-.126l-.115-.094-2.415-2.415c-.293-.293-.293-.768 0-1.06s.768-.294 1.06 0l1.77 1.767 3.825-5.74c.23-.345.696-.436 1.04-.207.346.23.44.696.21 1.04z"/></svg>`
     : "";
@@ -173,12 +239,12 @@ function buildTweetCard(opts: StaticCreativeOptions): string {
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
 ${FONT_IMPORT}
 *{margin:0;padding:0;box-sizing:border-box;}
-body{width:${CANVAS.width}px;height:${CANVAS.height}px;overflow:hidden;font-family:'Inter',system-ui,sans-serif;background:#fff;padding:64px 56px;display:flex;flex-direction:column;}
+body{width:${CANVAS.width}px;height:${CANVAS.height}px;overflow:hidden;font-family:'Inter',system-ui,sans-serif;background:${surface};padding:64px 56px;display:flex;flex-direction:column;}
 .head{display:flex;align-items:center;gap:18px;margin-bottom:28px;}
 .name-row{display:flex;align-items:center;gap:8px;}
-.name{font-size:34px;font-weight:800;color:#0f1419;}
-.handle{font-size:26px;color:#536471;margin-top:2px;}
-.text{font-size:40px;line-height:1.3;color:#0f1419;font-weight:400;margin-bottom:32px;}
+.name{font-size:34px;font-weight:800;color:${tokens.textColor};}
+.handle{font-size:26px;color:${tokens.subTextColor};margin-top:2px;}
+.text{font-size:40px;line-height:1.3;color:${tokens.textColor};font-weight:400;margin-bottom:32px;}
 .pair{display:grid;grid-template-columns:1fr 1fr;gap:10px;flex:1;border-radius:18px;overflow:hidden;}
 .pair img{width:100%;height:100%;object-fit:cover;}
 .single{flex:1;border-radius:18px;overflow:hidden;}
@@ -198,19 +264,20 @@ ${imgPair}
 
 function buildBoldTypographic(opts: StaticCreativeOptions): string {
   const accent = safeColor(opts.brandColor);
+  const tokens = themeTokens(opts.theme ?? "light", opts.brandColor ?? DEFAULT_ACCENT);
   const words = opts.headline.trim().split(/\s+/).length;
   const fs = words <= 4 ? 130 : words <= 7 ? 104 : words <= 11 ? 82 : 64;
   const corner = opts.logoPosition === "top-left" ? "left:56px;" : "right:56px;";
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
 ${FONT_IMPORT}
 *{margin:0;padding:0;box-sizing:border-box;}
-body{width:${CANVAS.width}px;height:${CANVAS.height}px;overflow:hidden;position:relative;font-family:'Inter',system-ui,sans-serif;background:#0d0d12;display:flex;align-items:center;padding:0 64px;}
+body{width:${CANVAS.width}px;height:${CANVAS.height}px;overflow:hidden;position:relative;font-family:'Inter',system-ui,sans-serif;background:${tokens.bgFallback};display:flex;align-items:center;padding:0 64px;}
 .accent-band{position:absolute;top:0;left:0;width:14px;height:100%;background:${accent};}
 .logo{position:absolute;top:56px;${corner}display:flex;align-items:center;gap:14px;}
-.brand-tag{color:rgba(255,255,255,0.75);font-size:22px;font-weight:600;}
-.headline{color:#fff;font-size:${fs}px;font-weight:900;line-height:1.02;letter-spacing:-0.03em;}
+.brand-tag{color:${tokens.subTextColor};font-size:22px;font-weight:600;}
+.headline{color:${tokens.textColor};font-size:${fs}px;font-weight:900;line-height:1.02;letter-spacing:-0.03em;}
 .rule{position:absolute;bottom:96px;left:64px;width:80px;height:5px;background:${accent};border-radius:3px;}
-.name{position:absolute;bottom:48px;left:64px;color:rgba(255,255,255,0.7);font-size:24px;font-weight:600;}
+.name{position:absolute;bottom:48px;left:64px;color:${tokens.subTextColor};font-size:24px;font-weight:600;}
 </style></head><body>
 <div class="accent-band"></div>
 <div class="logo">${logoHtml(opts, 52)}${opts.handle ? `<span class="brand-tag">${escapeHtml(opts.handle)}</span>` : ""}</div>
@@ -220,7 +287,75 @@ body{width:${CANVAS.width}px;height:${CANVAS.height}px;overflow:hidden;position:
 </body></html>`;
 }
 
+/**
+ * Shared "body / cta" slide chrome for carousels. Wears the SAME brand grammar
+ * as the premium cover (logo corner, italic brand label, accent rule, theme
+ * tokens, handle) so every slide in a carousel looks like one set, regardless
+ * of the chosen `style`. The focus is the body paragraph (body slides) or the
+ * "Follow for more" call-to-action (cta slides). All text is escaped; all
+ * color/image-URL interpolations go through the same sanitizers as the cover.
+ */
+function buildBodyChrome(opts: StaticCreativeOptions, role: "body" | "cta"): string {
+  const accent = safeColor(opts.brandColor);
+  const tokens = themeTokens(opts.theme ?? "light", opts.brandColor ?? DEFAULT_ACCENT);
+  const safeBg = safeImageUrl(opts.bgImageUrl);
+  const bg = safeBg
+    ? `background-image:url("${safeBg}");background-size:cover;background-position:center;`
+    : `background:${tokens.bgFallback};`;
+  const corner = opts.logoPosition === "top-left" ? "left:48px;" : "right:48px;";
+
+  // Body slides: a smaller secondary headline + a large multi-line body block.
+  // CTA slides: a centered "Follow for more" affordance.
+  const bodyText = escapeHtml(opts.body ?? opts.headline);
+  const isCta = role === "cta";
+  const ctaLabel = escapeHtml(opts.headline?.trim() ? opts.headline : "Follow for more");
+
+  const focus = isCta
+    ? `<div class="cta">
+    <div class="cta-rule"></div>
+    <div class="cta-text">${ctaLabel}</div>
+    <div class="cta-sub">Follow ${opts.handle ? escapeHtml(opts.handle) : escapeHtml(opts.channelName)} for more</div>
+  </div>`
+    : `<div class="block">
+    <div class="label">${escapeHtml(opts.channelName)}</div>
+    <div class="rule"></div>
+    ${opts.headline ? `<div class="subhead">${escapeHtml(opts.headline)}</div>` : ""}
+    <div class="body">${bodyText}</div>
+  </div>`;
+
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+${FONT_IMPORT}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{width:${CANVAS.width}px;height:${CANVAS.height}px;overflow:hidden;position:relative;font-family:'Inter',system-ui,sans-serif;background:${tokens.bgFallback};-webkit-font-smoothing:antialiased;}
+.bg{position:absolute;inset:0;${bg}}
+.scrim{position:absolute;inset:0;background:${tokens.scrim};}
+.accent-band{position:absolute;top:0;left:0;width:14px;height:100%;background:${accent};}
+.logo{position:absolute;top:44px;${corner}}
+.block{position:absolute;left:56px;right:56px;bottom:96px;}
+.label{font-style:italic;font-size:26px;font-weight:600;color:${tokens.subTextColor};letter-spacing:0.01em;}
+.rule{width:64px;height:4px;background:${accent};border-radius:2px;margin:14px 0 22px;}
+.subhead{color:${tokens.textColor};font-size:40px;font-weight:800;line-height:1.1;letter-spacing:-0.02em;margin-bottom:22px;word-break:break-word;}
+.body{color:${tokens.textColor};font-size:46px;font-weight:600;line-height:1.28;letter-spacing:-0.01em;word-break:break-word;}
+.cta{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0 72px;text-align:center;}
+.cta-rule{width:80px;height:5px;background:${accent};border-radius:3px;margin-bottom:32px;}
+.cta-text{color:${tokens.textColor};font-size:88px;font-weight:900;line-height:1.04;letter-spacing:-0.03em;word-break:break-word;}
+.cta-sub{margin-top:24px;color:${tokens.subTextColor};font-size:30px;font-weight:600;}
+.handle{position:absolute;bottom:44px;left:56px;color:${tokens.subTextColor};font-size:20px;font-weight:500;}
+</style></head><body>
+<div class="bg"></div><div class="scrim"></div>
+<div class="accent-band"></div>
+<div class="logo">${logoHtml(opts, 64)}</div>
+${focus}
+${opts.handle ? `<div class="handle">${escapeHtml(opts.handle)}</div>` : ""}
+</body></html>`;
+}
+
 export function buildStaticCreative(opts: StaticCreativeOptions): string {
+  // Carousel body/cta slides use a shared brand chrome (consistent across all
+  // styles) so the whole set looks like one template. Cover (or undefined) keeps
+  // the per-style cover layout — back-compat for the static single-image path.
+  if (opts.slideRole === "body") return buildBodyChrome(opts, "body");
+  if (opts.slideRole === "cta") return buildBodyChrome(opts, "cta");
   switch (opts.style) {
     case "premium_editorial":
       return buildPremiumEditorial(opts);

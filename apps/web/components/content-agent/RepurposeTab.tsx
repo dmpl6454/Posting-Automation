@@ -84,7 +84,10 @@ export function RepurposeTab() {
   // (gemini/gemma4) currently share a billing-held project (403). The backend
   // also falls back to OpenAI automatically if a chosen provider fails.
   const [provider, setProvider] = useState<typeof providers[number]>("openai");
-  const [theme, setTheme] = useState<"dark" | "light" | "gradient">("dark");
+  const [theme, setTheme] = useState<"dark" | "light" | "gradient">("light");
+  // Brand accent color — sourced from the picker below and from a saved
+  // template's brandColor. Sent to the router as accentColor when non-empty.
+  const [accentColor, setAccentColor] = useState<string>("");
   const [voiceOver, setVoiceOver] = useState(true);
   const [voiceType, setVoiceType] = useState<string>("nova");
   const [bgMusic, setBgMusic] = useState(true);
@@ -265,6 +268,7 @@ export function RepurposeTab() {
         creativeStyle,
         logoPosition,
         theme,
+        accentColor: accentColor || undefined,
         voiceOver: (format === "reel" || format === "ai_video" || format === "seedance_video") ? voiceOver : false,
         voiceType: voiceType as any,
         bgMusic: (format === "reel" || format === "ai_video" || format === "seedance_video") ? bgMusic : false,
@@ -441,6 +445,7 @@ export function RepurposeTab() {
                           setLogoPosition((t.logoPosition as "top-left" | "top-right") ?? "top-right");
                           setLogoUrl(t.logoMedia?.url ?? "");
                           setLogoMediaId(t.logoMediaId ?? "");
+                          if (t.brandColor) setAccentColor(t.brandColor);
                         }
                       }}
                     >
@@ -488,6 +493,33 @@ export function RepurposeTab() {
                     </Select>
                   </div>
 
+                  {/* Brand accent color (optional) */}
+                  <div className="flex items-center gap-2 pt-1">
+                    <Label className="text-xs" htmlFor="accent-color">Brand color (optional)</Label>
+                    <input
+                      id="accent-color"
+                      type="color"
+                      value={accentColor || "#0052cc"}
+                      onChange={(e) => setAccentColor(e.target.value)}
+                      className="h-8 w-10 cursor-pointer rounded border border-border bg-background p-0.5"
+                    />
+                    <Input
+                      value={accentColor}
+                      onChange={(e) => setAccentColor(e.target.value)}
+                      placeholder="#0052cc"
+                      className="h-8 w-28 text-xs"
+                    />
+                    {accentColor && (
+                      <button
+                        type="button"
+                        onClick={() => setAccentColor("")}
+                        className="text-[10px] text-muted-foreground hover:underline"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+
                   {logoUrl && (
                     <Button
                       type="button"
@@ -512,10 +544,10 @@ export function RepurposeTab() {
                 </div>
               )}
 
-              {/* Theme (for carousel/reel) */}
-              {(format === "carousel" || format === "reel" || format === "ai_video") && (
+              {/* Theme (static + carousel + slide-based video formats) */}
+              {(format === "static" || format === "carousel" || format === "reel" || format === "ai_video") && (
                 <div className="space-y-2">
-                  <Label>Slide Theme</Label>
+                  <Label>{format === "static" ? "Background Theme" : "Slide Theme"}</Label>
                   <div className="flex gap-2">
                     {THEMES.map(({ id, label, color }) => (
                       <button
