@@ -37,6 +37,62 @@ export async function markTargetFailed(
 }
 
 /**
+ * Shape of a single `prisma.notification.create({ data })` payload, matching the
+ * Notification Prisma model EXACTLY (`type`/`title`/`body`/`link`/`metadata`).
+ */
+export interface NotificationCreateData {
+  userId: string;
+  organizationId: string;
+  type: "post.published" | "post.failed";
+  title: string;
+  body: string;
+  link: string;
+  metadata: { postId: string; postTargetId: string; platform: string };
+}
+
+/**
+ * Pure helper: build one in-app Notification payload per org owner/admin for a
+ * publish outcome. The worker maps each returned object straight into
+ * `prisma.notification.create({ data })`. Extracted so it's unit-testable
+ * without BullMQ/Redis/Prisma.
+ *
+ * Best-effort by design at the call site — the worker wraps the create loop in a
+ * try/catch so a notification failure can NEVER fail the publish.
+ */
+export function buildPublishNotifications(
+  memberUserIds: string[],
+  opts: {
+    organizationId: string;
+    postId: string;
+    postTargetId: string;
+    platform: string;
+    status: "PUBLISHED" | "FAILED";
+  },
+): NotificationCreateData[] {
+  const published = opts.status === "PUBLISHED";
+  const type = published ? "post.published" : "post.failed";
+  const title = published ? "Post published" : "Post failed";
+  const body = published
+    ? `Published to ${opts.platform}`
+    : `Failed to publish to ${opts.platform}`;
+  const link = `/dashboard/posts/${opts.postId}`;
+
+  return memberUserIds.map((userId) => ({
+    userId,
+    organizationId: opts.organizationId,
+    type,
+    title,
+    body,
+    link,
+    metadata: {
+      postId: opts.postId,
+      postTargetId: opts.postTargetId,
+      platform: opts.platform,
+    },
+  }));
+}
+
+/**
  * Pure predicate: should the auto-healer reap this target?
  *
  * A PostTarget that has sat in PUBLISHING for longer than `maxAgeMs` is
