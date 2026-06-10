@@ -48,6 +48,15 @@ interface ComposeTabProps {
   initialContent?: string;
   initialImage?: string;
   initialImageMediaId?: string;
+  /**
+   * Multiple pre-uploaded media ids (in order) to pre-attach — used by the
+   * Repurpose carousel "Create Post" deep link so ALL slides attach, not just
+   * the cover. Each already has a Media DB row, so post-create uses the id
+   * directly (no URL download needed). Takes precedence over initialImage.
+   */
+  initialMediaIds?: string[];
+  /** Parallel slide preview URLs for initialMediaIds (same order). */
+  initialMediaUrls?: string[];
   onPostCreated?: () => void;
   externalMediaToAdd?: { dataUrl: string } | null;
   onExternalMediaConsumed?: () => void;
@@ -56,7 +65,7 @@ interface ComposeTabProps {
 // Fix #24: sessionStorage key for carrying draft content from GenerateTab / ImageTab
 const COMPOSE_DRAFT_KEY = "compose:draftContent";
 
-export function ComposeTab({ initialContent, initialImage, initialImageMediaId, onPostCreated, externalMediaToAdd, onExternalMediaConsumed }: ComposeTabProps) {
+export function ComposeTab({ initialContent, initialImage, initialImageMediaId, initialMediaIds, initialMediaUrls, onPostCreated, externalMediaToAdd, onExternalMediaConsumed }: ComposeTabProps) {
   const router = useRouter();
   const { toast } = useToast();
   const [content, setContent] = useState(initialContent || "");
@@ -150,8 +159,19 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
 
   useEffect(() => {
     if (initialContent) setContent(initialContent);
-    if (initialImage) setPostMedia((prev) => (prev.length === 0 ? [{ url: initialImage, mediaId: initialImageMediaId }] : prev));
-  }, [initialContent, initialImage]);
+    // Carousel deep link: pre-attach ALL slide media ids (in order) so the post
+    // attaches every slide. Each id already has a Media row, so post-create uses
+    // the id directly; the parallel URL (if present) is only for the thumbnail.
+    if (initialMediaIds && initialMediaIds.length > 0) {
+      setPostMedia((prev) =>
+        prev.length === 0
+          ? initialMediaIds.map((mediaId, i) => ({ url: initialMediaUrls?.[i] || "", mediaId }))
+          : prev
+      );
+    } else if (initialImage) {
+      setPostMedia((prev) => (prev.length === 0 ? [{ url: initialImage, mediaId: initialImageMediaId }] : prev));
+    }
+  }, [initialContent, initialImage, initialMediaIds, initialMediaUrls]);
 
   useEffect(() => {
     if (!externalMediaToAdd) return;

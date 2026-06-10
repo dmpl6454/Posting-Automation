@@ -25,6 +25,16 @@ function getPublicUrl(key: string): string {
   return `${process.env.S3_ENDPOINT || "https://s3.amazonaws.com"}/${BUCKET}/${key}`;
 }
 
+/**
+ * Drop failed (undefined/null) slides from a sparse slide-image array before
+ * passing them to the reel stitcher. `slideImages` is indexed by slide position,
+ * so a slide whose generation failed leaves a hole — mapping over it directly
+ * would crash on `undefined.imageBase64`. Pure + exported for unit testing.
+ */
+export function compactSlides<T>(slideImages: (T | undefined | null)[]): T[] {
+  return slideImages.filter((s): s is T => Boolean(s));
+}
+
 export const repurposeRouter = createRouter({
   repurpose: protectedProcedure
     .input(
@@ -1096,7 +1106,7 @@ Requirements:
             }
 
             const reelResult = await generateReelVideo({
-              slideImages: slideImages.map((s) => ({
+              slideImages: compactSlides(slideImages).map((s) => ({
                 imageBase64: s.imageBase64,
                 mimeType: s.mimeType,
               })),

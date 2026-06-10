@@ -1,6 +1,7 @@
 "use client";
 
 import { humanizeError } from "~/lib/errors";
+import { buildCreatePostQuery } from "~/lib/repurpose-create-post-params";
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { trpc } from "~/lib/trpc/client";
@@ -956,9 +957,17 @@ export function RepurposeTab() {
                         size="sm"
                         className="gap-1.5 text-xs"
                         onClick={() => {
-                          const mediaParam = platformImage ? `&aiImage=${encodeURIComponent(platformImage)}` : "";
-                          const mediaIdParam = platformMediaId ? `&aiMediaId=${encodeURIComponent(platformMediaId)}` : "";
-                          window.location.href = `/dashboard/content-agent?tab=compose&content=${encodeURIComponent(content)}${mediaParam}${mediaIdParam}`;
+                          // Carousel must forward ALL slide media ids (not just slide 0) so
+                          // Compose attaches every slide and the carousel publish path triggers.
+                          const query = buildCreatePostQuery({
+                            format: results.format,
+                            content,
+                            image: platformImage,
+                            mediaId: platformMediaId,
+                            carouselMediaIds: results.carouselMediaIds,
+                            carouselImages: results.mediaUrls,
+                          });
+                          window.location.href = `/dashboard/content-agent?${query}`;
                         }}
                       >
                         <FileText className="h-3 w-3" />
