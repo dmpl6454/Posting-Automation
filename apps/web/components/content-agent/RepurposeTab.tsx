@@ -94,9 +94,25 @@ export function RepurposeTab() {
   const [bgMusic, setBgMusic] = useState(true);
   const [creativeStyle, setCreativeStyle] = useState<"premium_editorial" | "hook_bars" | "tweet_card" | "bold_typographic">("premium_editorial");
   const [logoPosition, setLogoPosition] = useState<"top-left" | "top-right">("top-right");
+  // E2: number of CONTENT slides in a carousel (cover + cta added around these).
+  // Default 5 preserves prior behaviour. Only shown when format === "carousel".
+  const [slideCount, setSlideCount] = useState<number>(5);
+  // D7a: Seedance AI-video clip length (seconds, provider range 2–12). Default
+  // 8 preserves prior behaviour. Only shown/sent when format === "seedance_video".
+  const [videoDuration, setVideoDuration] = useState<number>(8);
   const [logoUrl, setLogoUrl] = useState<string>("");
   const [logoMediaId, setLogoMediaId] = useState<string>("");
+  // E1: aesthetic/style reference image the AI mimics (Gemini-only on backend).
+  const [aestheticRefUrl, setAestheticRefUrl] = useState<string>("");
+  // E3a: free-text aesthetic/style notes appended to the AI background prompt.
+  const [imageContext, setImageContext] = useState<string>("");
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
+  // E4: user-attached image(s) for a STATIC repurpose. When set, these BECOME
+  // the post media and the AI image generation is skipped (captions still
+  // generate). Each entry carries the Media id + url (for preview).
+  const [userMedia, setUserMedia] = useState<{ id: string; url: string }[]>([]);
+  // Whether the user's own image replaces the AI image (static format only).
+  const useOwnImage = format === "static" && userMedia.length > 0;
 
   // Results
   const [results, setResults] = useState<{
@@ -327,6 +343,74 @@ export function RepurposeTab() {
     },
   });
 
+  // E3b — per-image "Regenerate": re-roll JUST the static image / a carousel
+  // slide's image without re-running the whole repurpose flow. `regenTarget`
+  // tracks which card is loading: "static" for the single image, or the slide
+  // index for a carousel slide (so each button shows its own spinner).
+  const [regenTarget, setRegenTarget] = useState<"static" | number | null>(null);
+  const regenerateImage = trpc.repurpose.regenerateImage.useMutation();
+
+  // Resolve the channel name/handle/avatar the same way handleGenerate does, so
+  // the regenerated creative keeps the same branding as the original.
+  const resolveBranding = () => {
+    const ch = selectedChannelIds.length > 0
+      ? activeChannels.find((c: any) => c.id === selectedChannelIds[0])
+      : primaryChannel;
+    return {
+      channelName: ch?.name || "Channel",
+      channelHandle: ch?.username || "",
+      logoUrl: logoUrl || ch?.avatar || undefined,
+    };
+  };
+
+  const handleRegenerate = async (target: "static" | number) => {
+    if (!results) return;
+    // Headline: prefer the extracted title (what the original creative used).
+    const headline = (results.extracted?.title || "").trim();
+    if (!headline) {
+      toast({ title: "Can't regenerate", description: "No headline found for this image.", variant: "destructive" });
+      return;
+    }
+    const { channelName, channelHandle, logoUrl: brandLogo } = resolveBranding();
+    setRegenTarget(target);
+    try {
+      const res = await regenerateImage.mutateAsync({
+        headline,
+        creativeStyle,
+        theme,
+        logoUrl: brandLogo,
+        logoPosition,
+        accentColor: accentColor || undefined,
+        imageContext: imageContext || undefined,
+        aestheticRefUrl: aestheticRefUrl || undefined,
+        channelName,
+        channelHandle,
+      });
+      // Swap the displayed image (and its Media id for publish) in `results`.
+      setResults((prev) => {
+        if (!prev) return prev;
+        const nextUrls = [...prev.mediaUrls];
+        const idx = target === "static" ? 0 : target;
+        nextUrls[idx] = res.url;
+        const nextCarouselIds = prev.carouselMediaIds ? [...prev.carouselMediaIds] : undefined;
+        if (nextCarouselIds && idx < nextCarouselIds.length) nextCarouselIds[idx] = res.mediaId;
+        // For a single static image also refresh the per-platform mediaMap so the
+        // "Create Draft" path attaches the NEW image.
+        let nextMap = prev.mediaMap;
+        if (target === "static" && nextMap) {
+          nextMap = { ...nextMap };
+          for (const k of Object.keys(nextMap)) nextMap[k] = { url: res.url, mediaId: res.mediaId };
+        }
+        return { ...prev, mediaUrls: nextUrls, carouselMediaIds: nextCarouselIds, mediaMap: nextMap };
+      });
+      toast({ title: "Image regenerated" });
+    } catch (err: any) {
+      toast({ title: "Regenerate failed", description: humanizeError(err), variant: "destructive" });
+    } finally {
+      setRegenTarget(null);
+    }
+  };
+
   const handleExtractPreview = () => {
     if (!url) return;
     extractMutation.mutate({ url });
@@ -358,9 +442,18 @@ export function RepurposeTab() {
         logoPosition,
         theme,
         accentColor: accentColor || undefined,
-        voiceOver: (format === "reel" || format === "ai_video" || format === "seedance_video") ? voiceOver : false,
+        aestheticRefUrl: aestheticRefUrl || undefined,
+        imageContext: imageContext || undefined,
+        // E4: when the user attached their own image (static only), send the
+        // media ids so the router uses them and skips AI image generation.
+        userMediaIds: useOwnImage ? userMedia.map((m) => m.id) : undefined,
+        slideCount,
+        videoDuration,
+        // Seedance generates its own native audio, so the voiceOver/bgMusic
+        // toggles are hidden for seedance_video — only reel & ai_video use them.
+        voiceOver: (format === "reel" || format === "ai_video") ? voiceOver : false,
         voiceType: voiceType as any,
-        bgMusic: (format === "reel" || format === "ai_video" || format === "seedance_video") ? bgMusic : false,
+        bgMusic: (format === "reel" || format === "ai_video") ? bgMusic : false,
       });
     } else {
       if (!originalContent || selectedPlatforms.length === 0) return;
@@ -500,8 +593,70 @@ export function RepurposeTab() {
                 </div>
               </div>
 
-              {/* Creative style + brand reference (static + carousel cover) */}
-              {(format === "static" || format === "carousel") && (
+              {/* E4: Attach your own image (STATIC only). When set, it becomes the
+                  post media and the AI image generation is skipped — captions are
+                  still generated. */}
+              {format === "static" && (
+                <div className="space-y-2">
+                  <Label>Attach your own image (optional)</Label>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      id="user-media-upload"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const files = Array.from(e.target.files ?? []);
+                        e.target.value = "";
+                        for (const file of files) {
+                          if (userMedia.length >= 10) break;
+                          const fd = new FormData();
+                          fd.append("file", file);
+                          const res = await fetch("/api/upload", { method: "POST", body: fd });
+                          if (res.ok) {
+                            const { id, url } = await res.json();
+                            setUserMedia((prev) => (prev.length >= 10 ? prev : [...prev, { id, url }]));
+                          } else {
+                            toast({ title: "Image upload failed", variant: "destructive" });
+                          }
+                        }
+                      }}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => document.getElementById("user-media-upload")?.click()}
+                    >
+                      {userMedia.length > 0 ? "Add another image" : "Upload your own image"}
+                    </Button>
+                    {userMedia.map((m, i) => (
+                      <div key={m.id} className="relative">
+                        <img src={m.url} alt="attached" className="h-12 w-12 rounded object-cover border" />
+                        <button
+                          type="button"
+                          aria-label="Remove image"
+                          onClick={() => setUserMedia((prev) => prev.filter((_, idx) => idx !== i))}
+                          className="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[10px] text-white"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  {useOwnImage && (
+                    <p className="text-[10px] text-muted-foreground">
+                      Using your uploaded image — captions will still be generated. AI styling is skipped.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Creative style + brand reference (static + carousel cover).
+                  Hidden when the user attached their own static image (no AI
+                  image is generated, so the styling controls are irrelevant). */}
+              {((format === "static" && !useOwnImage) || format === "carousel") && (
                 <div className="space-y-2">
                   <Label>Creative Style</Label>
                   <div className="grid grid-cols-2 gap-2">
@@ -609,6 +764,60 @@ export function RepurposeTab() {
                     )}
                   </div>
 
+                  {/* E1: aesthetic/style reference image (optional) — the AI mimics its look (Gemini-only) */}
+                  <div className="flex items-center gap-2 pt-1">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      id="aesthetic-ref-upload"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = "";
+                        if (!file) return;
+                        const fd = new FormData();
+                        fd.append("file", file);
+                        fd.append("category", "aesthetic-ref");
+                        const res = await fetch("/api/upload", { method: "POST", body: fd });
+                        if (res.ok) {
+                          const { url } = await res.json();
+                          setAestheticRefUrl(url);
+                        } else {
+                          toast({ title: "Style reference upload failed", variant: "destructive" });
+                        }
+                      }}
+                    />
+                    <Button type="button" variant="outline" size="sm" onClick={() => document.getElementById("aesthetic-ref-upload")?.click()}>
+                      {aestheticRefUrl ? "Change style reference" : "Style reference (optional)"}
+                    </Button>
+                    {aestheticRefUrl && (
+                      <>
+                        <img src={aestheticRefUrl} alt="style reference" className="h-8 w-8 rounded object-cover border" />
+                        <button
+                          type="button"
+                          onClick={() => setAestheticRefUrl("")}
+                          className="text-[10px] text-muted-foreground hover:underline"
+                        >
+                          Clear
+                        </button>
+                      </>
+                    )}
+                  </div>
+
+                  {/* E3a: free-text aesthetic / style notes (optional, max 300 chars) */}
+                  <div className="space-y-1 pt-1">
+                    <Label className="text-xs" htmlFor="image-context">Aesthetic / style notes (optional)</Label>
+                    <Textarea
+                      id="image-context"
+                      value={imageContext}
+                      maxLength={300}
+                      onChange={(e) => setImageContext(e.target.value.slice(0, 300))}
+                      placeholder="e.g. neon and moody, 35mm film grain, warm tones"
+                      className="min-h-[60px] text-xs"
+                    />
+                    <p className="text-[10px] text-muted-foreground text-right">{imageContext.length}/300</p>
+                  </div>
+
                   {logoUrl && (
                     <Button
                       type="button"
@@ -633,8 +842,31 @@ export function RepurposeTab() {
                 </div>
               )}
 
-              {/* Theme (static + carousel + slide-based video formats) */}
-              {(format === "static" || format === "carousel" || format === "reel" || format === "ai_video") && (
+              {/* Content slides count (carousel only) — E2 */}
+              {format === "carousel" && (
+                <div className="space-y-2">
+                  <Label>Content slides</Label>
+                  <div className="flex gap-2">
+                    {[3, 5, 7, 10].map((n) => (
+                      <button
+                        key={n}
+                        type="button"
+                        onClick={() => setSlideCount(n)}
+                        className={`flex-1 rounded-lg border px-3 py-2 text-xs font-medium transition-all ${
+                          slideCount === n ? "border-primary ring-1 ring-primary" : "border-border hover:border-primary/50"
+                        }`}
+                      >
+                        {n}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-muted-foreground">A cover and a follow-for-more slide are added around these.</p>
+                </div>
+              )}
+
+              {/* Theme (static + carousel + slide-based video formats). Hidden
+                  for an own-image static post — theme only styles the AI image. */}
+              {((format === "static" && !useOwnImage) || format === "carousel" || format === "reel" || format === "ai_video") && (
                 <div className="space-y-2">
                   <Label>{format === "static" ? "Background Theme" : "Slide Theme"}</Label>
                   <div className="flex gap-2">
@@ -665,8 +897,36 @@ export function RepurposeTab() {
                 </div>
               )}
 
-              {/* Voice-over & Music (Reel & AI Video) */}
-              {(format === "reel" || format === "ai_video" || format === "seedance_video") && (
+              {/* D7a: Seedance AI-video duration selector (seconds, 2–12) */}
+              {format === "seedance_video" && (
+                <div className="space-y-2">
+                  <Label>Video length</Label>
+                  <div className="flex gap-2">
+                    {[4, 6, 8, 10, 12].map((n) => (
+                      <button
+                        key={n}
+                        type="button"
+                        onClick={() => setVideoDuration(n)}
+                        className={`flex-1 rounded-lg border px-3 py-2 text-xs font-medium transition-all ${
+                          videoDuration === n ? "border-primary ring-1 ring-primary" : "border-border hover:border-primary/50"
+                        }`}
+                      >
+                        {n}s
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-muted-foreground">Longer videos take longer and cost more.</p>
+                </div>
+              )}
+
+              {/* D-ADD4: Seedance generates its own native audio — the voiceOver/
+                  bgMusic toggles are hidden for it; show a one-line note instead. */}
+              {format === "seedance_video" && (
+                <p className="text-[11px] text-muted-foreground">Seedance generates its own audio.</p>
+              )}
+
+              {/* Voice-over & Music (Reel & AI Video only — not Seedance) */}
+              {(format === "reel" || format === "ai_video") && (
                 <div className="space-y-3 rounded-lg border bg-muted/30 p-3">
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Reel Audio</p>
 
@@ -966,14 +1226,31 @@ export function RepurposeTab() {
                       alt="Generated post"
                       className="w-full max-w-xs rounded-xl shadow-lg"
                     />
-                    <a
-                      href={results.mediaUrls[0]}
-                      download={`repurposed-image-${Date.now()}.png`}
-                      className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-muted transition-colors"
-                    >
-                      <Download className="h-4 w-4" />
-                      Download Image
-                    </a>
+                    <div className="flex items-center gap-2">
+                      <a
+                        href={results.mediaUrls[0]}
+                        download={`repurposed-image-${Date.now()}.png`}
+                        className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-muted transition-colors"
+                      >
+                        <Download className="h-4 w-4" />
+                        Download Image
+                      </a>
+                      {/* E3b: re-roll just this image (plan-gated server-side). */}
+                      <button
+                        type="button"
+                        onClick={() => handleRegenerate("static")}
+                        disabled={regenTarget !== null}
+                        title="Generate a new version of this image"
+                        className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-muted transition-colors disabled:opacity-60"
+                      >
+                        {regenTarget === "static" ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <RefreshCw className="h-4 w-4" />
+                        )}
+                        Regenerate
+                      </button>
+                    </div>
                   </div>
                 ) : (
                   <div className="space-y-3">
@@ -996,6 +1273,22 @@ export function RepurposeTab() {
                             >
                               <Download className="h-3.5 w-3.5" />
                             </a>
+                            {/* E3b: re-roll the carousel COVER (slide 0) image only. */}
+                            {i === 0 && (
+                              <button
+                                type="button"
+                                onClick={() => handleRegenerate(0)}
+                                disabled={regenTarget !== null}
+                                title="Generate a new cover image"
+                                className="absolute bottom-2 left-2 rounded-full bg-black/60 p-2 text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/80 disabled:opacity-100"
+                              >
+                                {regenTarget === 0 ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <RefreshCw className="h-3.5 w-3.5" />
+                                )}
+                              </button>
+                            )}
                           </div>
                         </div>
                       ))}
