@@ -2,6 +2,7 @@
 
 import { humanizeError } from "~/lib/errors";
 import { buildCreatePostQuery } from "~/lib/repurpose-create-post-params";
+import { parseVideoReadyEvent, isVideoErrorEvent } from "~/lib/parse-video-event";
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { trpc } from "~/lib/trpc/client";
@@ -116,6 +117,23 @@ export function RepurposeTab() {
   const [progressId, setProgressId] = useState<string | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
 
+  // Async video (reel / seedance): the mutation returns { videoPending } and the
+  // worker pushes a terminal `video_ready`/`video_error` over the SAME SSE the
+  // activity log already listens to. While the worker generates, keep the spinner
+  // up via this flag (the mutation has long since resolved, so isLoading is false).
+  const [videoGenerating, setVideoGenerating] = useState(false);
+  const videoTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Stop the SSE + clear the safety timeout in one place.
+  const closeVideoStream = useCallback(() => {
+    if (videoTimeoutRef.current) {
+      clearTimeout(videoTimeoutRef.current);
+      videoTimeoutRef.current = null;
+    }
+    eventSourceRef.current?.close();
+    eventSourceRef.current = null;
+  }, []);
+
   const startProgress = useCallback(() => {
     const id = `rep-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     setProgressId(id);
@@ -133,6 +151,44 @@ export function RepurposeTab() {
           eventSourceRef.current = null;
           return;
         }
+
+        // Terminal async-video events from the repurpose-video worker. These
+        // arrive on the SAME stream as the activity log; render the finished
+        // video (or surface the error) and stop the spinner.
+        const ready = parseVideoReadyEvent(step);
+        if (ready) {
+          // MERGE the video onto the existing result so the captions stored by
+          // onSuccess (videoPending branch) survive — replacing with {} here was
+          // the caption-loss regression. `prev ?? {}` guards the edge case where
+          // step 1 didn't run, but it now always sets `results` first.
+          setResults((prev) => ({
+            ...(prev ?? {}),
+            // Keep platformContent (captions) from the videoPending result.
+            platformContent: prev?.platformContent ?? {},
+            // The video card branches on mediaType === "video/mp4" (reel) or
+            // format ai_video/seedance_video — set both so every format renders.
+            mediaUrls: [ready.url],
+            mediaType: "video/mp4",
+            format: ready.format || prev?.format || "",
+            // Publish path attaches the VIDEO (not slide images) via carouselMediaIds.
+            carouselMediaIds: [ready.mediaId],
+          }));
+          setVideoGenerating(false);
+          toast({ title: "Video ready!", description: "Your video has been generated." });
+          closeVideoStream();
+          return;
+        }
+        if (isVideoErrorEvent(step)) {
+          setVideoGenerating(false);
+          toast({
+            title: "Video generation failed",
+            description: step.detail || "The video could not be produced. See the activity log.",
+            variant: "destructive",
+          });
+          closeVideoStream();
+          // fall through so the error step still appears in the activity log
+        }
+
         setProgressSteps((prev) => {
           // Update existing step or add new one
           const idx = prev.findIndex((s) => s.step === step.step);
@@ -154,9 +210,12 @@ export function RepurposeTab() {
     return id;
   }, []);
 
-  // Cleanup SSE on unmount
+  // Cleanup SSE + safety timeout on unmount
   useEffect(() => {
-    return () => { eventSourceRef.current?.close(); };
+    return () => {
+      if (videoTimeoutRef.current) clearTimeout(videoTimeoutRef.current);
+      eventSourceRef.current?.close();
+    };
   }, []);
 
   // Channel info (for branding + publishing)
@@ -213,6 +272,36 @@ export function RepurposeTab() {
   // URL-based repurpose
   const repurposeFromUrl = trpc.repurpose.repurposeFromUrl.useMutation({
     onSuccess: (data) => {
+      // Async video path (reel / seedance): the mutation returns immediately with
+      // `videoPending` while the worker generates. Render the captions NOW (they're
+      // already in `data.platformContent`; `data.mediaUrls` is [] so the video card
+      // stays hidden until the worker's terminal `video_ready` grafts the video on).
+      // Keep the spinner up and the SSE open; do NOT show a "repurposed!" success.
+      if ((data as { videoPending?: boolean }).videoPending) {
+        // Store the result so the per-platform caption cards render immediately —
+        // the video_ready handler later MERGES the video onto this same state,
+        // preserving these captions (regression fix).
+        setResults(data);
+        setVideoGenerating(true);
+        toast({
+          title: "Generating your video…",
+          description: "This can take a minute. It'll appear here as soon as it's ready.",
+        });
+        // Safety timeout: if no terminal event arrives, stop the spinner and the
+        // SSE rather than spinning forever.
+        if (videoTimeoutRef.current) clearTimeout(videoTimeoutRef.current);
+        videoTimeoutRef.current = setTimeout(() => {
+          videoTimeoutRef.current = null;
+          setVideoGenerating(false);
+          toast({
+            title: "Still processing",
+            description: "Your video is taking longer than expected — it'll appear in the post shortly. Check back soon.",
+          });
+          eventSourceRef.current?.close();
+          eventSourceRef.current = null;
+        }, 10 * 60 * 1000);
+        return;
+      }
       setResults(data);
       const mediaCount = data.mediaUrls.length;
       // Be honest: if captions generated but media failed, this is NOT a clean
@@ -283,7 +372,7 @@ export function RepurposeTab() {
     }
   };
 
-  const isLoading = repurpose.isPending || repurposeFromUrl.isPending;
+  const isLoading = repurpose.isPending || repurposeFromUrl.isPending || videoGenerating;
   const { addTask, removeTask } = useActiveTask();
 
   // Track repurpose as active task while generating

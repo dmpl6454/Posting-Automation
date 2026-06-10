@@ -24,11 +24,18 @@ export interface BuildCreatePostQueryArgs {
   carouselImages?: string[];
 }
 
+/** Video formats whose single rendered media id lives only in carouselMediaIds[0]. */
+const VIDEO_FORMATS = new Set(["reel", "seedance_video", "ai_video"]);
+
 /**
  * Build the query string (WITHOUT the leading "?") for the Compose deep link.
  *
  * - carousel + carouselMediaIds present → emits `&aiMediaIds=a,b,c` (ALL slides),
  *   and NO single `&aiMediaId=`.
+ * - video formats (reel / seedance_video / ai_video): the async worker returns the
+ *   stitched video's media id in `carouselMediaIds[0]` (NOT `mediaId`). Forward it
+ *   as the SINGLE `aiMediaId` (and `aiImage`=video url) so Compose attaches the
+ *   video — without this the per-platform Create Post opened with no media.
  * - otherwise → emits the single `&aiMediaId=` (and `&aiImage=` when an image URL
  *   is present), preserving the legacy static/reel behaviour.
  */
@@ -41,6 +48,13 @@ export function buildCreatePostQuery(args: BuildCreatePostQueryArgs): string {
 
   const isCarousel = format === "carousel" && Array.isArray(carouselMediaIds) && carouselMediaIds.length > 0;
 
+  // Video result: the single video media id is in carouselMediaIds[0]. Forward it
+  // as ONE aiMediaId (NOT aiMediaIds — a video is one piece of media).
+  const videoMediaId =
+    format && VIDEO_FORMATS.has(format) && Array.isArray(carouselMediaIds) && carouselMediaIds.length > 0
+      ? carouselMediaIds[0]
+      : undefined;
+
   if (isCarousel) {
     // Forward ALL slides so Compose attaches every one (carousel publish fix).
     params.push(`aiMediaIds=${encodeURIComponent(carouselMediaIds!.join(","))}`);
@@ -48,6 +62,12 @@ export function buildCreatePostQuery(args: BuildCreatePostQueryArgs): string {
       // Parallel URL list so Compose can render slide previews.
       params.push(`aiImages=${encodeURIComponent(carouselImages.join(","))}`);
     }
+  } else if (videoMediaId) {
+    if (image) {
+      params.push(`aiImage=${encodeURIComponent(image)}`);
+    }
+    // Single media id for the stitched video (worker put it in carouselMediaIds[0]).
+    params.push(`aiMediaId=${encodeURIComponent(videoMediaId)}`);
   } else {
     if (image) {
       params.push(`aiImage=${encodeURIComponent(image)}`);

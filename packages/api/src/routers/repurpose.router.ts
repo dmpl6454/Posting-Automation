@@ -3,7 +3,13 @@ import { TRPCError } from "@trpc/server";
 import { createRouter, protectedProcedure, orgProcedure } from "../trpc";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import crypto from "crypto";
-import { pushProgress, finishProgress, scopedProgressId } from "../lib/progress";
+import {
+  pushProgress,
+  finishProgress,
+  scopedProgressId,
+  repurposeVideoQueue,
+  type RepurposeVideoJobData,
+} from "@postautomation/queue";
 import { toFriendlyAIError, isMissingAIKeyError, friendlyAIMessage } from "../lib/ai-errors";
 import { requirePlan } from "../middleware/plan-limit.middleware";
 
@@ -68,6 +74,48 @@ export function capHookLine(raw: string): string {
     out = (out.slice(0, lastIdx) + out.slice(lastIdx + 2)).trim();
   }
   return out.trim();
+}
+
+/**
+ * Assemble the `RepurposeVideoJobData` payload enqueued to `repurposeVideoQueue`
+ * for an async reel / seedance video job (Phase 2b Task 3).
+ *
+ * The `progressId` is passed through RAW (the verbatim `input.progressId`, e.g.
+ * `rep-<ts>-<6char>`) — the WORKER scopes it exactly once via
+ * `scopedProgressId(userId, progressId)` so its Redis channel matches the SSE
+ * reader. Do NOT pre-scope here, or the worker would double-scope and never
+ * match. Pure + exported for unit testing.
+ */
+export function buildVideoJobData(args: {
+  format: "reel" | "seedance_video";
+  userId: string;
+  organizationId: string;
+  progressId: string;
+  theme: "dark" | "light" | "gradient";
+  reel?: {
+    slideUrls: string[];
+    voiceOver: boolean;
+    bgMusic: boolean;
+    voiceType?: string;
+    voiceScript?: string;
+  };
+  seedance?: {
+    scenes: string[];
+    title: string;
+    description: string;
+    duration: number;
+  };
+}): RepurposeVideoJobData {
+  return {
+    userId: args.userId,
+    organizationId: args.organizationId,
+    // RAW client id — worker scopes once. See doc-comment above.
+    progressId: args.progressId,
+    format: args.format,
+    theme: args.theme,
+    ...(args.reel ? { reel: args.reel } : {}),
+    ...(args.seedance ? { seedance: args.seedance } : {}),
+  };
 }
 
 export const repurposeRouter = createRouter({
@@ -162,8 +210,6 @@ export const repurposeRouter = createRouter({
         enforceNoHashtags,
         generateVideo: generateVeo3Video,
         buildVideoPrompt,
-        generateSeedanceVideo,
-        buildSeedancePrompt,
         overlayLogoOnImage,
         generateStyledCreativeImage,
         launchCreativeBrowser,
@@ -873,58 +919,57 @@ Return ONLY the JSON array, no other text.`;
           keyPoints = sentences.slice(0, 5).map((s) => s.trim().slice(0, 80));
         }
 
-        const musicMood = input.theme === "dark" ? "dramatic cinematic, deep bass, orchestral"
-          : input.theme === "gradient" ? "upbeat electronic, modern synth" : "clean corporate, optimistic";
-
-        const videoPrompt = buildSeedancePrompt({
-          title: extracted.title.slice(0, 60),
-          keyPoints,
-          visualStyle: `${input.theme} theme, professional social media video, cinematic B-roll`,
-          musicMood,
-          brandName: input.channelName || undefined,
-        });
-
-        progress("Generating AI video with Seedance 2.0 (30s-3min)");
-        console.log(`[Repurpose] Generating Seedance 2.0 video (${keyPoints.length} scenes)...`);
-
-        try {
-          const seedResult = await generateSeedanceVideo({
-            prompt: videoPrompt,
-            duration: 8,
-            aspectRatio: "9:16",
-            // Live progress so the UI never looks frozen during the long poll.
-            onProgress: ({ elapsedSeconds, status }) =>
-              progress("Generating AI video with Seedance 2.0 (30s-3min)", "running", `${elapsedSeconds}s — ${status}`),
-          });
-
-          const s3 = getS3Client();
-          const videoKey = `repurpose/seedance-${Date.now()}-${crypto.randomBytes(4).toString("hex")}.mp4`;
-          const videoBuf = Buffer.from(seedResult.videoBase64, "base64");
-          await s3.send(new PutObjectCommand({ Bucket: BUCKET, Key: videoKey, Body: videoBuf, ContentType: "video/mp4" }));
-
-          const videoUrl = getPublicUrl(videoKey);
-
-          await ctx.prisma.media.create({
-            data: {
-              organizationId,
-              uploadedById: userId,
-              fileName: `seedance-video-${Date.now()}.mp4`,
-              fileType: "video/mp4",
-              fileSize: videoBuf.length,
-              url: videoUrl,
-              duration: seedResult.durationSeconds,
+        // ── ENQUEUE the Seedance video job (Phase 2b T3) ─────────────────
+        // The long (~up to 7.5min) Seedance poll used to run synchronously here,
+        // holding the HTTP request open until the request/proxy timed out
+        // ("spinner forever"). It now runs in the WORKER (createRepurposeVideoWorker,
+        // T2): we enqueue the scene/title/description + duration and return
+        // immediately with `videoPending`. The worker builds the Seedance prompt,
+        // generates, uploads + creates the Media row, and streams `video_ready` /
+        // `video_error` over the SAME progress SSE the UI is already watching.
+        progress("Queued AI video for generation", "done", `${keyPoints.length} scenes`);
+        await repurposeVideoQueue.add(
+          `repurpose-video-${input.progressId}`,
+          buildVideoJobData({
+            format: "seedance_video",
+            userId,
+            organizationId,
+            // RAW client id — worker scopes once via scopedProgressId.
+            progressId: input.progressId ?? "",
+            theme: input.theme,
+            seedance: {
+              scenes: keyPoints,
+              title: extracted.title.slice(0, 60),
+              description: extracted.description || extracted.body.slice(0, 300),
+              // Parity with the previous synchronous call (duration: 8).
+              duration: 8,
             },
-          });
+          }),
+          { attempts: 1 },
+        );
+        console.log(`[Repurpose] Seedance video job enqueued (${keyPoints.length} scenes), progressId=${input.progressId}`);
 
-          mediaUrls = [videoUrl];
-          mediaType = "video/mp4";
-          progress("Generating AI video with Seedance 2.0 (30s-3min)", "done", `${(videoBuf.length / 1024 / 1024).toFixed(1)}MB uploaded`);
-          console.log(`[Repurpose] Seedance video uploaded: ${videoUrl} (${(videoBuf.length / 1024 / 1024).toFixed(1)}MB)`);
-        } catch (e) {
-          progress("Generating AI video with Seedance 2.0 (30s-3min)", "error", friendlyAIMessage(e));
-          console.error(`[Repurpose] Seedance generation failed:`, (e as Error).message);
-          // No fallback — Seedance failure is final for this format
-        }
+        return {
+          extracted: {
+            title: extracted.title,
+            description: extracted.description,
+            siteName: extracted.siteName,
+            type: extracted.type,
+            images: extracted.images,
+            url: extracted.url,
+          },
+          platformContent,
+          mediaUrls: [] as string[],
+          mediaMap: perPlatformMedia,
+          carouselMediaIds: [] as string[],
+          mediaType: "video/mp4",
+          format: input.format,
+          mediaFailed: false,
+          // The worker delivers the video via the progress SSE; the UI waits on
+          // `video_ready` keyed by this RAW progressId. T4 reads `videoPending`.
+          videoPending: true,
+          progressId: input.progressId,
+        };
 
       } else if (input.format === "carousel" || input.format === "reel") {
         // Generate carousel slide content via AI
@@ -1088,105 +1133,69 @@ Return ONLY the JSON array, no other text.`;
         }
 
         if (input.format === "reel") {
-          // Stitch slides into video with optional voice-over + background music
-          progress("Stitching reel video from slides");
-          try {
-            // Generate voice-over if requested
-            let voiceOverBase64: string | undefined;
-            if (input.voiceOver) {
-              try {
-                const totalSlidesDuration = slideImages.length * 3;
-                const script = generateVoiceOverScript(extracted.title, extracted.body, totalSlidesDuration);
-                console.log(`[Repurpose] Generating voice-over (${script.split(/\s+/).length} words, voice: ${input.voiceType})`);
-                const ttsResult = await generateSpeech({
-                  text: script,
-                  voice: input.voiceType as any,
-                  speed: 1.0,
-                  model: "tts-1-hd",
-                });
-                voiceOverBase64 = ttsResult.audioBase64;
-                console.log(`[Repurpose] Voice-over generated (~${Math.round(ttsResult.durationEstimate)}s)`);
-              } catch (ttsErr) {
-                console.warn(`[Repurpose] Voice-over generation failed:`, (ttsErr as Error).message);
-              }
-            }
+          // ── ENQUEUE the reel stitch job (Phase 2b T3) ───────────────────
+          // The ffmpeg slide-stitch + TTS + bg-music synthesis used to run
+          // synchronously here, holding the HTTP request open (and a raw
+          // shell-injection `execSync` for the bg-music tone). It now runs in the
+          // WORKER (createRepurposeVideoWorker, T2): we ship the uploaded slide
+          // URLs + the voice/music flags and return immediately with
+          // `videoPending`. The worker downloads the slides, generates TTS from
+          // `voiceScript`, synthesizes the music bed (execFileSync, no shell),
+          // stitches, uploads + creates the video Media row, and streams
+          // `video_ready` / `video_error` over the SAME progress SSE.
+          //
+          // Compute the voice-over SCRIPT here (cheap, deterministic) so the
+          // worker can synthesize the audio — matches the script the old sync
+          // path fed to generateSpeech.
+          const voiceScript = input.voiceOver
+            ? generateVoiceOverScript(extracted.title, extracted.body, slideImages.length * 3)
+            : undefined;
 
-            // Fetch background music if requested
-            let bgMusicBase64: string | undefined;
-            if (input.bgMusic) {
-              try {
-                // Use a bundled news-style background music (royalty-free)
-                // Generate a subtle ambient tone using FFmpeg if no music file available
-                const { execSync } = await import("node:child_process");
-                const { readFileSync, mkdirSync } = await import("node:fs");
-                const { join } = await import("node:path");
-                const { tmpdir } = await import("node:os");
-                const musicDir = join(tmpdir(), `bgmusic-${Date.now()}`);
-                mkdirSync(musicDir, { recursive: true });
-                const musicPath = join(musicDir, "bg.mp3");
-                // Generate a subtle ambient news-style tone (low drone + soft pad)
-                const duration = slideImages.length * 3 + 2;
-                execSync(
-                  `ffmpeg -y -f lavfi -i "sine=frequency=110:duration=${duration}" -f lavfi -i "sine=frequency=165:duration=${duration}" -filter_complex "[0:a][1:a]amix=inputs=2,volume=0.3,afade=t=in:d=1,afade=t=out:st=${duration - 1}:d=1[out]" -map "[out]" -c:a libmp3lame -b:a 128k "${musicPath}"`,
-                  { timeout: 30_000, stdio: "pipe" }
-                );
-                bgMusicBase64 = readFileSync(musicPath).toString("base64");
-                const { rmSync } = await import("node:fs");
-                rmSync(musicDir, { recursive: true, force: true });
-                console.log(`[Repurpose] Background music generated (${duration}s)`);
-              } catch (musicErr) {
-                console.warn(`[Repurpose] Background music generation failed:`, (musicErr as Error).message);
-              }
-            }
-
-            const reelResult = await generateReelVideo({
-              slideImages: compactSlides(slideImages).map((s) => ({
-                imageBase64: s.imageBase64,
-                mimeType: s.mimeType,
-              })),
-              slideDuration: 3,
-              width: 1080,
-              height: 1350,
-              voiceOverBase64,
-              bgMusicBase64,
-              bgMusicVolume: 0.15,
-              voiceVolume: 0.9,
-            });
-
-            const videoKey = `repurpose/reel-${Date.now()}-${crypto.randomBytes(4).toString("hex")}.mp4`;
-            const videoBuf = Buffer.from(reelResult.videoBase64, "base64");
-            await s3.send(new PutObjectCommand({ Bucket: BUCKET, Key: videoKey, Body: videoBuf, ContentType: "video/mp4" }));
-            const videoUrl = getPublicUrl(videoKey);
-            mediaUrls = [videoUrl];
-            mediaType = "video/mp4";
-            // The publishable asset is the VIDEO, not the slide images. Create a
-            // Media row for it and make it the sole attachable media so the UI
-            // (which prefers carouselMediaIds) attaches the reel video — NOT the
-            // N intermediate slide images. On reel failure we fall through to the
-            // catch and keep the slide carouselMediaIds (degrades to a carousel).
-            const videoMedia = await ctx.prisma.media.create({
-              data: {
-                organizationId,
-                uploadedById: userId,
-                fileName: `reel-${Date.now()}.mp4`,
-                fileType: "video/mp4",
-                fileSize: videoBuf.length,
-                url: videoUrl,
-                duration: slideImages.length * 3,
+          progress("Queued reel video for stitching", "done", `${uploadedUrls.length} slides`);
+          await repurposeVideoQueue.add(
+            `repurpose-video-${input.progressId}`,
+            buildVideoJobData({
+              format: "reel",
+              userId,
+              organizationId,
+              // RAW client id — worker scopes once via scopedProgressId.
+              progressId: input.progressId ?? "",
+              theme: input.theme,
+              reel: {
+                slideUrls: uploadedUrls,
+                voiceOver: input.voiceOver,
+                bgMusic: input.bgMusic,
+                voiceType: input.voiceType,
+                ...(voiceScript ? { voiceScript } : {}),
               },
-            });
-            carouselMediaIds.length = 0;
-            carouselMediaIds.push(videoMedia.id);
-            for (const platform of input.targetPlatforms) {
-              perPlatformMedia[platform] = { url: videoUrl, mediaId: videoMedia.id };
-            }
-            progress("Stitching reel video from slides", "done", "Video uploaded");
-            console.log(`[Repurpose] Reel video uploaded: ${mediaUrls[0]}`);
-          } catch (e) {
-            progress("Stitching reel video from slides", "error", friendlyAIMessage(e));
-            console.warn(`[Repurpose] Reel generation failed, falling back to carousel:`, (e as Error).message);
-            mediaUrls = uploadedUrls;
-          }
+            }),
+            { attempts: 1 },
+          );
+          console.log(`[Repurpose] Reel video job enqueued (${uploadedUrls.length} slides), progressId=${input.progressId}`);
+
+          return {
+            extracted: {
+              title: extracted.title,
+              description: extracted.description,
+              siteName: extracted.siteName,
+              type: extracted.type,
+              images: extracted.images,
+              url: extracted.url,
+            },
+            platformContent,
+            mediaUrls: [] as string[],
+            mediaMap: perPlatformMedia,
+            // The publishable asset is the reel VIDEO (created by the worker),
+            // not the intermediate slides — so do NOT return the slide ids here.
+            carouselMediaIds: [] as string[],
+            mediaType: "video/mp4",
+            format: input.format,
+            mediaFailed: false,
+            // The worker delivers the video via the progress SSE; the UI waits on
+            // `video_ready` keyed by this RAW progressId. T4 reads `videoPending`.
+            videoPending: true,
+            progressId: input.progressId,
+          };
         } else {
           mediaUrls = uploadedUrls;
         }
