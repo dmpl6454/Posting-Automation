@@ -19,6 +19,7 @@ import { createCampaignAnalyticsSyncWorker } from "./workers/campaign-analytics-
 import { createBrandContentSyncWorker } from "./workers/brand-content-sync.worker";
 import { createOutreachSendWorker } from "./workers/outreach-send.worker";
 import { createOutreachPollWorker } from "./workers/outreach-poll.worker";
+import { createRepurposeVideoWorker } from "./workers/repurpose-video.worker";
 import { startCronJobs } from "./scheduler/cron-jobs";
 import { registerWorker, markWorkerStopped, startHealthServer } from "./lib/health";
 
@@ -42,6 +43,7 @@ registerWorker("campaign-analytics-sync");
 registerWorker("brand-content-sync");
 registerWorker("outreach-send");
 registerWorker("outreach-poll");
+registerWorker("repurpose-video");
 
 // Start workers
 const postPublishWorker = createPostPublishWorker();
@@ -61,6 +63,7 @@ const campaignAnalyticsSyncWorker = createCampaignAnalyticsSyncWorker();
 const brandContentSyncWorker = createBrandContentSyncWorker();
 const outreachSendWorker = createOutreachSendWorker();
 const outreachPollWorker = createOutreachPollWorker();
+const repurposeVideoWorker = createRepurposeVideoWorker();
 
 // Start cron jobs
 startCronJobs();
@@ -86,6 +89,7 @@ console.log("  - Campaign Analytics Sync Worker");
 console.log("  - Brand Content Sync Worker");
 console.log("  - Outreach Send Worker");
 console.log("  - Outreach Poll Worker");
+console.log("  - Repurpose Video Worker");
 console.log("  - Cron Jobs (token refresh: 30min, analytics: 6hr, agent runs: 1min, cleanup: 1hr, pipeline: 15min)");
 
 // Graceful shutdown
@@ -110,6 +114,7 @@ async function shutdown() {
   markWorkerStopped("brand-content-sync");
   markWorkerStopped("outreach-send");
   markWorkerStopped("outreach-poll");
+  markWorkerStopped("repurpose-video");
 
   await Promise.all([
     postPublishWorker.close(),
@@ -129,6 +134,7 @@ async function shutdown() {
     brandContentSyncWorker.close(),
     outreachSendWorker.close(),
     outreachPollWorker.close(),
+    repurposeVideoWorker.close(),
   ]);
 
   healthServer.close();

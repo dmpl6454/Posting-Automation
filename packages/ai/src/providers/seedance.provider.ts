@@ -274,7 +274,7 @@ Final scene: Call-to-action "${opts.brandName || "Follow for More"}" with dynami
 
 Camera: Smooth dolly movements, subtle parallax, cinematic rack focus transitions between scenes.
 Text: SUPER BOLD, extra large, white, thick font weight, centered, high contrast against dark backgrounds.
-Do NOT show real people's faces. Use abstract visuals, motion graphics, silhouettes.`;
+You may show generic, anonymous people, crowds, and silhouettes. Do NOT depict any specific, real, named public figure or attempt to recreate a real person's likeness.`;
 }
 
 export const SEEDANCE_ASPECT_RATIOS = ["16:9", "9:16", "4:3", "3:4", "1:1", "auto"] as const;
