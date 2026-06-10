@@ -157,16 +157,22 @@ export function RepurposeTab() {
         // video (or surface the error) and stop the spinner.
         const ready = parseVideoReadyEvent(step);
         if (ready) {
-          setResults({
-            platformContent: {},
+          // MERGE the video onto the existing result so the captions stored by
+          // onSuccess (videoPending branch) survive — replacing with {} here was
+          // the caption-loss regression. `prev ?? {}` guards the edge case where
+          // step 1 didn't run, but it now always sets `results` first.
+          setResults((prev) => ({
+            ...(prev ?? {}),
+            // Keep platformContent (captions) from the videoPending result.
+            platformContent: prev?.platformContent ?? {},
             // The video card branches on mediaType === "video/mp4" (reel) or
             // format ai_video/seedance_video — set both so every format renders.
             mediaUrls: [ready.url],
             mediaType: "video/mp4",
-            format: ready.format,
+            format: ready.format || prev?.format || "",
             // Publish path attaches the VIDEO (not slide images) via carouselMediaIds.
             carouselMediaIds: [ready.mediaId],
-          });
+          }));
           setVideoGenerating(false);
           toast({ title: "Video ready!", description: "Your video has been generated." });
           closeVideoStream();
@@ -267,10 +273,15 @@ export function RepurposeTab() {
   const repurposeFromUrl = trpc.repurpose.repurposeFromUrl.useMutation({
     onSuccess: (data) => {
       // Async video path (reel / seedance): the mutation returns immediately with
-      // `videoPending` while the worker generates. DO NOT render a finished result
-      // or show a "repurposed!" success — keep the spinner up and the SSE open and
-      // wait for the worker's terminal `video_ready` / `video_error` step.
+      // `videoPending` while the worker generates. Render the captions NOW (they're
+      // already in `data.platformContent`; `data.mediaUrls` is [] so the video card
+      // stays hidden until the worker's terminal `video_ready` grafts the video on).
+      // Keep the spinner up and the SSE open; do NOT show a "repurposed!" success.
       if ((data as { videoPending?: boolean }).videoPending) {
+        // Store the result so the per-platform caption cards render immediately —
+        // the video_ready handler later MERGES the video onto this same state,
+        // preserving these captions (regression fix).
+        setResults(data);
         setVideoGenerating(true);
         toast({
           title: "Generating your video…",

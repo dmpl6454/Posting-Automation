@@ -48,15 +48,41 @@ describe("buildCreatePostQuery", () => {
     expect(q).not.toContain("aiMediaIds=");
   });
 
-  it("reel forwards a single aiMediaId (not aiMediaIds) even if carouselMediaIds exist", () => {
+  it("reel forwards the worker video id from carouselMediaIds[0] as a single aiMediaId (not aiMediaIds)", () => {
+    // The async video worker returns the stitched video's media id in
+    // carouselMediaIds[0] (NOT mediaId). It must be forwarded as ONE aiMediaId.
+    const q = buildCreatePostQuery({
+      format: "reel",
+      content: "reel caption",
+      carouselMediaIds: ["vid1"],
+    });
+    const params = new URLSearchParams(q);
+    expect(params.get("aiMediaId")).toBe("vid1");
+    expect(params.has("aiMediaIds")).toBe(false);
+  });
+
+  it("seedance_video forwards carouselMediaIds[0] as a single aiMediaId (+ aiImage video url)", () => {
+    const q = buildCreatePostQuery({
+      format: "seedance_video",
+      content: "ai video caption",
+      image: "https://s3.example.com/clip.mp4",
+      carouselMediaIds: ["vid9"],
+    });
+    const params = new URLSearchParams(q);
+    expect(params.get("aiMediaId")).toBe("vid9");
+    expect(params.get("aiImage")).toBe("https://s3.example.com/clip.mp4");
+    expect(params.has("aiMediaIds")).toBe(false);
+  });
+
+  it("video format with no carouselMediaIds falls back to single mediaId", () => {
     const q = buildCreatePostQuery({
       format: "reel",
       content: "reel caption",
       mediaId: "video1",
-      carouselMediaIds: ["a", "b"],
     });
-    expect(q).toContain("aiMediaId=video1");
-    expect(q).not.toContain("aiMediaIds=");
+    const params = new URLSearchParams(q);
+    expect(params.get("aiMediaId")).toBe("video1");
+    expect(params.has("aiMediaIds")).toBe(false);
   });
 
   it("carousel without carouselMediaIds falls back to single aiMediaId", () => {
