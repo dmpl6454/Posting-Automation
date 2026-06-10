@@ -166,6 +166,7 @@ export const repurposeRouter = createRouter({
         buildSeedancePrompt,
         overlayLogoOnImage,
         generateStyledCreativeImage,
+        launchCreativeBrowser,
         extractDominantColor,
         isPublicImageUrl,
       } = await import("@postautomation/ai");
@@ -325,6 +326,17 @@ export const repurposeRouter = createRouter({
         headline: string,
         category: string,
         hookLine?: string,
+        // Carousel extras (C4): all slides render through this branded template so
+        // the whole set is one consistent visual. `slideRole`/`body` select the
+        // layout; `browser` lets the carousel reuse ONE Puppeteer instance across
+        // every slide instead of cold-booting Chrome per slide.
+        extra?: {
+          slideRole?: "cover" | "body" | "cta";
+          body?: string;
+          // Pass-through shared browser. Typed off launchCreativeBrowser's return
+          // so the api package never names "puppeteer" directly (it isn't a dep).
+          browser?: Awaited<ReturnType<typeof launchCreativeBrowser>>;
+        },
       ): Promise<{ imageBase64: string; mimeType: string; bgSource: "ai" | "stock" }> {
         // Try to generate a relevant AI background (no text — the template
         // bakes the headline). generateImageSafe now has a working OpenAI
@@ -340,8 +352,9 @@ export const repurposeRouter = createRouter({
         // Text-first styles (hook_bars / bold_typographic) render entirely from
         // theme + brand color + typography — skip the slow AI background entirely
         // (a big latency win) and pass NO bgImageUrl. premium_editorial and
-        // tweet_card keep the AI photo background.
-        if (styleNeedsAiBackground(input.creativeStyle)) {
+        // tweet_card keep the AI photo background. CTA slides are a centered
+        // call-to-action on the brand background — never an AI photo.
+        if (extra?.slideRole !== "cta" && styleNeedsAiBackground(input.creativeStyle)) {
           // Theme-aware lighting descriptor for the background photo. The old
           // unconditional "Dark/moody … white text stays readable" suffix is now
           // conditioned on the theme so a light/gradient creative gets a matching
@@ -374,6 +387,9 @@ export const repurposeRouter = createRouter({
           logoUrl: resolvedLogoUrl || null,
           logoPosition: input.logoPosition,
           theme: input.theme,
+          ...(extra?.slideRole ? { slideRole: extra.slideRole } : {}),
+          ...(extra?.body !== undefined ? { body: extra.body } : {}),
+          ...(extra?.browser ? { browser: extra.browser } : {}),
           ...(hookLine ? { hookLine } : {}),
           ...(backgroundImageUrl ? { bgImageUrl: backgroundImageUrl } : {}),
           ...(resolvedBrandColor ? { brandColor: resolvedBrandColor } : {}),
@@ -969,128 +985,71 @@ Return ONLY the JSON array, no other text.`;
         progress(`Generating ${allSlides.length} carousel slides`);
         console.log(`[Repurpose] Generating ${allSlides.length} AI carousel slides...`);
 
-        // Build prompts for all slides
-        const slidePrompts: string[] = allSlides.map((slide, i) => {
-          if (slide.type === "cover") {
-            return `Design a bold, eye-catching social media carousel COVER slide (slide 1 of ${allSlides.length}).
-
-${contentBrief}
-
-Topic: "${slide.title}"
-${slide.body ? `Subtitle: "${slide.body}"` : ""}
-
-Requirements:
-- Include the title text "${slide.title.slice(0, 60)}" prominently in the design
-- Bold, modern typography with large readable text
-- Dramatic visual background related to the topic
-- Professional social media design with gradients and visual hierarchy
-- 4:5 portrait aspect ratio
-- Make it look like a premium Instagram carousel cover
-- Use vibrant, attention-grabbing colors
-- Do NOT include any hashtag text (no #word) in the image — hashtags go in the caption only`;
-          } else if (slide.type === "cta") {
-            return `Design a social media carousel CTA (call-to-action) slide (last slide of ${allSlides.length}).
-
-Text: "Follow for More"
-
-Requirements:
-- Large "Follow for More" text in the center
-- Clean, minimal design with bold typography
-- Matching color scheme for social media
-- 4:5 portrait aspect ratio
-- Professional, engaging call-to-action design
-- Do NOT include any hashtag text (no #word) in the image`;
-          } else {
-            return `Design a social media carousel content slide (slide ${i + 1} of ${allSlides.length}).
-
-Heading: "${slide.title}"
-Content: "${slide.body}"
-
-Requirements:
-- Include the heading "${slide.title}" and content text in the design
-- Do NOT include any hashtag text (no #word) in the image — hashtags belong in the caption only
-- Clean, readable typography with visual hierarchy
-- Subtle visual elements or icons related to the topic
-- Consistent social media carousel design style
-- 4:5 portrait aspect ratio
-- Professional layout with good spacing
-- Use complementary colors`;
-          }
-        });
-
-        // Generate slides in batches of 3 with retry + delay to avoid Gemini rate limits
+        // ── ALL slides through ONE branded template + ONE browser (C4/N13) ──
+        // Every slide — cover, content (body), cta — now renders through
+        // buildHeadlineCreative → the branded Puppeteer template. Previously the
+        // cover used the template while body/cta slides used a raw AI image +
+        // logo watermark, so slide 1 looked branded and slides 2+ looked like a
+        // different design entirely. Routing all slides through the same template
+        // (with slideRole selecting the layout) makes the carousel one set.
+        //
+        // We also launch ONE browser for the whole carousel and pass it to every
+        // generateStyledCreativeImage call — instead of cold-booting Chrome per
+        // slide (7+ launches per carousel → 1).
         const slideImages: Array<{ imageBase64: string; mimeType: string }> = [];
         const BATCH_SIZE = 3;
         const DELAY_BETWEEN_BATCHES = 3000; // 3s between batches
+        const category = /CATEGORY:\s*([^\n]+)/i.exec(contentBrief)?.[1]?.trim() || extracted.type || "news";
 
-        for (let batchStart = 0; batchStart < slidePrompts.length; batchStart += BATCH_SIZE) {
-          if (batchStart > 0) {
-            await new Promise((r) => setTimeout(r, DELAY_BETWEEN_BATCHES));
-          }
+        const carouselBrowser = await launchCreativeBrowser();
+        try {
+          for (let batchStart = 0; batchStart < allSlides.length; batchStart += BATCH_SIZE) {
+            if (batchStart > 0) {
+              await new Promise((r) => setTimeout(r, DELAY_BETWEEN_BATCHES));
+            }
 
-          const batchEnd = Math.min(batchStart + BATCH_SIZE, slidePrompts.length);
-          const batchPromises = slidePrompts.slice(batchStart, batchEnd).map(async (prompt, batchIdx) => {
-            const slideIdx = batchStart + batchIdx;
-            const slideMeta = allSlides[slideIdx];
-            // COVER slide gets the deterministic headline creative (baked
-            // headline + logo/handle via the news-card template) so the
-            // carousel cover matches the company's static-post format and is
-            // resilient to the AI image being unavailable. Content/CTA slides
-            // keep the AI-image + logo-watermark path.
-            if (slideMeta?.type === "cover") {
+            const batchEnd = Math.min(batchStart + BATCH_SIZE, allSlides.length);
+            const batchPromises = allSlides.slice(batchStart, batchEnd).map(async (slideMeta, batchIdx) => {
+              const slideIdx = batchStart + batchIdx;
+              const slideRole: "cover" | "body" | "cta" =
+                slideMeta.type === "cover" ? "cover" : slideMeta.type === "cta" ? "cta" : "body";
+              // Per-slide error isolation: one bad slide must NOT abort the
+              // carousel or kill the shared browser — skip it (null) and keep
+              // going, exactly like the previous resilience.
               try {
-                const category = /CATEGORY:\s*([^\n]+)/i.exec(contentBrief)?.[1]?.trim() || extracted.type || "news";
-                const cover = await buildHeadlineCreative(
-                  `Cinematic background photo for: "${slideMeta.title}". ${contentBrief}`,
-                  slideMeta.title,
+                const headline = slideMeta.title;
+                const bgPrompt = `Cinematic background photo for: "${slideMeta.title}". ${contentBrief}`;
+                const creative = await buildHeadlineCreative(
+                  bgPrompt,
+                  headline,
                   category,
+                  undefined,
+                  {
+                    slideRole,
+                    ...(slideRole === "body" ? { body: slideMeta.body } : {}),
+                    browser: carouselBrowser,
+                  },
                 );
-                return { slideIdx, imageBase64: cover.imageBase64, mimeType: cover.mimeType };
+                return { slideIdx, imageBase64: creative.imageBase64, mimeType: creative.mimeType };
               } catch (e) {
-                console.warn(`[Repurpose] Cover slide failed:`, (e as Error).message);
+                console.warn(`[Repurpose] Slide ${slideIdx + 1} (${slideRole}) failed:`, (e as Error).message);
                 return null;
               }
-            }
-            // Retry up to 2 times per slide
-            for (let attempt = 0; attempt < 3; attempt++) {
-              try {
-                if (attempt > 0) {
-                  await new Promise((r) => setTimeout(r, 2000 * attempt)); // backoff
-                  console.log(`[Repurpose] Retrying slide ${slideIdx + 1} (attempt ${attempt + 1})`);
-                }
-                // Use generateImageSafe so a Gemini safety-block on the
-                // first try auto-falls back through sanitized prompt →
-                // generic prompt → DALL-E. Carousels generating news
-                // content used to drop ~25% of slides to IMAGE_OTHER.
-                const slideResult = await generateImageSafe({
-                  prompt,
-                  aspectRatio: "3:4",
-                  title: extracted.title,
-                  topic: extracted.siteName || extracted.type || "news",
-                });
-                // Apply logo overlay to each carousel slide
-                const branded = await applyLogoOverlay(slideResult.imageBase64, slideResult.mimeType, 1080, 1350);
-                return { slideIdx, imageBase64: branded.imageBase64, mimeType: branded.mimeType };
-              } catch (e) {
-                if (attempt === 2) {
-                  console.warn(`[Repurpose] Slide ${slideIdx + 1} failed after 3 attempts:`, (e as Error).message);
-                  return null;
-                }
+            });
+
+            const batchResults = await Promise.all(batchPromises);
+            for (const result of batchResults) {
+              if (result) {
+                slideImages[result.slideIdx] = { imageBase64: result.imageBase64, mimeType: result.mimeType };
               }
             }
-            return null;
-          });
-
-          const batchResults = await Promise.all(batchPromises);
-          for (const result of batchResults) {
-            if (result) {
-              slideImages[result.slideIdx] = { imageBase64: result.imageBase64, mimeType: result.mimeType };
-            }
+            const batchNum = Math.floor(batchStart / BATCH_SIZE) + 1;
+            const batchOk = batchResults.filter(Boolean).length;
+            progress(`Generating ${allSlides.length} carousel slides`, "running", `Batch ${batchNum} done — ${batchOk}/${batchEnd - batchStart} slides`);
+            console.log(`[Repurpose] Batch ${batchNum} done (${batchOk}/${batchEnd - batchStart} slides)`);
           }
-          const batchNum = Math.floor(batchStart / BATCH_SIZE) + 1;
-          const batchOk = batchResults.filter(Boolean).length;
-          progress(`Generating ${allSlides.length} carousel slides`, "running", `Batch ${batchNum} done — ${batchOk}/${batchEnd - batchStart} slides`);
-          console.log(`[Repurpose] Batch ${batchNum} done (${batchOk}/${batchEnd - batchStart} slides)`);
+        } finally {
+          await carouselBrowser.close().catch(() => {});
         }
 
         // Upload all successfully generated slides to S3 AND create a Media row

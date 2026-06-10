@@ -19,6 +19,7 @@ vi.mock("puppeteer", () => ({
         setContent: setContentMock,
         screenshot: vi.fn(async () => Buffer.from("dummy").toString("base64")),
         evaluate: vi.fn(async () => null),
+        close: vi.fn(async () => {}),
       })),
       close: vi.fn(async () => {}),
     })),

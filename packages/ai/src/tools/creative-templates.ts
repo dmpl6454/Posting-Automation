@@ -17,6 +17,16 @@ export interface StaticCreativeOptions {
   style: CreativeStyle;
   /** Visual theme. Defaults to "light" where read. */
   theme?: CreativeTheme;
+  /**
+   * Carousel slide role. Undefined → cover behavior (the static single-image
+   * path + carousel cover). "body" → the same brand chrome with a large
+   * multi-line body paragraph as the focus. "cta" → the same chrome with a
+   * "Follow for more" call-to-action as the focus. This keeps every slide in a
+   * carousel visually consistent (one template, one grammar).
+   */
+  slideRole?: "cover" | "body" | "cta";
+  /** Body paragraph text for a "body" slide (escaped). Falls back to headline. */
+  body?: string;
   headline: string;
   /** Optional punchy hook line (hook_bars). Supports **word** highlight markup. */
   hookLine?: string;
@@ -277,7 +287,75 @@ body{width:${CANVAS.width}px;height:${CANVAS.height}px;overflow:hidden;position:
 </body></html>`;
 }
 
+/**
+ * Shared "body / cta" slide chrome for carousels. Wears the SAME brand grammar
+ * as the premium cover (logo corner, italic brand label, accent rule, theme
+ * tokens, handle) so every slide in a carousel looks like one set, regardless
+ * of the chosen `style`. The focus is the body paragraph (body slides) or the
+ * "Follow for more" call-to-action (cta slides). All text is escaped; all
+ * color/image-URL interpolations go through the same sanitizers as the cover.
+ */
+function buildBodyChrome(opts: StaticCreativeOptions, role: "body" | "cta"): string {
+  const accent = safeColor(opts.brandColor);
+  const tokens = themeTokens(opts.theme ?? "light", opts.brandColor ?? DEFAULT_ACCENT);
+  const safeBg = safeImageUrl(opts.bgImageUrl);
+  const bg = safeBg
+    ? `background-image:url("${safeBg}");background-size:cover;background-position:center;`
+    : `background:${tokens.bgFallback};`;
+  const corner = opts.logoPosition === "top-left" ? "left:48px;" : "right:48px;";
+
+  // Body slides: a smaller secondary headline + a large multi-line body block.
+  // CTA slides: a centered "Follow for more" affordance.
+  const bodyText = escapeHtml(opts.body ?? opts.headline);
+  const isCta = role === "cta";
+  const ctaLabel = escapeHtml(opts.headline?.trim() ? opts.headline : "Follow for more");
+
+  const focus = isCta
+    ? `<div class="cta">
+    <div class="cta-rule"></div>
+    <div class="cta-text">${ctaLabel}</div>
+    <div class="cta-sub">Follow ${opts.handle ? escapeHtml(opts.handle) : escapeHtml(opts.channelName)} for more</div>
+  </div>`
+    : `<div class="block">
+    <div class="label">${escapeHtml(opts.channelName)}</div>
+    <div class="rule"></div>
+    ${opts.headline ? `<div class="subhead">${escapeHtml(opts.headline)}</div>` : ""}
+    <div class="body">${bodyText}</div>
+  </div>`;
+
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+${FONT_IMPORT}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{width:${CANVAS.width}px;height:${CANVAS.height}px;overflow:hidden;position:relative;font-family:'Inter',system-ui,sans-serif;background:${tokens.bgFallback};-webkit-font-smoothing:antialiased;}
+.bg{position:absolute;inset:0;${bg}}
+.scrim{position:absolute;inset:0;background:${tokens.scrim};}
+.accent-band{position:absolute;top:0;left:0;width:14px;height:100%;background:${accent};}
+.logo{position:absolute;top:44px;${corner}}
+.block{position:absolute;left:56px;right:56px;bottom:96px;}
+.label{font-style:italic;font-size:26px;font-weight:600;color:${tokens.subTextColor};letter-spacing:0.01em;}
+.rule{width:64px;height:4px;background:${accent};border-radius:2px;margin:14px 0 22px;}
+.subhead{color:${tokens.textColor};font-size:40px;font-weight:800;line-height:1.1;letter-spacing:-0.02em;margin-bottom:22px;word-break:break-word;}
+.body{color:${tokens.textColor};font-size:46px;font-weight:600;line-height:1.28;letter-spacing:-0.01em;word-break:break-word;}
+.cta{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0 72px;text-align:center;}
+.cta-rule{width:80px;height:5px;background:${accent};border-radius:3px;margin-bottom:32px;}
+.cta-text{color:${tokens.textColor};font-size:88px;font-weight:900;line-height:1.04;letter-spacing:-0.03em;word-break:break-word;}
+.cta-sub{margin-top:24px;color:${tokens.subTextColor};font-size:30px;font-weight:600;}
+.handle{position:absolute;bottom:44px;left:56px;color:${tokens.subTextColor};font-size:20px;font-weight:500;}
+</style></head><body>
+<div class="bg"></div><div class="scrim"></div>
+<div class="accent-band"></div>
+<div class="logo">${logoHtml(opts, 64)}</div>
+${focus}
+${opts.handle ? `<div class="handle">${escapeHtml(opts.handle)}</div>` : ""}
+</body></html>`;
+}
+
 export function buildStaticCreative(opts: StaticCreativeOptions): string {
+  // Carousel body/cta slides use a shared brand chrome (consistent across all
+  // styles) so the whole set looks like one template. Cover (or undefined) keeps
+  // the per-style cover layout — back-compat for the static single-image path.
+  if (opts.slideRole === "body") return buildBodyChrome(opts, "body");
+  if (opts.slideRole === "cta") return buildBodyChrome(opts, "cta");
   switch (opts.style) {
     case "premium_editorial":
       return buildPremiumEditorial(opts);
