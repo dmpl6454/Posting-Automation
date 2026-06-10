@@ -128,7 +128,7 @@ export const repurposeRouter = createRouter({
           .default("premium_editorial"),
         logoPosition: z.enum(["top-left", "top-right"]).default("top-right"),
         accentColor: z.string().nullish(),
-        theme: z.enum(["dark", "light", "gradient"]).default("dark"),
+        theme: z.enum(["dark", "light", "gradient"]).default("light"),
         voiceOver: z.boolean().default(false),
         voiceType: z.enum(["nova", "shimmer", "alloy", "echo", "fable", "onyx"]).default("nova"),
         bgMusic: z.boolean().default(false),
