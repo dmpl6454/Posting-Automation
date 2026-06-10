@@ -97,6 +97,9 @@ export function RepurposeTab() {
   // E2: number of CONTENT slides in a carousel (cover + cta added around these).
   // Default 5 preserves prior behaviour. Only shown when format === "carousel".
   const [slideCount, setSlideCount] = useState<number>(5);
+  // D7a: Seedance AI-video clip length (seconds, provider range 2–12). Default
+  // 8 preserves prior behaviour. Only shown/sent when format === "seedance_video".
+  const [videoDuration, setVideoDuration] = useState<number>(8);
   const [logoUrl, setLogoUrl] = useState<string>("");
   const [logoMediaId, setLogoMediaId] = useState<string>("");
   // E1: aesthetic/style reference image the AI mimics (Gemini-only on backend).
@@ -368,9 +371,12 @@ export function RepurposeTab() {
         aestheticRefUrl: aestheticRefUrl || undefined,
         imageContext: imageContext || undefined,
         slideCount,
-        voiceOver: (format === "reel" || format === "ai_video" || format === "seedance_video") ? voiceOver : false,
+        videoDuration,
+        // Seedance generates its own native audio, so the voiceOver/bgMusic
+        // toggles are hidden for seedance_video — only reel & ai_video use them.
+        voiceOver: (format === "reel" || format === "ai_video") ? voiceOver : false,
         voiceType: voiceType as any,
-        bgMusic: (format === "reel" || format === "ai_video" || format === "seedance_video") ? bgMusic : false,
+        bgMusic: (format === "reel" || format === "ai_video") ? bgMusic : false,
       });
     } else {
       if (!originalContent || selectedPlatforms.length === 0) return;
@@ -751,8 +757,36 @@ export function RepurposeTab() {
                 </div>
               )}
 
-              {/* Voice-over & Music (Reel & AI Video) */}
-              {(format === "reel" || format === "ai_video" || format === "seedance_video") && (
+              {/* D7a: Seedance AI-video duration selector (seconds, 2–12) */}
+              {format === "seedance_video" && (
+                <div className="space-y-2">
+                  <Label>Video length</Label>
+                  <div className="flex gap-2">
+                    {[4, 6, 8, 10, 12].map((n) => (
+                      <button
+                        key={n}
+                        type="button"
+                        onClick={() => setVideoDuration(n)}
+                        className={`flex-1 rounded-lg border px-3 py-2 text-xs font-medium transition-all ${
+                          videoDuration === n ? "border-primary ring-1 ring-primary" : "border-border hover:border-primary/50"
+                        }`}
+                      >
+                        {n}s
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-muted-foreground">Longer videos take longer and cost more.</p>
+                </div>
+              )}
+
+              {/* D-ADD4: Seedance generates its own native audio — the voiceOver/
+                  bgMusic toggles are hidden for it; show a one-line note instead. */}
+              {format === "seedance_video" && (
+                <p className="text-[11px] text-muted-foreground">Seedance generates its own audio.</p>
+              )}
+
+              {/* Voice-over & Music (Reel & AI Video only — not Seedance) */}
+              {(format === "reel" || format === "ai_video") && (
                 <div className="space-y-3 rounded-lg border bg-muted/30 p-3">
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Reel Audio</p>
 

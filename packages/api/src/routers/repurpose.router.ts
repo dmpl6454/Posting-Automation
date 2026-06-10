@@ -120,6 +120,18 @@ export function appendImageContext(basePrompt: string, imageContext?: string): s
 }
 
 /**
+ * Clamp a user-supplied Seedance AI-video DURATION (seconds) into the
+ * provider-supported 2–12s range, rounding to the nearest whole second.
+ * Nullish/0 falls back to the default 8s (parity with the previous hardcoded
+ * value, so existing behaviour is preserved when the field is unset). Note
+ * `generateSeedanceVideo` also clamps internally — this is the UI-facing
+ * defensive clamp at the enqueue boundary. Pure + exported for unit testing.
+ */
+export function clampVideoDuration(n: number | undefined): number {
+  return Math.max(2, Math.min(12, Math.round(n || 8)));
+}
+
+/**
  * Assemble the `RepurposeVideoJobData` payload enqueued to `repurposeVideoQueue`
  * for an async reel / seedance video job (Phase 2b Task 3).
  *
@@ -228,6 +240,10 @@ export const repurposeRouter = createRouter({
         // these → total = slideCount + 2). Default 5 preserves prior behaviour.
         slideCount: z.number().int().min(3).max(10).default(5),
         theme: z.enum(["dark", "light", "gradient"]).default("light"),
+        // D7a: user-selectable Seedance AI-video clip length (seconds). The
+        // provider supports 2–12s; default 8 preserves the prior hardcoded value.
+        // Only consumed by the seedance_video enqueue path.
+        videoDuration: z.number().int().min(2).max(12).default(8),
         voiceOver: z.boolean().default(false),
         voiceType: z.enum(["nova", "shimmer", "alloy", "echo", "fable", "onyx"]).default("nova"),
         bgMusic: z.boolean().default(false),
@@ -1014,8 +1030,9 @@ Return ONLY the JSON array, no other text.`;
               scenes: keyPoints,
               title: extracted.title.slice(0, 60),
               description: extracted.description || extracted.body.slice(0, 300),
-              // Parity with the previous synchronous call (duration: 8).
-              duration: 8,
+              // D7a: user-selected clip length, clamped to the provider's 2–12s
+              // range (defaults to 8 — parity with the previous hardcoded value).
+              duration: clampVideoDuration(input.videoDuration),
             },
           }),
           { attempts: 1 },
