@@ -3,7 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { createRouter, protectedProcedure, orgProcedure } from "../trpc";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import crypto from "crypto";
-import { pushProgress, finishProgress } from "../lib/progress";
+import { pushProgress, finishProgress, scopedProgressId } from "../lib/progress";
 import { toFriendlyAIError, isMissingAIKeyError, friendlyAIMessage } from "../lib/ai-errors";
 import { requirePlan } from "../middleware/plan-limit.middleware";
 
@@ -23,6 +23,16 @@ const BUCKET = process.env.S3_BUCKET || "postautomation-media";
 function getPublicUrl(key: string): string {
   if (process.env.S3_PUBLIC_URL) return `${process.env.S3_PUBLIC_URL}/${key}`;
   return `${process.env.S3_ENDPOINT || "https://s3.amazonaws.com"}/${BUCKET}/${key}`;
+}
+
+/**
+ * Drop failed (undefined/null) slides from a sparse slide-image array before
+ * passing them to the reel stitcher. `slideImages` is indexed by slide position,
+ * so a slide whose generation failed leaves a hole — mapping over it directly
+ * would crash on `undefined.imageBase64`. Pure + exported for unit testing.
+ */
+export function compactSlides<T>(slideImages: (T | undefined | null)[]): T[] {
+  return slideImages.filter((s): s is T => Boolean(s));
 }
 
 export const repurposeRouter = createRouter({
@@ -122,6 +132,7 @@ export const repurposeRouter = createRouter({
         overlayLogoOnImage,
         generateStyledCreativeImage,
         extractDominantColor,
+        isPublicImageUrl,
       } = await import("@postautomation/ai");
 
       const userId = (ctx.session.user as any).id as string;
@@ -186,6 +197,20 @@ export const repurposeRouter = createRouter({
         }
       }
 
+      // SSRF chokepoint: `resolvedLogoUrl` is user-influenced (input.logoUrl /
+      // template logoMedia.url / channel avatar) and is fetched + rendered
+      // server-side downstream (reference fetch, extractDominantColor,
+      // buildHeadlineCreative, applyLogoOverlay → overlayLogoOnImage). Validate
+      // ONCE here so every downstream use is safe. Logos may live on external
+      // public CDNs, so the looser `isPublicImageUrl` (public hosts allowed,
+      // private/loopback/metadata/internal blocked) is used — NOT the strict S3
+      // allowlist (which would silently drop legit external logos). A blocked
+      // URL degrades gracefully to the no-logo path.
+      if (resolvedLogoUrl && !isPublicImageUrl(resolvedLogoUrl)) {
+        console.warn("[repurpose] logo URL blocked (private/internal host) — dropping logo");
+        resolvedLogoUrl = "";
+      }
+
       console.log(`[Repurpose] Logo config: logoUrl="${resolvedLogoUrl?.slice(0, 60) || ""}", channelName="${channelName}", handle="${channelHandle}"`);
 
       // Helper: apply logo overlay to a generated image
@@ -234,6 +259,10 @@ export const repurposeRouter = createRouter({
       // AI background to match the brand (B4). Gemini-only — the OpenAI fallback
       // ignores it; the logo is baked deterministically by the template either
       // way. A fetch failure degrades silently to no-reference.
+      // NOTE: `resolvedLogoUrl` was validated at the SSRF chokepoint above
+      // (`isPublicImageUrl`) and cleared if it pointed at a private/internal
+      // host, so it is safe to fetch here when truthy. A fetch failure degrades
+      // silently to the no-reference path.
       const brandReferenceImages: Array<{ base64: string; mimeType?: string }> = [];
       if (resolvedLogoUrl) {
         try {
@@ -298,8 +327,11 @@ export const repurposeRouter = createRouter({
         return { imageBase64: creative.imageBase64, mimeType: creative.mimeType, bgSource };
       }
 
-      // Progress tracking — fire-and-forget, never blocks
-      const pid = input.progressId;
+      // Progress tracking — fire-and-forget, never blocks.
+      // Scope the client-supplied id by the authenticated userId so the Redis
+      // keys/channels are per-user (closes a cross-tenant IDOR — the reader in
+      // apps/web/app/api/progress/route.ts scopes by session.user.id identically).
+      const pid = input.progressId ? scopedProgressId(userId, input.progressId) : undefined;
       const progress = (step: string, status: "running" | "done" | "error" | "skipped" = "running", detail?: string) => {
         if (pid) pushProgress(pid, step, status, detail).catch(() => {});
       };
@@ -1074,7 +1106,7 @@ Requirements:
             }
 
             const reelResult = await generateReelVideo({
-              slideImages: slideImages.map((s) => ({
+              slideImages: compactSlides(slideImages).map((s) => ({
                 imageBase64: s.imageBase64,
                 mimeType: s.mimeType,
               })),

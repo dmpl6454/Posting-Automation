@@ -6,15 +6,38 @@
  * also fetches any already-pushed steps on connect (catch-up).
  */
 
+import { auth } from "~/lib/auth";
+
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
+  const session = await auth();
+  if (!session?.user?.id) {
+    return new Response("Unauthorized", { status: 401 });
+  }
+
   const { searchParams } = new URL(request.url);
   const id = searchParams.get("id");
 
   if (!id) {
     return new Response("Missing id param", { status: 400 });
   }
+
+  // Scope the client-supplied id by the authenticated userId so the Redis
+  // keys/channels are per-user. The repurpose id is low-entropy
+  // (`rep-<ts>-<6char>`); without this, any signed-in user could read another
+  // user's repurpose progress stream by guessing the id (cross-tenant IDOR).
+  // The repurpose writer in packages/api/src/routers/repurpose.router.ts scopes
+  // identically via scopedProgressId(userId, id) → `${userId}:${id}`, so the
+  // keys match for the legitimate owner and diverge (→ empty) for any other user.
+  //
+  // The other consumer of this route is the post-publish progress flow
+  // (apps/web/app/dashboard/posts/[id]/page.tsx), whose id is a server-issued
+  // PostTarget cuid published by the worker to the UNSCOPED channel
+  // (apps/worker/src/workers/post-publish.worker.ts). Those ids are not the
+  // low-entropy client ids called out in the finding, so we only userId-scope
+  // the `rep-` namespace and leave the worker/posts flow on its existing key.
+  const scoped = id.startsWith("rep-") ? `${session.user.id}:${id}` : id;
 
   const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
 
@@ -57,7 +80,7 @@ export async function GET(request: Request) {
   (async () => {
     try {
       // 1. Send any already-pushed steps (catch-up)
-      const existing = await reader.lrange(`progress:${id}`, 0, -1);
+      const existing = await reader.lrange(`progress:${scoped}`, 0, -1);
       for (const entry of existing) {
         await send(entry);
         const parsed = JSON.parse(entry);
@@ -68,7 +91,7 @@ export async function GET(request: Request) {
       }
 
       // 2. Subscribe for new steps
-      await sub.subscribe(`progress-notify:${id}`);
+      await sub.subscribe(`progress-notify:${scoped}`);
 
       sub.on("message", async (_channel: string, message: string) => {
         await send(message);

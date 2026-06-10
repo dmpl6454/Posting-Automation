@@ -18,6 +18,7 @@ import { ComposeTab } from "~/components/content-agent/ComposeTab";
 import { CalendarTab } from "~/components/content-agent/CalendarTab";
 import { BulkTab } from "~/components/content-agent/BulkTab";
 import { Button } from "~/components/ui/button";
+import { parseCreatePostMediaIds, parseCsvList } from "~/lib/repurpose-create-post-params";
 
 const tabs = [
   { id: "compose", label: "Compose", icon: PenLine },
@@ -31,6 +32,14 @@ function ContentStudioInner() {
   const composeContent = searchParams.get("content") || undefined;
   const composeImage = searchParams.get("aiImage") || undefined;
   const composeMediaId = searchParams.get("aiMediaId") || undefined;
+  // Carousel "Create Post" forwards ALL slide ids via ?aiMediaIds=a,b,c. Prefer
+  // that multi-id list; fall back to the single ?aiMediaId for static/reel.
+  const composeMediaIds = parseCreatePostMediaIds({
+    aiMediaIds: searchParams.get("aiMediaIds"),
+    aiMediaId: searchParams.get("aiMediaId"),
+  });
+  // Parallel slide preview URLs for the carousel deep link (same order as ids).
+  const composeMediaUrls = parseCsvList(searchParams.get("aiImages"));
 
   // Accept ?tab= (canonical) and ?expanded= (legacy dashboard cards) — audit fix 2026-06-06
   const initialTab = searchParams.get("tab") || searchParams.get("expanded") || "compose";
@@ -75,6 +84,8 @@ function ContentStudioInner() {
                 initialContent={composeContent}
                 initialImage={composeImage}
                 initialImageMediaId={composeMediaId}
+                initialMediaIds={composeMediaIds.length > 0 ? composeMediaIds : undefined}
+                initialMediaUrls={composeMediaUrls.length > 0 ? composeMediaUrls : undefined}
                 onPostCreated={() => setPostCreated((n) => n + 1)}
                 externalMediaToAdd={pendingMedia}
                 onExternalMediaConsumed={() => setPendingMedia(null)}

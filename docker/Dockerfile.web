@@ -1,6 +1,9 @@
 FROM node:20-alpine AS base
 RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
-RUN apk add --no-cache openssl chromium nss freetype harfbuzz ca-certificates ttf-freefont
+# ffmpeg: the repurpose mutation runs in the web process and shells out to ffmpeg
+# for Slideshow-Reel stitching + background-music synthesis (D2). Interim — Phase 2
+# offloads video generation to the worker (which already bundles ffmpeg).
+RUN apk add --no-cache ffmpeg openssl chromium nss freetype harfbuzz ca-certificates ttf-freefont
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 

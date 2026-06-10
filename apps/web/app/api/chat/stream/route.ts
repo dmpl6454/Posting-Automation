@@ -1,6 +1,6 @@
 import { auth } from "~/lib/auth";
 import { prisma } from "@postautomation/db";
-import { streamChatAgent, parseActions, cleanResponseText, fetchTrendingNews, detectTrendingIntent, routeProvider } from "@postautomation/ai";
+import { streamChatAgent, parseActions, cleanResponseText, withIdempotencyKey, fetchTrendingNews, detectTrendingIntent, routeProvider } from "@postautomation/ai";
 import type { AIChatMessage, AIProvider } from "@postautomation/ai";
 
 export const dynamic = "force-dynamic";
@@ -267,8 +267,14 @@ export async function POST(req: Request) {
         throw new Error("All providers failed");
       }
 
-      // Parse any actions from the response
-      const action = parseActions(fullResponse);
+      // Parse any actions from the response and stamp a STABLE idempotency key
+      // ONCE (A1 followup). The SAME `action` object is BOTH persisted into
+      // metadata.action AND sent in the `done` SSE event below, so the key
+      // survives the streaming→persisted message-id transition (ephemeral
+      // `ai-<ts>` id → DB id on the next getThread refetch). The client uses
+      // action.idempotencyKey as both the lock key and the clientActionId, so a
+      // re-click after a refetch short-circuits server-side (no second post).
+      const action = withIdempotencyKey(parseActions(fullResponse));
       const displayText = cleanResponseText(fullResponse);
 
       // Save assistant message to DB (include provider in metadata for thread continuity)
@@ -284,7 +290,7 @@ export async function POST(req: Request) {
         },
       });
 
-      // Send completion event with action if present
+      // Send completion event with the SAME stamped action (key matches DB)
       const doneData = `data: ${JSON.stringify({
         type: "done",
         action: action || null,

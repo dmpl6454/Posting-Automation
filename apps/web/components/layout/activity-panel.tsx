@@ -45,6 +45,7 @@ const STATUS_CONFIG = {
 const TYPE_ICONS: Record<string, any> = {
   "post.published": Send,
   "post.failed": XCircle,
+  "post.publishing": Loader2,
   "post.scheduled": Clock,
   "post.created": Sparkles,
   "agent.completed": Zap,
@@ -91,10 +92,11 @@ export function ActivityPanel() {
   );
 
   // Also fetch recent post targets for publish status.
-  // ADD-7: widened 15s→60s (SSE drives the real-time updates).
+  // 10s poll so PUBLISHING→PUBLISHED/FAILED converges quickly even if an SSE
+  // push is missed (the worker now also writes Notification rows on publish).
   const postActivity = trpc.post.recentActivity.useQuery(
     { limit: 20 },
-    { refetchInterval: 60_000 }
+    { refetchInterval: 10_000 }
   );
 
   // Listen for SSE events to trigger refetch
@@ -132,7 +134,7 @@ export function ActivityPanel() {
       if (existing) continue;
       activities.push({
         id: `pt-${pt.id}`,
-        type: pt.status === "PUBLISHED" ? "post.published" : pt.status === "FAILED" ? "post.failed" : pt.status === "DRAFT" ? "post.draft" : "post.scheduled",
+        type: pt.status === "PUBLISHED" ? "post.published" : pt.status === "FAILED" ? "post.failed" : pt.status === "PUBLISHING" ? "post.publishing" : pt.status === "DRAFT" ? "post.draft" : "post.scheduled",
         title: pt.status === "PUBLISHED" ? `Published to ${pt.platform}` : pt.status === "FAILED" ? `Failed on ${pt.platform}` : pt.status === "DRAFT" ? `Saved as draft for ${pt.platform}` : pt.status === "PUBLISHING" ? `Publishing to ${pt.platform}` : `Scheduled for ${pt.platform}`,
         body: pt.content ? (pt.content.length >= 100 ? pt.content.slice(0, 80) + "…" : pt.content) : "",
         status: pt.status === "PUBLISHED" ? "success" : pt.status === "FAILED" ? "error" : "pending",

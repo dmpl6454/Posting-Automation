@@ -3,6 +3,7 @@ import { getModel, isLangChainProvider } from "../providers/provider.factory";
 import { callGemini } from "../providers/gemini.provider";
 import { callGemma4 } from "../providers/gemma4.provider";
 import { CHAT_AGENT_SYSTEM_PROMPT } from "../prompts/chat-agent.prompt";
+import { isAllowedImageUrl } from "../utils/safe-fetch-url";
 import type { AIProvider } from "../types";
 
 export type ChatMessageContentPart =
@@ -50,6 +51,17 @@ export type ChatActionType =
 export interface ChatAgentAction {
   type: ChatActionType;
   payload: Record<string, unknown>;
+  /**
+   * A1 followup: a stable idempotency key generated ONCE when the action is first
+   * parsed from the model output. It is sent in the SSE `done` event AND persisted
+   * into the assistant ChatMessage.metadata.action, so it survives the
+   * streaming→persisted message-id transition (the ephemeral `ai-<ts>` id is
+   * replaced by the DB id on the next getThread refetch). The client uses this key
+   * as BOTH the executedActionIds lock key AND the clientActionId sent to the
+   * server, so a re-click after a refetch short-circuits server-side instead of
+   * creating a second LIVE post.
+   */
+  idempotencyKey?: string;
 }
 
 /**
@@ -69,6 +81,24 @@ export function parseActions(text: string): ChatAgentAction | null {
     // Invalid JSON in action block
   }
   return null;
+}
+
+/**
+ * Attach a STABLE idempotency key to a parsed action (A1 followup).
+ *
+ * Pure helper so the same key is guaranteed to be used for BOTH the SSE `done`
+ * event and the persisted `metadata.action` — call this ONCE per assistant
+ * message, then send + persist the returned object. Returns `null` unchanged so
+ * the caller can pass through "no action" responses. If the action already has a
+ * key (defensive — e.g. re-processing) it is preserved rather than regenerated.
+ */
+export function withIdempotencyKey(
+  action: ChatAgentAction | null,
+  generateKey: () => string = () => globalThis.crypto.randomUUID()
+): ChatAgentAction | null {
+  if (!action) return null;
+  if (action.idempotencyKey) return action;
+  return { ...action, idempotencyKey: generateKey() };
 }
 
 /**
@@ -160,63 +190,14 @@ function buildContextString(context: ChatContext): string {
  * are written by our own org-scoped S3/MinIO upload flow, so the only legitimate
  * hosts are the configured S3 public/endpoint hosts. We fail closed: anything
  * not on the allowlist (and any private/loopback/link-local host) is rejected.
+ *
+ * The allow/deny logic now lives in the shared `../utils/safe-fetch-url`
+ * module (`isAllowedImageUrl`); this file delegates to it so all server-side
+ * image fetches enforce one guard.
  */
-function hostOf(value: string | undefined): string | null {
-  if (!value) return null;
-  try {
-    return new URL(value.startsWith("http") ? value : `https://${value}`).hostname.toLowerCase();
-  } catch {
-    return null;
-  }
-}
-
-const IMAGE_FETCH_ALLOWED_HOSTS: Set<string> = new Set(
-  [hostOf(process.env.S3_PUBLIC_URL), hostOf(process.env.S3_ENDPOINT), "s3.amazonaws.com"].filter(
-    (h): h is string => !!h,
-  ),
-);
-
-function isPrivateOrLoopbackHost(rawHost: string): boolean {
-  // Strip IPv6 brackets: "[::1]" → "::1"
-  const host = rawHost.replace(/^\[|\]$/g, "").toLowerCase();
-  if (host === "localhost" || host === "0.0.0.0" || host === "::" || host === "::1") return true;
-  // IPv4 private / loopback / link-local (covers cloud metadata 169.254.169.254)
-  if (
-    /^127\./.test(host) ||
-    /^10\./.test(host) ||
-    /^192\.168\./.test(host) ||
-    /^169\.254\./.test(host) ||
-    /^172\.(1[6-9]|2\d|3[01])\./.test(host)
-  ) {
-    return true;
-  }
-  // IPv6 unique-local (fc00::/7 → fc/fd), link-local (fe80::/10), and
-  // IPv4-mapped private ranges (::ffff:10.x / ::ffff:192.168.x / ::ffff:127.x).
-  if (/^f[cd][0-9a-f]*:/.test(host) || /^fe[89ab][0-9a-f]*:/.test(host)) return true;
-  if (/^::ffff:(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host)) return true;
-  return false;
-}
 
 /** @internal exported for SSRF-guard unit tests */
-export function __isAllowedImageUrl(url: string): boolean {
-  return isAllowedImageUrl(url);
-}
-
-function isAllowedImageUrl(url: string): boolean {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return false;
-  }
-  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return false;
-  const host = parsed.hostname.toLowerCase();
-  if (isPrivateOrLoopbackHost(host)) return false;
-  // Truly fail closed: only ever fetch from a configured S3 host. If the
-  // allowlist is empty (misconfig), fetch nothing — Gemini just answers from
-  // text. Never fall back to "any https host" (that would re-open SSRF).
-  return IMAGE_FETCH_ALLOWED_HOSTS.has(host);
-}
+export const __isAllowedImageUrl = isAllowedImageUrl;
 
 async function fetchImageAsBase64(url: string): Promise<{ data: string; mimeType: string } | null> {
   if (!isAllowedImageUrl(url)) {

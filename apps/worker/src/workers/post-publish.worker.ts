@@ -3,6 +3,7 @@ import { prisma } from "@postautomation/db";
 import { getSocialProvider } from "@postautomation/social";
 import { QUEUE_NAMES, postPublishQueue, type PostPublishJobData, createRedisConnection } from "@postautomation/queue";
 import IORedis from "ioredis";
+import { markTargetFailed, buildPublishNotifications } from "../lib/publish-recovery";
 
 // Redis pub/sub publisher for upload progress SSE
 const progressPublisher = new IORedis(process.env.REDIS_URL || "redis://localhost:6379", {
@@ -138,6 +139,35 @@ async function sendPublishReportEmail(
   } catch (emailErr: any) {
     // Never let email failure break the publish flow
     console.warn(`[PostPublish] Email report failed:`, emailErr.message);
+  }
+}
+
+// ── In-app notifications (best-effort) ───────────────────────────────────
+// Writes one Notification row per org owner/admin for a publish outcome so the
+// Activity panel's SSE/unread-driven refresh fires on publish events. Reuses the
+// same OWNER/ADMIN lookup as the email report. MUST never throw — a notification
+// failure can never be allowed to fail the publish.
+async function notifyPublishOutcome(
+  organizationId: string,
+  postId: string,
+  postTargetId: string,
+  platform: string,
+  status: "PUBLISHED" | "FAILED"
+): Promise<void> {
+  try {
+    const members = await prisma.organizationMember.findMany({
+      where: { organizationId, role: { in: ["OWNER", "ADMIN"] } },
+      select: { userId: true },
+    });
+    const rows = buildPublishNotifications(
+      members.map((m) => m.userId),
+      { organizationId, postId, postTargetId, platform, status }
+    );
+    for (const row of rows) {
+      await prisma.notification.create({ data: row });
+    }
+  } catch (notifyErr: any) {
+    console.warn(`[PostPublish] Notification write failed for ${postTargetId}:`, notifyErr?.message);
   }
 }
 
@@ -500,14 +530,25 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
               throw publishErr; // Can't refresh — rethrow original error
             }
           } catch (refreshRetryErr: any) {
-            // Mark with clear message about token issue
-            throw new Error(`Token expired and refresh failed: ${refreshRetryErr.message}. Reconnect this channel in Settings.`);
+            // Mark FAILED before throwing — otherwise the target stays at PUBLISHING,
+            // the BullMQ retry's claim guard skips it as a "duplicate" (claim.count === 0),
+            // and it's orphaned at PUBLISHING forever. Mirrors the generic else branch below.
+            const tokenErrMsg = `Token expired and refresh failed: ${refreshRetryErr.message}. Reconnect this channel in Settings.`;
+            await markTargetFailed(prisma, postTargetId, tokenErrMsg);
+            throw new Error(tokenErrMsg);
           }
         } else if (errType === "content_too_large") {
           // Aggressively truncate and retry
           const aggressiveContent = truncateForPlatform(publishContent, platform);
           console.log(`[PostPublish] Content too large — retrying with aggressive truncation`);
-          result = await provider.publishPost(tokens, { content: aggressiveContent.slice(0, Math.floor(aggressiveContent.length * 0.7)), mediaUrls, mediaTypes, metadata: providerMetadata });
+          try {
+            result = await provider.publishPost(tokens, { content: aggressiveContent.slice(0, Math.floor(aggressiveContent.length * 0.7)), mediaUrls, mediaTypes, metadata: providerMetadata });
+          } catch (truncateRetryErr: any) {
+            // The truncated retry also failed — mark FAILED before propagating so the
+            // target doesn't orphan at PUBLISHING (same reasoning as the else branch).
+            await markTargetFailed(prisma, postTargetId, truncateRetryErr?.message ?? errMsg);
+            throw truncateRetryErr;
+          }
         } else {
           // Unknown / unrecoverable error (e.g. a landscape video rejected by the
           // Shorts validator). Retrying re-runs the SAME input and fails identically,
@@ -549,6 +590,9 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
         // Do not rethrow — BullMQ must not retry (would re-publish)
         return result;
       }
+
+      // 4a. In-app notification for org owners/admins (best-effort, never fails publish)
+      await notifyPublishOutcome(postTarget.post.organizationId, postTarget.postId, postTargetId, platform, "PUBLISHED");
 
       // 4b. Fetch & save initial analytics snapshot (best-effort)
       if (result.platformPostId) {
@@ -689,6 +733,15 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
             include: { post: { select: { content: true, organizationId: true } } },
           });
           if (postTarget) {
+            // In-app FAILED notification for org owners/admins (best-effort, never throws)
+            await notifyPublishOutcome(
+              postTarget.post.organizationId,
+              postTarget.postId,
+              job.data.postTargetId,
+              job.data.platform,
+              "FAILED"
+            );
+
             const allTargets = await prisma.postTarget.findMany({
               where: { postId: postTarget.postId },
               include: { channel: { select: { platform: true } } },

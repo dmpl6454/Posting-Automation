@@ -4,6 +4,8 @@ import { createRouter, orgProcedure } from "../trpc";
 import { agentRunQueue, postPublishQueue } from "@postautomation/queue";
 import { requirePlan, enforcePlanLimit } from "../middleware/plan-limit.middleware";
 import type { PrismaClient } from "@postautomation/db";
+import crypto from "crypto";
+import { uploadBase64ToS3 } from "../lib/s3";
 
 /**
  * Throws unless every channelId belongs to the given org.
@@ -60,6 +62,73 @@ function requireText(value: unknown, field: string): string {
     throw new TRPCError({ code: "BAD_REQUEST", message: `Missing required "${field}" — ask the agent to include it.` });
   }
   return value;
+}
+
+/**
+ * A1 idempotency: returns true if a previous executeAction in this thread already
+ * recorded a result ChatMessage stamped with this clientActionId. The dedupe is
+ * keyed on (threadId + clientActionId) — a NEW action (new message id) is never
+ * blocked, and the same button can't double-fire a LIVE post.
+ *
+ * `ChatMessage.metadata` is `Json?` on Postgres, so the JSON-path filter
+ * `metadata: { path: ["executedActionId"], equals: ... }` is supported natively
+ * by prisma-client-js.
+ */
+export async function isActionAlreadyExecuted(
+  prisma: PrismaClient,
+  threadId: string,
+  clientActionId: string | undefined
+): Promise<boolean> {
+  if (!clientActionId) return false;
+  const dupe = await prisma.chatMessage.findFirst({
+    where: {
+      threadId,
+      metadata: { path: ["executedActionId"], equals: clientActionId },
+    },
+    select: { id: true },
+  });
+  return dupe !== null;
+}
+
+/**
+ * Upload generated image bytes to S3 and create the backing Media row with the
+ * S3 PUBLIC URL (not a multi-MB data: URL). Fix N2: storing a data URL broke
+ * later publishes (providers `fetch(media.url)` expecting an HTTP URL) and
+ * bloated the Postgres text column. Mirrors repurpose.router's upload pattern.
+ * If S3 is unconfigured the upload fails loudly — we never fall back to a data URL.
+ */
+export async function storeGeneratedNewsImage(
+  prisma: PrismaClient,
+  args: {
+    organizationId: string;
+    uploadedById: string;
+    imageBase64: string;
+    mimeType: string;
+    width?: number;
+    height?: number;
+  }
+): Promise<{ mediaId: string; url: string }> {
+  const ext = args.mimeType.includes("png") ? "png" : "jpg";
+  const contentType = args.mimeType.includes("png") ? "image/png" : "image/jpeg";
+  const key = `chat-news/news-${Date.now()}-${crypto.randomBytes(3).toString("hex")}.${ext}`;
+
+  const url = await uploadBase64ToS3({ base64: args.imageBase64, mimeType: contentType, key });
+  const fileSize = Buffer.from(args.imageBase64, "base64").length;
+
+  const media = await prisma.media.create({
+    data: {
+      organizationId: args.organizationId,
+      uploadedById: args.uploadedById,
+      fileName: `news-${Date.now()}.${ext}`,
+      fileType: contentType,
+      fileSize,
+      url,
+      width: args.width,
+      height: args.height,
+    },
+  });
+
+  return { mediaId: media.id, url };
 }
 
 // Fix #33: export supported actions so UI can derive the capability list from backend truth
@@ -246,6 +315,11 @@ export const chatRouter = createRouter({
           "trigger_agent_run", "get_analytics",
         ]),
         payload: z.record(z.unknown()),
+        // A1: optional per-message id from the client. When set, the
+        // post-creating cases (publish_now/schedule_post/bulk_schedule) dedupe
+        // on (threadId + clientActionId) so re-clicking the same action button
+        // can't create duplicate LIVE posts (no server idempotency before this).
+        clientActionId: z.string().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -307,6 +381,10 @@ export const chatRouter = createRouter({
         }
 
         case "schedule_post": {
+          // A1: short-circuit if this exact action button was already executed.
+          if (await isActionAlreadyExecuted(ctx.prisma, input.threadId, input.clientActionId)) {
+            return { type: "already_executed" };
+          }
           await enforcePlanLimit(ctx.organizationId, "postsPerMonth", ctx.isSuperAdmin);
           const p = input.payload as any;
           requireText(p.content, "content");
@@ -341,7 +419,7 @@ export const chatRouter = createRouter({
               threadId: input.threadId,
               role: "system",
               content: `Post scheduled for ${post.scheduledAt?.toLocaleString() || "soon"}.`,
-              metadata: { type: "post_scheduled", postId: post.id },
+              metadata: { type: "post_scheduled", postId: post.id, executedActionId: input.clientActionId },
             },
           });
 
@@ -349,6 +427,10 @@ export const chatRouter = createRouter({
         }
 
         case "bulk_schedule": {
+          // A1: short-circuit if this exact action button was already executed.
+          if (await isActionAlreadyExecuted(ctx.prisma, input.threadId, input.clientActionId)) {
+            return { type: "already_executed" };
+          }
           const p = input.payload as any;
           const userId = (ctx.session.user as any).id;
           const posts = p.posts || [];
@@ -397,7 +479,7 @@ export const chatRouter = createRouter({
               threadId: input.threadId,
               role: "system",
               content: `${createdPosts.length} posts scheduled:\n${summary}`,
-              metadata: { type: "bulk_scheduled", postIds: createdPosts.map((p) => p.id) },
+              metadata: { type: "bulk_scheduled", postIds: createdPosts.map((p) => p.id), executedActionId: input.clientActionId },
             },
           });
 
@@ -405,6 +487,11 @@ export const chatRouter = createRouter({
         }
 
         case "publish_now": {
+          // A1: short-circuit if this exact action button was already executed —
+          // re-clicking "Publish now" must NOT create a second LIVE post.
+          if (await isActionAlreadyExecuted(ctx.prisma, input.threadId, input.clientActionId)) {
+            return { type: "already_executed" };
+          }
           await enforcePlanLimit(ctx.organizationId, "postsPerMonth", ctx.isSuperAdmin);
           const p = input.payload as any;
           requireText(p.content, "content");
@@ -448,7 +535,9 @@ export const chatRouter = createRouter({
                 platform: target.channel.platform,
                 organizationId: ctx.organizationId,
               },
-              { delay: 0 }
+              // B4: match compose (post.router.ts) — retry transient publish
+              // failures instead of failing on the first hiccup.
+              { delay: 0, attempts: 3, backoff: { type: "exponential", delay: 30000 } }
             );
           }
 
@@ -457,7 +546,7 @@ export const chatRouter = createRouter({
               threadId: input.threadId,
               role: "system",
               content: `Post published to ${post.targets.map((t) => t.channel.name || t.channel.platform).join(", ")}.`,
-              metadata: { type: "post_published", postId: post.id },
+              metadata: { type: "post_published", postId: post.id, executedActionId: input.clientActionId },
             },
           });
 
@@ -470,7 +559,11 @@ export const chatRouter = createRouter({
             throw new TRPCError({ code: "BAD_REQUEST", message: "No agent linked to this thread" });
           }
           const updated = await ctx.prisma.agent.update({
-            where: { id: thread.agentId },
+            // Org-scope the where clause (N7): the thread is org-scoped but the
+            // agent record was not re-validated, so an AI-driven action could
+            // mutate another org's agent. Prisma throws P2025 if the agent is
+            // not in this org — the desired deny.
+            where: { id: thread.agentId, organizationId: ctx.organizationId },
             data: {
               ...(p.name && { name: p.name }),
               ...(p.niche && { niche: p.niche }),
@@ -512,24 +605,18 @@ export const chatRouter = createRouter({
             platform,
           });
 
-          // Save image as Media
-          const imageBuffer = Buffer.from(imageResult.imageBase64, "base64");
-          const fileName = `news-${Date.now()}.png`;
-
-          const dataUrl = `data:${imageResult.mimeType};base64,${imageResult.imageBase64}`;
-
-          const media = await ctx.prisma.media.create({
-            data: {
-              organizationId: ctx.organizationId,
-              uploadedById: (ctx.session.user as any).id,
-              fileName,
-              fileType: imageResult.mimeType,
-              fileSize: imageBuffer.length,
-              url: dataUrl,
-              width: imageResult.width,
-              height: imageResult.height,
-            },
+          // Upload image bytes to S3 and store the public URL (NOT a data URL):
+          // social providers fetch(media.url) on publish, and a data URL bloats
+          // the Postgres text column. Fix N2.
+          const { mediaId, url: imageUrl } = await storeGeneratedNewsImage(ctx.prisma, {
+            organizationId: ctx.organizationId,
+            uploadedById: (ctx.session.user as any).id,
+            imageBase64: imageResult.imageBase64,
+            mimeType: imageResult.mimeType,
+            width: imageResult.width,
+            height: imageResult.height,
           });
+          const media = { id: mediaId };
 
           // Attach to a system message in the thread
           await ctx.prisma.chatMessage.create({
@@ -552,7 +639,7 @@ export const chatRouter = createRouter({
           return {
             type: "news_image_generated",
             mediaId: media.id,
-            imageUrl: dataUrl,
+            imageUrl,
             style,
             content: p.content,
           };
@@ -585,6 +672,17 @@ export const chatRouter = createRouter({
 
         case "create_brand_tracker": {
           const p = input.payload as any;
+          // Verify an AI-supplied campaignId belongs to this org before
+          // associating it (N8): otherwise a cross-org campaign could be linked
+          // / leaked onto the new BrandTracker. Absent campaignId is fine.
+          if (p.campaignId) {
+            const camp = await ctx.prisma.campaign.findFirst({
+              where: { id: p.campaignId, organizationId: ctx.organizationId },
+            });
+            if (!camp) {
+              throw new TRPCError({ code: "FORBIDDEN", message: "Campaign not found in this workspace" });
+            }
+          }
           const brand = await ctx.prisma.brandTracker.create({
             data: {
               organizationId: ctx.organizationId,

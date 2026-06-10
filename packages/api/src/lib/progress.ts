@@ -20,6 +20,20 @@ export interface ProgressStep {
 
 const TTL = 300; // 5 min — auto-cleanup
 
+/**
+ * Build the per-user-scoped job id used for the Redis list key and pub/sub
+ * channel. Namespacing by the authenticated userId closes a cross-tenant IDOR:
+ * the client-supplied id is low-entropy (`rep-<ts>-<6char>`), so without this
+ * scoping any signed-in user could read another user's progress stream by
+ * guessing the id. With scoping, `progress:{A}:{id}` and `progress:{B}:{id}`
+ * are distinct keys, so user A reading user B's id finds nothing.
+ *
+ * MUST be applied identically on the writer (router) and reader (SSE route).
+ */
+export function scopedProgressId(userId: string, id: string): string {
+  return `${userId}:${id}`;
+}
+
 let pubClient: any = null;
 
 async function getPubClient() {
