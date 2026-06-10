@@ -96,6 +96,10 @@ export function RepurposeTab() {
   const [logoPosition, setLogoPosition] = useState<"top-left" | "top-right">("top-right");
   const [logoUrl, setLogoUrl] = useState<string>("");
   const [logoMediaId, setLogoMediaId] = useState<string>("");
+  // E1: aesthetic/style reference image the AI mimics (Gemini-only on backend).
+  const [aestheticRefUrl, setAestheticRefUrl] = useState<string>("");
+  // E3a: free-text aesthetic/style notes appended to the AI background prompt.
+  const [imageContext, setImageContext] = useState<string>("");
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
 
   // Results
@@ -358,6 +362,8 @@ export function RepurposeTab() {
         logoPosition,
         theme,
         accentColor: accentColor || undefined,
+        aestheticRefUrl: aestheticRefUrl || undefined,
+        imageContext: imageContext || undefined,
         voiceOver: (format === "reel" || format === "ai_video" || format === "seedance_video") ? voiceOver : false,
         voiceType: voiceType as any,
         bgMusic: (format === "reel" || format === "ai_video" || format === "seedance_video") ? bgMusic : false,
@@ -607,6 +613,60 @@ export function RepurposeTab() {
                         Clear
                       </button>
                     )}
+                  </div>
+
+                  {/* E1: aesthetic/style reference image (optional) — the AI mimics its look (Gemini-only) */}
+                  <div className="flex items-center gap-2 pt-1">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      id="aesthetic-ref-upload"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = "";
+                        if (!file) return;
+                        const fd = new FormData();
+                        fd.append("file", file);
+                        fd.append("category", "aesthetic-ref");
+                        const res = await fetch("/api/upload", { method: "POST", body: fd });
+                        if (res.ok) {
+                          const { url } = await res.json();
+                          setAestheticRefUrl(url);
+                        } else {
+                          toast({ title: "Style reference upload failed", variant: "destructive" });
+                        }
+                      }}
+                    />
+                    <Button type="button" variant="outline" size="sm" onClick={() => document.getElementById("aesthetic-ref-upload")?.click()}>
+                      {aestheticRefUrl ? "Change style reference" : "Style reference (optional)"}
+                    </Button>
+                    {aestheticRefUrl && (
+                      <>
+                        <img src={aestheticRefUrl} alt="style reference" className="h-8 w-8 rounded object-cover border" />
+                        <button
+                          type="button"
+                          onClick={() => setAestheticRefUrl("")}
+                          className="text-[10px] text-muted-foreground hover:underline"
+                        >
+                          Clear
+                        </button>
+                      </>
+                    )}
+                  </div>
+
+                  {/* E3a: free-text aesthetic / style notes (optional, max 300 chars) */}
+                  <div className="space-y-1 pt-1">
+                    <Label className="text-xs" htmlFor="image-context">Aesthetic / style notes (optional)</Label>
+                    <Textarea
+                      id="image-context"
+                      value={imageContext}
+                      maxLength={300}
+                      onChange={(e) => setImageContext(e.target.value.slice(0, 300))}
+                      placeholder="e.g. neon and moody, 35mm film grain, warm tones"
+                      className="min-h-[60px] text-xs"
+                    />
+                    <p className="text-[10px] text-muted-foreground text-right">{imageContext.length}/300</p>
                   </div>
 
                   {logoUrl && (

@@ -77,6 +77,21 @@ export function capHookLine(raw: string): string {
 }
 
 /**
+ * Append a free-text "aesthetic / style notes" clause to an AI background
+ * prompt (E3a). If `imageContext` is empty/whitespace/undefined the base prompt
+ * is returned UNCHANGED so the existing flow is untouched when the feature is
+ * unused. The notes are trimmed and hard-capped at 300 chars (the router schema
+ * also bounds it, but cap here defensively). The combined string still flows
+ * through `sanitizePrompt` inside `generateImageSafe`, so no extra sanitizing is
+ * needed here. Pure + exported for unit testing.
+ */
+export function appendImageContext(basePrompt: string, imageContext?: string): string {
+  const notes = (imageContext ?? "").trim();
+  if (notes.length === 0) return basePrompt;
+  return `${basePrompt}\n\nStyle notes: ${notes.slice(0, 300)}`;
+}
+
+/**
  * Assemble the `RepurposeVideoJobData` payload enqueued to `repurposeVideoQueue`
  * for an async reel / seedance video job (Phase 2b Task 3).
  *
@@ -176,6 +191,11 @@ export const repurposeRouter = createRouter({
           .default("premium_editorial"),
         logoPosition: z.enum(["top-left", "top-right"]).default("top-right"),
         accentColor: z.string().nullish(),
+        // E1: an aesthetic/style reference image the AI mimics (Gemini-only —
+        // the OpenAI fallback ignores reference images; degrade silently).
+        aestheticRefUrl: z.string().optional(),
+        // E3a: free-text style notes appended to the AI background prompt.
+        imageContext: z.string().max(300).optional(),
         theme: z.enum(["dark", "light", "gradient"]).default("light"),
         voiceOver: z.boolean().default(false),
         voiceType: z.enum(["nova", "shimmer", "alloy", "echo", "fable", "onyx"]).default("nova"),
@@ -356,6 +376,25 @@ export const repurposeRouter = createRouter({
           }
         } catch (e) {
           console.warn(`[Repurpose] Logo reference fetch failed (continuing without):`, (e as Error).message);
+        }
+      }
+
+      // E1: an aesthetic/style reference image the AI mimics, IN ADDITION to the
+      // logo. Pushed into the SAME `brandReferenceImages` array so Gemini (Nano
+      // Banana) gets logo + aesthetic. Gemini-only — the OpenAI fallback ignores
+      // references entirely (no image-input path). SSRF: gated by the same
+      // `isPublicImageUrl` guard the logo uses; a disallowed URL or fetch failure
+      // degrades silently to no aesthetic reference (never throws).
+      if (input.aestheticRefUrl && isPublicImageUrl(input.aestheticRefUrl)) {
+        try {
+          const r = await fetch(input.aestheticRefUrl);
+          if (r.ok) {
+            const mime = r.headers.get("content-type") || "image/png";
+            const b64 = Buffer.from(await r.arrayBuffer()).toString("base64");
+            if (b64.length > 0) brandReferenceImages.push({ base64: b64, mimeType: mime });
+          }
+        } catch (e) {
+          console.warn(`[Repurpose] Aesthetic reference fetch failed (continuing without):`, (e as Error).message);
         }
       }
 
@@ -657,6 +696,9 @@ Topic: "${headlineForCreativeFinal}"
 Context: ${contentSummary.slice(0, 400)}
 
 Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g. "Imran Khan, Bollywood actor" → Bollywood/film imagery, NOT politics). Photorealistic or editorial illustration, dramatic lighting, strong mood, relevant to the topic.`;
+        // E3a: append the user's free-text aesthetic/style notes. The combined
+        // string flows through `sanitizePrompt` inside `generateImageSafe`.
+        const bgPromptWithContext = appendImageContext(bgPrompt, input.imageContext);
 
         // Hook line for the `hook_bars` style ONLY — a short punchy hook with one
         // or two **brand-highlighted** words that renderHighlightMarkup turns into
@@ -682,7 +724,7 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
         try {
           progress("Generating creative");
           console.log(`[Repurpose] Building branded headline creative (category=${category})...`);
-          const creative = await buildHeadlineCreative(bgPrompt, headlineForCreativeFinal, category, hookLine);
+          const creative = await buildHeadlineCreative(bgPromptWithContext, headlineForCreativeFinal, category, hookLine);
 
           const { url, mediaId } = await uploadAndCreateMedia(
             creative.imageBase64,
@@ -1063,7 +1105,10 @@ Return ONLY the JSON array, no other text.`;
               // going, exactly like the previous resilience.
               try {
                 const headline = slideMeta.title;
-                const bgPrompt = `Cinematic background photo for: "${slideMeta.title}". ${contentBrief}`;
+                const bgPrompt = appendImageContext(
+                  `Cinematic background photo for: "${slideMeta.title}". ${contentBrief}`,
+                  input.imageContext,
+                );
                 const creative = await buildHeadlineCreative(
                   bgPrompt,
                   headline,
