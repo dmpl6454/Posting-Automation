@@ -143,6 +143,10 @@ export async function generateStyledCreativeImage(
     } catch (e) {
       console.warn(`[creative] setContent wait timed out, screenshotting anyway:`, (e as Error).message);
     }
+    // Give the background image a moment to paint before capture — without this,
+    // a large inline data-URL bg can fire screenshot() before the first paint and
+    // produce a blank/black card (matches generateStaticNewsCreativeImage).
+    await new Promise((r) => setTimeout(r, 400));
     const screenshotBuffer = await page.screenshot({ type: "png", encoding: "base64" });
     return {
       imageBase64: screenshotBuffer as string,
@@ -247,7 +251,19 @@ body{width:${width}px;height:${height}px;overflow:hidden;position:relative;font-
   try {
     const page = await browser.newPage();
     await page.setViewport({ width, height });
-    await page.setContent(html, { waitUntil: "networkidle0", timeout: 10000 });
+    // Use `load` (NOT `networkidle0`): the bg is an inline data-URL and the only
+    // network request is the Google-Fonts @import, so `networkidle0` never settles
+    // and times out on every overlay. If even `load` times out, fall back to
+    // domcontentloaded and screenshot the current state (mirrors
+    // generateStaticNewsCreativeImage).
+    try {
+      await page.setContent(html, { waitUntil: "load", timeout: 30000 });
+    } catch (e) {
+      console.warn(`[logo-overlay] setContent wait timed out, screenshotting current state:`, (e as Error).message);
+      await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 5000 }).catch(() => {});
+    }
+    // Give the background image + font a moment to paint before capture.
+    await new Promise((r) => setTimeout(r, 400));
 
     const screenshotBuffer = await page.screenshot({
       type: mimeType.includes("png") ? "png" : "jpeg",
