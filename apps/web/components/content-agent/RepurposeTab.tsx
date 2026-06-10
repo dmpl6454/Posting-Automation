@@ -94,6 +94,9 @@ export function RepurposeTab() {
   const [bgMusic, setBgMusic] = useState(true);
   const [creativeStyle, setCreativeStyle] = useState<"premium_editorial" | "hook_bars" | "tweet_card" | "bold_typographic">("premium_editorial");
   const [logoPosition, setLogoPosition] = useState<"top-left" | "top-right">("top-right");
+  // E2: number of CONTENT slides in a carousel (cover + cta added around these).
+  // Default 5 preserves prior behaviour. Only shown when format === "carousel".
+  const [slideCount, setSlideCount] = useState<number>(5);
   const [logoUrl, setLogoUrl] = useState<string>("");
   const [logoMediaId, setLogoMediaId] = useState<string>("");
   // E1: aesthetic/style reference image the AI mimics (Gemini-only on backend).
@@ -364,6 +367,7 @@ export function RepurposeTab() {
         accentColor: accentColor || undefined,
         aestheticRefUrl: aestheticRefUrl || undefined,
         imageContext: imageContext || undefined,
+        slideCount,
         voiceOver: (format === "reel" || format === "ai_video" || format === "seedance_video") ? voiceOver : false,
         voiceType: voiceType as any,
         bgMusic: (format === "reel" || format === "ai_video" || format === "seedance_video") ? bgMusic : false,
@@ -690,6 +694,28 @@ export function RepurposeTab() {
                       Save as template
                     </Button>
                   )}
+                </div>
+              )}
+
+              {/* Content slides count (carousel only) — E2 */}
+              {format === "carousel" && (
+                <div className="space-y-2">
+                  <Label>Content slides</Label>
+                  <div className="flex gap-2">
+                    {[3, 5, 7, 10].map((n) => (
+                      <button
+                        key={n}
+                        type="button"
+                        onClick={() => setSlideCount(n)}
+                        className={`flex-1 rounded-lg border px-3 py-2 text-xs font-medium transition-all ${
+                          slideCount === n ? "border-primary ring-1 ring-primary" : "border-border hover:border-primary/50"
+                        }`}
+                      >
+                        {n}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-muted-foreground">A cover and a follow-for-more slide are added around these.</p>
                 </div>
               )}
 

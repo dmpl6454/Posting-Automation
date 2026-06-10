@@ -77,6 +77,34 @@ export function capHookLine(raw: string): string {
 }
 
 /**
+ * Force the AI-extracted carousel content slides to EXACTLY `target` items so the
+ * user's chosen "Content slides" count is honoured regardless of how many points
+ * the model actually returned (E2). Strategy: slice if too long; if too short,
+ * top up from `fallback` (the sentence-derived slides) in order, then pad with
+ * generic `{ title: "Key point N", body: "" }` fillers until length === target.
+ * Always returns exactly `target` items — never more, never fewer. Pure + exported
+ * for unit testing. Does NOT touch the cover/cta slides added around the content.
+ */
+export function enforceSlideCount(
+  slideData: Array<{ title: string; body: string }>,
+  target: number,
+  fallback: Array<{ title: string; body: string }>,
+): Array<{ title: string; body: string }> {
+  if (slideData.length >= target) {
+    return slideData.slice(0, target);
+  }
+  const out = [...slideData];
+  for (const f of fallback) {
+    if (out.length >= target) break;
+    out.push(f);
+  }
+  while (out.length < target) {
+    out.push({ title: `Key point ${out.length + 1}`, body: "" });
+  }
+  return out;
+}
+
+/**
  * Append a free-text "aesthetic / style notes" clause to an AI background
  * prompt (E3a). If `imageContext` is empty/whitespace/undefined the base prompt
  * is returned UNCHANGED so the existing flow is untouched when the feature is
@@ -196,6 +224,9 @@ export const repurposeRouter = createRouter({
         aestheticRefUrl: z.string().optional(),
         // E3a: free-text style notes appended to the AI background prompt.
         imageContext: z.string().max(300).optional(),
+        // E2: how many CONTENT slides a carousel has (cover + cta added around
+        // these → total = slideCount + 2). Default 5 preserves prior behaviour.
+        slideCount: z.number().int().min(3).max(10).default(5),
         theme: z.enum(["dark", "light", "gradient"]).default("light"),
         voiceOver: z.boolean().default(false),
         voiceType: z.enum(["nova", "shimmer", "alloy", "echo", "fable", "onyx"]).default("nova"),
@@ -1015,7 +1046,7 @@ Return ONLY the JSON array, no other text.`;
 
       } else if (input.format === "carousel" || input.format === "reel") {
         // Generate carousel slide content via AI
-        const slidePrompt = `Analyze this content and break it into 5-7 key points for a carousel post.
+        const slidePrompt = `Analyze this content and break it into exactly ${input.slideCount} key points for a carousel post.
 
 ${contentBrief}
 
@@ -1048,14 +1079,21 @@ Return ONLY the JSON array, no other text.`;
           console.warn(`[Repurpose] AI slide generation failed, using fallback:`, (e as Error).message);
         }
 
-        // Fallback: split body into chunks
-        if (slideData.length === 0) {
-          const sentences = extracted.body.split(/[.!?]+/).filter((s) => s.trim().length > 20);
-          slideData = sentences.slice(0, 5).map((s, i) => ({
-            title: `Point ${i + 1}`,
-            body: s.trim().slice(0, 120),
-          }));
-        }
+        // Fallback slides derived from the body sentences — used both when the
+        // AI returns nothing AND to top up an AI list that came back short of
+        // the requested count. Generate up to `slideCount` so enforceSlideCount
+        // has enough material to reach the target before generic fillers kick in.
+        const fallbackSentences = extracted.body.split(/[.!?]+/).filter((s) => s.trim().length > 20);
+        const fallbackSlidesFromSentences = fallbackSentences.slice(0, input.slideCount).map((s, i) => ({
+          title: `Point ${i + 1}`,
+          body: s.trim().slice(0, 120),
+        }));
+
+        // E2: honour the user's chosen content-slide count EXACTLY — slice if the
+        // AI returned too many, top up from the sentence fallback then generic
+        // fillers if too few. Cover + cta are still added around these below, so
+        // the published carousel has slideCount + 2 slides total.
+        slideData = enforceSlideCount(slideData, input.slideCount, fallbackSlidesFromSentences);
 
         // Generate AI-designed carousel slides using Gemini
         const s3 = getS3Client();
