@@ -38,6 +38,35 @@ describe("__isAllowedImageUrl (SSRF guard)", () => {
   });
 });
 
+describe("isPublicPageUrl", () => {
+  async function load() {
+    const mod = await import("../utils/safe-fetch-url");
+    return mod.isPublicPageUrl;
+  }
+
+  it("allows a public http(s) page URL", async () => {
+    const isPublicPageUrl = await load();
+    expect(isPublicPageUrl("https://www.instagram.com/p/abc/")).toBe(true);
+  });
+
+  it("blocks metadata / private / loopback / link-local hosts", async () => {
+    const isPublicPageUrl = await load();
+    expect(isPublicPageUrl("http://169.254.169.254/")).toBe(false);
+    expect(isPublicPageUrl("http://10.0.0.5/page")).toBe(false);
+    expect(isPublicPageUrl("http://192.168.1.1/x")).toBe(false);
+    expect(isPublicPageUrl("http://127.0.0.1/x")).toBe(false);
+    expect(isPublicPageUrl("http://[::1]/x")).toBe(false);
+    expect(isPublicPageUrl("http://localhost/x")).toBe(false);
+  });
+
+  it("blocks non-http(s) schemes and non-URL strings", async () => {
+    const isPublicPageUrl = await load();
+    expect(isPublicPageUrl("ftp://example.com/x")).toBe(false);
+    expect(isPublicPageUrl("file:///etc/passwd")).toBe(false);
+    expect(isPublicPageUrl("not a url")).toBe(false);
+  });
+});
+
 describe("safeFetchPublicImage", () => {
   async function load() {
     const mod = await import("../utils/safe-fetch-url");

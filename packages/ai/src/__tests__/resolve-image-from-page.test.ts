@@ -85,4 +85,20 @@ describe("resolveImageFromPageUrl", () => {
     const result = await resolveImageFromPageUrl("https://example.com/missing");
     expect(result).toBeNull();
   });
+
+  describe("SSRF: fails closed BEFORE fetch for non-public URLs", () => {
+    it.each([
+      ["cloud metadata host", "http://169.254.169.254/"],
+      ["private RFC1918 host", "http://10.0.0.5/page"],
+      ["loopback localhost", "http://localhost/x"],
+      ["non-http(s) scheme", "ftp://example.com/x"],
+      ["not a URL at all", "not a url"],
+    ])("returns null without calling fetch — %s", async (_label, url) => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      const result = await resolveImageFromPageUrl(url);
+      expect(result).toBeNull();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
 });

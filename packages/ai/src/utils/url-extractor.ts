@@ -3,6 +3,8 @@
  * Fetches and extracts readable content from any URL (articles, social media, videos).
  */
 
+import { isPublicPageUrl } from "./safe-fetch-url";
+
 export interface ExtractedContent {
   title: string;
   description: string;
@@ -284,6 +286,9 @@ function getImages(html: string): string[] {
 const MAX_PAGE_BYTES = 2 * 1024 * 1024; // ~2MB — og:image is in <head>
 
 export async function resolveImageFromPageUrl(url: string): Promise<string | null> {
+  // SSRF: fail closed BEFORE the fetch — block private/loopback/link-local/metadata
+  // hosts (e.g. 169.254.169.254, 10.x) and non-http(s) schemes on the initial hop.
+  if (!isPublicPageUrl(url)) return null;
   let res: Response;
   try {
     res = await fetch(url, {

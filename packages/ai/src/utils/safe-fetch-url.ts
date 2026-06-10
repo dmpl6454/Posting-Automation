@@ -105,6 +105,17 @@ export function isPublicImageUrl(url: string): boolean {
   return true;
 }
 
+/** True only for a fetchable public http(s) page URL (blocks private/loopback/link-local/metadata hosts). Use before fetching a user-supplied PAGE url (e.g. og:image extraction). */
+export function isPublicPageUrl(url: string): boolean {
+  let u: URL;
+  try { u = new URL(url); } catch { return false; }
+  if (u.protocol !== "https:" && u.protocol !== "http:") return false;
+  const host = u.hostname.replace(/\.+$/, "").toLowerCase();
+  if (!host) return false;
+  if (isPrivateOrLoopbackHost(host)) return false;
+  return true;
+}
+
 /**
  * SSRF-safe fetch for image URLs. Throws if the URL is not allowed by
  * `isAllowedImageUrl`. Uses `redirect: "manual"` so a 30x cannot bounce the
