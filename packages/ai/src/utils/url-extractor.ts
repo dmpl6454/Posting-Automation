@@ -269,6 +269,53 @@ function getImages(html: string): string[] {
   return images;
 }
 
+/**
+ * Resolve a STYLE-REFERENCE image from an HTML post-page URL.
+ *
+ * Instagram/Facebook (and most social) POST PAGE URLs are `text/html`, not
+ * image files — pasting one as a "reference image" needs its `og:image`
+ * extracted. Returns the first of `og:image` / `twitter:image`, else null.
+ *
+ * Safety: `redirect: "manual"` (no SSRF chaining), 8s abort timeout, refuses
+ * non-HTML content-types (never parses binary), and caps the body at ~2MB
+ * (og: tags live in <head>, so slicing the prefix is sufficient). Any error
+ * → null so callers can fall back to "no reference".
+ */
+const MAX_PAGE_BYTES = 2 * 1024 * 1024; // ~2MB — og:image is in <head>
+
+export async function resolveImageFromPageUrl(url: string): Promise<string | null> {
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      headers: browserHeaders("https://www.google.com/"),
+      signal: AbortSignal.timeout(8000),
+      redirect: "manual",
+    });
+  } catch {
+    return null;
+  }
+
+  if (!res.ok) return null;
+
+  const ct = (res.headers.get("content-type") || "").toLowerCase();
+  if (!ct.includes("text/html")) return null;
+
+  let html: string;
+  try {
+    const buf = await res.arrayBuffer();
+    const sliced = buf.byteLength > MAX_PAGE_BYTES ? buf.slice(0, MAX_PAGE_BYTES) : buf;
+    html = new TextDecoder().decode(sliced);
+  } catch {
+    return null;
+  }
+
+  const og = getMeta(html, "og:image");
+  if (og) return og;
+  const tw = getMeta(html, "twitter:image");
+  if (tw) return tw;
+  return null;
+}
+
 /** Extract article body — find the largest text block */
 function getArticleBody(html: string): string {
   // Try article or main tags first
