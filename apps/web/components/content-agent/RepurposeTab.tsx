@@ -3,6 +3,7 @@
 import { humanizeError } from "~/lib/errors";
 import { buildCreatePostQuery } from "~/lib/repurpose-create-post-params";
 import { parseVideoReadyEvent, isVideoErrorEvent, finalizeRunningSteps } from "~/lib/parse-video-event";
+import { stripBareUrls } from "~/lib/strip-bare-urls";
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { trpc } from "~/lib/trpc/client";
@@ -67,6 +68,25 @@ const THEMES = [
   { id: "light" as const, label: "Light", color: "bg-zinc-100" },
   { id: "gradient" as const, label: "Gradient", color: "bg-gradient-to-r from-indigo-900 to-purple-900" },
 ];
+
+// T7: a pasted aesthetic-ref URL looks like a social/post PAGE (not a direct
+// image) when the host is a known social network OR the URL lacks a common image
+// extension. In that case the backend extracts the og:image, so we hint the user.
+function looksLikePostUrl(value: string): boolean {
+  const v = value.trim();
+  if (!/^https?:\/\//i.test(v)) return false;
+  let host = "";
+  let pathname = "";
+  try {
+    const u = new URL(v);
+    host = u.hostname.toLowerCase();
+    pathname = u.pathname.toLowerCase();
+  } catch {
+    return false;
+  }
+  if (/(^|\.)(instagram|facebook|twitter|x)\.com$/.test(host)) return true;
+  return !/\.(jpe?g|png|webp|gif)$/.test(pathname);
+}
 
 export function RepurposeTab() {
   const { toast } = useToast();
@@ -408,7 +428,7 @@ export function RepurposeTab() {
         logoUrl: brandLogo,
         logoPosition,
         accentColor: accentColor || undefined,
-        imageContext: imageContext || undefined,
+        imageContext: stripBareUrls(imageContext) || undefined,
         aestheticRefUrl: aestheticRefUrl || undefined,
         channelName,
         channelHandle,
@@ -475,7 +495,9 @@ export function RepurposeTab() {
         theme,
         accentColor: accentColor || undefined,
         aestheticRefUrl: aestheticRefUrl || undefined,
-        imageContext: imageContext || undefined,
+        // Strip bare URLs out of the free-text notes at send time so a URL pasted
+        // into the NOTES box doesn't leak into the AI prompt as literal text.
+        imageContext: stripBareUrls(imageContext) || undefined,
         // E4: when the user attached their own image (static only), send the
         // media ids so the router uses them and skips AI image generation.
         userMediaIds: useOwnImage ? userMedia.map((m) => m.id) : undefined,
@@ -836,6 +858,22 @@ export function RepurposeTab() {
                     )}
                   </div>
 
+                  {/* T7: paste an image OR a post/page URL — the backend extracts
+                      the og:image for page links. Last-write-wins with the file
+                      uploader above (both populate aestheticRefUrl). */}
+                  <div className="space-y-1">
+                    <Input
+                      type="url"
+                      value={aestheticRefUrl}
+                      onChange={(e) => setAestheticRefUrl(e.target.value)}
+                      placeholder="or paste an image / post URL"
+                      className="h-8 text-xs"
+                    />
+                    {looksLikePostUrl(aestheticRefUrl) && (
+                      <p className="text-[10px] text-muted-foreground">We&apos;ll grab the post&apos;s main image automatically.</p>
+                    )}
+                  </div>
+
                   {/* E3a: free-text aesthetic / style notes (optional, max 300 chars) */}
                   <div className="space-y-1 pt-1">
                     <Label className="text-xs" htmlFor="image-context">Aesthetic / style notes (optional)</Label>
@@ -874,10 +912,11 @@ export function RepurposeTab() {
                 </div>
               )}
 
-              {/* Content slides count (carousel only) — E2 */}
+              {/* Total slides count (carousel only) — E2/T6: this number now means
+                  TOTAL slides (cover + content + follow-for-more), not just content. */}
               {format === "carousel" && (
                 <div className="space-y-2">
-                  <Label>Content slides</Label>
+                  <Label>Total slides</Label>
                   <div className="flex gap-2">
                     {[3, 5, 7, 10].map((n) => (
                       <button
@@ -892,7 +931,7 @@ export function RepurposeTab() {
                       </button>
                     ))}
                   </div>
-                  <p className="text-[10px] text-muted-foreground">A cover and a follow-for-more slide are added around these.</p>
+                  <p className="text-[10px] text-muted-foreground">Includes a cover slide and a follow-for-more slide.</p>
                 </div>
               )}
 
@@ -1230,7 +1269,7 @@ export function RepurposeTab() {
                   Generated {results.format === "ai_video" ? "AI Video (Veo3)" : results.format === "seedance_video" ? "AI Video (Seedance 2.0)" : results.format === "reel" ? "Reel Video" : results.mediaUrls.length > 1 ? `Carousel (${results.mediaUrls.length} slides)` : "Static Post"}
                 </CardTitle>
                 <CardDescription>
-                  {results.format === "ai_video" ? "Cinematic AI video with text slides, visuals & music by Veo3" : results.format === "seedance_video" ? "Cinematic 2K video with native audio by Seedance 2.0" : results.format === "reel" ? "AI-generated video with slides" : results.format === "static" ? "AI-generated background with branded overlay" : "Swipe through carousel slides"}
+                  {results.format === "ai_video" ? "Cinematic AI video with text slides, visuals & music by Veo3" : results.format === "seedance_video" ? "Cinematic 2K video with native audio by Seedance 2.0" : results.format === "reel" ? "AI-generated video with slides" : results.format === "static" ? (creativeStyle === "hook_bars" || creativeStyle === "bold_typographic" ? "Branded design with your article's photo" : "AI-generated background with branded overlay") : "Swipe through carousel slides"}
                 </CardDescription>
               </CardHeader>
               <CardContent>
