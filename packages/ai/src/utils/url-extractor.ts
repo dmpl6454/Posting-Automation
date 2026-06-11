@@ -103,47 +103,86 @@ function browserHeaders(referer?: string): Record<string, string> {
  *
  * Returns the HTML body string and the effective URL (after any redirects).
  */
+
+/**
+ * Follow a single 3xx redirect from `res` ONLY if the Location header points
+ * to a safe public host (i.e. `isPublicPageUrl` passes). Returns the final
+ * response on a redirect-to-safe-host, or the original response when it's
+ * not a redirect / the Location is unsafe / the hop fails.
+ */
+async function followSafeRedirect(
+  res: Response,
+  headers: Record<string, string>,
+): Promise<Response | null> {
+  if (!res.ok && (res.status < 300 || res.status >= 400)) {
+    return res.ok ? res : null;
+  }
+  if (res.status >= 300 && res.status < 400) {
+    const location = res.headers.get("location");
+    if (location && isPublicPageUrl(location)) {
+      try {
+        return await fetch(location, {
+          headers,
+          signal: AbortSignal.timeout(TIMEOUT_MS),
+          redirect: "manual",
+        });
+      } catch {
+        return null;
+      }
+    }
+    // Location missing or points at a private host — refuse.
+    return null;
+  }
+  return res;
+}
+
 async function fetchHtmlWithFallback(
   url: string
 ): Promise<{ html: string; viaProxy: boolean }> {
   let lastErr: unknown;
 
   // ── Attempt 1: full Chrome headers with Google as referer ──────────
+  // Use redirect:"manual" so a 30x redirect cannot chain to a private host.
+  // On a redirect we re-validate the Location before following one hop.
   try {
     const res = await fetch(url, {
       headers: browserHeaders("https://www.google.com/"),
       signal: AbortSignal.timeout(TIMEOUT_MS),
-      redirect: "follow",
+      redirect: "manual",
     });
-    if (res.ok) {
-      const ct = res.headers.get("content-type") || "";
+    // Follow one redirect if the location is a safe public host.
+    const resolved = await followSafeRedirect(res, browserHeaders("https://www.google.com/"));
+    if (resolved?.ok) {
+      const ct = resolved.headers.get("content-type") || "";
       if (ct.includes("text/html") || ct.includes("application/xhtml") || ct.includes("text/plain")) {
-        return { html: await res.text(), viaProxy: false };
+        return { html: await resolved.text(), viaProxy: false };
       }
     }
-    lastErr = new Error(`HTTP ${res.status}`);
+    lastErr = new Error(`HTTP ${resolved?.status ?? res.status}`);
   } catch (e) {
     lastErr = e;
   }
 
   // ── Attempt 2: Googlebot UA ───────────────────────────────────────
   try {
+    const googleBotHeaders = {
+      "User-Agent": GOOGLEBOT_UA,
+      "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.9",
+    };
     const res = await fetch(url, {
-      headers: {
-        "User-Agent": GOOGLEBOT_UA,
-        "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
+      headers: googleBotHeaders,
       signal: AbortSignal.timeout(TIMEOUT_MS),
-      redirect: "follow",
+      redirect: "manual",
     });
-    if (res.ok) {
-      const ct = res.headers.get("content-type") || "";
+    const resolved = await followSafeRedirect(res, googleBotHeaders);
+    if (resolved?.ok) {
+      const ct = resolved.headers.get("content-type") || "";
       if (ct.includes("text/html") || ct.includes("application/xhtml") || ct.includes("text/plain")) {
-        return { html: await res.text(), viaProxy: false };
+        return { html: await resolved.text(), viaProxy: false };
       }
     }
-    lastErr = new Error(`Googlebot HTTP ${res.status}`);
+    lastErr = new Error(`Googlebot HTTP ${resolved?.status ?? res.status}`);
   } catch (e) {
     lastErr = e;
   }
@@ -794,11 +833,16 @@ async function extractLinkedIn(url: string): Promise<ExtractedContent> {
 
 /** Main extraction function */
 export async function extractUrlContent(url: string): Promise<ExtractedContent> {
-  // Validate URL
+  // Validate URL syntax first, then block private/loopback/metadata hosts so
+  // a user cannot point repurpose at 169.254.169.254 or any RFC-1918 address
+  // and read internal content back through the AI captions (SSRF).
   try {
     new URL(url);
   } catch {
     throw new Error("Invalid URL provided");
+  }
+  if (!isPublicPageUrl(url)) {
+    throw new Error("That URL is not accessible (private or non-HTTP host).");
   }
 
   const urlType = detectUrlType(url);

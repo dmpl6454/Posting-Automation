@@ -1,8 +1,12 @@
 import puppeteer from "puppeteer";
 import { generateNewsCardHtml, generateStaticNewsCreativeHtml, type NewsCardOptions, type StaticNewsCreativeOptions } from "./news-card-template";
 import { generateImageDallE } from "../providers/dalle.provider";
-import { buildStaticCreative, type StaticCreativeOptions } from "./creative-templates";
+import { buildStaticCreative, type StaticCreativeOptions, safeColor } from "./creative-templates";
 import { isPublicImageUrl } from "../utils/safe-fetch-url";
+
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
 
 export interface NewsImageResult {
   imageBase64: string;
@@ -221,7 +225,7 @@ export async function overlayLogoOnImage(options: LogoOverlayOptions): Promise<{
     imageBase64, mimeType, width, height,
     logoUrl, channelName, channelHandle,
     position = "bottom-left",
-    accentColor = "#e11d48",
+    accentColor,
     opacity = 0.85,
     browser: sharedBrowser,
   } = options;
@@ -232,7 +236,12 @@ export async function overlayLogoOnImage(options: LogoOverlayOptions): Promise<{
   }
 
   const dataUrl = `data:${mimeType};base64,${imageBase64}`;
-  const initial = (channelName?.[0] ?? "C").toUpperCase();
+  // Escape user-controlled strings before interpolating into HTML rendered by
+  // headless Puppeteer. A crafted channelName could otherwise execute JS in the
+  // server-side browser context (SSRF / local-file pivot). accentColor is gated
+  // through safeColor so only a valid CSS hex value reaches the style attribute.
+  const safeAccent = safeColor(accentColor);
+  const safeInitial = escapeHtml((channelName?.[0] ?? "C").toUpperCase());
 
   // SSRF guard: the logo URL is rendered as `<img src>` inside a headless
   // browser, so a private/metadata/internal host must never be fetched
@@ -242,10 +251,10 @@ export async function overlayLogoOnImage(options: LogoOverlayOptions): Promise<{
 
   const logoHtml = safeLogoUrl
     ? `<img src="${safeLogoUrl}" style="width:48px;height:48px;border-radius:12px;object-fit:cover;border:2px solid rgba(255,255,255,0.2);flex-shrink:0;" crossorigin="anonymous" />`
-    : `<div style="width:48px;height:48px;border-radius:12px;background:${accentColor};display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:20px;flex-shrink:0;">${initial}</div>`;
+    : `<div style="width:48px;height:48px;border-radius:12px;background:${safeAccent};display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:20px;flex-shrink:0;">${safeInitial}</div>`;
 
   const nameHtml = channelName
-    ? `<div style="color:#fff;font-size:18px;font-weight:700;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 1px 4px rgba(0,0,0,0.6);">${channelName}</div>`
+    ? `<div style="color:#fff;font-size:18px;font-weight:700;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 1px 4px rgba(0,0,0,0.6);">${escapeHtml(channelName)}</div>`
     : "";
   const handleHtml = "";
 
