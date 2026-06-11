@@ -870,7 +870,7 @@ export function RepurposeTab() {
                       className="h-8 text-xs"
                     />
                     {looksLikePostUrl(aestheticRefUrl) && (
-                      <p className="text-[10px] text-muted-foreground">We&apos;ll grab the post&apos;s main image automatically.</p>
+                      <p className="text-[10px] text-muted-foreground">We&apos;ll grab the post&apos;s main image automatically. It guides the background&apos;s look &amp; mood (not the layout or text) — the activity log shows whether it was applied.</p>
                     )}
                   </div>
 
@@ -882,10 +882,15 @@ export function RepurposeTab() {
                       value={imageContext}
                       maxLength={300}
                       onChange={(e) => setImageContext(e.target.value.slice(0, 300))}
-                      placeholder="e.g. neon and moody, 35mm film grain, warm tones"
+                      placeholder="e.g. neon and moody, 35mm film grain, warm tones — or wording, e.g. 'mention Doordarshan in the hook'"
                       className="min-h-[60px] text-xs"
                     />
-                    <p className="text-[10px] text-muted-foreground text-right">{imageContext.length}/300</p>
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="text-[10px] text-muted-foreground">
+                        Guides the background image AND the hook/headline wording. Highlighted words always use your brand color above.
+                      </p>
+                      <p className="text-[10px] text-muted-foreground shrink-0">{imageContext.length}/300</p>
+                    </div>
                   </div>
 
                   {logoUrl && (
@@ -1465,16 +1470,18 @@ export function RepurposeTab() {
             })}
           </div>
 
-          {/* Publish to Selected Channels */}
+          {/* Publish to Selected Channels — or save a channel-less draft */}
           <div className="flex flex-col items-center gap-3">
             {selectedChannelIds.length === 0 && (
-              <p className="text-sm text-muted-foreground">Select channels above to publish</p>
+              <p className="text-sm text-muted-foreground">
+                No channels selected — you can still save this as a draft and pick channels later in Posts
+              </p>
             )}
             <div className="flex gap-3">
               <Button
                 variant="outline"
                 className="gap-2"
-                disabled={selectedChannelIds.length === 0 || publishingState === "publishing"}
+                disabled={publishingState === "publishing"}
                 onClick={async () => {
                   setPublishingState("publishing");
                   try {
@@ -1512,8 +1519,11 @@ export function RepurposeTab() {
 
                     setPublishingState("done");
                     toast({
-                      title: "Draft posts created!",
-                      description: `${selectedChannelIds.length} draft post${selectedChannelIds.length > 1 ? "s" : ""} created. Go to Posts to review & schedule.`,
+                      title: selectedChannelIds.length === 0 ? "Draft saved!" : "Draft posts created!",
+                      description:
+                        selectedChannelIds.length === 0
+                          ? "Saved without channels — open it in Posts to add channels and publish."
+                          : `${selectedChannelIds.length} draft post${selectedChannelIds.length > 1 ? "s" : ""} created. Go to Posts to review & schedule.`,
                     });
                   } catch {
                     setPublishingState("idle");
@@ -1527,7 +1537,11 @@ export function RepurposeTab() {
                 ) : (
                   <FileText className="h-4 w-4" />
                 )}
-                {publishingState === "done" ? "Drafts Created" : `Create Drafts (${selectedChannelIds.length} channel${selectedChannelIds.length !== 1 ? "s" : ""})`}
+                {publishingState === "done"
+                  ? selectedChannelIds.length === 0 ? "Draft Saved" : "Drafts Created"
+                  : selectedChannelIds.length === 0
+                    ? "Save as Draft"
+                    : `Create Drafts (${selectedChannelIds.length} channel${selectedChannelIds.length !== 1 ? "s" : ""})`}
               </Button>
 
               {publishingState === "done" && (

@@ -33,6 +33,7 @@ import {
   CalendarIcon,
   RotateCcw,
   Ban,
+  Plus,
 } from "lucide-react";
 import { format } from "date-fns";
 
@@ -110,6 +111,22 @@ export default function PostDetailPage() {
   }, [post]);
 
   const isEditable = post?.status === "DRAFT" || post?.status === "SCHEDULED";
+
+  // Channels not yet targeted by this post — offered as one-click "Add"
+  // buttons on editable (draft/scheduled) posts, so a channel-less draft
+  // saved from Content Studio can be given channels here.
+  const { data: allChannels } = trpc.channel.list.useQuery(undefined, { enabled: isEditable });
+  const [addingChannelId, setAddingChannelId] = useState<string | null>(null);
+  const targetedChannelIds = new Set((post?.targets ?? []).map((t: any) => t.channelId));
+  const addableChannels = (allChannels ?? []).filter((c: any) => !targetedChannelIds.has(c.id));
+
+  const handleAddChannel = (channelId: string) => {
+    setAddingChannelId(channelId);
+    updatePost.mutate(
+      { id: postId, channelIds: [...targetedChannelIds, channelId] as string[] },
+      { onSettled: () => setAddingChannelId(null) }
+    );
+  };
 
   const updatePost = trpc.post.update.useMutation({
     onSuccess: () => {
@@ -448,6 +465,41 @@ export default function PostDetailPage() {
                   </div>
                 </div>
               ))}
+
+            {/* Add channels — drafts/scheduled only. A channel-less draft (saved
+                from Content Studio without selecting channels) gets its channels
+                here before it can be published. */}
+            {isEditable && addableChannels.length > 0 && (
+              <div className="rounded-lg border border-dashed p-3 space-y-2">
+                <p className="text-xs text-muted-foreground">
+                  {post.targets.length === 0
+                    ? "This draft has no channels yet — add at least one to publish it."
+                    : "Add more channels:"}
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {addableChannels.map((channel: any) => (
+                    <Button
+                      key={channel.id}
+                      size="sm"
+                      variant="outline"
+                      className="h-7 gap-1 px-2 text-xs"
+                      disabled={addingChannelId === channel.id || updatePost.isPending}
+                      onClick={() => handleAddChannel(channel.id)}
+                    >
+                      {addingChannelId === channel.id ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <Plus className="h-3 w-3" />
+                      )}
+                      {channel.name}
+                      <Badge variant="secondary" className="ml-1 text-[9px]">
+                        {channel.platform}
+                      </Badge>
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>
