@@ -19,7 +19,12 @@ import {
   generateSeedanceVideo,
   buildSeedancePrompt,
 } from "@postautomation/ai";
-import { buildVideoReadyDetail, friendlyVideoError, escapeDrawText } from "../lib/repurpose-video";
+import {
+  buildVideoReadyDetail,
+  friendlyVideoError,
+  escapeDrawText,
+  buildCaptionDrawtextFilters,
+} from "../lib/repurpose-video";
 
 // ── S3 (identical config to media-process.worker.ts) ─────────────────────
 const s3 = new S3Client({
@@ -65,14 +70,22 @@ async function downloadToBase64(url: string): Promise<{ imageBase64: string; mim
 }
 
 /**
- * Burn CLEAN caption text onto the Seedance-generated MP4 via an ffmpeg
- * `drawtext` pass. Seedance garbles any in-video text, so we generate with NO
- * text in the model output and overlay the readable title + scenes here — the
- * exact same drawtext approach used by the reel/video-overlay path.
+ * Burn a CLEAN lower-third onto the Seedance-generated MP4 via an ffmpeg
+ * `drawtext` pass. The Seedance model now renders VISUALS ONLY (no in-video
+ * text — fixed via the prompt), so we overlay the readable caption layer here:
+ * a PERSISTENT title line plus ONE time-sliced scene caption at a time (the
+ * scene rotates across equal windows of the clip), so at most two lines ever
+ * show at once instead of the old permanently-stacked block.
  */
-function burnCaptionsOnVideo(videoBuf: Buffer, lines: string[]): Buffer {
-  const cleanLines = lines.map((l) => l.trim()).filter(Boolean);
-  if (cleanLines.length === 0) return videoBuf; // nothing to burn
+function burnCaptionsOnVideo(
+  videoBuf: Buffer,
+  opts: { title: string; scenes: string[]; durationSeconds: number }
+): Buffer {
+  // Build the ordered drawtext filters (pure, unit-tested in lib/repurpose-video).
+  // escapeDrawText is applied to EVERY caption TEXT value inside the helper;
+  // the time-slice between(...) windows are computed numbers (never user input).
+  const filters = buildCaptionDrawtextFilters(opts, escapeDrawText);
+  if (filters.length === 0) return videoBuf; // nothing to burn
 
   const tmpId = crypto.randomBytes(8).toString("hex");
   const workDir = join(tmpdir(), `seedance-caption-${tmpId}`);
@@ -83,15 +96,10 @@ function burnCaptionsOnVideo(videoBuf: Buffer, lines: string[]): Buffer {
   try {
     writeFileSync(inputPath, videoBuf);
 
-    // Stack the lines vertically near the bottom, boxed for legibility.
-    const lineHeight = 70;
-    const drawtexts = cleanLines
-      .map((line, i) => {
-        const escaped = escapeDrawText(line.slice(0, 80));
-        const y = `h-text_h-${60 + (cleanLines.length - 1 - i) * lineHeight}`;
-        return `drawtext=text='${escaped}':fontsize=44:fontcolor=white:x=(w-text_w)/2:y=${y}:box=1:boxcolor=black@0.6:boxborderw=18`;
-      })
-      .join(",");
+    // Join the filters into the single `-vf` filtergraph element. The commas
+    // here separate the drawtext filters; the commas INSIDE between(t,A,B) are
+    // protected by that expression's own filtergraph-level single quotes.
+    const drawtexts = filters.join(",");
 
     // SECURITY: run ffmpeg with execFileSync (NO shell) so attacker-influenceable
     // caption text (from the user-supplied URL's article) can never reach /bin/sh.
@@ -264,11 +272,16 @@ export function createRepurposeVideoWorker() {
             },
           });
 
-          // Burn CLEAN captions: Seedance garbles in-video text, so the readable
-          // title + scenes are overlaid here via ffmpeg drawtext.
+          // Burn a CLEAN lower-third: the Seedance model now renders visuals
+          // only, so the readable title (persistent) + ONE rotating scene caption
+          // (time-sliced) are overlaid here via ffmpeg drawtext.
           await pushProgress(scoped, "Adding captions", "running");
           const raw = seed.videoUrl ? await downloadToBuffer(seed.videoUrl) : Buffer.from(seed.videoBase64, "base64");
-          videoBuf = burnCaptionsOnVideo(raw, [sd.title, ...sd.scenes.slice(0, 4)]);
+          videoBuf = burnCaptionsOnVideo(raw, {
+            title: sd.title,
+            scenes: sd.scenes.slice(0, 4),
+            durationSeconds: sd.duration,
+          });
           durationSeconds = seed.durationSeconds;
         } else {
           throw new Error(`Unsupported repurpose-video format: ${format}`);

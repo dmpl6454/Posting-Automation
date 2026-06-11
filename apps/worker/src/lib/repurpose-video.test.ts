@@ -4,6 +4,7 @@ import {
   buildVideoErrorDetail,
   friendlyVideoError,
   escapeDrawText,
+  buildCaptionDrawtextFilters,
 } from "./repurpose-video";
 
 describe("buildVideoReadyDetail", () => {
@@ -54,6 +55,134 @@ describe("escapeDrawText", () => {
   it("converts single-quotes to a typographic apostrophe (existing behaviour)", () => {
     const out = escapeDrawText("it's");
     expect(out).not.toContain("'");
+  });
+});
+
+describe("buildCaptionDrawtextFilters", () => {
+  const enableRe = /enable='between\(t,([0-9.]+),([0-9.]+)\)'/;
+
+  it("emits a persistent TITLE filter with NO enable= and one time-sliced filter per scene", () => {
+    const filters = buildCaptionDrawtextFilters(
+      { title: "My Title", scenes: ["Scene A", "Scene B"], durationSeconds: 10 },
+      escapeDrawText
+    );
+    // title + 2 scenes
+    expect(filters.length).toBe(3);
+    const [title, ...scenes] = filters;
+    // TITLE is persistent — no enable= expression.
+    expect(title).toBeDefined();
+    expect(title!).not.toContain("enable=");
+    expect(title!).toContain("drawtext=");
+    // every scene filter is time-sliced.
+    for (const s of scenes) {
+      expect(s).toMatch(enableRe);
+    }
+  });
+
+  it("produces non-overlapping ascending windows that sum to ~durationSeconds", () => {
+    const filters = buildCaptionDrawtextFilters(
+      { title: "T", scenes: ["a", "b", "c", "d"], durationSeconds: 12 },
+      escapeDrawText
+    );
+    const sceneFilters = filters.slice(1);
+    expect(sceneFilters.length).toBe(4);
+    let prevEnd = 0;
+    let total = 0;
+    for (const f of sceneFilters) {
+      const m = f.match(enableRe);
+      expect(m).not.toBeNull();
+      const a = Number(m![1]);
+      const b = Number(m![2]);
+      // ascending, non-overlapping: this window starts where the last ended.
+      expect(a).toBeCloseTo(prevEnd, 1);
+      expect(b).toBeGreaterThan(a);
+      total += b - a;
+      prevEnd = b;
+    }
+    // windows tile the whole clip.
+    expect(total).toBeCloseTo(12, 1);
+    expect(prevEnd).toBeCloseTo(12, 1);
+  });
+
+  it("keeps the numeric between() expression INTACT — single quotes kept, commas/colons NOT escaped", () => {
+    const filters = buildCaptionDrawtextFilters(
+      { title: "T", scenes: ["only"], durationSeconds: 8 },
+      escapeDrawText
+    );
+    const scene = filters[1];
+    expect(scene).toBeDefined();
+    // The between(...) expression keeps its single quotes (filtergraph-level).
+    expect(scene!).toContain("enable='between(t,0.00,8.00)'");
+    // The commas inside between(...) are NOT escaped (would break the expr).
+    expect(scene!).not.toContain("between(t\\,");
+    // And the t: / commas inside between are intact (no backslash-colon there).
+    expect(scene!).toContain("between(t,0.00,8.00)");
+  });
+
+  it("applies escapeDrawText to the TITLE and SCENE text (single-quote/colon escaped per contract)", () => {
+    const filters = buildCaptionDrawtextFilters(
+      { title: "it's: A", scenes: ["b's: c"], durationSeconds: 6 },
+      escapeDrawText
+    );
+    const title = filters[0];
+    const scene = filters[1];
+    expect(title).toBeDefined();
+    expect(scene).toBeDefined();
+    // escapeDrawText converts an apostrophe ' → typographic ’ and : → \: in the
+    // TEXT, so the article apostrophe never produces a raw ASCII single quote
+    // that could break out of the filtergraph `text='...'` quoting.
+    // The ONLY legitimate raw single quotes are the filter-level delimiters:
+    // the pair wrapping text='...' and (for scenes) the pair around between(...).
+    // Extract the TEXT value between the first text='...' pair and assert the
+    // article apostrophe was escaped away (no raw ' inside the text region).
+    const titleText = title!.match(/text='([^']*)'/);
+    expect(titleText).not.toBeNull();
+    expect(titleText![1]).not.toContain("'");
+    expect(title!).toContain("\\:"); // colon escaped in the title text
+    const sceneText = scene!.match(/text='([^']*)'/);
+    expect(sceneText).not.toBeNull();
+    expect(sceneText![1]).not.toContain("'");
+    expect(scene!).toContain("\\:"); // colon escaped in the scene text
+    // The between(...) expression keeps its OWN single quotes (filtergraph-level).
+    expect(scene!).toContain("enable='between(t,0.00,6.00)'");
+  });
+
+  it("sceneCount 0 → only the TITLE filter (no scene filters)", () => {
+    const filters = buildCaptionDrawtextFilters(
+      { title: "Only Title", scenes: [], durationSeconds: 10 },
+      escapeDrawText
+    );
+    expect(filters.length).toBe(1);
+    expect(filters[0]).toBeDefined();
+    expect(filters[0]!).not.toContain("enable=");
+  });
+
+  it("caps at 4 scenes even when more are supplied", () => {
+    const filters = buildCaptionDrawtextFilters(
+      { title: "T", scenes: ["1", "2", "3", "4", "5", "6"], durationSeconds: 20 },
+      escapeDrawText
+    );
+    // title + at most 4 scenes
+    expect(filters.length).toBe(5);
+  });
+
+  it("durationSeconds <= 0 → scenes fall back to NO enable= (no broken/zero windows)", () => {
+    const filters = buildCaptionDrawtextFilters(
+      { title: "T", scenes: ["a", "b"], durationSeconds: 0 },
+      escapeDrawText
+    );
+    expect(filters.length).toBe(3);
+    for (const f of filters.slice(1)) {
+      expect(f).not.toContain("enable=");
+    }
+  });
+
+  it("empty title + empty scenes → no filters at all", () => {
+    const filters = buildCaptionDrawtextFilters(
+      { title: "   ", scenes: ["", "  "], durationSeconds: 10 },
+      escapeDrawText
+    );
+    expect(filters.length).toBe(0);
   });
 });
 
