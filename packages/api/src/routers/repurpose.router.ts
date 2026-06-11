@@ -227,6 +227,25 @@ export function appendImageContext(basePrompt: string, imageContext?: string): s
 }
 
 /**
+ * Fold the OpenAI vision-derived aesthetic STYLE descriptor into the same
+ * `imageContext` channel that already flows to the AI background prompt. This is
+ * what makes the aesthetic-reference feature work provider-agnostically: the
+ * descriptor reaches gpt-image-1 (which ignores `referenceImages`) via the text
+ * prompt, while the raw reference is ALSO still pushed into `referenceImages` so
+ * Gemini conditioning resumes once its billing hold lifts.
+ *
+ * Returns the user's `imageContext` and `styleDescriptor` joined with ". ",
+ * dropping empties; `undefined` when both are empty so `appendImageContext`
+ * leaves the base prompt untouched. Pure + exported for unit testing.
+ */
+export function mergeStyleContext(
+  imageContext?: string,
+  styleDescriptor?: string,
+): string | undefined {
+  return [imageContext, styleDescriptor].filter(Boolean).join(". ") || undefined;
+}
+
+/**
  * Render a single branded "static creative" (the static-post / carousel-cover
  * image) — extracted to module level (E3b) so BOTH the repurpose flow's
  * `buildHeadlineCreative` closure AND the standalone `regenerateImage` mutation
@@ -495,6 +514,10 @@ export const repurposeRouter = createRouter({
         launchCreativeBrowser,
         extractDominantColor,
         isPublicImageUrl,
+        safeFetchPublicImage,
+        resolveImageFromPageUrl,
+        isPublicPageUrl,
+        describeImageStyle,
       } = await import("@postautomation/ai");
 
       const userId = (ctx.session.user as any).id as string;
@@ -627,34 +650,47 @@ export const repurposeRouter = createRouter({
       // silently to the no-reference path.
       const brandReferenceImages: Array<{ base64: string; mimeType?: string }> = [];
       if (resolvedLogoUrl) {
-        try {
-          const r = await fetch(resolvedLogoUrl);
-          if (r.ok) {
-            const mime = r.headers.get("content-type") || "image/png";
-            const b64 = Buffer.from(await r.arrayBuffer()).toString("base64");
-            if (b64.length > 0) brandReferenceImages.push({ base64: b64, mimeType: mime });
-          }
-        } catch (e) {
-          console.warn(`[Repurpose] Logo reference fetch failed (continuing without):`, (e as Error).message);
-        }
+        // SSRF-safe: `safeFetchPublicImage` re-checks `isPublicImageUrl`,
+        // uses `redirect:"manual"`, requires an image/* content-type, and caps
+        // the body. Returns null on any failure → degrade silently.
+        const logoRef = await safeFetchPublicImage(resolvedLogoUrl);
+        if (logoRef) brandReferenceImages.push({ base64: logoRef.base64, mimeType: logoRef.mimeType });
       }
 
       // E1: an aesthetic/style reference image the AI mimics, IN ADDITION to the
-      // logo. Pushed into the SAME `brandReferenceImages` array so Gemini (Nano
-      // Banana) gets logo + aesthetic. Gemini-only — the OpenAI fallback ignores
-      // references entirely (no image-input path). SSRF: gated by the same
-      // `isPublicImageUrl` guard the logo uses; a disallowed URL or fetch failure
-      // degrades silently to no aesthetic reference (never throws).
-      if (input.aestheticRefUrl && isPublicImageUrl(input.aestheticRefUrl)) {
-        try {
-          const r = await fetch(input.aestheticRefUrl);
-          if (r.ok) {
-            const mime = r.headers.get("content-type") || "image/png";
-            const b64 = Buffer.from(await r.arrayBuffer()).toString("base64");
-            if (b64.length > 0) brandReferenceImages.push({ base64: b64, mimeType: mime });
+      // logo. Two things happen with it:
+      //   (1) the raw image is pushed into `brandReferenceImages` so Gemini
+      //       (Nano Banana) conditions the AI background on it — Gemini-only,
+      //       resumes automatically once the Gemini billing hold lifts;
+      //   (2) it is sent ONCE to an OpenAI vision model (`describeImageStyle`)
+      //       to derive a ~40-word style descriptor that is folded into the
+      //       image PROMPT — so gpt-image-1 (the current fallback, which ignores
+      //       `referenceImages`) ALSO mimics the style. This is what makes the
+      //       feature work provider-agnostically.
+      // The url may be an IMAGE url OR a social POST PAGE url (text/html): a
+      // post-page yields no image bytes directly, so we fall back to extracting
+      // its og:image. All paths fail closed/silently — never throw.
+      let aestheticStyleDescriptor: string | undefined;
+      if (input.aestheticRefUrl) {
+        let aRef = await safeFetchPublicImage(input.aestheticRefUrl);
+        // Page-url fallback: a social POST PAGE is text/html, not an image, so
+        // `safeFetchPublicImage` returns null. Resolve its og:image/twitter:image
+        // (self-guarded by `isPublicPageUrl`), then fetch THAT image.
+        if (!aRef && isPublicPageUrl(input.aestheticRefUrl)) {
+          const og = await resolveImageFromPageUrl(input.aestheticRefUrl);
+          if (og && isPublicImageUrl(og)) {
+            aRef = await safeFetchPublicImage(og);
           }
-        } catch (e) {
-          console.warn(`[Repurpose] Aesthetic reference fetch failed (continuing without):`, (e as Error).message);
+        }
+        if (aRef) {
+          brandReferenceImages.push({ base64: aRef.base64, mimeType: aRef.mimeType });
+          try {
+            aestheticStyleDescriptor = (await describeImageStyle(aRef.base64, aRef.mimeType)) || undefined;
+          } catch {
+            aestheticStyleDescriptor = undefined;
+          }
+        } else {
+          console.warn(`[Repurpose] Aesthetic reference unavailable (no image / unfetchable url) — continuing without`);
         }
       }
 
@@ -963,9 +999,14 @@ Topic: "${headlineForCreativeFinal}"
 Context: ${contentSummary.slice(0, 400)}
 
 Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g. "Imran Khan, Bollywood actor" → Bollywood/film imagery, NOT politics). Photorealistic or editorial illustration, dramatic lighting, strong mood, relevant to the topic.`;
-        // E3a: append the user's free-text aesthetic/style notes. The combined
-        // string flows through `sanitizePrompt` inside `generateImageSafe`.
-        const bgPromptWithContext = appendImageContext(bgPrompt, input.imageContext);
+        // E3a: append the user's free-text aesthetic/style notes AND the OpenAI
+        // vision-derived aesthetic-reference style descriptor (folded into the
+        // same imageContext channel). The combined string flows through
+        // `sanitizePrompt` inside `generateImageSafe`.
+        const bgPromptWithContext = appendImageContext(
+          bgPrompt,
+          mergeStyleContext(input.imageContext, aestheticStyleDescriptor),
+        );
 
         // Hook line for the `hook_bars` style ONLY — a short punchy hook with one
         // or two **brand-highlighted** words that renderHighlightMarkup turns into
@@ -1430,7 +1471,10 @@ Return ONLY the JSON array, no other text.`;
                     slideIdx,
                     totalSlides: allSlides.length,
                     categoryTone,
-                    imageContext: input.imageContext,
+                    // Fold the OpenAI vision aesthetic-reference descriptor into
+                    // the per-slide imageContext (computed ONCE above, reused for
+                    // every slide) so the carousel mimics the reference style too.
+                    imageContext: mergeStyleContext(input.imageContext, aestheticStyleDescriptor),
                   },
                   appendImageContext,
                 );
@@ -1646,6 +1690,7 @@ Return ONLY the JSON array, no other text.`;
         generateStyledCreativeImage,
         extractDominantColor,
         isPublicImageUrl,
+        safeFetchPublicImage,
       } = await import("@postautomation/ai");
 
       const userId = (ctx.session.user as any).id as string;
@@ -1680,16 +1725,9 @@ Return ONLY the JSON array, no other text.`;
       const referenceImages: Array<{ base64: string; mimeType?: string }> = [];
       for (const refUrl of [safeLogoUrl, safeAestheticRef]) {
         if (!refUrl) continue;
-        try {
-          const r = await fetch(refUrl);
-          if (r.ok) {
-            const mime = r.headers.get("content-type") || "image/png";
-            const b64 = Buffer.from(await r.arrayBuffer()).toString("base64");
-            if (b64.length > 0) referenceImages.push({ base64: b64, mimeType: mime });
-          }
-        } catch (e) {
-          console.warn(`[Repurpose] regenerate reference fetch failed (continuing):`, (e as Error).message);
-        }
+        // SSRF-safe (content-type + redirect:"manual" + byte cap); null → skip.
+        const ref = await safeFetchPublicImage(refUrl);
+        if (ref) referenceImages.push({ base64: ref.base64, mimeType: ref.mimeType });
       }
 
       const headline = input.headline.trim();

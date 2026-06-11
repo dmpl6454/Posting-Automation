@@ -44,6 +44,8 @@ vi.mock("@postautomation/ai", () => ({
   extractDominantColor: (...a: any[]) => extractDominantColor(...a),
   isPublicImageUrl: (...a: any[]) => isPublicImageUrl(...a),
   launchCreativeBrowser: (...a: any[]) => launchCreativeBrowser(...a),
+  // reference fetch on the regenerate path — null/no-op (refs not asserted here)
+  safeFetchPublicImage: vi.fn(async () => null),
   // unused-by-regenerate exports — present so other code paths don't crash on import
   extractUrlContent: vi.fn(),
   repurposeContent: vi.fn(),
