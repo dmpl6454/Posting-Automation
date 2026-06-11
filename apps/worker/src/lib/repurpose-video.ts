@@ -93,8 +93,12 @@ export function escapeDrawText(text: string): string {
 
 /** Max scene captions to rotate through the lower-third. */
 const MAX_CAPTION_SCENES = 4;
-/** Hard cap on a single caption line (keeps the box readable on 720×1280). */
-const CAPTION_MAX_CHARS = 80;
+/**
+ * Hard cap on a single caption line. drawtext does NOT word-wrap, so at fontsize
+ * 40 on a 720px-wide (720×1280) frame an ~80-char line runs off both edges;
+ * ~48 chars keeps a single proportional line inside the frame and readable.
+ */
+const CAPTION_MAX_CHARS = 48;
 
 /**
  * Build the ordered list of ffmpeg `drawtext` filter strings for the Seedance

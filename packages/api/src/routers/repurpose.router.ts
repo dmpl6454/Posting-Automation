@@ -732,6 +732,12 @@ export const repurposeRouter = createRouter({
         if (aRef) {
           brandReferenceImages.push({ base64: aRef.base64, mimeType: aRef.mimeType });
           try {
+            // NOTE: this descriptor is appended to the image-gen prompt and, on the
+            // prod billing-403 path, reaches gpt-image-1 UNSANITIZED (sanitizePrompt
+            // only fires on a Gemini safety block, not the non-safety fallback). The
+            // describe prompt is style-only + capped (≤80 tokens / 300 chars) and the
+            // unconditional NO_REAL_PERSON_CLAUSE follows it, so the (cosmetic, own-post)
+            // injection blast radius is bounded — do NOT assume sanitizePrompt guards it.
             aestheticStyleDescriptor = (await describeImageStyle(aRef.base64, aRef.mimeType)) || undefined;
           } catch {
             aestheticStyleDescriptor = undefined;
