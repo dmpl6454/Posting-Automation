@@ -116,10 +116,19 @@ export class InstagramProvider extends SocialProvider {
 
     const containerId = await this.createMediaContainer(tokens, igUserId, containerParams);
 
-    // For videos, wait for processing before publishing
-    if (isVideo) {
-      await this.waitForMediaReady(tokens, containerId);
-    }
+    // Wait for the container to reach FINISHED before publishing. Instagram
+    // processes ALL media asynchronously — not just videos. Publishing an image
+    // container too soon returns OAuthException code 9007 / subcode 2207027
+    // ("Media ID is not available / The media is not ready to be published").
+    // Videos can take 30-90s; images are usually a few seconds but are NOT
+    // instant, especially larger files. Poll faster (2s) and shorter (30s) for
+    // images so the common case stays snappy; keep the long 90s budget for video.
+    await this.waitForMediaReady(
+      tokens,
+      containerId,
+      isVideo ? 90000 : 30000,
+      isVideo ? 5000 : 2000,
+    );
 
     // Step 2: Publish the container
     return this.publishContainer(tokens, igUserId, containerId);
@@ -127,10 +136,18 @@ export class InstagramProvider extends SocialProvider {
 
   /**
    * Poll until the media container status is FINISHED (ready to publish).
-   * Instagram video processing can take 30-90 seconds.
+   * Applies to images AND videos — Instagram processes all media asynchronously.
+   * Video processing can take 30-90s; images are usually a few seconds.
+   * Treats a still-IN_PROGRESS / missing status_code as "keep waiting" (the
+   * status field can lag right after container creation), only failing on an
+   * explicit ERROR/EXPIRED or after the timeout budget is exhausted.
    */
-  private async waitForMediaReady(tokens: OAuthTokens, containerId: string, maxWaitMs = 90000): Promise<void> {
-    const pollInterval = 5000;
+  private async waitForMediaReady(
+    tokens: OAuthTokens,
+    containerId: string,
+    maxWaitMs = 90000,
+    pollInterval = 5000,
+  ): Promise<void> {
     const maxAttempts = Math.ceil(maxWaitMs / pollInterval);
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -141,13 +158,15 @@ export class InstagramProvider extends SocialProvider {
       );
       const data: any = await res.json();
 
-      if (data.status_code === "FINISHED") return;
+      // FINISHED = ready to publish; PUBLISHED = already published (defensive).
+      if (data.status_code === "FINISHED" || data.status_code === "PUBLISHED") return;
       if (data.status_code === "ERROR" || data.status_code === "EXPIRED") {
         throw new Error(`Instagram media processing failed: ${data.status || data.status_code}`);
       }
+      // IN_PROGRESS, an unknown status, or a transient read error → keep polling.
     }
 
-    throw new Error("Instagram video processing timed out after 90 seconds");
+    throw new Error(`Instagram media processing timed out after ${Math.round(maxWaitMs / 1000)} seconds`);
   }
 
   async deletePost(tokens: OAuthTokens, platformPostId: string): Promise<void> {
@@ -374,20 +393,40 @@ export class InstagramProvider extends SocialProvider {
     igUserId: string,
     containerId: string
   ): Promise<SocialPostResult> {
-    const res = await fetch(
-      `${this.graphBaseUrl}/${this.apiVersion}/${igUserId}/media_publish`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          creation_id: containerId,
-          access_token: tokens.accessToken,
-        }),
-      }
-    );
+    // Even after the container reports FINISHED, media_publish can briefly still
+    // return subcode 2207027 ("media is not ready to be published"). Retry a few
+    // times with backoff so a one-off race resolves inside this call instead of
+    // failing the whole job (which the user sees as a red "Failed" before the
+    // BullMQ retry eventually fixes it). Only this specific transient subcode is
+    // retried here; any other error throws immediately.
+    let data: any;
+    let res: Response;
+    const maxPublishAttempts = 5;
+    for (let attempt = 0; attempt < maxPublishAttempts; attempt++) {
+      res = await fetch(
+        `${this.graphBaseUrl}/${this.apiVersion}/${igUserId}/media_publish`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            creation_id: containerId,
+            access_token: tokens.accessToken,
+          }),
+        }
+      );
 
-    const data: any = await res.json();
-    if (!res.ok) throw new Error(`Instagram publish failed: ${JSON.stringify(data)}`);
+      data = await res.json();
+      if (res.ok) break;
+
+      const subcode = data?.error?.error_subcode;
+      const isNotReady = subcode === 2207027 || /not ready to be published|Media ID is not available/i.test(data?.error?.error_user_msg || data?.error?.message || "");
+      if (isNotReady && attempt < maxPublishAttempts - 1) {
+        // Linear-ish backoff: 3s, 6s, 9s, 12s — gives the container time to settle.
+        await new Promise((r) => setTimeout(r, 3000 * (attempt + 1)));
+        continue;
+      }
+      throw new Error(`Instagram publish failed: ${JSON.stringify(data)}`);
+    }
 
     // media_publish returns a numeric media ID, not a shortcode.
     // Fetch the permalink field to get the real post URL.
@@ -452,10 +491,15 @@ export class InstagramProvider extends SocialProvider {
       if (!res.ok) throw new Error(`Instagram carousel item upload failed: ${JSON.stringify(data)}`);
       const childId: string = data.id;
 
-      // Video children must be fully processed before the carousel container can be created
-      if (isChildVideo) {
-        await this.waitForMediaReady(tokens, childId);
-      }
+      // Every child container must be FINISHED before the carousel container can
+      // be created — images included (not just videos). Use the short image
+      // budget for images, the long one for videos.
+      await this.waitForMediaReady(
+        tokens,
+        childId,
+        isChildVideo ? 90000 : 30000,
+        isChildVideo ? 5000 : 2000,
+      );
 
       childContainerIds.push(childId);
     }
@@ -477,6 +521,10 @@ export class InstagramProvider extends SocialProvider {
 
     const carouselData: any = await carouselRes.json();
     if (!carouselRes.ok) throw new Error(`Instagram carousel container creation failed: ${JSON.stringify(carouselData)}`);
+
+    // The carousel container itself is processed asynchronously too — wait for
+    // it to finish before publishing, or media_publish returns subcode 2207027.
+    await this.waitForMediaReady(tokens, carouselData.id, 60000, 3000);
 
     // Step 3: Publish the carousel
     return this.publishContainer(tokens, igUserId, carouselData.id);

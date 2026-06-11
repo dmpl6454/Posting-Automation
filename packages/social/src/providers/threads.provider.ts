@@ -163,21 +163,41 @@ export class ThreadsProvider extends SocialProvider {
       throw new Error(`Threads container creation failed: ${JSON.stringify(containerData)}`);
     }
 
-    // Step 2: Publish the container
-    const publishRes = await fetch(
-      `https://graph.threads.net/v1.0/${userId}/threads_publish`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          creation_id: containerData.id,
-          access_token: tokens.accessToken,
-        }),
-      }
-    );
+    // Media containers (image / video / carousel) are processed asynchronously.
+    // Publishing too soon returns a "media not ready" error (Meta recommends
+    // waiting ~30s for media before publishing). Pure TEXT posts publish
+    // instantly and skip the wait. We poll the container's status field rather
+    // than blindly sleeping the full 30s so the common (fast) case stays snappy.
+    if (containerParams.media_type !== "TEXT") {
+      await this.waitForContainerReady(containerData.id, tokens.accessToken);
+    }
 
-    const publishData: any = await publishRes.json();
-    if (!publishRes.ok || publishData.error) {
+    // Step 2: Publish the container (with a short retry on the transient
+    // "not ready" race that can still occur right after the container settles).
+    let publishData: any;
+    const maxPublishAttempts = 5;
+    for (let attempt = 0; attempt < maxPublishAttempts; attempt++) {
+      const publishRes = await fetch(
+        `https://graph.threads.net/v1.0/${userId}/threads_publish`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            creation_id: containerData.id,
+            access_token: tokens.accessToken,
+          }),
+        }
+      );
+
+      publishData = await publishRes.json();
+      if (publishRes.ok && !publishData.error) break;
+
+      const msg = publishData?.error?.error_user_msg || publishData?.error?.message || "";
+      const isNotReady = /not ready|not available|still processing|media is not/i.test(msg);
+      if (isNotReady && attempt < maxPublishAttempts - 1) {
+        await new Promise((r) => setTimeout(r, 3000 * (attempt + 1)));
+        continue;
+      }
       throw new Error(`Threads publish failed: ${JSON.stringify(publishData)}`);
     }
 
@@ -192,6 +212,42 @@ export class ThreadsProvider extends SocialProvider {
       url: permalinkData.permalink || `https://www.threads.net/post/${publishData.id}`,
       metadata: publishData,
     };
+  }
+
+  /**
+   * Poll a Threads media container's status until it is FINISHED (ready to
+   * publish). Threads processes media asynchronously; publishing too soon fails
+   * with a "media not ready" error. Returns on FINISHED/PUBLISHED, throws on
+   * ERROR/EXPIRED, otherwise keeps polling up to the timeout budget. A missing
+   * status field or transient read error is treated as "keep waiting".
+   */
+  private async waitForContainerReady(
+    containerId: string,
+    accessToken: string,
+    maxWaitMs = 45000,
+    pollInterval = 3000,
+  ): Promise<void> {
+    const maxAttempts = Math.ceil(maxWaitMs / pollInterval);
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      await new Promise((r) => setTimeout(r, pollInterval));
+      try {
+        const res = await fetch(
+          `https://graph.threads.net/v1.0/${containerId}?fields=status,error_message&access_token=${accessToken}`
+        );
+        const data: any = await res.json();
+        const status = String(data.status || "").toUpperCase();
+        if (status === "FINISHED" || status === "PUBLISHED") return;
+        if (status === "ERROR" || status === "EXPIRED") {
+          throw new Error(`Threads media processing failed: ${data.error_message || status}`);
+        }
+        // IN_PROGRESS / unknown → keep polling.
+      } catch (e) {
+        // A genuine processing failure is rethrown; a transient read error keeps polling.
+        if (e instanceof Error && /processing failed/i.test(e.message)) throw e;
+      }
+    }
+    // Don't hard-fail on timeout — fall through to the publish call, which has
+    // its own "not ready" retry. The container may simply be slow to report.
   }
 
   async deletePost(tokens: OAuthTokens, platformPostId: string): Promise<void> {
