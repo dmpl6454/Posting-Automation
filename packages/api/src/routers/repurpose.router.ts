@@ -1156,7 +1156,6 @@ Return ONLY the JSON array, no other text.`;
           const cleaned = kpResponse.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
           const arrMatch = cleaned.match(/\[[\s\S]*\]/);
           if (arrMatch) keyPoints = JSON.parse(arrMatch[0]);
-          progress("Extracting key points for video scenes", "done", `${keyPoints.length} scenes`);
         } catch (e) {
           progress("Extracting key points for video scenes", "error", friendlyAIMessage(e));
           console.warn(`[Repurpose] Key point extraction failed:`, (e as Error).message);
@@ -1166,6 +1165,9 @@ Return ONLY the JSON array, no other text.`;
           const sentences = extracted.body.split(/[.!?]+/).filter((s) => s.trim().length > 20);
           keyPoints = sentences.slice(0, 5).map((s) => s.trim().slice(0, 80));
         }
+        // Publish "done" AFTER the sentence-fallback fills keyPoints so the scene
+        // count is the final value (parity with the seedance branch).
+        progress("Extracting key points for video scenes", "done", `${keyPoints.length} scenes`);
 
         // 2. Build cinematic video prompt
         const musicMood = input.theme === "dark" ? "dramatic, cinematic, deep bass" :
@@ -1330,7 +1332,6 @@ Return ONLY the JSON array, no other text.`;
           const cleaned = kpResponse.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
           const arrMatch = cleaned.match(/\[[\s\S]*\]/);
           if (arrMatch) keyPoints = JSON.parse(arrMatch[0]);
-          progress("Extracting key points for video scenes", "done", `${keyPoints.length} scenes`);
         } catch (e) {
           progress("Extracting key points for video scenes", "error", friendlyAIMessage(e));
         }
@@ -1339,6 +1340,10 @@ Return ONLY the JSON array, no other text.`;
           const sentences = extracted.body.split(/[.!?]+/).filter((s) => s.trim().length > 20);
           keyPoints = sentences.slice(0, 5).map((s) => s.trim().slice(0, 80));
         }
+        // Publish the "done" AFTER the sentence-fallback fills keyPoints, so the
+        // scene count reflects the final value (was published before the fallback
+        // → showed "0 scenes" then "Queued ... 5 scenes" mismatch).
+        progress("Extracting key points for video scenes", "done", `${keyPoints.length} scenes`);
 
         // ── ENQUEUE the Seedance video job (Phase 2b T3) ─────────────────
         // The long (~up to 7.5min) Seedance poll used to run synchronously here,

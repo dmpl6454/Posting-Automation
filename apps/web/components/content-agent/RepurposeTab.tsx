@@ -2,7 +2,7 @@
 
 import { humanizeError } from "~/lib/errors";
 import { buildCreatePostQuery } from "~/lib/repurpose-create-post-params";
-import { parseVideoReadyEvent, isVideoErrorEvent } from "~/lib/parse-video-event";
+import { parseVideoReadyEvent, isVideoErrorEvent, finalizeRunningSteps } from "~/lib/parse-video-event";
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { trpc } from "~/lib/trpc/client";
@@ -168,6 +168,13 @@ export function RepurposeTab() {
       try {
         const step: ProgressStep = JSON.parse(ev.data);
         if (step.step === "__finished__") {
+          // Self-heal the synchronous path: flip any lingering running step to
+          // the finishing status. (The async-video path closes the SSE on
+          // video_ready before __finished__ arrives, so this is belt-and-braces
+          // — finalizeRunningSteps also runs in the video_ready/error branches.)
+          setProgressSteps((prev) =>
+            finalizeRunningSteps(prev, step.status === "error" ? "error" : "done"),
+          );
           es.close();
           eventSourceRef.current = null;
           return;
@@ -195,12 +202,20 @@ export function RepurposeTab() {
             carouselMediaIds: [ready.mediaId],
           }));
           setVideoGenerating(false);
+          // The worker re-publishes "done" for each step, but the client closes
+          // the SSE on video_ready (below) — so any step still showing "running"
+          // (race: the worker's done re-publish hadn't arrived yet) would spin
+          // forever. Flip every outstanding running step → done before closing.
+          setProgressSteps((prev) => finalizeRunningSteps(prev, "done"));
           toast({ title: "Video ready!", description: "Your video has been generated." });
           closeVideoStream();
           return;
         }
         if (isVideoErrorEvent(step)) {
           setVideoGenerating(false);
+          // Flip outstanding running steps → error so none spin forever after
+          // the stream closes (the worker only published them as "running").
+          setProgressSteps((prev) => finalizeRunningSteps(prev, "error"));
           toast({
             title: "Video generation failed",
             description: step.detail || "The video could not be produced. See the activity log.",

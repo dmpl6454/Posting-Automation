@@ -243,6 +243,9 @@ export function createRepurposeVideoWorker() {
           });
           videoBuf = Buffer.from(reelResult.videoBase64, "base64");
           durationSeconds = reelResult.durationSeconds;
+          // Re-publish "done" so the activity-log spinner flips to a checkmark
+          // (the client dedupes by step name).
+          await pushProgress(scoped, "Stitching reel video", "done");
         } else if (format === "seedance_video") {
           await pushProgress(scoped, "Generating AI video (Seedance)", "running");
           const sd = job.data.seedance;
@@ -272,6 +275,10 @@ export function createRepurposeVideoWorker() {
             },
           });
 
+          // Generation finished — flip the spinner to a checkmark before the
+          // caption pass (the client dedupes by step name).
+          await pushProgress(scoped, "Generating AI video (Seedance)", "done", `${sd.duration}s clip`);
+
           // Burn a CLEAN lower-third: the Seedance model now renders visuals
           // only, so the readable title (persistent) + ONE rotating scene caption
           // (time-sliced) are overlaid here via ffmpeg drawtext.
@@ -282,6 +289,7 @@ export function createRepurposeVideoWorker() {
             scenes: sd.scenes.slice(0, 4),
             durationSeconds: sd.duration,
           });
+          await pushProgress(scoped, "Adding captions", "done");
           durationSeconds = seed.durationSeconds;
         } else {
           throw new Error(`Unsupported repurpose-video format: ${format}`);
@@ -291,6 +299,9 @@ export function createRepurposeVideoWorker() {
         await pushProgress(scoped, "Uploading video", "running", `${(videoBuf.length / 1024 / 1024).toFixed(1)}MB`);
         const key = `repurpose/${format}-${Date.now()}-${crypto.randomBytes(4).toString("hex")}.mp4`;
         const url = await uploadVideoToS3(videoBuf, key);
+        // Upload finished — flip the spinner to a checkmark before the terminal
+        // video_ready event (the client dedupes by step name).
+        await pushProgress(scoped, "Uploading video", "done", `${(videoBuf.length / 1024 / 1024).toFixed(1)}MB`);
 
         const media = await prisma.media.create({
           data: {

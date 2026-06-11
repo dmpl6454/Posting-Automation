@@ -52,3 +52,20 @@ export function parseVideoReadyEvent(step: VideoProgressStep): VideoReadyPayload
 export function isVideoErrorEvent(step: VideoProgressStep): boolean {
   return step.step === "video_error";
 }
+
+/**
+ * On a terminal video event (`video_ready` / `video_error` / `__finished__`),
+ * the activity-log steps that the worker only ever published as "running"
+ * (e.g. "Generating AI video (Seedance)", "Adding captions", "Uploading video")
+ * would otherwise spin forever, because the client closes the SSE before the
+ * worker's "done" re-publishes arrive. This flips every still-"running" step to
+ * the terminal `status`, leaving every other status (done/error/skipped)
+ * untouched. Pure + non-mutating (returns a new array with new objects only for
+ * the running entries).
+ */
+export function finalizeRunningSteps<T extends { status: string }>(
+  steps: T[],
+  status: "done" | "error",
+): T[] {
+  return steps.map((s) => (s.status === "running" ? { ...s, status } : s));
+}

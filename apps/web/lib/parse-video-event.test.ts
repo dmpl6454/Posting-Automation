@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseVideoReadyEvent, isVideoErrorEvent } from "./parse-video-event";
+import { parseVideoReadyEvent, isVideoErrorEvent, finalizeRunningSteps } from "./parse-video-event";
 
 describe("parseVideoReadyEvent", () => {
   it("parses a valid video_ready step into mediaId/url/format", () => {
@@ -48,5 +48,42 @@ describe("isVideoErrorEvent", () => {
 
   it("returns false for a video_ready step", () => {
     expect(isVideoErrorEvent({ step: "video_ready" })).toBe(false);
+  });
+});
+
+describe("finalizeRunningSteps", () => {
+  it("flips every running step to done, leaving others untouched", () => {
+    const steps = [
+      { step: "a", status: "running" as const },
+      { step: "b", status: "done" as const },
+      { step: "c", status: "running" as const },
+    ];
+    const result = finalizeRunningSteps(steps, "done");
+    expect(result.map((s) => s.status)).toEqual(["done", "done", "done"]);
+  });
+
+  it("flips running steps to error when given error", () => {
+    const steps = [
+      { step: "a", status: "running" as const },
+      { step: "b", status: "skipped" as const },
+    ];
+    const result = finalizeRunningSteps(steps, "error");
+    expect(result.map((s) => s.status)).toEqual(["error", "skipped"]);
+  });
+
+  it("does not mutate the input array and preserves other fields", () => {
+    const steps = [{ step: "a", status: "running" as const, detail: "x" }];
+    const result = finalizeRunningSteps(steps, "done");
+    expect(steps[0]!.status).toBe("running"); // original untouched
+    expect(result[0]).toEqual({ step: "a", status: "done", detail: "x" });
+  });
+
+  it("leaves already-done and error steps unchanged", () => {
+    const steps = [
+      { step: "a", status: "done" as const },
+      { step: "b", status: "error" as const },
+    ];
+    const result = finalizeRunningSteps(steps, "done");
+    expect(result).toEqual(steps);
   });
 });
