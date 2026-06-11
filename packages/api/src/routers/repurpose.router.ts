@@ -300,6 +300,24 @@ export async function renderStaticCreative(args: {
   // Text-first styles (hook_bars / bold_typographic) + cta slides render from
   // theme tokens alone — skip the slow AI background. premium_editorial /
   // tweet_card keep the AI photo background.
+  //
+  // For non-AI styles with a real https:// bgImageUrl: Puppeteer's `load` event
+  // does NOT wait for CSS background-image network fetches, so the canvas
+  // screenshots before the image paints (blank white). Pre-fetch → data URL so
+  // the image is inline and the load event correctly covers it.
+  if (
+    backgroundImageUrl?.startsWith("https://") &&
+    !styleNeedsAiBackground(args.creativeStyle)
+  ) {
+    try {
+      const { safeFetchPublicImage } = await import("@postautomation/ai");
+      const fetched = await safeFetchPublicImage(backgroundImageUrl, { timeoutMs: 8000 });
+      if (fetched) backgroundImageUrl = `data:${fetched.mimeType};base64,${fetched.base64}`;
+    } catch {
+      // keep the https:// URL; gradient fallback still looks fine
+    }
+  }
+
   if (args.slideRole !== "cta" && styleNeedsAiBackground(args.creativeStyle)) {
     const themeBgDescriptor =
       args.theme === "light"
