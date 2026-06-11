@@ -61,7 +61,10 @@ export const postRouter = createRouter({
       z.object({
         content: z.string().min(1),
         contentVariants: z.record(z.string()).optional(),
-        channelIds: z.array(z.string()).min(1),
+        // Empty is allowed for channel-less DRAFTS (save now, pick channels
+        // later on the post page). Scheduling still requires ≥1 channel —
+        // enforced below, not in the schema, so the error message is friendly.
+        channelIds: z.array(z.string()).default([]),
         scheduledAt: z.string().datetime().optional(),
         mediaIds: z.array(z.string()).optional(),
         tags: z.array(z.string()).optional(),
@@ -87,6 +90,11 @@ export const postRouter = createRouter({
         const now = new Date(Date.now() - 60_000);
         if (scheduled < now) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "Scheduled time cannot be in the past." });
+        }
+        // A scheduled post must have somewhere to publish; only DRAFTS may be
+        // saved channel-less (channels are added later on the post page).
+        if (input.channelIds.length === 0) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Select at least one channel to schedule a post." });
         }
       }
 
@@ -176,6 +184,9 @@ export const postRouter = createRouter({
         contentVariants: z.record(z.string()).optional(),
         scheduledAt: z.string().datetime().nullable().optional(),
         tags: z.array(z.string()).optional(),
+        // Replace the post's target channels (drafts/scheduled only). Enables
+        // adding channels to a channel-less draft saved from Content Studio.
+        channelIds: z.array(z.string()).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -187,7 +198,24 @@ export const postRouter = createRouter({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot edit published posts" });
       }
 
-      const { id, tags, ...data } = input;
+      const { id, tags, channelIds, ...data } = input;
+
+      // Channel replacement: only for DRAFT/SCHEDULED posts (a FAILED post may
+      // hold already-PUBLISHED targets that must not be deleted). Every id is
+      // org-ownership-validated — same IDOR guard as create.
+      if (channelIds) {
+        if (existing.status !== "DRAFT" && existing.status !== "SCHEDULED") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Channels can only be changed on draft or scheduled posts." });
+        }
+        const ownedChannels = await ctx.prisma.channel.findMany({
+          where: { id: { in: channelIds }, organizationId: ctx.organizationId },
+          select: { id: true },
+        });
+        if (ownedChannels.length !== new Set(channelIds).size) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Some selected channels are no longer available. Please re-select your channels and try again." });
+        }
+      }
+
       const updatedPost = await ctx.prisma.post.update({
         where: { id },
         data: {
@@ -197,6 +225,15 @@ export const postRouter = createRouter({
             tags: {
               deleteMany: {},
               create: tags.map((tag) => ({ tag })),
+            },
+          }),
+          ...(channelIds && {
+            targets: {
+              deleteMany: {},
+              create: channelIds.map((channelId) => ({
+                channelId,
+                status: existing.status,
+              })),
             },
           }),
         },

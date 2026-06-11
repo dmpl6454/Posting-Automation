@@ -169,6 +169,44 @@ export function capHookLine(raw: string): string {
 }
 
 /**
+ * Build the hook-line generation prompt for the `hook_bars` style. When the
+ * user supplied free-text creative notes (the UI's "Aesthetic / style notes"),
+ * they are passed through as WORDING instructions — e.g. "mention Doordarshan
+ * in the hook" — so text directives in the notes actually reach the hook, not
+ * just the background-image prompt. Color/layout directives are explicitly
+ * told to be ignored here (they belong to the template/brand color, which the
+ * AI cannot change). Pure + exported for unit testing.
+ */
+export function buildHookLinePrompt(headline: string, creativeNotes?: string): string {
+  const notesClause = creativeNotes?.trim()
+    ? `\nUser instructions — follow the parts about the hook's wording or which words to emphasize; ignore parts about colors, layout, or imagery: ${creativeNotes.trim()}`
+    : "";
+  return `Write a 4-7 word punchy hook for a social post about: ${headline}. Wrap ONE or TWO key words in **double asterisks** for emphasis.${notesClause}\nOutput ONLY the hook line, no quotes.`;
+}
+
+/**
+ * Build the notes-aware headline rewrite prompt. Runs ONLY when the user
+ * supplied creative notes: gives the AI one chance to honour wording
+ * instructions (e.g. "mention Doordarshan") grounded in the article context,
+ * while ignoring purely visual instructions. Instructed to return the headline
+ * unchanged when no wording instruction applies, so visual-only notes are a
+ * no-op for the text. Pure + exported for unit testing.
+ */
+export function buildHeadlineRewritePrompt(
+  headline: string,
+  context: string,
+  creativeNotes: string,
+): string {
+  return `You are refining the headline baked onto a social-post image.
+
+Current headline: ${headline}
+Article context: ${context}
+User instructions: ${creativeNotes}
+
+Apply ONLY the instructions that concern wording or what/who to mention. Ignore instructions about colors, fonts, layout, or imagery. If no wording instruction applies, return the current headline UNCHANGED. Return ONLY the headline text — max 12 words, no quotes, no hashtags, no emojis.`;
+}
+
+/**
  * Cap a headline to ≤12 words and ≤80 visible characters so the creative
  * template's word-count font sizing stays readable (≥16 words renders at 40px).
  * Applies to all formats. Hoisted to module level (E3b) so the standalone
@@ -622,6 +660,17 @@ export const repurposeRouter = createRouter({
       const userId = (ctx.session.user as any).id as string;
       const organizationId = ctx.organizationId;
 
+      // Progress tracking — fire-and-forget, never blocks. Hoisted ABOVE the
+      // logo/aesthetic-reference resolution so those steps can report into the
+      // activity log too (they used to fail silently with only a console.warn).
+      // Scope the client-supplied id by the authenticated userId so the Redis
+      // keys/channels are per-user (closes a cross-tenant IDOR — the reader in
+      // apps/web/app/api/progress/route.ts scopes by session.user.id identically).
+      const pid = input.progressId ? scopedProgressId(userId, input.progressId) : undefined;
+      const progress = (step: string, status: "running" | "done" | "error" | "skipped" = "running", detail?: string) => {
+        if (pid) pushProgress(pid, step, status, detail).catch(() => {});
+      };
+
       // Text-provider resilience: caption/brief generation is a hard
       // requirement for the whole flow. If the chosen provider fails (e.g. the
       // Google-family gemini/gemma4 providers share a billing-held project →
@@ -743,6 +792,10 @@ export const repurposeRouter = createRouter({
       // its og:image. All paths fail closed/silently — never throw.
       let aestheticStyleDescriptor: string | undefined;
       if (input.aestheticRefUrl) {
+        // Surface this step in the activity log: a dead reference url used to
+        // degrade with only a server-side console.warn, so users couldn't tell
+        // whether their style reference was honoured or silently dropped.
+        progress("Analyzing style reference");
         let aRef = await safeFetchPublicImage(input.aestheticRefUrl);
         // Page-url fallback: a social POST PAGE is text/html, not an image, so
         // `safeFetchPublicImage` returns null. Resolve its og:image/twitter:image
@@ -766,8 +819,20 @@ export const repurposeRouter = createRouter({
           } catch {
             aestheticStyleDescriptor = undefined;
           }
+          progress(
+            "Analyzing style reference",
+            "done",
+            aestheticStyleDescriptor
+              ? "Style extracted — applied to the AI background"
+              : "Reference image found — style description unavailable, using it as-is",
+          );
         } else {
           console.warn(`[Repurpose] Aesthetic reference unavailable (no image / unfetchable url) — continuing without`);
+          progress(
+            "Analyzing style reference",
+            "error",
+            "Couldn't read an image from that link (the site may block automated access) — continuing without the style reference",
+          );
         }
       }
 
@@ -826,15 +891,6 @@ export const repurposeRouter = createRouter({
           ...(extra?.bgImageUrl ? { bgImageUrl: extra.bgImageUrl } : {}),
         });
       }
-
-      // Progress tracking — fire-and-forget, never blocks.
-      // Scope the client-supplied id by the authenticated userId so the Redis
-      // keys/channels are per-user (closes a cross-tenant IDOR — the reader in
-      // apps/web/app/api/progress/route.ts scopes by session.user.id identically).
-      const pid = input.progressId ? scopedProgressId(userId, input.progressId) : undefined;
-      const progress = (step: string, status: "running" | "done" | "error" | "skipped" = "running", detail?: string) => {
-        if (pid) pushProgress(pid, step, status, detail).catch(() => {});
-      };
 
       // Helper: upload to S3 + create Media record in DB
       async function uploadAndCreateMedia(
@@ -1071,6 +1127,31 @@ KEYWORDS: ${(brief.keywords || []).join(", ")}`;
             console.warn(`[Repurpose] Social headline synthesis failed, using extracted title:`, (e as Error).message);
           }
         }
+        // The user's free-text creative notes may contain WORDING instructions
+        // (e.g. "mention Doordarshan in the hook"). Previously they only
+        // reached the background-image prompt, so any text instruction was
+        // silently ignored. When notes exist, give the AI one chance to honour
+        // them in the headline; visual-only notes return it unchanged. Never
+        // fails the flow.
+        const creativeNotes = input.imageContext?.trim() || "";
+        if (creativeNotes) {
+          try {
+            const rewritten = await generateContentResilient({
+              provider: input.provider,
+              platform: "INSTAGRAM",
+              userPrompt: buildHeadlineRewritePrompt(
+                headlineForCreativeFinal,
+                contentSummary.slice(0, 500),
+                creativeNotes,
+              ),
+              tone: "professional",
+            });
+            const cleanedHeadline = rewritten.replace(/^["']|["']$/g, "").replace(/\n[\s\S]*$/, "").trim();
+            if (cleanedHeadline.length > 3) headlineForCreativeFinal = cleanedHeadline;
+          } catch (e) {
+            console.warn(`[Repurpose] Notes-aware headline rewrite failed, keeping original:`, (e as Error).message);
+          }
+        }
         headlineForCreativeFinal = capHeadline(headlineForCreativeFinal);
         // PART A: surface the exact rendered headline so Regenerate reuses it.
         renderedHeadline = headlineForCreativeFinal;
@@ -1103,7 +1184,7 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
             const rawHook = await generateContentResilient({
               provider: input.provider,
               platform: "INSTAGRAM",
-              userPrompt: `Write a 4-7 word punchy hook for a social post about: ${headlineForCreativeFinal}. Wrap ONE or TWO key words in **double asterisks** for emphasis. Output ONLY the hook line, no quotes.`,
+              userPrompt: buildHookLinePrompt(headlineForCreativeFinal, creativeNotes),
               tone: "professional",
             });
             const trimmedHook = rawHook.replace(/^["']|["']$/g, "").replace(/\n[\s\S]*$/, "").trim();
