@@ -90,3 +90,85 @@ export function escapeDrawText(text: string): string {
     .replace(/\[/g, "\\[")
     .replace(/\]/g, "\\]");
 }
+
+/** Max scene captions to rotate through the lower-third. */
+const MAX_CAPTION_SCENES = 4;
+/**
+ * Hard cap on a single caption line. drawtext does NOT word-wrap, so at fontsize
+ * 40 on a 720px-wide (720×1280) frame an ~80-char line runs off both edges;
+ * ~48 chars keeps a single proportional line inside the frame and readable.
+ */
+const CAPTION_MAX_CHARS = 48;
+
+/**
+ * Build the ordered list of ffmpeg `drawtext` filter strings for the Seedance
+ * caption burn — a CLEAN lower-third:
+ *   • a PERSISTENT title line (no `enable=`), sitting near the bottom; and
+ *   • ONE rotating scene caption at a time, time-sliced via
+ *     `enable='between(t,A,B)'`, positioned ABOVE the title so at most two
+ *     lines (title + current scene) ever show at once.
+ *
+ * Returned as an array of filter strings; the caller joins with "," into the
+ * single `-vf` element passed to `execFileSync("ffmpeg", [...])` (NO shell).
+ *
+ * SECURITY: the `escape` callback (escapeDrawText) is applied to EVERY caption
+ * TEXT value — title + each scene — because the text is article-derived and
+ * attacker-influenceable. The `between(t,A,B)` window bounds are NUMBERS we
+ * compute here (never user input); the single quotes around `between(...)` are
+ * filtergraph-level quoting that make the commas/colons inside safe, so we must
+ * NOT run that expression through `escape` (doing so would break the filter).
+ *
+ * Guards: sceneCount === 0 → just the title; durationSeconds <= 0 → scenes get
+ * NO `enable=` (persistent fallback, no zero-width windows); all-empty → [].
+ */
+export function buildCaptionDrawtextFilters(
+  opts: { title: string; scenes: string[]; durationSeconds: number },
+  escape: (s: string) => string
+): string[] {
+  const filters: string[] = [];
+
+  const cleanTitle = opts.title.trim();
+  const scenes = opts.scenes
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, MAX_CAPTION_SCENES);
+
+  // Nothing to show at all.
+  if (!cleanTitle && scenes.length === 0) return filters;
+
+  // ── Persistent TITLE (lower-third, no enable=) ──────────────────────────
+  // Sits near the very bottom; the scene caption stacks ABOVE it.
+  if (cleanTitle) {
+    const escapedTitle = escape(cleanTitle.slice(0, CAPTION_MAX_CHARS));
+    filters.push(
+      `drawtext=text='${escapedTitle}':fontsize=40:fontcolor=white:x=(w-text_w)/2:y=h-text_h-60:box=1:boxcolor=black@0.6:boxborderw=18`
+    );
+  }
+
+  // ── Rotating SCENE captions (time-sliced, one at a time) ────────────────
+  // Each sits ABOVE the title line so only title + one scene show at once.
+  const sceneCount = scenes.length;
+  if (sceneCount > 0) {
+    const hasWindows = opts.durationSeconds > 0;
+    const seg = hasWindows ? opts.durationSeconds / sceneCount : 0;
+
+    scenes.forEach((scene, i) => {
+      const escapedScene = escape(scene.slice(0, CAPTION_MAX_CHARS));
+      // y ABOVE the title: title box is ~text_h+~36 tall and anchored at
+      // y=h-text_h-60; place the scene a fixed band higher.
+      const base = `drawtext=text='${escapedScene}':fontsize=40:fontcolor=white:x=(w-text_w)/2:y=h-text_h-200:box=1:boxcolor=black@0.55:boxborderw=18`;
+      if (hasWindows) {
+        // A and B are computed NUMBERS, NOT user input. The single quotes here
+        // are filtergraph-level — keep them; do NOT escape the inner expr.
+        const a = (i * seg).toFixed(2);
+        const b = ((i + 1) * seg).toFixed(2);
+        filters.push(`${base}:enable='between(t,${a},${b})'`);
+      } else {
+        // durationSeconds <= 0 → can't time-slice; show persistently.
+        filters.push(base);
+      }
+    });
+  }
+
+  return filters;
+}

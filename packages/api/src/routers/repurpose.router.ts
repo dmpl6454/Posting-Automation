@@ -56,6 +56,94 @@ export function styleNeedsAiBackground(style: string): boolean {
 }
 
 /**
+ * Pick the article's own photo (og:image, first in `extracted.images`) to use as
+ * the static-creative BACKGROUND. The locked product decision: hook+headline
+ * styles should sit on the real article photo (the templates render a
+ * scrim/branded gradient fallback when none is supplied). For AI-background
+ * styles (premium_editorial / tweet_card) this becomes the harmless DEFAULT that
+ * the AI overrides — and the AI-failure catch falls back to it.
+ *
+ * https-only: the downstream `safeImageUrl` in creative-templates accepts only
+ * `https://` or `data:image` (NOT `http://`), so an http og:image would be
+ * silently dropped there anyway. `isAllowed` is the `isPublicImageUrl` SSRF gate.
+ * Pure + exported for unit testing.
+ */
+export function pickArticleBgImage(
+  images: string[] | undefined,
+  isAllowed: (u: string) => boolean,
+): string | undefined {
+  if (!images) return undefined;
+  for (const u of images) {
+    if (typeof u === "string" && u.startsWith("https://") && isAllowed(u)) return u;
+  }
+  return undefined;
+}
+
+/**
+ * Camera/composition angles cycled across carousel slides so each AI background
+ * looks visually DISTINCT instead of "same person, same scene" on every slide.
+ * Indexed modulo the list so any slide count is covered.
+ */
+const SLIDE_ANGLES = [
+  "wide establishing shot",
+  "close-up detail / texture",
+  "overhead flat-lay composition",
+  "abstract geometric pattern",
+  "environment / location shot",
+] as const;
+
+/** Pick the camera/composition angle for slide N (wraps around). Pure + exported. */
+export function slideAngleDescriptor(slideIdx: number): string {
+  return SLIDE_ANGLES[slideIdx % SLIDE_ANGLES.length]!;
+}
+
+/**
+ * Build a PER-SLIDE carousel AI-background prompt that varies by slide (R3). The
+ * old code appended the FULL shared `contentBrief` (incl. `SUBJECT: <full named
+ * person>` + a single `VISUAL:`) to every slide with only a 3–6-word title
+ * varying — so every slide's prompt was ~95% identical and rendered the same
+ * person/scene. This builder instead:
+ *   - cycles a distinct camera/composition `angle` per slide,
+ *   - uses the slide's OWN title + body (the per-slide content), and
+ *   - includes ONLY the CATEGORY/TONE lines from the brief (`categoryTone`),
+ *     dropping the repeated SUBJECT/VISUAL that caused the sameness,
+ *   - explicitly asks the model to make each scene DISTINCT.
+ * The result still flows through the caller's `append` (= `appendImageContext`)
+ * so the user's style notes reach `sanitizePrompt` inside `generateImageSafe`.
+ * Pure + exported for unit testing.
+ */
+export function buildCarouselSlidePrompt(
+  opts: {
+    slideTitle: string;
+    slideBody?: string;
+    slideIdx: number;
+    totalSlides: number;
+    categoryTone: string;
+    imageContext?: string;
+  },
+  append: (base: string, ctx?: string) => string,
+): string {
+  const angle = slideAngleDescriptor(opts.slideIdx);
+  const base =
+    `Cinematic background photo, ${angle}, visually depicting: "${opts.slideTitle}".` +
+    (opts.slideBody ? ` ${opts.slideBody}` : "") +
+    ` ${opts.categoryTone}` +
+    ` Slide ${opts.slideIdx + 1} of ${opts.totalSlides}. Make this scene visually DISTINCT from the other slides.`;
+  return append(base, opts.imageContext);
+}
+
+/**
+ * Unconditional real-person guard appended to EVERY static-creative AI-background
+ * prompt (R3). Mirrors the clause in `seedance.provider.ts`. MUST be on the
+ * prompt unconditionally because the prod image path bypasses `sanitizePrompt`'s
+ * safety-only guard (the Gemini billing-403 doesn't match `isSafetyBlock`, so a
+ * raw prompt carrying a real named subject goes straight to gpt-image-1, which
+ * then renders that real person). Exported for unit testing.
+ */
+export const NO_REAL_PERSON_CLAUSE =
+  " Do NOT depict any specific, real, named public figure or recognizable real person; use only anonymous, generic, non-identifiable people.";
+
+/**
  * Cap a punchy hook line to ≤7 words and ≤60 visible characters WHILE
  * preserving any `**...**` emphasis markup. A naive substring/word cut could
  * split a `**word**` pair and leave a dangling `**`; this drops any trailing
@@ -73,6 +161,20 @@ export function capHookLine(raw: string): string {
     const lastIdx = out.lastIndexOf("**");
     out = (out.slice(0, lastIdx) + out.slice(lastIdx + 2)).trim();
   }
+  return out.trim();
+}
+
+/**
+ * Cap a headline to ≤12 words and ≤80 visible characters so the creative
+ * template's word-count font sizing stays readable (≥16 words renders at 40px).
+ * Applies to all formats. Hoisted to module level (E3b) so the standalone
+ * `regenerateImage` mutation can reuse the SAME capping logic as the repurpose
+ * flow. Pure + exported for unit testing.
+ */
+export function capHeadline(text: string): string {
+  const words = text.trim().split(/\s+/);
+  let out = words.slice(0, 12).join(" ");
+  if (out.length > 80) out = out.slice(0, 80).replace(/\s+\S*$/, "");
   return out.trim();
 }
 
@@ -104,6 +206,11 @@ export function enforceSlideCount(
   return out;
 }
 
+/** Carousel slideCount is the TOTAL slide count (cover + content + CTA). Content slides = total - 2 (min 1). */
+export function contentSlidesForTotal(total: number): number {
+  return Math.max(1, total - 2);
+}
+
 /**
  * Append a free-text "aesthetic / style notes" clause to an AI background
  * prompt (E3a). If `imageContext` is empty/whitespace/undefined the base prompt
@@ -117,6 +224,25 @@ export function appendImageContext(basePrompt: string, imageContext?: string): s
   const notes = (imageContext ?? "").trim();
   if (notes.length === 0) return basePrompt;
   return `${basePrompt}\n\nStyle notes: ${notes.slice(0, 300)}`;
+}
+
+/**
+ * Fold the OpenAI vision-derived aesthetic STYLE descriptor into the same
+ * `imageContext` channel that already flows to the AI background prompt. This is
+ * what makes the aesthetic-reference feature work provider-agnostically: the
+ * descriptor reaches gpt-image-1 (which ignores `referenceImages`) via the text
+ * prompt, while the raw reference is ALSO still pushed into `referenceImages` so
+ * Gemini conditioning resumes once its billing hold lifts.
+ *
+ * Returns the user's `imageContext` and `styleDescriptor` joined with ". ",
+ * dropping empties; `undefined` when both are empty so `appendImageContext`
+ * leaves the base prompt untouched. Pure + exported for unit testing.
+ */
+export function mergeStyleContext(
+  imageContext?: string,
+  styleDescriptor?: string,
+): string | undefined {
+  return [imageContext, styleDescriptor].filter(Boolean).join(". ") || undefined;
 }
 
 /**
@@ -157,10 +283,17 @@ export async function renderStaticCreative(args: {
   hookLine?: string;
   slideRole?: "cover" | "body" | "cta";
   body?: string;
+  /**
+   * A pre-existing photo (e.g. the real article image) to use as the creative
+   * background. Used as the DEFAULT bg; the AI-generation block below overrides
+   * it only for styles that need an AI photo (premium_editorial / tweet_card),
+   * and on AI failure we fall back to this passed-in photo.
+   */
+  bgImageUrl?: string;
   browser?: unknown;
 }): Promise<{ imageBase64: string; mimeType: string; bgSource: "ai" | "stock" }> {
   const { generateImageSafe, generateStyledCreativeImage } = args.ai;
-  let backgroundImageUrl: string | undefined;
+  let backgroundImageUrl: string | undefined = args.bgImageUrl;
   let bgSource: "ai" | "stock" = "stock";
   const referenceImages = args.referenceImages ?? [];
 
@@ -176,7 +309,10 @@ export async function renderStaticCreative(args: {
           : "dark, moody, dramatic";
     try {
       const bg = await generateImageSafe({
-        prompt: `${args.bgPrompt}\n\nIMPORTANT: produce a clean BACKGROUND photo only — NO text, words, letters, numbers, logos, or watermarks. ${themeBgDescriptor} tones.`,
+        // NO_REAL_PERSON_CLAUSE is UNCONDITIONAL (always on the prompt): the prod
+        // image path bypasses sanitizePrompt's safety-only guard, so this is the
+        // only thing stopping a real named subject from being rendered.
+        prompt: `${args.bgPrompt}\n\nIMPORTANT: produce a clean BACKGROUND photo only — NO text, words, letters, numbers, logos, or watermarks. ${themeBgDescriptor} tones.${NO_REAL_PERSON_CLAUSE}`,
         aspectRatio: "3:4",
         title: args.headline,
         topic: args.category || "news",
@@ -185,6 +321,8 @@ export async function renderStaticCreative(args: {
       backgroundImageUrl = `data:${bg.mimeType};base64,${bg.imageBase64}`;
       bgSource = "ai";
     } catch (e) {
+      // AI failure → fall back to the passed-in real photo (if any), not nothing.
+      backgroundImageUrl = args.bgImageUrl ?? backgroundImageUrl;
       console.warn(`[Repurpose] AI background failed, using stock template bg:`, (e as Error).message);
     }
   }
@@ -205,6 +343,81 @@ export async function renderStaticCreative(args: {
     ...(args.brandColor ? { brandColor: args.brandColor } : {}),
   });
   return { imageBase64: creative.imageBase64, mimeType: creative.mimeType, bgSource };
+}
+
+/**
+ * Minimal structural prisma type for `resolveLogoForOrg` — just the two reads it
+ * performs. Keeps the helper testable against a mocked prisma without importing
+ * the full `PrismaClient` type (and without `any`).
+ */
+type LogoResolverPrisma = {
+  channel: {
+    findFirst: (args: any) => Promise<{ id: string; avatar: string | null; metadata: unknown } | null>;
+  };
+  media: {
+    findFirst: (args: any) => Promise<{ url: string } | null>;
+  };
+};
+
+/**
+ * Shared logo-resolution chain (R3) used by BOTH the main repurpose flow AND the
+ * standalone `regenerateImage` mutation, so a regenerated creative keeps the SAME
+ * logo (and therefore the same derived brandColor) as the original.
+ *
+ * Resolution order — IDENTICAL to the old inline main-flow chain:
+ *   1. explicit `logoUrl` (caller / template / UI), else
+ *   2. DB Media `findFirst` ({ organizationId, category:"logo", channelId }) for a
+ *      channel matched by name/handle, else
+ *   3. that channel's `metadata.logo_path`, else
+ *   4. that channel's `avatar`.
+ *
+ * The final resolved url is SSRF-validated via `isPublicImageUrl` (dynamically
+ * imported from `@postautomation/ai`, same source the callers use) — a
+ * private/internal host is dropped (returns `undefined`) so every downstream use
+ * (fetch / extractDominantColor / render) is safe. All DB work is best-effort:
+ * any read failure degrades to the no-logo path rather than throwing.
+ */
+export async function resolveLogoForOrg(
+  prisma: LogoResolverPrisma,
+  opts: { organizationId: string; logoUrl?: string | null; channelName?: string; channelHandle?: string },
+): Promise<{ logoUrl: string | undefined }> {
+  const { isPublicImageUrl } = await import("@postautomation/ai");
+  let resolved = (opts.logoUrl || "").trim();
+  const channelName = opts.channelName || "";
+  const channelHandle = opts.channelHandle || "";
+
+  if (!resolved && channelName) {
+    try {
+      const channel = await prisma.channel.findFirst({
+        where: {
+          organizationId: opts.organizationId,
+          OR: [{ name: channelName }, { username: channelHandle || undefined }],
+        },
+        select: { id: true, avatar: true, metadata: true },
+      });
+      if (channel) {
+        const logoMedia = await prisma.media.findFirst({
+          where: { organizationId: opts.organizationId, category: "logo", channelId: channel.id },
+          orderBy: { createdAt: "desc" },
+        });
+        if (logoMedia) {
+          resolved = logoMedia.url;
+        } else {
+          const meta = channel.metadata as any;
+          resolved = meta?.logo_path || channel.avatar || "";
+        }
+      }
+    } catch {
+      // Non-critical — continue without logo.
+    }
+  }
+
+  // SSRF chokepoint: drop a private/internal-host logo (graceful no-logo path).
+  if (resolved && !isPublicImageUrl(resolved)) {
+    console.warn("[repurpose] logo URL blocked (private/internal host) — dropping logo");
+    resolved = "";
+  }
+  return { logoUrl: resolved || undefined };
 }
 
 /**
@@ -324,8 +537,9 @@ export const repurposeRouter = createRouter({
         aestheticRefUrl: z.string().optional(),
         // E3a: free-text style notes appended to the AI background prompt.
         imageContext: z.string().max(300).optional(),
-        // E2: how many CONTENT slides a carousel has (cover + cta added around
-        // these → total = slideCount + 2). Default 5 preserves prior behaviour.
+        // E2 / round3: total slides incl. cover + CTA; min 3 = cover+1 content+cta.
+        // Carousel content slides = slideCount - 2 (min 1). (Reel/slideshow has no
+        // picker and reads slideCount directly as its content-slide count.)
         slideCount: z.number().int().min(3).max(10).default(5),
         // E4: user-attached image(s). When set on a STATIC repurpose, these
         // BECOME the post media and the AI image generation is SKIPPED (captions
@@ -375,6 +589,10 @@ export const repurposeRouter = createRouter({
         launchCreativeBrowser,
         extractDominantColor,
         isPublicImageUrl,
+        safeFetchPublicImage,
+        resolveImageFromPageUrl,
+        isPublicPageUrl,
+        describeImageStyle,
       } = await import("@postautomation/ai");
 
       const userId = (ctx.session.user as any).id as string;
@@ -408,50 +626,22 @@ export const repurposeRouter = createRouter({
         }
       }
 
-      // Resolve logo: prefer input.logoUrl → DB media (category: "logo") → channel avatar
-      let resolvedLogoUrl = input.logoUrl || "";
+      // Resolve logo via the shared resolver (R3): input.logoUrl → DB media
+      // (category:"logo") → channel metadata.logo_path → channel avatar. The
+      // SAME helper backs `regenerateImage`, so a regenerated creative keeps the
+      // identical logo + derived brandColor. The resolver SSRF-validates the
+      // final url (`isPublicImageUrl`) and drops a private/internal host — every
+      // downstream use (reference fetch, extractDominantColor,
+      // buildHeadlineCreative, applyLogoOverlay) is therefore safe.
       const channelName = input.channelName || "";
       const channelHandle = input.channelHandle || "";
-
-      if (!resolvedLogoUrl && channelName) {
-        try {
-          // Try to find a channel matching the name/handle
-          const channel = await ctx.prisma.channel.findFirst({
-            where: { organizationId, OR: [{ name: channelName }, { username: channelHandle || undefined }] },
-            select: { id: true, avatar: true, metadata: true },
-          });
-          if (channel) {
-            // Check for custom logo in media library
-            const logoMedia = await ctx.prisma.media.findFirst({
-              where: { organizationId, category: "logo", channelId: channel.id },
-              orderBy: { createdAt: "desc" },
-            });
-            if (logoMedia) {
-              resolvedLogoUrl = logoMedia.url;
-            } else {
-              // Fallback to metadata.logo_path → channel avatar
-              const meta = channel.metadata as any;
-              resolvedLogoUrl = meta?.logo_path || channel.avatar || "";
-            }
-          }
-        } catch {
-          // Non-critical — continue without logo
-        }
-      }
-
-      // SSRF chokepoint: `resolvedLogoUrl` is user-influenced (input.logoUrl /
-      // template logoMedia.url / channel avatar) and is fetched + rendered
-      // server-side downstream (reference fetch, extractDominantColor,
-      // buildHeadlineCreative, applyLogoOverlay → overlayLogoOnImage). Validate
-      // ONCE here so every downstream use is safe. Logos may live on external
-      // public CDNs, so the looser `isPublicImageUrl` (public hosts allowed,
-      // private/loopback/metadata/internal blocked) is used — NOT the strict S3
-      // allowlist (which would silently drop legit external logos). A blocked
-      // URL degrades gracefully to the no-logo path.
-      if (resolvedLogoUrl && !isPublicImageUrl(resolvedLogoUrl)) {
-        console.warn("[repurpose] logo URL blocked (private/internal host) — dropping logo");
-        resolvedLogoUrl = "";
-      }
+      const { logoUrl: resolvedLogoOrUndef } = await resolveLogoForOrg(ctx.prisma, {
+        organizationId,
+        logoUrl: input.logoUrl,
+        channelName,
+        channelHandle,
+      });
+      let resolvedLogoUrl = resolvedLogoOrUndef || "";
 
       console.log(`[Repurpose] Logo config: logoUrl="${resolvedLogoUrl?.slice(0, 60) || ""}", channelName="${channelName}", handle="${channelHandle}"`);
 
@@ -507,34 +697,53 @@ export const repurposeRouter = createRouter({
       // silently to the no-reference path.
       const brandReferenceImages: Array<{ base64: string; mimeType?: string }> = [];
       if (resolvedLogoUrl) {
-        try {
-          const r = await fetch(resolvedLogoUrl);
-          if (r.ok) {
-            const mime = r.headers.get("content-type") || "image/png";
-            const b64 = Buffer.from(await r.arrayBuffer()).toString("base64");
-            if (b64.length > 0) brandReferenceImages.push({ base64: b64, mimeType: mime });
-          }
-        } catch (e) {
-          console.warn(`[Repurpose] Logo reference fetch failed (continuing without):`, (e as Error).message);
-        }
+        // SSRF-safe: `safeFetchPublicImage` re-checks `isPublicImageUrl`,
+        // uses `redirect:"manual"`, requires an image/* content-type, and caps
+        // the body. Returns null on any failure → degrade silently.
+        const logoRef = await safeFetchPublicImage(resolvedLogoUrl);
+        if (logoRef) brandReferenceImages.push({ base64: logoRef.base64, mimeType: logoRef.mimeType });
       }
 
       // E1: an aesthetic/style reference image the AI mimics, IN ADDITION to the
-      // logo. Pushed into the SAME `brandReferenceImages` array so Gemini (Nano
-      // Banana) gets logo + aesthetic. Gemini-only — the OpenAI fallback ignores
-      // references entirely (no image-input path). SSRF: gated by the same
-      // `isPublicImageUrl` guard the logo uses; a disallowed URL or fetch failure
-      // degrades silently to no aesthetic reference (never throws).
-      if (input.aestheticRefUrl && isPublicImageUrl(input.aestheticRefUrl)) {
-        try {
-          const r = await fetch(input.aestheticRefUrl);
-          if (r.ok) {
-            const mime = r.headers.get("content-type") || "image/png";
-            const b64 = Buffer.from(await r.arrayBuffer()).toString("base64");
-            if (b64.length > 0) brandReferenceImages.push({ base64: b64, mimeType: mime });
+      // logo. Two things happen with it:
+      //   (1) the raw image is pushed into `brandReferenceImages` so Gemini
+      //       (Nano Banana) conditions the AI background on it — Gemini-only,
+      //       resumes automatically once the Gemini billing hold lifts;
+      //   (2) it is sent ONCE to an OpenAI vision model (`describeImageStyle`)
+      //       to derive a ~40-word style descriptor that is folded into the
+      //       image PROMPT — so gpt-image-1 (the current fallback, which ignores
+      //       `referenceImages`) ALSO mimics the style. This is what makes the
+      //       feature work provider-agnostically.
+      // The url may be an IMAGE url OR a social POST PAGE url (text/html): a
+      // post-page yields no image bytes directly, so we fall back to extracting
+      // its og:image. All paths fail closed/silently — never throw.
+      let aestheticStyleDescriptor: string | undefined;
+      if (input.aestheticRefUrl) {
+        let aRef = await safeFetchPublicImage(input.aestheticRefUrl);
+        // Page-url fallback: a social POST PAGE is text/html, not an image, so
+        // `safeFetchPublicImage` returns null. Resolve its og:image/twitter:image
+        // (self-guarded by `isPublicPageUrl`), then fetch THAT image.
+        if (!aRef && isPublicPageUrl(input.aestheticRefUrl)) {
+          const og = await resolveImageFromPageUrl(input.aestheticRefUrl);
+          if (og && isPublicImageUrl(og)) {
+            aRef = await safeFetchPublicImage(og);
           }
-        } catch (e) {
-          console.warn(`[Repurpose] Aesthetic reference fetch failed (continuing without):`, (e as Error).message);
+        }
+        if (aRef) {
+          brandReferenceImages.push({ base64: aRef.base64, mimeType: aRef.mimeType });
+          try {
+            // NOTE: this descriptor is appended to the image-gen prompt and, on the
+            // prod billing-403 path, reaches gpt-image-1 UNSANITIZED (sanitizePrompt
+            // only fires on a Gemini safety block, not the non-safety fallback). The
+            // describe prompt is style-only + capped (≤80 tokens / 300 chars) and the
+            // unconditional NO_REAL_PERSON_CLAUSE follows it, so the (cosmetic, own-post)
+            // injection blast radius is bounded — do NOT assume sanitizePrompt guards it.
+            aestheticStyleDescriptor = (await describeImageStyle(aRef.base64, aRef.mimeType)) || undefined;
+          } catch {
+            aestheticStyleDescriptor = undefined;
+          }
+        } else {
+          console.warn(`[Repurpose] Aesthetic reference unavailable (no image / unfetchable url) — continuing without`);
         }
       }
 
@@ -561,6 +770,11 @@ export const repurposeRouter = createRouter({
           // Pass-through shared browser. Typed off launchCreativeBrowser's return
           // so the api package never names "puppeteer" directly (it isn't a dep).
           browser?: Awaited<ReturnType<typeof launchCreativeBrowser>>;
+          // The article's own photo (og:image) to use as the creative background.
+          // Becomes the renderer's DEFAULT bg: AI overrides it for AI-background
+          // styles, but for hook_bars/bold_typographic (AI skipped) it IS the bg —
+          // so those styles no longer render "blank". Pass-through, no fetch here.
+          bgImageUrl?: string;
         },
       ): Promise<{ imageBase64: string; mimeType: string; bgSource: "ai" | "stock" }> {
         // Delegate to the module-level renderer (E3b) so the repurpose flow and
@@ -585,6 +799,7 @@ export const repurposeRouter = createRouter({
           ...(extra?.slideRole ? { slideRole: extra.slideRole } : {}),
           ...(extra?.body !== undefined ? { body: extra.body } : {}),
           ...(extra?.browser ? { browser: extra.browser } : {}),
+          ...(extra?.bgImageUrl ? { bgImageUrl: extra.bgImageUrl } : {}),
         });
       }
 
@@ -731,14 +946,8 @@ KEYWORDS: ${(brief.keywords || []).join(", ")}`;
       const displayName = channelName || extracted.siteName || "Channel";
       const handle = channelHandle || displayName;
 
-      // Cap headlines so the template's word-count font sizing stays readable
-      // (≥16 words renders at 40px). Applies to all formats.
-      const capHeadline = (text: string): string => {
-        const words = text.trim().split(/\s+/);
-        let out = words.slice(0, 12).join(" ");
-        if (out.length > 80) out = out.slice(0, 80).replace(/\s+\S*$/, "");
-        return out.trim();
-      };
+      // Headlines are capped via the module-level `capHeadline` (hoisted so the
+      // regenerateImage mutation reuses the same logic — ≤12 words / ≤80 chars).
 
       let mediaUrls: string[] = [];
       let mediaType = "image/jpeg";
@@ -746,6 +955,11 @@ KEYWORDS: ${(brief.keywords || []).join(", ")}`;
       // Ordered slide media IDs for carousel posts (post.create needs real
       // Media rows, not raw S3 urls). Empty for non-carousel formats.
       const carouselMediaIds: string[] = [];
+      // The EXACT headline + hook line used to render the creative, surfaced in
+      // the response (PART A) so the per-image "Regenerate" can re-render with
+      // the SAME inputs (capped headline + hook) instead of the raw page title.
+      let renderedHeadline: string | undefined;
+      let renderedHookLine: string | undefined;
 
       if (input.format === "static" && input.userMediaIds?.length) {
         // ── E4: user attached their own image(s) ─────────────────────────────
@@ -834,6 +1048,8 @@ KEYWORDS: ${(brief.keywords || []).join(", ")}`;
           }
         }
         headlineForCreativeFinal = capHeadline(headlineForCreativeFinal);
+        // PART A: surface the exact rendered headline so Regenerate reuses it.
+        renderedHeadline = headlineForCreativeFinal;
 
         const bgPrompt = `Create a cinematic, high-quality BACKGROUND photo for a social post about:
 
@@ -843,9 +1059,14 @@ Topic: "${headlineForCreativeFinal}"
 Context: ${contentSummary.slice(0, 400)}
 
 Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g. "Imran Khan, Bollywood actor" → Bollywood/film imagery, NOT politics). Photorealistic or editorial illustration, dramatic lighting, strong mood, relevant to the topic.`;
-        // E3a: append the user's free-text aesthetic/style notes. The combined
-        // string flows through `sanitizePrompt` inside `generateImageSafe`.
-        const bgPromptWithContext = appendImageContext(bgPrompt, input.imageContext);
+        // E3a: append the user's free-text aesthetic/style notes AND the OpenAI
+        // vision-derived aesthetic-reference style descriptor (folded into the
+        // same imageContext channel). The combined string flows through
+        // `sanitizePrompt` inside `generateImageSafe`.
+        const bgPromptWithContext = appendImageContext(
+          bgPrompt,
+          mergeStyleContext(input.imageContext, aestheticStyleDescriptor),
+        );
 
         // Hook line for the `hook_bars` style ONLY — a short punchy hook with one
         // or two **brand-highlighted** words that renderHighlightMarkup turns into
@@ -867,11 +1088,28 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
             console.warn(`[Repurpose] Hook line generation failed, rendering without hook:`, (e as Error).message);
           }
         }
+        // PART A: surface the hook line so Regenerate re-renders hook_bars WITH it.
+        renderedHookLine = hookLine;
+
+        // Use the article's OWN photo (og:image, first in extracted.images) as the
+        // creative background. For hook_bars/bold_typographic (AI background
+        // skipped by design) this is what stops the creative rendering "blank" — it
+        // becomes the real backdrop behind the bars/headline. For the AI-background
+        // styles it's the harmless DEFAULT the AI overrides (and the AI-failure
+        // fallback). SSRF-gated by isPublicImageUrl; https-only (safeImageUrl drops
+        // http:// downstream anyway).
+        const articleBg = pickArticleBgImage(extracted.images, isPublicImageUrl);
 
         try {
           progress("Generating creative");
-          console.log(`[Repurpose] Building branded headline creative (category=${category})...`);
-          const creative = await buildHeadlineCreative(bgPromptWithContext, headlineForCreativeFinal, category, hookLine);
+          console.log(`[Repurpose] Building branded headline creative (category=${category}, articleBg=${articleBg ? "yes" : "none"})...`);
+          const creative = await buildHeadlineCreative(
+            bgPromptWithContext,
+            headlineForCreativeFinal,
+            category,
+            hookLine,
+            articleBg ? { bgImageUrl: articleBg } : undefined,
+          );
 
           const { url, mediaId } = await uploadAndCreateMedia(
             creative.imageBase64,
@@ -924,7 +1162,6 @@ Return ONLY the JSON array, no other text.`;
           const cleaned = kpResponse.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
           const arrMatch = cleaned.match(/\[[\s\S]*\]/);
           if (arrMatch) keyPoints = JSON.parse(arrMatch[0]);
-          progress("Extracting key points for video scenes", "done", `${keyPoints.length} scenes`);
         } catch (e) {
           progress("Extracting key points for video scenes", "error", friendlyAIMessage(e));
           console.warn(`[Repurpose] Key point extraction failed:`, (e as Error).message);
@@ -934,6 +1171,9 @@ Return ONLY the JSON array, no other text.`;
           const sentences = extracted.body.split(/[.!?]+/).filter((s) => s.trim().length > 20);
           keyPoints = sentences.slice(0, 5).map((s) => s.trim().slice(0, 80));
         }
+        // Publish "done" AFTER the sentence-fallback fills keyPoints so the scene
+        // count is the final value (parity with the seedance branch).
+        progress("Extracting key points for video scenes", "done", `${keyPoints.length} scenes`);
 
         // 2. Build cinematic video prompt
         const musicMood = input.theme === "dark" ? "dramatic, cinematic, deep bass" :
@@ -1098,7 +1338,6 @@ Return ONLY the JSON array, no other text.`;
           const cleaned = kpResponse.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
           const arrMatch = cleaned.match(/\[[\s\S]*\]/);
           if (arrMatch) keyPoints = JSON.parse(arrMatch[0]);
-          progress("Extracting key points for video scenes", "done", `${keyPoints.length} scenes`);
         } catch (e) {
           progress("Extracting key points for video scenes", "error", friendlyAIMessage(e));
         }
@@ -1107,6 +1346,10 @@ Return ONLY the JSON array, no other text.`;
           const sentences = extracted.body.split(/[.!?]+/).filter((s) => s.trim().length > 20);
           keyPoints = sentences.slice(0, 5).map((s) => s.trim().slice(0, 80));
         }
+        // Publish the "done" AFTER the sentence-fallback fills keyPoints, so the
+        // scene count reflects the final value (was published before the fallback
+        // → showed "0 scenes" then "Queued ... 5 scenes" mismatch).
+        progress("Extracting key points for video scenes", "done", `${keyPoints.length} scenes`);
 
         // ── ENQUEUE the Seedance video job (Phase 2b T3) ─────────────────
         // The long (~up to 7.5min) Seedance poll used to run synchronously here,
@@ -1162,8 +1405,17 @@ Return ONLY the JSON array, no other text.`;
         };
 
       } else if (input.format === "carousel" || input.format === "reel") {
+        // LOCKED decision: for a CAROUSEL the user's slideCount picker means the
+        // TOTAL slide count (cover + content + CTA), so the content-slide count
+        // is total - 2 (min 1). The slideCount picker is carousel-only — the reel
+        // (slideshow) path has NO picker, so it keeps its prior behaviour and uses
+        // input.slideCount (default 5) content slides directly. The carousel and
+        // reel branches SHARE this slide-extraction/enforce code, so we branch the
+        // content count here and use `effectiveContentCount` everywhere below.
+        const effectiveContentCount =
+          input.format === "carousel" ? contentSlidesForTotal(input.slideCount) : input.slideCount;
         // Generate carousel slide content via AI
-        const slidePrompt = `Analyze this content and break it into exactly ${input.slideCount} key points for a carousel post.
+        const slidePrompt = `Analyze this content and break it into exactly ${effectiveContentCount} key points for a carousel post.
 
 ${contentBrief}
 
@@ -1198,19 +1450,22 @@ Return ONLY the JSON array, no other text.`;
 
         // Fallback slides derived from the body sentences — used both when the
         // AI returns nothing AND to top up an AI list that came back short of
-        // the requested count. Generate up to `slideCount` so enforceSlideCount
-        // has enough material to reach the target before generic fillers kick in.
+        // the requested count. Generate up to `effectiveContentCount` so
+        // enforceSlideCount has enough material to reach the target before generic
+        // fillers kick in.
         const fallbackSentences = extracted.body.split(/[.!?]+/).filter((s) => s.trim().length > 20);
-        const fallbackSlidesFromSentences = fallbackSentences.slice(0, input.slideCount).map((s, i) => ({
+        const fallbackSlidesFromSentences = fallbackSentences.slice(0, effectiveContentCount).map((s, i) => ({
           title: `Point ${i + 1}`,
           body: s.trim().slice(0, 120),
         }));
 
-        // E2: honour the user's chosen content-slide count EXACTLY — slice if the
-        // AI returned too many, top up from the sentence fallback then generic
-        // fillers if too few. Cover + cta are still added around these below, so
-        // the published carousel has slideCount + 2 slides total.
-        slideData = enforceSlideCount(slideData, input.slideCount, fallbackSlidesFromSentences);
+        // E2 / round3: honour the user's chosen content-slide count EXACTLY —
+        // slice if the AI returned too many, top up from the sentence fallback
+        // then generic fillers if too few. Cover + cta are still added around
+        // these below. For a carousel `effectiveContentCount = total - 2`, so the
+        // published carousel has exactly `slideCount` slides total (cover + N + cta);
+        // for a reel `effectiveContentCount = input.slideCount` (unchanged).
+        slideData = enforceSlideCount(slideData, effectiveContentCount, fallbackSlidesFromSentences);
 
         // Generate AI-designed carousel slides using Gemini
         const s3 = getS3Client();
@@ -1218,6 +1473,9 @@ Return ONLY the JSON array, no other text.`;
 
         // Build all slide texts: cover + content + CTA
         const coverHeadline = capHeadline(extracted.title);
+        // PART A: the capped cover headline is what the carousel cover renders —
+        // surface it so Regenerate of the cover slide reuses it (not the raw title).
+        renderedHeadline = coverHeadline;
         const allSlides = [
           { type: "cover", title: coverHeadline, body: extracted.description?.slice(0, 100) || "" },
           ...slideData.map((d, i) => ({ type: "content", title: d.title, body: d.body })),
@@ -1242,6 +1500,20 @@ Return ONLY the JSON array, no other text.`;
         const BATCH_SIZE = 3;
         const DELAY_BETWEEN_BATCHES = 3000; // 3s between batches
         const category = /CATEGORY:\s*([^\n]+)/i.exec(contentBrief)?.[1]?.trim() || extracted.type || "news";
+        // ONLY the CATEGORY/TONE lines of the brief (computed once) — NOT the full
+        // SUBJECT/VISUAL brief. Feeding the whole brief per slide is exactly what
+        // made every slide's prompt ~95% identical (same SUBJECT person each time).
+        const categoryTone = [
+          contentBrief.match(/CATEGORY:[^\n]*/)?.[0],
+          contentBrief.match(/TONE:[^\n]*/)?.[0],
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .trim();
+        // LOCKED decision: the COVER slide sits on the real article photo (the
+        // same source the static-post cover uses). Body/cta slides keep the
+        // per-slide variety AI background (cta skips AI entirely in the renderer).
+        const coverArticleBg = pickArticleBgImage(extracted.images, isPublicImageUrl);
 
         const carouselBrowser = await launchCreativeBrowser();
         try {
@@ -1260,10 +1532,25 @@ Return ONLY the JSON array, no other text.`;
               // going, exactly like the previous resilience.
               try {
                 const headline = slideMeta.title;
-                const bgPrompt = appendImageContext(
-                  `Cinematic background photo for: "${slideMeta.title}". ${contentBrief}`,
-                  input.imageContext,
+                // Per-slide variety: distinct camera angle + the slide's OWN
+                // title/body + only CATEGORY/TONE (not the repeated full brief).
+                const bgPrompt = buildCarouselSlidePrompt(
+                  {
+                    slideTitle: slideMeta.title,
+                    slideBody: slideMeta.body,
+                    slideIdx,
+                    totalSlides: allSlides.length,
+                    categoryTone,
+                    // Fold the OpenAI vision aesthetic-reference descriptor into
+                    // the per-slide imageContext (computed ONCE above, reused for
+                    // every slide) so the carousel mimics the reference style too.
+                    imageContext: mergeStyleContext(input.imageContext, aestheticStyleDescriptor),
+                  },
+                  appendImageContext,
                 );
+                // Cover gets the real article photo (locked decision); body/cta
+                // keep the AI variety background.
+                const isCover = slideRole === "cover" || slideIdx === 0;
                 const creative = await buildHeadlineCreative(
                   bgPrompt,
                   headline,
@@ -1272,6 +1559,7 @@ Return ONLY the JSON array, no other text.`;
                   {
                     slideRole,
                     ...(slideRole === "body" ? { body: slideMeta.body } : {}),
+                    ...(isCover && coverArticleBg ? { bgImageUrl: coverArticleBg } : {}),
                     browser: carouselBrowser,
                   },
                 );
@@ -1434,6 +1722,11 @@ Return ONLY the JSON array, no other text.`;
         format: input.format,
         // Truthful signal for the UI: captions exist but no media was produced.
         mediaFailed,
+        // PART A: the EXACT headline + hook line used to render the creative, so
+        // the per-image Regenerate re-renders with the same inputs (capped
+        // headline + hook), not the raw extracted page title.
+        renderedHeadline: renderedHeadline ?? null,
+        hookLine: renderedHookLine ?? null,
       };
     }),
 
@@ -1460,6 +1753,12 @@ Return ONLY the JSON array, no other text.`;
         aestheticRefUrl: z.string().optional(),
         channelName: z.string().optional(),
         channelHandle: z.string().optional(),
+        // R3 parity with the main flow: the hook line (hook_bars), the article
+        // photo to sit the creative on, and the article-context blurb folded into
+        // the AI background prompt — so a regenerated image matches the original.
+        hookLine: z.string().optional(),
+        bgImageUrl: z.string().url().optional(),
+        bgContext: z.string().max(600).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -1472,6 +1771,7 @@ Return ONLY the JSON array, no other text.`;
         generateStyledCreativeImage,
         extractDominantColor,
         isPublicImageUrl,
+        safeFetchPublicImage,
       } = await import("@postautomation/ai");
 
       const userId = (ctx.session.user as any).id as string;
@@ -1481,12 +1781,22 @@ Return ONLY the JSON array, no other text.`;
       // isn't a public host (private/loopback/metadata/internal blocked). A
       // disallowed url degrades silently to the no-logo / no-reference path —
       // never fetched, never thrown.
-      const safeLogoUrl =
-        input.logoUrl && isPublicImageUrl(input.logoUrl) ? input.logoUrl : undefined;
       const safeAestheticRef =
         input.aestheticRefUrl && isPublicImageUrl(input.aestheticRefUrl)
           ? input.aestheticRefUrl
           : undefined;
+
+      // R3 parity: resolve the logo via the SAME shared chain the main flow uses
+      // (input.logoUrl → DB category:"logo" media → channel metadata.logo_path →
+      // channel avatar), so a regenerated creative gets the IDENTICAL logo (and
+      // hence the same derived brandColor). The resolver SSRF-validates the final
+      // url, so `safeLogoUrl` is safe to fetch / colour-extract below.
+      const { logoUrl: safeLogoUrl } = await resolveLogoForOrg(ctx.prisma, {
+        organizationId,
+        logoUrl: input.logoUrl,
+        channelName: input.channelName,
+        channelHandle: input.channelHandle,
+      });
 
       // Resolve a brand accent color: prefer the explicit accent, else derive it
       // from the (validated) logo. Failure → template default.
@@ -1506,26 +1816,28 @@ Return ONLY the JSON array, no other text.`;
       const referenceImages: Array<{ base64: string; mimeType?: string }> = [];
       for (const refUrl of [safeLogoUrl, safeAestheticRef]) {
         if (!refUrl) continue;
-        try {
-          const r = await fetch(refUrl);
-          if (r.ok) {
-            const mime = r.headers.get("content-type") || "image/png";
-            const b64 = Buffer.from(await r.arrayBuffer()).toString("base64");
-            if (b64.length > 0) referenceImages.push({ base64: b64, mimeType: mime });
-          }
-        } catch (e) {
-          console.warn(`[Repurpose] regenerate reference fetch failed (continuing):`, (e as Error).message);
-        }
+        // SSRF-safe (content-type + redirect:"manual" + byte cap); null → skip.
+        const ref = await safeFetchPublicImage(refUrl);
+        if (ref) referenceImages.push({ base64: ref.base64, mimeType: ref.mimeType });
       }
 
-      const headline = input.headline.trim();
+      // R3 parity: cap the headline the same way the main flow does (≤12 words /
+      // ≤80 chars) so the regenerated creative's font sizing matches the original
+      // (the UI sends `renderedHeadline`, but cap defensively for raw callers too).
+      const headline = capHeadline(input.headline.trim());
       const channelName = input.channelName || "Channel";
+      // R3 parity: drop a private/internal-host bgImageUrl (SSRF), keep a valid
+      // public one as the creative background (the real article photo).
+      const safeBgImageUrl =
+        input.bgImageUrl && isPublicImageUrl(input.bgImageUrl) ? input.bgImageUrl : undefined;
       // Build the cinematic background prompt the same way the static path does,
-      // then append the user's free-text style notes (sanitized downstream inside
-      // generateImageSafe → sanitizePrompt).
+      // then append the user's free-text style notes AND the article-context blurb
+      // (bgContext) so the AI background reflects the article, not just the
+      // headline. Both flow through the same `appendImageContext` channel (capped
+      // to 600 by the schema) → sanitized downstream inside generateImageSafe.
       const bgPrompt = appendImageContext(
         `Create a cinematic, high-quality BACKGROUND photo for a social post about:\n\nTopic: "${headline}"\n\nPhotorealistic or editorial illustration, dramatic lighting, strong mood, relevant to the topic.`,
-        input.imageContext,
+        mergeStyleContext(input.imageContext, input.bgContext),
       );
 
       let creative;
@@ -1543,6 +1855,8 @@ Return ONLY the JSON array, no other text.`;
           logoPosition: input.logoPosition,
           brandColor,
           referenceImages,
+          ...(input.hookLine ? { hookLine: input.hookLine } : {}),
+          ...(safeBgImageUrl ? { bgImageUrl: safeBgImageUrl } : {}),
         });
       } catch (e) {
         throw toFriendlyAIError(e);

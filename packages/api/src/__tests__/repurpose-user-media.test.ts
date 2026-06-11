@@ -64,6 +64,12 @@ vi.mock("@postautomation/ai", () => ({
   generateVideo: vi.fn(),
   buildVideoPrompt: vi.fn(),
   overlayLogoOnImage: vi.fn(),
+  // aesthetic-reference helpers (provider-agnostic describe path) — null/no-op
+  // here since the user-media path doesn't exercise a reference image.
+  safeFetchPublicImage: vi.fn(async () => null),
+  resolveImageFromPageUrl: vi.fn(async () => null),
+  isPublicPageUrl: vi.fn(() => false),
+  describeImageStyle: vi.fn(async () => null),
 }));
 
 /* ── S3 mock — never hit the network. ── */

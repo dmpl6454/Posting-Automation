@@ -2,7 +2,8 @@
 
 import { humanizeError } from "~/lib/errors";
 import { buildCreatePostQuery } from "~/lib/repurpose-create-post-params";
-import { parseVideoReadyEvent, isVideoErrorEvent } from "~/lib/parse-video-event";
+import { parseVideoReadyEvent, isVideoErrorEvent, finalizeRunningSteps } from "~/lib/parse-video-event";
+import { stripBareUrls } from "~/lib/strip-bare-urls";
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { trpc } from "~/lib/trpc/client";
@@ -68,6 +69,25 @@ const THEMES = [
   { id: "gradient" as const, label: "Gradient", color: "bg-gradient-to-r from-indigo-900 to-purple-900" },
 ];
 
+// T7: a pasted aesthetic-ref URL looks like a social/post PAGE (not a direct
+// image) when the host is a known social network OR the URL lacks a common image
+// extension. In that case the backend extracts the og:image, so we hint the user.
+function looksLikePostUrl(value: string): boolean {
+  const v = value.trim();
+  if (!/^https?:\/\//i.test(v)) return false;
+  let host = "";
+  let pathname = "";
+  try {
+    const u = new URL(v);
+    host = u.hostname.toLowerCase();
+    pathname = u.pathname.toLowerCase();
+  } catch {
+    return false;
+  }
+  if (/(^|\.)(instagram|facebook|twitter|x)\.com$/.test(host)) return true;
+  return !/\.(jpe?g|png|webp|gif)$/.test(pathname);
+}
+
 export function RepurposeTab() {
   const { toast } = useToast();
 
@@ -124,6 +144,11 @@ export function RepurposeTab() {
     mediaType: string;
     format: string;
     mediaFailed?: boolean;
+    // PART A/D: the exact headline + hook line the server rendered the creative
+    // with — so Regenerate re-renders with the SAME inputs (capped headline +
+    // hook) instead of the raw extracted page title.
+    renderedHeadline?: string | null;
+    hookLine?: string | null;
   } | null>(null);
   const [copiedPlatform, setCopiedPlatform] = useState<string | null>(null);
 
@@ -163,6 +188,13 @@ export function RepurposeTab() {
       try {
         const step: ProgressStep = JSON.parse(ev.data);
         if (step.step === "__finished__") {
+          // Self-heal the synchronous path: flip any lingering running step to
+          // the finishing status. (The async-video path closes the SSE on
+          // video_ready before __finished__ arrives, so this is belt-and-braces
+          // — finalizeRunningSteps also runs in the video_ready/error branches.)
+          setProgressSteps((prev) =>
+            finalizeRunningSteps(prev, step.status === "error" ? "error" : "done"),
+          );
           es.close();
           eventSourceRef.current = null;
           return;
@@ -190,12 +222,20 @@ export function RepurposeTab() {
             carouselMediaIds: [ready.mediaId],
           }));
           setVideoGenerating(false);
+          // The worker re-publishes "done" for each step, but the client closes
+          // the SSE on video_ready (below) — so any step still showing "running"
+          // (race: the worker's done re-publish hadn't arrived yet) would spin
+          // forever. Flip every outstanding running step → done before closing.
+          setProgressSteps((prev) => finalizeRunningSteps(prev, "done"));
           toast({ title: "Video ready!", description: "Your video has been generated." });
           closeVideoStream();
           return;
         }
         if (isVideoErrorEvent(step)) {
           setVideoGenerating(false);
+          // Flip outstanding running steps → error so none spin forever after
+          // the stream closes (the worker only published them as "running").
+          setProgressSteps((prev) => finalizeRunningSteps(prev, "error"));
           toast({
             title: "Video generation failed",
             description: step.detail || "The video could not be produced. See the activity log.",
@@ -365,13 +405,20 @@ export function RepurposeTab() {
 
   const handleRegenerate = async (target: "static" | number) => {
     if (!results) return;
-    // Headline: prefer the extracted title (what the original creative used).
-    const headline = (results.extracted?.title || "").trim();
+    // Headline: prefer the EXACT headline the server rendered the original with
+    // (capped + synthesized), falling back to the raw extracted title. This makes
+    // the regenerated image match the original instead of diverging (R3).
+    const headline = (results.renderedHeadline ?? results.extracted?.title ?? "").trim();
     if (!headline) {
       toast({ title: "Can't regenerate", description: "No headline found for this image.", variant: "destructive" });
       return;
     }
     const { channelName, channelHandle, logoUrl: brandLogo } = resolveBranding();
+    // Reuse the SAME background photo (first https article image) the original
+    // creative sat on — the server re-validates it with isPublicImageUrl — plus
+    // the article-context blurb so the AI background reflects the article.
+    const bgImageUrl = results.extracted?.images?.find((u) => u.startsWith("https://"));
+    const bgContext = results.extracted?.description?.slice(0, 600);
     setRegenTarget(target);
     try {
       const res = await regenerateImage.mutateAsync({
@@ -381,10 +428,15 @@ export function RepurposeTab() {
         logoUrl: brandLogo,
         logoPosition,
         accentColor: accentColor || undefined,
-        imageContext: imageContext || undefined,
+        imageContext: stripBareUrls(imageContext) || undefined,
         aestheticRefUrl: aestheticRefUrl || undefined,
         channelName,
         channelHandle,
+        // R3 parity: carry the rendered hook line, the article background photo,
+        // and the article-context blurb so the regenerated image matches.
+        hookLine: results.hookLine ?? undefined,
+        bgImageUrl: bgImageUrl || undefined,
+        bgContext: bgContext || undefined,
       });
       // Swap the displayed image (and its Media id for publish) in `results`.
       setResults((prev) => {
@@ -443,7 +495,9 @@ export function RepurposeTab() {
         theme,
         accentColor: accentColor || undefined,
         aestheticRefUrl: aestheticRefUrl || undefined,
-        imageContext: imageContext || undefined,
+        // Strip bare URLs out of the free-text notes at send time so a URL pasted
+        // into the NOTES box doesn't leak into the AI prompt as literal text.
+        imageContext: stripBareUrls(imageContext) || undefined,
         // E4: when the user attached their own image (static only), send the
         // media ids so the router uses them and skips AI image generation.
         userMediaIds: useOwnImage ? userMedia.map((m) => m.id) : undefined,
@@ -804,6 +858,22 @@ export function RepurposeTab() {
                     )}
                   </div>
 
+                  {/* T7: paste an image OR a post/page URL — the backend extracts
+                      the og:image for page links. Last-write-wins with the file
+                      uploader above (both populate aestheticRefUrl). */}
+                  <div className="space-y-1">
+                    <Input
+                      type="url"
+                      value={aestheticRefUrl}
+                      onChange={(e) => setAestheticRefUrl(e.target.value)}
+                      placeholder="or paste an image / post URL"
+                      className="h-8 text-xs"
+                    />
+                    {looksLikePostUrl(aestheticRefUrl) && (
+                      <p className="text-[10px] text-muted-foreground">We&apos;ll grab the post&apos;s main image automatically.</p>
+                    )}
+                  </div>
+
                   {/* E3a: free-text aesthetic / style notes (optional, max 300 chars) */}
                   <div className="space-y-1 pt-1">
                     <Label className="text-xs" htmlFor="image-context">Aesthetic / style notes (optional)</Label>
@@ -842,10 +912,11 @@ export function RepurposeTab() {
                 </div>
               )}
 
-              {/* Content slides count (carousel only) — E2 */}
+              {/* Total slides count (carousel only) — E2/T6: this number now means
+                  TOTAL slides (cover + content + follow-for-more), not just content. */}
               {format === "carousel" && (
                 <div className="space-y-2">
-                  <Label>Content slides</Label>
+                  <Label>Total slides</Label>
                   <div className="flex gap-2">
                     {[3, 5, 7, 10].map((n) => (
                       <button
@@ -860,7 +931,7 @@ export function RepurposeTab() {
                       </button>
                     ))}
                   </div>
-                  <p className="text-[10px] text-muted-foreground">A cover and a follow-for-more slide are added around these.</p>
+                  <p className="text-[10px] text-muted-foreground">Includes a cover slide and a follow-for-more slide.</p>
                 </div>
               )}
 
@@ -1198,7 +1269,7 @@ export function RepurposeTab() {
                   Generated {results.format === "ai_video" ? "AI Video (Veo3)" : results.format === "seedance_video" ? "AI Video (Seedance 2.0)" : results.format === "reel" ? "Reel Video" : results.mediaUrls.length > 1 ? `Carousel (${results.mediaUrls.length} slides)` : "Static Post"}
                 </CardTitle>
                 <CardDescription>
-                  {results.format === "ai_video" ? "Cinematic AI video with text slides, visuals & music by Veo3" : results.format === "seedance_video" ? "Cinematic 2K video with native audio by Seedance 2.0" : results.format === "reel" ? "AI-generated video with slides" : results.format === "static" ? "AI-generated background with branded overlay" : "Swipe through carousel slides"}
+                  {results.format === "ai_video" ? "Cinematic AI video with text slides, visuals & music by Veo3" : results.format === "seedance_video" ? "Cinematic 2K video with native audio by Seedance 2.0" : results.format === "reel" ? "AI-generated video with slides" : results.format === "static" ? (creativeStyle === "hook_bars" || creativeStyle === "bold_typographic" ? "Branded design with your article's photo" : "AI-generated background with branded overlay") : "Swipe through carousel slides"}
                 </CardDescription>
               </CardHeader>
               <CardContent>

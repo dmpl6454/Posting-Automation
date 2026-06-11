@@ -157,4 +157,90 @@ describe("bold_typographic style", () => {
     expect(html).toContain("Moviefied");
     expect(html).toContain("#e11d48");
   });
+
+  it("honors a valid bgImageUrl with a photo background", () => {
+    const html = buildStaticCreative({
+      style: "bold_typographic",
+      headline: "Big news today.",
+      channelName: "Moviefied",
+      brandColor: "#e11d48",
+      logoPosition: "top-left",
+      bgImageUrl: "https://x/y.jpg",
+    });
+    // The photo is referenced under a dark scrim overlay (keeps headline legible).
+    expect(html).toContain("url('https://x/y.jpg')");
+    expect(html).toContain("background-image:");
+  });
+
+  it("falls back to a branded gradient (not flat) when no bgImageUrl", () => {
+    const html = buildStaticCreative({
+      style: "bold_typographic",
+      headline: "Big news today.",
+      channelName: "Moviefied",
+      brandColor: "#e11d48",
+      logoPosition: "top-left",
+    });
+    expect(html).toContain("linear-gradient(");
+    // A photo background must NOT be present in the no-photo path.
+    expect(html).not.toContain("background-image:url(");
+  });
+
+  it("drops a malicious bgImageUrl (falls back to gradient, no breakout)", () => {
+    const html = buildStaticCreative({
+      style: "bold_typographic",
+      headline: "x",
+      channelName: "Brand",
+      logoPosition: "top-right",
+      bgImageUrl: `https://x/y.jpg');}</style><script>alert(1)</script>`,
+    });
+    expect(html).not.toContain("<script>alert(1)</script>");
+    expect(html).not.toContain(`https://x/y.jpg');}</style>`);
+    expect(html).toContain("linear-gradient(");
+  });
+});
+
+describe("hook_bars no-photo fallback", () => {
+  it("uses a branded gradient (not a flat near-white fill) when no bgImageUrl + light theme", () => {
+    const html = buildStaticCreative({
+      style: "hook_bars",
+      headline: "Headline only",
+      hookLine: "Hook!",
+      channelName: "NewsPage",
+      brandColor: "#e11d48",
+      theme: "light",
+      logoPosition: "top-right",
+    });
+    expect(html).toContain("linear-gradient(");
+    // The flat near-white fallback must NOT be used on the main background.
+    expect(html).not.toContain(".bg{position:absolute;inset:0;background:#f7f7f8;}");
+  });
+
+  it("still honors a valid bgImageUrl when present", () => {
+    const html = buildStaticCreative({
+      style: "hook_bars",
+      headline: "Headline only",
+      hookLine: "Hook!",
+      channelName: "NewsPage",
+      brandColor: "#e11d48",
+      theme: "light",
+      logoPosition: "top-right",
+      bgImageUrl: "https://cdn.example.com/photo.png",
+    });
+    expect(html).toContain("background-image:url");
+    expect(html).toContain("https://cdn.example.com/photo.png");
+  });
+
+  it("drops a malicious bgImageUrl (falls back to gradient, no breakout)", () => {
+    const html = buildStaticCreative({
+      style: "hook_bars",
+      headline: "x",
+      hookLine: "Hook!",
+      channelName: "Brand",
+      logoPosition: "top-right",
+      bgImageUrl: `https://x/y.jpg');}</style><script>alert(1)</script>`,
+    });
+    expect(html).not.toContain("<script>alert(1)</script>");
+    expect(html).not.toContain(`https://x/y.jpg');}</style>`);
+    expect(html).toContain("linear-gradient(");
+  });
 });

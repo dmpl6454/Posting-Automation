@@ -105,6 +105,17 @@ export function isPublicImageUrl(url: string): boolean {
   return true;
 }
 
+/** True only for a fetchable public http(s) page URL (blocks private/loopback/link-local/metadata hosts). Use before fetching a user-supplied PAGE url (e.g. og:image extraction). */
+export function isPublicPageUrl(url: string): boolean {
+  let u: URL;
+  try { u = new URL(url); } catch { return false; }
+  if (u.protocol !== "https:" && u.protocol !== "http:") return false;
+  const host = u.hostname.replace(/\.+$/, "").toLowerCase();
+  if (!host) return false;
+  if (isPrivateOrLoopbackHost(host)) return false;
+  return true;
+}
+
 /**
  * SSRF-safe fetch for image URLs. Throws if the URL is not allowed by
  * `isAllowedImageUrl`. Uses `redirect: "manual"` so a 30x cannot bounce the
@@ -121,4 +132,47 @@ export async function safeFetchImage(
     redirect: "manual",
     signal: AbortSignal.timeout(opts?.timeoutMs ?? 10000),
   });
+}
+
+/**
+ * SSRF-safe fetch for PUBLIC image URLs (external CDNs included). Unlike
+ * `safeFetchImage`, this gates on `isPublicImageUrl` (any public host; blocks
+ * private/loopback/link-local/metadata) rather than the strict S3 allowlist, so
+ * it can be used for aesthetic-reference / logo / brand-avatar URLs.
+ *
+ * Returns the decoded `{ base64, mimeType }` or `null` on any failure. Fails
+ * closed:
+ *  - rejects disallowed URLs (`isPublicImageUrl` false) without fetching;
+ *  - inline `data:image/...` URLs are decoded WITHOUT a network call;
+ *  - `redirect: "manual"` so a 30x cannot bounce to an internal target
+ *    (a 30x surfaces as `res.ok === false` → treated as failure);
+ *  - aborts after `timeoutMs` (default 10s);
+ *  - requires an `image/(png|jpe?g|webp|gif)` content-type;
+ *  - caps the body at `maxBytes` (default 8 MiB).
+ */
+export async function safeFetchPublicImage(
+  url: string,
+  opts?: { maxBytes?: number; timeoutMs?: number },
+): Promise<{ base64: string; mimeType: string } | null> {
+  if (!isPublicImageUrl(url)) return null;
+  if (url.startsWith("data:image/")) {
+    const [, mimeType = "image/png", b64 = ""] =
+      url.match(/^data:(image\/(?:png|jpe?g|webp|gif));base64,(.*)$/s) ?? [];
+    return b64 ? { base64: b64, mimeType } : null;
+  }
+  const maxBytes = opts?.maxBytes ?? 8 * 1024 * 1024;
+  const timeoutMs = opts?.timeoutMs ?? 10_000;
+  let res: Response;
+  try {
+    res = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(timeoutMs) });
+  } catch {
+    return null;
+  }
+  if (!res.ok) return null; // manual redirect → res.ok false for 30x; treat as failure
+  const ct = (res.headers.get("content-type") || "").toLowerCase();
+  if (!/^image\/(png|jpe?g|webp|gif)/.test(ct)) return null;
+  const buf = Buffer.from(await res.arrayBuffer());
+  if (buf.byteLength > maxBytes) return null;
+  const mimeType = ct.split(";")[0]?.trim() || "image/png";
+  return { base64: buf.toString("base64"), mimeType };
 }
