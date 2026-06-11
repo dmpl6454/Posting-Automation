@@ -102,6 +102,14 @@ query, no `NEXT_PUBLIC_*` var.
   route, `org.router.ts`).
 - Roles, org membership, superadmin, impersonation, auth, sign-up/sign-in.
 
+## Activation (now)
+
+The flag is inert until set on the server. After the code merges (default `false` — no
+change to live behavior on its own), activate the unlock by adding `BILLING_DISABLED=true`
+to the server's `.env.prod` and redeploying (`bash scripts/deploy.sh deploy`). Verify by
+checking that a FREE org can reach a plan-gated feature (e.g. Campaigns) without a lock
+icon or "upgrade" error.
+
 ## Re-arming (later)
 
 Set `BILLING_DISABLED=false` (or delete the line) in `.env.prod` and redeploy. All gates
