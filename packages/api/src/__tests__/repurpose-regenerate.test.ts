@@ -88,6 +88,8 @@ const orgMemberFindUnique = vi.fn();
 const orgMemberFindFirst = vi.fn();
 const orgFindUnique = vi.fn();
 const mediaCreate = vi.fn();
+const mediaFindFirst = vi.fn();
+const channelFindFirst = vi.fn();
 vi.mock("@postautomation/db", () => ({
   prisma: {
     organizationMember: {
@@ -96,14 +98,17 @@ vi.mock("@postautomation/db", () => ({
     },
     // orgProcedure reads this in its plan-expiry guard for non-superadmin actors.
     organization: { findUnique: (...a: any[]) => orgFindUnique(...a) },
-    media: { create: (...a: any[]) => mediaCreate(...a) },
-    channel: { findFirst: vi.fn() },
+    media: {
+      create: (...a: any[]) => mediaCreate(...a),
+      findFirst: (...a: any[]) => mediaFindFirst(...a),
+    },
+    channel: { findFirst: (...a: any[]) => channelFindFirst(...a) },
   },
   ensurePersonalOrg: vi.fn(),
 }));
 
 import { createCallerFactory } from "../trpc";
-import { repurposeRouter } from "../routers/repurpose.router";
+import { repurposeRouter, resolveLogoForOrg, capHeadline } from "../routers/repurpose.router";
 import { prisma as prismaMock } from "@postautomation/db";
 
 const ORG_ID = "org-1";
@@ -145,6 +150,10 @@ beforeEach(() => {
   // enforcePlanLimit inside the mutation body, not the expiry revert).
   orgFindUnique.mockResolvedValue({ plan: "FREE", planExpiresAt: null });
   mediaCreate.mockResolvedValue({ id: "media-regen-1" });
+  // Logo-resolver fallthrough: by default no channel / no DB logo media, so
+  // resolveLogoForOrg returns input.logoUrl (or undefined) untouched.
+  channelFindFirst.mockResolvedValue(null);
+  mediaFindFirst.mockResolvedValue(null);
 });
 
 describe("repurpose.regenerateImage", () => {
@@ -209,5 +218,103 @@ describe("repurpose.regenerateImage", () => {
     expect(generateImageSafe).not.toHaveBeenCalled();
     // but the template still renders.
     expect(generateStyledCreativeImage).toHaveBeenCalledTimes(1);
+  });
+
+  it("parity: hook_bars + a hookLine reaches the creative template render", async () => {
+    const caller = makeCaller();
+    await caller.regenerateImage(
+      input({ creativeStyle: "hook_bars", hookLine: "This **changes** everything" }),
+    );
+    const renderArgs = generateStyledCreativeImage.mock.calls[0]?.[0] as any;
+    expect(renderArgs.hookLine).toBe("This **changes** everything");
+  });
+
+  it("parity: a long (>12-word) headline is capped before it reaches the render", async () => {
+    const longHeadline =
+      "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen";
+    const caller = makeCaller();
+    await caller.regenerateImage(input({ headline: longHeadline }));
+    const renderArgs = generateStyledCreativeImage.mock.calls[0]?.[0] as any;
+    const used: string = renderArgs.headline;
+    // capHeadline contract: ≤12 words AND ≤80 chars.
+    expect(used.trim().split(/\s+/).length).toBeLessThanOrEqual(12);
+    expect(used.length).toBeLessThanOrEqual(80);
+    expect(used).toBe(capHeadline(longHeadline));
+  });
+
+  it("parity: a valid https bgImageUrl reaches the creative template render", async () => {
+    const caller = makeCaller();
+    // premium_editorial generates an AI background which OVERRIDES bgImageUrl, so
+    // use a text-first style (hook_bars) where the passed-in bg is the actual bg.
+    await caller.regenerateImage(
+      input({
+        creativeStyle: "hook_bars",
+        bgImageUrl: "https://cdn.example.com/article-photo.jpg",
+      }),
+    );
+    const renderArgs = generateStyledCreativeImage.mock.calls[0]?.[0] as any;
+    expect(renderArgs.bgImageUrl).toBe("https://cdn.example.com/article-photo.jpg");
+  });
+
+  it("SSRF: a private-host bgImageUrl is dropped (never reaches the render bg)", async () => {
+    const caller = makeCaller();
+    await caller.regenerateImage(
+      input({
+        creativeStyle: "hook_bars",
+        bgImageUrl: "https://10.0.0.5/internal.jpg",
+      }),
+    );
+    expect(isPublicImageUrl).toHaveBeenCalledWith("https://10.0.0.5/internal.jpg");
+    const renderArgs = generateStyledCreativeImage.mock.calls[0]?.[0] as any;
+    // hook_bars skips AI bg; the disallowed bg is dropped → no bgImageUrl rendered.
+    expect(renderArgs.bgImageUrl ?? null).toBeNull();
+  });
+
+  it("parity: bgContext is interpolated into the AI background prompt", async () => {
+    const caller = makeCaller();
+    // premium_editorial DOES generate an AI background, so the prompt is observable.
+    await caller.regenerateImage(
+      input({ creativeStyle: "premium_editorial", bgContext: "A bustling night market in Mumbai" }),
+    );
+    const bgArgs = generateImageSafe.mock.calls[0]?.[0] as any;
+    expect(String(bgArgs.prompt)).toContain("A bustling night market in Mumbai");
+  });
+});
+
+describe("resolveLogoForOrg", () => {
+  beforeEach(() => {
+    channelFindFirst.mockResolvedValue(null);
+    mediaFindFirst.mockResolvedValue(null);
+  });
+
+  it("returns the supplied logoUrl when set (no DB lookup needed)", async () => {
+    const res = await resolveLogoForOrg(prismaMock as any, {
+      organizationId: ORG_ID,
+      logoUrl: "https://cdn.example.com/logo.png",
+      channelName: "Acme",
+    });
+    expect(res.logoUrl).toBe("https://cdn.example.com/logo.png");
+    // input.logoUrl short-circuits the channel/DB lookup.
+    expect(channelFindFirst).not.toHaveBeenCalled();
+  });
+
+  it("falls through to a DB category:logo media url when no logoUrl is supplied", async () => {
+    channelFindFirst.mockResolvedValue({ id: "ch-1", avatar: "https://cdn/av.png", metadata: null });
+    mediaFindFirst.mockResolvedValue({ url: "https://cdn.example.com/db-logo.png" });
+    const res = await resolveLogoForOrg(prismaMock as any, {
+      organizationId: ORG_ID,
+      channelName: "Acme",
+    });
+    expect(res.logoUrl).toBe("https://cdn.example.com/db-logo.png");
+  });
+
+  it("falls through to channel.avatar when there is no DB logo media", async () => {
+    channelFindFirst.mockResolvedValue({ id: "ch-1", avatar: "https://cdn.example.com/av.png", metadata: null });
+    mediaFindFirst.mockResolvedValue(null);
+    const res = await resolveLogoForOrg(prismaMock as any, {
+      organizationId: ORG_ID,
+      channelName: "Acme",
+    });
+    expect(res.logoUrl).toBe("https://cdn.example.com/av.png");
   });
 });

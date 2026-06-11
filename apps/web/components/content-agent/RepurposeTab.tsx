@@ -124,6 +124,11 @@ export function RepurposeTab() {
     mediaType: string;
     format: string;
     mediaFailed?: boolean;
+    // PART A/D: the exact headline + hook line the server rendered the creative
+    // with — so Regenerate re-renders with the SAME inputs (capped headline +
+    // hook) instead of the raw extracted page title.
+    renderedHeadline?: string | null;
+    hookLine?: string | null;
   } | null>(null);
   const [copiedPlatform, setCopiedPlatform] = useState<string | null>(null);
 
@@ -365,13 +370,20 @@ export function RepurposeTab() {
 
   const handleRegenerate = async (target: "static" | number) => {
     if (!results) return;
-    // Headline: prefer the extracted title (what the original creative used).
-    const headline = (results.extracted?.title || "").trim();
+    // Headline: prefer the EXACT headline the server rendered the original with
+    // (capped + synthesized), falling back to the raw extracted title. This makes
+    // the regenerated image match the original instead of diverging (R3).
+    const headline = (results.renderedHeadline ?? results.extracted?.title ?? "").trim();
     if (!headline) {
       toast({ title: "Can't regenerate", description: "No headline found for this image.", variant: "destructive" });
       return;
     }
     const { channelName, channelHandle, logoUrl: brandLogo } = resolveBranding();
+    // Reuse the SAME background photo (first https article image) the original
+    // creative sat on — the server re-validates it with isPublicImageUrl — plus
+    // the article-context blurb so the AI background reflects the article.
+    const bgImageUrl = results.extracted?.images?.find((u) => u.startsWith("https://"));
+    const bgContext = results.extracted?.description?.slice(0, 600);
     setRegenTarget(target);
     try {
       const res = await regenerateImage.mutateAsync({
@@ -385,6 +397,11 @@ export function RepurposeTab() {
         aestheticRefUrl: aestheticRefUrl || undefined,
         channelName,
         channelHandle,
+        // R3 parity: carry the rendered hook line, the article background photo,
+        // and the article-context blurb so the regenerated image matches.
+        hookLine: results.hookLine ?? undefined,
+        bgImageUrl: bgImageUrl || undefined,
+        bgContext: bgContext || undefined,
       });
       // Swap the displayed image (and its Media id for publish) in `results`.
       setResults((prev) => {

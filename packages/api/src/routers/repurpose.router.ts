@@ -346,6 +346,81 @@ export async function renderStaticCreative(args: {
 }
 
 /**
+ * Minimal structural prisma type for `resolveLogoForOrg` — just the two reads it
+ * performs. Keeps the helper testable against a mocked prisma without importing
+ * the full `PrismaClient` type (and without `any`).
+ */
+type LogoResolverPrisma = {
+  channel: {
+    findFirst: (args: any) => Promise<{ id: string; avatar: string | null; metadata: unknown } | null>;
+  };
+  media: {
+    findFirst: (args: any) => Promise<{ url: string } | null>;
+  };
+};
+
+/**
+ * Shared logo-resolution chain (R3) used by BOTH the main repurpose flow AND the
+ * standalone `regenerateImage` mutation, so a regenerated creative keeps the SAME
+ * logo (and therefore the same derived brandColor) as the original.
+ *
+ * Resolution order — IDENTICAL to the old inline main-flow chain:
+ *   1. explicit `logoUrl` (caller / template / UI), else
+ *   2. DB Media `findFirst` ({ organizationId, category:"logo", channelId }) for a
+ *      channel matched by name/handle, else
+ *   3. that channel's `metadata.logo_path`, else
+ *   4. that channel's `avatar`.
+ *
+ * The final resolved url is SSRF-validated via `isPublicImageUrl` (dynamically
+ * imported from `@postautomation/ai`, same source the callers use) — a
+ * private/internal host is dropped (returns `undefined`) so every downstream use
+ * (fetch / extractDominantColor / render) is safe. All DB work is best-effort:
+ * any read failure degrades to the no-logo path rather than throwing.
+ */
+export async function resolveLogoForOrg(
+  prisma: LogoResolverPrisma,
+  opts: { organizationId: string; logoUrl?: string | null; channelName?: string; channelHandle?: string },
+): Promise<{ logoUrl: string | undefined }> {
+  const { isPublicImageUrl } = await import("@postautomation/ai");
+  let resolved = (opts.logoUrl || "").trim();
+  const channelName = opts.channelName || "";
+  const channelHandle = opts.channelHandle || "";
+
+  if (!resolved && channelName) {
+    try {
+      const channel = await prisma.channel.findFirst({
+        where: {
+          organizationId: opts.organizationId,
+          OR: [{ name: channelName }, { username: channelHandle || undefined }],
+        },
+        select: { id: true, avatar: true, metadata: true },
+      });
+      if (channel) {
+        const logoMedia = await prisma.media.findFirst({
+          where: { organizationId: opts.organizationId, category: "logo", channelId: channel.id },
+          orderBy: { createdAt: "desc" },
+        });
+        if (logoMedia) {
+          resolved = logoMedia.url;
+        } else {
+          const meta = channel.metadata as any;
+          resolved = meta?.logo_path || channel.avatar || "";
+        }
+      }
+    } catch {
+      // Non-critical — continue without logo.
+    }
+  }
+
+  // SSRF chokepoint: drop a private/internal-host logo (graceful no-logo path).
+  if (resolved && !isPublicImageUrl(resolved)) {
+    console.warn("[repurpose] logo URL blocked (private/internal host) — dropping logo");
+    resolved = "";
+  }
+  return { logoUrl: resolved || undefined };
+}
+
+/**
  * Clamp a user-supplied Seedance AI-video DURATION (seconds) into the
  * provider-supported 2–12s range, rounding to the nearest whole second.
  * Nullish/0 falls back to the default 8s (parity with the previous hardcoded
@@ -551,50 +626,22 @@ export const repurposeRouter = createRouter({
         }
       }
 
-      // Resolve logo: prefer input.logoUrl → DB media (category: "logo") → channel avatar
-      let resolvedLogoUrl = input.logoUrl || "";
+      // Resolve logo via the shared resolver (R3): input.logoUrl → DB media
+      // (category:"logo") → channel metadata.logo_path → channel avatar. The
+      // SAME helper backs `regenerateImage`, so a regenerated creative keeps the
+      // identical logo + derived brandColor. The resolver SSRF-validates the
+      // final url (`isPublicImageUrl`) and drops a private/internal host — every
+      // downstream use (reference fetch, extractDominantColor,
+      // buildHeadlineCreative, applyLogoOverlay) is therefore safe.
       const channelName = input.channelName || "";
       const channelHandle = input.channelHandle || "";
-
-      if (!resolvedLogoUrl && channelName) {
-        try {
-          // Try to find a channel matching the name/handle
-          const channel = await ctx.prisma.channel.findFirst({
-            where: { organizationId, OR: [{ name: channelName }, { username: channelHandle || undefined }] },
-            select: { id: true, avatar: true, metadata: true },
-          });
-          if (channel) {
-            // Check for custom logo in media library
-            const logoMedia = await ctx.prisma.media.findFirst({
-              where: { organizationId, category: "logo", channelId: channel.id },
-              orderBy: { createdAt: "desc" },
-            });
-            if (logoMedia) {
-              resolvedLogoUrl = logoMedia.url;
-            } else {
-              // Fallback to metadata.logo_path → channel avatar
-              const meta = channel.metadata as any;
-              resolvedLogoUrl = meta?.logo_path || channel.avatar || "";
-            }
-          }
-        } catch {
-          // Non-critical — continue without logo
-        }
-      }
-
-      // SSRF chokepoint: `resolvedLogoUrl` is user-influenced (input.logoUrl /
-      // template logoMedia.url / channel avatar) and is fetched + rendered
-      // server-side downstream (reference fetch, extractDominantColor,
-      // buildHeadlineCreative, applyLogoOverlay → overlayLogoOnImage). Validate
-      // ONCE here so every downstream use is safe. Logos may live on external
-      // public CDNs, so the looser `isPublicImageUrl` (public hosts allowed,
-      // private/loopback/metadata/internal blocked) is used — NOT the strict S3
-      // allowlist (which would silently drop legit external logos). A blocked
-      // URL degrades gracefully to the no-logo path.
-      if (resolvedLogoUrl && !isPublicImageUrl(resolvedLogoUrl)) {
-        console.warn("[repurpose] logo URL blocked (private/internal host) — dropping logo");
-        resolvedLogoUrl = "";
-      }
+      const { logoUrl: resolvedLogoOrUndef } = await resolveLogoForOrg(ctx.prisma, {
+        organizationId,
+        logoUrl: input.logoUrl,
+        channelName,
+        channelHandle,
+      });
+      let resolvedLogoUrl = resolvedLogoOrUndef || "";
 
       console.log(`[Repurpose] Logo config: logoUrl="${resolvedLogoUrl?.slice(0, 60) || ""}", channelName="${channelName}", handle="${channelHandle}"`);
 
@@ -902,6 +949,11 @@ KEYWORDS: ${(brief.keywords || []).join(", ")}`;
       // Ordered slide media IDs for carousel posts (post.create needs real
       // Media rows, not raw S3 urls). Empty for non-carousel formats.
       const carouselMediaIds: string[] = [];
+      // The EXACT headline + hook line used to render the creative, surfaced in
+      // the response (PART A) so the per-image "Regenerate" can re-render with
+      // the SAME inputs (capped headline + hook) instead of the raw page title.
+      let renderedHeadline: string | undefined;
+      let renderedHookLine: string | undefined;
 
       if (input.format === "static" && input.userMediaIds?.length) {
         // ── E4: user attached their own image(s) ─────────────────────────────
@@ -990,6 +1042,8 @@ KEYWORDS: ${(brief.keywords || []).join(", ")}`;
           }
         }
         headlineForCreativeFinal = capHeadline(headlineForCreativeFinal);
+        // PART A: surface the exact rendered headline so Regenerate reuses it.
+        renderedHeadline = headlineForCreativeFinal;
 
         const bgPrompt = `Create a cinematic, high-quality BACKGROUND photo for a social post about:
 
@@ -1028,6 +1082,8 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
             console.warn(`[Repurpose] Hook line generation failed, rendering without hook:`, (e as Error).message);
           }
         }
+        // PART A: surface the hook line so Regenerate re-renders hook_bars WITH it.
+        renderedHookLine = hookLine;
 
         // Use the article's OWN photo (og:image, first in extracted.images) as the
         // creative background. For hook_bars/bold_typographic (AI background
@@ -1406,6 +1462,9 @@ Return ONLY the JSON array, no other text.`;
 
         // Build all slide texts: cover + content + CTA
         const coverHeadline = capHeadline(extracted.title);
+        // PART A: the capped cover headline is what the carousel cover renders —
+        // surface it so Regenerate of the cover slide reuses it (not the raw title).
+        renderedHeadline = coverHeadline;
         const allSlides = [
           { type: "cover", title: coverHeadline, body: extracted.description?.slice(0, 100) || "" },
           ...slideData.map((d, i) => ({ type: "content", title: d.title, body: d.body })),
@@ -1652,6 +1711,11 @@ Return ONLY the JSON array, no other text.`;
         format: input.format,
         // Truthful signal for the UI: captions exist but no media was produced.
         mediaFailed,
+        // PART A: the EXACT headline + hook line used to render the creative, so
+        // the per-image Regenerate re-renders with the same inputs (capped
+        // headline + hook), not the raw extracted page title.
+        renderedHeadline: renderedHeadline ?? null,
+        hookLine: renderedHookLine ?? null,
       };
     }),
 
@@ -1678,6 +1742,12 @@ Return ONLY the JSON array, no other text.`;
         aestheticRefUrl: z.string().optional(),
         channelName: z.string().optional(),
         channelHandle: z.string().optional(),
+        // R3 parity with the main flow: the hook line (hook_bars), the article
+        // photo to sit the creative on, and the article-context blurb folded into
+        // the AI background prompt — so a regenerated image matches the original.
+        hookLine: z.string().optional(),
+        bgImageUrl: z.string().url().optional(),
+        bgContext: z.string().max(600).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -1700,12 +1770,22 @@ Return ONLY the JSON array, no other text.`;
       // isn't a public host (private/loopback/metadata/internal blocked). A
       // disallowed url degrades silently to the no-logo / no-reference path —
       // never fetched, never thrown.
-      const safeLogoUrl =
-        input.logoUrl && isPublicImageUrl(input.logoUrl) ? input.logoUrl : undefined;
       const safeAestheticRef =
         input.aestheticRefUrl && isPublicImageUrl(input.aestheticRefUrl)
           ? input.aestheticRefUrl
           : undefined;
+
+      // R3 parity: resolve the logo via the SAME shared chain the main flow uses
+      // (input.logoUrl → DB category:"logo" media → channel metadata.logo_path →
+      // channel avatar), so a regenerated creative gets the IDENTICAL logo (and
+      // hence the same derived brandColor). The resolver SSRF-validates the final
+      // url, so `safeLogoUrl` is safe to fetch / colour-extract below.
+      const { logoUrl: safeLogoUrl } = await resolveLogoForOrg(ctx.prisma, {
+        organizationId,
+        logoUrl: input.logoUrl,
+        channelName: input.channelName,
+        channelHandle: input.channelHandle,
+      });
 
       // Resolve a brand accent color: prefer the explicit accent, else derive it
       // from the (validated) logo. Failure → template default.
@@ -1730,14 +1810,23 @@ Return ONLY the JSON array, no other text.`;
         if (ref) referenceImages.push({ base64: ref.base64, mimeType: ref.mimeType });
       }
 
-      const headline = input.headline.trim();
+      // R3 parity: cap the headline the same way the main flow does (≤12 words /
+      // ≤80 chars) so the regenerated creative's font sizing matches the original
+      // (the UI sends `renderedHeadline`, but cap defensively for raw callers too).
+      const headline = capHeadline(input.headline.trim());
       const channelName = input.channelName || "Channel";
+      // R3 parity: drop a private/internal-host bgImageUrl (SSRF), keep a valid
+      // public one as the creative background (the real article photo).
+      const safeBgImageUrl =
+        input.bgImageUrl && isPublicImageUrl(input.bgImageUrl) ? input.bgImageUrl : undefined;
       // Build the cinematic background prompt the same way the static path does,
-      // then append the user's free-text style notes (sanitized downstream inside
-      // generateImageSafe → sanitizePrompt).
+      // then append the user's free-text style notes AND the article-context blurb
+      // (bgContext) so the AI background reflects the article, not just the
+      // headline. Both flow through the same `appendImageContext` channel (capped
+      // to 600 by the schema) → sanitized downstream inside generateImageSafe.
       const bgPrompt = appendImageContext(
         `Create a cinematic, high-quality BACKGROUND photo for a social post about:\n\nTopic: "${headline}"\n\nPhotorealistic or editorial illustration, dramatic lighting, strong mood, relevant to the topic.`,
-        input.imageContext,
+        mergeStyleContext(input.imageContext, input.bgContext),
       );
 
       let creative;
@@ -1755,6 +1844,8 @@ Return ONLY the JSON array, no other text.`;
           logoPosition: input.logoPosition,
           brandColor,
           referenceImages,
+          ...(input.hookLine ? { hookLine: input.hookLine } : {}),
+          ...(safeBgImageUrl ? { bgImageUrl: safeBgImageUrl } : {}),
         });
       } catch (e) {
         throw toFriendlyAIError(e);
