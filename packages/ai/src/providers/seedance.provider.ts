@@ -261,20 +261,18 @@ export function buildSeedancePrompt(opts: {
   const style = opts.visualStyle || "cinematic, professional, modern";
 
   const scenes = opts.keyPoints
-    .map((point, i) => `Scene ${i + 2}: Bold white text "${point}" centered on screen over dramatic cinematic B-roll.`)
+    .map((point, i) => `Scene ${i + 2}: Cinematic B-roll visually depicting: ${point}.`)
     .join("\n");
 
-  return `Create a VERTICAL 9:16 social media video with bold text overlays and cinematic visuals.
+  return `Create a VERTICAL 9:16 social media video with cinematic visuals only.
 
 Style: ${style}
 
-Scene 1: Opening — enormous bold white title "${opts.title}" zooms in with dramatic camera push. Dark cinematic background.
+Scene 1: Opening — an evocative, textless cinematic establishing shot that visually sets up the subject of "${opts.title}". Dramatic camera push, dark cinematic background.
 ${scenes}
-Final scene: Call-to-action "${opts.brandName || "Follow for More"}" with dynamic typography animation.
 
 Camera: Smooth dolly movements, subtle parallax, cinematic rack focus transitions between scenes.
-Text: SUPER BOLD, extra large, white, thick font weight, centered, high contrast against dark backgrounds.
-You may show generic, anonymous people, crowds, and silhouettes. Do NOT depict any specific, real, named public figure or attempt to recreate a real person's likeness.`;
+You may show generic, anonymous people, crowds, and silhouettes. Do NOT depict any specific, real, named public figure or attempt to recreate a real person's likeness. Do NOT render any on-screen text, words, letters, numbers, captions, subtitles, lower-thirds, chyrons, titles, logos, watermarks, or typography of any kind anywhere in the video.`;
 }
 
 export const SEEDANCE_ASPECT_RATIOS = ["16:9", "9:16", "4:3", "3:4", "1:1", "auto"] as const;
