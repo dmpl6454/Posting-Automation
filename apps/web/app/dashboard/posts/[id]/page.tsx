@@ -694,7 +694,11 @@ export default function PostDetailPage() {
 
           {/* Publish Now — for DRAFT (immediate); Publish All — for SCHEDULED (re-queue immediately) */}
           {(post.status === "DRAFT" || post.status === "SCHEDULED") && (
-            <Button onClick={handlePublishAll} disabled={publishNow.isPending}>
+            <Button
+              onClick={handlePublishAll}
+              disabled={publishNow.isPending || post.targets.length === 0}
+              title={post.targets.length === 0 ? "Add at least one channel before publishing" : undefined}
+            >
               {publishNow.isPending ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : (
