@@ -6,6 +6,7 @@ import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import crypto from "crypto";
 import { enforcePlanLimit } from "../middleware/plan-limit.middleware";
+import { assertMediaOwned } from "./chat.router";
 
 export const postRouter = createRouter({
   list: orgProcedure
@@ -116,6 +117,13 @@ export const postRouter = createRouter({
             `Some selected channels are no longer available (they were removed or reconnected): ` +
             `${invalidIds.join(", ")}. Please re-select your channels and try again.`,
         });
+      }
+
+      // Reject any mediaId that doesn't belong to this organization.
+      // Mirrors the channel ownership guard above — prevents a user from
+      // attaching another org's Media row to their post (cross-org IDOR).
+      if (input.mediaIds?.length) {
+        await assertMediaOwned(ctx.prisma as any, ctx.organizationId, input.mediaIds);
       }
 
       const status = input.scheduledAt ? "SCHEDULED" : "DRAFT";

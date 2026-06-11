@@ -207,6 +207,71 @@ Apply ONLY the instructions that concern wording or what/who to mention. Ignore 
 }
 
 /**
+ * Derive the BEST headline for a carousel cover (or any format that needs a
+ * readable visual headline) from the raw extraction result + AI content brief.
+ * Mirrors the same 3-step logic the STATIC branch uses:
+ *   1. Generic-title detection → swap in the AI SUBJECT from the content brief.
+ *   2. Social-post synthesis   → synthesize a clean headline from the caption.
+ *   3. Notes-aware rewrite     → honour wording instructions from imageContext.
+ *
+ * Called server-side inside the mutation so `generateContentResilient` is
+ * passed in as a parameter (keeps the function testable and avoids a circular
+ * import). All three steps degrade gracefully — failures return the previous
+ * best value. Pure enough to unit-test the branch logic; exported for tests.
+ */
+export async function deriveCreativeHeadline({
+  extracted,
+  contentBrief,
+  contentSummary,
+  creativeNotes,
+  generateFn,
+}: {
+  extracted: { title: string; description?: string; body: string; type: string };
+  contentBrief: string;
+  contentSummary: string;
+  creativeNotes: string;
+  generateFn: (prompt: string) => Promise<string>;
+}): Promise<string> {
+  // Step 1: prefer the AI SUBJECT over a generic site/listing <title>
+  const briefSubject = /SUBJECT:\s*([^\n]+)/i.exec(contentBrief)?.[1]?.trim() || "";
+  const looksGenericTitle =
+    /\|\s*\w|breaking news|top headlines|latest news|home\s*[-|]|homepage/i.test(extracted.title) ||
+    extracted.title.length > 90;
+  let headline =
+    looksGenericTitle && briefSubject && briefSubject.length > 3
+      ? briefSubject.replace(/\s*[-–—,]\s*(bollywood actor|politician|.*)$/i, "").trim() || briefSubject
+      : extracted.title;
+
+  // Step 2: social-post caption synthesis
+  if (extracted.type === "social") {
+    try {
+      const synth = await generateFn(
+        `Write ONE concise, punchy news-style headline (max 10 words, no hashtags, no emojis) summarizing this social post. Return ONLY the headline text.\n\nPost: ${(extracted.body || extracted.description || extracted.title).slice(0, 800)}`,
+      );
+      const cleaned = synth.replace(/^["']|["']$/g, "").replace(/\n[\s\S]*$/, "").trim();
+      if (cleaned.length > 3) headline = cleaned;
+    } catch {
+      // degrade to step-1 result
+    }
+  }
+
+  // Step 3: notes-aware rewrite (wording instructions only)
+  if (creativeNotes) {
+    try {
+      const rewritten = await generateFn(
+        buildHeadlineRewritePrompt(headline, contentSummary.slice(0, 500), creativeNotes),
+      );
+      const cleaned = rewritten.replace(/^["']|["']$/g, "").replace(/\n[\s\S]*$/, "").trim();
+      if (cleaned.length > 3) headline = cleaned;
+    } catch {
+      // degrade to step-2 result
+    }
+  }
+
+  return capHeadline(headline);
+}
+
+/**
  * Cap a headline to ≤12 words and ≤80 visible characters so the creative
  * template's word-count font sizing stays readable (≥16 words renders at 40px).
  * Applies to all formats. Hoisted to module level (E3b) so the standalone
@@ -1575,7 +1640,20 @@ Return ONLY the JSON array, no other text.`;
         const uploadedUrls: string[] = [];
 
         // Build all slide texts: cover + content + CTA
-        const coverHeadline = capHeadline(extracted.title);
+        // Use the same 3-step headline derivation as the static branch so the
+        // carousel cover also: (a) swaps a generic site-title for the AI SUBJECT,
+        // (b) synthesizes a clean headline from social-post captions, and (c)
+        // honours wording instructions from the user's creative notes.
+        const carouselContentSummary = extracted.body.slice(0, 600) || extracted.description || extracted.title;
+        const carouselCreativeNotes = input.imageContext?.trim() || "";
+        const coverHeadline = await deriveCreativeHeadline({
+          extracted,
+          contentBrief,
+          contentSummary: carouselContentSummary,
+          creativeNotes: carouselCreativeNotes,
+          generateFn: (prompt) =>
+            generateContentResilient({ provider: input.provider, platform: "INSTAGRAM", userPrompt: prompt, tone: "professional" }),
+        });
         // PART A: the capped cover headline is what the carousel cover renders —
         // surface it so Regenerate of the cover slide reuses it (not the raw title).
         renderedHeadline = coverHeadline;
@@ -1945,6 +2023,29 @@ Return ONLY the JSON array, no other text.`;
         mergeStyleContext(input.imageContext, input.bgContext),
       );
 
+      // F6: when the user has edited the creative notes (imageContext) since the
+      // last render, re-derive the hook line from those notes rather than reusing
+      // the original rendered hook verbatim. This makes "Regenerate" honour both
+      // the background re-roll AND any updated wording instructions in the notes.
+      // Falls back to the client-supplied hookLine (original render) on failure.
+      const regenNotes = input.imageContext?.trim() || "";
+      let regenHookLine = input.hookLine;
+      if (input.creativeStyle === "hook_bars" && regenNotes) {
+        const { generateContent } = await import("@postautomation/ai");
+        try {
+          const rawHook = await generateContent({
+            provider: "openai",
+            platform: "INSTAGRAM",
+            userPrompt: buildHookLinePrompt(headline, regenNotes),
+            tone: "professional",
+          });
+          const trimmed = rawHook.replace(/^["']|["']$/g, "").replace(/\n[\s\S]*$/, "").trim();
+          if (trimmed.length > 0) regenHookLine = capHookLine(trimmed);
+        } catch {
+          // degrade to original hookLine
+        }
+      }
+
       let creative;
       try {
         creative = await renderStaticCreative({
@@ -1960,7 +2061,7 @@ Return ONLY the JSON array, no other text.`;
           logoPosition: input.logoPosition,
           brandColor,
           referenceImages,
-          ...(input.hookLine ? { hookLine: input.hookLine } : {}),
+          ...(regenHookLine ? { hookLine: regenHookLine } : {}),
           ...(safeBgImageUrl ? { bgImageUrl: safeBgImageUrl } : {}),
         });
       } catch (e) {

@@ -560,7 +560,9 @@ export function RepurposeTab() {
             Repurpose Content
           </CardTitle>
           <CardDescription>
-            Paste a URL or text content to create social media posts, carousels, or reels
+            {sourceMode === "text"
+              ? "Paste text to generate platform-optimised captions"
+              : "Paste a URL to create social media posts, carousels, or reels"}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-5">
@@ -1178,8 +1180,12 @@ export function RepurposeTab() {
               <Sparkles className="h-4 w-4" />
             )}
             {isLoading
-              ? `Generating ${format === "carousel" ? "carousel" : format === "reel" ? "reel" : format === "ai_video" ? "AI video with Veo3 (1-3 min)" : format === "seedance_video" ? "AI video with Seedance 2.0 (30s-3 min)" : "post"}...`
-              : `Repurpose as ${FORMAT_OPTIONS.find((f) => f.id === format)?.label || "Static Post"}`}
+              ? sourceMode === "text"
+                ? "Generating captions..."
+                : `Generating ${format === "carousel" ? "carousel" : format === "reel" ? "reel" : format === "ai_video" ? "AI video with Veo3 (1-3 min)" : format === "seedance_video" ? "AI video with Seedance 2.0 (30s-3 min)" : "post"}...`
+              : sourceMode === "text"
+                ? "Generate Captions"
+                : `Repurpose as ${FORMAT_OPTIONS.find((f) => f.id === format)?.label || "Static Post"}`}
           </Button>
         </CardContent>
       </Card>
