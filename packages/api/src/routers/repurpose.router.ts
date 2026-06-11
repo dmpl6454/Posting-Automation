@@ -42,17 +42,21 @@ export function compactSlides<T>(slideImages: (T | undefined | null)[]): T[] {
 }
 
 /**
- * Whether a creative style needs a (slow) AI-generated photo background.
+ * Whether a creative style needs an AI-generated photo background.
  *
- * `hook_bars` and `bold_typographic` are TEXT-FIRST styles that render entirely
- * from theme tokens + brand color + typography (Task 1 gave them solid/gradient
- * fallbacks), so we SKIP the `generateImageSafe` call for them — a big latency
- * win. `premium_editorial` and `tweet_card` keep the AI photo background. Any
- * unknown/future style defaults to `true` (safe: render with a background).
+ * ALL styles now get an AI background (product decision 2026-06-11): users
+ * expected `hook_bars` ("Hook + Headline") and `bold_typographic` to render rich
+ * AI imagery like `premium_editorial`/`tweet_card`, not sit on a flat near-white
+ * fill — which read as "blank", and made carousel body/cta slides blank too.
+ * The hook/headline/body text simply layers on top of the AI photo (the
+ * templates already scrim + render the text bars over `.bg`). CTA slides remain
+ * the one exception (handled by the `slideRole !== "cta"` guard at the call
+ * site) — they're a centered "Follow for more" card on a branded gradient.
+ * `false` is dead today but kept so the signature/tests stay meaningful.
  * Pure + exported for unit testing.
  */
-export function styleNeedsAiBackground(style: string): boolean {
-  return style !== "hook_bars" && style !== "bold_typographic";
+export function styleNeedsAiBackground(_style: string): boolean {
+  return true;
 }
 
 /**
@@ -251,12 +255,13 @@ export function mergeStyleContext(
  * `buildHeadlineCreative` closure AND the standalone `regenerateImage` mutation
  * render through ONE code path (no duplicated render logic, identical output).
  *
- * Flow: optionally generate an AI background photo (skipped for text-first
- * styles via `styleNeedsAiBackground`, and for `cta` slides), then bake the
+ * Flow: generate an AI background photo for every style (only `cta` slides skip
+ * it — they're a branded-gradient "Follow for more" card), then bake the
  * headline + logo + brand color onto it via the Puppeteer creative template
  * (`generateStyledCreativeImage`). If the AI background fails the template still
- * renders with a stock background, so a creative is ALWAYS produced. Pure-ish:
- * all I/O is via the injected AI helpers; no router/ctx coupling.
+ * renders with the passed-in article photo / branded gradient, so a creative is
+ * ALWAYS produced. Pure-ish: all I/O is via the injected AI helpers; no
+ * router/ctx coupling.
  *
  * `bgPrompt` is expected to ALREADY have had `appendImageContext` applied by the
  * caller (so the user's style notes flow through `sanitizePrompt` inside
@@ -297,27 +302,11 @@ export async function renderStaticCreative(args: {
   let bgSource: "ai" | "stock" = "stock";
   const referenceImages = args.referenceImages ?? [];
 
-  // Text-first styles (hook_bars / bold_typographic) + cta slides render from
-  // theme tokens alone — skip the slow AI background. premium_editorial /
-  // tweet_card keep the AI photo background.
-  //
-  // For non-AI styles with a real https:// bgImageUrl: Puppeteer's `load` event
-  // does NOT wait for CSS background-image network fetches, so the canvas
-  // screenshots before the image paints (blank white). Pre-fetch → data URL so
-  // the image is inline and the load event correctly covers it.
-  if (
-    backgroundImageUrl?.startsWith("https://") &&
-    !styleNeedsAiBackground(args.creativeStyle)
-  ) {
-    try {
-      const { safeFetchPublicImage } = await import("@postautomation/ai");
-      const fetched = await safeFetchPublicImage(backgroundImageUrl, { timeoutMs: 8000 });
-      if (fetched) backgroundImageUrl = `data:${fetched.mimeType};base64,${fetched.base64}`;
-    } catch {
-      // keep the https:// URL; gradient fallback still looks fine
-    }
-  }
-
+  // Every style now gets an AI photo background (product decision 2026-06-11) —
+  // hook_bars/bold_typographic layer their text bars on top, exactly like
+  // premium_editorial. Only `cta` slides skip AI (they're a centered
+  // "Follow for more" card on a branded gradient). On AI failure we fall back to
+  // the passed-in real article photo (if any), never to a blank fill.
   if (args.slideRole !== "cta" && styleNeedsAiBackground(args.creativeStyle)) {
     const themeBgDescriptor =
       args.theme === "light"
@@ -342,6 +331,23 @@ export async function renderStaticCreative(args: {
       // AI failure → fall back to the passed-in real photo (if any), not nothing.
       backgroundImageUrl = args.bgImageUrl ?? backgroundImageUrl;
       console.warn(`[Repurpose] AI background failed, using stock template bg:`, (e as Error).message);
+    }
+  }
+
+  // If the background is still a raw https:// URL — a CTA slide carrying the
+  // article photo, or the AI-failure fallback above — pre-fetch it to a data
+  // URI. Puppeteer's `load` event does NOT wait for CSS background-image network
+  // fetches, so a remote URL screenshots blank-white; an inline data URI paints
+  // synchronously. (AI backgrounds are already data URIs and skip this.)
+  // SSRF-gated by safeFetchPublicImage; on any failure we keep the URL and the
+  // template's branded gradient still renders (never blank).
+  if (backgroundImageUrl?.startsWith("https://")) {
+    try {
+      const { safeFetchPublicImage } = await import("@postautomation/ai");
+      const fetched = await safeFetchPublicImage(backgroundImageUrl, { timeoutMs: 8000 });
+      if (fetched) backgroundImageUrl = `data:${fetched.mimeType};base64,${fetched.base64}`;
+    } catch {
+      /* keep the https:// URL; gradient fallback covers it */
     }
   }
 
@@ -788,10 +794,10 @@ export const repurposeRouter = createRouter({
           // Pass-through shared browser. Typed off launchCreativeBrowser's return
           // so the api package never names "puppeteer" directly (it isn't a dep).
           browser?: Awaited<ReturnType<typeof launchCreativeBrowser>>;
-          // The article's own photo (og:image) to use as the creative background.
-          // Becomes the renderer's DEFAULT bg: AI overrides it for AI-background
-          // styles, but for hook_bars/bold_typographic (AI skipped) it IS the bg —
-          // so those styles no longer render "blank". Pass-through, no fetch here.
+          // The article's own photo (og:image) — the renderer's DEFAULT bg and
+          // AI-failure FALLBACK. Every style now generates an AI background that
+          // overrides this on success (2026-06-11); the photo is what keeps a
+          // creative from rendering "blank" if AI fails. Pass-through, no fetch.
           bgImageUrl?: string;
         },
       ): Promise<{ imageBase64: string; mimeType: string; bgSource: "ai" | "stock" }> {
@@ -1109,13 +1115,11 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
         // PART A: surface the hook line so Regenerate re-renders hook_bars WITH it.
         renderedHookLine = hookLine;
 
-        // Use the article's OWN photo (og:image, first in extracted.images) as the
-        // creative background. For hook_bars/bold_typographic (AI background
-        // skipped by design) this is what stops the creative rendering "blank" — it
-        // becomes the real backdrop behind the bars/headline. For the AI-background
-        // styles it's the harmless DEFAULT the AI overrides (and the AI-failure
-        // fallback). SSRF-gated by isPublicImageUrl; https-only (safeImageUrl drops
-        // http:// downstream anyway).
+        // The article's OWN photo (og:image, first in extracted.images) is the
+        // harmless DEFAULT background that the AI generation overrides on success
+        // and falls back to on failure — for EVERY style now (all styles generate
+        // an AI background as of 2026-06-11). SSRF-gated by isPublicImageUrl;
+        // https-only (safeImageUrl drops http:// downstream anyway).
         const articleBg = pickArticleBgImage(extracted.images, isPublicImageUrl);
 
         try {
@@ -1566,8 +1570,10 @@ Return ONLY the JSON array, no other text.`;
                   },
                   appendImageContext,
                 );
-                // Cover gets the real article photo (locked decision); body/cta
-                // keep the AI variety background.
+                // Every non-cta slide now gets an AI background (2026-06-11). The
+                // cover passes the article photo as its AI-failure FALLBACK (the AI
+                // overrides it on success); body slides get per-slide AI variety;
+                // cta renders a branded-gradient "Follow for more" card.
                 const isCover = slideRole === "cover" || slideIdx === 0;
                 const creative = await buildHeadlineCreative(
                   bgPrompt,

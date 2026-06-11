@@ -153,9 +153,13 @@ function logoHtml(opts: StaticCreativeOptions, size: number): string {
 // ── Style builders ────────────────────────────────────────────────────────
 function buildPremiumEditorial(opts: StaticCreativeOptions): string {
   const accent = safeColor(opts.brandColor);
-  const tokens = themeTokens(opts.theme ?? "light", opts.brandColor ?? DEFAULT_ACCENT);
-  const fs = headlineFontSize(opts.headline);
   const safeBg = safeImageUrl(opts.bgImageUrl);
+  // With a photo: honor the requested theme. WITHOUT one (AI bg + article-photo
+  // both failed): force "gradient" — white headline on a rich brand gradient — so
+  // the creative is a legible branded card, never a flat near-white "blank".
+  const effectiveTheme: CreativeTheme = safeBg ? (opts.theme ?? "light") : "gradient";
+  const tokens = themeTokens(effectiveTheme, opts.brandColor ?? DEFAULT_ACCENT);
+  const fs = headlineFontSize(opts.headline);
   const bg = safeBg
     ? `background-image:url("${safeBg}");background-size:cover;background-position:center;`
     : `background:${tokens.bgFallback};`;
@@ -307,8 +311,13 @@ body{width:${CANVAS.width}px;height:${CANVAS.height}px;overflow:hidden;position:
  */
 function buildBodyChrome(opts: StaticCreativeOptions, role: "body" | "cta"): string {
   const accent = safeColor(opts.brandColor);
-  const tokens = themeTokens(opts.theme ?? "light", opts.brandColor ?? DEFAULT_ACCENT);
   const safeBg = safeImageUrl(opts.bgImageUrl);
+  // With a photo: honor the requested theme (its scrim keeps text legible over the
+  // image). WITHOUT a photo (cta slides, or a body slide whose AI bg failed): force
+  // the "gradient" theme — white text on a rich brand-color gradient — so the slide
+  // is a legible branded card, NEVER a flat near-white fill that reads as "blank".
+  const effectiveTheme: CreativeTheme = safeBg ? (opts.theme ?? "light") : "gradient";
+  const tokens = themeTokens(effectiveTheme, opts.brandColor ?? DEFAULT_ACCENT);
   const bg = safeBg
     ? `background-image:url("${safeBg}");background-size:cover;background-position:center;`
     : `background:${tokens.bgFallback};`;

@@ -1269,7 +1269,7 @@ export function RepurposeTab() {
                   Generated {results.format === "ai_video" ? "AI Video (Veo3)" : results.format === "seedance_video" ? "AI Video (Seedance 2.0)" : results.format === "reel" ? "Reel Video" : results.mediaUrls.length > 1 ? `Carousel (${results.mediaUrls.length} slides)` : "Static Post"}
                 </CardTitle>
                 <CardDescription>
-                  {results.format === "ai_video" ? "Cinematic AI video with text slides, visuals & music by Veo3" : results.format === "seedance_video" ? "Cinematic 2K video with native audio by Seedance 2.0" : results.format === "reel" ? "AI-generated video with slides" : results.format === "static" ? (creativeStyle === "hook_bars" || creativeStyle === "bold_typographic" ? "Branded design with your article's photo" : "AI-generated background with branded overlay") : "Swipe through carousel slides"}
+                  {results.format === "ai_video" ? "Cinematic AI video with text slides, visuals & music by Veo3" : results.format === "seedance_video" ? "Cinematic 2K video with native audio by Seedance 2.0" : results.format === "reel" ? "AI-generated video with slides" : results.format === "static" ? "AI-generated background with branded overlay" : "Swipe through carousel slides"}
                 </CardDescription>
               </CardHeader>
               <CardContent>

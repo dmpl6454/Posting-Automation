@@ -2,17 +2,14 @@ import { describe, expect, it } from "vitest";
 import { styleNeedsAiBackground, capHookLine } from "../routers/repurpose.router";
 
 describe("styleNeedsAiBackground", () => {
-  it("text-only styles do NOT need an AI background", () => {
-    expect(styleNeedsAiBackground("hook_bars")).toBe(false);
-    expect(styleNeedsAiBackground("bold_typographic")).toBe(false);
-  });
-
-  it("photo styles DO need an AI background", () => {
+  // Product decision 2026-06-11: EVERY style now gets an AI background (hook_bars
+  // and bold_typographic used to skip it and render on a flat near-white fill,
+  // which read as "blank" — and left carousel body slides blank too).
+  it("all styles need an AI background", () => {
+    expect(styleNeedsAiBackground("hook_bars")).toBe(true);
+    expect(styleNeedsAiBackground("bold_typographic")).toBe(true);
     expect(styleNeedsAiBackground("premium_editorial")).toBe(true);
     expect(styleNeedsAiBackground("tweet_card")).toBe(true);
-  });
-
-  it("unknown styles default to needing an AI background (safe default)", () => {
     expect(styleNeedsAiBackground("anything_else")).toBe(true);
   });
 });
