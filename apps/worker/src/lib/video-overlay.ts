@@ -1,9 +1,45 @@
-import { execSync } from "child_process";
+import { execFileSync } from "node:child_process";
 import { writeFileSync, unlinkSync, existsSync, mkdirSync, readFileSync } from "fs";
 import { join } from "path";
 import crypto from "crypto";
 
 const TMP_DIR = "/tmp/video-overlay";
+
+/**
+ * Build the ffmpeg argument ARRAY for the overlay pass (pure — no I/O).
+ *
+ * SECURITY: every element is a discrete, UNQUOTED arg. With `execFileSync`
+ * (no shell) each array element is passed verbatim, so shell metachars in
+ * the (user-controlled) `text`/`channelName` baked into `filterComplex` are
+ * inert. Do NOT wrap any element in shell quotes — quotes would become part
+ * of the literal filename / filtergraph value.
+ *   - `inputArgs` is already discrete (`["-i", path1, "-i", path2, ...]`).
+ *   - `filterComplex` is ONE element (do not split / quote).
+ *   - `[vout]` and `outputPath` are their own UNQUOTED elements.
+ */
+export function buildOverlayFfmpegArgs(opts: {
+  inputArgs: string[];
+  filterComplex: string;
+  outputPath: string;
+}): string[] {
+  return [
+    "-y",
+    ...opts.inputArgs,
+    "-filter_complex",
+    opts.filterComplex,
+    "-map",
+    "[vout]",
+    "-map",
+    "0:a?",
+    "-codec:a",
+    "copy",
+    "-preset",
+    "ultrafast",
+    "-movflags",
+    "+faststart",
+    opts.outputPath,
+  ];
+}
 
 interface VideoOverlayOptions {
   text?: string;              // headline/supertext to burn on video
@@ -64,10 +100,12 @@ export async function processVideoOverlay(
 
     // 3. Build FFmpeg filter chain
     const filters: string[] = [];
-    const inputs: string[] = [`-i "${inputPath}"`];
+    // Discrete arg elements (NOT a shell string): each input is `-i` then the
+    // RAW path — execFileSync passes each element verbatim, so no quoting.
+    const inputArgs: string[] = ["-i", inputPath];
 
     if (hasLogo) {
-      inputs.push(`-i "${logoPath}"`);
+      inputArgs.push("-i", logoPath);
     }
 
     // --- Logo overlay filter ---
@@ -118,12 +156,16 @@ export async function processVideoOverlay(
       filters.push(`[vlogo]null[vout]`);
     }
 
-    // 4. Build FFmpeg command
+    // 4. Build FFmpeg args (ARRAY, not a shell string) and run with execFileSync
+    // (NO shell) — closes command injection via user-controlled text/channelName
+    // baked into filterComplex. The `escaped` drawtext escaping above stays:
+    // it's correct for the ffmpeg FILTERGRAPH level; the no-shell exec handles
+    // the (now-irrelevant) shell level.
     const filterComplex = filters.join(";");
-    const cmd = `ffmpeg -y ${inputs.join(" ")} -filter_complex "${filterComplex}" -map "[vout]" -map 0:a? -codec:a copy -preset ultrafast -movflags +faststart "${outputPath}"`;
+    const args = buildOverlayFfmpegArgs({ inputArgs, filterComplex, outputPath });
 
     console.log(`[VideoOverlay] Processing: logo=${hasLogo ? "yes" : channelName ? "text" : "none"}, text=${text ? "yes" : "no"}`);
-    execSync(cmd, { timeout: 180000, stdio: "pipe" });
+    execFileSync("ffmpeg", args, { timeout: 180000, stdio: "pipe" });
 
     // 5. Upload to S3
     const { S3Client, PutObjectCommand } = await import("@aws-sdk/client-s3");
