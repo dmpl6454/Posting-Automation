@@ -1,7 +1,29 @@
 import { describe, it, expect } from "vitest";
-import { enforceSlideCount } from "../routers/repurpose.router";
+import { enforceSlideCount, contentSlidesForTotal } from "../routers/repurpose.router";
 
 type Slide = { title: string; body: string };
+
+describe("contentSlidesForTotal", () => {
+  it("maps total=3 → 1 content slide (cover + 1 + cta = 3 total)", () => {
+    expect(contentSlidesForTotal(3)).toBe(1);
+  });
+
+  it("maps total=5 → 3 content slides (cover + 3 + cta = 5 total)", () => {
+    expect(contentSlidesForTotal(5)).toBe(3);
+  });
+
+  it("maps total=10 → 8 content slides (cover + 8 + cta = 10 total)", () => {
+    expect(contentSlidesForTotal(10)).toBe(8);
+  });
+
+  it("clamps to min 1 when total=2 (would be 0)", () => {
+    expect(contentSlidesForTotal(2)).toBe(1);
+  });
+
+  it("clamps to min 1 when total=1 (would be negative)", () => {
+    expect(contentSlidesForTotal(1)).toBe(1);
+  });
+});
 
 function slides(n: number, prefix = "real"): Slide[] {
   return Array.from({ length: n }, (_, i) => ({

@@ -206,6 +206,11 @@ export function enforceSlideCount(
   return out;
 }
 
+/** Carousel slideCount is the TOTAL slide count (cover + content + CTA). Content slides = total - 2 (min 1). */
+export function contentSlidesForTotal(total: number): number {
+  return Math.max(1, total - 2);
+}
+
 /**
  * Append a free-text "aesthetic / style notes" clause to an AI background
  * prompt (E3a). If `imageContext` is empty/whitespace/undefined the base prompt
@@ -438,8 +443,9 @@ export const repurposeRouter = createRouter({
         aestheticRefUrl: z.string().optional(),
         // E3a: free-text style notes appended to the AI background prompt.
         imageContext: z.string().max(300).optional(),
-        // E2: how many CONTENT slides a carousel has (cover + cta added around
-        // these → total = slideCount + 2). Default 5 preserves prior behaviour.
+        // E2 / round3: total slides incl. cover + CTA; min 3 = cover+1 content+cta.
+        // Carousel content slides = slideCount - 2 (min 1). (Reel/slideshow has no
+        // picker and reads slideCount directly as its content-slide count.)
         slideCount: z.number().int().min(3).max(10).default(5),
         // E4: user-attached image(s). When set on a STATIC repurpose, these
         // BECOME the post media and the AI image generation is SKIPPED (captions
@@ -1291,8 +1297,17 @@ Return ONLY the JSON array, no other text.`;
         };
 
       } else if (input.format === "carousel" || input.format === "reel") {
+        // LOCKED decision: for a CAROUSEL the user's slideCount picker means the
+        // TOTAL slide count (cover + content + CTA), so the content-slide count
+        // is total - 2 (min 1). The slideCount picker is carousel-only — the reel
+        // (slideshow) path has NO picker, so it keeps its prior behaviour and uses
+        // input.slideCount (default 5) content slides directly. The carousel and
+        // reel branches SHARE this slide-extraction/enforce code, so we branch the
+        // content count here and use `effectiveContentCount` everywhere below.
+        const effectiveContentCount =
+          input.format === "carousel" ? contentSlidesForTotal(input.slideCount) : input.slideCount;
         // Generate carousel slide content via AI
-        const slidePrompt = `Analyze this content and break it into exactly ${input.slideCount} key points for a carousel post.
+        const slidePrompt = `Analyze this content and break it into exactly ${effectiveContentCount} key points for a carousel post.
 
 ${contentBrief}
 
@@ -1327,19 +1342,22 @@ Return ONLY the JSON array, no other text.`;
 
         // Fallback slides derived from the body sentences — used both when the
         // AI returns nothing AND to top up an AI list that came back short of
-        // the requested count. Generate up to `slideCount` so enforceSlideCount
-        // has enough material to reach the target before generic fillers kick in.
+        // the requested count. Generate up to `effectiveContentCount` so
+        // enforceSlideCount has enough material to reach the target before generic
+        // fillers kick in.
         const fallbackSentences = extracted.body.split(/[.!?]+/).filter((s) => s.trim().length > 20);
-        const fallbackSlidesFromSentences = fallbackSentences.slice(0, input.slideCount).map((s, i) => ({
+        const fallbackSlidesFromSentences = fallbackSentences.slice(0, effectiveContentCount).map((s, i) => ({
           title: `Point ${i + 1}`,
           body: s.trim().slice(0, 120),
         }));
 
-        // E2: honour the user's chosen content-slide count EXACTLY — slice if the
-        // AI returned too many, top up from the sentence fallback then generic
-        // fillers if too few. Cover + cta are still added around these below, so
-        // the published carousel has slideCount + 2 slides total.
-        slideData = enforceSlideCount(slideData, input.slideCount, fallbackSlidesFromSentences);
+        // E2 / round3: honour the user's chosen content-slide count EXACTLY —
+        // slice if the AI returned too many, top up from the sentence fallback
+        // then generic fillers if too few. Cover + cta are still added around
+        // these below. For a carousel `effectiveContentCount = total - 2`, so the
+        // published carousel has exactly `slideCount` slides total (cover + N + cta);
+        // for a reel `effectiveContentCount = input.slideCount` (unchanged).
+        slideData = enforceSlideCount(slideData, effectiveContentCount, fallbackSlidesFromSentences);
 
         // Generate AI-designed carousel slides using Gemini
         const s3 = getS3Client();
