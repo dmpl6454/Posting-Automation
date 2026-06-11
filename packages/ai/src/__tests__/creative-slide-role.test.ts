@@ -77,4 +77,36 @@ describe("creative-templates slideRole (carousel consistency)", () => {
     expect(html).toContain("<!DOCTYPE html>");
     expect(html).toContain("Body text for a hook_bars body slide");
   });
+
+  // 2026-06-11 regression: carousel body/cta slides with NO photo were rendering
+  // on a flat near-white #f7f7f8 fill that read as "blank" (the user's slide 2/3
+  // bug). A photoless body/cta slide must force the gradient theme — white text
+  // on a rich brand gradient — never the flat near-white fill.
+  it("body slide with NO photo + light theme falls back to a branded gradient (never blank-white)", () => {
+    const html = buildStaticCreative({ ...body }); // no bgImageUrl
+    expect(html).toContain("linear-gradient(");
+    expect(html).toContain("#ffffff"); // white text for legibility over the gradient
+    expect(html).not.toContain(".bg{position:absolute;inset:0;background:#f7f7f8;}");
+  });
+
+  it("cta slide with NO photo + light theme falls back to a branded gradient (never blank-white)", () => {
+    const html = buildStaticCreative({
+      ...body,
+      slideRole: "cta",
+      headline: "Follow for More",
+      body: "",
+    });
+    expect(html).toContain("linear-gradient(");
+    expect(html).toContain("#ffffff");
+    expect(html).not.toContain(".bg{position:absolute;inset:0;background:#f7f7f8;}");
+  });
+
+  it("body slide WITH a photo honors the requested light theme (dark text + photo bg)", () => {
+    const html = buildStaticCreative({
+      ...body,
+      bgImageUrl: "https://cdn.example.com/photo.jpg",
+    });
+    expect(html).toContain("https://cdn.example.com/photo.jpg");
+    expect(html).toContain("#0f1419"); // dark text (light theme honored over the photo+scrim)
+  });
 });

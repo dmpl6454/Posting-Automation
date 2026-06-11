@@ -211,13 +211,15 @@ describe("repurpose.regenerateImage", () => {
     expect(mediaCreate).toHaveBeenCalledTimes(1);
   });
 
-  it("honors styleNeedsAiBackground: hook_bars skips the AI background render", async () => {
+  it("hook_bars now generates an AI background like every other style", async () => {
     const caller = makeCaller();
     await caller.regenerateImage(input({ creativeStyle: "hook_bars" }));
-    // hook_bars is text-first → no AI background generated.
-    expect(generateImageSafe).not.toHaveBeenCalled();
-    // but the template still renders.
+    // 2026-06-11: ALL styles get an AI background (was: hook_bars skipped it).
+    expect(generateImageSafe).toHaveBeenCalledTimes(1);
     expect(generateStyledCreativeImage).toHaveBeenCalledTimes(1);
+    // The AI background (a data: URI) reaches the template render as bgImageUrl.
+    const renderArgs = generateStyledCreativeImage.mock.calls[0]?.[0] as any;
+    expect(renderArgs.bgImageUrl).toMatch(/^data:image\//);
   });
 
   it("parity: hook_bars + a hookLine reaches the creative template render", async () => {
@@ -242,10 +244,12 @@ describe("repurpose.regenerateImage", () => {
     expect(used).toBe(capHeadline(longHeadline));
   });
 
-  it("parity: a valid https bgImageUrl reaches the creative template render", async () => {
+  it("parity: a passed-in https bgImageUrl is the AI-failure fallback background", async () => {
+    // All styles generate an AI bg now, so on SUCCESS the AI data: URI overrides
+    // any passed-in url. The passed-in article photo is the FALLBACK: simulate an
+    // AI failure and assert the render falls back to that url (not blank).
+    generateImageSafe.mockRejectedValueOnce(new Error("ai down"));
     const caller = makeCaller();
-    // premium_editorial generates an AI background which OVERRIDES bgImageUrl, so
-    // use a text-first style (hook_bars) where the passed-in bg is the actual bg.
     await caller.regenerateImage(
       input({
         creativeStyle: "hook_bars",
@@ -253,10 +257,14 @@ describe("repurpose.regenerateImage", () => {
       }),
     );
     const renderArgs = generateStyledCreativeImage.mock.calls[0]?.[0] as any;
+    // safeFetchPublicImage is mocked to null → the url stays as-is (not a data URI).
     expect(renderArgs.bgImageUrl).toBe("https://cdn.example.com/article-photo.jpg");
   });
 
   it("SSRF: a private-host bgImageUrl is dropped (never reaches the render bg)", async () => {
+    // Even with the AI bg failing, a private-host fallback must be dropped — the
+    // render should get the AI nothing-fallback, NOT the internal url.
+    generateImageSafe.mockRejectedValueOnce(new Error("ai down"));
     const caller = makeCaller();
     await caller.regenerateImage(
       input({
@@ -266,7 +274,7 @@ describe("repurpose.regenerateImage", () => {
     );
     expect(isPublicImageUrl).toHaveBeenCalledWith("https://10.0.0.5/internal.jpg");
     const renderArgs = generateStyledCreativeImage.mock.calls[0]?.[0] as any;
-    // hook_bars skips AI bg; the disallowed bg is dropped → no bgImageUrl rendered.
+    // Disallowed bg dropped before render; AI failed → no bgImageUrl at all.
     expect(renderArgs.bgImageUrl ?? null).toBeNull();
   });
 
