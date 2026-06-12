@@ -1161,9 +1161,11 @@ export function RepurposeTab() {
             </div>
           )}
 
-          {/* AI Provider */}
-          <div className="w-48 space-y-1.5">
-            <Label>AI Provider</Label>
+          {/* AI Text Provider — governs captions/headline/hook ONLY. Images are
+              created by a separate image engine (Gemini → OpenAI fallback) that
+              this control does NOT select; that's surfaced in the result card. */}
+          <div className="w-64 space-y-1.5">
+            <Label>AI Text Provider</Label>
             <Select value={provider} onValueChange={(v) => setProvider(v as typeof providers[number])}>
               <SelectTrigger>
                 <SelectValue />
@@ -1182,6 +1184,10 @@ export function RepurposeTab() {
                 })}
               </SelectContent>
             </Select>
+            <p className="text-[11px] leading-snug text-muted-foreground">
+              Writes captions &amp; headlines. Images are created by our image
+              engine (Gemini, with OpenAI fallback) — not this setting.
+            </p>
           </div>
 
           {/* Generate Button */}
@@ -1301,7 +1307,7 @@ export function RepurposeTab() {
                   Generated {results.format === "ai_video" ? "AI Video (Veo3)" : results.format === "seedance_video" ? "AI Video (Seedance 2.0)" : results.format === "reel" ? "Reel Video" : results.mediaUrls.length > 1 ? `Carousel (${results.mediaUrls.length} slides)` : "Static Post"}
                 </CardTitle>
                 <CardDescription>
-                  {results.format === "ai_video" ? "Cinematic AI video with text slides, visuals & music by Veo3" : results.format === "seedance_video" ? "Cinematic 2K video with native audio by Seedance 2.0" : results.format === "reel" ? "AI-generated video with slides" : results.format === "static" ? ((results as any).bgSource === "ai" ? "AI-generated background with branded overlay" : (results as any).bgSource === "stock" ? "Article photo background (AI image unavailable) · branded overlay" : "AI-generated background with branded overlay") : "Swipe through carousel slides"}
+                  {results.format === "ai_video" ? "Cinematic AI video with text slides, visuals & music by Veo3" : results.format === "seedance_video" ? "Cinematic 2K video with native audio by Seedance 2.0" : results.format === "reel" ? "AI-generated video with slides" : results.format === "static" ? ((results as any).bgSource === "ai" ? `AI background by ${(results as any).imageEngine === "openai" ? "OpenAI" : "Gemini"} · branded overlay` : (results as any).bgSource === "stock" ? "Article photo background (AI image unavailable) · branded overlay" : "AI-generated background with branded overlay") : "Swipe through carousel slides"}
                 </CardDescription>
               </CardHeader>
               <CardContent>

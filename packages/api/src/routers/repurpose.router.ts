@@ -405,7 +405,7 @@ export function mergeStyleContext(
  */
 export async function renderStaticCreative(args: {
   ai: {
-    generateImageSafe: (a: any) => Promise<{ imageBase64: string; mimeType: string }>;
+    generateImageSafe: (a: any) => Promise<{ imageBase64: string; mimeType: string; source?: string }>;
     generateStyledCreativeImage: (a: any) => Promise<{ imageBase64: string; mimeType: string }>;
   };
   bgPrompt: string;
@@ -430,10 +430,13 @@ export async function renderStaticCreative(args: {
    */
   bgImageUrl?: string;
   browser?: unknown;
-}): Promise<{ imageBase64: string; mimeType: string; bgSource: "ai" | "stock" }> {
+}): Promise<{ imageBase64: string; mimeType: string; bgSource: "ai" | "stock"; imageEngine?: "gemini" | "openai" }> {
   const { generateImageSafe, generateStyledCreativeImage } = args.ai;
   let backgroundImageUrl: string | undefined = args.bgImageUrl;
   let bgSource: "ai" | "stock" = "stock";
+  // Coarse engine that actually produced the AI background (for honest UI
+  // labeling): the gemini-* sanitized/generic variants all collapse to "gemini".
+  let imageEngine: "gemini" | "openai" | undefined;
   const referenceImages = args.referenceImages ?? [];
 
   // Every style now gets an AI photo background (product decision 2026-06-11) —
@@ -461,6 +464,7 @@ export async function renderStaticCreative(args: {
       });
       backgroundImageUrl = `data:${bg.mimeType};base64,${bg.imageBase64}`;
       bgSource = "ai";
+      imageEngine = bg.source === "dalle" ? "openai" : "gemini";
     } catch (e) {
       // AI failure → fall back to the passed-in real photo (if any), not nothing.
       backgroundImageUrl = args.bgImageUrl ?? backgroundImageUrl;
@@ -500,7 +504,7 @@ export async function renderStaticCreative(args: {
     ...(backgroundImageUrl ? { bgImageUrl: backgroundImageUrl } : {}),
     ...(args.brandColor ? { brandColor: args.brandColor } : {}),
   });
-  return { imageBase64: creative.imageBase64, mimeType: creative.mimeType, bgSource };
+  return { imageBase64: creative.imageBase64, mimeType: creative.mimeType, bgSource, imageEngine };
 }
 
 /**
@@ -996,7 +1000,7 @@ export const repurposeRouter = createRouter({
           // creative from rendering "blank" if AI fails. Pass-through, no fetch.
           bgImageUrl?: string;
         },
-      ): Promise<{ imageBase64: string; mimeType: string; bgSource: "ai" | "stock" }> {
+      ): Promise<{ imageBase64: string; mimeType: string; bgSource: "ai" | "stock"; imageEngine?: "gemini" | "openai" }> {
         // Delegate to the module-level renderer (E3b) so the repurpose flow and
         // the standalone `regenerateImage` mutation share ONE render path. The
         // brand logo is passed as a reference image so Gemini (Nano Banana)
@@ -1172,6 +1176,7 @@ KEYWORDS: ${(brief.keywords || []).join(", ")}`;
       let renderedHeadline: string | undefined;
       let renderedHookLine: string | undefined;
       let renderedBgSource: "ai" | "stock" | undefined;
+      let renderedImageEngine: "gemini" | "openai" | undefined;
 
       if (input.format === "static" && input.userMediaIds?.length) {
         // ── E4: user attached their own image(s) ─────────────────────────────
@@ -1358,6 +1363,7 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
             perPlatformMedia[platform] = { url, mediaId };
           }
           renderedBgSource = creative.bgSource;
+          renderedImageEngine = creative.imageEngine;
           progress(
             "Generating creative",
             "done",
@@ -1979,6 +1985,7 @@ Return ONLY the JSON array, no other text.`;
         renderedHeadline: renderedHeadline ?? null,
         hookLine: renderedHookLine ?? null,
         bgSource: renderedBgSource ?? null,
+        imageEngine: renderedImageEngine ?? null,
       };
     }),
 
