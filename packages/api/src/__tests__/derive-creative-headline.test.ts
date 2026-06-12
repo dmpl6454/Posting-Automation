@@ -89,7 +89,7 @@ describe("deriveCreativeHeadline — notes-aware rewrite (step 3)", () => {
     expect(generateFn).not.toHaveBeenCalled();
   });
 
-  it("caps the output to 12 words regardless of what generateFn returns", async () => {
+  it("caps the output to 16 words regardless of what generateFn returns", async () => {
     const longHeadline = Array.from({ length: 20 }, (_, i) => `word${i}`).join(" ");
     const generateFn = vi.fn().mockResolvedValue(longHeadline);
     const result = await deriveCreativeHeadline({
@@ -99,6 +99,6 @@ describe("deriveCreativeHeadline — notes-aware rewrite (step 3)", () => {
       creativeNotes: "some notes",
       generateFn,
     });
-    expect(result.split(" ").length).toBeLessThanOrEqual(12);
+    expect(result.split(" ").length).toBeLessThanOrEqual(16);
   });
 });

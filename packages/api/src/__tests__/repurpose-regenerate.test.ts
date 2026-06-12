@@ -240,9 +240,9 @@ describe("repurpose.regenerateImage", () => {
     await caller.regenerateImage(input({ headline: longHeadline }));
     const renderArgs = generateStyledCreativeImage.mock.calls[0]?.[0] as any;
     const used: string = renderArgs.headline;
-    // capHeadline contract: ≤12 words AND ≤80 chars.
-    expect(used.trim().split(/\s+/).length).toBeLessThanOrEqual(12);
-    expect(used.length).toBeLessThanOrEqual(80);
+    // capHeadline contract: ≤16 words AND ≤90 chars.
+    expect(used.trim().split(/\s+/).length).toBeLessThanOrEqual(16);
+    expect(used.length).toBeLessThanOrEqual(90);
     expect(used).toBe(capHeadline(longHeadline));
   });
 

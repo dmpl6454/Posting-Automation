@@ -51,7 +51,7 @@ describe("buildHeadlineRewritePrompt", () => {
     expect(p).toMatch(/Ignore instructions about colors, fonts, layout, or imagery/i);
   });
 
-  it("caps the output contract at 12 words (matches capHeadline)", () => {
-    expect(buildHeadlineRewritePrompt("h", "ctx", "notes")).toContain("max 12 words");
+  it("caps the output contract at 14 words (matches capHeadline budget with headroom)", () => {
+    expect(buildHeadlineRewritePrompt("h", "ctx", "notes")).toContain("max 14 words");
   });
 });

@@ -203,7 +203,7 @@ Current headline: ${headline}
 Article context: ${context}
 User instructions: ${creativeNotes}
 
-Apply ONLY the instructions that concern wording or what/who to mention. Ignore instructions about colors, fonts, layout, or imagery. If no wording instruction applies, return the current headline UNCHANGED. Return ONLY the headline text — max 12 words, no quotes, no hashtags, no emojis.`;
+Apply ONLY the instructions that concern wording or what/who to mention. Ignore instructions about colors, fonts, layout, or imagery. If no wording instruction applies, return the current headline UNCHANGED. Return ONLY the headline text — one complete headline, max 14 words, no trailing fragments, no quotes, no hashtags, no emojis.`;
 }
 
 /**
@@ -246,7 +246,7 @@ export async function deriveCreativeHeadline({
   if (extracted.type === "social") {
     try {
       const synth = await generateFn(
-        `Write ONE concise, punchy news-style headline (max 10 words, no hashtags, no emojis) summarizing this social post. Return ONLY the headline text.\n\nPost: ${(extracted.body || extracted.description || extracted.title).slice(0, 800)}`,
+        `Write ONE complete, self-contained, punchy news-style headline (max 14 words, no hashtags, no emojis) summarizing this social post. Return ONLY the headline text.\n\nPost: ${(extracted.body || extracted.description || extracted.title).slice(0, 800)}`,
       );
       const cleaned = synth.replace(/^["']|["']$/g, "").replace(/\n[\s\S]*$/, "").trim();
       if (cleaned.length > 3) headline = cleaned;
@@ -272,17 +272,48 @@ export async function deriveCreativeHeadline({
 }
 
 /**
- * Cap a headline to ≤12 words and ≤80 visible characters so the creative
- * template's word-count font sizing stays readable (≥16 words renders at 40px).
- * Applies to all formats. Hoisted to module level (E3b) so the standalone
- * `regenerateImage` mutation can reuse the SAME capping logic as the repurpose
- * flow. Pure + exported for unit testing.
+ * Cap a headline so it fits the creative template's largest comfortable size
+ * tier WITHOUT ever ending mid-word. The template's headlineFontSize() renders
+ * up to 16 words at 46px (creative-templates.ts:138), so 16 words / ~90 chars
+ * is the real layout ceiling — not the old 12/80 guess.
+ *
+ * Strategy when over budget: keep whole words only; if we had to drop any
+ * content, prefer cutting back to the last sentence-ending punctuation within
+ * budget so the headline reads as a complete thought; otherwise append "…" so
+ * it reads as deliberately abbreviated, never as a broken sentence.
  */
 export function capHeadline(text: string): string {
-  const words = text.trim().split(/\s+/);
-  let out = words.slice(0, 12).join(" ");
-  if (out.length > 80) out = out.slice(0, 80).replace(/\s+\S*$/, "");
-  return out.trim();
+  const cleaned = text.trim().replace(/\s+/g, " ");
+  const words = cleaned.split(" ");
+  const MAX_WORDS = 16;
+  const MAX_CHARS = 90;
+
+  if (words.length <= MAX_WORDS && cleaned.length <= MAX_CHARS) return cleaned;
+
+  let out = words.slice(0, MAX_WORDS).join(" ");
+  while (out.length > MAX_CHARS && out.includes(" ")) {
+    out = out.slice(0, out.lastIndexOf(" "));
+  }
+
+  const lastStop = Math.max(out.lastIndexOf(". "), out.lastIndexOf("? "), out.lastIndexOf("! "));
+  if (lastStop > out.length * 0.6) {
+    return out.slice(0, lastStop + 1).trim();
+  }
+
+  return out.replace(/[\s,;:–—-]+$/, "").trim() + "…";
+}
+
+/**
+ * Cut body text to maxChars on a whole-word boundary and append "…" when
+ * content is dropped. Used for carousel slide/cover body fields where a raw
+ * .slice() could chop mid-word. Pure + exported for unit testing.
+ */
+export function capBody(text: string, maxChars: number): string {
+  const cleaned = text.trim().replace(/\s+/g, " ");
+  if (cleaned.length <= maxChars) return cleaned;
+  let out = cleaned.slice(0, maxChars);
+  if (out.includes(" ")) out = out.slice(0, out.lastIndexOf(" "));
+  return out.replace(/[\s,;:–—-]+$/, "").trim() + "…";
 }
 
 /**
@@ -1183,7 +1214,7 @@ KEYWORDS: ${(brief.keywords || []).join(", ")}`;
             const synth = await generateContentResilient({
               provider: input.provider,
               platform: "INSTAGRAM",
-              userPrompt: `Write ONE concise, punchy news-style headline (max 10 words, no hashtags, no emojis) summarizing this social post. Return ONLY the headline text.\n\nPost: ${(extracted.body || extracted.description || extracted.title).slice(0, 800)}`,
+              userPrompt: `Write ONE complete, self-contained, punchy news-style headline (max 14 words, no hashtags, no emojis) summarizing this social post. Return ONLY the headline text.\n\nPost: ${(extracted.body || extracted.description || extracted.title).slice(0, 800)}`,
               tone: "professional",
             });
             const cleaned = synth.replace(/^["']|["']$/g, "").replace(/\n[\s\S]*$/, "").trim();
@@ -1624,7 +1655,7 @@ Return ONLY the JSON array, no other text.`;
         const fallbackSentences = extracted.body.split(/[.!?]+/).filter((s) => s.trim().length > 20);
         const fallbackSlidesFromSentences = fallbackSentences.slice(0, effectiveContentCount).map((s, i) => ({
           title: `Point ${i + 1}`,
-          body: s.trim().slice(0, 120),
+          body: capBody(s, 120),
         }));
 
         // E2 / round3: honour the user's chosen content-slide count EXACTLY —
@@ -1658,7 +1689,7 @@ Return ONLY the JSON array, no other text.`;
         // surface it so Regenerate of the cover slide reuses it (not the raw title).
         renderedHeadline = coverHeadline;
         const allSlides = [
-          { type: "cover", title: coverHeadline, body: extracted.description?.slice(0, 100) || "" },
+          { type: "cover", title: coverHeadline, body: extracted.description ? capBody(extracted.description, 100) : "" },
           ...slideData.map((d, i) => ({ type: "content", title: d.title, body: d.body })),
           { type: "cta", title: "Follow for More", body: "" },
         ];
@@ -2004,8 +2035,8 @@ Return ONLY the JSON array, no other text.`;
         if (ref) referenceImages.push({ base64: ref.base64, mimeType: ref.mimeType });
       }
 
-      // R3 parity: cap the headline the same way the main flow does (≤12 words /
-      // ≤80 chars) so the regenerated creative's font sizing matches the original
+      // R3 parity: cap the headline the same way the main flow does (≤16 words /
+      // ≤90 chars) so the regenerated creative's font sizing matches the original
       // (the UI sends `renderedHeadline`, but cap defensively for raw callers too).
       const headline = capHeadline(input.headline.trim());
       const channelName = input.channelName || "Channel";

@@ -186,7 +186,7 @@ export const newsgridRouter = createRouter({
                 `Given this news headline: "${input.headline}"`,
                 `Return ONLY a JSON object (no markdown) with two keys:`,
                 `"caption": a ${tone}-style Instagram caption under 150 chars, no hashtags`,
-                `"headline": a short rephrased headline for the image card (max 12 words, punchy, ${tone} tone)`,
+                `"headline": a short rephrased headline for the image card (one complete headline, max 14 words, punchy, ${tone} tone)`,
                 input.summary ? `Context: ${input.summary}` : "",
                 input.celebName ? `Celebrity: ${input.celebName}` : "",
                 input.eventName ? `Event: ${input.eventName}` : "",
