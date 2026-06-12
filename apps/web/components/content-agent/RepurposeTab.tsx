@@ -93,6 +93,23 @@ function looksLikePostUrl(value: string): boolean {
   return !/\.(jpe?g|png|webp|gif)$/.test(pathname);
 }
 
+/** Plain-English "which AI made this image" chip — rendered SEPARATELY in the
+ *  UI (above the post preview), never baked into the picture, so non-technical
+ *  users always know the source. `engines` is the unique set used across the
+ *  run: one for static, possibly mixed for carousel/reel slides ("Gemini +
+ *  OpenAI" when a slide fell back mid-batch). Hidden when no AI image was made
+ *  (the card description already explains the article-photo fallback). */
+function ImageEngineChip({ engines, label = "Image created by" }: { engines: string[]; label?: string }) {
+  if (engines.length === 0) return null;
+  const names = engines.map((e) => (e === "openai" ? "OpenAI (GPT Image)" : "Google Gemini (Nano Banana)"));
+  return (
+    <div className="mt-1.5 inline-flex w-fit items-center gap-1.5 rounded-full bg-muted px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
+      <Sparkles className="h-3 w-3 text-purple-500" />
+      {label} {names.join(" + ")}
+    </div>
+  );
+}
+
 export function RepurposeTab() {
   const { toast } = useToast();
 
@@ -165,6 +182,11 @@ export function RepurposeTab() {
     // hook) instead of the raw extracted page title.
     renderedHeadline?: string | null;
     hookLine?: string | null;
+    // Which AI image engine(s) made the visuals — drives the "Image created by
+    // X" chip. Plural covers carousel/reel (slides can mix engines mid-batch).
+    bgSource?: "ai" | "stock" | null;
+    imageEngine?: string | null;
+    imageEngines?: string[];
   } | null>(null);
   const [copiedPlatform, setCopiedPlatform] = useState<string | null>(null);
 
@@ -469,7 +491,24 @@ export function RepurposeTab() {
           nextMap = { ...nextMap };
           for (const k of Object.keys(nextMap)) nextMap[k] = { url: res.url, mediaId: res.mediaId };
         }
-        return { ...prev, mediaUrls: nextUrls, carouselMediaIds: nextCarouselIds, mediaMap: nextMap };
+        // Refresh the "Image created by X" chip from THIS regenerate: a static
+        // regen replaces the engine outright; a carousel-slide regen unions into
+        // the existing set (the other slides keep whichever engine made them).
+        const prevEngines = prev.imageEngines ?? (prev.imageEngine ? [prev.imageEngine] : []);
+        const nextEngines =
+          target === "static"
+            ? (res.imageEngine ? [res.imageEngine] : [])
+            : res.imageEngine && !prevEngines.includes(res.imageEngine)
+              ? [...prevEngines, res.imageEngine]
+              : prevEngines;
+        return {
+          ...prev,
+          mediaUrls: nextUrls,
+          carouselMediaIds: nextCarouselIds,
+          mediaMap: nextMap,
+          imageEngines: nextEngines,
+          ...(target === "static" ? { bgSource: res.bgSource, imageEngine: res.imageEngine } : {}),
+        };
       });
       toast({ title: "Image regenerated" });
     } catch (err: any) {
@@ -1307,18 +1346,12 @@ export function RepurposeTab() {
                   Generated {results.format === "ai_video" ? "AI Video (Veo3)" : results.format === "seedance_video" ? "AI Video (Seedance 2.0)" : results.format === "reel" ? "Reel Video" : results.mediaUrls.length > 1 ? `Carousel (${results.mediaUrls.length} slides)` : "Static Post"}
                 </CardTitle>
                 <CardDescription>
-                  {results.format === "ai_video" ? "Cinematic AI video with text slides, visuals & music by Veo3" : results.format === "seedance_video" ? "Cinematic 2K video with native audio by Seedance 2.0" : results.format === "reel" ? "AI-generated video with slides" : results.format === "static" ? ((results as any).bgSource === "stock" ? "Image made from the article's own photo (AI image was unavailable)" : "AI-generated image with your branding") : "Swipe through carousel slides"}
+                  {results.format === "ai_video" ? "Cinematic AI video with text slides, visuals & music by Veo3" : results.format === "seedance_video" ? "Cinematic 2K video with native audio by Seedance 2.0" : results.format === "reel" ? "AI-generated video with slides" : results.format === "static" ? (results.bgSource === "stock" ? "Image made from the article's own photo (AI image was unavailable)" : "AI-generated image with your branding") : (results.imageEngines && results.imageEngines.length === 0 ? "Slides made from the article's photo and branded backgrounds (AI image was unavailable)" : "Swipe through carousel slides")}
                 </CardDescription>
-                {/* Plain-English "which AI made this image" line — shown SEPARATELY
-                    in the UI (a small chip above the post), never baked into the
-                    picture. Visible to non-technical users so they always know
-                    the source of the generated image. */}
-                {results.format === "static" && (results as any).bgSource === "ai" && (
-                  <div className="mt-1.5 inline-flex w-fit items-center gap-1.5 rounded-full bg-muted px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
-                    <Sparkles className="h-3 w-3 text-purple-500" />
-                    Image created by {(results as any).imageEngine === "openai" ? "OpenAI (GPT Image)" : "Google Gemini (Nano Banana)"}
-                  </div>
-                )}
+                <ImageEngineChip
+                  engines={results.imageEngines ?? (results.bgSource === "ai" && results.imageEngine ? [results.imageEngine] : [])}
+                  label={results.format === "reel" ? "Slide images created by" : results.format === "carousel" ? "Images created by" : "Image created by"}
+                />
               </CardHeader>
               <CardContent>
                 {(results.mediaType === "video/mp4" || results.format === "ai_video" || results.format === "seedance_video") && results.mediaUrls[0] ? (

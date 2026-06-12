@@ -213,6 +213,27 @@ describe("repurpose.regenerateImage", () => {
     expect(mediaCreate).toHaveBeenCalledTimes(1);
   });
 
+  it("returns bgSource + imageEngine so the UI engine chip refreshes after a regenerate", async () => {
+    // A dalle-sourced background maps to the "openai" engine label.
+    generateImageSafe.mockResolvedValueOnce({
+      imageBase64: "BG_BYTES",
+      mimeType: "image/png",
+      source: "dalle",
+    } as any);
+    const caller = makeCaller();
+    const res = await caller.regenerateImage(input());
+    expect(res.bgSource).toBe("ai");
+    expect(res.imageEngine).toBe("openai");
+  });
+
+  it("AI-failure regenerate reports a stock background and NO engine (chip hides)", async () => {
+    generateImageSafe.mockRejectedValueOnce(new Error("ai down"));
+    const caller = makeCaller();
+    const res = await caller.regenerateImage(input());
+    expect(res.bgSource).toBe("stock");
+    expect(res.imageEngine).toBeNull();
+  });
+
   it("hook_bars now generates an AI background like every other style", async () => {
     const caller = makeCaller();
     await caller.regenerateImage(input({ creativeStyle: "hook_bars" }));

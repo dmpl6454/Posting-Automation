@@ -1177,6 +1177,10 @@ KEYWORDS: ${(brief.keywords || []).join(", ")}`;
       let renderedHookLine: string | undefined;
       let renderedBgSource: "ai" | "stock" | undefined;
       let renderedImageEngine: "gemini" | "openai" | undefined;
+      // Unique set of AI image engines used across ALL rendered images this run
+      // (static = one, carousel/reel = per-slide, which can MIX when a slide
+      // falls back mid-batch). Drives the "Image created by X" chip everywhere.
+      const renderedEngines = new Set<"gemini" | "openai">();
 
       if (input.format === "static" && input.userMediaIds?.length) {
         // ── E4: user attached their own image(s) ─────────────────────────────
@@ -1364,6 +1368,7 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
           }
           renderedBgSource = creative.bgSource;
           renderedImageEngine = creative.imageEngine;
+          if (creative.imageEngine) renderedEngines.add(creative.imageEngine);
           progress(
             "Generating creative",
             "done",
@@ -1640,6 +1645,8 @@ Return ONLY the JSON array, no other text.`;
           mediaType: "video/mp4",
           format: input.format,
           mediaFailed: false,
+          // No images are rendered on the AI-video path — engine chip stays hidden.
+          imageEngines: [] as ("gemini" | "openai")[],
           // The worker delivers the video via the progress SSE; the UI waits on
           // `video_ready` keyed by this RAW progressId. T4 reads `videoPending`.
           videoPending: true,
@@ -1820,7 +1827,7 @@ Return ONLY the JSON array, no other text.`;
                     browser: carouselBrowser,
                   },
                 );
-                return { slideIdx, imageBase64: creative.imageBase64, mimeType: creative.mimeType };
+                return { slideIdx, imageBase64: creative.imageBase64, mimeType: creative.mimeType, imageEngine: creative.imageEngine };
               } catch (e) {
                 console.warn(`[Repurpose] Slide ${slideIdx + 1} (${slideRole}) failed:`, (e as Error).message);
                 return null;
@@ -1831,6 +1838,7 @@ Return ONLY the JSON array, no other text.`;
             for (const result of batchResults) {
               if (result) {
                 slideImages[result.slideIdx] = { imageBase64: result.imageBase64, mimeType: result.mimeType };
+                if (result.imageEngine) renderedEngines.add(result.imageEngine);
               }
             }
             const batchNum = Math.floor(batchStart / BATCH_SIZE) + 1;
@@ -1936,6 +1944,9 @@ Return ONLY the JSON array, no other text.`;
             mediaType: "video/mp4",
             format: input.format,
             mediaFailed: false,
+            // The reel's SLIDE images were rendered above — surface their engines
+            // now (the chip labels the slide images; the MP4 itself is ffmpeg).
+            imageEngines: [...renderedEngines],
             // The worker delivers the video via the progress SSE; the UI waits on
             // `video_ready` keyed by this RAW progressId. T4 reads `videoPending`.
             videoPending: true,
@@ -1986,6 +1997,9 @@ Return ONLY the JSON array, no other text.`;
         hookLine: renderedHookLine ?? null,
         bgSource: renderedBgSource ?? null,
         imageEngine: renderedImageEngine ?? null,
+        // Unique AI image engines across ALL rendered images (static + per-slide
+        // carousel). [] when every image fell back to article photo/gradient.
+        imageEngines: [...renderedEngines],
       };
     }),
 
@@ -2164,6 +2178,8 @@ Return ONLY the JSON array, no other text.`;
         },
       });
 
-      return { url, mediaId: media.id };
+      // bgSource + imageEngine let the UI refresh the "Image created by X" chip
+      // after a regenerate instead of showing the stale engine from the first run.
+      return { url, mediaId: media.id, bgSource: creative.bgSource, imageEngine: creative.imageEngine ?? null };
     }),
 });
