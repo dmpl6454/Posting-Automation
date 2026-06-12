@@ -146,6 +146,7 @@ function ContentStudioInner() {
               key={postCreated}
               onSwitchTab={(tab) => {
                 if (tab === "calendar") setShowCalendar(true);
+                else setActiveTab(tab);
               }}
             />
           ) : (
