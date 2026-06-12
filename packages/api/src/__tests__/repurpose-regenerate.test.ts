@@ -72,6 +72,8 @@ const enforcePlanLimit = vi.fn(async (..._a: any[]) => undefined);
 vi.mock("../middleware/plan-limit.middleware", () => ({
   enforcePlanLimit: (...a: any[]) => enforcePlanLimit(...a),
   requirePlan: vi.fn(async () => undefined),
+  // billing enforced in this suite — it exercises the enforcePlanLimit gate path
+  isBillingDisabled: () => false,
 }));
 
 /* ── Queue mock (imported at module top). ── */

@@ -4,6 +4,7 @@ import superjson from "superjson";
 import { ZodError } from "zod";
 import { prisma, ensurePersonalOrg } from "@postautomation/db";
 import { jwtVerify } from "jose";
+import { isBillingDisabled } from "./middleware/plan-limit.middleware";
 
 export interface TRPCContext {
   prisma: typeof prisma;
@@ -160,7 +161,9 @@ export const orgProcedure = protectedProcedure.use(async ({ ctx, next }) => {
   // plan-limit middleware correctly enforces FREE-tier limits until Stripe webhook
   // updates the row. We write back to DB so subsequent queries see the correct plan.
   // Skip for superadmin — their org should never be forcibly downgraded.
-  if (!isSuperAdmin) {
+  // Skip entirely when billing is disabled: gates are bypassed anyway, and we
+  // must not mutate org plan rows we want preserved for when billing re-activates.
+  if (!isSuperAdmin && !isBillingDisabled()) {
     const org = await ctx.prisma.organization.findUnique({
       where: { id: organizationId },
       select: { plan: true, planExpiresAt: true },

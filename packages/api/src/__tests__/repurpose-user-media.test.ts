@@ -83,6 +83,7 @@ vi.mock("@aws-sdk/client-s3", () => ({
 vi.mock("../middleware/plan-limit.middleware", () => ({
   enforcePlanLimit: vi.fn(async () => undefined),
   requirePlan: vi.fn(async () => undefined),
+  isBillingDisabled: () => false,
 }));
 
 /* ── Queue mock (imported at module top). ── */
