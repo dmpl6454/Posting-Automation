@@ -26,7 +26,7 @@ describe("scheduleRssSync", () => {
     ]);
     await scheduleRssSync();
     expect(addMock).toHaveBeenCalledTimes(1);
-    expect(addMock.mock.calls[0][1]).toEqual({ feedId: "f1", organizationId: "o1" });
+    expect(addMock.mock.calls[0]![1]).toEqual({ feedId: "f1", organizationId: "o1" });
   });
 
   it("skips feeds checked within their interval", async () => {
