@@ -128,12 +128,22 @@ export function createAgentRunWorker() {
             userPrompt = `You are a social media expert for the ${agent.niche} niche. Write a viral ${agent.tone} post about "${topic}". Include relevant hashtags and optimise for ${platform}.`;
           }
 
-          const content = await generateContent({
-            provider: agent.aiProvider as any,
-            platform,
-            userPrompt,
-            tone: agent.tone,
-          });
+          // Resilient chain [agent's provider → openai → anthropic]: an agent
+          // configured with a billing-held provider (e.g. gemini) no longer
+          // FAILs the whole AgentRun — it degrades to a configured provider.
+          const { withTextProviderFallback } = await import("@postautomation/ai");
+          const content = await withTextProviderFallback(
+            agent.aiProvider,
+            (p) =>
+              generateContent({
+                provider: p as any,
+                platform,
+                userPrompt,
+                tone: agent.tone,
+              }),
+            (failed, next, e) =>
+              console.warn(`[AgentRun] Content via ${failed} failed (${e instanceof Error ? e.message.slice(0, 80) : e}), trying ${next}`),
+          );
 
           if (i === 0) {
             firstPostContent = content;

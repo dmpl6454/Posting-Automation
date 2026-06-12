@@ -48,9 +48,20 @@ export const imageRouter = createRouter({
 
       try {
         if (input.provider === "dall-e") {
+          // The UI sends `aspectRatio` (same field as the other providers) but
+          // this branch only read `size` — which the UI never sends — so every
+          // generation silently fell back to 1024x1024 square. Map the selected
+          // ratio to the nearest gpt-image-1 size (it supports exactly three):
+          // landscape → 1536x1024, portrait → 1024x1536, else square.
+          let size = input.size as Parameters<typeof generateImageDallE>[0]["size"];
+          if (!size && input.aspectRatio) {
+            const [w, h] = input.aspectRatio.split(":").map(Number);
+            const ratio = w && h ? w / h : 1;
+            size = ratio > 1.15 ? "1536x1024" : ratio < 0.87 ? "1024x1536" : "1024x1024";
+          }
           const result = await generateImageDallE({
             prompt: input.prompt,
-            size: input.size,
+            size,
             quality: input.quality,
           });
 

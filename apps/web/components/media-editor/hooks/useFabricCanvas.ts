@@ -61,7 +61,9 @@ export function useFabricCanvas(options: UseFabricCanvasOptions = {}) {
     setIsReady(true);
 
     if (options.initialImage) {
-      FabricImage.fromURL(options.initialImage).then((img) => {
+      // crossOrigin is REQUIRED for remote (S3) images: without it the canvas
+      // is tainted and toDataURL() throws SecurityError → "Export failed".
+      FabricImage.fromURL(options.initialImage, { crossOrigin: "anonymous" }).then((img) => {
         const scaleX = canvasSize.width / (img.width || 1);
         const scaleY = canvasSize.height / (img.height || 1);
         const scale = Math.min(scaleX, scaleY);

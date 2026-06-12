@@ -193,12 +193,17 @@ export const newsgridRouter = createRouter({
                 input.language === "HI" ? "Write in Hindi." : input.language === "MIX" ? "Use Hinglish." : "",
               ].filter(Boolean).join("\n");
 
-              const res = await generateContent({
-                provider: input.provider as any,
-                platform:  "INSTAGRAM" as any,
-                userPrompt: headlinePrompt,
-                tone:       "casual" as any,
-              });
+              // Resilient chain [chosen → openai → anthropic]: a billing-held
+              // provider degrades instead of dropping to the raw-headline caption.
+              const { withTextProviderFallback } = await import("@postautomation/ai");
+              const res = await withTextProviderFallback(input.provider, (p) =>
+                generateContent({
+                  provider: p as any,
+                  platform: "INSTAGRAM" as any,
+                  userPrompt: headlinePrompt,
+                  tone: "casual" as any,
+                }),
+              );
 
               if (res) {
                 try {
@@ -566,12 +571,18 @@ Requirements:
       let cta = "";
 
       try {
-        const res = await generateContent({
-          provider: "gemini" as any,
-          platform: "INSTAGRAM" as any,
-          userPrompt: prompt,
-          tone: "casual" as any,
-        });
+        // Resilient chain: 'gemini' was hardcoded — during the Google billing
+        // hold every prefill silently returned an empty form. Fall through to
+        // openai/anthropic; the silent catch below stays as the final guard.
+        const { withTextProviderFallback } = await import("@postautomation/ai");
+        const res = await withTextProviderFallback("gemini", (p) =>
+          generateContent({
+            provider: p as any,
+            platform: "INSTAGRAM" as any,
+            userPrompt: prompt,
+            tone: "casual" as any,
+          }),
+        );
 
         if (res) {
           const jsonMatch = res.match(/\{[\s\S]*\}/);

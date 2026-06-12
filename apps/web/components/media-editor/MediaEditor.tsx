@@ -21,7 +21,7 @@ import { LayerPanel } from "./LayerPanel";
 
 interface MediaEditorProps {
   initialImage?: string;
-  onApply: (blobUrl: string) => void;
+  onApply: (blobUrl: string) => void | Promise<void>;
   onSaveToLibrary?: (dataUrl: string) => void;
   onCancel: () => void;
   onPreviewUpdate?: (thumbnailUrl: string) => void;
@@ -109,10 +109,13 @@ export function MediaEditor({
     setIsExporting(true);
     try {
       const blobUrl = await exportBlobUrl("png");
-      onApply(blobUrl);
+      await onApply(blobUrl);
       toast({ title: "Applied to post" });
-    } catch {
-      toast({ title: "Export failed", variant: "destructive" });
+    } catch (e) {
+      // Surface the real reason (e.g. SecurityError = canvas tainted by a
+      // cross-origin image) instead of an opaque generic toast.
+      const msg = e instanceof Error ? e.message : "Unknown error";
+      toast({ title: "Export failed", description: msg, variant: "destructive" });
     }
     setIsExporting(false);
   };

@@ -19,13 +19,22 @@ export const aiRouter = createRouter({
     .mutation(async ({ input }) => {
       try {
         // Dynamically import to avoid issues if AI package isn't fully set up
-        const { generateContent } = await import("@postautomation/ai");
-        const content = await generateContent({
-          provider: input.provider,
-          platform: (input.platform || "TWITTER") as any,
-          userPrompt: input.prompt,
-          tone: input.tone,
-        });
+        const { generateContent, withTextProviderFallback } = await import("@postautomation/ai");
+        // Resilient chain [chosen → openai → anthropic]: a billing-held or
+        // quota-exhausted chosen provider degrades to the next configured one
+        // instead of hard-failing the generation (same policy as repurpose).
+        const content = await withTextProviderFallback(
+          input.provider,
+          (p) =>
+            generateContent({
+              provider: p as typeof input.provider,
+              platform: (input.platform || "TWITTER") as any,
+              userPrompt: input.prompt,
+              tone: input.tone,
+            }),
+          (failed, next, err) =>
+            console.warn(`[AI] generateContent via ${failed} failed (${err instanceof Error ? err.message.slice(0, 80) : err}), trying ${next}`),
+        );
         return { content };
       } catch (e) {
         // ADD-5: surface missing-key errors as a friendly "AI Provider Not
@@ -38,11 +47,18 @@ export const aiRouter = createRouter({
     .input(z.object({ content: z.string().min(1), platform: z.string().optional() }))
     .mutation(async ({ input }) => {
       try {
-        const { suggestHashtags } = await import("@postautomation/ai");
-        const hashtags = await suggestHashtags({
-          content: input.content,
-          platform: input.platform || "TWITTER",
-        });
+        const { suggestHashtags, withTextProviderFallback } = await import("@postautomation/ai");
+        const hashtags = await withTextProviderFallback(
+          undefined, // default chain [openai → anthropic]
+          (p) =>
+            suggestHashtags({
+              content: input.content,
+              platform: input.platform || "TWITTER",
+              provider: p as any,
+            }),
+          (failed, next, err) =>
+            console.warn(`[AI] suggestHashtags via ${failed} failed (${err instanceof Error ? err.message.slice(0, 80) : err}), trying ${next}`),
+        );
         return { hashtags };
       } catch (e) {
         throw toFriendlyAIError(e);
@@ -59,12 +75,19 @@ export const aiRouter = createRouter({
     )
     .mutation(async ({ input }) => {
       try {
-        const { optimizeContent } = await import("@postautomation/ai");
-        const optimized = await optimizeContent({
-          content: input.content,
-          platform: input.platform,
-          goal: input.goal,
-        });
+        const { optimizeContent, withTextProviderFallback } = await import("@postautomation/ai");
+        const optimized = await withTextProviderFallback(
+          undefined, // default chain [openai → anthropic]
+          (p) =>
+            optimizeContent({
+              content: input.content,
+              platform: input.platform,
+              goal: input.goal,
+              provider: p as any,
+            } as any),
+          (failed, next, err) =>
+            console.warn(`[AI] optimizeContent via ${failed} failed (${err instanceof Error ? err.message.slice(0, 80) : err}), trying ${next}`),
+        );
         return { optimized };
       } catch (e) {
         throw toFriendlyAIError(e);

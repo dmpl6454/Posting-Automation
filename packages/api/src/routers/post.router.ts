@@ -431,12 +431,17 @@ Return ONLY the JSON array, no other text.`;
 
       let slideData: Array<{ title: string; body: string }> = [];
       try {
-        const slideResponse = await generateContent({
-          provider: "gemini",
-          platform: "INSTAGRAM",
-          userPrompt: slidePrompt,
-          tone: "professional",
-        });
+        // Resilient chain: 'gemini' was hardcoded — during the Google billing
+        // hold carousels silently degraded to the dumb text-split fallback.
+        const { withTextProviderFallback } = await import("@postautomation/ai");
+        const slideResponse = await withTextProviderFallback("gemini", (p) =>
+          generateContent({
+            provider: p as any,
+            platform: "INSTAGRAM",
+            userPrompt: slidePrompt,
+            tone: "professional",
+          }),
+        );
         const cleaned = slideResponse.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
         const arrMatch = cleaned.match(/\[[\s\S]*\]/);
         if (arrMatch) slideData = JSON.parse(arrMatch[0]);
