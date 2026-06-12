@@ -2,6 +2,7 @@ import { Worker, type Job } from "bullmq";
 import { prisma } from "@postautomation/db";
 import { QUEUE_NAMES, type RssSyncJobData, createRedisConnection } from "@postautomation/queue";
 import { parseRssItems, type RssItem } from "@postautomation/ai/src/utils/rss-parser";
+import { resolveOrgAuthor } from "../lib/system-user";
 
 async function generatePostFromEntry(
   entry: { title: string; summary: string },
@@ -43,13 +44,19 @@ export function createRssSyncWorker() {
           return;
         }
 
-        // 2. Fetch the RSS feed XML
+        // 2. Fetch the RSS feed XML (SSRF guard: skip non-public URLs)
+        const { isPublicPageUrl } = await import("@postautomation/ai");
+        if (!isPublicPageUrl(feed.url)) {
+          console.log(`[RssSync] Feed ${feedId} URL not public, skipping`);
+          return;
+        }
         const response = await fetch(feed.url, {
           headers: {
             "User-Agent": "PostAutomation RSS Reader/1.0",
             Accept: "application/rss+xml, application/xml, text/xml, application/atom+xml",
           },
           signal: AbortSignal.timeout(30_000),
+          redirect: "manual",
         });
 
         if (!response.ok) {
@@ -101,7 +108,16 @@ export function createRssSyncWorker() {
             take: 10, // Process at most 10 at a time
           });
 
+          let authorId: string;
+          try {
+            authorId = await resolveOrgAuthor(organizationId);
+          } catch (err) {
+            console.log(`[RssSync] No members in org ${organizationId}, skipping auto-post`);
+            authorId = ""; // won't be used — loop below is skipped
+          }
+
           for (const entry of unprocessedEntries) {
+            if (!authorId) break;
             try {
               const content = await generatePostFromEntry(
                 { title: entry.title, summary: entry.summary || "" },
@@ -111,7 +127,7 @@ export function createRssSyncWorker() {
               await prisma.post.create({
                 data: {
                   organizationId,
-                  createdById: "system",
+                  createdById: authorId,
                   content,
                   status: "DRAFT",
                   aiGenerated: true,

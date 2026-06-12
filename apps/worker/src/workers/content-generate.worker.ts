@@ -6,6 +6,7 @@ import {
   type ContentGenerateJobData,
   createRedisConnection,
 } from "@postautomation/queue";
+import { resolveOrgAuthor } from "../lib/system-user";
 import {
   generateContent,
   suggestHashtags,
@@ -83,6 +84,9 @@ export function createContentGenerateWorker() {
         }
 
         const { trendingItem, agent } = autopilotPost;
+
+        // Resolve a real org member to attribute generated content to
+        const authorId = await resolveOrgAuthor(organizationId);
 
         // 2. Update status to GENERATING
         await prisma.autopilotPost.update({
@@ -183,7 +187,7 @@ export function createContentGenerateWorker() {
         const media = await prisma.media.create({
           data: {
             organizationId,
-            uploadedById: "autopilot-system",
+            uploadedById: authorId,
             fileName: `news-${autopilotPostId}.png`,
             fileType: "image/png",
             fileSize: imageBuffer.length,
@@ -198,7 +202,7 @@ export function createContentGenerateWorker() {
         const post = await prisma.post.create({
           data: {
             organizationId,
-            createdById: "autopilot-system",
+            createdById: authorId,
             content: fullContent,
             status: "DRAFT",
             aiGenerated: true,

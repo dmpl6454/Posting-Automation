@@ -3,6 +3,7 @@ import { prisma } from "@postautomation/db";
 import { QUEUE_NAMES, postPublishQueue, type AgentRunJobData, createRedisConnection } from "@postautomation/queue";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import crypto from "crypto";
+import { resolveOrgAuthor } from "../lib/system-user";
 
 const SCHEDULE_HOURS = [9, 12, 15, 18]; // 9am, 12pm, 3pm, 6pm
 
@@ -99,6 +100,9 @@ export function createAgentRunWorker() {
         }
         console.log(`[AgentRun] Fetched ${allHeadlines.length} unique headlines for ${agent.postsPerDay} posts`);
 
+        // Resolve a real org member to attribute generated posts/media to
+        const authorId = await resolveOrgAuthor(agent.organizationId);
+
         for (let i = 0; i < agent.postsPerDay; i++) {
           const topic = topics[i]!;
           currentTopicIndex = agent.topicIndex + i + 1;
@@ -148,7 +152,7 @@ export function createAgentRunWorker() {
           const post = await prisma.post.create({
             data: {
               organizationId: agent.organizationId,
-              createdById: "agent-system",
+              createdById: authorId,
               content,
               status: "SCHEDULED",
               aiGenerated: true,
@@ -203,7 +207,7 @@ export function createAgentRunWorker() {
             const media = await prisma.media.create({
               data: {
                 organizationId: agent.organizationId,
-                uploadedById: "agent-system",
+                uploadedById: authorId,
                 url: imageUrl,
                 fileName: `news-creative-${i + 1}.jpg`,
                 fileType: result.mimeType || "image/jpeg",

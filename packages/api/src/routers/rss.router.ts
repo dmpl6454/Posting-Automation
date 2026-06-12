@@ -3,6 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
 import { rssSyncQueue } from "@postautomation/queue";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
+import { isPublicPageUrl } from "@postautomation/ai";
 
 // SECURITY: every mutation/query is org-scoped via `orgProcedure`. Each
 // lookup adds `organizationId: ctx.organizationId` so a user from org A
@@ -33,12 +34,15 @@ export const rssRouter = createRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      if (!isPublicPageUrl(input.url)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Feed URL must be a publicly accessible http(s) address." });
+      }
       // Fix #42/#43: validate that the URL actually returns an RSS/Atom feed
       try {
         const res = await fetch(input.url, {
           method: "GET",
           signal: AbortSignal.timeout(5000),
-          redirect: "follow",
+          redirect: "manual",
           headers: { "User-Agent": "PostAutomation-RSS-Validator/1.0" },
         });
         if (!res.ok) {
@@ -131,6 +135,9 @@ export const rssRouter = createRouter({
       });
       if (!existing) {
         throw new TRPCError({ code: "NOT_FOUND", message: "RSS feed not found" });
+      }
+      if (data.url && !isPublicPageUrl(data.url)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Feed URL must be a publicly accessible http(s) address." });
       }
       if (data.targetChannels && data.targetChannels.length > 0) {
         const owned = await ctx.prisma.channel.findMany({
