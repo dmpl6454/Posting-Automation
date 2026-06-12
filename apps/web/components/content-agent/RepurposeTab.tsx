@@ -1136,7 +1136,7 @@ export function RepurposeTab() {
                   </button>
                 ))}
                 {filteredChannels.length === 0 && channelSearch && (
-                  <p className="text-xs text-muted-foreground py-2">No channels match "{channelSearch}"</p>
+                  <p className="text-xs text-muted-foreground py-2">No channels match &ldquo;{channelSearch}&rdquo;</p>
                 )}
               </div>
               <p className="text-xs text-muted-foreground">
