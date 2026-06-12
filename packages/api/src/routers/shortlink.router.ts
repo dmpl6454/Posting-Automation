@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
+import { Prisma } from "@postautomation/db";
 import { createRouter, orgProcedure } from "../trpc";
 
 // SECURITY: every endpoint is org-scoped via `orgProcedure` and looks up
@@ -53,24 +54,41 @@ export const shortlinkRouter = createRouter({
   create: orgProcedure
     .input(
       z.object({
-        originalUrl: z.string().url(),
+        originalUrl: z.string().url().refine(
+          (u) => { try { const p = new URL(u).protocol; return p === "http:" || p === "https:"; } catch { return false; } },
+          { message: "Only http(s) URLs are allowed" }
+        ),
         postId: z.string().optional(),
         expiresAt: z.string().datetime().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const code = crypto.randomBytes(4).toString("hex");
+      if (input.expiresAt && new Date(input.expiresAt) <= new Date()) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Expiry must be in the future." });
+      }
 
-      const shortLink = await ctx.prisma.shortLink.create({
-        data: {
-          organizationId: ctx.organizationId,
-          code,
-          originalUrl: input.originalUrl,
-          postId: input.postId,
-          expiresAt: input.expiresAt ? new Date(input.expiresAt) : null,
-        },
-      });
-
+      let shortLink = null;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const code = crypto.randomBytes(6).toString("hex"); // 48-bit
+        try {
+          shortLink = await ctx.prisma.shortLink.create({
+            data: {
+              organizationId: ctx.organizationId,
+              code,
+              originalUrl: input.originalUrl,
+              postId: input.postId,
+              expiresAt: input.expiresAt ? new Date(input.expiresAt) : null,
+            },
+          });
+          break;
+        } catch (e: unknown) {
+          if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") continue;
+          throw e;
+        }
+      }
+      if (!shortLink) {
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not generate a unique short code, please retry." });
+      }
       return shortLink;
     }),
 
@@ -161,11 +179,6 @@ export const shortlinkRouter = createRouter({
         "Direct"
       ).map(({ name, count }) => ({ referer: name, count }));
 
-      const topCountries = bucket(
-        clicks.map((c) => c.country as string | null),
-        "Unknown"
-      ).map(({ name, count }) => ({ country: name, count }));
-
       // Fix #45: device / browser / OS breakdown via inline UA parser
       const parsed = clicks.map((c) => parseUA(c.userAgent));
       const devices = bucket(
@@ -184,7 +197,7 @@ export const shortlinkRouter = createRouter({
       // Fix #45: clicks by hour-of-day (0-23)
       const hours = new Array(24).fill(0) as number[];
       for (const c of clicks) {
-        hours[c.createdAt.getHours()] = (hours[c.createdAt.getHours()] ?? 0) + 1;
+        hours[c.createdAt.getUTCHours()] = (hours[c.createdAt.getUTCHours()] ?? 0) + 1;
       }
       const clicksByHour = hours.map((count, hour) => ({ hour, count }));
 
@@ -194,7 +207,6 @@ export const shortlinkRouter = createRouter({
           .map(([date, count]) => ({ date, count }))
           .reverse(),
         topReferers,
-        topCountries,
         devices,
         browsers,
         os,

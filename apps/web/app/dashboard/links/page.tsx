@@ -41,6 +41,10 @@ function getBaseUrl(): string {
   return "";
 }
 
+function isHttpUrl(u: string) {
+  try { const p = new URL(u).protocol; return p === "http:" || p === "https:"; } catch { return false; }
+}
+
 export default function LinksPage() {
   const { toast } = useToast();
 
@@ -48,6 +52,7 @@ export default function LinksPage() {
   const [statsLinkId, setStatsLinkId] = useState<string | null>(null);
   const [originalUrl, setOriginalUrl] = useState("");
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [expiresAt, setExpiresAt] = useState<string>("");
 
   // Fix #46: removed localStorage orgId gate — backend scopes by session
   const { data, isLoading, refetch } = trpc.shortlink.list.useQuery({});
@@ -57,6 +62,7 @@ export default function LinksPage() {
       refetch();
       setDialogOpen(false);
       setOriginalUrl("");
+      setExpiresAt("");
       toast({ title: "Short link created" });
     },
     onError: (err) => {
@@ -75,6 +81,7 @@ export default function LinksPage() {
     if (!originalUrl) return;
     createLink.mutate({
       originalUrl,
+      ...(expiresAt ? { expiresAt: new Date(expiresAt).toISOString() } : {}),
     });
   };
 
@@ -117,6 +124,15 @@ export default function LinksPage() {
                   value={originalUrl}
                   onChange={(e) => setOriginalUrl(e.target.value)}
                   placeholder="https://example.com/long-url-here"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Expires at (optional)</label>
+                <input
+                  type="datetime-local"
+                  value={expiresAt}
+                  onChange={(e) => setExpiresAt(e.target.value)}
+                  className="w-full rounded border px-2 py-1 text-sm"
                 />
               </div>
             </div>
@@ -207,14 +223,23 @@ export default function LinksPage() {
                       >
                         <BarChart3 className="h-4 w-4" />
                       </Button>
-                      <a
-                        href={link.originalUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                      >
-                        <ExternalLink className="h-4 w-4" />
-                      </a>
+                      {isHttpUrl(link.originalUrl) ? (
+                        <a
+                          href={link.originalUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                        >
+                          <ExternalLink className="h-4 w-4" />
+                        </a>
+                      ) : (
+                        <span
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-red-400"
+                          title="Unsafe URL scheme"
+                        >
+                          <ExternalLink className="h-4 w-4" />
+                        </span>
+                      )}
                       <Button
                         variant="ghost"
                         size="icon"
@@ -320,7 +345,7 @@ function LinkStats({ linkId }: { linkId: string }) {
       {/* Hour-of-day */}
       <div>
         <p className="mb-1 text-xs font-medium text-muted-foreground">
-          Clicks by hour of day (local time)
+          Clicks by hour of day (UTC)
         </p>
         <div className="flex items-end gap-[2px]" style={{ height: 50 }}>
           {data.clicksByHour.map((h) => (
@@ -341,13 +366,12 @@ function LinkStats({ linkId }: { linkId: string }) {
         </div>
       </div>
 
-      {/* 4-up breakdown */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      {/* 3-up breakdown */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {([
           { title: "Devices", rows: data.devices },
           { title: "Browsers", rows: data.browsers },
           { title: "Operating Systems", rows: data.os },
-          { title: "Top Countries", rows: data.topCountries.map((c) => ({ name: c.country, count: c.count })) },
         ] as const).map((col) =>
           col.rows.length > 0 ? (
             <div key={col.title}>
