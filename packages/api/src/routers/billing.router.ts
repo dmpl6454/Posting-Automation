@@ -7,7 +7,7 @@ import {
   createCustomerPortalSession,
   getStripe,
 } from "@postautomation/billing";
-import { checkUsageLimit } from "../middleware/plan-limit.middleware";
+import { checkUsageLimit, isBillingDisabled } from "../middleware/plan-limit.middleware";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 
 export const billingRouter = createRouter({
@@ -20,7 +20,9 @@ export const billingRouter = createRouter({
       where: { id: ctx.organizationId },
       select: { plan: true, planExpiresAt: true, stripeCustomerId: true, stripeSubscriptionId: true },
     });
-    return { ...org, planConfig: PLANS[org.plan] || PLANS.FREE };
+    // billingDisabled: temporary product switch — when true, all plan/quota gates
+    // are bypassed for every org, so the UI should hide plan locks / upgrade nudges.
+    return { ...org, planConfig: PLANS[org.plan] || PLANS.FREE, billingDisabled: isBillingDisabled() };
   }),
 
   createCheckout: orgProcedure

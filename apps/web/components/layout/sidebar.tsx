@@ -97,11 +97,15 @@ export function Sidebar({ open, onClose }: SidebarProps) {
     staleTime: 5 * 60 * 1000,
   });
   const orgPlan = (planData?.plan ?? "FREE") as PlanType;
+  // Temporary: when billing is disabled, every feature is unlocked for everyone,
+  // so no nav item should show a lock badge or redirect to billing.
+  const billingDisabled = planData?.billingDisabled === true;
 
   /** Returns true if the org's current plan meets the item's minPlan requirement.
    *  Super admins always pass — they have unlimited access to all features. */
   const planAllowed = (item: NavItem) => {
     if (!item.minPlan) return true;
+    if (billingDisabled) return true;
     if (isSuperAdmin) return true;
     return PLAN_ORDER.indexOf(orgPlan) >= PLAN_ORDER.indexOf(item.minPlan);
   };

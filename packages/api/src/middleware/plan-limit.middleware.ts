@@ -7,6 +7,19 @@ import type { PlanType } from "@postautomation/db";
 const PLAN_ORDER: PlanType[] = ["FREE", "STARTER", "PROFESSIONAL", "ENTERPRISE"];
 
 /**
+ * TEMPORARY product switch: when BILLING_DISABLED=true, ALL plan/quota gates are
+ * bypassed for every org so that every user (new and old) has free rein. Billing
+ * code stays fully intact — re-arm by setting BILLING_DISABLED=false (or removing
+ * the env var) and redeploying. Default (unset) = billing enforced as normal.
+ *
+ * Read at call time (not module load) so it works inside Docker, where env is
+ * injected at container start — mirrors the runtime-read PLANS Proxy in billing/plans.ts.
+ */
+export function isBillingDisabled(): boolean {
+  return process.env.BILLING_DISABLED === "true";
+}
+
+/**
  * Throw FORBIDDEN if the org's current plan is below `minimumPlan`.
  * Pass `isSuperAdmin: true` to bypass the check entirely (e.g. for tabish@dashmani.com).
  *
@@ -19,6 +32,8 @@ export async function requirePlan(
   featureName: string,
   isSuperAdmin?: boolean
 ): Promise<void> {
+  // Temporary: billing disabled → every org has access to every feature.
+  if (isBillingDisabled()) return;
   // Super admins bypass all plan gates — they have access to everything.
   if (isSuperAdmin) return;
 
@@ -51,6 +66,10 @@ export async function checkUsageLimit(
   resource: LimitResource,
   isSuperAdmin?: boolean
 ): Promise<{ allowed: boolean; current: number; limit: number; planName: string }> {
+  // Temporary: billing disabled → unlimited usage for every org.
+  if (isBillingDisabled()) {
+    return { allowed: true, current: 0, limit: -1, planName: "Unlimited" };
+  }
   // Super admins are never limited.
   if (isSuperAdmin) {
     return { allowed: true, current: 0, limit: -1, planName: "Enterprise" };

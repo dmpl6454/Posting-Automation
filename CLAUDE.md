@@ -312,6 +312,14 @@ The Super Agent ([apps/web/app/dashboard/super-agent/page.tsx](apps/web/app/dash
 - Team page shows an upgrade CTA banner when the team-member limit is reached.
 - All limits are `-1` (unlimited) on ENTERPRISE and for `postsPerMonth`/`teamMembers` on PROFESSIONAL.
 
+### ⚠️ Billing temporarily DISABLED — everyone has free rein (2026-06-11)
+**Current state:** `BILLING_DISABLED=true` is set on production (`.env.prod`), so **all plan/quota gates are bypassed for every org** (new + old, any plan). This is a deliberate, reversible product decision — billing code is fully intact, NOT removed. Design spec: [docs/superpowers/specs/2026-06-11-disable-billing-temporarily-design.md](docs/superpowers/specs/2026-06-11-disable-billing-temporarily-design.md).
+- **Switch:** `isBillingDisabled()` in [plan-limit.middleware.ts](packages/api/src/middleware/plan-limit.middleware.ts) reads `process.env.BILLING_DISABLED === "true"` at call time. Default (unset/other) = billing enforced exactly as the rest of this section describes.
+- **Four bypass points**, each mirroring the existing `isSuperAdmin` early-return: `requirePlan` (returns), `checkUsageLimit` (returns `{allowed:true, limit:-1, planName:"Unlimited"}`), the `planExpiresAt` auto-revert in [trpc.ts](packages/api/src/trpc.ts) (skipped — no org-row mutation while disabled), and the UI `planAllowed()` predicates in [sidebar.tsx](apps/web/components/layout/sidebar.tsx) + [dashboard/page.tsx](apps/web/app/dashboard/page.tsx) (no lock icons / "Upgrade to X" cards). UI reads `billing.currentPlan.billingDisabled`.
+- **All ~20 backend gate call sites are UNCHANGED** — they keep their `requirePlan(...)`/`enforcePlanLimit(...)` lines + `ctx.isSuperAdmin` arg, dormant until re-armed. Stripe, plan definitions, the billing settings page, and default-FREE-on-signup are untouched (usage UI just reads "unlimited"). Sign-up/sign-in never call these helpers, so they are unaffected.
+- **Re-arm later:** set `BILLING_DISABLED=false` (or remove it) in `.env.prod` and redeploy. **Zero code change.** Do NOT delete the `isBillingDisabled()` checks — they ARE the toggle.
+- **Regression guard:** [billing-disabled.test.ts](packages/api/src/__tests__/billing-disabled.test.ts) locks both flag-ON bypass (no DB read) and flag-OFF unchanged enforcement. Keep green.
+
 ## Conventions
 
 - TypeScript strict, shared base config in [tsconfig.base.json](tsconfig.base.json)

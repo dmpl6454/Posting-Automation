@@ -126,6 +126,8 @@ services:
       STRIPE_STARTER_PRICE_ID: ${STRIPE_STARTER_PRICE_ID}
       STRIPE_PRO_PRICE_ID: ${STRIPE_PRO_PRICE_ID}
       STRIPE_ENTERPRISE_PRICE_ID: ${STRIPE_ENTERPRISE_PRICE_ID}
+      # Temporary: bypass ALL plan/quota gates (default empty = billing enforced)
+      BILLING_DISABLED: ${BILLING_DISABLED:-}
       SMTP_HOST: ${SMTP_HOST}
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USER: ${SMTP_USER}

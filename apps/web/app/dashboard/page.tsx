@@ -132,9 +132,13 @@ export default function DashboardPage() {
   const { data: activity, isLoading: activityLoading } = trpc.analytics.recentActivity.useQuery({ limit: 5 });
   const { data: planData } = trpc.billing.currentPlan.useQuery(undefined, { staleTime: 5 * 60 * 1000 });
   const orgPlan = (planData?.plan ?? "FREE") as PlanType;
+  // Temporary: when billing is disabled, every feature is unlocked for everyone,
+  // so the dashboard cards must not show lock badges or "Upgrade to X" copy.
+  const billingDisabled = planData?.billingDisabled === true;
 
   const planAllowed = (minPlan?: PlanType) => {
     if (!minPlan) return true;
+    if (billingDisabled) return true;
     if (isSuperAdmin) return true;
     return PLAN_ORDER.indexOf(orgPlan) >= PLAN_ORDER.indexOf(minPlan);
   };
