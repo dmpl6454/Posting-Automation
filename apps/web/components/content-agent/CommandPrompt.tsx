@@ -157,10 +157,8 @@ export function CommandPrompt() {
               setMessages((prev) => [...prev, assistantMsg]);
               setStreamingContent("");
 
-              // Auto-execute publish_now actions
-              if (event.action?.type === "publish_now") {
-                executeAction(event.action, tid!);
-              }
+              // publish_now is NOT auto-executed (CLAUDE.md audit invariant
+              // 2026-06-06) — the action renders a button the user must click.
             } else if (event.type === "error") {
               setMessages((prev) => [
                 ...prev,

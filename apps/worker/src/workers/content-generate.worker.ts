@@ -14,6 +14,7 @@ import {
   generateStaticNewsCreativeImage,
   generateRelevantBackground,
   extractDominantColor,
+  withTextProviderFallback,
   type AIProvider,
 } from "@postautomation/ai";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
@@ -112,19 +113,34 @@ export function createContentGenerateWorker() {
           .filter(Boolean)
           .join("\n");
 
-        const caption = await generateContent({
-          provider: agent.aiProvider as AIProvider,
-          platform: "instagram",
-          userPrompt,
-          tone: agent.tone,
-        });
+        // Resilient text generation: [agent's provider → openai → anthropic],
+        // skipping unconfigured keys — an agent configured with a billing-held
+        // provider (e.g. gemini) no longer hard-fails every autopilot run.
+        const caption = await withTextProviderFallback(
+          agent.aiProvider,
+          (p) =>
+            generateContent({
+              provider: p as AIProvider,
+              platform: "instagram",
+              userPrompt,
+              tone: agent.tone,
+            }),
+          (failed, next, e) =>
+            console.warn(`[ContentGenerate] Caption via ${failed} failed (${e instanceof Error ? e.message.slice(0, 80) : e}), trying ${next}`),
+        );
 
         // 4. Generate hashtags
-        const hashtagList = await suggestHashtags({
-          content: caption,
-          platform: "instagram",
-          provider: agent.aiProvider as AIProvider,
-        });
+        const hashtagList = await withTextProviderFallback(
+          agent.aiProvider,
+          (p) =>
+            suggestHashtags({
+              content: caption,
+              platform: "instagram",
+              provider: p as AIProvider,
+            }),
+          (failed, next, e) =>
+            console.warn(`[ContentGenerate] Hashtags via ${failed} failed (${e instanceof Error ? e.message.slice(0, 80) : e}), trying ${next}`),
+        );
 
         const hashtags = hashtagList.join(" ");
 

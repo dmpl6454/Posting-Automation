@@ -36,6 +36,11 @@ export function MessageBubble({ message, onExecuteAction, isExecuting }: Message
   const action = message.metadata?.action || null;
   const isContentDraft = action?.type === "generate_content";
   const isNewsImage = action?.type === "generate_news_image";
+  const isCreateAgent = action?.type === "create_agent";
+  // Any other action type (publish_now, schedule_post, bulk_schedule, ...)
+  // renders a generic explicit confirm button below — NEVER auto-executed
+  // (CLAUDE.md invariant: publish_now requires an explicit user click).
+  const isGenericAction = !!action && !isContentDraft && !isNewsImage && !isCreateAgent;
 
   if (isSystem) {
     // Special rendering for system messages with generated news images
@@ -151,6 +156,32 @@ export function MessageBubble({ message, onExecuteAction, isExecuting }: Message
                 Style: {(action.payload.imageStyle as string) === "ai_generated" ? "AI Generated" : "News Card"}
               </p>
             )}
+          </div>
+        )}
+
+        {/* Generic action confirm (publish_now / schedule_post / ...) — always
+            an explicit button; publish_now additionally shows an irreversibility
+            warning. Replaces the removed auto-execute (which published live
+            posts with zero review — CLAUDE.md audit invariant 2026-06-06). */}
+        {!isUser && isGenericAction && (
+          <div className="mt-3 border-t pt-3 space-y-2">
+            {action.type === "publish_now" && (
+              <div className="flex items-center gap-1.5 rounded-md bg-amber-500/10 px-2 py-1 text-[11px] text-amber-700 dark:text-amber-400">
+                <Info className="h-3 w-3 shrink-0" />
+                This will publish immediately to your selected channels. It cannot be undone.
+              </div>
+            )}
+            <button
+              onClick={() => onExecuteAction?.(action)}
+              disabled={isExecuting}
+              className="rounded-lg bg-purple-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-purple-700 disabled:opacity-50"
+            >
+              {isExecuting
+                ? "Working..."
+                : action.type === "publish_now"
+                  ? "Publish now"
+                  : `Confirm: ${String(action.type).replace(/_/g, " ")}`}
+            </button>
           </div>
         )}
 

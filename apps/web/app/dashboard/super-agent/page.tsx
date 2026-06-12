@@ -47,6 +47,16 @@ interface Message {
 // legacy messages persisted before idempotencyKey existed.
 const actionKey = (msg: Message): string => msg.action?.idempotencyKey ?? msg.id;
 
+// Friendly label for the model that actually answered (B1 transparency).
+const PROVIDER_BADGE_LABELS: Record<string, string> = {
+  openai: "OpenAI (GPT-4)",
+  anthropic: "Anthropic (Claude)",
+  gemini: "Google (Gemini)",
+  gemma4: "Google (Gemma 4)",
+  grok: "xAI (Grok)",
+  deepseek: "DeepSeek",
+};
+
 /* ── Helpers ── */
 function formatTimeAgo(date: string | Date | null): string {
   if (!date) return "";
@@ -585,14 +595,7 @@ export default function SuperAgentPage() {
                     <div className="whitespace-pre-wrap text-sm leading-relaxed">{msg.content}</div>
                     {msg.role === "assistant" && msg.provider && (
                       <div className="mt-1.5 text-[10px] text-muted-foreground/70">
-                        {{
-                          openai: "OpenAI (GPT-4)",
-                          anthropic: "Anthropic (Claude)",
-                          gemini: "Google (Gemini)",
-                          gemma4: "Google (Gemma 4)",
-                          grok: "xAI (Grok)",
-                          deepseek: "DeepSeek",
-                        }[msg.provider] ?? msg.provider}
+                        {PROVIDER_BADGE_LABELS[msg.provider] ?? msg.provider}
                       </div>
                     )}
                     {msg.action && (

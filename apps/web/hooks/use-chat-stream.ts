@@ -12,8 +12,11 @@ interface ChatMessageData {
   createdAt?: string | Date;
 }
 
-// Action types that should be auto-executed without user clicking a button
-const AUTO_EXECUTE_ACTIONS = new Set(["publish_now"]);
+// Action types that may be auto-executed without user confirmation.
+// SECURITY INVARIANT (CLAUDE.md, audit fix 2026-06-06): publish_now must NEVER
+// be auto-executed — an AI-emitted action would publish live with zero review.
+// It belongs here ONLY as an explicit user-clicked button (see MessageBubble).
+const AUTO_EXECUTE_ACTIONS = new Set<string>([]);
 
 export function useChatStream(threadId: string | null) {
   const [messages, setMessages] = useState<ChatMessageData[]>([]);
@@ -118,12 +121,16 @@ export function useChatStream(threadId: string | null) {
                 accumulated += event.content;
                 setStreamingContent(accumulated);
               } else if (event.type === "done") {
-                // Add the final assistant message
+                // Add the final assistant message (provider = the model that
+                // actually answered, including after a fallback hop)
                 const assistantMsg: ChatMessageData = {
                   id: `assistant-${Date.now()}`,
                   role: "assistant",
                   content: event.displayText || accumulated,
-                  metadata: event.action ? { action: event.action } : undefined,
+                  metadata: {
+                    ...(event.action ? { action: event.action } : {}),
+                    ...(event.provider ? { provider: event.provider } : {}),
+                  },
                   createdAt: new Date().toISOString(),
                 };
                 setMessages((prev) => [...prev, assistantMsg]);

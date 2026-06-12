@@ -120,7 +120,7 @@ export function RepurposeTab() {
         .find((p) => configured[p]);
       if (first) setProvider(first);
     }
-  }, [aiConfig]);
+  }, [aiConfig, provider]);
   const [theme, setTheme] = useState<"dark" | "light" | "gradient">("light");
   // Brand accent color — sourced from the picker below and from a saved
   // template's brandColor. Sent to the router as accentColor when non-empty.
