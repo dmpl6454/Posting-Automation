@@ -66,6 +66,24 @@ const CATEGORY_TO_PROVIDER: Record<string, AIProvider> = {
 
 const DEFAULT_PROVIDER: AIProvider = "openai";
 
+function isProviderConfigured(provider: AIProvider): boolean {
+  const checks: Partial<Record<AIProvider, () => boolean>> = {
+    openai:    () => !!process.env.OPENAI_API_KEY,
+    anthropic: () => !!process.env.ANTHROPIC_API_KEY,
+    gemini:    () => !!(process.env.GOOGLE_GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY),
+    gemma4:    () => !!(process.env.GOOGLE_GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY),
+    grok:      () => !!process.env.XAI_API_KEY,
+    deepseek:  () => !!process.env.DEEPSEEK_API_KEY,
+  };
+  return checks[provider]?.() ?? true;
+}
+
+function safeProvider(preferred: AIProvider): AIProvider {
+  if (isProviderConfigured(preferred)) return preferred;
+  const fallbacks: AIProvider[] = ["openai", "anthropic", "gemini"];
+  return fallbacks.find(isProviderConfigured) ?? DEFAULT_PROVIDER;
+}
+
 function countKeywordMatches(message: string, keywords: string[]): number {
   const lower = message.toLowerCase();
   return keywords.filter((kw) => lower.includes(kw.toLowerCase())).length;
@@ -127,37 +145,37 @@ export async function routeProvider(
   context: RouterContext
 ): Promise<AIProvider> {
   if (context.hasAttachments) {
-    return "gemini";
+    return safeProvider("gemini");
   }
 
   const matchedRules = getKeywordMatches(message);
 
   if (context.lastProvider) {
     if (matchedRules.length === 1) {
-      return matchedRules[0]!.provider;
+      return safeProvider(matchedRules[0]!.provider);
     }
     if (matchedRules.length > 1) {
       const llmResult = await classifyWithLLM(message);
-      return llmResult ?? context.lastProvider;
+      return safeProvider(llmResult ?? context.lastProvider);
     }
-    return context.lastProvider;
+    return safeProvider(context.lastProvider);
   }
 
   if (matchedRules.length === 1) {
-    return matchedRules[0]!.provider;
+    return safeProvider(matchedRules[0]!.provider);
   }
   if (matchedRules.length > 1) {
     const llmResult = await classifyWithLLM(message);
-    return llmResult ?? DEFAULT_PROVIDER;
+    return safeProvider(llmResult ?? DEFAULT_PROVIDER);
   }
 
   if (context.agentNiche) {
     const nicheProvider = NICHE_PROVIDER_MAP[context.agentNiche.toLowerCase()];
     if (nicheProvider) {
-      return nicheProvider;
+      return safeProvider(nicheProvider);
     }
   }
 
   const llmResult = await classifyWithLLM(message);
-  return llmResult ?? DEFAULT_PROVIDER;
+  return safeProvider(llmResult ?? DEFAULT_PROVIDER);
 }

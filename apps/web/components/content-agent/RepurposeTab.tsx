@@ -54,6 +54,11 @@ const ALL_PLATFORMS = [
 ] as const;
 
 const providers = ["openai", "anthropic", "gemini", "grok", "deepseek", "gemma4"] as const;
+const PROVIDER_LABELS: Record<typeof providers[number], string> = {
+  openai: "OpenAI (GPT-4)", anthropic: "Anthropic (Claude)",
+  gemini: "Google (Gemini)", grok: "xAI (Grok)",
+  deepseek: "DeepSeek", gemma4: "Google (Gemma 4)",
+};
 
 const FORMAT_OPTIONS = [
   { id: "static" as const, label: "Static Post", icon: Image, desc: "Single branded image + caption" },
@@ -101,10 +106,21 @@ export function RepurposeTab() {
   // No platforms pre-selected — the user explicitly picks targets (the
   // Generate button stays disabled until at least one is chosen).
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
-  // Default to OpenAI for text generation — the Google-family providers
-  // (gemini/gemma4) currently share a billing-held project (403). The backend
-  // also falls back to OpenAI automatically if a chosen provider fails.
   const [provider, setProvider] = useState<typeof providers[number]>("openai");
+  const { data: aiConfig } = trpc.ai.getConfig.useQuery();
+  useEffect(() => {
+    if (!aiConfig) return;
+    const configured: Record<string, boolean> = {
+      openai: aiConfig.openai, anthropic: aiConfig.anthropic,
+      gemini: aiConfig.gemini, grok: aiConfig.grok,
+      deepseek: aiConfig.deepseek, gemma4: aiConfig.gemma4,
+    };
+    if (!configured[provider]) {
+      const first = (["openai", "anthropic", "gemini", "gemma4", "grok", "deepseek"] as const)
+        .find((p) => configured[p]);
+      if (first) setProvider(first);
+    }
+  }, [aiConfig]);
   const [theme, setTheme] = useState<"dark" | "light" | "gradient">("light");
   // Brand accent color — sourced from the picker below and from a saved
   // template's brandColor. Sent to the router as accentColor when non-empty.
@@ -1153,12 +1169,17 @@ export function RepurposeTab() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="openai">OpenAI (GPT-4)</SelectItem>
-                <SelectItem value="anthropic">Anthropic (Claude)</SelectItem>
-                <SelectItem value="gemini">Google (Gemini)</SelectItem>
-                <SelectItem value="grok">xAI (Grok)</SelectItem>
-                <SelectItem value="deepseek">DeepSeek</SelectItem>
-                <SelectItem value="gemma4">Google (Gemma 4)</SelectItem>
+                {(Object.entries(PROVIDER_LABELS) as [typeof providers[number], string][]).map(([value, label]) => {
+                  const configured = aiConfig ? (aiConfig as Record<string, boolean>)[value] !== false : true;
+                  return (
+                    <SelectItem key={value} value={value} disabled={!configured}>
+                      <span className="flex items-center gap-2">
+                        {label}
+                        {!configured && <span className="text-[10px] text-muted-foreground">Not configured</span>}
+                      </span>
+                    </SelectItem>
+                  );
+                })}
               </SelectContent>
             </Select>
           </div>
@@ -1280,7 +1301,7 @@ export function RepurposeTab() {
                   Generated {results.format === "ai_video" ? "AI Video (Veo3)" : results.format === "seedance_video" ? "AI Video (Seedance 2.0)" : results.format === "reel" ? "Reel Video" : results.mediaUrls.length > 1 ? `Carousel (${results.mediaUrls.length} slides)` : "Static Post"}
                 </CardTitle>
                 <CardDescription>
-                  {results.format === "ai_video" ? "Cinematic AI video with text slides, visuals & music by Veo3" : results.format === "seedance_video" ? "Cinematic 2K video with native audio by Seedance 2.0" : results.format === "reel" ? "AI-generated video with slides" : results.format === "static" ? "AI-generated background with branded overlay" : "Swipe through carousel slides"}
+                  {results.format === "ai_video" ? "Cinematic AI video with text slides, visuals & music by Veo3" : results.format === "seedance_video" ? "Cinematic 2K video with native audio by Seedance 2.0" : results.format === "reel" ? "AI-generated video with slides" : results.format === "static" ? ((results as any).bgSource === "ai" ? "AI-generated background with branded overlay" : (results as any).bgSource === "stock" ? "Article photo background (AI image unavailable) · branded overlay" : "AI-generated background with branded overlay") : "Swipe through carousel slides"}
                 </CardDescription>
               </CardHeader>
               <CardContent>

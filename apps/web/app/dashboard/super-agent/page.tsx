@@ -39,6 +39,7 @@ interface Message {
   // creation; it lives inside metadata.action so it survives a getThread refetch.
   action?: { type: string; payload: Record<string, unknown>; idempotencyKey?: string } | null;
   createdAt?: string | Date;
+  provider?: string;
 }
 
 // A1 followup: the STABLE key used for BOTH the executedActionIds lock and the
@@ -137,6 +138,7 @@ export default function SuperAgentPage() {
         content: m.content,
         action: (m.metadata as any)?.action || null,
         createdAt: m.createdAt,
+        provider: (m.metadata as any)?.provider || undefined,
       }));
 
       // A1 followup: re-seed the "Done" lock from PERSISTED markers so it survives
@@ -322,6 +324,7 @@ export default function SuperAgentPage() {
                   content: event.displayText || accumulated,
                   action: event.action || null,
                   createdAt: new Date().toISOString(),
+                  provider: (event as any).provider || undefined,
                 },
               ]);
               setStreamingContent("");
@@ -580,6 +583,18 @@ export default function SuperAgentPage() {
                     )}
                   >
                     <div className="whitespace-pre-wrap text-sm leading-relaxed">{msg.content}</div>
+                    {msg.role === "assistant" && msg.provider && (
+                      <div className="mt-1.5 text-[10px] text-muted-foreground/70">
+                        {{
+                          openai: "OpenAI (GPT-4)",
+                          anthropic: "Anthropic (Claude)",
+                          gemini: "Google (Gemini)",
+                          gemma4: "Google (Gemma 4)",
+                          grok: "xAI (Grok)",
+                          deepseek: "DeepSeek",
+                        }[msg.provider] ?? msg.provider}
+                      </div>
+                    )}
                     {msg.action && (
                       <div className="mt-3 border-t border-foreground/10 pt-2">
                         {msg.action.type === "publish_now" && (

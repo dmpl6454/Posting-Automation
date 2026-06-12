@@ -767,32 +767,67 @@ export const repurposeRouter = createRouter({
         if (pid) pushProgress(pid, step, status, detail).catch(() => {});
       };
 
-      // Text-provider resilience: caption/brief generation is a hard
-      // requirement for the whole flow. If the chosen provider fails (e.g. the
-      // Google-family gemini/gemma4 providers share a billing-held project →
-      // 403), retry once with OpenAI before giving up. Mirrors the image
-      // fallback philosophy so a single provider outage never kills repurpose.
+      // Build [chosen → openai → anthropic], deduped, skipping keys that are
+      // absent in the environment so we never route to an unconfigured provider.
+      // Always includes at least one entry: falls back to "openai" if the chain
+      // would otherwise be empty (e.g. all keys absent in a test environment).
+      function buildProviderChain(chosen: string | undefined): string[] {
+        const safe = chosen || "openai";
+        const configured: Record<string, boolean> = {
+          openai:    !!process.env.OPENAI_API_KEY,
+          anthropic: !!process.env.ANTHROPIC_API_KEY,
+          gemini:    !!(process.env.GOOGLE_GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY),
+          gemma4:    !!(process.env.GOOGLE_GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY),
+          grok:      !!process.env.XAI_API_KEY,
+          deepseek:  !!process.env.DEEPSEEK_API_KEY,
+        };
+        const seen = new Set<string>();
+        const chain = [safe, "openai", "anthropic"].filter((p) => {
+          if (seen.has(p)) return false;
+          seen.add(p);
+          return configured[p] ?? true; // unknown providers (e.g. in tests) pass through
+        });
+        // Guarantee at least the chosen provider is tried — even if unconfigured —
+        // so the caller always gets a meaningful error rather than silent no-op.
+        return chain.length > 0 ? chain : [safe];
+      }
+
+      // Text-provider resilience: tries [chosen → openai → anthropic] in order,
+      // skipping unconfigured providers, throwing only after the full chain fails.
+      // Previously fell back only to OpenAI — when OpenAI itself was quota-degraded,
+      // Anthropic (healthy) was never tried and every dead provider produced a hard
+      // failure.
       async function repurposeContentResilient(
         args: Parameters<typeof repurposeContent>[0],
       ): Promise<Awaited<ReturnType<typeof repurposeContent>>> {
-        try {
-          return await repurposeContent(args);
-        } catch (e) {
-          if (args.provider === "openai") throw e; // already on the fallback
-          console.warn(`[Repurpose] Caption gen via ${args.provider} failed (${(e as Error).message.slice(0, 80)}), retrying with OpenAI`);
-          return await repurposeContent({ ...args, provider: "openai" });
+        const chain = buildProviderChain(args.provider);
+        let lastErr: unknown;
+        for (const p of chain) {
+          try {
+            return await repurposeContent({ ...args, provider: p as typeof args.provider });
+          } catch (e) {
+            const msg = e instanceof Error ? e.message.slice(0, 80) : String(e ?? "unknown error");
+            console.warn(`[Repurpose] Caption gen via ${p} failed (${msg})${chain.indexOf(p) < chain.length - 1 ? ", trying next provider" : ""}`);
+            lastErr = e;
+          }
         }
+        throw lastErr;
       }
       async function generateContentResilient(
         args: Parameters<typeof generateContent>[0],
       ): Promise<string> {
-        try {
-          return await generateContent(args);
-        } catch (e) {
-          if (args.provider === "openai") throw e;
-          console.warn(`[Repurpose] generateContent via ${args.provider} failed (${(e as Error).message.slice(0, 80)}), retrying with OpenAI`);
-          return await generateContent({ ...args, provider: "openai" });
+        const chain = buildProviderChain(args.provider);
+        let lastErr: unknown;
+        for (const p of chain) {
+          try {
+            return await generateContent({ ...args, provider: p as typeof args.provider });
+          } catch (e) {
+            const msg = e instanceof Error ? e.message.slice(0, 80) : String(e ?? "unknown error");
+            console.warn(`[Repurpose] generateContent via ${p} failed (${msg})${chain.indexOf(p) < chain.length - 1 ? ", trying next provider" : ""}`);
+            lastErr = e;
+          }
         }
+        throw lastErr as Error;
       }
 
       // Resolve logo via the shared resolver (R3): input.logoUrl → DB media
@@ -1136,6 +1171,7 @@ KEYWORDS: ${(brief.keywords || []).join(", ")}`;
       // the SAME inputs (capped headline + hook) instead of the raw page title.
       let renderedHeadline: string | undefined;
       let renderedHookLine: string | undefined;
+      let renderedBgSource: "ai" | "stock" | undefined;
 
       if (input.format === "static" && input.userMediaIds?.length) {
         // ── E4: user attached their own image(s) ─────────────────────────────
@@ -1321,6 +1357,7 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
           for (const platform of input.targetPlatforms) {
             perPlatformMedia[platform] = { url, mediaId };
           }
+          renderedBgSource = creative.bgSource;
           progress(
             "Generating creative",
             "done",
@@ -1941,6 +1978,7 @@ Return ONLY the JSON array, no other text.`;
         // headline + hook), not the raw extracted page title.
         renderedHeadline: renderedHeadline ?? null,
         hookLine: renderedHookLine ?? null,
+        bgSource: renderedBgSource ?? null,
       };
     }),
 

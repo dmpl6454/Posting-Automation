@@ -254,12 +254,12 @@ export async function POST(req: Request) {
       // Try the routed provider first
       let success = await attemptStream(provider);
 
-      // If pre-stream failure, try fallback (max 1 fallback)
+      // If pre-stream failure, walk the full fallback chain until one succeeds.
       if (!success) {
-        const fallback = FALLBACK_PRIORITY.find((p) => p !== provider);
-        if (fallback) {
+        for (const fallback of FALLBACK_PRIORITY.filter((p) => p !== provider)) {
           console.log(`[Chat] Falling back from ${provider} to ${fallback}`);
           success = await attemptStream(fallback);
+          if (success) break;
         }
       }
 
@@ -295,6 +295,7 @@ export async function POST(req: Request) {
         type: "done",
         action: action || null,
         displayText,
+        provider: usedProvider,
       })}\n\n`;
       await writer.write(encoder.encode(doneData));
     } catch (error: any) {
