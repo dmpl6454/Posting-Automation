@@ -62,6 +62,20 @@ export const rssRouter = createRouter({
         });
       }
 
+      // Validate every target channel belongs to the caller's org (worker writes
+      // these straight into PostTarget.channelId with no re-check).
+      if (input.targetChannels.length > 0) {
+        const owned = await ctx.prisma.channel.findMany({
+          where: { id: { in: input.targetChannels }, organizationId: ctx.organizationId },
+          select: { id: true },
+        });
+        if (owned.length !== new Set(input.targetChannels).size) {
+          const ownedSet = new Set(owned.map((c) => c.id));
+          const invalid = input.targetChannels.filter((id) => !ownedSet.has(id));
+          throw new TRPCError({ code: "FORBIDDEN", message: `Channels not in this organization: ${invalid.join(", ")}` });
+        }
+      }
+
       const feed = await ctx.prisma.rssFeed.create({
         data: {
           organizationId: ctx.organizationId,
@@ -73,6 +87,14 @@ export const rssRouter = createRouter({
           promptTemplate: input.promptTemplate,
         },
       });
+
+      // Kick off an initial sync so the feed isn't empty until the next cron tick.
+      await rssSyncQueue.add(
+        `rss-sync-${feed.id}`,
+        { feedId: feed.id, organizationId: ctx.organizationId },
+        { jobId: `rss-sync-initial-${feed.id}`, removeOnComplete: true, removeOnFail: 100 }
+      );
+
       // Fix #78: audit log for RSS feed creation
       createAuditLog({
         organizationId: ctx.organizationId,
@@ -109,6 +131,17 @@ export const rssRouter = createRouter({
       });
       if (!existing) {
         throw new TRPCError({ code: "NOT_FOUND", message: "RSS feed not found" });
+      }
+      if (data.targetChannels && data.targetChannels.length > 0) {
+        const owned = await ctx.prisma.channel.findMany({
+          where: { id: { in: data.targetChannels }, organizationId: ctx.organizationId },
+          select: { id: true },
+        });
+        if (owned.length !== new Set(data.targetChannels).size) {
+          const ownedSet = new Set(owned.map((c) => c.id));
+          const invalid = data.targetChannels.filter((id) => !ownedSet.has(id));
+          throw new TRPCError({ code: "FORBIDDEN", message: `Channels not in this organization: ${invalid.join(", ")}` });
+        }
       }
       const feed = await ctx.prisma.rssFeed.update({
         where: { id },
@@ -201,10 +234,11 @@ export const rssRouter = createRouter({
       if (!feed) {
         throw new TRPCError({ code: "NOT_FOUND", message: "RSS feed not found" });
       }
-      await rssSyncQueue.add(`rss-sync-${input.feedId}`, {
-        feedId: input.feedId,
-        organizationId: ctx.organizationId,
-      });
+      await rssSyncQueue.add(
+        `rss-sync-${input.feedId}`,
+        { feedId: input.feedId, organizationId: ctx.organizationId },
+        { jobId: `rss-sync-manual-${input.feedId}`, removeOnComplete: true, removeOnFail: 100 }
+      );
       return { success: true, message: "RSS sync job enqueued" };
     }),
 });

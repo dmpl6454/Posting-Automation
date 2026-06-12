@@ -77,17 +77,17 @@ export function createRssSyncWorker() {
       for (const item of items) {
         if (existingGuids.has(item.guid)) continue;
 
-        await prisma.rssFeedEntry.create({
-          data: {
-            feedId,
-            guid: item.guid,
-            title: item.title,
-            link: item.link,
-            summary: item.summary || null,
-            published: item.published,
-          },
-        });
-        newEntryCount++;
+        try {
+          await prisma.rssFeedEntry.create({
+            data: {
+              feedId, guid: item.guid, title: item.title, link: item.link,
+              summary: item.summary || null, published: item.published,
+            },
+          });
+          newEntryCount++;
+        } catch (e: any) {
+          if (e?.code !== "P2002") throw e; // ignore the unique-guid race, rethrow real errors
+        }
       }
 
       console.log(`[RssSync] Created ${newEntryCount} new entries for feed ${feed.name}`);
