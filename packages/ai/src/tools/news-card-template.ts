@@ -105,6 +105,8 @@ function escapeHtml(text: string): string {
     .replace(/"/g, "&quot;");
 }
 
+import { safeColor } from "./creative-templates";
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Static News Creative — Instagram 4:5 (1080×1350) full-bleed image creative
 // ─────────────────────────────────────────────────────────────────────────────
@@ -186,12 +188,14 @@ const CREATIVE_THEME: Record<string, {
 
 export function generateStaticNewsCreativeHtml(options: StaticNewsCreativeOptions): string {
   const baseTheme = CREATIVE_THEME[options.template] ?? CREATIVE_THEME["cinematic"]!;
+  // Sanitize brandColor before interpolating into CSS to prevent CSS injection.
+  const safeBrandColor = options.brandColor ? safeColor(options.brandColor) : undefined;
   // Override accent color with brand color from logo if provided
-  const theme = options.brandColor
+  const theme = safeBrandColor
     ? {
         ...baseTheme,
-        accentColor: options.brandColor,
-        tagBg: baseTheme.tag ? options.brandColor : baseTheme.tagBg,
+        accentColor: safeBrandColor,
+        tagBg: baseTheme.tag ? safeBrandColor : baseTheme.tagBg,
       }
     : baseTheme;
   const seed = options.bgSeed ?? Math.abs(options.headline.split("").reduce((a, c) => a + c.charCodeAt(0), 42)) % 1000;

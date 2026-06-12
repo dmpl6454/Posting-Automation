@@ -2,7 +2,7 @@ import { z } from "zod";
 import { createRouter, orgProcedure } from "../trpc";
 import { TRPCError } from "@trpc/server";
 import { postPublishQueue } from "@postautomation/queue";
-import { requirePlan } from "../middleware/plan-limit.middleware";
+import { requirePlan, enforcePlanLimit } from "../middleware/plan-limit.middleware";
 
 // ── tone → CTA mapping ───────────────────────────────────────────────────────
 const TONE_CTA_MAP: Record<string, string[]> = {
@@ -137,6 +137,7 @@ export const newsgridRouter = createRouter({
     .mutation(async ({ ctx, input }) => {
       // NewsGrid Bot is a STARTER+ feature
       await requirePlan(ctx.organizationId, "STARTER", "NewsGrid Bot", ctx.isSuperAdmin);
+      await enforcePlanLimit(ctx.organizationId, "aiImagesPerMonth", ctx.isSuperAdmin);
       const channels = await ctx.prisma.channel.findMany({
         where: {
           id:             { in: input.channelIds },
@@ -380,16 +381,39 @@ Requirements:
             caption:          z.string(),
             hashtags:         z.array(z.string()),
             cta:              z.string(),
-            scheduleTime:     z.string().nullable(),
+            scheduleTime:     z.string().datetime().nullable(),
             backgroundImageUrl: z.string().nullable().optional(),
           })
         ),
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // Task 18: Verify all requested channels belong to this org (prevent cross-org IDOR)
+      const channelIds = [...new Set(input.payloads.map((p) => p.channelId))];
+      const ownedChannels = await ctx.prisma.channel.findMany({
+        where: { id: { in: channelIds }, organizationId: ctx.organizationId },
+        select: { id: true },
+      });
+      if (ownedChannels.length !== channelIds.length) {
+        const ownedSet = new Set(ownedChannels.map((c) => c.id));
+        const invalid = channelIds.filter((id) => !ownedSet.has(id));
+        throw new TRPCError({ code: "FORBIDDEN", message: `Channels not in this organization: ${invalid.join(", ")}` });
+      }
+
       const created: string[] = [];
 
       for (const payload of input.payloads) {
+        // Task 22: Reject past schedule times
+        if (payload.scheduleTime) {
+          const when = new Date(payload.scheduleTime);
+          if (when.getTime() <= Date.now()) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: `Schedule time for channel ${payload.channelId} must be in the future.` });
+          }
+        }
+
+        // Task 20: Enforce per-org post quota
+        await enforcePlanLimit(ctx.organizationId, "postsPerMonth", ctx.isSuperAdmin);
+
         const fullContent = [
           payload.caption,
           payload.cta,
@@ -431,11 +455,22 @@ Requirements:
                 throw new Error("Invalid data URL format");
               }
             } else {
-              // External URL — download it
-              const resp = await fetch(payload.backgroundImageUrl);
+              // External URL — guard against SSRF before fetching
+              const { isPublicImageUrl } = await import("@postautomation/ai");
+              if (!isPublicImageUrl(payload.backgroundImageUrl)) {
+                console.warn(`[NewsGrid] Rejected non-allowlisted image URL for post ${post.id}`);
+                throw new Error("Image URL not allowed");
+              }
+              const resp = await fetch(payload.backgroundImageUrl, {
+                signal: AbortSignal.timeout(8000),
+                redirect: "manual",
+              });
+              const ct = resp.headers.get("content-type") || "";
+              if (!resp.ok || !/^image\//.test(ct)) throw new Error("Image fetch failed or not an image");
               const arrayBuf = await resp.arrayBuffer();
+              if (arrayBuf.byteLength > 15 * 1024 * 1024) throw new Error("Image too large");
               imgBuffer = Buffer.from(arrayBuf);
-              mimeType = resp.headers.get("content-type") || "image/jpeg";
+              mimeType = ct || "image/jpeg";
             }
 
             // Upload to S3
@@ -566,28 +601,38 @@ Requirements:
   assignLogoToChannel: orgProcedure
     .input(z.object({ mediaId: z.string(), channelId: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      // Remove previous logo assignment for this channel
+      // Verify the logo media belongs to the caller's org
+      const media = await ctx.prisma.media.findFirst({
+        where: { id: input.mediaId, organizationId: ctx.organizationId, category: "logo" },
+        select: { id: true, url: true },
+      });
+      if (!media) throw new TRPCError({ code: "NOT_FOUND" });
+
+      // Verify the target channel belongs to the caller's org
+      const channel = await ctx.prisma.channel.findFirst({
+        where: { id: input.channelId, organizationId: ctx.organizationId },
+        select: { id: true, metadata: true },
+      });
+      if (!channel) throw new TRPCError({ code: "NOT_FOUND" });
+
+      // Remove previous logo assignment for this channel (org-scoped)
       await ctx.prisma.media.updateMany({
         where: { organizationId: ctx.organizationId, category: "logo", channelId: input.channelId },
         data: { channelId: null },
       });
-      // Assign new logo
-      await ctx.prisma.media.update({
-        where: { id: input.mediaId },
+
+      // Assign new logo — org-scoped updateMany (not update by bare id)
+      await ctx.prisma.media.updateMany({
+        where: { id: input.mediaId, organizationId: ctx.organizationId },
         data: { channelId: input.channelId },
       });
-      // Also update channel metadata logo_path
-      const media = await ctx.prisma.media.findUnique({ where: { id: input.mediaId } });
-      if (media) {
-        const channel = await ctx.prisma.channel.findFirst({ where: { id: input.channelId, organizationId: ctx.organizationId } });
-        if (channel) {
-          const existing = (channel.metadata as any) ?? {};
-          await ctx.prisma.channel.update({
-            where: { id: input.channelId },
-            data: { metadata: { ...existing, logo_path: media.url } },
-          });
-        }
-      }
+
+      // Write the verified own-org media URL into channel metadata
+      const existing = (channel.metadata as any) ?? {};
+      await ctx.prisma.channel.update({
+        where: { id: channel.id },
+        data: { metadata: { ...existing, logo_path: media.url } },
+      });
       return { success: true };
     }),
 

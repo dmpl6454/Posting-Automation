@@ -33,7 +33,9 @@ export async function launchCreativeBrowser(): Promise<import("puppeteer").Brows
 export async function generateNewsCardImage(
   options: NewsCardOptions
 ): Promise<NewsImageResult> {
-  const html = generateNewsCardHtml(options);
+  // Null out unsafe logo URLs to prevent Puppeteer from fetching internal hosts
+  const safeLogoUrl = options.logoUrl && isPublicImageUrl(options.logoUrl) ? options.logoUrl : null;
+  const html = generateNewsCardHtml({ ...options, logoUrl: safeLogoUrl ?? undefined });
 
   const dimensions = options.platform === "instagram"
     ? { width: 1080, height: 1080 }
@@ -93,7 +95,9 @@ export async function generateNewsAiImage(
 export async function generateStaticNewsCreativeImage(
   options: StaticNewsCreativeOptions
 ): Promise<NewsImageResult> {
-  const html = generateStaticNewsCreativeHtml(options);
+  // Null out unsafe logo URLs to prevent Puppeteer from fetching internal hosts
+  const safeLogoUrl = options.logoUrl && isPublicImageUrl(options.logoUrl) ? options.logoUrl : null;
+  const html = generateStaticNewsCreativeHtml({ ...options, logoUrl: safeLogoUrl });
 
   const browser = await puppeteer.launch({
     headless: true,
