@@ -1,5 +1,5 @@
 import { prisma } from "@postautomation/db";
-import { tokenRefreshQueue, analyticsSyncQueue, agentRunQueue, trendDiscoverQueue, listeningSyncQueue, campaignAnalyticsSyncQueue, brandContentSyncQueue, outreachPollQueue, postPublishQueue } from "@postautomation/queue";
+import { tokenRefreshQueue, analyticsSyncQueue, agentRunQueue, trendDiscoverQueue, listeningSyncQueue, campaignAnalyticsSyncQueue, brandContentSyncQueue, outreachPollQueue, postPublishQueue, rssSyncQueue } from "@postautomation/queue";
 import { runAutoHealerWithLogging } from "../workers/auto-healer.worker";
 import { runCelebrityDetectors } from "../workers/celebrity-detect.worker";
 
@@ -259,6 +259,35 @@ export async function scheduleListeningSync() {
 }
 
 /**
+ * Enqueue RSS sync jobs for active feeds whose checkInterval has elapsed.
+ * Run every 5 minutes; honors each feed's per-feed checkInterval (minutes).
+ */
+export async function scheduleRssSync() {
+  const now = Date.now();
+  const feeds = await prisma.rssFeed.findMany({
+    where: { isActive: true },
+    select: { id: true, organizationId: true, checkInterval: true, lastCheckedAt: true },
+  });
+
+  let queued = 0;
+  for (const feed of feeds) {
+    const dueAt = feed.lastCheckedAt
+      ? feed.lastCheckedAt.getTime() + feed.checkInterval * 60 * 1000
+      : 0; // never checked → due immediately
+    if (now < dueAt) continue;
+
+    await rssSyncQueue.add(
+      `rss-sync-cron-${feed.id}`,
+      { feedId: feed.id, organizationId: feed.organizationId },
+      { jobId: `rss-sync-cron-${feed.id}-${now}`, removeOnComplete: true, removeOnFail: 100 }
+    );
+    queued++;
+  }
+
+  if (queued > 0) console.log(`[Cron] Queued ${queued} RSS sync jobs`);
+}
+
+/**
  * Sync campaign analytics: aggregate metrics for active campaigns.
  * Run every 4 hours.
  */
@@ -474,6 +503,10 @@ export function startCronJobs() {
   setInterval(scheduleListeningSync, 30 * 60 * 1000);
   setTimeout(scheduleListeningSync, 2 * 60 * 1000); // Start after 2 min warmup
 
+  // RSS sync every 5 minutes (honors per-feed checkInterval)
+  setInterval(scheduleRssSync, 5 * 60 * 1000);
+  setTimeout(scheduleRssSync, 90 * 1000); // Start after 90s warmup
+
   // Campaign analytics sync every 4 hours
   setInterval(scheduleCampaignAnalyticsSync, 4 * 60 * 60 * 1000);
   setTimeout(scheduleCampaignAnalyticsSync, 10 * 60 * 1000); // Start after 10 min warmup
@@ -501,6 +534,7 @@ export function startCronJobs() {
   console.log("[Cron]   - Autopilot cleanup: every 1 hour");
   console.log("[Cron]   - Autopilot pipeline: every 15 min");
   console.log("[Cron]   - Listening sync: every 30 min");
+  console.log("[Cron]   - RSS sync: every 5 min (per-feed interval)");
   console.log("[Cron]   - Campaign analytics sync: every 4 hours");
   console.log("[Cron]   - Brand content sync: every 4 hours");
   console.log("[Cron]   - Outreach poll: every 5 min");
