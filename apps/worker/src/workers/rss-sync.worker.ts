@@ -35,118 +35,130 @@ export function createRssSyncWorker() {
       const { feedId, organizationId } = job.data;
       console.log(`[RssSync] Processing job ${job.id} for feed ${feedId}`);
 
-      // 1. Get the feed
-      const feed = await prisma.rssFeed.findUnique({ where: { id: feedId } });
-      if (!feed || !feed.isActive) {
-        console.log(`[RssSync] Feed ${feedId} not found or inactive, skipping`);
-        return;
-      }
-
-      // 2. Fetch the RSS feed XML
-      const response = await fetch(feed.url, {
-        headers: {
-          "User-Agent": "PostAutomation RSS Reader/1.0",
-          Accept: "application/rss+xml, application/xml, text/xml, application/atom+xml",
-        },
-        signal: AbortSignal.timeout(30_000),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch RSS feed: HTTP ${response.status}`);
-      }
-
-      const xml = (await response.text()) as string;
-
-      // 3. Parse items from the XML
-      const items = parseRssItems(xml);
-      console.log(`[RssSync] Found ${items.length} items in feed ${feed.name}`);
-
-      // 4. Get existing guids to avoid duplicates
-      const existingGuids = new Set(
-        (
-          await prisma.rssFeedEntry.findMany({
-            where: { feedId },
-            select: { guid: true },
-          })
-        ).map((e) => e.guid)
-      );
-
-      // 5. Create new entries
-      let newEntryCount = 0;
-
-      for (const item of items) {
-        if (existingGuids.has(item.guid)) continue;
-
-        try {
-          await prisma.rssFeedEntry.create({
-            data: {
-              feedId, guid: item.guid, title: item.title, link: item.link,
-              summary: item.summary || null, published: item.published,
-            },
-          });
-          newEntryCount++;
-        } catch (e: any) {
-          if (e?.code !== "P2002") throw e; // ignore the unique-guid race, rethrow real errors
+      try {
+        // 1. Get the feed
+        const feed = await prisma.rssFeed.findUnique({ where: { id: feedId } });
+        if (!feed || !feed.isActive) {
+          console.log(`[RssSync] Feed ${feedId} not found or inactive, skipping`);
+          return;
         }
-      }
 
-      console.log(`[RssSync] Created ${newEntryCount} new entries for feed ${feed.name}`);
-
-      // 6. If autoPost is enabled, generate posts for new unprocessed entries
-      if (feed.autoPost && feed.targetChannels.length > 0) {
-        const unprocessedEntries = await prisma.rssFeedEntry.findMany({
-          where: { feedId, processed: false },
-          orderBy: { createdAt: "asc" },
-          take: 10, // Process at most 10 at a time
+        // 2. Fetch the RSS feed XML
+        const response = await fetch(feed.url, {
+          headers: {
+            "User-Agent": "PostAutomation RSS Reader/1.0",
+            Accept: "application/rss+xml, application/xml, text/xml, application/atom+xml",
+          },
+          signal: AbortSignal.timeout(30_000),
         });
 
-        for (const entry of unprocessedEntries) {
-          try {
-            const content = await generatePostFromEntry(
-              { title: entry.title, summary: entry.summary || "" },
-              feed.promptTemplate
-            );
+        if (!response.ok) {
+          throw new Error(`Failed to fetch RSS feed: HTTP ${response.status}`);
+        }
 
-            await prisma.post.create({
+        const xml = (await response.text()) as string;
+
+        // 3. Parse items from the XML
+        const items = parseRssItems(xml);
+        console.log(`[RssSync] Found ${items.length} items in feed ${feed.name}`);
+
+        // 4. Get existing guids to avoid duplicates
+        const existingGuids = new Set(
+          (
+            await prisma.rssFeedEntry.findMany({
+              where: { feedId },
+              select: { guid: true },
+            })
+          ).map((e) => e.guid)
+        );
+
+        // 5. Create new entries
+        let newEntryCount = 0;
+
+        for (const item of items) {
+          if (existingGuids.has(item.guid)) continue;
+
+          try {
+            await prisma.rssFeedEntry.create({
               data: {
-                organizationId,
-                createdById: "system",
-                content,
-                status: "DRAFT",
-                aiGenerated: true,
-                aiProvider: "openai",
-                aiPrompt: `RSS auto-post from: ${entry.title}`,
-                targets: {
-                  create: feed.targetChannels.map((channelId) => ({
-                    channelId,
-                    status: "DRAFT" as const,
-                  })),
-                },
+                feedId, guid: item.guid, title: item.title, link: item.link,
+                summary: item.summary || null, published: item.published,
               },
             });
-
-            await prisma.rssFeedEntry.update({
-              where: { id: entry.id },
-              data: { processed: true },
-            });
-
-            console.log(`[RssSync] Created auto-post for entry: ${entry.title}`);
-          } catch (error) {
-            console.error(
-              `[RssSync] Failed to create post for entry ${entry.id}:`,
-              error
-            );
+            newEntryCount++;
+          } catch (e: any) {
+            if (e?.code !== "P2002") throw e; // ignore the unique-guid race, rethrow real errors
           }
         }
+
+        console.log(`[RssSync] Created ${newEntryCount} new entries for feed ${feed.name}`);
+
+        // 6. If autoPost is enabled, generate posts for new unprocessed entries
+        if (feed.autoPost && feed.targetChannels.length > 0) {
+          const unprocessedEntries = await prisma.rssFeedEntry.findMany({
+            where: { feedId, processed: false },
+            orderBy: { createdAt: "asc" },
+            take: 10, // Process at most 10 at a time
+          });
+
+          for (const entry of unprocessedEntries) {
+            try {
+              const content = await generatePostFromEntry(
+                { title: entry.title, summary: entry.summary || "" },
+                feed.promptTemplate
+              );
+
+              await prisma.post.create({
+                data: {
+                  organizationId,
+                  createdById: "system",
+                  content,
+                  status: "DRAFT",
+                  aiGenerated: true,
+                  aiProvider: "openai",
+                  aiPrompt: `RSS auto-post from: ${entry.title}`,
+                  targets: {
+                    create: feed.targetChannels.map((channelId) => ({
+                      channelId,
+                      status: "DRAFT" as const,
+                    })),
+                  },
+                },
+              });
+
+              await prisma.rssFeedEntry.update({
+                where: { id: entry.id },
+                data: { processed: true },
+              });
+
+              console.log(`[RssSync] Created auto-post for entry: ${entry.title}`);
+            } catch (error) {
+              console.error(
+                `[RssSync] Failed to create post for entry ${entry.id}:`,
+                error
+              );
+            }
+          }
+        }
+
+        // 7. Update lastCheckedAt with SUCCESS status
+        await prisma.rssFeed.update({
+          where: { id: feedId },
+          data: { lastCheckedAt: new Date(), lastSyncStatus: "SUCCESS", lastSyncError: null },
+        });
+
+        console.log(`[RssSync] Completed sync for feed ${feed.name}`);
+      } catch (err) {
+        await prisma.rssFeed.update({
+          where: { id: feedId },
+          data: {
+            lastCheckedAt: new Date(),
+            lastSyncStatus: "FAILED",
+            lastSyncError: String((err as Error)?.message ?? err).slice(0, 1000),
+          },
+        }).catch(() => {});
+        throw err; // keep BullMQ retry/fail semantics
       }
-
-      // 7. Update lastCheckedAt
-      await prisma.rssFeed.update({
-        where: { id: feedId },
-        data: { lastCheckedAt: new Date() },
-      });
-
-      console.log(`[RssSync] Completed sync for feed ${feed.name}`);
     },
     {
       connection: createRedisConnection(),

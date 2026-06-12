@@ -51,6 +51,8 @@ export default function RssPage() {
 
   // Fix #44: removed localStorage orgId gate — backend scopes by session
   const { data: feeds, isLoading, refetch } = trpc.rss.list.useQuery();
+  const { data: channels } = trpc.channel.list.useQuery();
+  const [selectedChannelIds, setSelectedChannelIds] = useState<string[]>([]);
 
   const createFeed = trpc.rss.create.useMutation({
     onSuccess: () => {
@@ -92,16 +94,21 @@ export default function RssPage() {
     setCheckInterval(60);
     setAutoPost(false);
     setPromptTemplate("");
+    setSelectedChannelIds([]);
   };
 
   const handleCreate = () => {
     if (!name || !url) return;
+    if (autoPost && selectedChannelIds.length === 0) {
+      toast({ title: "Select at least one target channel for auto-post.", variant: "destructive" });
+      return;
+    }
     createFeed.mutate({
       name,
       url,
       checkInterval,
       autoPost,
-      targetChannels: [],
+      targetChannels: selectedChannelIds,
       promptTemplate: promptTemplate || undefined,
     });
   };
@@ -173,24 +180,55 @@ export default function RssPage() {
                 />
               </div>
               {autoPost && (
-                <div className="space-y-1.5">
-                  {/* Fix #41: clearer usage guidance */}
-                  <Label htmlFor="prompt-template">AI Prompt Template (optional)</Label>
-                  <Textarea
-                    id="prompt-template"
-                    value={promptTemplate}
-                    onChange={(e) => setPromptTemplate(e.target.value)}
-                    // Fix #40: use {title} syntax (not {{title}}) as shown in help text
-                    placeholder="e.g. New on our blog: {title} — {summary}"
-                    className="min-h-[80px] resize-none"
-                  />
-                  {/* Fix #40/#41: document the template syntax clearly */}
-                  <p className="text-xs text-muted-foreground">
-                    Available variables: <code className="font-mono">{"{title}"}</code>,{" "}
-                    <code className="font-mono">{"{summary}"}</code>,{" "}
-                    <code className="font-mono">{"{link}"}</code>. They are replaced when each feed item is converted into a post.
-                  </p>
-                </div>
+                <>
+                  <div className="space-y-1.5">
+                    {/* Fix #41: clearer usage guidance */}
+                    <Label htmlFor="prompt-template">AI Prompt Template (optional)</Label>
+                    <Textarea
+                      id="prompt-template"
+                      value={promptTemplate}
+                      onChange={(e) => setPromptTemplate(e.target.value)}
+                      // Fix #40: use {title} syntax (not {{title}}) as shown in help text
+                      placeholder="e.g. New on our blog: {title} — {summary}"
+                      className="min-h-[80px] resize-none"
+                    />
+                    {/* Fix #40/#41: document the template syntax clearly */}
+                    <p className="text-xs text-muted-foreground">
+                      Available variables: <code className="font-mono">{"{title}"}</code>,{" "}
+                      <code className="font-mono">{"{summary}"}</code>,{" "}
+                      <code className="font-mono">{"{link}"}</code>. They are replaced when each feed item is converted into a post.
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Target channels (required for auto-post)</Label>
+                    {!channels || channels.length === 0 ? (
+                      <p className="text-xs text-muted-foreground rounded border p-2">
+                        No channels connected. Connect a channel first.
+                      </p>
+                    ) : (
+                      <div className="max-h-40 overflow-y-auto rounded border p-2 space-y-1">
+                        {channels.map((ch: any) => (
+                          <label key={ch.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={selectedChannelIds.includes(ch.id)}
+                              onChange={(e) =>
+                                setSelectedChannelIds((prev) =>
+                                  e.target.checked ? [...prev, ch.id] : prev.filter((id) => id !== ch.id)
+                                )
+                              }
+                            />
+                            {ch.name}{" "}
+                            <span className="text-muted-foreground">@{ch.username ?? ch.platform}</span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                    {selectedChannelIds.length === 0 && (
+                      <p className="text-xs text-amber-600">Select at least one channel, or auto-post will not run.</p>
+                    )}
+                  </div>
+                </>
               )}
             </div>
             <DialogFooter>
@@ -298,6 +336,11 @@ function FeedCard({
                   ? `Checked ${new Date(feed.lastCheckedAt).toLocaleDateString()}`
                   : "Never checked"}
               </p>
+              {feed.lastSyncStatus === "FAILED" && (
+                <p className="text-[10px] text-red-600" title={feed.lastSyncError ?? ""}>
+                  ⚠ Last sync failed{feed.lastSyncError ? `: ${feed.lastSyncError.slice(0, 80)}` : ""}
+                </p>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-1">

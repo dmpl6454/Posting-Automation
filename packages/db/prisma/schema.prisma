@@ -586,6 +586,8 @@ model RssFeed {
   isActive       Boolean   @default(true)
   checkInterval  Int       @default(60) // minutes between checks
   lastCheckedAt  DateTime?
+  lastSyncStatus String?   // "SUCCESS" | "FAILED"
+  lastSyncError  String?   @db.Text
 
   autoPost       Boolean  @default(false)
   targetChannels String[] // Channel IDs to auto-post to
