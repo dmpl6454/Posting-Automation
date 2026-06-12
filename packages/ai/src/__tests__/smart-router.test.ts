@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("../providers/gemini.provider", () => ({
   callGemini: vi.fn(),
@@ -13,6 +13,18 @@ const mockedCallGemini = vi.mocked(callGemini);
 describe("Smart Router", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // The router now gates every selection on configured API keys (safeProvider).
+    // Stub ALL provider keys so the routing assertions below test the routing
+    // logic itself; the gating behavior has its own describe block at the bottom.
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    vi.stubEnv("ANTHROPIC_API_KEY", "test-key");
+    vi.stubEnv("GOOGLE_GEMINI_API_KEY", "test-key");
+    vi.stubEnv("XAI_API_KEY", "test-key");
+    vi.stubEnv("DEEPSEEK_API_KEY", "test-key");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   describe("keyword routing", () => {
@@ -140,6 +152,38 @@ describe("Smart Router", () => {
       mockedCallGemini.mockResolvedValueOnce("structured");
       const result = await routeProvider("do something", {});
       expect(result).toBe("openai"); // LLM returns "structured"
+    });
+  });
+
+  describe("configured-key gating (safeProvider)", () => {
+    it("redirects a keyword match to a configured provider when the matched key is unset", async () => {
+      // Grok would win on keywords, but XAI_API_KEY is unset → fall to openai.
+      vi.stubEnv("XAI_API_KEY", "");
+      const result = await routeProvider("What's the latest trending news today?", {});
+      expect(result).toBe("openai");
+    });
+
+    it("falls through to the first configured provider when several keys are unset", async () => {
+      // Only Anthropic is configured → everything lands there.
+      vi.stubEnv("XAI_API_KEY", "");
+      vi.stubEnv("DEEPSEEK_API_KEY", "");
+      vi.stubEnv("OPENAI_API_KEY", "");
+      vi.stubEnv("GOOGLE_GEMINI_API_KEY", "");
+      vi.stubEnv("GOOGLE_AI_API_KEY", "");
+      const result = await routeProvider("What's the latest trending news today?", {});
+      expect(result).toBe("anthropic");
+    });
+
+    it("redirects the attachments→gemini rule when the Google key is unset", async () => {
+      vi.stubEnv("GOOGLE_GEMINI_API_KEY", "");
+      vi.stubEnv("GOOGLE_AI_API_KEY", "");
+      const result = await routeProvider("Check this out", { hasAttachments: true });
+      expect(result).toBe("openai");
+    });
+
+    it("keeps the matched provider when its key IS configured", async () => {
+      const result = await routeProvider("What's the latest trending news today?", {});
+      expect(result).toBe("grok");
     });
   });
 });
