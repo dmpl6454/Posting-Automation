@@ -1307,8 +1307,18 @@ export function RepurposeTab() {
                   Generated {results.format === "ai_video" ? "AI Video (Veo3)" : results.format === "seedance_video" ? "AI Video (Seedance 2.0)" : results.format === "reel" ? "Reel Video" : results.mediaUrls.length > 1 ? `Carousel (${results.mediaUrls.length} slides)` : "Static Post"}
                 </CardTitle>
                 <CardDescription>
-                  {results.format === "ai_video" ? "Cinematic AI video with text slides, visuals & music by Veo3" : results.format === "seedance_video" ? "Cinematic 2K video with native audio by Seedance 2.0" : results.format === "reel" ? "AI-generated video with slides" : results.format === "static" ? ((results as any).bgSource === "ai" ? `AI background by ${(results as any).imageEngine === "openai" ? "OpenAI" : "Gemini"} · branded overlay` : (results as any).bgSource === "stock" ? "Article photo background (AI image unavailable) · branded overlay" : "AI-generated background with branded overlay") : "Swipe through carousel slides"}
+                  {results.format === "ai_video" ? "Cinematic AI video with text slides, visuals & music by Veo3" : results.format === "seedance_video" ? "Cinematic 2K video with native audio by Seedance 2.0" : results.format === "reel" ? "AI-generated video with slides" : results.format === "static" ? ((results as any).bgSource === "stock" ? "Image made from the article's own photo (AI image was unavailable)" : "AI-generated image with your branding") : "Swipe through carousel slides"}
                 </CardDescription>
+                {/* Plain-English "which AI made this image" line — shown SEPARATELY
+                    in the UI (a small chip above the post), never baked into the
+                    picture. Visible to non-technical users so they always know
+                    the source of the generated image. */}
+                {results.format === "static" && (results as any).bgSource === "ai" && (
+                  <div className="mt-1.5 inline-flex w-fit items-center gap-1.5 rounded-full bg-muted px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
+                    <Sparkles className="h-3 w-3 text-purple-500" />
+                    Image created by {(results as any).imageEngine === "openai" ? "OpenAI (GPT Image)" : "Google Gemini (Nano Banana)"}
+                  </div>
+                )}
               </CardHeader>
               <CardContent>
                 {(results.mediaType === "video/mp4" || results.format === "ai_video" || results.format === "seedance_video") && results.mediaUrls[0] ? (
