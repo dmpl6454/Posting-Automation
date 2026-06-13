@@ -211,18 +211,28 @@ export const postRouter = createRouter({
         // Replace the post's target channels (drafts/scheduled only). Enables
         // adding channels to a channel-less draft saved from Content Studio.
         channelIds: z.array(z.string()).optional(),
+        // Mirrors create: whether AI image generation is on for this post. Default
+        // true keeps the worker's auto-gen behaviour; an explicit false blocks a
+        // media-less IG/FB SCHEDULE (the post-update path of the media-required
+        // guard — closes the create-only gap so it can't be reached via edit).
+        aiImages: z.boolean().default(true),
       })
     )
     .mutation(async ({ ctx, input }) => {
       const existing = await ctx.prisma.post.findFirst({
         where: { id: input.id, organizationId: ctx.organizationId },
+        include: {
+          targets: { select: { channelId: true } },
+          _count: { select: { mediaAttachments: true } },
+        },
       });
       if (!existing) throw new TRPCError({ code: "NOT_FOUND" });
       if (existing.status === "PUBLISHED" || existing.status === "PUBLISHING") {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot edit published posts" });
       }
 
-      const { id, tags, channelIds, ...data } = input;
+      // `aiImages` is a guard input, not a Post column — keep it out of `data`.
+      const { id, tags, channelIds, aiImages, ...data } = input;
 
       // Channel replacement: only for DRAFT/SCHEDULED posts (a FAILED post may
       // hold already-PUBLISHED targets that must not be deleted). Every id is
@@ -238,6 +248,22 @@ export const postRouter = createRouter({
         if (ownedChannels.length !== new Set(channelIds).size) {
           throw new TRPCError({ code: "FORBIDDEN", message: "Some selected channels are no longer available. Please re-select your channels and try again." });
         }
+      }
+
+      // Full-coverage media-required guard (closes the create-only gap): if this
+      // update leaves the post SCHEDULED (effective scheduledAt set), block a
+      // media-less IG/FB target when AI is off — it can never publish. Uses the
+      // EFFECTIVE channels (input replacement OR the post's existing targets) and
+      // the post's existing media count (update can't change media). Dormant by
+      // default (aiImages defaults true). Runs AFTER the channel IDOR check.
+      const effectiveScheduledAt =
+        input.scheduledAt !== undefined ? input.scheduledAt : existing.scheduledAt;
+      if (effectiveScheduledAt) {
+        const effectiveChannelIds = channelIds ?? existing.targets.map((t) => t.channelId);
+        await assertMediaForPlatforms(ctx.prisma as any, ctx.organizationId, effectiveChannelIds, {
+          hasMedia: existing._count.mediaAttachments > 0,
+          aiEnabled: aiImages,
+        });
       }
 
       const updatedPost = await ctx.prisma.post.update({
