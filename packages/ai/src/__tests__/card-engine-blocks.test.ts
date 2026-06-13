@@ -188,6 +188,13 @@ describe("renderTweetHeader", () => {
     const html = renderTweetHeader({ displayName: "Brand", handle: "brand" }, C);
     expect(html).not.toContain("verified-tick");
   });
+  it("positions itself above the background so it is not occluded", () => {
+    // Regression: a static (non-positioned) header is painted UNDER the absolute
+    // background block and vanishes. The wrapper must be positioned + z-indexed.
+    const html = renderTweetHeader({ displayName: "B", handle: "b" }, C);
+    expect(html).toMatch(/class="tweet-head"[^>]*position:absolute/);
+    expect(html).toMatch(/class="tweet-head"[^>]*z-index:/);
+  });
   it("escapes the display name and handle", () => {
     const html = renderTweetHeader({ displayName: `<b>X</b>`, handle: `y"z` }, C);
     expect(html).toContain("&lt;b&gt;X");

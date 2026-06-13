@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { renderCard, CANVAS, DEFAULT_CONTROLS, type CardSpec } from "../tools/card-engine";
+import { buildCardHtmlForPuppeteer } from "../tools/news-image-generator";
 
 const spec = (blocks: CardSpec["blocks"], controls = DEFAULT_CONTROLS): CardSpec => ({
   canvas: CANVAS, blocks, controls,
@@ -60,5 +61,14 @@ describe("renderCard", () => {
     expect(html).toContain("verified-tick");
     expect(html).toContain("L");
     expect(html).toContain("C");
+  });
+});
+
+describe("buildCardHtmlForPuppeteer", () => {
+  it("returns a renderCard HTML doc for a CardSpec (pure, no browser)", () => {
+    const html = buildCardHtmlForPuppeteer(spec([{ kind: "footer", props: { text: "Follow @x" } }]));
+    expect(html).toContain("<!DOCTYPE html>");
+    expect(html).toContain("Follow @x");
+    expect(html).toContain("width:1080px");
   });
 });

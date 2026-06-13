@@ -389,7 +389,7 @@ export function renderTweetHeader(props: TweetHeaderBlockProps, controls: StyleC
   const tick = props.verified
     ? `<svg class="verified-tick" width="26" height="26" viewBox="0 0 24 24" fill="${tickColor}"><path d="M22.5 12.5c0-1.58-.88-2.95-2.15-3.6.15-.44.24-.91.24-1.4 0-2.21-1.71-4-3.82-4-.47 0-.92.08-1.34.25C14.82 2.42 13.51 1.5 12 1.5s-2.82.92-3.44 2.25c-.41-.17-.86-.25-1.34-.25-2.11 0-3.82 1.79-3.82 4 0 .49.08.96.24 1.4-1.27.65-2.15 2.02-2.15 3.6 0 1.5.78 2.8 1.94 3.49-.02.16-.03.32-.03.49 0 2.21 1.71 4 3.82 4 .47 0 .92-.09 1.34-.25.62 1.33 1.93 2.25 3.44 2.25s2.82-.92 3.44-2.25c.41.16.86.25 1.34.25 2.11 0 3.82-1.79 3.82-4 0-.16-.01-.33-.03-.49 1.16-.69 1.94-1.99 1.94-3.49z"/></svg>`
     : "";
-  return `<div class="tweet-head" style="display:flex;align-items:center;gap:18px;margin-bottom:28px;">
+  return `<div class="tweet-head" style="position:absolute;top:48px;left:56px;right:56px;z-index:3;display:flex;align-items:center;gap:18px;">
   ${avatarHtml}
   <div>
     <div style="display:flex;align-items:center;gap:8px;"><span style="font-size:34px;font-weight:800;color:${tokens.textColor};">${escapeHtml(props.displayName)}</span>${tick}</div>
