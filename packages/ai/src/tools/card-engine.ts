@@ -225,3 +225,45 @@ export function fontStack(f: FontFamily): string {
     default: return "'Inter',system-ui,sans-serif";
   }
 }
+
+// ── Highlight markup (Component 2) ──────────────────────────────────────────
+export type HighlightMode = "text" | "box";
+
+/**
+ * Render per-span highlight markup to escaped HTML <span>s.
+ *
+ *   [[text]]            → accent color, text mode
+ *   [[text|#hex]]       → explicit color, text mode
+ *   [[text|#hex|box]]   → explicit color, solid-box mode (IG-selection look)
+ *   **text**            → accent color, text mode (legacy)
+ *
+ * Escape-then-markup: the WHOLE string is HTML-escaped first, then the (now
+ * escape-safe) markers are replaced. Every color flows through safeColor, so a
+ * crafted span color can never break out of the style attribute. A span with no
+ * explicit color uses the passed accent. Unbalanced markup is left as escaped
+ * literal text.
+ */
+export function renderHighlightMarkup(text: string, accentColor: string): string {
+  const accent = safeColor(accentColor);
+  let out = escapeHtml(text ?? "");
+
+  // [[ text | #hex | box ]]  — color + mode optional. `[^\[\]|]` so spans never
+  // swallow another marker; the body is already escaped (no raw < > " ').
+  out = out.replace(
+    /\[\[([^\[\]|]+?)(?:\|(#[0-9a-fA-F]{3,8}|[^\[\]|]*))?(?:\|(box|text))?\]\]/g,
+    (_m, body: string, rawColor: string | undefined, mode: string | undefined) => {
+      const color = rawColor ? safeColor(rawColor) : accent;
+      if (mode === "box") {
+        return `<span style="background:${color};color:#fff;padding:2px 10px;border-radius:6px;">${body}</span>`;
+      }
+      return `<span style="color:${color}">${body}</span>`;
+    },
+  );
+
+  // Legacy **text** / ==text== → default-accent text span.
+  out = out
+    .replace(/\*\*([^*]+)\*\*/g, `<span style="color:${accent}">$1</span>`)
+    .replace(/==([^=]+)==/g, `<span style="color:${accent}">$1</span>`);
+
+  return out;
+}
