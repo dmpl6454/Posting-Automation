@@ -110,6 +110,36 @@ export function resolveSlotAssignments(
   return out;
 }
 
+const PRESET_TITLES: Record<string, string> = {
+  news_caption: "News Caption",
+  news_inset: "News Inset",
+  infographic_stats: "Infographic Stats",
+  marketing_minimal: "Marketing Minimal",
+  tweet_card: "Tweet Card",
+  photo_grid: "Photo Grid",
+  title_cover: "Title Cover",
+  listicle_body: "Listicle Body",
+};
+
+/** Auto-name a saved style from its detected preset + date. Pure + exported. */
+export function buildSavedStyleName(preset: string | undefined, now: Date): string {
+  const title = (preset && PRESET_TITLES[preset]) || "Saved style";
+  return `${title} — ${now.toISOString().slice(0, 10)}`;
+}
+
+/**
+ * Persist a reference as a CreativeTemplate ONLY when we both stored the source
+ * image (have a media id) AND classified it with reasonable confidence (≥0.5). A
+ * low-confidence / failed classification is NOT auto-saved (avoids junk in the
+ * gallery). Pure + exported for unit testing.
+ */
+export function shouldPersistReference(
+  referenceMediaId: string | undefined,
+  hint: { confidence: number } | null,
+): boolean {
+  return Boolean(referenceMediaId) && Boolean(hint) && hint!.confidence >= 0.5;
+}
+
 /**
  * Camera/composition angles cycled across carousel slides so each AI background
  * looks visually DISTINCT instead of "same person, same scene" on every slide.
@@ -1015,6 +1045,71 @@ export const repurposeRouter = createRouter({
               ? "Style extracted — applied to the AI background"
               : "Reference image found — style description unavailable, using it as-is",
           );
+
+          // Component 3: structured layout detection (in addition to the prose
+          // descriptor above). Used by the UI to auto-select a preset; failure
+          // never blocks generation (classifyCard returns null).
+          let cardHint: Awaited<ReturnType<typeof classifyCard>> = null;
+          try {
+            cardHint = await classifyCard(aRef.base64, aRef.mimeType);
+          } catch {
+            cardHint = null;
+          }
+          // Component 9 / D8: persist the reference image + resolved hint as a
+          // reusable CreativeTemplate (auto-named) so the "Saved styles" gallery
+          // can re-pick it with NO AI call. Store the source image as an org Media
+          // row first, then the template. Best-effort — a failure here must NOT
+          // break generation (the whole flow continues without a saved style).
+          try {
+            if (cardHint) {
+              const { mediaId: refMediaId } = await uploadAndCreateMedia(
+                aRef.base64,
+                aRef.mimeType,
+                "styleref",
+              );
+              if (shouldPersistReference(refMediaId, cardHint)) {
+                await ctx.prisma.creativeTemplate.create({
+                  data: {
+                    organizationId,
+                    createdById: userId,
+                    name: buildSavedStyleName(cardHint.preset, new Date()),
+                    style: input.creativeStyle,
+                    logoPosition: input.logoPosition,
+                    brandColor: cardHint.accentColor,
+                    referenceMediaId: refMediaId,
+                    sourceUrl: isPublicPageUrl(input.aestheticRefUrl)
+                      ? input.aestheticRefUrl
+                      : undefined,
+                    // Shape MUST be exactly what sanitizeCardSpecJson preserves on
+                    // read ({ canvas, blocks, controls }); extra top-level keys
+                    // (e.g. detectedPreset) would be silently stripped, so we don't
+                    // store dead data. The "Saved styles" gallery re-applies
+                    // controls.{theme,brandColor,bgOpacity,textAlign,fontFamily}.
+                    cardSpec: {
+                      canvas: { w: 1080, h: 1350 },
+                      blocks: [],
+                      controls: {
+                        theme: cardHint.theme,
+                        brandColor: cardHint.accentColor,
+                        highlightColor: cardHint.accentColor,
+                        bgOpacity: 60,
+                        fontFamily: "inter",
+                        textAlign: "left",
+                        logoPosition: input.logoPosition === "top-left" ? "tl" : "tr",
+                      },
+                    },
+                  },
+                });
+                progress(
+                  "Analyzing style reference",
+                  "done",
+                  `Detected: ${cardHint.preset} — saved to your styles`,
+                );
+              }
+            }
+          } catch (e) {
+            console.warn(`[Repurpose] saved-style persistence failed (non-fatal):`, (e as Error).message);
+          }
         } else {
           console.warn(`[Repurpose] Aesthetic reference unavailable (no image / unfetchable url) — continuing without`);
           progress(
