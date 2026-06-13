@@ -65,3 +65,48 @@ describe("renderBackground", () => {
     expect(html).toContain("linear-gradient(");
   });
 });
+
+import { renderLogo, type LogoBlockProps } from "../tools/card-engine";
+
+describe("renderLogo", () => {
+  it("renders an image logo with sanitized src", () => {
+    const html = renderLogo({ logos: [{ kind: "image", src: "https://cdn.x/logo.png", anchor: "tr", size: 8, opacity: 100 }] }, C);
+    expect(html).toContain("https://cdn.x/logo.png");
+  });
+  it("renders a wordmark with escaped text", () => {
+    const html = renderLogo({ logos: [{ kind: "wordmark", text: "BOLLYWOOD <CHRONICLE>", anchor: "bl", size: 10, opacity: 100 }] }, C);
+    expect(html).toContain("BOLLYWOOD &lt;CHRONICLE&gt;");
+  });
+  it("renders a monogram", () => {
+    const html = renderLogo({ logos: [{ kind: "monogram", text: "DS", anchor: "tl", size: 6, opacity: 100 }] }, C);
+    expect(html).toContain(">DS<");
+  });
+  it("renders multiple independently-anchored logos", () => {
+    const html = renderLogo({ logos: [
+      { kind: "wordmark", text: "MAM", anchor: "tl", size: 8, opacity: 100 },
+      { kind: "image", src: "https://cdn.x/kfc.png", anchor: "br", size: 12, opacity: 100 },
+    ] }, C);
+    expect(html).toContain("MAM");
+    expect(html).toContain("https://cdn.x/kfc.png");
+  });
+  it("renders a faint watermark at reduced opacity", () => {
+    const html = renderLogo({ logos: [{ kind: "wordmark", text: "WM", anchor: "mc", size: 30, opacity: 12, watermark: true }] }, C);
+    expect(html).toContain("opacity:0.12");
+  });
+  it("clamps an out-of-range size and rejects a malicious box bg", () => {
+    const html = renderLogo({ logos: [{ kind: "wordmark", text: "X", anchor: "tr", size: 999, opacity: 100, box: { bg: "red;}</style>", opacity: 100, radius: 8, pad: 6 } }] }, C);
+    expect(html).not.toContain("red;}</style>");
+    expect(html).not.toMatch(/width:999%/);
+  });
+  it("emits nothing for an empty logo array", () => {
+    expect(renderLogo({ logos: [] }, C)).toBe("");
+  });
+  it("drops a logo with a malicious src (no image emitted) but keeps valid siblings", () => {
+    const html = renderLogo({ logos: [
+      { kind: "image", src: `https://x/a.png"><script>alert(1)</script>`, anchor: "tr", size: 8, opacity: 100 },
+      { kind: "wordmark", text: "OK", anchor: "tl", size: 8, opacity: 100 },
+    ] }, C);
+    expect(html).not.toContain("<script>alert(1)</script>");
+    expect(html).toContain("OK");
+  });
+});

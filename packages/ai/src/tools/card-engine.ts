@@ -342,3 +342,38 @@ export function renderBackground(props: BackgroundBlockProps, controls: StyleCon
       return grad;
   }
 }
+
+// ── logo block ──────────────────────────────────────────────────────────────
+const ANCHOR_CSS: Record<LogoBlock["anchor"], string> = {
+  tl: "top:44px;left:44px;",   tc: "top:44px;left:50%;transform:translateX(-50%);",  tr: "top:44px;right:44px;",
+  ml: "top:50%;left:44px;transform:translateY(-50%);", mc: "top:50%;left:50%;transform:translate(-50%,-50%);", mr: "top:50%;right:44px;transform:translateY(-50%);",
+  bl: "bottom:44px;left:44px;", bc: "bottom:44px;left:50%;transform:translateX(-50%);", br: "bottom:44px;right:44px;",
+};
+
+function clampSize(pct: number): number { return Math.max(1, Math.min(100, pct)); }
+
+function renderOneLogo(l: LogoBlock, controls: StyleControls): string {
+  const widthPx = Math.round((clampSize(l.size) / 100) * CANVAS.w);
+  const opacity = clampOpacity(l.opacity, 100) / 100;
+  const anchor = ANCHOR_CSS[l.anchor] ?? ANCHOR_CSS.tr;
+  const z = l.watermark ? "z-index:0;" : "z-index:5;";
+  const boxStyle = l.box
+    ? `background:${safeColor(l.box.bg)};opacity:${clampOpacity(l.box.opacity, 100) / 100};border-radius:${Math.max(0, l.box.radius)}px;padding:${Math.max(0, l.box.pad)}px;`
+    : "";
+  let inner = "";
+  if (l.kind === "image") {
+    const src = safeImageUrl(l.src);
+    if (!src) return ""; // drop a logo we can't safely render
+    inner = `<img src="${src}" style="width:${widthPx}px;height:auto;object-fit:contain;display:block;"/>`;
+  } else if (l.kind === "wordmark") {
+    inner = `<span style="font-weight:900;font-size:${Math.round(widthPx * 0.32)}px;color:${safeColor(controls.brandColor)};letter-spacing:0.02em;">${escapeHtml(l.text ?? "")}</span>`;
+  } else { // monogram
+    inner = `<span style="font-weight:900;font-size:${Math.round(widthPx * 0.6)}px;color:${safeColor(controls.brandColor)};border:3px solid ${safeColor(controls.brandColor)};border-radius:12px;padding:6px 12px;">${escapeHtml(l.text ?? "")}</span>`;
+  }
+  return `<div style="position:absolute;${anchor}${z}opacity:${opacity};${boxStyle}display:flex;align-items:center;">${inner}</div>`;
+}
+
+export function renderLogo(props: LogoBlockProps, controls: StyleControls): string {
+  if (!props.logos?.length) return "";
+  return props.logos.map((l) => renderOneLogo(l, controls)).join("");
+}
