@@ -83,3 +83,5 @@ export { classifySensitivity, type Sensitivity } from "./tools/sensitivity-class
 export { detectGroundingNeed, searchForGrounding, buildGroundingContext, type GroundingResult } from "./utils/web-grounding";
 export { resolveImageSlot } from "./tools/image-slot-resolver";
 export type { ImageSource, ResolveImageSlotCtx } from "./tools/image-slot-resolver";
+export { classifyCard, parseCardHint } from "./tools/classify-card";
+export type { CardHint } from "./tools/classify-card";
