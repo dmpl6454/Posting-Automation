@@ -46,3 +46,4 @@ docker/data/
 # Debug
 npm-debug.log*
 pnpm-debug.log*
+.worktrees/

@@ -111,3 +111,34 @@ export function shouldReapPublishing(
     now.getTime() - target.updatedAt.getTime() > maxAgeMs
   );
 }
+
+const MEDIA_REQUIRED_LABEL: Record<string, string> = {
+  INSTAGRAM: "Instagram",
+  FACEBOOK: "Facebook",
+};
+
+/**
+ * Human-readable FAILED reason for a post that hit the media-required wall in the
+ * worker (no media attached and AI auto-generation didn't produce an image).
+ * Used by the worker's `media_required` error branch.
+ */
+export function mediaRequiredReason(platform: string): string {
+  const label = MEDIA_REQUIRED_LABEL[platform] ?? platform;
+  return `${label} requires an image or video; none was attached and AI generation is off or unavailable. Attach media (or enable AI image generation) and retry.`;
+}
+
+/**
+ * Pure decision: should the worker FORCE a stuck PUBLISHING target to FAILED?
+ *
+ * The atomic claim guard only transitions SCHEDULED/FAILED/DRAFT → PUBLISHING. A
+ * BullMQ retry on a target that is ALREADY PUBLISHING gets claimCount === 0 and
+ * the worker returns early — but on the FINAL attempt that early return would
+ * leave the target orphaned at PUBLISHING forever (the watchdog only reaps after
+ * 30 min). So on the final attempt with a no-op claim we must terminalize it now.
+ */
+export function terminalizeStuckClaim(opts: {
+  claimCount: number;
+  isFinalAttempt: boolean;
+}): boolean {
+  return opts.claimCount === 0 && opts.isFinalAttempt;
+}
