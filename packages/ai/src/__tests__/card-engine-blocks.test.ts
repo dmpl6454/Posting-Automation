@@ -272,3 +272,33 @@ describe("renderStatCards", () => {
     expect(renderStatCards({ cards: [] }, C)).toBe("");
   });
 });
+
+import { renderBodyText, type BodyTextBlockProps } from "../tools/card-engine";
+
+describe("renderBodyText", () => {
+  it("renders title + meta rows + description", () => {
+    const html = renderBodyText({
+      title: "Kalki 2898",
+      meta: [{ label: "Starring", value: "Prabhas" }, { label: "Genre", value: "Sci-fi" }],
+      description: "A dystopian epic set in the future.",
+    }, C);
+    expect(html).toContain("Kalki 2898");
+    expect(html).toContain("Starring");
+    expect(html).toContain("Prabhas");
+    expect(html).toContain("dystopian epic");
+  });
+  it("escapes all fields", () => {
+    const html = renderBodyText({ title: "<x>", description: `"d"`, meta: [{ label: "<l>", value: "<v>" }] }, C);
+    expect(html).toContain("&lt;x&gt;");
+    expect(html).toContain("&quot;d&quot;");
+    expect(html).toContain("&lt;l&gt;");
+  });
+  it("renders with description only (no title/meta)", () => {
+    const html = renderBodyText({ description: "Just a paragraph." }, C);
+    expect(html).toContain("Just a paragraph.");
+  });
+  it("uses a sanitized text color override", () => {
+    const html = renderBodyText({ description: "x", textColor: `#fff" onload=x` }, C);
+    expect(html).not.toContain("onload=x");
+  });
+});

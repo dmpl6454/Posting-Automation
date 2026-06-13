@@ -473,3 +473,18 @@ export function renderStatCards(props: StatCardsBlockProps, controls: StyleContr
     .join("");
   return `<div class="stat-cards" style="position:absolute;left:48px;right:48px;bottom:300px;display:flex;gap:18px;flex-wrap:wrap;z-index:3;">${cards}</div>`;
 }
+
+// ── bodyText block ──────────────────────────────────────────────────────────
+export function renderBodyText(props: BodyTextBlockProps, controls: StyleControls): string {
+  const tokens = themeTokens(controls);
+  const textColor = safeColor(props.textColor ?? tokens.textColor);
+  const align = safeAlign(controls.textAlign);
+  const title = props.title
+    ? `<div style="font-size:48px;font-weight:900;line-height:1.08;margin-bottom:18px;color:${textColor};">${escapeHtml(props.title)}</div>`
+    : "";
+  const meta = (props.meta ?? [])
+    .map((m) => `<div style="font-size:28px;color:${tokens.subTextColor};margin-bottom:6px;"><b style="color:${textColor};">${escapeHtml(m.label)}:</b> ${escapeHtml(m.value)}</div>`)
+    .join("");
+  const desc = `<div style="font-size:34px;line-height:1.32;color:${textColor};margin-top:14px;">${escapeHtml(props.description)}</div>`;
+  return `<div class="body-text" style="position:absolute;left:56px;right:56px;top:120px;text-align:${align};z-index:3;">${title}${meta}${desc}</div>`;
+}
