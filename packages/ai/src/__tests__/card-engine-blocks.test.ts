@@ -139,3 +139,37 @@ describe("renderCircularInset", () => {
     expect(renderCircularInset({ items: [] }, C)).toBe("");
   });
 });
+
+import { renderLabelChip, type LabelChipBlockProps } from "../tools/card-engine";
+
+describe("renderLabelChip", () => {
+  it("renders a positioned pill with bg + highlight markup", () => {
+    const html = renderLabelChip({ pills: [{ text: "[[History Created|#ffd700|box]]", bg: "#000000", textColor: "#ffffff", position: { top: 80, left: 60 }, shape: "pill" }] }, C);
+    expect(html).toContain("background:#000000");
+    expect(html).toContain("background:#ffd700"); // the box-mode span
+    expect(html).toContain("History Created");
+  });
+  it("renders multiple chips with mixed colors", () => {
+    const html = renderLabelChip({ pills: [
+      { text: "Rejected", bg: "#e11d48" },
+      { text: "Approved", bg: "#16a34a" },
+    ] }, C);
+    expect(html).toContain("#e11d48");
+    expect(html).toContain("#16a34a");
+  });
+  it("applies a per-pill bgOpacity overriding the global default", () => {
+    const html = renderLabelChip({ pills: [{ text: "x", bg: "#112233", bgOpacity: 40 }] }, { ...C, bgOpacity: 100 });
+    expect(html).toContain("opacity:0.4");
+  });
+  it("rejects a malicious pill bg (injection)", () => {
+    const html = renderLabelChip({ pills: [{ text: "x", bg: `#fff" onload=alert(1)` }] }, C);
+    expect(html).not.toContain("onload=alert(1)");
+  });
+  it("respects the bar shape", () => {
+    const html = renderLabelChip({ pills: [{ text: "Bar", shape: "bar" }] }, C);
+    expect(html).toContain("border-radius:8px");
+  });
+  it("emits nothing when no pills", () => {
+    expect(renderLabelChip({ pills: [] }, C)).toBe("");
+  });
+});

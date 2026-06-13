@@ -378,6 +378,28 @@ export function renderLogo(props: LogoBlockProps, controls: StyleControls): stri
   return props.logos.map((l) => renderOneLogo(l, controls)).join("");
 }
 
+// ── labelChip block ─────────────────────────────────────────────────────────
+function pillRadius(shape: "pill" | "bar"): number { return shape === "bar" ? 8 : 999; }
+
+export function renderLabelChip(props: LabelChipBlockProps, controls: StyleControls): string {
+  if (!props.pills?.length) return "";
+  return props.pills
+    .map((p) => {
+      const shape = safeShape(p.shape);
+      const bg = safeColor(p.bg ?? (controls.theme === "dark" ? "#111111" : "#ffffff"));
+      const opacity = clampOpacity(p.bgOpacity, controls.bgOpacity) / 100;
+      const textColor = safeColor(p.textColor ?? (controls.theme === "dark" ? "#ffffff" : "#0f1419"));
+      const radius = p.radius != null ? Math.max(0, p.radius) : pillRadius(shape);
+      const pad = p.padding != null ? Math.max(0, p.padding) : 14;
+      const pos = p.position
+        ? `position:absolute;top:${Math.max(0, p.position.top)}px;left:${Math.max(0, p.position.left)}px;`
+        : "";
+      const inner = renderHighlightMarkup(p.text, controls.highlightColor);
+      return `<div style="${pos}display:inline-flex;align-items:center;background:${bg};opacity:${opacity};color:${textColor};border-radius:${radius}px;padding:${pad}px ${pad + 8}px;font-weight:800;font-size:32px;z-index:6;">${inner}</div>`;
+    })
+    .join("");
+}
+
 // ── circularInset block ─────────────────────────────────────────────────────
 export function renderCircularInset(props: CircularInsetBlockProps, controls: StyleControls): string {
   const items = (props.items ?? [])
