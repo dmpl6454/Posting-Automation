@@ -84,6 +84,33 @@ export function pickArticleBgImage(
 }
 
 /**
+ * A user image assigned to a specific image slot (D10). `slot` is a stable key:
+ *   "background" | "inset:N" | "subject" | "grid:N" | "slide:N"
+ * `mediaId` is an org-owned Media id. Multiple assignments allowed; each is
+ * resolved independently by `resolveImageSlot`.
+ */
+export type SlotAssignment = { slot: string; mediaId: string };
+
+/**
+ * Build the `userImages` lookup (media id → { url }) consumed by `resolveImageSlot`,
+ * keeping ONLY assignments whose mediaId resolved to an org-owned Media row.
+ * `ownedRows` MUST already be org-scoped by the caller (assertMediaOwned). Pure +
+ * exported for unit testing.
+ */
+export function resolveSlotAssignments(
+  assignments: SlotAssignment[],
+  ownedRows: Array<{ id: string; url: string }>,
+): Record<string, { url: string }> {
+  const byId = new Map(ownedRows.map((r) => [r.id, r.url]));
+  const out: Record<string, { url: string }> = {};
+  for (const a of assignments) {
+    const url = byId.get(a.mediaId);
+    if (url) out[a.mediaId] = { url };
+  }
+  return out;
+}
+
+/**
  * Camera/composition angles cycled across carousel slides so each AI background
  * looks visually DISTINCT instead of "same person, same scene" on every slide.
  * Indexed modulo the list so any slide count is covered.
