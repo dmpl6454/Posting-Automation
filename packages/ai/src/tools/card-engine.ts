@@ -536,3 +536,42 @@ export function renderCtaCard(props: CtaCardBlockProps, controls: StyleControls)
   ${sub}${button}${phoneHtml}
 </div>`;
 }
+
+// ── renderCard composer ─────────────────────────────────────────────────────
+const FONT_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Playfair+Display:wght@700;900&family=Oswald:wght@500;700&display=swap');`;
+
+function renderBlock(block: Block, controls: StyleControls): string {
+  switch (block.kind) {
+    case "background": return renderBackground(block.props, controls);
+    case "logo": return renderLogo(block.props, controls);
+    case "circularInset": return renderCircularInset(block.props, controls);
+    case "labelChip": return renderLabelChip(block.props, controls);
+    case "tweetHeader": return renderTweetHeader(block.props, controls);
+    case "captionStack": return renderCaptionStack(block.props, controls);
+    case "statCards": return renderStatCards(block.props, controls);
+    case "bodyText": return renderBodyText(block.props, controls);
+    case "footer": return renderFooter(block.props, controls);
+    case "carouselChrome": return renderCarouselChrome(block.props, controls);
+    case "ctaCard": return renderCtaCard(block.props, controls);
+    default: return "";
+  }
+}
+
+/**
+ * Render a CardSpec to a complete HTML document. Pure — no I/O. Each block is a
+ * pure builder; a block with missing inputs returns "" and is simply skipped.
+ * Rasterized to PNG by news-image-generator.generateStyledCreativeImage.
+ */
+export function renderCard(spec: CardSpec): string {
+  const controls = spec.controls ?? DEFAULT_CONTROLS;
+  const tokens = themeTokens(controls);
+  const scale = Math.max(0.8, Math.min(1.5, controls.fontScale ?? 1));
+  const body = spec.blocks.map((b) => renderBlock(b, controls)).join("\n");
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+${FONT_IMPORT}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{width:${CANVAS.w}px;height:${CANVAS.h}px;overflow:hidden;position:relative;font-family:${fontStack(controls.fontFamily)};font-size:${Math.round(16 * scale)}px;background:${tokens.bgFallback};-webkit-font-smoothing:antialiased;}
+</style></head><body>
+${body}
+</body></html>`;
+}
