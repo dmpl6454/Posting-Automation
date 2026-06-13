@@ -151,7 +151,9 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 2: Block media-less IG/FB at compose-create (`post.router.ts`)
+> **⚠️ TASKS 2–4 DEFERRED TO PLAN 3 (decided 2026-06-13 during execution).** Adversarial review found the publish worker [post-publish.worker.ts:385-426](../../../apps/worker/src/workers/post-publish.worker.ts#L385-L426) **unconditionally** auto-generates an AI image for media-less IG/FB posts (no `aiEnabled` check). So a schedule-time block with hardcoded `aiEnabled:false` would reject posts that currently publish fine via auto-gen — a behavior regression, not a fix. The block belongs in Plan 3, where the real-first / AI-opt-in toggle (D2) makes "AI off" a real state that can be passed truthfully. **Task 1's `mediaRequiredBlock` predicate is kept** (Plan 3 reuses it). The actual stuck-post bug is fixed by the worker terminalization in Tasks 5–9 below. Skip Tasks 2, 3, 4.
+
+### Task 2: Block media-less IG/FB at compose-create (`post.router.ts`) — DEFERRED to Plan 3
 
 **Files:**
 - Modify: `packages/api/src/routers/post.router.ts` (the `create` mutation, lines 60–185 — insert the guard between the media-ownership check at line 127 and `const status =` at line 129)
