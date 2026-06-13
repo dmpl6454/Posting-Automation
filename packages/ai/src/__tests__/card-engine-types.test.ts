@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { CANVAS, DEFAULT_CONTROLS, type CardSpec, type Block } from "../tools/card-engine";
+import * as aiRoot from "../index";
 
 describe("card-engine type contract", () => {
   it("exposes a fixed 1080x1350 canvas constant", () => {
@@ -18,5 +19,13 @@ describe("card-engine type contract", () => {
     const block: Block = { kind: "footer", props: { text: "Follow @x for more" } };
     const spec: CardSpec = { canvas: CANVAS, blocks: [block], controls: DEFAULT_CONTROLS };
     expect(spec.blocks[0]!.kind).toBe("footer");
+  });
+});
+
+describe("card-engine root exports", () => {
+  it("re-exports renderCard, preset, legacyStyleToCardSpec from the package root", () => {
+    expect(typeof aiRoot.renderCard).toBe("function");
+    expect(typeof aiRoot.preset).toBe("function");
+    expect(typeof aiRoot.legacyStyleToCardSpec).toBe("function");
   });
 });

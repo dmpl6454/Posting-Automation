@@ -29,6 +29,31 @@ export { generateNewsCardImage, generateNewsAiImage, generateNewsImage, generate
 export type { NewsImageResult, LogoOverlayOptions } from "./tools/news-image-generator";
 export { buildStaticCreative } from "./tools/creative-templates";
 export type { CreativeStyle, StaticCreativeOptions } from "./tools/creative-templates";
+export {
+  renderCard,
+  preset,
+  legacyStyleToCardSpec,
+  renderHighlightMarkup as renderCardHighlightMarkup,
+  capHeadline as capCardHeadline,
+  capBody as capCardBody,
+  dedupeHook,
+  jaccardSimilarity,
+  CANVAS as CARD_CANVAS,
+  DEFAULT_CONTROLS as CARD_DEFAULT_CONTROLS,
+} from "./tools/card-engine";
+export type {
+  CardSpec,
+  Block,
+  BlockKind,
+  StyleControls,
+  CaptionPill,
+  LogoBlock,
+  ImageSlot,
+  PresetId,
+  FontFamily,
+  HighlightMode,
+  LegacyStyleInput,
+} from "./tools/card-engine";
 export { generateNewsCardHtml, generateStaticNewsCreativeHtml } from "./tools/news-card-template";
 export type { NewsCardOptions, StaticNewsCreativeOptions } from "./tools/news-card-template";
 export { extractUrlContent, resolveImageFromPageUrl } from "./utils/url-extractor";
