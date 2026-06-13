@@ -458,6 +458,18 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
       // Validate content before publishing
       const errors = provider.validateContent({ content: publishContent, mediaUrls, mediaTypes });
       if (errors.length > 0) {
+        // A media-required platform with no media is the common "stuck scheduled
+        // post" cause. Terminalize it now with a clear human reason instead of
+        // throwing a generic Validation-failed error into the retry loop (which
+        // would orphan it at PUBLISHING). UnrecoverableError stops BullMQ retries.
+        if (
+          mediaUrls.length === 0 &&
+          mediaRequiredPlatforms.includes(platform)
+        ) {
+          const reason = mediaRequiredReason(platform);
+          await markTargetFailed(prisma, postTargetId, reason);
+          throw new UnrecoverableError(reason);
+        }
         throw new Error(`Validation failed: ${errors.join(", ")}`);
       }
 
@@ -562,6 +574,15 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
             await markTargetFailed(prisma, postTargetId, tokenErrMsg);
             throw new Error(tokenErrMsg);
           }
+        } else if (errType === "media_required") {
+          // Media-required platform (IG/FB) with no usable media. Retrying re-runs
+          // the same media-less input and fails identically; the retry's claim
+          // guard would then skip it as a duplicate and orphan it at PUBLISHING.
+          // Mark FAILED here with a clear human reason so the user knows to attach
+          // media or enable AI image generation.
+          const reason = mediaRequiredReason(platform);
+          await markTargetFailed(prisma, postTargetId, reason);
+          throw new UnrecoverableError(reason);
         } else if (errType === "content_too_large") {
           // Aggressively truncate and retry
           const aggressiveContent = truncateForPlatform(publishContent, platform);
