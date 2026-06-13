@@ -456,6 +456,15 @@ export async function renderStaticCreative(args: {
    * and on AI failure we fall back to this passed-in photo.
    */
   bgImageUrl?: string;
+  /**
+   * D2 Real⇄AI switch. When `false`, the internal AI-background generation is
+   * SKIPPED entirely and the passed-in `bgImageUrl` (real photo / branded
+   * gradient) is used as-is — the renderer only bakes the headline/logo overlay.
+   * Defaults to `true` (the prior always-AI behaviour); the repurpose flow passes
+   * `false` because the per-slot ladder (`resolveImageSlot`) already owns the AI
+   * rung, so generating again here would double-render (and double-bill).
+   */
+  aiEnabled?: boolean;
   browser?: unknown;
 }): Promise<{ imageBase64: string; mimeType: string; bgSource: "ai" | "stock"; imageEngine?: "gemini" | "openai" }> {
   const { generateImageSafe, generateStyledCreativeImage } = args.ai;
@@ -471,7 +480,7 @@ export async function renderStaticCreative(args: {
   // premium_editorial. Only `cta` slides skip AI (they're a centered
   // "Follow for more" card on a branded gradient). On AI failure we fall back to
   // the passed-in real article photo (if any), never to a blank fill.
-  if (args.slideRole !== "cta" && styleNeedsAiBackground(args.creativeStyle)) {
+  if (args.aiEnabled !== false && args.slideRole !== "cta" && styleNeedsAiBackground(args.creativeStyle)) {
     const themeBgDescriptor =
       args.theme === "light"
         ? "bright, airy, well-lit, clean"
@@ -735,6 +744,20 @@ export const repurposeRouter = createRouter({
         // still generate). IDOR-sensitive — org-scoped before use in the static
         // branch. STATIC only for now (carousel/video attach is future).
         userMediaIds: z.array(z.string()).max(10).optional(),
+        // D2 (Real⇄AI toggle): when false, AI image generation is OFF and every
+        // image slot resolves real-first (user → article → branded gradient).
+        // Default true preserves the prior always-AI behaviour.
+        aiImages: z.boolean().default(true),
+        // D10: per-slot user image assignments (all formats). Each {slot, mediaId}
+        // assigns an org-owned Media id to a named slot ("background", "slide:0",
+        // "slide:2", …). Org-ownership is enforced ONCE up-front (IDOR). When
+        // present, this TAKES PRECEDENCE over the legacy static-only `userMediaIds`
+        // (the legacy multi-image branch is skipped). The new UI sends this instead
+        // of userMediaIds.
+        imageAssignments: z
+          .array(z.object({ slot: z.string().min(1).max(40), mediaId: z.string().min(1) }))
+          .max(20)
+          .optional(),
         theme: z.enum(["dark", "light", "gradient"]).default("light"),
         // D7a: user-selectable Seedance AI-video clip length (seconds). The
         // provider supports 2–12s; default 8 preserves the prior hardcoded value.
@@ -782,6 +805,10 @@ export const repurposeRouter = createRouter({
         resolveImageFromPageUrl,
         isPublicPageUrl,
         describeImageStyle,
+        // D10: per-slot real-first image ladder (user → AI → article → branded).
+        resolveImageSlot,
+        // Component 3: structured layout detection for the aesthetic reference.
+        classifyCard,
       } = await import("@postautomation/ai");
 
       const userId = (ctx.session.user as any).id as string;
@@ -998,6 +1025,67 @@ export const repurposeRouter = createRouter({
         }
       }
 
+      // ── D10 / D2: per-slot image assignments + Real⇄AI toggle ───────────────
+      // Engine accounting for the "Image created by X" chip. `renderedEngines`
+      // collects every AI engine used this run (static = 1, carousel = per-slide);
+      // `lastSlotImageEngine` is the most-recent single engine, used for the static
+      // single-image `imageEngine` response field. Hoisted here (was declared just
+      // before the format branches) because the slot AI helper below records into
+      // them.
+      const renderedEngines = new Set<"gemini" | "openai">();
+      let lastSlotImageEngine: "gemini" | "openai" | undefined;
+
+      // D10: validate every per-slot assigned media id is org-owned (IDOR) ONCE,
+      // then build the userImages lookup consumed by resolveImageSlot. The map is
+      // keyed by Media id; resolveImageSlot selects a slot's image via its
+      // `userImageId` (the id assigned to that slot). A count mismatch (any id not
+      // in this org) throws FORBIDDEN — closes a cross-org image-attach IDOR.
+      const slotAssignments: SlotAssignment[] = [...(input.imageAssignments ?? [])];
+      let userImages: Record<string, { url: string }> = {};
+      if (slotAssignments.length) {
+        const ids = [...new Set(slotAssignments.map((a) => a.mediaId))];
+        const owned = await ctx.prisma.media.findMany({
+          where: { id: { in: ids }, organizationId },
+          select: { id: true, url: true },
+        });
+        if (owned.length !== ids.length) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "One or more attached images were not found in this workspace",
+          });
+        }
+        userImages = resolveSlotAssignments(slotAssignments, owned);
+      }
+      /** The org-owned Media id assigned to a named slot, if any. */
+      const slotMediaId = (slot: string): string | undefined =>
+        slotAssignments.find((a) => a.slot === slot)?.mediaId;
+      // Branded gradient — the always-renders bottom rung of the per-slot ladder.
+      const brandGradient = `linear-gradient(135deg, ${resolvedBrandColor || "#e11d48"}, #11131a)`;
+      // The AI rung of the ladder: a clean BACKGROUND photo as a data: URL
+      // (Gemini → OpenAI via generateImageSafe), mirroring renderStaticCreative's
+      // internal AI prompt (theme tones + the UNCONDITIONAL NO_REAL_PERSON clause +
+      // brand reference images). resolveImageSlot swallows a failure here and falls
+      // through to the article/branded rung — generation never blocks on AI.
+      async function generateAiSlotImage(slotPrompt?: string): Promise<string> {
+        const themeBgDescriptor =
+          input.theme === "light"
+            ? "bright, airy, well-lit, clean"
+            : input.theme === "gradient"
+              ? "vibrant, colorful, dramatic lighting"
+              : "dark, moody, dramatic";
+        const bg = await generateImageSafe({
+          prompt: `${slotPrompt || "Clean editorial background photo"}\n\nIMPORTANT: produce a clean BACKGROUND photo only — NO text, words, letters, numbers, logos, or watermarks. ${themeBgDescriptor} tones.${NO_REAL_PERSON_CLAUSE}`,
+          aspectRatio: "3:4",
+          ...(brandReferenceImages.length ? { referenceImages: brandReferenceImages } : {}),
+        });
+        lastSlotImageEngine = bg.source === "dalle" ? "openai" : "gemini";
+        renderedEngines.add(lastSlotImageEngine);
+        return `data:${bg.mimeType};base64,${bg.imageBase64}`;
+      }
+      // NOTE: `articleImagesList` + `slotCtx` are declared AFTER `extracted` is
+      // resolved below (they read `extracted.images`); the helpers above don't
+      // touch `extracted`, so they live here next to the IDOR/userImages setup.
+
       /**
        * Build a branded "static news creative": deterministic headline text +
        * logo/handle baked onto the image via the Puppeteer news-card template
@@ -1026,6 +1114,10 @@ export const repurposeRouter = createRouter({
           // overrides this on success (2026-06-11); the photo is what keeps a
           // creative from rendering "blank" if AI fails. Pass-through, no fetch.
           bgImageUrl?: string;
+          // D2: when false, renderStaticCreative skips its internal AI generation
+          // and bakes the overlay onto `bgImageUrl` as-is. The repurpose flow sets
+          // this false because resolveImageSlot already produced the background.
+          aiEnabled?: boolean;
         },
       ): Promise<{ imageBase64: string; mimeType: string; bgSource: "ai" | "stock"; imageEngine?: "gemini" | "openai" }> {
         // Delegate to the module-level renderer (E3b) so the repurpose flow and
@@ -1051,6 +1143,7 @@ export const repurposeRouter = createRouter({
           ...(extra?.body !== undefined ? { body: extra.body } : {}),
           ...(extra?.browser ? { browser: extra.browser } : {}),
           ...(extra?.bgImageUrl ? { bgImageUrl: extra.bgImageUrl } : {}),
+          ...(extra?.aiEnabled !== undefined ? { aiEnabled: extra.aiEnabled } : {}),
         });
       }
 
@@ -1103,6 +1196,23 @@ export const repurposeRouter = createRouter({
       }
       progress("Extracting content from URL", "done", `"${extracted.title}" (${extracted.body.length} chars)`);
       console.log(`[Repurpose] Extracted: "${extracted.title}" (${extracted.body.length} chars)`);
+
+      // D10: the SSRF-filtered list of the source article's photos (https-only,
+      // public host) — the resolver's "article" rung, shared by both branches.
+      const articleImagesList = (extracted.images ?? []).filter(
+        (u: unknown): u is string =>
+          typeof u === "string" && u.startsWith("https://") && isPublicImageUrl(u),
+      );
+      // Slot resolution context shared by the static + carousel branches. `aiToggle`
+      // is the D2 Real⇄AI switch. Return type is inferred + checked structurally at
+      // each resolveImageSlot call (no need to import ResolveImageSlotCtx).
+      const slotCtx = () => ({
+        aiToggle: input.aiImages,
+        userImages,
+        articleImages: articleImagesList,
+        brandGradient,
+        generateAi: generateAiSlotImage,
+      });
 
       // 2. Understand the content — disambiguate people, identify context, create content brief
       progress("Analyzing content with AI");
@@ -1204,13 +1314,14 @@ KEYWORDS: ${(brief.keywords || []).join(", ")}`;
       let renderedHookLine: string | undefined;
       let renderedBgSource: "ai" | "stock" | undefined;
       let renderedImageEngine: "gemini" | "openai" | undefined;
-      // Unique set of AI image engines used across ALL rendered images this run
-      // (static = one, carousel/reel = per-slide, which can MIX when a slide
-      // falls back mid-batch). Drives the "Image created by X" chip everywhere.
-      const renderedEngines = new Set<"gemini" | "openai">();
+      // `renderedEngines` + `lastSlotImageEngine` are declared above (hoisted) so
+      // the per-slot AI helper `generateAiSlotImage` can record into them.
 
-      if (input.format === "static" && input.userMediaIds?.length) {
-        // ── E4: user attached their own image(s) ─────────────────────────────
+      if (input.format === "static" && input.userMediaIds?.length && !input.imageAssignments?.length) {
+        // ── E4 (legacy): user attached their own image(s) via userMediaIds ────
+        // Skipped when `imageAssignments` is present — the new per-slot path (the
+        // `else if (input.format === "static")` render branch below) is then
+        // authoritative and handles the "background" slot itself.
         // The uploaded image BECOMES the post media — SKIP the AI image
         // generation entirely (captions were already generated above and are
         // returned regardless). STATIC only.
@@ -1371,43 +1482,90 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
         // https-only (safeImageUrl drops http:// downstream anyway).
         const articleBg = pickArticleBgImage(extracted.images, isPublicImageUrl);
 
-        try {
-          progress("Generating creative");
-          console.log(`[Repurpose] Building branded headline creative (category=${category}, articleBg=${articleBg ? "yes" : "none"})...`);
-          const creative = await buildHeadlineCreative(
-            bgPromptWithContext,
-            headlineForCreativeFinal,
-            category,
-            hookLine,
-            articleBg ? { bgImageUrl: articleBg } : undefined,
-          );
+        // D10/D2: resolve the single background slot through the real-first ladder:
+        //   user-assigned (imageAssignments "background") → AI (if aiImages on, via
+        //   generateAiSlotImage) → article og:image → branded gradient.
+        // The resolver OWNS the AI rung here, so the creative render below runs with
+        // aiEnabled:false (it just bakes the headline/logo overlay onto the resolved
+        // background — no second AI generation, no double billing).
+        const bgSlot = await resolveImageSlot(
+          {
+            userImageId: slotMediaId("background"),
+            ...(articleBg ? { articleImageUrl: articleBg } : {}),
+            aiPrompt: bgPromptWithContext,
+          },
+          slotCtx(),
+        ).catch(() => ({ url: brandGradient, source: "branded" as const }));
 
-          const { url, mediaId } = await uploadAndCreateMedia(
-            creative.imageBase64,
-            creative.mimeType,
-            "static",
-          );
-          mediaUrls.push(url);
-          mediaType = creative.mimeType.includes("png") ? "image/png" : "image/jpeg";
-          // Same creative for every platform (caption differs per platform).
-          for (const platform of input.targetPlatforms) {
-            perPlatformMedia[platform] = { url, mediaId };
+        // A user-assigned background IS the post media — skip the branded render
+        // (parity with the legacy userMediaIds attach, single image). The url came
+        // from the org-scoped userImages map (IDOR-checked above); re-resolve the
+        // Media row by (url, org) to attach the real id.
+        if (bgSlot.source === "user") {
+          const m = await ctx.prisma.media.findFirst({
+            where: { url: bgSlot.url, organizationId },
+            select: { id: true, url: true },
+          });
+          if (m) {
+            mediaUrls = [m.url];
+            carouselMediaIds.push(m.id);
+            mediaType = /\.png(\?|$)/i.test(m.url) ? "image/png" : "image/jpeg";
+            for (const platform of input.targetPlatforms) perPlatformMedia[platform] = { url: m.url, mediaId: m.id };
+            renderedBgSource = "stock";
+            progress("Using your image", "done", "Your uploaded image");
+            console.log(`[Repurpose] Static using user-assigned background image: ${m.url}`);
           }
-          renderedBgSource = creative.bgSource;
-          renderedImageEngine = creative.imageEngine;
-          if (creative.imageEngine) renderedEngines.add(creative.imageEngine);
-          progress(
-            "Generating creative",
-            "done",
-            creative.bgSource === "ai" ? "Uploaded to S3" : "Uploaded to S3 (stock background — AI image unavailable)",
-          );
-          console.log(`[Repurpose] Static creative uploaded: ${url} (mediaId: ${mediaId}, bg: ${creative.bgSource})`);
-        } catch (e) {
-          // The template renderer itself failed (Puppeteer/asset issue). This
-          // is the genuine no-image case — surface it loudly (Fix 4) but with
-          // a sanitized message (no raw provider internals / project IDs).
-          progress("Generating creative", "error", friendlyAIMessage(e));
-          console.error(`[Repurpose] Static creative FAILED:`, (e as Error).message);
+        }
+
+        if (mediaUrls.length === 0) {
+          try {
+            progress("Generating creative");
+            console.log(`[Repurpose] Building branded headline creative (category=${category}, bgSource=${bgSlot.source})...`);
+            const creative = await buildHeadlineCreative(
+              bgPromptWithContext,
+              headlineForCreativeFinal,
+              category,
+              hookLine,
+              {
+                // The slot ladder already resolved the bg (incl. AI); bake-only.
+                aiEnabled: false,
+                // A branded-gradient rung passes no bgImageUrl so the template
+                // renders its OWN gradient (passing the CSS gradient string as a
+                // url would just be dropped by safeImageUrl).
+                ...(bgSlot.source === "branded" ? {} : { bgImageUrl: bgSlot.url }),
+              },
+            );
+
+            const { url, mediaId } = await uploadAndCreateMedia(
+              creative.imageBase64,
+              creative.mimeType,
+              "static",
+            );
+            mediaUrls.push(url);
+            mediaType = creative.mimeType.includes("png") ? "image/png" : "image/jpeg";
+            // Same creative for every platform (caption differs per platform).
+            for (const platform of input.targetPlatforms) {
+              perPlatformMedia[platform] = { url, mediaId };
+            }
+            // Honest source/engine: AI only when the slot actually resolved to AI;
+            // the engine was recorded by generateAiSlotImage into lastSlotImageEngine.
+            renderedBgSource = bgSlot.source === "ai" ? "ai" : "stock";
+            if (bgSlot.source === "ai") renderedImageEngine = lastSlotImageEngine;
+            progress(
+              "Generating creative",
+              "done",
+              bgSlot.source === "ai"
+                ? "Uploaded to S3"
+                : "Uploaded to S3 (real/branded background — AI off or unavailable)",
+            );
+            console.log(`[Repurpose] Static creative uploaded: ${url} (mediaId: ${mediaId}, bg: ${bgSlot.source})`);
+          } catch (e) {
+            // The template renderer itself failed (Puppeteer/asset issue). This
+            // is the genuine no-image case — surface it loudly (Fix 4) but with
+            // a sanitized message (no raw provider internals / project IDs).
+            progress("Generating creative", "error", friendlyAIMessage(e));
+            console.error(`[Repurpose] Static creative FAILED:`, (e as Error).message);
+          }
         }
       } else if (input.format === "ai_video") {
         // ── Veo3 Ultra AI Video Generation ─────────────────────────────
@@ -1842,6 +2000,43 @@ Return ONLY the JSON array, no other text.`;
                 // overrides it on success); body slides get per-slide AI variety;
                 // cta renders a branded-gradient "Follow for more" card.
                 const isCover = slideRole === "cover" || slideIdx === 0;
+                const isCta = slideRole === "cta";
+                // D10/D5/D2: resolve THIS slide's background through the real-first
+                // ladder. user-assigned (imageAssignments "slide:N") → AI (if on,
+                // per-slide variety) → article photo (cover = the article hero; body
+                // = cover-hero reuse when AI is off, D5) → branded gradient. The cta
+                // slide never gets AI/article — only an explicit user image, else its
+                // branded "Follow for more" card. The resolver OWNS the AI rung, so
+                // the render runs aiEnabled:false (overlay-only, no double gen).
+                let slideBg: string | undefined;
+                if (isCta) {
+                  const ctaUserId = slotMediaId(`slide:${slideIdx}`);
+                  if (ctaUserId && userImages[ctaUserId]) slideBg = userImages[ctaUserId]!.url;
+                } else {
+                  // Body slides fall back to the cover hero first (D5), then any
+                  // other article photo; cover uses the article hero only.
+                  const bodyFallback = coverArticleBg
+                    ? [coverArticleBg, ...articleImagesList]
+                    : articleImagesList;
+                  const slot = await resolveImageSlot(
+                    {
+                      userImageId: slotMediaId(`slide:${slideIdx}`),
+                      ...(isCover && coverArticleBg ? { articleImageUrl: coverArticleBg } : {}),
+                      aiPrompt: bgPrompt,
+                    },
+                    {
+                      ...slotCtx(),
+                      articleImages: isCover
+                        ? coverArticleBg
+                          ? [coverArticleBg]
+                          : []
+                        : bodyFallback,
+                    },
+                  ).catch(() => ({ url: brandGradient, source: "branded" as const }));
+                  // A branded-gradient rung passes no bgImageUrl so the template
+                  // renders its own gradient (a CSS gradient string isn't a url).
+                  slideBg = slot.source === "branded" ? undefined : slot.url;
+                }
                 const creative = await buildHeadlineCreative(
                   bgPrompt,
                   headline,
@@ -1849,8 +2044,9 @@ Return ONLY the JSON array, no other text.`;
                   undefined,
                   {
                     slideRole,
+                    aiEnabled: false, // bg resolved by the slot ladder above
                     ...(slideRole === "body" ? { body: slideMeta.body } : {}),
-                    ...(isCover && coverArticleBg ? { bgImageUrl: coverArticleBg } : {}),
+                    ...(slideBg ? { bgImageUrl: slideBg } : {}),
                     browser: carouselBrowser,
                   },
                 );
