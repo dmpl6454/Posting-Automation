@@ -701,3 +701,79 @@ export function dedupeHook(hook: string, headline: string): string {
   if (!h) return "";
   return jaccardSimilarity(h, headline) >= HOOK_DUP_THRESHOLD ? "" : h;
 }
+
+// ── Compatibility shim (Component 8 / §8) ───────────────────────────────────
+/**
+ * The subset of the legacy StaticCreativeOptions the shim needs. Kept local so
+ * card-engine has no import cycle with creative-templates.ts. NewsGrid/Autopilot
+ * callers map their existing options onto this and render through renderCard.
+ */
+export interface LegacyStyleInput {
+  style: "premium_editorial" | "hook_bars" | "tweet_card" | "bold_typographic";
+  headline: string;
+  channelName: string;
+  hookLine?: string;
+  handle?: string;
+  verified?: boolean;
+  bgImageUrl?: string;
+  logoUrl?: string | null;
+}
+
+function logosFromLegacy(input: LegacyStyleInput, controls: StyleControls): LogoBlock[] {
+  const src = safeImageUrl(input.logoUrl ?? undefined);
+  const anchor: LogoBlock["anchor"] = controls.logoPosition;
+  if (src) return [{ kind: "image", src, anchor, size: 7, opacity: 100 }];
+  // No logo image → a wordmark of the channel name (matches old initial-avatar intent).
+  return [{ kind: "wordmark", text: input.channelName, anchor, size: 9, opacity: 100 }];
+}
+
+/**
+ * Map an old creativeStyle id → CardSpec so existing callers keep rendering
+ * through the new engine. premium_editorial→news_caption, hook_bars→news_caption
+ * w/ 2 pills (deduped), tweet_card→tweet_card, bold_typographic→title_cover.
+ */
+export function legacyStyleToCardSpec(input: LegacyStyleInput, controls: StyleControls): CardSpec {
+  const headline = capHeadline(input.headline);
+  const bg = safeImageUrl(input.bgImageUrl) ?? undefined;
+  const bgBlock: Block = {
+    kind: "background",
+    props: { mode: bg ? "photo" : "gradient", imageUrl: bg },
+  };
+  const logoBlock: Block = { kind: "logo", props: { logos: logosFromLegacy(input, controls) } };
+
+  switch (input.style) {
+    case "tweet_card":
+      return {
+        canvas: CANVAS, controls,
+        blocks: [
+          { kind: "background", props: { mode: "gradient" } },
+          { kind: "tweetHeader", props: { displayName: input.channelName, handle: (input.handle ?? "").replace(/^@/, ""), verified: input.verified, logoUrl: input.logoUrl ?? undefined } },
+          { kind: "bodyText", props: { description: headline } },
+        ],
+      };
+    case "bold_typographic":
+      return {
+        canvas: CANVAS, controls,
+        blocks: [
+          bgBlock, logoBlock,
+          { kind: "bodyText", props: { title: headline, description: "" } },
+        ],
+      };
+    case "hook_bars": {
+      const hook = dedupeHook(input.hookLine ?? "", headline);
+      const pills: CaptionPill[] = hook
+        ? [{ text: hook }, { text: headline }]
+        : [{ text: headline }];
+      return {
+        canvas: CANVAS, controls,
+        blocks: [bgBlock, logoBlock, { kind: "captionStack", props: { pills } }],
+      };
+    }
+    case "premium_editorial":
+    default:
+      return {
+        canvas: CANVAS, controls,
+        blocks: [bgBlock, logoBlock, { kind: "captionStack", props: { pills: [{ text: headline }] } }],
+      };
+  }
+}
