@@ -20,13 +20,13 @@ describe("media-required publish path", () => {
   });
 
   it("writes a FAILED target with the human media-required reason", async () => {
-    const update = vi.fn(async () => ({}));
+    const update = vi.fn<(arg: { where: { id: string }; data: { status: string; errorMessage: string } }) => Promise<object>>(async () => ({}));
     const prisma = { postTarget: { update } } as any;
 
     await markTargetFailed(prisma, "target-1", mediaRequiredReason("INSTAGRAM"));
 
     expect(update).toHaveBeenCalledTimes(1);
-    const arg = update.mock.calls[0][0];
+    const arg = update.mock.calls[0]![0]!;
     expect(arg.where).toEqual({ id: "target-1" });
     expect(arg.data.status).toBe("FAILED");
     expect(arg.data.errorMessage).toContain("Instagram");
@@ -43,13 +43,13 @@ describe("final-attempt orphan terminalization", () => {
     const shouldFail = terminalizeStuckClaim({ claimCount, isFinalAttempt });
     expect(shouldFail).toBe(true);
 
-    const update = vi.fn(async () => ({}));
+    const update = vi.fn<(arg: { where: { id: string }; data: { status: string; errorMessage: string } }) => Promise<object>>(async () => ({}));
     const prisma = { postTarget: { update } } as any;
     if (shouldFail) {
       await markTargetFailed(prisma, "target-2", "Publishing did not complete after all retries — please retry.");
     }
     expect(update).toHaveBeenCalledTimes(1);
-    expect(update.mock.calls[0][0].data.status).toBe("FAILED");
+    expect(update.mock.calls[0]![0]!.data.status).toBe("FAILED");
   });
 
   it("does NOT force FAILED on a non-final no-op claim", () => {
