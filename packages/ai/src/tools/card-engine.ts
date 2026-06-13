@@ -641,3 +641,63 @@ export function preset(id: PresetId, data?: Partial<StyleControls>): CardSpec {
   const builder = PRESET_BLOCKS[id] ?? PRESET_BLOCKS.news_caption;
   return { canvas: CANVAS, blocks: builder(controls), controls };
 }
+
+// ── Headline integrity (Component 6) ────────────────────────────────────────
+const HEADLINE_MAX_WORDS = 16;
+const HEADLINE_MAX_CHARS = 90;
+
+/**
+ * Cap a headline to ≤16 words / ≤90 chars WITHOUT ending mid-word or mid-sentence.
+ * Prefers a full-clause cut within budget; else appends "…". Ported from
+ * repurpose.router.ts:285 so the engine is self-contained.
+ */
+export function capHeadline(text: string): string {
+  const cleaned = (text ?? "").trim().replace(/\s+/g, " ");
+  const words = cleaned.split(" ");
+  if (words.length <= HEADLINE_MAX_WORDS && cleaned.length <= HEADLINE_MAX_CHARS) return cleaned;
+  let out = words.slice(0, HEADLINE_MAX_WORDS).join(" ");
+  while (out.length > HEADLINE_MAX_CHARS && out.includes(" ")) {
+    out = out.slice(0, out.lastIndexOf(" "));
+  }
+  const lastStop = Math.max(out.lastIndexOf(". "), out.lastIndexOf("? "), out.lastIndexOf("! "));
+  if (lastStop > out.length * 0.6) return out.slice(0, lastStop + 1).trim();
+  return out.replace(/[\s,;:–—-]+$/, "").trim() + "…";
+}
+
+/** Cut body to maxChars on a whole-word boundary; append "…" when truncated. */
+export function capBody(text: string, maxChars: number): string {
+  const cleaned = (text ?? "").trim().replace(/\s+/g, " ");
+  if (cleaned.length <= maxChars) return cleaned;
+  let out = cleaned.slice(0, maxChars);
+  if (out.includes(" ")) out = out.slice(0, out.lastIndexOf(" "));
+  return out.replace(/[\s,;:–—-]+$/, "").trim() + "…";
+}
+
+function tokenSet(s: string): Set<string> {
+  return new Set(
+    (s ?? "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean),
+  );
+}
+
+/** Token-Jaccard similarity in [0,1]; case/punctuation insensitive. */
+export function jaccardSimilarity(a: string, b: string): number {
+  const sa = tokenSet(a), sb = tokenSet(b);
+  if (sa.size === 0 && sb.size === 0) return 1;
+  let inter = 0;
+  for (const t of sa) if (sb.has(t)) inter++;
+  const union = sa.size + sb.size - inter;
+  return union === 0 ? 0 : inter / union;
+}
+
+const HOOK_DUP_THRESHOLD = 0.7;
+
+/**
+ * Return the hook only if it is meaningfully different from the headline
+ * (Jaccard < threshold); otherwise "" so the caller never renders the headline
+ * twice (Component 6: hook≠headline, subhead≠headline). Empty/whitespace → "".
+ */
+export function dedupeHook(hook: string, headline: string): string {
+  const h = (hook ?? "").trim();
+  if (!h) return "";
+  return jaccardSimilarity(h, headline) >= HOOK_DUP_THRESHOLD ? "" : h;
+}
