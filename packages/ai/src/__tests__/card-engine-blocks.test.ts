@@ -246,3 +246,29 @@ describe("renderCaptionStack", () => {
     expect(renderCaptionStack({ pills: [] }, C)).toBe("");
   });
 });
+
+import { renderStatCards, type StatCardsBlockProps } from "../tools/card-engine";
+
+describe("renderStatCards", () => {
+  it("renders label + value callout boxes (SpaceX IPO)", () => {
+    const html = renderStatCards({ cards: [{ label: "IPO SIZE", value: "$75 BILLION", bg: "#1d4ed8" }] }, C);
+    expect(html).toContain("IPO SIZE");
+    expect(html).toContain("$75 BILLION");
+    expect(html).toContain("#1d4ed8");
+  });
+  it("renders multiple cards and escapes label/value", () => {
+    const html = renderStatCards({ cards: [
+      { label: "<A>", value: "1" },
+      { label: "B", value: `"2"` },
+    ] }, C);
+    expect(html).toContain("&lt;A&gt;");
+    expect(html).toContain("&quot;2&quot;");
+  });
+  it("rejects a malicious card bg", () => {
+    const html = renderStatCards({ cards: [{ label: "x", value: "y", bg: `#fff" onload=x` }] }, C);
+    expect(html).not.toContain("onload=x");
+  });
+  it("emits nothing with no cards", () => {
+    expect(renderStatCards({ cards: [] }, C)).toBe("");
+  });
+});

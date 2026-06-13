@@ -456,3 +456,20 @@ export function renderCaptionStack(props: CaptionStackBlockProps, controls: Styl
     .join("");
   return `<div class="caption-stack" style="position:absolute;left:36px;right:36px;bottom:48px;display:flex;flex-direction:column;gap:14px;z-index:3;">${pills}</div>`;
 }
+
+// ── statCards block ─────────────────────────────────────────────────────────
+export function renderStatCards(props: StatCardsBlockProps, controls: StyleControls): string {
+  if (!props.cards?.length) return "";
+  const cards = props.cards
+    .map((c) => {
+      const bg = safeColor(c.bg ?? controls.brandColor);
+      const icon = safeEmoji(c.icon);
+      return `<div style="background:${bg};color:#fff;border-radius:18px;padding:24px 28px;min-width:240px;">
+  ${icon ? `<div style="font-size:34px;">${icon}</div>` : ""}
+  <div style="font-size:24px;font-weight:700;opacity:0.85;letter-spacing:0.04em;text-transform:uppercase;">${escapeHtml(c.label)}</div>
+  <div style="font-size:56px;font-weight:900;line-height:1.05;margin-top:4px;">${escapeHtml(c.value)}</div>
+</div>`;
+    })
+    .join("");
+  return `<div class="stat-cards" style="position:absolute;left:48px;right:48px;bottom:300px;display:flex;gap:18px;flex-wrap:wrap;z-index:3;">${cards}</div>`;
+}
