@@ -488,3 +488,10 @@ export function renderBodyText(props: BodyTextBlockProps, controls: StyleControl
   const desc = `<div style="font-size:34px;line-height:1.32;color:${textColor};margin-top:14px;">${escapeHtml(props.description)}</div>`;
   return `<div class="body-text" style="position:absolute;left:56px;right:56px;top:120px;text-align:${align};z-index:3;">${title}${meta}${desc}</div>`;
 }
+
+// ── footer block ────────────────────────────────────────────────────────────
+export function renderFooter(props: FooterBlockProps, controls: StyleControls): string {
+  const tokens = themeTokens(controls);
+  const color = safeColor(props.textColor ?? tokens.subTextColor);
+  return `<div class="card-footer" style="position:absolute;left:56px;right:56px;bottom:44px;color:${color};font-size:24px;font-weight:600;text-align:${safeAlign(controls.textAlign)};z-index:3;">${escapeHtml(props.text)}</div>`;
+}

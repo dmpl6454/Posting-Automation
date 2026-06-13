@@ -302,3 +302,21 @@ describe("renderBodyText", () => {
     expect(html).not.toContain("onload=x");
   });
 });
+
+import { renderFooter, type FooterBlockProps } from "../tools/card-engine";
+
+describe("renderFooter", () => {
+  it("renders a follow line", () => {
+    const html = renderFooter({ text: "Follow @moviefied for more" }, C);
+    expect(html).toContain("Follow @moviefied for more");
+    expect(html).toContain("card-footer");
+  });
+  it("escapes the text", () => {
+    const html = renderFooter({ text: `<b>X</b>` }, C);
+    expect(html).toContain("&lt;b&gt;X");
+  });
+  it("uses a sanitized color override", () => {
+    const html = renderFooter({ text: "x", textColor: `#fff" onload=x` }, C);
+    expect(html).not.toContain("onload=x");
+  });
+});
