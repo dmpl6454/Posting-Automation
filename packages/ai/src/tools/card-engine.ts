@@ -575,3 +575,69 @@ body{width:${CANVAS.w}px;height:${CANVAS.h}px;overflow:hidden;position:relative;
 ${body}
 </body></html>`;
 }
+
+// ── Presets (data-driven; Component 1) ──────────────────────────────────────
+export type PresetId =
+  | "news_caption" | "news_inset" | "infographic_stats" | "marketing_minimal"
+  | "tweet_card" | "photo_grid" | "title_cover" | "listicle_body";
+
+const PRESET_BLOCKS: Record<PresetId, (c: StyleControls) => Block[]> = {
+  news_caption: () => [
+    { kind: "background", props: { mode: "photo" } },
+    { kind: "logo", props: { logos: [] } },
+    { kind: "captionStack", props: { pills: [{ text: "" }] } },
+  ],
+  news_inset: () => [
+    { kind: "background", props: { mode: "photo" } },
+    { kind: "logo", props: { logos: [] } },
+    { kind: "circularInset", props: { items: [] } },
+    { kind: "captionStack", props: { pills: [{ text: "" }] } },
+    { kind: "labelChip", props: { pills: [] } },
+  ],
+  infographic_stats: () => [
+    { kind: "background", props: { mode: "photo" } },
+    { kind: "logo", props: { logos: [] } },
+    { kind: "statCards", props: { cards: [] } },
+    { kind: "captionStack", props: { pills: [{ text: "" }] } },
+  ],
+  marketing_minimal: () => [
+    { kind: "background", props: { mode: "topTextBottomPhoto", overlayText: "" } },
+    { kind: "logo", props: { logos: [] } },
+    { kind: "carouselChrome", props: { totalSlides: 1, currentSlide: 0, progressBar: {} } },
+  ],
+  tweet_card: () => [
+    { kind: "background", props: { mode: "gradient" } },
+    { kind: "tweetHeader", props: { displayName: "", handle: "" } },
+    { kind: "bodyText", props: { description: "" } },
+  ],
+  photo_grid: () => [
+    { kind: "background", props: { mode: "photoGrid", imageUrls: [] } },
+    { kind: "captionStack", props: { pills: [{ text: "" }] } },
+  ],
+  title_cover: () => [
+    { kind: "background", props: { mode: "gradient" } },
+    { kind: "logo", props: { logos: [] } },
+    { kind: "bodyText", props: { description: "" } },
+  ],
+  listicle_body: () => [
+    { kind: "background", props: { mode: "photo" } },
+    { kind: "bodyText", props: { description: "" } },
+    { kind: "footer", props: { text: "" } },
+    { kind: "logo", props: { logos: [] } },
+  ],
+};
+
+/** Named CardSpec factory — the detector's target and a user-pickable preset. */
+export function preset(id: PresetId, data?: Partial<StyleControls>): CardSpec {
+  const controls: StyleControls = {
+    ...DEFAULT_CONTROLS,
+    ...(data ?? {}),
+    brandColor: safeColor(data?.brandColor ?? DEFAULT_CONTROLS.brandColor),
+    highlightColor: safeColor(data?.highlightColor ?? DEFAULT_CONTROLS.highlightColor),
+    fontFamily: safeFontFamily(data?.fontFamily),
+    textAlign: safeAlign(data?.textAlign),
+    bgOpacity: clampOpacity(data?.bgOpacity, DEFAULT_CONTROLS.bgOpacity),
+  };
+  const builder = PRESET_BLOCKS[id] ?? PRESET_BLOCKS.news_caption;
+  return { canvas: CANVAS, blocks: builder(controls), controls };
+}
