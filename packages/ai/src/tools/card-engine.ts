@@ -378,6 +378,26 @@ export function renderLogo(props: LogoBlockProps, controls: StyleControls): stri
   return props.logos.map((l) => renderOneLogo(l, controls)).join("");
 }
 
+// ── tweetHeader block ───────────────────────────────────────────────────────
+export function renderTweetHeader(props: TweetHeaderBlockProps, controls: StyleControls): string {
+  const tokens = themeTokens(controls);
+  const tickColor = safeColor(props.verifiedColor ?? "#1d9bf0");
+  const avatar = safeImageUrl(props.logoUrl);
+  const avatarHtml = avatar
+    ? `<img src="${avatar}" style="width:72px;height:72px;border-radius:50%;object-fit:cover;"/>`
+    : `<div style="width:72px;height:72px;border-radius:50%;background:${safeColor(controls.brandColor)};"></div>`;
+  const tick = props.verified
+    ? `<svg class="verified-tick" width="26" height="26" viewBox="0 0 24 24" fill="${tickColor}"><path d="M22.5 12.5c0-1.58-.88-2.95-2.15-3.6.15-.44.24-.91.24-1.4 0-2.21-1.71-4-3.82-4-.47 0-.92.08-1.34.25C14.82 2.42 13.51 1.5 12 1.5s-2.82.92-3.44 2.25c-.41-.17-.86-.25-1.34-.25-2.11 0-3.82 1.79-3.82 4 0 .49.08.96.24 1.4-1.27.65-2.15 2.02-2.15 3.6 0 1.5.78 2.8 1.94 3.49-.02.16-.03.32-.03.49 0 2.21 1.71 4 3.82 4 .47 0 .92-.09 1.34-.25.62 1.33 1.93 2.25 3.44 2.25s2.82-.92 3.44-2.25c.41.16.86.25 1.34.25 2.11 0 3.82-1.79 3.82-4 0-.16-.01-.33-.03-.49 1.16-.69 1.94-1.99 1.94-3.49z"/></svg>`
+    : "";
+  return `<div class="tweet-head" style="display:flex;align-items:center;gap:18px;margin-bottom:28px;">
+  ${avatarHtml}
+  <div>
+    <div style="display:flex;align-items:center;gap:8px;"><span style="font-size:34px;font-weight:800;color:${tokens.textColor};">${escapeHtml(props.displayName)}</span>${tick}</div>
+    <div style="font-size:26px;color:${tokens.subTextColor};">@${escapeHtml(props.handle)}</div>
+  </div>
+</div>`;
+}
+
 // ── labelChip block ─────────────────────────────────────────────────────────
 function pillRadius(shape: "pill" | "bar"): number { return shape === "bar" ? 8 : 999; }
 

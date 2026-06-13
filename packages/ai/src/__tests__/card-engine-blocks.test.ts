@@ -173,3 +173,28 @@ describe("renderLabelChip", () => {
     expect(renderLabelChip({ pills: [] }, C)).toBe("");
   });
 });
+
+import { renderTweetHeader, type TweetHeaderBlockProps } from "../tools/card-engine";
+
+describe("renderTweetHeader", () => {
+  it("renders name + @handle + verified tick", () => {
+    const html = renderTweetHeader({ displayName: "Moviefied", handle: "moviefied", verified: true, logoUrl: "https://x/av.png" }, C);
+    expect(html).toContain("Moviefied");
+    expect(html).toContain("@moviefied");
+    expect(html).toContain("verified-tick");
+    expect(html).toContain("https://x/av.png");
+  });
+  it("omits the tick when not verified", () => {
+    const html = renderTweetHeader({ displayName: "Brand", handle: "brand" }, C);
+    expect(html).not.toContain("verified-tick");
+  });
+  it("escapes the display name and handle", () => {
+    const html = renderTweetHeader({ displayName: `<b>X</b>`, handle: `y"z` }, C);
+    expect(html).toContain("&lt;b&gt;X");
+    expect(html).toContain("@y&quot;z");
+  });
+  it("uses a sanitized verified color", () => {
+    const html = renderTweetHeader({ displayName: "B", handle: "b", verified: true, verifiedColor: `#fff"onload=x` }, C);
+    expect(html).not.toContain("onload=x");
+  });
+});
