@@ -267,3 +267,78 @@ export function renderHighlightMarkup(text: string, accentColor: string): string
 
   return out;
 }
+
+// ── Theme tokens (shared by builders) ───────────────────────────────────────
+export interface ThemeTokens { bgFallback: string; scrim: string; textColor: string; subTextColor: string; }
+
+export function themeTokens(controls: StyleControls): ThemeTokens {
+  const safe = safeColor(controls.brandColor);
+  if (controls.theme === "dark") {
+    return {
+      bgFallback: "linear-gradient(135deg,#1a1a2e,#16213e)",
+      scrim: "linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.25) 50%, rgba(0,0,0,0) 100%)",
+      textColor: "#ffffff",
+      subTextColor: "rgba(255,255,255,0.75)",
+    };
+  }
+  // light default
+  return {
+    bgFallback: `linear-gradient(135deg, ${safe}, #11131a)`, // branded, never flat
+    scrim: "linear-gradient(to top, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0.15) 50%, rgba(0,0,0,0) 100%)",
+    textColor: "#0f1419",
+    subTextColor: "#5b6470",
+  };
+}
+
+function brandedGradient(controls: StyleControls): string {
+  return `background:linear-gradient(135deg, ${safeColor(controls.brandColor)}, #11131a);`;
+}
+
+// ── background block ────────────────────────────────────────────────────────
+export function renderBackground(props: BackgroundBlockProps, controls: StyleControls): string {
+  const url = safeImageUrl(props.imageUrl);
+  const urls = (props.imageUrls ?? []).map(safeImageUrl).filter((u): u is string => !!u);
+  const accent = safeColor(props.accentColor ?? controls.brandColor);
+
+  const cover = (u: string) =>
+    `<div class="bg" style="position:absolute;inset:0;background-image:url('${u}');background-size:cover;background-position:center;"></div>`;
+  const grad = `<div class="bg" style="position:absolute;inset:0;${brandedGradient(controls)}"></div>`;
+  const scrim = `<div class="scrim" style="position:absolute;inset:0;background:${themeTokens(controls).scrim};"></div>`;
+
+  switch (props.mode) {
+    case "photo":
+    case "ai":
+      return url ? cover(url) + scrim : grad;
+    case "subjectComposite":
+      // cutout matting is a stretch goal; degrade to plain photo / gradient
+      return url ? cover(url) + scrim : grad;
+    case "gradient":
+      return `<div class="bg" style="position:absolute;inset:0;background:linear-gradient(135deg, ${accent}, #11131a);"></div>`;
+    case "splitPhotos": {
+      if (urls.length < 2) return urls[0] ? cover(urls[0]) + scrim : grad;
+      return `<div class="bg" style="position:absolute;inset:0;display:grid;grid-template-columns:1fr 1fr;">`
+        + urls.slice(0, 2).map((u) => `<div style="background:url('${u}') center/cover;"></div>`).join("")
+        + `</div>` + scrim;
+    }
+    case "photoGrid": {
+      if (urls.length === 0) return grad;
+      const cols = urls.length <= 1 ? "1fr" : "1fr 1fr";
+      return `<div class="bg" style="position:absolute;inset:0;display:grid;grid-template-columns:${cols};grid-auto-rows:1fr;">`
+        + urls.slice(0, 4).map((u) => `<div style="background:url('${u}') center/cover;"></div>`).join("")
+        + `</div>` + scrim;
+    }
+    case "topTextBottomPhoto": {
+      const band = `<div style="position:absolute;top:0;left:0;right:0;height:42%;background:${accent};display:flex;align-items:center;justify-content:center;padding:0 56px;color:#fff;font-weight:900;font-size:64px;line-height:1.05;text-align:center;">${escapeHtml(props.overlayText ?? "")}</div>`;
+      const photo = url
+        ? `<div style="position:absolute;bottom:0;left:0;right:0;height:58%;background:url('${url}') center/cover;"></div>`
+        : `<div style="position:absolute;bottom:0;left:0;right:0;height:58%;${brandedGradient(controls)}"></div>`;
+      return `<div class="bg" style="position:absolute;inset:0;">${photo}${band}</div>`;
+    }
+    case "screenshot":
+      return url
+        ? `<div class="bg" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;${brandedGradient(controls)}"><div class="screenshot-frame" style="width:72%;border:14px solid #0f1419;border-radius:36px;overflow:hidden;box-shadow:0 18px 60px rgba(0,0,0,0.45);"><img src="${url}" style="width:100%;display:block;"/></div></div>`
+        : grad;
+    default:
+      return grad;
+  }
+}
