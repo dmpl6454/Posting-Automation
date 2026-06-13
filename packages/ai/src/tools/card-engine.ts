@@ -437,3 +437,22 @@ export function renderCircularInset(props: CircularInsetBlockProps, controls: St
     })
     .join("");
 }
+
+// ── captionStack block ──────────────────────────────────────────────────────
+export function renderCaptionStack(props: CaptionStackBlockProps, controls: StyleControls): string {
+  if (!props.pills?.length) return "";
+  const pills = props.pills
+    .map((p) => {
+      const shape = safeShape(p.shape);
+      const bg = safeColor(p.bg ?? (controls.theme === "dark" ? "#111111" : "#ffffff"));
+      const opacity = clampOpacity(p.bgOpacity, controls.bgOpacity) / 100;
+      const textColor = safeColor(p.textColor ?? (controls.theme === "dark" ? "#ffffff" : "#0f1419"));
+      const align = safeAlign(p.align ?? controls.textAlign);
+      const radius = shape === "bar" ? 10 : 18;
+      const emoji = safeEmoji(p.emoji);
+      const inner = renderHighlightMarkup(p.text, controls.highlightColor) + (emoji ? ` ${emoji}` : "");
+      return `<div class="caption-pill" style="background:${bg};opacity:${opacity};color:${textColor};border-radius:${radius}px;padding:18px 24px;text-align:${align};font-weight:800;font-size:42px;line-height:1.15;box-shadow:0 6px 24px rgba(0,0,0,0.3);word-break:break-word;">${inner}</div>`;
+    })
+    .join("");
+  return `<div class="caption-stack" style="position:absolute;left:36px;right:36px;bottom:48px;display:flex;flex-direction:column;gap:14px;z-index:3;">${pills}</div>`;
+}

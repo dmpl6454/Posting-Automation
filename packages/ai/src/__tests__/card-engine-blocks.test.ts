@@ -198,3 +198,51 @@ describe("renderTweetHeader", () => {
     expect(html).not.toContain("onload=x");
   });
 });
+
+import { renderCaptionStack, type CaptionStackBlockProps } from "../tools/card-engine";
+
+describe("renderCaptionStack", () => {
+  it("renders a single white pill bottom-anchored", () => {
+    const html = renderCaptionStack({ pills: [{ text: "Breaking news today" }] }, C);
+    expect(html).toContain("Breaking news today");
+    expect(html).toContain("caption-stack");
+  });
+  it("renders multiple pills (white + red)", () => {
+    const html = renderCaptionStack({ pills: [
+      { text: "First", bg: "#ffffff", textColor: "#000000" },
+      { text: "Second", bg: "#e11d48", textColor: "#ffffff" },
+    ] }, C);
+    expect(html).toContain("#ffffff");
+    expect(html).toContain("#e11d48");
+  });
+  it("applies the global bgOpacity to a pill (opacity slider)", () => {
+    const html = renderCaptionStack({ pills: [{ text: "x" }] }, { ...C, bgOpacity: 60 });
+    expect(html).toContain("opacity:0.6");
+  });
+  it("a per-pill bgOpacity overrides the global", () => {
+    const html = renderCaptionStack({ pills: [{ text: "x", bgOpacity: 25 }] }, { ...C, bgOpacity: 100 });
+    expect(html).toContain("opacity:0.25");
+  });
+  it("renders a whitelisted trailing emoji, drops a malicious one", () => {
+    const ok = renderCaptionStack({ pills: [{ text: "Alert", emoji: "🚨" }] }, C);
+    expect(ok).toContain("🚨");
+    const bad = renderCaptionStack({ pills: [{ text: "x", emoji: `"><script>` }] }, C);
+    expect(bad).not.toContain("<script>");
+  });
+  it("honors per-pill center alignment", () => {
+    const html = renderCaptionStack({ pills: [{ text: "x", align: "center" }] }, C);
+    expect(html).toContain("text-align:center");
+  });
+  it("renders multi-span highlight markup inside a pill", () => {
+    const html = renderCaptionStack({ pills: [{ text: "[[A|#111]] vs [[B|#222|box]]" }] }, C);
+    expect(html).toContain("color:#111");
+    expect(html).toContain("background:#222");
+  });
+  it("rejects a malicious pill bg color", () => {
+    const html = renderCaptionStack({ pills: [{ text: "x", bg: `#fff" onload=alert(1)` }] }, C);
+    expect(html).not.toContain("onload=alert(1)");
+  });
+  it("emits nothing when no pills", () => {
+    expect(renderCaptionStack({ pills: [] }, C)).toBe("");
+  });
+});
