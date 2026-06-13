@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { markTargetFailed, shouldReapPublishing } from "./publish-recovery";
+import { markTargetFailed, shouldReapPublishing, mediaRequiredReason, terminalizeStuckClaim } from "./publish-recovery";
 
 describe("shouldReapPublishing", () => {
   const now = new Date("2026-06-10T12:00:00.000Z");
@@ -47,5 +47,35 @@ describe("markTargetFailed", () => {
       markTargetFailed(prisma, "pt_456", "some message"),
     ).resolves.toBeUndefined();
     expect(update).toHaveBeenCalledOnce();
+  });
+});
+
+describe("mediaRequiredReason", () => {
+  it("names Instagram in the reason", () => {
+    const msg = mediaRequiredReason("INSTAGRAM");
+    expect(msg).toContain("Instagram");
+    expect(msg.toLowerCase()).toContain("image");
+  });
+
+  it("names Facebook in the reason", () => {
+    expect(mediaRequiredReason("FACEBOOK")).toContain("Facebook");
+  });
+
+  it("falls back to the raw platform for an unmapped platform", () => {
+    expect(mediaRequiredReason("THREADS")).toContain("THREADS");
+  });
+});
+
+describe("terminalizeStuckClaim", () => {
+  it("terminalizes when the claim found nothing on the final attempt", () => {
+    expect(terminalizeStuckClaim({ claimCount: 0, isFinalAttempt: true })).toBe(true);
+  });
+
+  it("does NOT terminalize on a non-final no-op claim (a later attempt may succeed)", () => {
+    expect(terminalizeStuckClaim({ claimCount: 0, isFinalAttempt: false })).toBe(false);
+  });
+
+  it("does NOT terminalize when the claim succeeded (count > 0)", () => {
+    expect(terminalizeStuckClaim({ claimCount: 1, isFinalAttempt: true })).toBe(false);
   });
 });
