@@ -160,3 +160,68 @@ export type CardSpec = {
   blocks: Block[];
   controls: StyleControls;
 };
+
+// ── Sanitizers (Component 2 / §4) ───────────────────────────────────────────
+const FONT_ALLOWLIST: readonly FontFamily[] = ["inter", "serif_display", "condensed"];
+
+/** Allow only valid CSS hex colors; else fall back to the default accent. */
+export function safeColor(color: string | undefined): string {
+  return color && /^#[0-9a-fA-F]{3,8}$/.test(color) ? color : DEFAULT_ACCENT;
+}
+
+/** Allow only https: or data:image base64 URLs with no CSS/HTML-breakout chars. */
+export function safeImageUrl(url: string | undefined | null): string | null {
+  if (!url) return null;
+  const ok = /^(https:\/\/|data:image\/(png|jpeg|jpg|webp|gif);base64,)[^"')\s<>\\]+$/i.test(url);
+  return ok ? url : null;
+}
+
+export function escapeHtml(text: string): string {
+  return (text ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/** Clamp a 0–100 opacity; non-numeric → `dflt`. */
+export function clampOpacity(v: number | undefined, dflt = 100): number {
+  if (typeof v !== "number" || Number.isNaN(v)) return dflt;
+  return Math.max(0, Math.min(100, Math.round(v)));
+}
+
+export function safeFontFamily(f: string | undefined): FontFamily {
+  return FONT_ALLOWLIST.includes(f as FontFamily) ? (f as FontFamily) : "inter";
+}
+
+export function safeAlign(a: string | undefined): "left" | "center" {
+  return a === "center" ? "center" : "left";
+}
+
+export function safeShape(s: string | undefined): "pill" | "bar" {
+  return s === "bar" ? "bar" : "pill";
+}
+
+/**
+ * Allow only 1–3 codepoints in the emoji/symbol unicode range; anything else
+ * (markup, ASCII text, breakout chars) → "". Prevents a per-pill `emoji` field
+ * from injecting HTML/CSS into the rendered span.
+ */
+export function safeEmoji(e: string | undefined): string {
+  if (!e) return "";
+  const cps = Array.from(e.trim());
+  if (cps.length === 0 || cps.length > 3) return "";
+  const EMOJI = /[‼-㊙\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}️‍]/u;
+  return cps.every((c) => EMOJI.test(c)) ? cps.join("") : "";
+}
+
+/** Map a FontFamily enum to a real CSS font-family stack. */
+export function fontStack(f: FontFamily): string {
+  switch (f) {
+    case "serif_display": return "'Playfair Display',Georgia,serif";
+    case "condensed": return "'Oswald','Arial Narrow',sans-serif";
+    case "inter":
+    default: return "'Inter',system-ui,sans-serif";
+  }
+}
