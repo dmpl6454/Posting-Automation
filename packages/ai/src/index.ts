@@ -38,6 +38,8 @@ export {
   capBody as capCardBody,
   dedupeHook,
   jaccardSimilarity,
+  safeColor,
+  safeImageUrl,
   CANVAS as CARD_CANVAS,
   DEFAULT_CONTROLS as CARD_DEFAULT_CONTROLS,
 } from "./tools/card-engine";
