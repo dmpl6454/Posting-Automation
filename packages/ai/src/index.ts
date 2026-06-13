@@ -25,10 +25,35 @@ export { generateImageMeta } from "./providers/meta.provider";
 export type { MetaGenerateParams, MetaImageResult } from "./providers/meta.provider";
 export { fetchTrendingNews, detectTrendingIntent } from "./tools/trending-news";
 export type { TrendingHeadline } from "./tools/trending-news";
-export { generateNewsCardImage, generateNewsAiImage, generateNewsImage, generateStaticNewsCreativeImage, generateStyledCreativeImage, generateRelevantBackground, overlayLogoOnImage, extractDominantColor, launchCreativeBrowser } from "./tools/news-image-generator";
+export { generateNewsCardImage, generateNewsAiImage, generateNewsImage, generateStaticNewsCreativeImage, generateStyledCreativeImage, generateRelevantBackground, overlayLogoOnImage, extractDominantColor, launchCreativeBrowser, buildCardHtmlForPuppeteer, generateCardImage } from "./tools/news-image-generator";
 export type { NewsImageResult, LogoOverlayOptions } from "./tools/news-image-generator";
 export { buildStaticCreative } from "./tools/creative-templates";
 export type { CreativeStyle, StaticCreativeOptions } from "./tools/creative-templates";
+export {
+  renderCard,
+  preset,
+  legacyStyleToCardSpec,
+  renderHighlightMarkup as renderCardHighlightMarkup,
+  capHeadline as capCardHeadline,
+  capBody as capCardBody,
+  dedupeHook,
+  jaccardSimilarity,
+  CANVAS as CARD_CANVAS,
+  DEFAULT_CONTROLS as CARD_DEFAULT_CONTROLS,
+} from "./tools/card-engine";
+export type {
+  CardSpec,
+  Block,
+  BlockKind,
+  StyleControls,
+  CaptionPill,
+  LogoBlock,
+  ImageSlot,
+  PresetId,
+  FontFamily,
+  HighlightMode,
+  LegacyStyleInput,
+} from "./tools/card-engine";
 export { generateNewsCardHtml, generateStaticNewsCreativeHtml } from "./tools/news-card-template";
 export type { NewsCardOptions, StaticNewsCreativeOptions } from "./tools/news-card-template";
 export { extractUrlContent, resolveImageFromPageUrl } from "./utils/url-extractor";

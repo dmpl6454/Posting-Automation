@@ -2,6 +2,7 @@ import puppeteer from "puppeteer";
 import { generateNewsCardHtml, generateStaticNewsCreativeHtml, type NewsCardOptions, type StaticNewsCreativeOptions } from "./news-card-template";
 import { generateImageDallE } from "../providers/dalle.provider";
 import { buildStaticCreative, type StaticCreativeOptions, safeColor } from "./creative-templates";
+import { renderCard, type CardSpec } from "./card-engine";
 import { isPublicImageUrl } from "../utils/safe-fetch-url";
 
 function escapeHtml(text: string): string {
@@ -188,6 +189,49 @@ export async function generateStyledCreativeImage(
   } finally {
     // Always close the page. Only close the browser when WE launched it; if a
     // shared browser was passed, the caller owns its lifecycle.
+    await page.close().catch(() => {});
+    if (!sharedBrowser) await browser.close();
+  }
+}
+
+/**
+ * Pure: render a CardSpec to the same HTML doc renderCard produces. Exported so
+ * unit tests can assert the HTML without launching Chrome. Kept separate from the
+ * Puppeteer path so the rasterizer and the renderer test in isolation.
+ */
+export function buildCardHtmlForPuppeteer(spec: CardSpec): string {
+  return renderCard(spec);
+}
+
+/**
+ * Rasterize a CardSpec to PNG via Puppeteer. Mirrors generateStyledCreativeImage's
+ * Puppeteer config exactly (waitUntil "load", screenshot-on-timeout, 400ms paint
+ * delay, shared-browser option) — only the HTML source differs (renderCard vs
+ * buildStaticCreative). Additive: existing callers of generateStyledCreativeImage
+ * are unaffected.
+ */
+export async function generateCardImage(
+  spec: CardSpec,
+  opts?: { browser?: import("puppeteer").Browser },
+): Promise<NewsImageResult> {
+  const html = buildCardHtmlForPuppeteer(spec);
+  const sharedBrowser = opts?.browser;
+  const browser = sharedBrowser ?? (await puppeteer.launch({
+    headless: true,
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+  }));
+  const page = await browser.newPage();
+  try {
+    await page.setViewport({ width: 1080, height: 1350 });
+    try {
+      await page.setContent(html, { waitUntil: "load", timeout: 30000 });
+    } catch (e) {
+      console.warn(`[card-engine] setContent wait timed out, screenshotting anyway:`, (e as Error).message);
+    }
+    await new Promise((r) => setTimeout(r, 400));
+    const screenshotBuffer = await page.screenshot({ type: "png", encoding: "base64" });
+    return { imageBase64: screenshotBuffer as string, mimeType: "image/png", width: 1080, height: 1350, style: "news_card" };
+  } finally {
     await page.close().catch(() => {});
     if (!sharedBrowser) await browser.close();
   }
