@@ -343,3 +343,28 @@ describe("renderCarouselChrome", () => {
     expect(html).not.toContain("onload=x");
   });
 });
+
+import { renderCtaCard, type CtaCardBlockProps } from "../tools/card-engine";
+
+describe("renderCtaCard", () => {
+  it("renders headline + follow button on a branded bg", () => {
+    const html = renderCtaCard({ headline: "Follow Us", buttonText: "Follow", bg: "#7c8cff" }, C);
+    expect(html).toContain("Follow Us");
+    expect(html).toContain("#7c8cff");
+    expect(html).toContain(">Follow<");
+  });
+  it("renders an optional phone mockup image", () => {
+    const html = renderCtaCard({ headline: "Follow Us", phoneAssetUrl: "https://x/phone.png" }, C);
+    expect(html).toContain("https://x/phone.png");
+  });
+  it("escapes headline + subheading", () => {
+    const html = renderCtaCard({ headline: `<b>F</b>`, subheading: `"s"` }, C);
+    expect(html).toContain("&lt;b&gt;F");
+    expect(html).toContain("&quot;s&quot;");
+  });
+  it("rejects a malicious bg and a malicious phone url", () => {
+    const html = renderCtaCard({ headline: "x", bg: `#fff" onload=x`, phoneAssetUrl: `https://x/p.png");}</style>` }, C);
+    expect(html).not.toContain("onload=x");
+    expect(html).not.toContain(`https://x/p.png");}</style>`);
+  });
+});

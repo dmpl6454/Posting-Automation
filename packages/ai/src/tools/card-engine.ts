@@ -517,3 +517,22 @@ export function renderCarouselChrome(props: CarouselChromeBlockProps, controls: 
   }
   return parts.join("");
 }
+
+// ── ctaCard block ───────────────────────────────────────────────────────────
+export function renderCtaCard(props: CtaCardBlockProps, controls: StyleControls): string {
+  const bg = safeColor(props.bg ?? controls.brandColor);
+  const phone = safeImageUrl(props.phoneAssetUrl);
+  const button = props.buttonText
+    ? `<div style="margin-top:32px;display:inline-flex;align-items:center;background:#fff;color:${bg};font-weight:900;font-size:34px;border-radius:999px;padding:18px 44px;">${escapeHtml(props.buttonText)}</div>`
+    : "";
+  const phoneHtml = phone
+    ? `<img src="${phone}" style="margin-top:36px;max-width:60%;border-radius:28px;"/>`
+    : "";
+  const sub = props.subheading
+    ? `<div style="margin-top:18px;color:rgba(255,255,255,0.85);font-size:30px;font-weight:600;">${escapeHtml(props.subheading)}</div>`
+    : "";
+  return `<div class="cta-card" style="position:absolute;inset:0;background:linear-gradient(135deg, ${bg}, #11131a);display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:0 72px;z-index:2;">
+  <div style="color:#fff;font-size:88px;font-weight:900;line-height:1.04;letter-spacing:-0.03em;word-break:break-word;">${escapeHtml(props.headline)}</div>
+  ${sub}${button}${phoneHtml}
+</div>`;
+}
