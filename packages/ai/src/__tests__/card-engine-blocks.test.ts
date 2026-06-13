@@ -320,3 +320,26 @@ describe("renderFooter", () => {
     expect(html).not.toContain("onload=x");
   });
 });
+
+import { renderCarouselChrome, type CarouselChromeBlockProps } from "../tools/card-engine";
+
+describe("renderCarouselChrome", () => {
+  it("renders a progress bar reflecting current/total", () => {
+    const html = renderCarouselChrome({ totalSlides: 5, currentSlide: 2, progressBar: { color: "#7c8cff", height: 6 } }, C);
+    expect(html).toContain("#7c8cff");
+    // slide 2 of 5 (0-indexed) → 60% width
+    expect(html).toContain("width:60%");
+  });
+  it("renders page dots when requested", () => {
+    const html = renderCarouselChrome({ totalSlides: 3, currentSlide: 0, pageDots: true }, C);
+    expect((html.match(/page-dot/g) || []).length).toBe(3);
+  });
+  it("renders a nav-arrow hint when requested", () => {
+    const html = renderCarouselChrome({ totalSlides: 3, currentSlide: 0, navArrowHint: true }, C);
+    expect(html).toContain("nav-arrow");
+  });
+  it("rejects a malicious progress color", () => {
+    const html = renderCarouselChrome({ totalSlides: 2, currentSlide: 0, progressBar: { color: `#fff" onload=x` } }, C);
+    expect(html).not.toContain("onload=x");
+  });
+});

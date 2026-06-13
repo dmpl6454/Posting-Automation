@@ -495,3 +495,25 @@ export function renderFooter(props: FooterBlockProps, controls: StyleControls): 
   const color = safeColor(props.textColor ?? tokens.subTextColor);
   return `<div class="card-footer" style="position:absolute;left:56px;right:56px;bottom:44px;color:${color};font-size:24px;font-weight:600;text-align:${safeAlign(controls.textAlign)};z-index:3;">${escapeHtml(props.text)}</div>`;
 }
+
+// ── carouselChrome block ────────────────────────────────────────────────────
+export function renderCarouselChrome(props: CarouselChromeBlockProps, controls: StyleControls): string {
+  const total = Math.max(1, props.totalSlides);
+  const cur = Math.max(0, Math.min(total - 1, props.currentSlide));
+  const pct = Math.round(((cur + 1) / total) * 100);
+  const parts: string[] = [];
+  if (props.progressBar) {
+    const color = safeColor(props.progressBar.color ?? controls.brandColor);
+    const h = Math.max(2, props.progressBar.height ?? 6);
+    parts.push(`<div style="position:absolute;top:0;left:0;right:0;height:${h}px;background:rgba(0,0,0,0.12);z-index:7;"><div style="height:100%;width:${pct}%;background:${color};"></div></div>`);
+  }
+  if (props.pageDots) {
+    const dots = Array.from({ length: total }, (_v, i) =>
+      `<span class="page-dot" style="width:10px;height:10px;border-radius:50%;background:${i === cur ? safeColor(controls.brandColor) : "rgba(255,255,255,0.5)"};"></span>`).join("");
+    parts.push(`<div style="position:absolute;top:24px;left:50%;transform:translateX(-50%);display:flex;gap:8px;z-index:7;">${dots}</div>`);
+  }
+  if (props.navArrowHint && cur < total - 1) {
+    parts.push(`<div class="nav-arrow" style="position:absolute;right:32px;top:50%;transform:translateY(-50%);color:#fff;font-size:48px;opacity:0.8;z-index:7;">›</div>`);
+  }
+  return parts.join("");
+}
