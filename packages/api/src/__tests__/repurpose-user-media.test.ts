@@ -70,6 +70,26 @@ vi.mock("@postautomation/ai", () => ({
   resolveImageFromPageUrl: vi.fn(async () => null),
   isPublicPageUrl: vi.fn(() => false),
   describeImageStyle: vi.fn(async () => null),
+  // D10: present so the router's destructure resolves. These legacy-userMediaIds
+  // tests pass no imageAssignments, so the legacy branch runs and the resolver is
+  // never invoked — but the export must exist. (Faithful replica of the ladder.)
+  resolveImageSlot: async (slot: any, ctx: any) => {
+    if (slot.userImageId && ctx.userImages?.[slot.userImageId]) {
+      return { url: ctx.userImages[slot.userImageId].url, source: "user" };
+    }
+    if (ctx.aiToggle) {
+      try {
+        const url = await ctx.generateAi(slot.aiPrompt);
+        if (url) return { url, source: "ai" };
+      } catch {
+        /* fall through */
+      }
+    }
+    const article = slot.articleImageUrl || ctx.articleImages?.[0];
+    if (article) return { url: article, source: "article" };
+    return { url: ctx.brandGradient, source: "branded" };
+  },
+  classifyCard: vi.fn(async () => null),
 }));
 
 /* ── S3 mock — never hit the network. ── */
