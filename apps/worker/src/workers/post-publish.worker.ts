@@ -3,7 +3,7 @@ import { prisma } from "@postautomation/db";
 import { getSocialProvider } from "@postautomation/social";
 import { QUEUE_NAMES, postPublishQueue, type PostPublishJobData, createRedisConnection } from "@postautomation/queue";
 import IORedis from "ioredis";
-import { markTargetFailed, buildPublishNotifications } from "../lib/publish-recovery";
+import { markTargetFailed, buildPublishNotifications, mediaRequiredReason, terminalizeStuckClaim } from "../lib/publish-recovery";
 
 // Redis pub/sub publisher for upload progress SSE
 const progressPublisher = new IORedis(process.env.REDIS_URL || "redis://localhost:6379", {
@@ -224,7 +224,32 @@ export function createPostPublishWorker() {
         data: { status: "PUBLISHING" },
       });
       if (claim.count === 0) {
-        console.warn(`[PostPublish] target ${postTargetId} already claimed or published — skipping duplicate job ${job.id}`);
+        // The claim guard only transitions SCHEDULED/FAILED/DRAFT → PUBLISHING.
+        // count===0 means the target is already PUBLISHING/PUBLISHED or gone.
+        // On a NON-final attempt we skip (a later attempt or the original job may
+        // still finish). On the FINAL attempt a no-op claim means a previous
+        // attempt left it orphaned at PUBLISHING — terminalize it now so it can't
+        // sit "in progress" forever (the 30-min watchdog is the slow backstop).
+        const isFinalAttempt = (job.attemptsMade + 1) >= (job.opts?.attempts ?? 1);
+        if (terminalizeStuckClaim({ claimCount: claim.count, isFinalAttempt })) {
+          const stuck = await prisma.postTarget.findUnique({
+            where: { id: postTargetId },
+            select: { status: true, publishedId: true },
+          });
+          // Only terminalize a target genuinely orphaned at PUBLISHING with no
+          // platform id — never clobber a PUBLISHED row or one that has a
+          // publishedId (the publishedId short-circuit will mark it PUBLISHED).
+          if (stuck && stuck.status === "PUBLISHING" && !stuck.publishedId) {
+            await markTargetFailed(
+              prisma,
+              postTargetId,
+              "Publishing did not complete after all retries — please retry.",
+            );
+            console.warn(`[PostPublish] target ${postTargetId} orphaned at PUBLISHING on final attempt — marked FAILED (job ${job.id})`);
+          }
+        } else {
+          console.warn(`[PostPublish] target ${postTargetId} already claimed or published — skipping duplicate job ${job.id}`);
+        }
         return;
       }
 
