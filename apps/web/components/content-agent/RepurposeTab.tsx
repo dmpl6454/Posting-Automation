@@ -23,6 +23,7 @@ import {
   SelectValue,
 } from "~/components/ui/select";
 import { Switch } from "~/components/ui/switch";
+import { MediaPickerDialog } from "~/components/media-picker-dialog";
 import { useToast } from "~/hooks/use-toast";
 import {
   Sparkles,
@@ -160,12 +161,18 @@ export function RepurposeTab() {
   // E3a: free-text aesthetic/style notes appended to the AI background prompt.
   const [imageContext, setImageContext] = useState<string>("");
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
-  // E4: user-attached image(s) for a STATIC repurpose. When set, these BECOME
-  // the post media and the AI image generation is skipped (captions still
-  // generate). Each entry carries the Media id + url (for preview).
-  const [userMedia, setUserMedia] = useState<{ id: string; url: string }[]>([]);
-  // Whether the user's own image replaces the AI image (static format only).
-  const useOwnImage = format === "static" && userMedia.length > 0;
+  // D2: Real⇄AI image toggle. Default ON preserves the prior always-AI behaviour.
+  const [aiImages, setAiImages] = useState<boolean>(true);
+  // D10: per-slot user image assignments (all formats). Keyed by slot:
+  //   "background" (static) | "slide:0".."slide:N" (carousel). Each entry carries
+  //   the org-owned Media id + url (for preview). The picker writes here; the
+  //   mutate payload maps it to [{slot, mediaId}].
+  const [imageAssignments, setImageAssignments] = useState<Record<string, { mediaId: string; url: string }>>({});
+  // The slot whose Media Library picker is currently open (one shared dialog).
+  const [pickerSlot, setPickerSlot] = useState<string | null>(null);
+  // A user-assigned STATIC background image becomes the whole post media, so the
+  // AI-styling controls are irrelevant in that case (parity w/ the old behaviour).
+  const useOwnImage = format === "static" && !!imageAssignments["background"];
 
   // Results
   const [results, setResults] = useState<{
@@ -553,9 +560,10 @@ export function RepurposeTab() {
         // Strip bare URLs out of the free-text notes at send time so a URL pasted
         // into the NOTES box doesn't leak into the AI prompt as literal text.
         imageContext: stripBareUrls(imageContext) || undefined,
-        // E4: when the user attached their own image (static only), send the
-        // media ids so the router uses them and skips AI image generation.
-        userMediaIds: useOwnImage ? userMedia.map((m) => m.id) : undefined,
+        // D2 (Real⇄AI) + D10 (per-slot images). When off, slots resolve real-first;
+        // each assignment overrides AI/article for that one slot.
+        aiImages,
+        imageAssignments: Object.entries(imageAssignments).map(([slot, v]) => ({ slot, mediaId: v.mediaId })),
         slideCount,
         videoDuration,
         // Seedance generates its own native audio, so the voiceOver/bgMusic
@@ -704,63 +712,113 @@ export function RepurposeTab() {
                 </div>
               </div>
 
-              {/* E4: Attach your own image (STATIC only). When set, it becomes the
-                  post media and the AI image generation is skipped — captions are
-                  still generated. */}
-              {format === "static" && (
-                <div className="space-y-2">
-                  <Label>Attach your own image (optional)</Label>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <input
-                      type="file"
-                      accept="image/*"
-                      multiple
-                      id="user-media-upload"
-                      className="hidden"
-                      onChange={async (e) => {
-                        const files = Array.from(e.target.files ?? []);
-                        e.target.value = "";
-                        for (const file of files) {
-                          if (userMedia.length >= 10) break;
-                          const fd = new FormData();
-                          fd.append("file", file);
-                          const res = await fetch("/api/upload", { method: "POST", body: fd });
-                          if (res.ok) {
-                            const { id, url } = await res.json();
-                            setUserMedia((prev) => (prev.length >= 10 ? prev : [...prev, { id, url }]));
-                          } else {
-                            toast({ title: "Image upload failed", variant: "destructive" });
-                          }
-                        }
-                      }}
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => document.getElementById("user-media-upload")?.click()}
-                    >
-                      {userMedia.length > 0 ? "Add another image" : "Upload your own image"}
-                    </Button>
-                    {userMedia.map((m, i) => (
-                      <div key={m.id} className="relative">
-                        <img src={m.url} alt="attached" className="h-12 w-12 rounded object-cover border" />
-                        <button
-                          type="button"
-                          aria-label="Remove image"
-                          onClick={() => setUserMedia((prev) => prev.filter((_, idx) => idx !== i))}
-                          className="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[10px] text-white"
-                        >
-                          ×
-                        </button>
-                      </div>
-                    ))}
+              {/* D2/D10: Real⇄AI image toggle + per-slot "your image" picker. The
+                  toggle governs whether the AI invents a photo for any slot with no
+                  assigned image; the picker assigns YOUR photo to a specific slot
+                  (it overrides AI/article for that slot only). */}
+              {(format === "static" || format === "carousel" || format === "reel") && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2">
+                    <div className="pr-3">
+                      <Label className="text-sm font-medium">AI image generation</Label>
+                      <p className="text-xs text-muted-foreground">
+                        {aiImages
+                          ? "On — the AI invents a photo when no real one is assigned to a slot"
+                          : "Off — uses your image, the article photo, or a branded background"}
+                      </p>
+                    </div>
+                    <Switch checked={aiImages} onCheckedChange={setAiImages} />
                   </div>
-                  {useOwnImage && (
-                    <p className="text-[10px] text-muted-foreground">
-                      Using your uploaded image — captions will still be generated. AI styling is skipped.
-                    </p>
-                  )}
+
+                  {(format === "static" || format === "carousel") && (() => {
+                    const slotKeys =
+                      format === "carousel"
+                        ? Array.from({ length: slideCount }, (_, i) => `slide:${i}`)
+                        : ["background"];
+                    const slotLabel = (slot: string) =>
+                      slot === "background" ? "Background" : `Slide ${Number(slot.split(":")[1]) + 1}`;
+                    return (
+                      <div className="space-y-2">
+                        <Label className="text-sm font-medium">Your images (optional)</Label>
+                        <p className="text-xs text-muted-foreground">
+                          Assign your own photo to a slot — it overrides AI/article for that slot only.
+                        </p>
+                        {slotKeys.map((slot) => {
+                          const cur = imageAssignments[slot];
+                          return (
+                            <div key={slot} className="flex items-center gap-2">
+                              <span className="w-20 shrink-0 text-xs text-muted-foreground">{slotLabel(slot)}</span>
+                              {cur ? (
+                                <>
+                                  <img src={cur.url} alt={slot} className="h-9 w-9 rounded border object-cover" />
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() =>
+                                      setImageAssignments((p) => {
+                                        const n = { ...p };
+                                        delete n[slot];
+                                        return n;
+                                      })
+                                    }
+                                  >
+                                    Clear
+                                  </Button>
+                                </>
+                              ) : (
+                                <>
+                                  <input
+                                    type="file"
+                                    accept="image/*"
+                                    className="hidden"
+                                    id={`slot-upload-${slot}`}
+                                    onChange={async (e) => {
+                                      const file = e.target.files?.[0];
+                                      e.target.value = "";
+                                      if (!file) return;
+                                      const fd = new FormData();
+                                      fd.append("file", file);
+                                      const res = await fetch("/api/upload", { method: "POST", body: fd });
+                                      if (!res.ok) {
+                                        toast({ title: "Image upload failed", variant: "destructive" });
+                                        return;
+                                      }
+                                      const d = await res.json();
+                                      setImageAssignments((p) => ({ ...p, [slot]: { mediaId: d.id, url: d.url } }));
+                                    }}
+                                  />
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => document.getElementById(`slot-upload-${slot}`)?.click()}
+                                  >
+                                    Upload
+                                  </Button>
+                                  <Button type="button" variant="outline" size="sm" onClick={() => setPickerSlot(slot)}>
+                                    Library
+                                  </Button>
+                                </>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
+
+                  {/* ONE shared Media Library dialog for whichever slot is picking. */}
+                  <MediaPickerDialog
+                    open={pickerSlot !== null}
+                    onOpenChange={(v) => {
+                      if (!v) setPickerSlot(null);
+                    }}
+                    onSelect={(u, _n, mediaId) => {
+                      const slot = pickerSlot;
+                      if (mediaId && slot) setImageAssignments((p) => ({ ...p, [slot]: { mediaId, url: u } }));
+                    }}
+                  />
                 </div>
               )}
 
@@ -811,6 +869,38 @@ export function RepurposeTab() {
                         ))}
                       </SelectContent>
                     </Select>
+                  )}
+
+                  {/* D8: Saved styles gallery — reference-image thumbnails of styles
+                      auto-saved from an aesthetic reference. Picking one applies its
+                      saved controls to local state with NO regeneration / AI call. */}
+                  {creativeTemplates && creativeTemplates.some((t) => (t as any).referenceMedia?.url) && (
+                    <div className="space-y-1.5 pt-1">
+                      <Label className="text-xs block">Saved styles</Label>
+                      <p className="text-[10px] text-muted-foreground">Re-use a style you saved before — applied instantly, no AI call.</p>
+                      <div className="flex flex-wrap gap-2">
+                        {creativeTemplates
+                          .filter((t) => (t as any).referenceMedia?.url)
+                          .map((t) => (
+                            <button
+                              key={t.id}
+                              type="button"
+                              onClick={() => {
+                                setSelectedTemplateId(t.id);
+                                if (t.style) setCreativeStyle(t.style as typeof creativeStyle);
+                                if (t.brandColor) setAccentColor(t.brandColor);
+                                if (t.logoPosition) setLogoPosition(t.logoPosition as "top-left" | "top-right");
+                                const cs = (t as any).cardSpec?.controls;
+                                if (cs?.theme) setTheme(cs.theme);
+                              }}
+                              className={`flex items-center gap-1.5 rounded-lg border px-2 py-1.5 text-xs ${selectedTemplateId === t.id ? "border-primary bg-primary/10" : "border-border"}`}
+                            >
+                              <img src={(t as any).referenceMedia.url} alt={t.name} className="h-8 w-8 rounded object-cover" />
+                              <span className="max-w-[7rem] truncate">{t.name}</span>
+                            </button>
+                          ))}
+                      </div>
+                    </div>
                   )}
 
                   <div className="flex items-center gap-2">
@@ -1352,6 +1442,9 @@ export function RepurposeTab() {
                   engines={results.imageEngines ?? (results.bgSource === "ai" && results.imageEngine ? [results.imageEngine] : [])}
                   label={results.format === "reel" ? "Slide images created by" : results.format === "carousel" ? "Images created by" : "Image created by"}
                 />
+                {Object.keys(imageAssignments).length > 0 && (
+                  <p className="text-[11px] text-muted-foreground">Includes your uploaded image(s) for the slot(s) you assigned.</p>
+                )}
               </CardHeader>
               <CardContent>
                 {(results.mediaType === "video/mp4" || results.format === "ai_video" || results.format === "seedance_video") && results.mediaUrls[0] ? (
