@@ -6,7 +6,7 @@ import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import crypto from "crypto";
 import { enforcePlanLimit } from "../middleware/plan-limit.middleware";
-import { assertMediaOwned } from "./chat.router";
+import { assertMediaOwned, assertMediaForPlatforms } from "./chat.router";
 
 export const postRouter = createRouter({
   list: orgProcedure
@@ -72,6 +72,12 @@ export const postRouter = createRouter({
         aiGenerated: z.boolean().default(false),
         aiProvider: z.string().optional(),
         aiPrompt: z.string().optional(),
+        // D2 (deferred Plan-1 media block): whether AI image generation is ON for
+        // this post. Default true preserves current behaviour (the publish worker
+        // auto-generates an image for media-less IG/FB). When explicitly false +
+        // no media + an IG/FB target, scheduling is blocked (the post can never
+        // publish). Drafts are exempt (only enforced when scheduledAt is set).
+        aiImages: z.boolean().default(true),
         formatByChannelId: z.record(z.enum(["FEED", "REEL", "STORY", "SHORT", "VIDEO", "CAROUSEL"])).optional(),
         metadata: z.object({
           title: z.string().optional(),
@@ -124,6 +130,16 @@ export const postRouter = createRouter({
       // attaching another org's Media row to their post (cross-org IDOR).
       if (input.mediaIds?.length) {
         await assertMediaOwned(ctx.prisma as any, ctx.organizationId, input.mediaIds);
+      }
+
+      // Block a media-less IG/FB SCHEDULE when AI is off (it can never publish).
+      // Only enforced for scheduled posts — DRAFTS may be saved media-less and
+      // filled in later. aiImages defaults true, so this is dormant by default.
+      if (input.scheduledAt) {
+        await assertMediaForPlatforms(ctx.prisma as any, ctx.organizationId, input.channelIds, {
+          hasMedia: !!input.mediaIds?.length,
+          aiEnabled: input.aiImages,
+        });
       }
 
       const status = input.scheduledAt ? "SCHEDULED" : "DRAFT";

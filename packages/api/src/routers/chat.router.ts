@@ -6,6 +6,7 @@ import { requirePlan, enforcePlanLimit } from "../middleware/plan-limit.middlewa
 import type { PrismaClient } from "@postautomation/db";
 import crypto from "crypto";
 import { uploadBase64ToS3 } from "../lib/s3";
+import { mediaRequiredBlock } from "../lib/media-required";
 
 /**
  * Throws unless every channelId belongs to the given org.
@@ -51,6 +52,39 @@ export async function assertMediaOwned(
   if (owned.length !== new Set(mediaIds).size) {
     throw new TRPCError({ code: "FORBIDDEN", message: "Some media are not in this organization." });
   }
+}
+
+/**
+ * Throws BAD_REQUEST when a post would target a media-required platform
+ * (Instagram / Facebook) with NO media attached AND AI image generation OFF — a
+ * post that can NEVER publish (the publish worker only auto-generates an image
+ * when AI is on). Call AFTER assertChannelsOwned. The channel lookup is
+ * org-scoped (no cross-org platform leak — IDOR-safe). No-op (and no query) when
+ * media is attached, AI is on, or no channels target IG/FB. Deferred from
+ * Plan-1 (scheduler-fix): the worker auto-generates UNCONDITIONALLY, so this
+ * fires only for the genuinely-doomed `aiEnabled:false + no media` case — never
+ * the default (aiEnabled defaults true everywhere it's wired).
+ */
+export async function assertMediaForPlatforms(
+  prisma: PrismaClient,
+  organizationId: string,
+  channelIds: string[],
+  opts: { hasMedia: boolean; aiEnabled: boolean },
+): Promise<void> {
+  // Fast path: nothing is doomed when media is present or AI will fill the gap.
+  if (opts.hasMedia || opts.aiEnabled) return;
+  const ids = [...new Set((channelIds || []).filter(Boolean))];
+  if (ids.length === 0) return;
+  const channels = await prisma.channel.findMany({
+    where: { id: { in: ids }, organizationId },
+    select: { platform: true },
+  });
+  const reason = mediaRequiredBlock({
+    platforms: channels.map((c) => c.platform),
+    hasMedia: opts.hasMedia,
+    aiEnabled: opts.aiEnabled,
+  });
+  if (reason) throw new TRPCError({ code: "BAD_REQUEST", message: reason });
 }
 
 /**
@@ -391,6 +425,12 @@ export const chatRouter = createRouter({
           await assertChannelsOwned(ctx.prisma, ctx.organizationId, p.channelIds || []);
           const mediaIds: string[] = Array.isArray(p.mediaIds) ? p.mediaIds : [];
           await assertMediaOwned(ctx.prisma, ctx.organizationId, mediaIds);
+          // Block a media-less IG/FB schedule only when AI is OFF (default true →
+          // dormant; the worker auto-generates when on). aiEnabled defaults true.
+          await assertMediaForPlatforms(ctx.prisma, ctx.organizationId, p.channelIds || [], {
+            hasMedia: mediaIds.length > 0,
+            aiEnabled: p.aiImages !== false,
+          });
           const userId = (ctx.session.user as any).id;
           const post = await ctx.prisma.post.create({
             data: {
@@ -446,6 +486,10 @@ export const chatRouter = createRouter({
             await assertChannelsOwned(ctx.prisma, ctx.organizationId, item.channelIds || []);
             const itemMediaIds: string[] = Array.isArray(item.mediaIds) ? item.mediaIds : [];
             await assertMediaOwned(ctx.prisma, ctx.organizationId, itemMediaIds);
+            await assertMediaForPlatforms(ctx.prisma, ctx.organizationId, item.channelIds || [], {
+              hasMedia: itemMediaIds.length > 0,
+              aiEnabled: item.aiImages !== false,
+            });
             const post = await ctx.prisma.post.create({
               data: {
                 organizationId: ctx.organizationId,
@@ -498,6 +542,12 @@ export const chatRouter = createRouter({
           await assertChannelsOwned(ctx.prisma, ctx.organizationId, p.channelIds || []);
           const mediaIds: string[] = Array.isArray(p.mediaIds) ? p.mediaIds : [];
           await assertMediaOwned(ctx.prisma, ctx.organizationId, mediaIds);
+          // publish_now goes LIVE immediately — block a media-less IG/FB post when
+          // AI is off (it can never succeed). aiEnabled defaults true (dormant).
+          await assertMediaForPlatforms(ctx.prisma, ctx.organizationId, p.channelIds || [], {
+            hasMedia: mediaIds.length > 0,
+            aiEnabled: p.aiImages !== false,
+          });
           const userId = (ctx.session.user as any).id;
 
           // Create post and immediately queue for publishing
