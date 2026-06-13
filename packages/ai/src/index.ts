@@ -81,3 +81,5 @@ export { isSourceOpen, recordSourceFailure, recordSourceSuccess } from "./tools/
 export { calculateTrendScore, calculateNicheRelevance, calculateRecencyScore, calculateSourceCredibility, calculateViralSignal } from "./tools/trend-scorer";
 export { classifySensitivity, type Sensitivity } from "./tools/sensitivity-classifier";
 export { detectGroundingNeed, searchForGrounding, buildGroundingContext, type GroundingResult } from "./utils/web-grounding";
+export { resolveImageSlot } from "./tools/image-slot-resolver";
+export type { ImageSource, ResolveImageSlotCtx } from "./tools/image-slot-resolver";
