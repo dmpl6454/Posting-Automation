@@ -110,3 +110,32 @@ describe("renderLogo", () => {
     expect(html).toContain("OK");
   });
 });
+
+import { renderCircularInset, type CircularInsetBlockProps } from "../tools/card-engine";
+
+describe("renderCircularInset", () => {
+  it("renders a single circular inset with a colored ring", () => {
+    const html = renderCircularInset({ items: [{ imageUrl: "https://x/face.jpg", position: { top: 200, left: 60 }, size: 300, ringColor: "#ff0000", ringWidth: 6 }] }, C);
+    expect(html).toContain("https://x/face.jpg");
+    expect(html).toContain("border-radius:50%");
+    expect(html).toContain("border:6px solid #ff0000");
+  });
+  it("renders multiple insets (Hema ×2)", () => {
+    const html = renderCircularInset({ items: [
+      { imageUrl: "https://x/a.jpg", position: { top: 100, left: 60 }, size: 240 },
+      { imageUrl: "https://x/b.jpg", position: { top: 100, left: 360 }, size: 240 },
+    ] }, C);
+    expect((html.match(/border-radius:50%/g) || []).length).toBe(2);
+  });
+  it("skips an item with a malicious url and keeps valid ones", () => {
+    const html = renderCircularInset({ items: [
+      { imageUrl: `https://x/a.jpg");}</style>`, position: { top: 0, left: 0 }, size: 100 },
+      { imageUrl: "https://x/ok.jpg", position: { top: 0, left: 120 }, size: 100 },
+    ] }, C);
+    expect(html).not.toContain(`https://x/a.jpg");}</style>`);
+    expect(html).toContain("https://x/ok.jpg");
+  });
+  it("emits nothing when no items", () => {
+    expect(renderCircularInset({ items: [] }, C)).toBe("");
+  });
+});

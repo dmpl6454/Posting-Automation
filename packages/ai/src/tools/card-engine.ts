@@ -377,3 +377,21 @@ export function renderLogo(props: LogoBlockProps, controls: StyleControls): stri
   if (!props.logos?.length) return "";
   return props.logos.map((l) => renderOneLogo(l, controls)).join("");
 }
+
+// ── circularInset block ─────────────────────────────────────────────────────
+export function renderCircularInset(props: CircularInsetBlockProps, controls: StyleControls): string {
+  const items = (props.items ?? [])
+    .map((it) => ({ ...it, url: safeImageUrl(it.imageUrl) }))
+    .filter((it) => !!it.url);
+  if (!items.length) return "";
+  return items
+    .map((it) => {
+      const ring = safeColor(it.ringColor ?? controls.brandColor);
+      const w = Math.max(0, it.ringWidth ?? 6);
+      const size = Math.max(40, it.size);
+      const top = Math.max(0, it.position.top);
+      const left = Math.max(0, it.position.left);
+      return `<div style="position:absolute;top:${top}px;left:${left}px;width:${size}px;height:${size}px;border-radius:50%;overflow:hidden;border:${w}px solid ${ring};box-shadow:0 8px 30px rgba(0,0,0,0.5);z-index:4;"><img src="${it.url}" style="width:100%;height:100%;object-fit:cover;"/></div>`;
+    })
+    .join("");
+}
