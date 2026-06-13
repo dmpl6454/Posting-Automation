@@ -352,7 +352,8 @@ model Media {
   organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   postMedia       PostMedia[]
   chatAttachments ChatAttachment[]
-  creativeTemplates CreativeTemplate[]
+  creativeTemplates          CreativeTemplate[] @relation("CreativeTemplateLogo")
+  referenceTemplates         CreativeTemplate[] @relation("CreativeTemplateReference")
 
   createdAt DateTime @default(now())
 
@@ -907,10 +908,15 @@ model CreativeTemplate {
   name           String
   style          String // "premium_editorial" | "hook_bars" | "tweet_card" | "bold_typographic"
   logoMediaId    String?
-  logoMedia      Media?       @relation(fields: [logoMediaId], references: [id], onDelete: SetNull)
+  logoMedia      Media?       @relation("CreativeTemplateLogo", fields: [logoMediaId], references: [id], onDelete: SetNull)
   logoPosition   String       @default("top-right")
   brandColor     String?
   channelId      String?
+  // Saved style-reference library (Component 9 / D8)
+  referenceMediaId String?
+  referenceMedia   Media?     @relation("CreativeTemplateReference", fields: [referenceMediaId], references: [id], onDelete: SetNull)
+  cardSpec         Json?      // resolved CardSpec (preset + blocks + StyleControls)
+  sourceUrl        String?    // original ref URL, if pasted (sanitized; provenance only)
   createdById    String
   createdBy      User         @relation(fields: [createdById], references: [id])
   createdAt      DateTime     @default(now())

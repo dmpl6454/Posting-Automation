@@ -84,6 +84,26 @@ vi.mock("@postautomation/ai", () => ({
   resolveImageFromPageUrl: vi.fn(async () => null),
   isPublicPageUrl: vi.fn(() => false),
   describeImageStyle: vi.fn(async () => null),
+  // D10: faithful replica of the real resolveImageSlot ladder so the engine
+  // aggregation (which now flows through the slot resolver → ctx.generateAi →
+  // generateImageSafe) is genuinely exercised by these tests.
+  resolveImageSlot: async (slot: any, ctx: any) => {
+    if (slot.userImageId && ctx.userImages?.[slot.userImageId]) {
+      return { url: ctx.userImages[slot.userImageId].url, source: "user" };
+    }
+    if (ctx.aiToggle) {
+      try {
+        const url = await ctx.generateAi(slot.aiPrompt);
+        if (url) return { url, source: "ai" };
+      } catch {
+        /* fall through to article/branded */
+      }
+    }
+    const article = slot.articleImageUrl || ctx.articleImages?.[0];
+    if (article) return { url: article, source: "article" };
+    return { url: ctx.brandGradient, source: "branded" };
+  },
+  classifyCard: vi.fn(async () => null),
 }));
 
 /* ── S3 mock — never hit the network. ── */
