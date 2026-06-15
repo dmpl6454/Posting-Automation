@@ -1666,7 +1666,7 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
         // (parity with the legacy userMediaIds attach, single image). The url came
         // from the org-scoped userImages map (IDOR-checked above); re-resolve the
         // Media row by (url, org) to attach the real id.
-        if (bgSlot.source === "user") {
+        if (bgSlot.source === "user" && !(detectedLayout && detectedLayout.confidence >= 0.5)) {
           const m = await ctx.prisma.media.findFirst({
             where: { url: bgSlot.url, organizationId },
             select: { id: true, url: true },
@@ -2226,20 +2226,43 @@ Return ONLY the JSON array, no other text.`;
                   // renders its own gradient (a CSS gradient string isn't a url).
                   slideBg = slot.source === "branded" ? undefined : slot.url;
                 }
-                const creative = await buildHeadlineCreative(
-                  bgPrompt,
-                  headline,
-                  category,
-                  undefined,
-                  {
-                    slideRole,
-                    aiEnabled: false, // bg resolved by the slot ladder above
-                    ...(slideRole === "body" ? { body: slideMeta.body } : {}),
-                    ...(slideBg ? { bgImageUrl: slideBg } : {}),
-                    browser: carouselBrowser,
-                  },
-                );
-                return { slideIdx, imageBase64: creative.imageBase64, mimeType: creative.mimeType, imageEngine: creative.imageEngine };
+                const useLayoutForCover =
+                  isCover && detectedLayout !== null && detectedLayout.confidence >= 0.5;
+                let creativeBase64: string;
+                let creativeMime: string;
+                let creativeEngine: string | undefined;
+                if (useLayoutForCover) {
+                  console.log(`[Repurpose] Carousel cover — using block engine (confidence=${detectedLayout!.confidence.toFixed(2)})`);
+                  const coverSpec = cardLayoutToSpec(detectedLayout!, {
+                    headline,
+                    ...(slideBg ? { heroImageUrl: slideBg } : {}),
+                    channelName: displayName,
+                    ...(resolvedLogoUrl ? { logoUrl: resolvedLogoUrl } : {}),
+                    ...(effectiveBrandColor ? { brandColor: effectiveBrandColor } : {}),
+                  });
+                  const coverCard = await generateCardImage(coverSpec, { browser: carouselBrowser });
+                  creativeBase64 = coverCard.imageBase64;
+                  creativeMime = coverCard.mimeType;
+                  creativeEngine = undefined;
+                } else {
+                  const creative = await buildHeadlineCreative(
+                    bgPrompt,
+                    headline,
+                    category,
+                    undefined,
+                    {
+                      slideRole,
+                      aiEnabled: false, // bg resolved by the slot ladder above
+                      ...(slideRole === "body" ? { body: slideMeta.body } : {}),
+                      ...(slideBg ? { bgImageUrl: slideBg } : {}),
+                      browser: carouselBrowser,
+                    },
+                  );
+                  creativeBase64 = creative.imageBase64;
+                  creativeMime = creative.mimeType;
+                  creativeEngine = creative.imageEngine;
+                }
+                return { slideIdx, imageBase64: creativeBase64, mimeType: creativeMime, imageEngine: creativeEngine };
               } catch (e) {
                 console.warn(`[Repurpose] Slide ${slideIdx + 1} (${slideRole}) failed:`, (e as Error).message);
                 return null;
@@ -2250,7 +2273,7 @@ Return ONLY the JSON array, no other text.`;
             for (const result of batchResults) {
               if (result) {
                 slideImages[result.slideIdx] = { imageBase64: result.imageBase64, mimeType: result.mimeType };
-                if (result.imageEngine) renderedEngines.add(result.imageEngine);
+                if (result.imageEngine === "gemini" || result.imageEngine === "openai") renderedEngines.add(result.imageEngine);
               }
             }
             const batchNum = Math.floor(batchStart / BATCH_SIZE) + 1;
