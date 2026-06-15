@@ -87,3 +87,5 @@ export { resolveImageSlot } from "./tools/image-slot-resolver";
 export type { ImageSource, ResolveImageSlotCtx } from "./tools/image-slot-resolver";
 export { classifyCard, parseCardHint } from "./tools/classify-card";
 export type { CardHint } from "./tools/classify-card";
+export { extractCardLayout, parseCardLayout, cardLayoutToSpec } from "./tools/extract-card-layout";
+export type { CardLayout, CardContent, LayoutBackgroundMode } from "./tools/extract-card-layout";

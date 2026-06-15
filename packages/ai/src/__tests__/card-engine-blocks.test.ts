@@ -375,3 +375,79 @@ describe("renderCtaCard", () => {
     expect(html).not.toContain(`https://x/p.png");}</style>`);
   });
 });
+
+// ── Reference-faithful extensions (2026-06-15) ──────────────────────────────
+describe("captionStack — plain variant + brand label (moviefied headline)", () => {
+  it("plain variant renders boxless huge bold text (no pill box), with highlight", () => {
+    const html = renderCaptionStack(
+      { pills: [{ text: "Five IAF personnel [[killed]] in crash", variant: "plain", textColor: "#ffffff" }] },
+      { ...C, theme: "dark", highlightColor: "#ff7f50" },
+    );
+    expect(html).toContain("caption-plain");
+    expect(html).toContain("font-weight:900");
+    // boxless: no pill box-shadow / radius box
+    expect(html).not.toContain("caption-pill");
+    // highlight still applies
+    expect(html).toContain("color:#ff7f50");
+    // dark theme → legibility shadow
+    expect(html).toContain("text-shadow:");
+  });
+
+  it("light-theme plain variant uses dark text and no shadow", () => {
+    const html = renderCaptionStack(
+      { pills: [{ text: "Headline", variant: "plain" }] },
+      { ...C, theme: "light" },
+    );
+    expect(html).toContain("caption-plain");
+    expect(html).not.toContain("text-shadow:");
+  });
+
+  it("renders a brand label/wordmark with an accent underline above the headline", () => {
+    const html = renderCaptionStack(
+      { label: { text: "Moviefied", italic: true }, pills: [{ text: "Big news", variant: "plain" }] },
+      { ...C, brandColor: "#ff7f50" },
+    );
+    expect(html).toContain("caption-label");
+    expect(html).toContain("Moviefied");
+    expect(html).toContain("font-style:italic");
+    expect(html).toContain("background:#ff7f50"); // the underline rule
+  });
+
+  it("escapes a malicious brand label (no injection)", () => {
+    const html = renderCaptionStack(
+      { label: { text: `<img src=x onerror=alert(1)>` }, pills: [{ text: "x", variant: "plain" }] },
+      C,
+    );
+    expect(html).not.toContain("<img");
+    expect(html).toContain("&lt;img");
+  });
+
+  it("box variant is unchanged (still a boxed pill)", () => {
+    const html = renderCaptionStack({ pills: [{ text: "Boxed" }] }, C);
+    expect(html).toContain("caption-pill");
+    expect(html).not.toContain("caption-plain");
+  });
+});
+
+describe("renderBackground — brand scrim (photo→brand blend)", () => {
+  it("scrimMode 'brand' bleeds the photo into the brand color at the bottom", () => {
+    const html = renderBackground(
+      { mode: "photo", imageUrl: "https://cdn.x/p.jpg", scrimMode: "brand" },
+      { ...C, brandColor: "#ff7f50" },
+    );
+    expect(html).toContain("https://cdn.x/p.jpg");
+    expect(html).toContain("#ff7f50"); // brand gradient scrim
+  });
+  it("scrimMode 'none' omits the scrim", () => {
+    const html = renderBackground(
+      { mode: "photo", imageUrl: "https://cdn.x/p.jpg", scrimMode: "none" },
+      C,
+    );
+    expect(html).toContain("https://cdn.x/p.jpg");
+    expect(html).not.toContain('class="scrim"');
+  });
+  it("default scrim (no scrimMode) is the dark legibility scrim — no regression", () => {
+    const html = renderBackground({ mode: "photo", imageUrl: "https://cdn.x/p.jpg" }, C);
+    expect(html).toContain('class="scrim"');
+  });
+});
