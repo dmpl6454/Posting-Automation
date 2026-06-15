@@ -80,6 +80,17 @@ effectiveBrandColor =
 ## Process
 model-tiered-execution (Sonnet implements, Opus reviews — implementer≠reviewer; run tests/tsc yourself) + subagent-driven-development. Color precedence + UI→server fields → adversarial review. Library UI → multimodal review. Visual gate (orange reaches output) BEFORE ship. Puppeteer at `~/.cache/puppeteer/chrome/mac_arm-146.0.7680.66/...`.
 
+## DEPLOY RUNBOOK (must do, in order)
+1. Deploy normally (push → merge → Deploy to Linode). The migrate container runs `db:push` and adds `CreativeTemplate.kind String @default("style")` — additive, non-destructive.
+2. **AFTER db:push, run the backfill ONCE** so existing logo-only templates file under "Brand logos" (the column default is "style", so without this they show under "Saved styles" until run):
+   ```bash
+   ssh posting-automation 'docker exec postautomation-web-1 sh -c "cd /app && NODE_PATH=/app/packages/db/node_modules /app/packages/db/node_modules/.bin/tsx scripts/backfill-template-kind.ts"'
+   ```
+   Idempotent — only stamps rows that have a logoMediaId, no referenceMediaId, and still carry the default kind. Safe to re-run.
+
+## Visual gate result (2026-06-15) — PASSED
+Rendered premium_editorial via the real `generateStyledCreativeImage`→Puppeteer path with `brandColor:"#ff7a00"` vs no brandColor (default `#e11d48`) and VIEWED both PNGs: the orange render shows an orange logo badge + orange wordmark underline + photo→orange-gradient scrim (matches `~/Downloads/MoviefiedPostRef.jpg`); the default render is identical but RED — proving the accent is driven by `brandColor`, not hardcoded. The "fade copies but color doesn't" symptom is resolved: the scrim gradient is `linear-gradient(..., brandColor, ...)`, so once the reference's accent flows through (T1), fade AND color are both the reference's orange.
+
 ## Pointers
 - Round 8 (control model + photo + UI): `docs/superpowers/plans/2026-06-15-repurpose-control-photo-ui-fix.md`; memory `project-repurpose-control-photo-ui`.
 - Reference image: `~/Downloads/MoviefiedPostRef.jpg`; logo: `~/Downloads/Moviefied logo.png`.

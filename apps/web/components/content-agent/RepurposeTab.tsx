@@ -147,6 +147,12 @@ export function RepurposeTab() {
   // Brand accent color — sourced from the picker below and from a saved
   // template's brandColor. Sent to the router as accentColor when non-empty.
   const [accentColor, setAccentColor] = useState<string>("");
+  // Mirror accentColor into a ref so classifyAndPreselect can read the LATEST
+  // value without taking it as a dep — that keeps the callback stable (deps [])
+  // so every caller (paste/blur/change) uses the same fresh logic. (Without this
+  // the paste path, defined before classifyAndPreselect, captured a stale "".)
+  const accentColorRef = useRef<string>("");
+  useEffect(() => { accentColorRef.current = accentColor; }, [accentColor]);
   const [voiceOver, setVoiceOver] = useState(true);
   const [voiceType, setVoiceType] = useState<string>("nova");
   const [bgMusic, setBgMusic] = useState(true);
@@ -279,14 +285,15 @@ export function RepurposeTab() {
           if (r.suggestedStyle) { setCreativeStyle(r.suggestedStyle); touched = true; }
           // Pre-fill accent + theme from the reference — only when the user hasn't
           // already set their own accent (don't clobber an explicit brand decision).
-          if (r.accentColor && !accentColor) { setAccentColor(r.accentColor); touched = true; }
+          // Read the LATEST accent via the ref so this stays dep-free + stable.
+          if (r.accentColor && !accentColorRef.current) { setAccentColor(r.accentColor); touched = true; }
           if (r.theme) { setTheme(r.theme); touched = true; }
           if (touched) setStyleAutoSuggested(true);
         },
       },
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accentColor]);
+  }, []);
 
   const startProgress = useCallback(() => {
     const id = `rep-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
