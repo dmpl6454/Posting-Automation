@@ -906,6 +906,7 @@ model CreativeTemplate {
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   name           String
+  kind           String       @default("style") // "logo" | "style" — which library this belongs to
   style          String // "premium_editorial" | "hook_bars" | "tweet_card" | "bold_typographic"
   logoMediaId    String?
   logoMedia      Media?       @relation("CreativeTemplateLogo", fields: [logoMediaId], references: [id], onDelete: SetNull)
