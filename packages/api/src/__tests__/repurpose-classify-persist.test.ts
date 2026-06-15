@@ -43,6 +43,8 @@ describe("reference detection → render mapping (D)", () => {
     expect(presetToCreativeStyle("infographic_stats")).toBe("bold_typographic");
     expect(presetToCreativeStyle("news_caption")).toBe("premium_editorial");
     expect(presetToCreativeStyle("title_cover")).toBe("premium_editorial");
+    expect(presetToCreativeStyle("photo_grid")).toBe("premium_editorial");
+    expect(presetToCreativeStyle("listicle_body")).toBe("premium_editorial");
     // Unknown / future presets degrade to the photo-led default, never crash.
     expect(presetToCreativeStyle("something_new")).toBe("premium_editorial");
   });

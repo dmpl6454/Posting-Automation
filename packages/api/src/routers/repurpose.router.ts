@@ -780,6 +780,70 @@ export const repurposeRouter = createRouter({
       }
     }),
 
+  /**
+   * Classify an attached style reference (uploaded image / pasted clipboard image
+   * / pasted social-post URL) into the closest of the 4 creative styles, so the
+   * Repurpose UI can PRE-SELECT it in the picker (T2a). The user can still override
+   * — this only seeds the default; the render path (repurposeFromUrl) honours the
+   * user's picked `creativeStyle` regardless of what this returns.
+   *
+   * Fail-soft by design: a dead / unfetchable / unclassifiable reference returns
+   * `{ suggestedStyle: null, confidence: 0 }` and NEVER throws to the client — a
+   * classification miss must not break the UI or pop an error toast. The fetch is
+   * SSRF-guarded by `safeFetchPublicImage` / `isPublicPageUrl` / `isPublicImageUrl`
+   * (fail-closed on private/loopback/metadata hosts) — the url is user-supplied, so
+   * it is NEVER fetched without these guards.
+   */
+  classifyStyleReference: protectedProcedure
+    .input(z.object({ aestheticRefUrl: z.string().min(1) }))
+    .mutation(
+      async ({
+        input,
+      }): Promise<{
+        suggestedStyle:
+          | "premium_editorial"
+          | "hook_bars"
+          | "tweet_card"
+          | "bold_typographic"
+          | null;
+        confidence: number;
+      }> => {
+        try {
+          const {
+            safeFetchPublicImage,
+            isPublicImageUrl,
+            isPublicPageUrl,
+            resolveImageFromPageUrl,
+            classifyCard,
+          } = await import("@postautomation/ai");
+
+          // Fetch the reference image EXACTLY like repurposeFromUrl does: try the
+          // url directly, then (for a social POST PAGE, which is text/html) resolve
+          // its og:image/twitter:image and fetch THAT. Both paths are SSRF-gated.
+          let aRef = await safeFetchPublicImage(input.aestheticRefUrl);
+          if (!aRef && isPublicPageUrl(input.aestheticRefUrl)) {
+            const og = await resolveImageFromPageUrl(input.aestheticRefUrl);
+            if (og && isPublicImageUrl(og)) aRef = await safeFetchPublicImage(og);
+          }
+          if (!aRef) return { suggestedStyle: null, confidence: 0 };
+
+          const hint = await classifyCard(aRef.base64, aRef.mimeType).catch(() => null);
+          if (!hint) return { suggestedStyle: null, confidence: 0 };
+
+          // presetToCreativeStyle always returns one of the 4 valid style strings.
+          const suggestedStyle = presetToCreativeStyle(hint.preset) as
+            | "premium_editorial"
+            | "hook_bars"
+            | "tweet_card"
+            | "bold_typographic";
+          return { suggestedStyle, confidence: hint.confidence };
+        } catch {
+          // Fail-soft: never surface a reference-classification miss to the client.
+          return { suggestedStyle: null, confidence: 0 };
+        }
+      },
+    ),
+
   /** Repurpose from URL — generates caption + media (static/carousel/reel) */
   repurposeFromUrl: orgProcedure
     .input(
