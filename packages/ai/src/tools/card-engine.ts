@@ -52,6 +52,13 @@ export type BackgroundBlockProps = {
   imageUrls?: string[]; // splitPhotos / photoGrid tiles
   accentColor?: string;
   overlayText?: string; // topTextBottomPhoto
+  /**
+   * Bottom scrim over a photo. "dark" (default) — the theme's dark scrim for
+   * legibility. "brand" — the photo BLEEDS into the brand color at the bottom
+   * (the moviefied photo→gradient blend; pairs with a bottom plain headline).
+   * "none" — no scrim.
+   */
+  scrimMode?: "dark" | "brand" | "none";
 };
 
 export interface LogoBlock {
@@ -105,8 +112,22 @@ export interface CaptionPill {
   align?: "left" | "center";
   shape?: "pill" | "bar";
   emoji?: string;
+  /**
+   * "box" (default) — the boxed pill (hook-bars / desi-news look).
+   * "plain" — boxless huge bold text directly on the background (moviefied /
+   * premium-editorial headline). Highlight markup + brand highlight color still
+   * apply; a drop shadow keeps it legible over a photo.
+   */
+  variant?: "box" | "plain";
 }
-export type CaptionStackBlockProps = { pills: CaptionPill[] };
+export type CaptionStackBlockProps = {
+  pills: CaptionPill[];
+  /**
+   * Optional brand label / wordmark rendered ABOVE the pills with a brand-accent
+   * underline (moviefied "Moviefied"; premium-editorial italic channel label).
+   */
+  label?: { text: string; italic?: boolean };
+};
 
 export type StatCardsBlockProps = {
   cards: Array<{ label: string; value: string; bg?: string; icon?: string }>;
@@ -303,7 +324,12 @@ export function renderBackground(props: BackgroundBlockProps, controls: StyleCon
   const cover = (u: string) =>
     `<div class="bg" style="position:absolute;inset:0;background-image:url('${u}');background-size:cover;background-position:center;"></div>`;
   const grad = `<div class="bg" style="position:absolute;inset:0;${brandedGradient(controls)}"></div>`;
-  const scrim = `<div class="scrim" style="position:absolute;inset:0;background:${themeTokens(controls).scrim};"></div>`;
+  // Bottom scrim: "brand" bleeds the photo into the brand color (moviefied blend),
+  // "none" omits it, default "dark" keeps the theme's legibility scrim.
+  const brandScrim = `<div class="scrim" style="position:absolute;inset:0;background:linear-gradient(to top, ${accent} 0%, ${accent}d9 16%, ${accent}33 44%, transparent 66%);"></div>`;
+  const darkScrim = `<div class="scrim" style="position:absolute;inset:0;background:${themeTokens(controls).scrim};"></div>`;
+  const scrim =
+    props.scrimMode === "brand" ? brandScrim : props.scrimMode === "none" ? "" : darkScrim;
 
   switch (props.mode) {
     case "photo":
@@ -439,22 +465,49 @@ export function renderCircularInset(props: CircularInsetBlockProps, controls: St
 }
 
 // ── captionStack block ──────────────────────────────────────────────────────
+/** Boxless-headline font size (px): fewer words → bigger, like a real news card. */
+function plainCaptionFontSize(text: string): number {
+  const words = text.trim().split(/\s+/).length;
+  return words <= 6 ? 80 : words <= 10 ? 68 : words <= 14 ? 60 : words <= 20 ? 52 : 46;
+}
+
 export function renderCaptionStack(props: CaptionStackBlockProps, controls: StyleControls): string {
   if (!props.pills?.length) return "";
   const pills = props.pills
     .map((p) => {
+      const align = safeAlign(p.align ?? controls.textAlign);
+      const emoji = safeEmoji(p.emoji);
+      const inner = renderHighlightMarkup(p.text, controls.highlightColor) + (emoji ? ` ${emoji}` : "");
+      // "plain" — boxless huge bold headline on the background (moviefied look).
+      // No box, large font, drop shadow for legibility; highlight markup still applies.
+      if (p.variant === "plain") {
+        const fs = plainCaptionFontSize(p.text);
+        const tc = safeColor(p.textColor ?? (controls.theme === "dark" ? "#ffffff" : "#0f1419"));
+        const shadow = controls.theme === "dark" ? "text-shadow:0 2px 20px rgba(0,0,0,0.6);" : "";
+        return `<div class="caption-plain" style="color:${tc};text-align:${align};font-weight:900;font-size:${fs}px;line-height:1.06;letter-spacing:-0.02em;word-break:break-word;${shadow}">${inner}</div>`;
+      }
+      // "box" (default) — unchanged boxed-pill behavior.
       const shape = safeShape(p.shape);
       const bg = safeColor(p.bg ?? (controls.theme === "dark" ? "#111111" : "#ffffff"));
       const opacity = clampOpacity(p.bgOpacity, controls.bgOpacity) / 100;
       const textColor = safeColor(p.textColor ?? (controls.theme === "dark" ? "#ffffff" : "#0f1419"));
-      const align = safeAlign(p.align ?? controls.textAlign);
       const radius = shape === "bar" ? 10 : 18;
-      const emoji = safeEmoji(p.emoji);
-      const inner = renderHighlightMarkup(p.text, controls.highlightColor) + (emoji ? ` ${emoji}` : "");
       return `<div class="caption-pill" style="background:${bg};opacity:${opacity};color:${textColor};border-radius:${radius}px;padding:18px 24px;text-align:${align};font-weight:800;font-size:42px;line-height:1.15;box-shadow:0 6px 24px rgba(0,0,0,0.3);word-break:break-word;">${inner}</div>`;
     })
     .join("");
-  return `<div class="caption-stack" style="position:absolute;left:36px;right:36px;bottom:48px;display:flex;flex-direction:column;gap:14px;z-index:3;">${pills}</div>`;
+  // Optional brand label / wordmark above the headline, with a brand-accent underline.
+  let label = "";
+  if (props.label?.text) {
+    const tokens = themeTokens(controls);
+    const accent = safeColor(controls.brandColor);
+    const labelShadow = controls.theme === "dark" ? "text-shadow:0 2px 14px rgba(0,0,0,0.55);" : "";
+    const fontStyle = props.label.italic === false ? "normal" : "italic";
+    label =
+      `<div class="caption-label" style="color:${tokens.textColor};font-style:${fontStyle};font-weight:700;font-size:30px;letter-spacing:0.01em;${labelShadow}">` +
+      `${escapeHtml(props.label.text)}` +
+      `<div style="width:72px;height:5px;background:${accent};border-radius:3px;margin-top:10px;"></div></div>`;
+  }
+  return `<div class="caption-stack" style="position:absolute;left:36px;right:36px;bottom:48px;display:flex;flex-direction:column;gap:14px;z-index:3;">${label}${pills}</div>`;
 }
 
 // ── statCards block ─────────────────────────────────────────────────────────

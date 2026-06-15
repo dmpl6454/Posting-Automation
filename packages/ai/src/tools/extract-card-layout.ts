@@ -1,0 +1,255 @@
+/**
+ * Reference-faithful layout extraction (2026-06-15).
+ *
+ * A gpt-4o-mini vision call reads a style-reference image's LAYOUT/AESTHETIC —
+ * NOT its text — into a small, sanitized `CardLayout` skeleton: background
+ * treatment, scrim/blend, headline placement+style, brand wordmark, logo
+ * position/shape, theme + dominant accent. The pure `cardLayoutToSpec` then fills
+ * in OUR content (article headline, hero photo, brand logo/color) and emits a
+ * `CardSpec` the block engine (`renderCard`) reproduces faithfully.
+ *
+ * Everything is sanitized at the parse boundary (enums whitelisted, color via
+ * safeColor, confidence clamped) and again downstream in renderCard. Fails graceful
+ * → null; the caller falls back to the legacy template so generation never blocks.
+ */
+import { safeColor, type CardSpec, type Block, type StyleControls } from "./card-engine";
+
+/** Background treatments the extractor may pick (subset the engine renders well). */
+export type LayoutBackgroundMode =
+  | "photo"
+  | "gradient"
+  | "splitPhotos"
+  | "photoGrid"
+  | "screenshot"
+  | "topTextBottomPhoto";
+
+export interface CardLayout {
+  theme: "light" | "dark";
+  accentColor: string; // #hex, safeColor-sanitized
+  background: {
+    mode: LayoutBackgroundMode;
+    /** Bottom scrim over a photo: "brand" = photo bleeds into the brand color
+     * (moviefied blend); "dark" = legibility scrim; "none". */
+    scrimMode: "dark" | "brand" | "none";
+  };
+  headline: {
+    /** "plain" = boxless huge text on the image (moviefied); "box" = boxed bars. */
+    variant: "plain" | "box";
+    align: "left" | "center";
+  };
+  /** A brand wordmark / label sits above the headline (e.g. "Moviefied" + underline). */
+  brandLabel: boolean;
+  logo: {
+    present: boolean;
+    anchor: "tl" | "tr" | "bl" | "br";
+    shape: "circle" | "square";
+  };
+  confidence: number; // 0–1
+}
+
+const BG_MODES: readonly LayoutBackgroundMode[] = [
+  "photo", "gradient", "splitPhotos", "photoGrid", "screenshot", "topTextBottomPhoto",
+];
+const ANCHORS = ["tl", "tr", "bl", "br"] as const;
+
+const num = (v: unknown, fallback = 0): number =>
+  typeof v === "number" && Number.isFinite(v) ? v : fallback;
+const clamp01 = (n: number): number => Math.max(0, Math.min(1, n));
+const oneOf = <T extends string>(v: unknown, allowed: readonly T[], dflt: T): T =>
+  typeof v === "string" && (allowed as readonly string[]).includes(v) ? (v as T) : dflt;
+
+/** Parse the vision model's text into a sanitized CardLayout, or null. Pure + exported. */
+export function parseCardLayout(raw: string): CardLayout | null {
+  const cleaned = raw.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
+  const match = cleaned.match(/\{[\s\S]*\}/);
+  if (!match) return null;
+  let o: any;
+  try {
+    o = JSON.parse(match[0]);
+  } catch {
+    return null;
+  }
+  if (!o || typeof o !== "object") return null;
+  const bg = o.background ?? {};
+  const hl = o.headline ?? {};
+  const lg = o.logo ?? {};
+  return {
+    theme: o.theme === "dark" ? "dark" : "light",
+    accentColor: safeColor(typeof o.accentColor === "string" ? o.accentColor : undefined),
+    background: {
+      mode: oneOf(bg.mode, BG_MODES, "photo"),
+      scrimMode: oneOf(bg.scrimMode, ["dark", "brand", "none"] as const, "dark"),
+    },
+    headline: {
+      variant: hl.variant === "box" ? "box" : "plain",
+      align: hl.align === "center" ? "center" : "left",
+    },
+    brandLabel: lg.present === undefined ? o.brandLabel === true : o.brandLabel === true,
+    logo: {
+      present: lg.present === true,
+      anchor: oneOf(lg.anchor, ANCHORS, "tr"),
+      shape: lg.shape === "square" ? "square" : "circle",
+    },
+    confidence: clamp01(num(o.confidence, 0)),
+  };
+}
+
+const EXTRACT_PROMPT = `You are a LAYOUT analyst for Instagram-style social cards.
+Look at the reference image and describe its VISUAL STYLE and LAYOUT — NOT its words.
+Return ONLY this JSON (no prose):
+{
+  "theme": "light" | "dark",                         // overall lightness of the card
+  "accentColor": "#rrggbb",                          // dominant brand/accent color
+  "background": {
+    "mode": "photo" | "gradient" | "splitPhotos" | "photoGrid" | "screenshot" | "topTextBottomPhoto",
+    "scrimMode": "brand" | "dark" | "none"           // "brand" if the photo fades into a colored gradient where the text sits
+  },
+  "headline": {
+    "variant": "plain" | "box",                      // "plain"=big text directly on the image; "box"=text inside solid bars/boxes
+    "align": "left" | "center"
+  },
+  "brandLabel": true | false,                        // is there a small brand name/wordmark near the headline?
+  "logo": { "present": true|false, "anchor": "tl"|"tr"|"bl"|"br", "shape": "circle"|"square" },
+  "confidence": 0..1
+}
+Pick the SINGLE best value for each field. Return ONLY the JSON.`;
+
+/**
+ * Extract a CardLayout from a reference image via gpt-4o-mini vision. Returns null
+ * on any failure (missing key, network, unparseable) so the caller falls back to
+ * the legacy template and generation is never blocked.
+ */
+export async function extractCardLayout(
+  imageBase64: string,
+  imageMimeType: string,
+): Promise<CardLayout | null> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return null;
+  const model = process.env.OPENAI_VISION_MODEL || "gpt-4o-mini";
+  try {
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model,
+        max_tokens: 400,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: EXTRACT_PROMPT },
+              { type: "image_url", image_url: { url: `data:${imageMimeType};base64,${imageBase64}` } },
+            ],
+          },
+        ],
+      }),
+    });
+    if (!res.ok) {
+      console.warn(`[extractCardLayout] vision call failed: ${res.status}`);
+      return null;
+    }
+    const data: any = await res.json();
+    const text = data?.choices?.[0]?.message?.content;
+    return typeof text === "string" ? parseCardLayout(text) : null;
+  } catch (e) {
+    console.warn(`[extractCardLayout] error:`, (e as Error).message);
+    return null;
+  }
+}
+
+/** The repurpose flow's OWN content, poured into the extracted layout skeleton. */
+export interface CardContent {
+  headline: string;
+  /** Hero/background photo (data: or https url). For split/grid, pass heroImageUrls. */
+  heroImageUrl?: string;
+  heroImageUrls?: string[];
+  channelName: string;
+  /** Brand logo image url (the user's). Absent → a monogram from channelName. */
+  logoUrl?: string;
+  /** Brand accent (user's explicit color wins over the reference's detected accent). */
+  brandColor?: string;
+  /** Optional body for a carousel body slide (unused for the static cover). */
+  body?: string;
+}
+
+/**
+ * Pure: map an extracted CardLayout + our content → a CardSpec the engine renders.
+ * The reference dictates STYLE (layout/treatment/positions/theme); we supply the
+ * TEXT and IMAGES. Exported for unit testing.
+ */
+export function cardLayoutToSpec(layout: CardLayout, content: CardContent): CardSpec {
+  const brandColor = safeColor(content.brandColor ?? layout.accentColor);
+  const controls: StyleControls = {
+    theme: layout.theme,
+    brandColor,
+    highlightColor: brandColor,
+    bgOpacity: 100,
+    fontFamily: "inter",
+    textAlign: layout.headline.align,
+    logoPosition: layout.logo.anchor,
+    fontScale: 1,
+  };
+
+  const blocks: Block[] = [];
+
+  // Background: the hero photo (or split/grid tiles) with the reference's scrim/blend.
+  blocks.push({
+    kind: "background",
+    props: {
+      mode: layout.background.mode,
+      ...(content.heroImageUrl ? { imageUrl: content.heroImageUrl } : {}),
+      ...(content.heroImageUrls?.length ? { imageUrls: content.heroImageUrls } : {}),
+      accentColor: brandColor,
+      scrimMode: layout.background.scrimMode,
+    },
+  });
+
+  // Logo: the user's brand logo (image) at the detected anchor; else a monogram from
+  // the channel initial. A "circle" shape wraps it in a circular brand box.
+  if (layout.logo.present) {
+    const circleBox =
+      layout.logo.shape === "circle"
+        ? { box: { bg: brandColor, opacity: 100, radius: 999, pad: 14 } }
+        : {};
+    if (content.logoUrl) {
+      blocks.push({
+        kind: "logo",
+        props: { logos: [{ kind: "image", src: content.logoUrl, anchor: layout.logo.anchor, size: 9, opacity: 100, ...circleBox }] },
+      });
+    } else {
+      blocks.push({
+        kind: "logo",
+        props: {
+          logos: [
+            {
+              kind: "monogram",
+              text: (content.channelName[0] ?? "N").toUpperCase(),
+              anchor: layout.logo.anchor,
+              size: 8,
+              opacity: 100,
+            },
+          ],
+        },
+      });
+    }
+  }
+
+  // Headline (+ optional brand wordmark above it). Text + highlight markup come from
+  // the repurpose flow; the reference dictates plain-vs-box + alignment.
+  blocks.push({
+    kind: "captionStack",
+    props: {
+      ...(layout.brandLabel ? { label: { text: content.channelName, italic: true } } : {}),
+      pills: [
+        {
+          text: content.headline,
+          variant: layout.headline.variant,
+          align: layout.headline.align,
+          textColor: layout.theme === "dark" ? "#ffffff" : "#0f1419",
+        },
+      ],
+    },
+  });
+
+  return { canvas: { w: 1080, h: 1350 }, blocks, controls };
+}
