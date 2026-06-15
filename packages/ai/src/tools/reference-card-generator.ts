@@ -149,11 +149,24 @@ export interface ReferenceCardDeps {
 // ── Internal constants ────────────────────────────────────────────────────────
 
 /**
- * Appended to every generation prompt. Mirrors the NO_REAL_PERSON_CLAUSE used
- * in the router (we cannot import a router-local const, so we define our own).
+ * Safety clauses for the generation prompts.
+ *
+ * The naive "do NOT depict any real recognizable person" clause BLOCKS the core
+ * use case: this feature recreates news/celebrity social cards whose hero photo
+ * legitimately IS a real person the user supplied. A blanket ban made Gemini
+ * refuse with finishReason OTHER on every celebrity reference (verified on the
+ * visual gate). The fix distinguishes the two cases:
+ *   - WITH a hero photo: PRESERVE the user's supplied person as-is; the only ban
+ *     is fabricating a DIFFERENT real named identity (deepfake risk).
+ *   - WITHOUT a hero photo: keep the stricter no-real-person ban (we'd otherwise
+ *     be inventing a likeness from nothing).
+ * Both forbid gibberish text + hashtags (same as the router's image path).
  */
-const SAFETY_CLAUSE =
-  "\n\nIMPORTANT: Do NOT depict any real, recognizable named person. Do NOT include hashtag text. Any text rendered must be clean, legible, correctly spelled, and limited to the provided headline/brand wordmark — no gibberish or placeholder lorem text.";
+const SAFETY_CLAUSE_WITH_HERO =
+  "\n\nIMPORTANT: Use the user's supplied photo (the second image) as the subject exactly as given — do NOT alter, swap, or fabricate a different real person's face or identity. Do NOT include hashtag text. Any text you render must be clean, legible, correctly spelled, and limited to the provided headline and brand wordmark — no gibberish or placeholder lorem text.";
+
+const SAFETY_CLAUSE_NO_HERO =
+  "\n\nIMPORTANT: Do NOT depict any real, recognizable named person (no hero photo was provided). Do NOT include hashtag text. Any text you render must be clean, legible, correctly spelled, and limited to the provided headline and brand wordmark — no gibberish or placeholder lorem text.";
 
 const CARD_WIDTH = 1080;
 const CARD_HEIGHT = 1350;
@@ -177,20 +190,20 @@ function buildGeminiPrompt(
 
   const headlineInstruction =
     args.textMode === "ai"
-      ? `Render this headline in the reference's headline style and position: "${headline}".`
+      ? `Place this exact headline text where the reference's headline sits, matching its font weight, size, alignment, and any partial-bold emphasis: "${headline}".`
       : `Leave the headline text area as clean, empty negative space — DO NOT render any headline text, words, or letters in it. Keep the layout, eyebrow, photo region(s), filmstrip, footer, and color treatment of the reference.`;
 
   const heroInstruction = hasHero
-    ? `Replace the reference's main photo with the SECOND image (the user's photo), fitted into the same photo region(s).`
+    ? `Place the SECOND image (the user's photo) into the reference's main photo region, cropped/scaled to fill it the same way — keep that person exactly as supplied.`
     : "";
 
   return [
-    `Recreate the composition, layout, element placement, typography treatment, and color treatment of the FIRST image (the reference) EXACTLY — same structure: any eyebrow/label, headline position and alignment, any image strip/filmstrip rows, footer, and overall grid.`,
+    `You are a graphic designer recreating a social-media card TEMPLATE. Study the FIRST image (the reference) and reproduce its LAYOUT precisely as a new card: the same overall grid and proportions, the same photo region position and shape, the same eyebrow/label placement, the same headline position and alignment, any image strip / filmstrip rows, any footer or brand bar, and the same color/gradient treatment and typography style.`,
     heroInstruction,
     headlineInstruction,
-    `Brand accent color: ${colorHint}. Keep the same look and feel as the reference.`,
-    `Output a single finished 1080x1350 (4:5 portrait) social media card.`,
-    SAFETY_CLAUSE,
+    `Use this brand accent color where the reference uses its accent: ${colorHint}. Keep the same overall look and feel as the reference.`,
+    `This is a layout/template design task — match the reference's composition, not its specific content. Output a single finished 1080x1350 (4:5 portrait) social media card image.`,
+    hasHero ? SAFETY_CLAUSE_WITH_HERO : SAFETY_CLAUSE_NO_HERO,
   ]
     .filter(Boolean)
     .join("\n");
@@ -222,7 +235,9 @@ function buildOpenAIPrompt(
     `Layout: portrait social card with header area, main content, and footer.`,
     textInstruction,
     `Brand accent color: ${colorHint}.`,
-    SAFETY_CLAUSE,
+    // gpt-image-1 fabricates from text only (no hero photo input), so use the
+    // stricter no-real-person clause regardless of whether a hero exists.
+    SAFETY_CLAUSE_NO_HERO,
   ].join(" ");
 }
 

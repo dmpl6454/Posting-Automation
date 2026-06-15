@@ -116,8 +116,8 @@ describe("generateReferenceStyledCard", () => {
 
     const calls = (deps.generateImage as ReturnType<typeof vi.fn>).mock.calls;
     const prompt = (calls[0]![0] as { prompt: string }).prompt;
-    // Must instruct the model to render the headline
-    expect(prompt).toMatch(/Render this headline/i);
+    // Must instruct the model to render the headline (in the reference's position)
+    expect(prompt).toMatch(/Place this exact headline text/i);
     expect(prompt).toContain(BASE_ARGS.headline);
   });
 
@@ -132,20 +132,39 @@ describe("generateReferenceStyledCard", () => {
     // Must tell the model to leave headline area empty
     expect(prompt).toMatch(/empty negative space/i);
     // Must NOT contain the render-headline instruction
-    expect(prompt).not.toMatch(/Render this headline/i);
+    expect(prompt).not.toMatch(/Place this exact headline text/i);
   });
 
-  it("both textModes include the safety clause (no real person / no gibberish)", async () => {
+  it("NO-hero prompt uses the strict no-real-person clause (both textModes)", async () => {
     const fn = await load();
 
     for (const textMode of ["ai", "overlay"] as const) {
       const deps = makeDeps();
+      // BASE_ARGS has no heroImage → strict clause.
       await fn({ ...BASE_ARGS, textMode }, deps);
       const calls = (deps.generateImage as ReturnType<typeof vi.fn>).mock.calls;
       const prompt = (calls[0]![0] as { prompt: string }).prompt;
       expect(prompt).toMatch(/Do NOT depict any real.*recognizable named person/i);
       expect(prompt).toMatch(/gibberish/i);
     }
+  });
+
+  it("WITH-hero prompt allows preserving the supplied person and does NOT forbid all real people", async () => {
+    // The core fix: a hero photo IS a real person (celebrity-news use case). The
+    // prompt must PRESERVE the supplied photo and only forbid FABRICATING a
+    // different identity — never the blanket "no real person" ban that made
+    // Gemini refuse every celebrity reference.
+    const fn = await load();
+    const deps = makeDeps();
+    await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE }, deps);
+    const calls = (deps.generateImage as ReturnType<typeof vi.fn>).mock.calls;
+    const prompt = (calls[0]![0] as { prompt: string }).prompt;
+    // It must NOT carry the blanket ban...
+    expect(prompt).not.toMatch(/Do NOT depict any real.*recognizable named person/i);
+    // ...and it must instruct preservation of the user's supplied photo + ban identity-swap.
+    expect(prompt).toMatch(/supplied photo/i);
+    expect(prompt).toMatch(/do NOT alter, swap, or fabricate a different real person/i);
+    expect(prompt).toMatch(/gibberish/i);
   });
 
   // ── overlay mode wiring ─────────────────────────────────────────────────────
