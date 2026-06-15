@@ -70,13 +70,16 @@ export function escapeHtml(text: string): string {
     .replace(/"/g, "&quot;");
 }
 
-/** Convert **word** / ==word== markup to brand-accent <span>s, escaping the rest. */
+/** Convert **word** / ==word== markup to brand-accent <span>s, escaping the rest.
+ * Defensive: after pairing, any ORPHAN marker (e.g. left by headline truncation)
+ * is stripped so a stray "**" never renders as literal text. */
 export function renderHighlightMarkup(text: string, accent: string): string {
   const safe = safeColor(accent);
   const escaped = escapeHtml(text);
   return escaped
     .replace(/\*\*([^*]+)\*\*/g, `<span style="color:${safe}">$1</span>`)
-    .replace(/==([^=]+)==/g, `<span style="color:${safe}">$1</span>`);
+    .replace(/==([^=]+)==/g, `<span style="color:${safe}">$1</span>`)
+    .replace(/\*\*|==/g, "");
 }
 
 export interface ThemeTokens {
@@ -164,25 +167,38 @@ function buildPremiumEditorial(opts: StaticCreativeOptions): string {
     ? `background-image:url("${safeBg}");background-size:cover;background-position:center;`
     : `background:${tokens.bgFallback};`;
   const corner = opts.logoPosition === "top-left" ? "left:48px;" : "right:48px;";
+  // Light-text themes get a drop shadow so a bold white headline reads cleanly
+  // over a busy real photo (the moviefied look); the light theme keeps dark text
+  // on a light scrim and needs no shadow.
+  const lightText = effectiveTheme !== "light";
+  const headlineShadow = lightText ? "text-shadow:0 2px 22px rgba(0,0,0,0.55);" : "";
+  // Over a real photo with light text, anchor a stronger bottom gradient under
+  // the text block (in addition to the theme scrim) so the headline never washes
+  // out against a bright/busy photo — same intent as moviefied's gradient.
+  const photoScrim =
+    safeBg && lightText
+      ? `<div class="photo-scrim"></div>`
+      : "";
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
 ${FONT_IMPORT}
 *{margin:0;padding:0;box-sizing:border-box;}
 body{width:${CANVAS.width}px;height:${CANVAS.height}px;overflow:hidden;position:relative;font-family:'Inter',system-ui,sans-serif;background:${tokens.bgFallback};-webkit-font-smoothing:antialiased;}
 .bg{position:absolute;inset:0;${bg}}
 .scrim{position:absolute;inset:0;background:${tokens.scrim};}
+.photo-scrim{position:absolute;left:0;right:0;bottom:0;height:62%;background:linear-gradient(to top, rgba(0,0,0,0.82) 0%, rgba(0,0,0,0.45) 40%, rgba(0,0,0,0) 100%);}
 .logo{position:absolute;top:44px;${corner}}
 .block{position:absolute;left:56px;right:56px;bottom:96px;}
-.label{font-style:italic;font-size:26px;font-weight:600;color:${tokens.subTextColor};letter-spacing:0.01em;}
+.label{font-style:italic;font-size:26px;font-weight:600;color:${tokens.subTextColor};letter-spacing:0.01em;${headlineShadow}}
 .rule{width:64px;height:4px;background:${accent};border-radius:2px;margin:14px 0 22px;}
-.headline{color:${tokens.textColor};font-size:${fs}px;font-weight:800;line-height:1.08;letter-spacing:-0.02em;word-break:break-word;}
-.handle{position:absolute;bottom:44px;left:56px;color:${tokens.subTextColor};font-size:20px;font-weight:500;}
+.headline{color:${tokens.textColor};font-size:${fs}px;font-weight:900;line-height:1.06;letter-spacing:-0.02em;word-break:break-word;${headlineShadow}}
+.handle{position:absolute;bottom:44px;left:56px;color:${tokens.subTextColor};font-size:20px;font-weight:500;${headlineShadow}}
 </style></head><body>
-<div class="bg"></div><div class="scrim"></div>
+<div class="bg"></div><div class="scrim"></div>${photoScrim}
 <div class="logo">${logoHtml(opts, 64)}</div>
 <div class="block">
   <div class="label">${escapeHtml(opts.channelName)}</div>
   <div class="rule"></div>
-  <div class="headline">${escapeHtml(opts.headline)}</div>
+  <div class="headline">${renderHighlightMarkup(opts.headline, accent)}</div>
 </div>
 ${opts.handle ? `<div class="handle">${escapeHtml(opts.handle)}</div>` : ""}
 </body></html>`;

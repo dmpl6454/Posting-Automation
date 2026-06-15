@@ -141,6 +141,43 @@ export function shouldPersistReference(
 }
 
 /**
+ * Map a detected reference PRESET (classifyCard's 8 layout ids) to the closest of
+ * the 4 renderable creative styles, so an uploaded reference actually DRIVES the
+ * rendered template — not merely a saved-style name. Pure + exported for testing.
+ *   tweet_card                          → tweet_card        (tweet screenshot)
+ *   news_inset                          → hook_bars         (headline bar + inset)
+ *   marketing_minimal, infographic_stats→ bold_typographic  (type-forward)
+ *   everything else                     → premium_editorial (photo + bottom headline)
+ */
+export function presetToCreativeStyle(preset: string): string {
+  switch (preset) {
+    case "tweet_card":
+      return "tweet_card";
+    case "news_inset":
+      return "hook_bars";
+    case "marketing_minimal":
+    case "infographic_stats":
+      return "bold_typographic";
+    default:
+      return "premium_editorial";
+  }
+}
+
+/**
+ * A photo-led reference layout — built around a real photo — so a repurpose using
+ * it should prefer the article's OWN photo over an invented AI background (E).
+ * Pure + exported for testing.
+ */
+export function isPhotoCardPreset(preset: string): boolean {
+  return (
+    preset === "news_caption" ||
+    preset === "title_cover" ||
+    preset === "photo_grid" ||
+    preset === "news_inset"
+  );
+}
+
+/**
  * Camera/composition angles cycled across carousel slides so each AI background
  * looks visually DISTINCT instead of "same person, same scene" on every slide.
  * Indexed modulo the list so any slide count is covered.
@@ -345,7 +382,11 @@ export function capHeadline(text: string): string {
   const MAX_WORDS = 16;
   const MAX_CHARS = 90;
 
-  if (words.length <= MAX_WORDS && cleaned.length <= MAX_CHARS) return cleaned;
+  // Measure the VISIBLE length (excluding **/== emphasis markers) so a headline
+  // with brand-highlight markup isn't truncated just for the marker characters.
+  // renderHighlightMarkup strips any orphan marker a later truncation might leave.
+  const visible = cleaned.replace(/\*\*|==/g, "");
+  if (words.length <= MAX_WORDS && visible.length <= MAX_CHARS) return cleaned;
 
   let out = words.slice(0, MAX_WORDS).join(" ");
   while (out.length > MAX_CHARS && out.includes(" ")) {
@@ -1010,6 +1051,10 @@ export const repurposeRouter = createRouter({
       // post-page yields no image bytes directly, so we fall back to extracting
       // its og:image. All paths fail closed/silently — never throw.
       let aestheticStyleDescriptor: string | undefined;
+      // Hoisted to outer scope (set inside the reference block) so the effective
+      // style/theme/accent resolution below can let a classified reference DRIVE
+      // the actual render — not just name a saved style.
+      let detectedCardHint: Awaited<ReturnType<typeof classifyCard>> = null;
       if (input.aestheticRefUrl) {
         // Surface this step in the activity log: a dead reference url used to
         // degrade with only a server-side console.warn, so users couldn't tell
@@ -1047,69 +1092,22 @@ export const repurposeRouter = createRouter({
           );
 
           // Component 3: structured layout detection (in addition to the prose
-          // descriptor above). Used by the UI to auto-select a preset; failure
-          // never blocks generation (classifyCard returns null).
+          // descriptor above). Drives the rendered template + theme/accent below
+          // AND names a saved style; failure never blocks generation (→ null).
           let cardHint: Awaited<ReturnType<typeof classifyCard>> = null;
           try {
             cardHint = await classifyCard(aRef.base64, aRef.mimeType);
           } catch {
             cardHint = null;
           }
-          // Component 9 / D8: persist the reference image + resolved hint as a
-          // reusable CreativeTemplate (auto-named) so the "Saved styles" gallery
-          // can re-pick it with NO AI call. Store the source image as an org Media
-          // row first, then the template. Best-effort — a failure here must NOT
-          // break generation (the whole flow continues without a saved style).
-          try {
-            if (cardHint) {
-              const { mediaId: refMediaId } = await uploadAndCreateMedia(
-                aRef.base64,
-                aRef.mimeType,
-                "styleref",
-              );
-              if (shouldPersistReference(refMediaId, cardHint)) {
-                await ctx.prisma.creativeTemplate.create({
-                  data: {
-                    organizationId,
-                    createdById: userId,
-                    name: buildSavedStyleName(cardHint.preset, new Date()),
-                    style: input.creativeStyle,
-                    logoPosition: input.logoPosition,
-                    brandColor: cardHint.accentColor,
-                    referenceMediaId: refMediaId,
-                    sourceUrl: isPublicPageUrl(input.aestheticRefUrl)
-                      ? input.aestheticRefUrl
-                      : undefined,
-                    // Shape MUST be exactly what sanitizeCardSpecJson preserves on
-                    // read ({ canvas, blocks, controls }); extra top-level keys
-                    // (e.g. detectedPreset) would be silently stripped, so we don't
-                    // store dead data. The "Saved styles" gallery re-applies
-                    // controls.{theme,brandColor,bgOpacity,textAlign,fontFamily}.
-                    cardSpec: {
-                      canvas: { w: 1080, h: 1350 },
-                      blocks: [],
-                      controls: {
-                        theme: cardHint.theme,
-                        brandColor: cardHint.accentColor,
-                        highlightColor: cardHint.accentColor,
-                        bgOpacity: 60,
-                        fontFamily: "inter",
-                        textAlign: "left",
-                        logoPosition: input.logoPosition === "top-left" ? "tl" : "tr",
-                      },
-                    },
-                  },
-                });
-                progress(
-                  "Analyzing style reference",
-                  "done",
-                  `Detected: ${cardHint.preset} — saved to your styles`,
-                );
-              }
-            }
-          } catch (e) {
-            console.warn(`[Repurpose] saved-style persistence failed (non-fatal):`, (e as Error).message);
-          }
+          detectedCardHint = cardHint;
+          // Fix B: NO silent auto-save. We used to auto-create a CreativeTemplate
+          // ("News Caption — <date>") whenever a reference classified — confusing
+          // (it appeared in the styles gallery with no rename/delete and the user
+          // never asked for it). The classification now DRIVES this render (above)
+          // and the user saves a style EXPLICITLY via the UI's "Save as template"
+          // button when they want to keep it. `shouldPersistReference` /
+          // `buildSavedStyleName` remain exported for that explicit path + tests.
         } else {
           console.warn(`[Repurpose] Aesthetic reference unavailable (no image / unfetchable url) — continuing without`);
           progress(
@@ -1154,8 +1152,27 @@ export const repurposeRouter = createRouter({
       /** The org-owned Media id assigned to a named slot, if any. */
       const slotMediaId = (slot: string): string | undefined =>
         slotAssignments.find((a) => a.slot === slot)?.mediaId;
+
+      // ── D8: a classified reference DEFINES the look ──────────────────────────
+      // When the user uploads/links an aesthetic reference and it classifies, the
+      // reference's detected layout/theme/accent DRIVE this render (echoed to the
+      // UI by the response below) — previously the detection only named a saved
+      // style and the render used the user's dropdown values, so mimicry never
+      // happened. No reference (or unclassifiable) → the user's own selections
+      // stand, exactly as before. The user's EXPLICIT brand color still wins over
+      // a detected accent (an explicit brand decision, not a style guess).
+      const effectiveStyle: string = detectedCardHint
+        ? presetToCreativeStyle(detectedCardHint.preset)
+        : input.creativeStyle;
+      const effectiveTheme = detectedCardHint ? detectedCardHint.theme : input.theme;
+      const effectiveBrandColor = resolvedBrandColor || detectedCardHint?.accentColor || null;
+      if (detectedCardHint) {
+        console.log(
+          `[Repurpose] Reference classified as ${detectedCardHint.preset} → style=${effectiveStyle}, theme=${effectiveTheme}, accent=${effectiveBrandColor}`,
+        );
+      }
       // Branded gradient — the always-renders bottom rung of the per-slot ladder.
-      const brandGradient = `linear-gradient(135deg, ${resolvedBrandColor || "#e11d48"}, #11131a)`;
+      const brandGradient = `linear-gradient(135deg, ${effectiveBrandColor || "#e11d48"}, #11131a)`;
       // The AI rung of the ladder: a clean BACKGROUND photo as a data: URL
       // (Gemini → OpenAI via generateImageSafe), mirroring renderStaticCreative's
       // internal AI prompt (theme tones + the UNCONDITIONAL NO_REAL_PERSON clause +
@@ -1163,9 +1180,9 @@ export const repurposeRouter = createRouter({
       // through to the article/branded rung — generation never blocks on AI.
       async function generateAiSlotImage(slotPrompt?: string): Promise<string> {
         const themeBgDescriptor =
-          input.theme === "light"
+          effectiveTheme === "light"
             ? "bright, airy, well-lit, clean"
-            : input.theme === "gradient"
+            : effectiveTheme === "gradient"
               ? "vibrant, colorful, dramatic lighting"
               : "dark, moody, dramatic";
         const bg = await generateImageSafe({
@@ -1225,13 +1242,13 @@ export const repurposeRouter = createRouter({
           bgPrompt,
           headline,
           category,
-          creativeStyle: input.creativeStyle,
-          theme: input.theme,
+          creativeStyle: effectiveStyle,
+          theme: effectiveTheme,
           channelName: displayName,
           handle,
           logoUrl: resolvedLogoUrl || null,
           logoPosition: input.logoPosition,
-          brandColor: resolvedBrandColor,
+          brandColor: effectiveBrandColor,
           referenceImages: brandReferenceImages,
           ...(hookLine ? { hookLine } : {}),
           ...(extra?.slideRole ? { slideRole: extra.slideRole } : {}),
@@ -1298,11 +1315,36 @@ export const repurposeRouter = createRouter({
         (u: unknown): u is string =>
           typeof u === "string" && u.startsWith("https://") && isPublicImageUrl(u),
       );
+      // E: a photo-led reference ("real photo card") + an actual article photo
+      // available → prefer the REAL photo over an invented AI background, so a
+      // crash/news story doesn't render a generic AI scene when the genuine photo
+      // exists. Falls back to the user's Real⇄AI toggle when there's no reference
+      // or no real photo to use (else we'd force a flat branded gradient).
+      const referencePrefersRealPhoto =
+        !!detectedCardHint && isPhotoCardPreset(detectedCardHint.preset) && articleImagesList.length > 0;
+      const effectiveAiImages = referencePrefersRealPhoto ? false : input.aiImages;
+      if (referencePrefersRealPhoto) {
+        console.log(`[Repurpose] Photo-card reference → using the article's real photo (AI background off for this render)`);
+      }
+      // C: report exactly what the reference drove (never a silent no-op). When a
+      // reference classified, say which style/theme/photo it produced; the fetch/
+      // classify FAILURE paths above already report their own "couldn't read"/
+      // "style extracted" lines.
+      if (detectedCardHint) {
+        progress(
+          "Style reference applied",
+          "done",
+          `${effectiveStyle.replace(/_/g, " ")} · ${effectiveTheme} theme${
+            referencePrefersRealPhoto ? " · your article's real photo" : ""
+          }`,
+        );
+      }
       // Slot resolution context shared by the static + carousel branches. `aiToggle`
-      // is the D2 Real⇄AI switch. Return type is inferred + checked structurally at
-      // each resolveImageSlot call (no need to import ResolveImageSlotCtx).
+      // is the D2 Real⇄AI switch (overridden to real for photo-card references).
+      // Return type is inferred + checked structurally at each resolveImageSlot
+      // call (no need to import ResolveImageSlotCtx).
       const slotCtx = () => ({
-        aiToggle: input.aiImages,
+        aiToggle: effectiveAiImages,
         userImages,
         articleImages: articleImagesList,
         brandGradient,
@@ -1553,7 +1595,7 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
         // style so no other style pays for it. Never fails the whole repurpose:
         // on any error we fall back to no hook line.
         let hookLine: string | undefined;
-        if (input.creativeStyle === "hook_bars") {
+        if (effectiveStyle === "hook_bars") {
           try {
             const rawHook = await generateContentResilient({
               provider: input.provider,
@@ -1583,6 +1625,16 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
         // The resolver OWNS the AI rung here, so the creative render below runs with
         // aiEnabled:false (it just bakes the headline/logo overlay onto the resolved
         // background — no second AI generation, no double billing).
+        //
+        // Fix A (progress regression): the slow ~20-40s AI background generation now
+        // runs INSIDE resolveImageSlot (the `generateAi` rung), which reports no
+        // progress of its own — so the activity log used to freeze at "Generating
+        // captions… done" with only the spinner until the fast Puppeteer bake. Emit
+        // a live "Creating background image" step around the resolve when the AI
+        // rung will actually run (AI on + no user-assigned image), then report the
+        // honest outcome (AI ready / fell back to the real photo or branding).
+        const willGenerateAiBg = effectiveAiImages && !slotMediaId("background");
+        if (willGenerateAiBg) progress("Creating background image");
         const bgSlot = await resolveImageSlot(
           {
             userImageId: slotMediaId("background"),
@@ -1591,6 +1643,15 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
           },
           slotCtx(),
         ).catch(() => ({ url: brandGradient, source: "branded" as const }));
+        if (willGenerateAiBg) {
+          progress(
+            "Creating background image",
+            "done",
+            bgSlot.source === "ai"
+              ? "AI background ready"
+              : "AI unavailable — using the article photo / branded background",
+          );
+        }
 
         // A user-assigned background IS the post media — skip the branded render
         // (parity with the legacy userMediaIds attach, single image). The url came
@@ -2269,6 +2330,10 @@ Return ONLY the JSON array, no other text.`;
             // `video_ready` keyed by this RAW progressId. T4 reads `videoPending`.
             videoPending: true,
             progressId: input.progressId,
+            referenceApplied: !!detectedCardHint,
+            appliedStyle: detectedCardHint ? effectiveStyle : null,
+            appliedTheme: detectedCardHint ? effectiveTheme : null,
+            usedRealPhoto: referencePrefersRealPhoto,
           };
         } else {
           mediaUrls = uploadedUrls;
@@ -2318,6 +2383,13 @@ Return ONLY the JSON array, no other text.`;
         // Unique AI image engines across ALL rendered images (static + per-slide
         // carousel). [] when every image fell back to article photo/gradient.
         imageEngines: [...renderedEngines],
+        // C/D: what an uploaded style reference actually drove this render to, so
+        // the UI can confirm it was honoured (vs. the old silent no-op). Null when
+        // no reference was classified.
+        referenceApplied: !!detectedCardHint,
+        appliedStyle: detectedCardHint ? effectiveStyle : null,
+        appliedTheme: detectedCardHint ? effectiveTheme : null,
+        usedRealPhoto: referencePrefersRealPhoto,
       };
     }),
 

@@ -47,6 +47,8 @@ import {
   AlertTriangle,
   Clock,
   Download,
+  Pencil,
+  Trash2,
 } from "lucide-react";
 
 const ALL_PLATFORMS = [
@@ -156,8 +158,12 @@ export function RepurposeTab() {
   const [videoDuration, setVideoDuration] = useState<number>(8);
   const [logoUrl, setLogoUrl] = useState<string>("");
   const [logoMediaId, setLogoMediaId] = useState<string>("");
-  // E1: aesthetic/style reference image the AI mimics (Gemini-only on backend).
+  // E1: aesthetic/style reference image. OpenAI vision detects its layout and
+  // drives the rendered template style/theme/accent (+ prefers the real photo).
   const [aestheticRefUrl, setAestheticRefUrl] = useState<string>("");
+  // Media id of an UPLOADED style reference (so "Save as template" can persist it
+  // as the saved style's reference thumbnail). Empty for pasted URLs.
+  const [aestheticRefMediaId, setAestheticRefMediaId] = useState<string>("");
   // E3a: free-text aesthetic/style notes appended to the AI background prompt.
   const [imageContext, setImageContext] = useState<string>("");
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
@@ -194,6 +200,12 @@ export function RepurposeTab() {
     bgSource?: "ai" | "stock" | null;
     imageEngine?: string | null;
     imageEngines?: string[];
+    // C/D: what an uploaded style reference actually drove this render to (so the
+    // UI confirms it was honoured, vs. the old silent no-op).
+    referenceApplied?: boolean;
+    appliedStyle?: string | null;
+    appliedTheme?: string | null;
+    usedRealPhoto?: boolean;
   } | null>(null);
   const [copiedPlatform, setCopiedPlatform] = useState<string | null>(null);
 
@@ -323,6 +335,8 @@ export function RepurposeTab() {
   const { data: channels } = trpc.channel.list.useQuery();
   const { data: creativeTemplates } = trpc.creativeTemplate.list.useQuery();
   const createTemplate = trpc.creativeTemplate.create.useMutation();
+  const updateTemplate = trpc.creativeTemplate.update.useMutation();
+  const deleteTemplate = trpc.creativeTemplate.delete.useMutation();
   const utils = trpc.useUtils();
   const activeChannels = (channels as any[])?.filter((c: any) => c.isActive) || [];
   const primaryChannel = activeChannels[0];
@@ -846,60 +860,100 @@ export function RepurposeTab() {
                     ))}
                   </div>
 
-                  <Label className="pt-2 block">Brand Reference (optional)</Label>
+                  {/* ── Saved styles — own bordered section, separate from the logo
+                       controls below. No silent auto-save: a style only lands here
+                       when you click "Save as template". Each can be applied,
+                       renamed, or deleted. ── */}
                   {creativeTemplates && creativeTemplates.length > 0 && (
-                    <Select
-                      value={selectedTemplateId}
-                      onValueChange={(id) => {
-                        setSelectedTemplateId(id);
-                        const t = creativeTemplates.find((x) => x.id === id);
-                        if (t) {
-                          setCreativeStyle(t.style as typeof creativeStyle);
-                          setLogoPosition((t.logoPosition as "top-left" | "top-right") ?? "top-right");
-                          setLogoUrl(t.logoMedia?.url ?? "");
-                          setLogoMediaId(t.logoMediaId ?? "");
-                          if (t.brandColor) setAccentColor(t.brandColor);
-                        }
-                      }}
-                    >
-                      <SelectTrigger><SelectValue placeholder="Use a saved brand template…" /></SelectTrigger>
-                      <SelectContent>
-                        {creativeTemplates.map((t) => (
-                          <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
-
-                  {/* D8: Saved styles gallery — reference-image thumbnails of styles
-                      auto-saved from an aesthetic reference. Picking one applies its
-                      saved controls to local state with NO regeneration / AI call. */}
-                  {creativeTemplates && creativeTemplates.some((t) => (t as any).referenceMedia?.url) && (
-                    <div className="space-y-1.5 pt-1">
-                      <Label className="text-xs block">Saved styles</Label>
-                      <p className="text-[10px] text-muted-foreground">Re-use a style you saved before — applied instantly, no AI call.</p>
-                      <div className="flex flex-wrap gap-2">
-                        {creativeTemplates
-                          .filter((t) => (t as any).referenceMedia?.url)
-                          .map((t) => (
-                            <button
-                              key={t.id}
-                              type="button"
-                              onClick={() => {
-                                setSelectedTemplateId(t.id);
-                                if (t.style) setCreativeStyle(t.style as typeof creativeStyle);
-                                if (t.brandColor) setAccentColor(t.brandColor);
-                                if (t.logoPosition) setLogoPosition(t.logoPosition as "top-left" | "top-right");
-                                const cs = (t as any).cardSpec?.controls;
-                                if (cs?.theme) setTheme(cs.theme);
-                              }}
-                              className={`flex items-center gap-1.5 rounded-lg border px-2 py-1.5 text-xs ${selectedTemplateId === t.id ? "border-primary bg-primary/10" : "border-border"}`}
-                            >
-                              <img src={(t as any).referenceMedia.url} alt={t.name} className="h-8 w-8 rounded object-cover" />
-                              <span className="max-w-[7rem] truncate">{t.name}</span>
-                            </button>
-                          ))}
+                    <div className="rounded-lg border border-border p-3 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-xs font-semibold">Saved styles</Label>
+                        <span className="text-[10px] text-muted-foreground">Applied instantly — no AI call</span>
                       </div>
+
+                      {/* Pick any saved style by name (covers logo-only brand templates too) */}
+                      <Select
+                        value={selectedTemplateId}
+                        onValueChange={(id) => {
+                          setSelectedTemplateId(id);
+                          const t = creativeTemplates.find((x) => x.id === id);
+                          if (t) {
+                            setCreativeStyle(t.style as typeof creativeStyle);
+                            setLogoPosition((t.logoPosition as "top-left" | "top-right") ?? "top-right");
+                            setLogoUrl(t.logoMedia?.url ?? "");
+                            setLogoMediaId(t.logoMediaId ?? "");
+                            if (t.brandColor) setAccentColor(t.brandColor);
+                            const cs = (t as any).cardSpec?.controls;
+                            if (cs?.theme) setTheme(cs.theme);
+                          }
+                        }}
+                      >
+                        <SelectTrigger className="h-8"><SelectValue placeholder="Use a saved style…" /></SelectTrigger>
+                        <SelectContent>
+                          {creativeTemplates.map((t) => (
+                            <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+
+                      {/* Thumbnail gallery (reference-image styles) — click to apply,
+                          ✎ to rename, ✕ to delete. The thumbnail IS the preview. */}
+                      {creativeTemplates.some((t) => (t as any).referenceMedia?.url) && (
+                        <div className="flex flex-wrap gap-2 pt-1">
+                          {creativeTemplates
+                            .filter((t) => (t as any).referenceMedia?.url)
+                            .map((t) => (
+                              <div
+                                key={t.id}
+                                className={`flex items-center gap-1.5 rounded-lg border px-2 py-1.5 text-xs ${selectedTemplateId === t.id ? "border-primary bg-primary/10" : "border-border"}`}
+                              >
+                                <button
+                                  type="button"
+                                  title="Apply this style"
+                                  onClick={() => {
+                                    setSelectedTemplateId(t.id);
+                                    if (t.style) setCreativeStyle(t.style as typeof creativeStyle);
+                                    if (t.brandColor) setAccentColor(t.brandColor);
+                                    if (t.logoPosition) setLogoPosition(t.logoPosition as "top-left" | "top-right");
+                                    const cs = (t as any).cardSpec?.controls;
+                                    if (cs?.theme) setTheme(cs.theme);
+                                  }}
+                                  className="flex items-center gap-1.5"
+                                >
+                                  <img src={(t as any).referenceMedia.url} alt={t.name} className="h-10 w-10 rounded object-cover" />
+                                  <span className="max-w-[6rem] truncate">{t.name}</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  title="Rename"
+                                  onClick={async () => {
+                                    const name = window.prompt("Rename this style:", t.name);
+                                    if (!name || name.trim() === t.name) return;
+                                    await updateTemplate.mutateAsync({ id: t.id, name: name.trim() });
+                                    utils.creativeTemplate.list.invalidate();
+                                  }}
+                                  className="text-muted-foreground hover:text-foreground"
+                                >
+                                  <Pencil className="h-3 w-3" />
+                                </button>
+                                <button
+                                  type="button"
+                                  title="Delete"
+                                  onClick={async () => {
+                                    if (!window.confirm(`Delete saved style "${t.name}"?`)) return;
+                                    await deleteTemplate.mutateAsync({ id: t.id });
+                                    if (selectedTemplateId === t.id) setSelectedTemplateId("");
+                                    utils.creativeTemplate.list.invalidate();
+                                    toast({ title: "Saved style deleted" });
+                                  }}
+                                  className="text-muted-foreground hover:text-destructive"
+                                >
+                                  <Trash2 className="h-3 w-3" />
+                                </button>
+                              </div>
+                            ))}
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -965,7 +1019,9 @@ export function RepurposeTab() {
                     )}
                   </div>
 
-                  {/* E1: aesthetic/style reference image (optional) — the AI mimics its look (Gemini-only) */}
+                  {/* E1: aesthetic/style reference image (optional) — OpenAI vision
+                      detects its LAYOUT and drives the template style + theme + accent
+                      (and uses your real photo for photo-style references). */}
                   <div className="flex items-center gap-2 pt-1">
                     <input
                       type="file"
@@ -981,8 +1037,9 @@ export function RepurposeTab() {
                         fd.append("category", "aesthetic-ref");
                         const res = await fetch("/api/upload", { method: "POST", body: fd });
                         if (res.ok) {
-                          const { url } = await res.json();
+                          const { id, url } = await res.json();
                           setAestheticRefUrl(url);
+                          setAestheticRefMediaId(id ?? "");
                         } else {
                           toast({ title: "Style reference upload failed", variant: "destructive" });
                         }
@@ -996,7 +1053,7 @@ export function RepurposeTab() {
                         <img src={aestheticRefUrl} alt="style reference" className="h-8 w-8 rounded object-cover border" />
                         <button
                           type="button"
-                          onClick={() => setAestheticRefUrl("")}
+                          onClick={() => { setAestheticRefUrl(""); setAestheticRefMediaId(""); }}
                           className="text-[10px] text-muted-foreground hover:underline"
                         >
                           Clear
@@ -1012,12 +1069,12 @@ export function RepurposeTab() {
                     <Input
                       type="url"
                       value={aestheticRefUrl}
-                      onChange={(e) => setAestheticRefUrl(e.target.value)}
+                      onChange={(e) => { setAestheticRefUrl(e.target.value); setAestheticRefMediaId(""); }}
                       placeholder="or paste an image / post URL"
                       className="h-8 text-xs"
                     />
                     {looksLikePostUrl(aestheticRefUrl) && (
-                      <p className="text-[10px] text-muted-foreground">We&apos;ll grab the post&apos;s main image automatically. It guides the background&apos;s look &amp; mood (not the layout or text) — the activity log shows whether it was applied.</p>
+                      <p className="text-[10px] text-muted-foreground">We&apos;ll grab the post&apos;s main image automatically and match its layout — style, theme &amp; accent. The activity log + result confirm what was applied. (Instagram links often block automated fetch — uploading the image is more reliable.)</p>
                     )}
                   </div>
 
@@ -1040,22 +1097,37 @@ export function RepurposeTab() {
                     </div>
                   </div>
 
-                  {logoUrl && (
+                  {/* Explicit save (replaces the old silent auto-save). Available
+                      whenever there's something worth keeping — a logo, an uploaded
+                      style reference, or a brand color. Persists the style + theme
+                      + accent + reference thumbnail so it re-applies in one click. */}
+                  {(logoUrl || aestheticRefMediaId || accentColor) && (
                     <Button
                       type="button"
                       variant="ghost"
                       size="sm"
                       onClick={async () => {
-                        const name = window.prompt("Name this brand template:");
-                        if (!name) return;
+                        const name = window.prompt("Name this style:");
+                        if (!name?.trim()) return;
                         await createTemplate.mutateAsync({
-                          name,
+                          name: name.trim(),
                           style: creativeStyle,
                           logoMediaId: logoMediaId || undefined,
                           logoPosition,
+                          ...(accentColor ? { brandColor: accentColor } : {}),
+                          ...(aestheticRefMediaId ? { referenceMediaId: aestheticRefMediaId } : {}),
+                          cardSpec: {
+                            canvas: { w: 1080, h: 1350 },
+                            blocks: [],
+                            controls: {
+                              theme,
+                              ...(accentColor ? { brandColor: accentColor, highlightColor: accentColor } : {}),
+                              logoPosition: logoPosition === "top-left" ? "tl" : "tr",
+                            },
+                          },
                         });
                         utils.creativeTemplate.list.invalidate();
-                        toast({ title: "Brand template saved" });
+                        toast({ title: "Style saved" });
                       }}
                     >
                       Save as template
@@ -1442,6 +1514,13 @@ export function RepurposeTab() {
                   engines={results.imageEngines ?? (results.bgSource === "ai" && results.imageEngine ? [results.imageEngine] : [])}
                   label={results.format === "reel" ? "Slide images created by" : results.format === "carousel" ? "Images created by" : "Image created by"}
                 />
+                {results.referenceApplied && (
+                  <p className="text-[11px] text-muted-foreground">
+                    Matched your style reference → {String(results.appliedStyle ?? "").replace(/_/g, " ")}
+                    {results.appliedTheme ? ` · ${results.appliedTheme}` : ""}
+                    {results.usedRealPhoto ? " · using the article's real photo" : ""}
+                  </p>
+                )}
                 {Object.keys(imageAssignments).length > 0 && (
                   <p className="text-[11px] text-muted-foreground">Includes your uploaded image(s) for the slot(s) you assigned.</p>
                 )}
