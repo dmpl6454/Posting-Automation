@@ -49,6 +49,8 @@ import {
   Download,
   Pencil,
   Trash2,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 
 const ALL_PLATFORMS = [
@@ -167,6 +169,9 @@ export function RepurposeTab() {
   // E3a: free-text aesthetic/style notes appended to the AI background prompt.
   const [imageContext, setImageContext] = useState<string>("");
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
+  // Advanced options toggle — Creative Style, Background Theme, Logo Position, and
+  // Aesthetic/style notes are collapsed by default so the reference-first UI is clean.
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   // D2: Real⇄AI image toggle. Default ON preserves the prior always-AI behaviour.
   const [aiImages, setAiImages] = useState<boolean>(true);
   // D10: per-slot user image assignments (all formats). Keyed by slot:
@@ -231,6 +236,27 @@ export function RepurposeTab() {
     eventSourceRef.current?.close();
     eventSourceRef.current = null;
   }, []);
+
+  // Clipboard paste handler for the style-reference URL input. Reads an image
+  // from the clipboard and uploads it exactly like the file uploader does.
+  const handleRefPaste = useCallback(async (e: React.ClipboardEvent) => {
+    const item = Array.from(e.clipboardData.items).find((i) => i.type.startsWith("image/"));
+    if (!item) return;
+    const file = item.getAsFile();
+    if (!file) return;
+    e.preventDefault();
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("category", "aesthetic-ref");
+    const res = await fetch("/api/upload", { method: "POST", body: fd });
+    if (res.ok) {
+      const { id, url } = await res.json();
+      setAestheticRefUrl(url);
+      setAestheticRefMediaId(id ?? "");
+    } else {
+      toast({ title: "Pasted image upload failed", variant: "destructive" });
+    }
+  }, [toast]);
 
   const startProgress = useCallback(() => {
     const id = `rep-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -841,29 +867,46 @@ export function RepurposeTab() {
                   image is generated, so the styling controls are irrelevant). */}
               {((format === "static" && !useOwnImage) || format === "carousel") && (
                 <div className="space-y-2">
-                  <Label>Creative Style</Label>
-                  <div className="grid grid-cols-2 gap-2">
-                    {[
-                      { id: "premium_editorial", label: "Premium Editorial" },
-                      { id: "hook_bars", label: "Hook + Headline" },
-                      { id: "tweet_card", label: "Tweet / Post Card" },
-                      { id: "bold_typographic", label: "Bold Typographic" },
-                    ].map((s) => (
-                      <button
-                        key={s.id}
-                        type="button"
-                        onClick={() => setCreativeStyle(s.id as typeof creativeStyle)}
-                        className={`rounded-lg border px-3 py-2 text-xs font-medium ${creativeStyle === s.id ? "border-primary bg-primary/10" : "border-border"}`}
-                      >
-                        {s.label}
-                      </button>
-                    ))}
-                  </div>
+                  {/* ── Advanced toggle ── Creative Style, Theme, Logo Position, and
+                       style notes live here. Hidden by default so the reference-first
+                       UI is clean. All state/handlers remain unchanged. ── */}
+                  <button
+                    type="button"
+                    onClick={() => setAdvancedOpen((v) => !v)}
+                    className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                  >
+                    {advancedOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                    Advanced — style, theme &amp; layout (auto-set from your reference)
+                  </button>
+                  {advancedOpen && (
+                    <div className="space-y-3">
+                      <div className="space-y-2">
+                        <Label>Creative Style</Label>
+                        <div className="grid grid-cols-2 gap-2">
+                          {[
+                            { id: "premium_editorial", label: "Premium Editorial" },
+                            { id: "hook_bars", label: "Hook + Headline" },
+                            { id: "tweet_card", label: "Tweet / Post Card" },
+                            { id: "bold_typographic", label: "Bold Typographic" },
+                          ].map((s) => (
+                            <button
+                              key={s.id}
+                              type="button"
+                              onClick={() => setCreativeStyle(s.id as typeof creativeStyle)}
+                              className={`rounded-lg border px-3 py-2 text-xs font-medium ${creativeStyle === s.id ? "border-primary bg-primary/10" : "border-border"}`}
+                            >
+                              {s.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )} {/* end advancedOpen — Creative Style */}
 
                   {/* ── Saved styles — own bordered section, separate from the logo
                        controls below. No silent auto-save: a style only lands here
                        when you click "Save as template". Each can be applied,
-                       renamed, or deleted. ── */}
+                       renamed, or deleted. Always visible (not gated by advancedOpen). ── */}
                   {creativeTemplates && creativeTemplates.length > 0 && (
                     <div className="rounded-lg border border-border p-3 space-y-2">
                       <div className="flex items-center justify-between">
@@ -983,13 +1026,15 @@ export function RepurposeTab() {
                       {logoUrl ? "Change logo" : "Upload logo"}
                     </Button>
                     {logoUrl && <img src={logoUrl} alt="logo" className="h-8 w-8 rounded object-contain border" />}
-                    <Select value={logoPosition} onValueChange={(v) => setLogoPosition(v as "top-left" | "top-right")}>
-                      <SelectTrigger className="w-36"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="top-right">Logo top-right</SelectItem>
-                        <SelectItem value="top-left">Logo top-left</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    {advancedOpen && (
+                      <Select value={logoPosition} onValueChange={(v) => setLogoPosition(v as "top-left" | "top-right")}>
+                        <SelectTrigger className="w-36"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="top-right">Logo top-right</SelectItem>
+                          <SelectItem value="top-left">Logo top-left</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    )}
                   </div>
 
                   {/* Brand accent color (optional) */}
@@ -1064,13 +1109,15 @@ export function RepurposeTab() {
 
                   {/* T7: paste an image OR a post/page URL — the backend extracts
                       the og:image for page links. Last-write-wins with the file
-                      uploader above (both populate aestheticRefUrl). */}
+                      uploader above (both populate aestheticRefUrl).
+                      onPaste intercepts clipboard image data and uploads it directly. */}
                   <div className="space-y-1">
                     <Input
                       type="url"
                       value={aestheticRefUrl}
                       onChange={(e) => { setAestheticRefUrl(e.target.value); setAestheticRefMediaId(""); }}
-                      placeholder="or paste an image / post URL"
+                      onPaste={handleRefPaste}
+                      placeholder="Paste an image (Cmd/Ctrl+V) or a post URL"
                       className="h-8 text-xs"
                     />
                     {looksLikePostUrl(aestheticRefUrl) && (
@@ -1078,24 +1125,26 @@ export function RepurposeTab() {
                     )}
                   </div>
 
-                  {/* E3a: free-text aesthetic / style notes (optional, max 300 chars) */}
-                  <div className="space-y-1 pt-1">
-                    <Label className="text-xs" htmlFor="image-context">Aesthetic / style notes (optional)</Label>
-                    <Textarea
-                      id="image-context"
-                      value={imageContext}
-                      maxLength={300}
-                      onChange={(e) => setImageContext(e.target.value.slice(0, 300))}
-                      placeholder="e.g. neon and moody, 35mm film grain, warm tones — or wording, e.g. 'mention Doordarshan in the hook'"
-                      className="min-h-[60px] text-xs"
-                    />
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="text-[10px] text-muted-foreground">
-                        Guides the background image AND the hook/headline wording. Highlighted words always use your brand color above.
-                      </p>
-                      <p className="text-[10px] text-muted-foreground shrink-0">{imageContext.length}/300</p>
+                  {/* E3a: free-text aesthetic / style notes — Advanced only */}
+                  {advancedOpen && (
+                    <div className="space-y-1 pt-1">
+                      <Label className="text-xs" htmlFor="image-context">Aesthetic / style notes (optional)</Label>
+                      <Textarea
+                        id="image-context"
+                        value={imageContext}
+                        maxLength={300}
+                        onChange={(e) => setImageContext(e.target.value.slice(0, 300))}
+                        placeholder="e.g. neon and moody, 35mm film grain, warm tones — or wording, e.g. 'mention Doordarshan in the hook'"
+                        className="min-h-[60px] text-xs"
+                      />
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="text-[10px] text-muted-foreground">
+                          Guides the background image AND the hook/headline wording. Highlighted words always use your brand color above.
+                        </p>
+                        <p className="text-[10px] text-muted-foreground shrink-0">{imageContext.length}/300</p>
+                      </div>
                     </div>
-                  </div>
+                  )}
 
                   {/* Explicit save (replaces the old silent auto-save). Available
                       whenever there's something worth keeping — a logo, an uploaded
@@ -1160,8 +1209,9 @@ export function RepurposeTab() {
               )}
 
               {/* Theme (static + carousel + slide-based video formats). Hidden
-                  for an own-image static post — theme only styles the AI image. */}
-              {((format === "static" && !useOwnImage) || format === "carousel" || format === "reel" || format === "ai_video") && (
+                  for an own-image static post — theme only styles the AI image.
+                  Shown only when Advanced is open (auto-set from style reference). */}
+              {advancedOpen && ((format === "static" && !useOwnImage) || format === "carousel" || format === "reel" || format === "ai_video") && (
                 <div className="space-y-2">
                   <Label>{format === "static" ? "Background Theme" : "Slide Theme"}</Label>
                   <div className="flex gap-2">
