@@ -866,7 +866,14 @@ export const repurposeRouter = createRouter({
           | "bold_typographic"
           | null;
         confidence: number;
+        // Round 9: also surface the reference's detected accent + theme so the UI
+        // can PRE-FILL the brand-color + theme controls on attach (overridable).
+        // Both are already sanitized at source: accentColor via safeColor in
+        // classify-card.ts; theme is the "light"|"dark" enum. null when unknown.
+        accentColor: string | null;
+        theme: "light" | "dark" | null;
       }> => {
+        const EMPTY = { suggestedStyle: null, confidence: 0, accentColor: null, theme: null } as const;
         try {
           const {
             safeFetchPublicImage,
@@ -884,10 +891,10 @@ export const repurposeRouter = createRouter({
             const og = await resolveImageFromPageUrl(input.aestheticRefUrl);
             if (og && isPublicImageUrl(og)) aRef = await safeFetchPublicImage(og);
           }
-          if (!aRef) return { suggestedStyle: null, confidence: 0 };
+          if (!aRef) return EMPTY;
 
           const hint = await classifyCard(aRef.base64, aRef.mimeType).catch(() => null);
-          if (!hint) return { suggestedStyle: null, confidence: 0 };
+          if (!hint) return EMPTY;
 
           // presetToCreativeStyle always returns one of the 4 valid style strings.
           const suggestedStyle = presetToCreativeStyle(hint.preset) as
@@ -895,10 +902,15 @@ export const repurposeRouter = createRouter({
             | "hook_bars"
             | "tweet_card"
             | "bold_typographic";
-          return { suggestedStyle, confidence: hint.confidence };
+          return {
+            suggestedStyle,
+            confidence: hint.confidence,
+            accentColor: hint.accentColor ?? null,
+            theme: hint.theme ?? null,
+          };
         } catch {
           // Fail-soft: never surface a reference-classification miss to the client.
-          return { suggestedStyle: null, confidence: 0 };
+          return EMPTY;
         }
       },
     ),
