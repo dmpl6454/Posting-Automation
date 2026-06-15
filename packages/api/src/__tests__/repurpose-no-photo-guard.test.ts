@@ -1,25 +1,26 @@
 /**
- * Regression guard for the "Image created by X" engine chip (WS1, 2026-06-12).
+ * Regression guard for the T3 "no hero photo" block (2026-06-15).
  *
- * The repurpose mutation surfaces WHICH AI image engine produced each visual:
- *   - static  → singular `imageEngine` + uniform `imageEngines` (one entry)
- *   - carousel/reel → `imageEngines` = the UNIQUE set across all slides, which
- *     can MIX ("gemini" + "openai") when a slide falls back mid-batch; the CTA
- *     slide renders a branded gradient and contributes NO engine
- *   - every-image-failed → `imageEngines: []` (the UI hides the chip and the
- *     card description explains the article-photo/gradient fallback)
+ * A STATIC post and a CAROUSEL COVER both require a usable background photo. When
+ * AI image generation is OFF (or unavailable) AND there is no user image AND no
+ * article photo, the prior behaviour rendered a blank branded gradient with a
+ * floating headline. The locked decision is to BLOCK instead, surfacing an
+ * actionable error the UI shows as a toast:
+ *   "Add a hero photo — paste or upload one — or turn on AI image generation. …"
  *
- * Built via createCallerFactory(repurposeRouter) against a mocked prisma + a
- * mocked @postautomation/ai + mocked S3, following the conventions in
- * repurpose-user-media.test.ts / repurpose-regenerate.test.ts.
+ * Guards live in repurpose.router.ts:
+ *   - STATIC:        inside `if (mediaUrls.length === 0)`, throws when bgSlot.source === "branded".
+ *   - CAROUSEL COVER: `if (format === "carousel" && !effectiveAiImages)` → throws when
+ *                     no user image for slide:0 AND no article cover photo.
+ *
+ * These cases are NOT covered by repurpose-image-engines.test.ts (which exercises
+ * the engine-chip path with AI on / real photos present). The mock harness below
+ * is replicated from that file so the caller resolves a real membership + org and
+ * the slot resolver faithfully mirrors the production resolveImageSlot ladder.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-/* ── @postautomation/ai mock (dynamically imported by the router). The engine
- *    chip derives from `generateImageSafe().source`: the FIRST call reports
- *    "gemini", every later call "dalle" (→ "openai"). Slides render in parallel
- *    batches, so assertions are on the aggregated unique SET, never on which
- *    slide got which engine. ── */
+/* ── @postautomation/ai mock (dynamically imported by the router). ── */
 let imageCall = 0;
 const generateImageSafe = vi.fn(async (..._a: any[]) => {
   imageCall += 1;
@@ -84,9 +85,9 @@ vi.mock("@postautomation/ai", () => ({
   resolveImageFromPageUrl: vi.fn(async () => null),
   isPublicPageUrl: vi.fn(() => false),
   describeImageStyle: vi.fn(async () => null),
-  // D10: faithful replica of the real resolveImageSlot ladder so the engine
-  // aggregation (which now flows through the slot resolver → ctx.generateAi →
-  // generateImageSafe) is genuinely exercised by these tests.
+  // Faithful replica of the real resolveImageSlot ladder so the no-photo guard is
+  // exercised through the SAME slot resolution the router relies on: with the AI
+  // toggle off and no user/article image, the slot resolves to "branded".
   resolveImageSlot: async (slot: any, ctx: any) => {
     if (slot.userImageId && ctx.userImages?.[slot.userImageId]) {
       return { url: ctx.userImages[slot.userImageId].url, source: "user" };
@@ -131,7 +132,7 @@ vi.mock("@postautomation/queue", () => ({
   repurposeVideoQueue: { add: vi.fn(async () => {}) },
 }));
 
-/* ── Prisma mock — same shape as repurpose-user-media.test.ts. ── */
+/* ── Prisma mock — same shape as repurpose-image-engines.test.ts. ── */
 const orgMemberFindUnique = vi.fn();
 const orgMemberFindFirst = vi.fn();
 const orgFindUnique = vi.fn();
@@ -193,68 +194,76 @@ beforeEach(() => {
   mediaFindMany.mockResolvedValue([]);
   channelFindFirst.mockResolvedValue(null);
   mediaCreate.mockResolvedValue({ id: "media-ai-1" });
+  // Reset to the photoless default for each test; cases that need a photo set it explicitly.
+  extractUrlContent.mockResolvedValue({
+    title: "Big news today",
+    description: "A short description",
+    siteName: "Example",
+    type: "article",
+    images: [] as string[],
+    url: "https://example.com/article",
+    body: "First sentence with plenty of detail for slides. Second sentence with more detail. Third sentence rounding out the article body for fallbacks.",
+  });
 });
 
-describe("repurpose.repurposeFromUrl — imageEngines surfacing", () => {
-  it("static: reports the single engine in BOTH the singular and plural fields", async () => {
+describe("repurpose.repurposeFromUrl — T3 no-photo guard", () => {
+  it("STATIC + AI off + no photo → REJECTS with an actionable error", async () => {
+    // photoless extract (default), AI off, no user media → bgSlot.source === "branded".
     const caller = makeCaller();
-    const res: any = await caller.repurposeFromUrl(input());
-
-    // One render → one AI background call → first-call mock = gemini.
-    expect(generateImageSafe).toHaveBeenCalledTimes(1);
-    expect(res.bgSource).toBe("ai");
-    expect(res.imageEngine).toBe("gemini");
-    expect(res.imageEngines).toEqual(["gemini"]);
+    await expect(caller.repurposeFromUrl(input({ aiImages: false }))).rejects.toThrow(/Add a hero photo/);
   });
 
-  it("carousel: aggregates the UNIQUE engine set across slides; CTA contributes none", async () => {
-    const caller = makeCaller();
-    // slideCount=4 total → cover + 2 content + CTA. CTA skips the AI background,
-    // so exactly 3 generateImageSafe calls: 1× "gemini" + 2× "dalle" → mixed set.
-    const res: any = await caller.repurposeFromUrl(input({ format: "carousel", slideCount: 4 }));
-
-    expect(generateImageSafe).toHaveBeenCalledTimes(3);
-    expect(res.mediaUrls).toHaveLength(4);
-    // Order within the set depends on parallel batch completion — sort it.
-    expect([...res.imageEngines].sort()).toEqual(["gemini", "openai"]);
-  });
-
-  it("carousel: all slides on one engine → a single-entry set (no false 'mixed')", async () => {
-    generateImageSafe.mockImplementation(async () => ({
-      imageBase64: "BG_BYTES",
-      mimeType: "image/png",
-      source: "dalle",
-    }));
-    const caller = makeCaller();
-    const res: any = await caller.repurposeFromUrl(input({ format: "carousel", slideCount: 4 }));
-
-    expect(res.imageEngines).toEqual(["openai"]);
-  });
-
-  it("static AI failure: stock fallback, NO engine reported (chip hides)", async () => {
-    generateImageSafe.mockRejectedValueOnce(new Error("billing hold"));
-    // T3: a truly photoless + AI-failed render is now intentionally BLOCKED. This
-    // test exercises the engine-chip-hides path, which requires a real fallback
-    // photo — so provide an article image; the AI failure falls back to it (source
-    // "article" → bgSource "real", no engine), preserving the original assertion.
-    extractUrlContent.mockResolvedValueOnce({
+  it("STATIC + AI off + article photo present → does NOT reject (falls back to the photo)", async () => {
+    extractUrlContent.mockResolvedValue({
       title: "Big news today",
       description: "A short description",
       siteName: "Example",
       type: "article",
-      images: ["https://example.com/photo.jpg"],
+      images: ["https://example.com/p.jpg"],
       url: "https://example.com/article",
       body: "First sentence with plenty of detail for slides. Second sentence with more detail. Third sentence rounding out the article body for fallbacks.",
     });
     const caller = makeCaller();
+    const res: any = await caller.repurposeFromUrl(input({ aiImages: false }));
+
+    expect(res.mediaUrls).toHaveLength(1);
+    expect(res.bgSource).toBe("real");
+    // AI was off, so no AI background call was made.
+    expect(generateImageSafe).not.toHaveBeenCalled();
+  });
+
+  it("STATIC + AI on + AI succeeds → does NOT reject", async () => {
+    // aiImages defaults to true; the default generateImageSafe mock resolves.
+    const caller = makeCaller();
     const res: any = await caller.repurposeFromUrl(input());
 
-    // The render itself still succeeds (article-photo fallback)…
     expect(res.mediaUrls).toHaveLength(1);
-    expect(res.mediaFailed).toBe(false);
-    // …but no AI engine is claimed.
-    expect(res.bgSource).toBe("real");
-    expect(res.imageEngine).toBeNull();
-    expect(res.imageEngines).toEqual([]);
+    expect(res.bgSource).toBe("ai");
+    expect(generateImageSafe).toHaveBeenCalled();
+  });
+
+  it("CAROUSEL + AI off + no cover photo → REJECTS with an actionable error", async () => {
+    // photoless extract (default), AI off, no slide:0 user image → cover is branded.
+    const caller = makeCaller();
+    await expect(
+      caller.repurposeFromUrl(input({ format: "carousel", aiImages: false })),
+    ).rejects.toThrow(/Add a hero photo/);
+  });
+
+  it("CAROUSEL + AI off + cover article photo present → does NOT reject", async () => {
+    extractUrlContent.mockResolvedValue({
+      title: "Big news today",
+      description: "A short description",
+      siteName: "Example",
+      type: "article",
+      images: ["https://example.com/p.jpg"],
+      url: "https://example.com/article",
+      body: "First sentence with plenty of detail for slides. Second sentence with more detail. Third sentence rounding out the article body for fallbacks.",
+    });
+    const caller = makeCaller();
+    const res: any = await caller.repurposeFromUrl(input({ format: "carousel", aiImages: false }));
+
+    expect(Array.isArray(res.mediaUrls)).toBe(true);
+    expect(res.mediaUrls.length).toBeGreaterThan(0);
   });
 });

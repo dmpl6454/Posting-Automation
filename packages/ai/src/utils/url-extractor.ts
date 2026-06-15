@@ -284,26 +284,134 @@ function getTitle(html: string): string {
   return decodeEntities(match?.[1]?.trim() || "");
 }
 
+/**
+ * Reject known-bad non-photo extensions (.svg/.gif/.ico/.bmp). Checks the URL
+ * PATH only, ignoring the query string. Extensionless + raster extensions are
+ * KEPT (many CDNs serve images without one, e.g. `?im=FitAndFill`).
+ */
+function hasBadExtension(path: string): boolean {
+  const BAD_EXTENSIONS = [".svg", ".gif", ".ico", ".bmp"];
+  return BAD_EXTENSIONS.some((ext) => path.endsWith(ext));
+}
+
+/**
+ * Is `parsed`/`lowerUrl` a tracker/analytics/beacon URL? Matched by SPECIFIC,
+ * unambiguous tokens — NOT loose substrings — to avoid dropping legitimate news
+ * photos:
+ *   - Multi-part tokens (`scorecardresearch`, `google-analytics`, …) are
+ *     unambiguous → substring against host + full url.
+ *   - Bare `analytics` is matched ONLY as a full host LABEL
+ *     (`hostname.split(".")` includes "analytics"), so `analytics.foo.com` is
+ *     blocked but real publishers `analyticsindiamag.com` / `analyticsinsight.net`
+ *     survive. (`google-analytics`/`googletagmanager` already cover GA.)
+ *   - `/pixel` and `/beacon` are intentionally NOT here — as loose path
+ *     substrings they wrongly dropped "Pixel 7" / "Beacon Hill" stories; a rare
+ *     tracking pixel/beacon falls through to the SSRF-gated fallback instead.
+ */
+function isTrackerUrl(parsed: URL, lowerUrl: string): boolean {
+  const host = parsed.hostname.toLowerCase();
+  const TRACKER_TOKENS = [
+    "scorecardresearch",
+    "doubleclick",
+    "google-analytics",
+    "googletagmanager",
+    "googlesyndication",
+    "facebook.com/tr",
+    "quantserve",
+    "chartbeat",
+  ];
+  if (TRACKER_TOKENS.some((s) => host.includes(s) || lowerUrl.includes(s))) {
+    return true;
+  }
+  // `analytics` as a full host LABEL only (not a substring — spares
+  // analyticsindiamag.com / img.analyticsinsight.net).
+  if (host.split(".").includes("analytics")) return true;
+  return false;
+}
+
+/**
+ * UI-chrome FILENAME tokens (`icon`, `logo`, `1x1`) — `site-logo.png`,
+ * `nav-icon.svg`, `1x1.gif`. Matched ONLY as an EXACT token of the LAST path
+ * segment (filename), never the host/dir/query, so `silicon-valley.jpg` /
+ * `iconic-moment.jpg` survive. `pixel`/`avatar` are deliberately EXCLUDED — too
+ * ambiguous as standalone words ("Pixel 7", "Avatar 2"); a missed
+ * tracking-pixel/avatar just falls through to the SSRF-gated fallback.
+ */
+function isChromeFilename(path: string): boolean {
+  const file = path.split("/").pop() ?? "";
+  const fileTokens = file.split(/[-_.]+/).filter(Boolean);
+  const CHROME = ["icon", "logo", "1x1"];
+  return CHROME.some((k) => fileTokens.includes(k));
+}
+
+/**
+ * Heuristic: is `url` likely a real CONTENT photo (raster hero) rather than a
+ * tracking pixel, analytics beacon, logo/icon SVG, or UI chrome? Used for the
+ * noisy inline `<img>` list, where `site-logo.png` / `nav-icon.svg` chrome
+ * actually appears — so this applies the chrome-filename filter too.
+ *
+ * CONTENT-QUALITY filter ONLY — NOT a security boundary. The SSRF gate stays
+ * `isPublicImageUrl` / `isPublicPageUrl`; this just keeps junk out of the
+ * `images[]` array so the downstream "hero" pick isn't a 1px pixel or a vector
+ * logo. Pure string/URL inspection — performs NO network I/O.
+ *
+ * Rejects: bad extensions (rule 1) + tracker hosts/labels (rule 2) + chrome
+ * filename tokens (rule 3). Malformed urls (new URL throws) → false.
+ */
+function isLikelyContentPhoto(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  const lowerUrl = url.toLowerCase();
+  const path = parsed.pathname.toLowerCase();
+
+  if (hasBadExtension(path)) return false;
+  if (isTrackerUrl(parsed, lowerUrl)) return false;
+  if (isChromeFilename(path)) return false;
+  return true;
+}
+
+/**
+ * Filter for og:image / twitter:image — the publisher's chosen HERO. It is
+ * virtually never named `logo.png`, so chrome-keyword filtering is NOT applied
+ * here: doing so wrongly dropped legitimate heroes (`silicon-…`, a
+ * story-about-a-logo). Only the unambiguous junk — non-photo EXTENSIONS +
+ * TRACKER hosts/labels — is rejected. Malformed urls → false. Pure / no network.
+ */
+function isLikelyOgPhoto(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  const lowerUrl = url.toLowerCase();
+  const path = parsed.pathname.toLowerCase();
+
+  if (hasBadExtension(path)) return false;
+  if (isTrackerUrl(parsed, lowerUrl)) return false;
+  return true;
+}
+
 /** Extract main images from HTML */
 function getImages(html: string): string[] {
   const images: string[] = [];
+  // og:image / twitter:image are usually the real hero — keep them FIRST and
+  // only drop them if they're a non-photo extension or a tracker host (an
+  // og:image that is a .svg or a scorecardresearch url is genuinely junk).
   const og = getMeta(html, "og:image");
-  if (og) images.push(og);
+  if (og && isLikelyOgPhoto(og)) images.push(og);
   const tw = getMeta(html, "twitter:image");
-  if (tw && !images.includes(tw)) images.push(tw);
+  if (tw && isLikelyOgPhoto(tw) && !images.includes(tw)) images.push(tw);
   // Get first few article images
   const imgRegex = /<img[^>]+src=["']([^"']+)["']/gi;
   let match;
   while ((match = imgRegex.exec(html)) !== null && images.length < 6) {
     const src = match[1]!;
-    if (
-      src.startsWith("http") &&
-      !src.includes("icon") &&
-      !src.includes("logo") &&
-      !src.includes("avatar") &&
-      !src.includes("pixel") &&
-      !src.includes("1x1")
-    ) {
+    if (src.startsWith("http") && isLikelyContentPhoto(src)) {
       if (!images.includes(src)) images.push(src);
     }
   }
@@ -867,4 +975,4 @@ export async function extractUrlContent(url: string): Promise<ExtractedContent> 
 }
 
 /** @internal test-only access to private extractors */
-export const __test__ = { getMeta, getTitle, stripHtml };
+export const __test__ = { getMeta, getTitle, stripHtml, isLikelyContentPhoto, isLikelyOgPhoto };

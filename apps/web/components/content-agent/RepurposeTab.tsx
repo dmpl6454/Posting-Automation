@@ -169,9 +169,13 @@ export function RepurposeTab() {
   // E3a: free-text aesthetic/style notes appended to the AI background prompt.
   const [imageContext, setImageContext] = useState<string>("");
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
-  // Advanced options toggle — Creative Style, Background Theme, Logo Position, and
-  // Aesthetic/style notes are collapsed by default so the reference-first UI is clean.
+  // Advanced options toggle — Background Theme, Logo Position, and Aesthetic/style
+  // notes are collapsed by default. The Creative Style picker is now ALWAYS visible
+  // (T2b) — it decides the rendered layout; the reference only pre-selects it.
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  // T2b: true once a style reference auto-suggested the picker value. Cleared the
+  // moment the user clicks a style button (their explicit choice) or clears the ref.
+  const [styleAutoSuggested, setStyleAutoSuggested] = useState(false);
   // D2: Real⇄AI image toggle. Default ON preserves the prior always-AI behaviour.
   const [aiImages, setAiImages] = useState<boolean>(true);
   // D10: per-slot user image assignments (all formats). Keyed by slot:
@@ -202,7 +206,9 @@ export function RepurposeTab() {
     hookLine?: string | null;
     // Which AI image engine(s) made the visuals — drives the "Image created by
     // X" chip. Plural covers carousel/reel (slides can mix engines mid-batch).
-    bgSource?: "ai" | "stock" | null;
+    // bgSource: "ai" = AI-generated; "real" = actual article/user photo;
+    // "branded" = a branded gradient (rare — the no-photo guard blocks most).
+    bgSource?: "ai" | "real" | "branded" | null;
     imageEngine?: string | null;
     imageEngines?: string[];
     // C/D: what an uploaded style reference actually drove this render to (so the
@@ -253,10 +259,29 @@ export function RepurposeTab() {
       const { id, url } = await res.json();
       setAestheticRefUrl(url);
       setAestheticRefMediaId(id ?? "");
+      classifyAndPreselect(url);
     } else {
       toast({ title: "Pasted image upload failed", variant: "destructive" });
     }
   }, [toast]);
+
+  // T2b: classify the just-attached reference and pre-select the closest creative
+  // style. Uses the url passed in (not stale state). Null suggestion = no-op.
+  const classifyAndPreselect = useCallback((refUrl: string) => {
+    if (!refUrl) return;
+    classifyRef.mutate(
+      { aestheticRefUrl: refUrl },
+      {
+        onSuccess: (r) => {
+          if (r.suggestedStyle) {
+            setCreativeStyle(r.suggestedStyle);
+            setStyleAutoSuggested(true);
+          }
+        },
+      },
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const startProgress = useCallback(() => {
     const id = `rep-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -468,6 +493,10 @@ export function RepurposeTab() {
     },
   });
 
+  // T2b — classify an attached style reference and pre-select the closest creative
+  // style. Fail-soft on the backend (never throws); a null suggestion is a no-op.
+  const classifyRef = trpc.repurpose.classifyStyleReference.useMutation();
+
   // E3b — per-image "Regenerate": re-roll JUST the static image / a carousel
   // slide's image without re-running the whole repurpose flow. `regenTarget`
   // tracks which card is loading: "static" for the single image, or the slide
@@ -554,7 +583,7 @@ export function RepurposeTab() {
           carouselMediaIds: nextCarouselIds,
           mediaMap: nextMap,
           imageEngines: nextEngines,
-          ...(target === "static" ? { bgSource: res.bgSource, imageEngine: res.imageEngine } : {}),
+          ...(target === "static" ? { bgSource: res.bgSource as "ai" | "real" | "branded" | null, imageEngine: res.imageEngine } : {}),
         };
       });
       toast({ title: "Image regenerated" });
@@ -867,41 +896,52 @@ export function RepurposeTab() {
                   image is generated, so the styling controls are irrelevant). */}
               {((format === "static" && !useOwnImage) || format === "carousel") && (
                 <div className="space-y-2">
-                  {/* ── Advanced toggle ── Creative Style, Theme, Logo Position, and
-                       style notes live here. Hidden by default so the reference-first
-                       UI is clean. All state/handlers remain unchanged. ── */}
+                  {/* ── Creative Style ── ALWAYS visible (T2b). This picker DECIDES
+                       the rendered layout; a style reference only pre-selects the
+                       closest one (and the user can change it). ── */}
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <Label>Creative style</Label>
+                      {styleAutoSuggested && aestheticRefUrl && (
+                        <span className="text-[10px] text-primary">Suggested from your reference</span>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      {[
+                        { id: "premium_editorial", label: "Premium Editorial" },
+                        { id: "hook_bars", label: "Hook + Headline" },
+                        { id: "tweet_card", label: "Tweet / Post Card" },
+                        { id: "bold_typographic", label: "Bold Typographic" },
+                      ].map((s) => (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onClick={() => {
+                            setCreativeStyle(s.id as typeof creativeStyle);
+                            // Manual pick = explicit choice — drop the "suggested" badge.
+                            setStyleAutoSuggested(false);
+                          }}
+                          className={`rounded-lg border px-3 py-2 text-xs font-medium ${creativeStyle === s.id ? "border-primary bg-primary/10" : "border-border"}`}
+                        >
+                          {s.label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">
+                      Pick how the post looks. A style reference pre-selects the closest one — change it anytime.
+                    </p>
+                  </div>
+
+                  {/* ── Advanced toggle ── now gates Theme, Logo Position & style
+                       notes only (the style picker above is always visible). ── */}
                   <button
                     type="button"
                     onClick={() => setAdvancedOpen((v) => !v)}
                     className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
                   >
                     {advancedOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                    Advanced — style, theme &amp; layout (auto-set from your reference)
+                    Advanced — theme, logo &amp; notes
                   </button>
-                  {advancedOpen && (
-                    <div className="space-y-3">
-                      <div className="space-y-2">
-                        <Label>Creative Style</Label>
-                        <div className="grid grid-cols-2 gap-2">
-                          {[
-                            { id: "premium_editorial", label: "Premium Editorial" },
-                            { id: "hook_bars", label: "Hook + Headline" },
-                            { id: "tweet_card", label: "Tweet / Post Card" },
-                            { id: "bold_typographic", label: "Bold Typographic" },
-                          ].map((s) => (
-                            <button
-                              key={s.id}
-                              type="button"
-                              onClick={() => setCreativeStyle(s.id as typeof creativeStyle)}
-                              className={`rounded-lg border px-3 py-2 text-xs font-medium ${creativeStyle === s.id ? "border-primary bg-primary/10" : "border-border"}`}
-                            >
-                              {s.label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  )} {/* end advancedOpen — Creative Style */}
 
                   {/* ── Saved styles — own bordered section, separate from the logo
                        controls below. No silent auto-save: a style only lands here
@@ -1064,10 +1104,12 @@ export function RepurposeTab() {
                     )}
                   </div>
 
-                  {/* E1: aesthetic/style reference image (optional) — OpenAI vision
-                      detects its LAYOUT and drives the template style + theme + accent
-                      (and uses your real photo for photo-style references). */}
-                  <div className="flex items-center gap-2 pt-1">
+                  {/* ── Style reference (optional) ── ONE consolidated block (T6):
+                       upload | paste/link a post + thumbnail + Clear, then one line
+                       of helper copy. We match its theme, accent & logo and
+                       pre-select the closest style (the picker above stays in control). */}
+                  <div className="space-y-1.5 pt-1">
+                    <Label className="text-xs">Style reference (optional)</Label>
                     <input
                       type="file"
                       accept="image/*"
@@ -1085,43 +1127,48 @@ export function RepurposeTab() {
                           const { id, url } = await res.json();
                           setAestheticRefUrl(url);
                           setAestheticRefMediaId(id ?? "");
+                          classifyAndPreselect(url);
                         } else {
                           toast({ title: "Style reference upload failed", variant: "destructive" });
                         }
                       }}
                     />
-                    <Button type="button" variant="outline" size="sm" onClick={() => document.getElementById("aesthetic-ref-upload")?.click()}>
-                      {aestheticRefUrl ? "Change style reference" : "Style reference (optional)"}
-                    </Button>
-                    {aestheticRefUrl && (
-                      <>
-                        <img src={aestheticRefUrl} alt="style reference" className="h-8 w-8 rounded object-cover border" />
-                        <button
-                          type="button"
-                          onClick={() => { setAestheticRefUrl(""); setAestheticRefMediaId(""); }}
-                          className="text-[10px] text-muted-foreground hover:underline"
-                        >
-                          Clear
-                        </button>
-                      </>
-                    )}
-                  </div>
-
-                  {/* T7: paste an image OR a post/page URL — the backend extracts
-                      the og:image for page links. Last-write-wins with the file
-                      uploader above (both populate aestheticRefUrl).
-                      onPaste intercepts clipboard image data and uploads it directly. */}
-                  <div className="space-y-1">
-                    <Input
-                      type="url"
-                      value={aestheticRefUrl}
-                      onChange={(e) => { setAestheticRefUrl(e.target.value); setAestheticRefMediaId(""); }}
-                      onPaste={handleRefPaste}
-                      placeholder="Paste an image (Cmd/Ctrl+V) or a post URL"
-                      className="h-8 text-xs"
-                    />
+                    <div className="flex items-center gap-2">
+                      <Button type="button" variant="outline" size="sm" onClick={() => document.getElementById("aesthetic-ref-upload")?.click()}>
+                        {aestheticRefUrl ? "Change" : "Upload"}
+                      </Button>
+                      <Input
+                        type="url"
+                        value={aestheticRefUrl}
+                        onChange={(e) => { setAestheticRefUrl(e.target.value); setAestheticRefMediaId(""); }}
+                        onPaste={handleRefPaste}
+                        onBlur={(e) => {
+                          // T2b: a typed/pasted URL is "committed" on blur — classify it
+                          // and pre-select the closest style (looks-like-a-URL only).
+                          const v = e.target.value.trim();
+                          if (/^https?:\/\//i.test(v)) classifyAndPreselect(v);
+                        }}
+                        placeholder="Paste an image (Cmd/Ctrl+V) or a post URL"
+                        className="h-8 flex-1 text-xs"
+                      />
+                      {aestheticRefUrl && (
+                        <>
+                          <img src={aestheticRefUrl} alt="style reference" className="h-8 w-8 rounded object-cover border shrink-0" />
+                          <button
+                            type="button"
+                            onClick={() => { setAestheticRefUrl(""); setAestheticRefMediaId(""); setStyleAutoSuggested(false); }}
+                            className="text-[10px] text-muted-foreground hover:underline shrink-0"
+                          >
+                            Clear
+                          </button>
+                        </>
+                      )}
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">
+                      Upload, paste (Cmd/Ctrl+V), or link a post you want this to look like. We match its theme, accent &amp; logo and pre-select the closest style.
+                    </p>
                     {looksLikePostUrl(aestheticRefUrl) && (
-                      <p className="text-[10px] text-muted-foreground">We&apos;ll grab the post&apos;s main image automatically and match its layout — style, theme &amp; accent. The activity log + result confirm what was applied. (Instagram links often block automated fetch — uploading the image is more reliable.)</p>
+                      <p className="text-[10px] text-muted-foreground">We&apos;ll grab the post&apos;s main image automatically. (Instagram links often block automated fetch — uploading the image is more reliable.)</p>
                     )}
                   </div>
 
@@ -1558,7 +1605,7 @@ export function RepurposeTab() {
                   Generated {results.format === "ai_video" ? "AI Video (Veo3)" : results.format === "seedance_video" ? "AI Video (Seedance 2.0)" : results.format === "reel" ? "Reel Video" : results.mediaUrls.length > 1 ? `Carousel (${results.mediaUrls.length} slides)` : "Static Post"}
                 </CardTitle>
                 <CardDescription>
-                  {results.format === "ai_video" ? "Cinematic AI video with text slides, visuals & music by Veo3" : results.format === "seedance_video" ? "Cinematic 2K video with native audio by Seedance 2.0" : results.format === "reel" ? "AI-generated video with slides" : results.format === "static" ? (results.bgSource === "stock" ? "Image made from the article's own photo (AI image was unavailable)" : "AI-generated image with your branding") : (results.imageEngines && results.imageEngines.length === 0 ? "Slides made from the article's photo and branded backgrounds (AI image was unavailable)" : "Swipe through carousel slides")}
+                  {results.format === "ai_video" ? "Cinematic AI video with text slides, visuals & music by Veo3" : results.format === "seedance_video" ? "Cinematic 2K video with native audio by Seedance 2.0" : results.format === "reel" ? "AI-generated video with slides" : results.format === "static" ? (results.bgSource === "real" ? "Made from the article's own photo with your branding" : results.bgSource === "branded" ? "Branded background" : results.bgSource === "ai" ? "AI-generated background with your branding" : "Your post image") : (results.imageEngines && results.imageEngines.length === 0 ? "Slides made from the article's photo and branded backgrounds (AI image was unavailable)" : "Swipe through carousel slides")}
                 </CardDescription>
                 <ImageEngineChip
                   engines={results.imageEngines ?? (results.bgSource === "ai" && results.imageEngine ? [results.imageEngine] : [])}
@@ -1566,8 +1613,8 @@ export function RepurposeTab() {
                 />
                 {results.referenceApplied && (
                   <p className="text-[11px] text-muted-foreground">
-                    Matched your style reference → {String(results.appliedStyle ?? "").replace(/_/g, " ")}
-                    {results.appliedTheme ? ` · ${results.appliedTheme}` : ""}
+                    Style reference applied for theme &amp; accent
+                    {results.appliedTheme ? ` · ${results.appliedTheme} theme` : ""}
                     {results.usedRealPhoto ? " · using the article's real photo" : ""}
                   </p>
                 )}

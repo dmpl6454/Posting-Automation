@@ -72,13 +72,72 @@ export function styleNeedsAiBackground(_style: string): boolean {
  * silently dropped there anyway. `isAllowed` is the `isPublicImageUrl` SSRF gate.
  * Pure + exported for unit testing.
  */
+/**
+ * Is `url` a real RASTER content photo (not a tracking pixel, analytics beacon,
+ * or vector/logo SVG)? CONTENT-QUALITY filter — NOT a security boundary; the
+ * SSRF gate remains `isAllowed` (isPublicImageUrl).
+ *
+ * `pickArticleBgImage` picks the HERO (og:image/first image), so this mirrors
+ * url-extractor's HERO filter (`isLikelyOgPhoto`): bad-extension + tracker ONLY,
+ * NO chrome-keyword (`icon`/`logo`) filter. A loose keyword match was the T5
+ * regression — it dropped legit heroes like `silicon-valley.jpg` and the real
+ * publishers `analyticsindiamag.com` / `analyticsinsight.net`. Tracker tokens
+ * are SPECIFIC (multi-part substrings) plus `analytics` as a full host LABEL.
+ * Replicated here (defense in depth, cross-package) — keep IDENTICAL to the
+ * url-extractor hero rules. Pure / no network; malformed urls → false.
+ * Exported for unit testing.
+ */
+export function isRasterPhotoUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  const lowerUrl = url.toLowerCase();
+  const host = parsed.hostname.toLowerCase();
+  const path = parsed.pathname.toLowerCase();
+
+  // Rule 1: bad non-photo extensions (path only — ignore ?query).
+  const BAD_EXTENSIONS = [".svg", ".gif", ".ico", ".bmp"];
+  if (BAD_EXTENSIONS.some((ext) => path.endsWith(ext))) return false;
+
+  // Rule 2: tracker tokens (unambiguous multi-part substrings against host+url)
+  // + `analytics` as a full host LABEL only (NOT a substring — spares
+  // analyticsindiamag.com / img.analyticsinsight.net). `/pixel` and `/beacon`
+  // are intentionally absent (they dropped "Pixel 7" / "Beacon Hill" stories).
+  const TRACKER_TOKENS = [
+    "scorecardresearch",
+    "doubleclick",
+    "google-analytics",
+    "googletagmanager",
+    "googlesyndication",
+    "facebook.com/tr",
+    "quantserve",
+    "chartbeat",
+  ];
+  if (TRACKER_TOKENS.some((s) => host.includes(s) || lowerUrl.includes(s))) {
+    return false;
+  }
+  if (host.split(".").includes("analytics")) return false;
+
+  return true;
+}
+
 export function pickArticleBgImage(
   images: string[] | undefined,
   isAllowed: (u: string) => boolean,
 ): string | undefined {
   if (!images) return undefined;
   for (const u of images) {
-    if (typeof u === "string" && u.startsWith("https://") && isAllowed(u)) return u;
+    if (
+      typeof u === "string" &&
+      u.startsWith("https://") &&
+      isAllowed(u) &&
+      isRasterPhotoUrl(u)
+    ) {
+      return u;
+    }
   }
   return undefined;
 }
@@ -780,6 +839,70 @@ export const repurposeRouter = createRouter({
       }
     }),
 
+  /**
+   * Classify an attached style reference (uploaded image / pasted clipboard image
+   * / pasted social-post URL) into the closest of the 4 creative styles, so the
+   * Repurpose UI can PRE-SELECT it in the picker (T2a). The user can still override
+   * — this only seeds the default; the render path (repurposeFromUrl) honours the
+   * user's picked `creativeStyle` regardless of what this returns.
+   *
+   * Fail-soft by design: a dead / unfetchable / unclassifiable reference returns
+   * `{ suggestedStyle: null, confidence: 0 }` and NEVER throws to the client — a
+   * classification miss must not break the UI or pop an error toast. The fetch is
+   * SSRF-guarded by `safeFetchPublicImage` / `isPublicPageUrl` / `isPublicImageUrl`
+   * (fail-closed on private/loopback/metadata hosts) — the url is user-supplied, so
+   * it is NEVER fetched without these guards.
+   */
+  classifyStyleReference: protectedProcedure
+    .input(z.object({ aestheticRefUrl: z.string().min(1) }))
+    .mutation(
+      async ({
+        input,
+      }): Promise<{
+        suggestedStyle:
+          | "premium_editorial"
+          | "hook_bars"
+          | "tweet_card"
+          | "bold_typographic"
+          | null;
+        confidence: number;
+      }> => {
+        try {
+          const {
+            safeFetchPublicImage,
+            isPublicImageUrl,
+            isPublicPageUrl,
+            resolveImageFromPageUrl,
+            classifyCard,
+          } = await import("@postautomation/ai");
+
+          // Fetch the reference image EXACTLY like repurposeFromUrl does: try the
+          // url directly, then (for a social POST PAGE, which is text/html) resolve
+          // its og:image/twitter:image and fetch THAT. Both paths are SSRF-gated.
+          let aRef = await safeFetchPublicImage(input.aestheticRefUrl);
+          if (!aRef && isPublicPageUrl(input.aestheticRefUrl)) {
+            const og = await resolveImageFromPageUrl(input.aestheticRefUrl);
+            if (og && isPublicImageUrl(og)) aRef = await safeFetchPublicImage(og);
+          }
+          if (!aRef) return { suggestedStyle: null, confidence: 0 };
+
+          const hint = await classifyCard(aRef.base64, aRef.mimeType).catch(() => null);
+          if (!hint) return { suggestedStyle: null, confidence: 0 };
+
+          // presetToCreativeStyle always returns one of the 4 valid style strings.
+          const suggestedStyle = presetToCreativeStyle(hint.preset) as
+            | "premium_editorial"
+            | "hook_bars"
+            | "tweet_card"
+            | "bold_typographic";
+          return { suggestedStyle, confidence: hint.confidence };
+        } catch {
+          // Fail-soft: never surface a reference-classification miss to the client.
+          return { suggestedStyle: null, confidence: 0 };
+        }
+      },
+    ),
+
   /** Repurpose from URL — generates caption + media (static/carousel/reel) */
   repurposeFromUrl: orgProcedure
     .input(
@@ -878,12 +1001,9 @@ export const repurposeRouter = createRouter({
         describeImageStyle,
         // D10: per-slot real-first image ladder (user → AI → article → branded).
         resolveImageSlot,
-        // Component 3: structured layout detection for the aesthetic reference.
+        // Component 3: structured layout detection for the aesthetic reference
+        // (supplies theme + accent; the user's picked style decides the layout family).
         classifyCard,
-        // Component 4: block-engine faithful reproduction of the reference layout.
-        extractCardLayout,
-        cardLayoutToSpec,
-        generateCardImage,
       } = await import("@postautomation/ai");
 
       const userId = (ctx.session.user as any).id as string;
@@ -1059,7 +1179,6 @@ export const repurposeRouter = createRouter({
       // style/theme/accent resolution below can let a classified reference DRIVE
       // the actual render — not just name a saved style.
       let detectedCardHint: Awaited<ReturnType<typeof classifyCard>> = null;
-      let detectedLayout: Awaited<ReturnType<typeof extractCardLayout>> = null;
       if (input.aestheticRefUrl) {
         // Surface this step in the activity log: a dead reference url used to
         // degrade with only a server-side console.warn, so users couldn't tell
@@ -1106,10 +1225,6 @@ export const repurposeRouter = createRouter({
             cardHint = null;
           }
           detectedCardHint = cardHint;
-          // Component 4: extract the reference's LAYOUT skeleton for the block engine.
-          // Runs in parallel with classifyCard (both use the same aRef bytes).
-          // Fails closed → null; never blocks generation.
-          try { detectedLayout = await extractCardLayout(aRef.base64, aRef.mimeType); } catch { detectedLayout = null; }
           // Fix B: NO silent auto-save. We used to auto-create a CreativeTemplate
           // ("News Caption — <date>") whenever a reference classified — confusing
           // (it appeared in the styles gallery with no rename/delete and the user
@@ -1170,14 +1285,16 @@ export const repurposeRouter = createRouter({
       // happened. No reference (or unclassifiable) → the user's own selections
       // stand, exactly as before. The user's EXPLICIT brand color still wins over
       // a detected accent (an explicit brand decision, not a style guess).
-      const effectiveStyle: string = detectedCardHint
-        ? presetToCreativeStyle(detectedCardHint.preset)
-        : input.creativeStyle;
+      // T1 (control model): the user's picked creativeStyle ALWAYS decides the
+      // layout family. A classified reference no longer overrides it — the
+      // reference supplies only theme/accent/logo (effectiveTheme/effectiveBrandColor
+      // below), not the style family.
+      const effectiveStyle: string = input.creativeStyle;
       const effectiveTheme = detectedCardHint ? detectedCardHint.theme : input.theme;
       const effectiveBrandColor = resolvedBrandColor || detectedCardHint?.accentColor || null;
       if (detectedCardHint) {
         console.log(
-          `[Repurpose] Reference classified as ${detectedCardHint.preset} → style=${effectiveStyle}, theme=${effectiveTheme}, accent=${effectiveBrandColor}`,
+          `[Repurpose] Reference classified as ${detectedCardHint.preset} → effective style=${effectiveStyle} (user pick wins), theme=${effectiveTheme}, accent=${effectiveBrandColor}`,
         );
       }
       // Branded gradient — the always-renders bottom rung of the per-slot ladder.
@@ -1458,7 +1575,7 @@ KEYWORDS: ${(brief.keywords || []).join(", ")}`;
       // the SAME inputs (capped headline + hook) instead of the raw page title.
       let renderedHeadline: string | undefined;
       let renderedHookLine: string | undefined;
-      let renderedBgSource: "ai" | "stock" | undefined;
+      let renderedBgSource: "ai" | "real" | "branded" | undefined;
       let renderedImageEngine: "gemini" | "openai" | undefined;
       // `renderedEngines` + `lastSlotImageEngine` are declared above (hoisted) so
       // the per-slot AI helper `generateAiSlotImage` can record into them.
@@ -1666,7 +1783,7 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
         // (parity with the legacy userMediaIds attach, single image). The url came
         // from the org-scoped userImages map (IDOR-checked above); re-resolve the
         // Media row by (url, org) to attach the real id.
-        if (bgSlot.source === "user" && !(detectedLayout && detectedLayout.confidence >= 0.5)) {
+        if (bgSlot.source === "user") {
           const m = await ctx.prisma.media.findFirst({
             where: { url: bgSlot.url, organizationId },
             select: { id: true, url: true },
@@ -1676,78 +1793,71 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
             carouselMediaIds.push(m.id);
             mediaType = /\.png(\?|$)/i.test(m.url) ? "image/png" : "image/jpeg";
             for (const platform of input.targetPlatforms) perPlatformMedia[platform] = { url: m.url, mediaId: m.id };
-            renderedBgSource = "stock";
+            renderedBgSource = "real";
             progress("Using your image", "done", "Your uploaded image");
             console.log(`[Repurpose] Static using user-assigned background image: ${m.url}`);
           }
         }
 
         if (mediaUrls.length === 0) {
+          // T3 no-photo guard: a branded slot means no user image, no article photo, and
+          // AI off/unavailable. Rather than render a blank gradient + floating headline,
+          // block with an actionable error the UI surfaces as a toast (locked decision).
+          // This MUST be before the try/catch below — that catch swallows render errors
+          // (friendlyAIMessage + continue), so a throw inside it would never reach the
+          // client. Placed here, the TRPCError propagates straight to the UI.
+          if (bgSlot.source === "branded") {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message:
+                "Add a hero photo — paste or upload one — or turn on AI image generation. This style needs a background image and none was available (no article photo found and AI image generation is off or unavailable).",
+            });
+          }
           try {
             progress("Generating creative");
-            // Component 4: if we extracted a confident layout from the style reference,
-            // reproduce it faithfully via the block engine instead of the fixed template.
-            const useLayout = detectedLayout !== null && detectedLayout.confidence >= 0.5;
-            if (useLayout) {
-              console.log(`[Repurpose] Reference layout detected (confidence=${detectedLayout!.confidence.toFixed(2)}) — using block engine`);
-              const heroUrl = bgSlot.source === "branded" ? undefined : bgSlot.url;
-              const spec = cardLayoutToSpec(detectedLayout!, {
-                headline: headlineForCreativeFinal,
-                ...(heroUrl ? { heroImageUrl: heroUrl } : {}),
-                channelName: displayName,
-                ...(resolvedLogoUrl ? { logoUrl: resolvedLogoUrl } : {}),
-                ...(effectiveBrandColor ? { brandColor: effectiveBrandColor } : {}),
-              });
-              const cardCreative = await generateCardImage(spec);
-              const { url, mediaId } = await uploadAndCreateMedia(cardCreative.imageBase64, cardCreative.mimeType, "static");
-              mediaUrls.push(url);
-              mediaType = cardCreative.mimeType.includes("png") ? "image/png" : "image/jpeg";
-              for (const platform of input.targetPlatforms) perPlatformMedia[platform] = { url, mediaId };
-              renderedBgSource = bgSlot.source === "ai" ? "ai" : "stock";
-              if (bgSlot.source === "ai") renderedImageEngine = lastSlotImageEngine;
-              progress("Generating creative", "done", "Reproduced your reference layout");
-              console.log(`[Repurpose] Block-engine creative uploaded: ${url} (mediaId: ${mediaId})`);
-            } else {
-              console.log(`[Repurpose] Building branded headline creative (category=${category}, bgSource=${bgSlot.source})...`);
-              const creative = await buildHeadlineCreative(
-                bgPromptWithContext,
-                headlineForCreativeFinal,
-                category,
-                hookLine,
-                {
-                  // The slot ladder already resolved the bg (incl. AI); bake-only.
-                  aiEnabled: false,
-                  // A branded-gradient rung passes no bgImageUrl so the template
-                  // renders its OWN gradient (passing the CSS gradient string as a
-                  // url would just be dropped by safeImageUrl).
-                  ...(bgSlot.source === "branded" ? {} : { bgImageUrl: bgSlot.url }),
-                },
-              );
+            // T1 (control model): ALWAYS render via the template engine
+            // (buildHeadlineCreative → buildStaticCreative). The user's picked
+            // creativeStyle decides the layout family; the block engine no longer
+            // hijacks the Repurpose styled-output path.
+            console.log(`[Repurpose] Building branded headline creative (category=${category}, bgSource=${bgSlot.source})...`);
+            const creative = await buildHeadlineCreative(
+              bgPromptWithContext,
+              headlineForCreativeFinal,
+              category,
+              hookLine,
+              {
+                // The slot ladder already resolved the bg (incl. AI); bake-only.
+                aiEnabled: false,
+                // The T3 guard above threw for the branded-gradient rung, so the
+                // slot here is always user/article/ai — all of which carry a real
+                // bg url to bake into the template.
+                bgImageUrl: bgSlot.url,
+              },
+            );
 
-              const { url, mediaId } = await uploadAndCreateMedia(
-                creative.imageBase64,
-                creative.mimeType,
-                "static",
-              );
-              mediaUrls.push(url);
-              mediaType = creative.mimeType.includes("png") ? "image/png" : "image/jpeg";
-              // Same creative for every platform (caption differs per platform).
-              for (const platform of input.targetPlatforms) {
-                perPlatformMedia[platform] = { url, mediaId };
-              }
-              // Honest source/engine: AI only when the slot actually resolved to AI;
-              // the engine was recorded by generateAiSlotImage into lastSlotImageEngine.
-              renderedBgSource = bgSlot.source === "ai" ? "ai" : "stock";
-              if (bgSlot.source === "ai") renderedImageEngine = lastSlotImageEngine;
-              progress(
-                "Generating creative",
-                "done",
-                bgSlot.source === "ai"
-                  ? "Uploaded to S3"
-                  : "Uploaded to S3 (real/branded background — AI off or unavailable)",
-              );
-              console.log(`[Repurpose] Static creative uploaded: ${url} (mediaId: ${mediaId}, bg: ${bgSlot.source})`);
+            const { url, mediaId } = await uploadAndCreateMedia(
+              creative.imageBase64,
+              creative.mimeType,
+              "static",
+            );
+            mediaUrls.push(url);
+            mediaType = creative.mimeType.includes("png") ? "image/png" : "image/jpeg";
+            // Same creative for every platform (caption differs per platform).
+            for (const platform of input.targetPlatforms) {
+              perPlatformMedia[platform] = { url, mediaId };
             }
+            // Honest source/engine: AI only when the slot actually resolved to AI;
+            // the engine was recorded by generateAiSlotImage into lastSlotImageEngine.
+            renderedBgSource = bgSlot.source === "ai" ? "ai" : "real";
+            if (bgSlot.source === "ai") renderedImageEngine = lastSlotImageEngine;
+            progress(
+              "Generating creative",
+              "done",
+              bgSlot.source === "ai"
+                ? "Uploaded to S3"
+                : "Uploaded to S3 (real/branded background — AI off or unavailable)",
+            );
+            console.log(`[Repurpose] Static creative uploaded: ${url} (mediaId: ${mediaId}, bg: ${bgSlot.source})`);
           } catch (e) {
             // The template renderer itself failed (Puppeteer/asset issue). This
             // is the genuine no-image case — surface it loudly (Fix 4) but with
@@ -2151,6 +2261,30 @@ Return ONLY the JSON array, no other text.`;
         // per-slide variety AI background (cta skips AI entirely in the renderer).
         const coverArticleBg = pickArticleBgImage(extracted.images, isPublicImageUrl);
 
+        // T3 no-photo guard (carousel COVER only — NOT reel, a video path). The
+        // cover mirrors the static post and must have a usable photo; body/cta
+        // slides legitimately use branded gradients by design, so we never block
+        // those. We pre-flight ONLY when AI is effectively OFF for the cover
+        // (!effectiveAiImages): when AI is ON the cover resolves to an AI bg
+        // (source "ai") so it won't be branded — and a check here would have to
+        // call AI a second time, which is unacceptable. With AI off, the cover is
+        // branded iff there's no user image for slide:0 AND no article photo —
+        // cheap to detect up-front (no AI call, no double-resolve). The per-slide
+        // loop below re-resolves the cover normally; this only decides whether to
+        // block, so the UI gets a toast instead of a blank gradient + floating box.
+        if (input.format === "carousel" && !effectiveAiImages) {
+          const coverUserId = slotMediaId("slide:0");
+          const coverHasUserImage = !!(coverUserId && userImages[coverUserId]);
+          const coverHasPhoto = coverHasUserImage || !!coverArticleBg;
+          if (!coverHasPhoto) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message:
+                "Add a hero photo — paste or upload one — or turn on AI image generation. This style needs a background image and none was available (no article photo found and AI image generation is off or unavailable).",
+            });
+          }
+        }
+
         const carouselBrowser = await launchCreativeBrowser();
         try {
           for (let batchStart = 0; batchStart < allSlides.length; batchStart += BATCH_SIZE) {
@@ -2198,6 +2332,9 @@ Return ONLY the JSON array, no other text.`;
                 // branded "Follow for more" card. The resolver OWNS the AI rung, so
                 // the render runs aiEnabled:false (overlay-only, no double gen).
                 let slideBg: string | undefined;
+                // The cover slide's resolved bg source, surfaced so the outer
+                // `renderedBgSource` reflects the COVER honestly (cta isn't the cover).
+                let slideSource: "user" | "ai" | "article" | "branded" | undefined;
                 if (isCta) {
                   const ctaUserId = slotMediaId(`slide:${slideIdx}`);
                   if (ctaUserId && userImages[ctaUserId]) slideBg = userImages[ctaUserId]!.url;
@@ -2225,26 +2362,15 @@ Return ONLY the JSON array, no other text.`;
                   // A branded-gradient rung passes no bgImageUrl so the template
                   // renders its own gradient (a CSS gradient string isn't a url).
                   slideBg = slot.source === "branded" ? undefined : slot.url;
+                  slideSource = slot.source;
                 }
-                const useLayoutForCover =
-                  isCover && detectedLayout !== null && detectedLayout.confidence >= 0.5;
+                // T1 (control model): ALWAYS render the cover (and every slide) via
+                // the template engine — the user's picked creativeStyle decides the
+                // layout family; the block engine no longer hijacks the cover.
                 let creativeBase64: string;
                 let creativeMime: string;
                 let creativeEngine: string | undefined;
-                if (useLayoutForCover) {
-                  console.log(`[Repurpose] Carousel cover — using block engine (confidence=${detectedLayout!.confidence.toFixed(2)})`);
-                  const coverSpec = cardLayoutToSpec(detectedLayout!, {
-                    headline,
-                    ...(slideBg ? { heroImageUrl: slideBg } : {}),
-                    channelName: displayName,
-                    ...(resolvedLogoUrl ? { logoUrl: resolvedLogoUrl } : {}),
-                    ...(effectiveBrandColor ? { brandColor: effectiveBrandColor } : {}),
-                  });
-                  const coverCard = await generateCardImage(coverSpec, { browser: carouselBrowser });
-                  creativeBase64 = coverCard.imageBase64;
-                  creativeMime = coverCard.mimeType;
-                  creativeEngine = undefined;
-                } else {
+                {
                   const creative = await buildHeadlineCreative(
                     bgPrompt,
                     headline,
@@ -2262,7 +2388,7 @@ Return ONLY the JSON array, no other text.`;
                   creativeMime = creative.mimeType;
                   creativeEngine = creative.imageEngine;
                 }
-                return { slideIdx, imageBase64: creativeBase64, mimeType: creativeMime, imageEngine: creativeEngine };
+                return { slideIdx, imageBase64: creativeBase64, mimeType: creativeMime, imageEngine: creativeEngine, source: isCover ? slideSource : undefined };
               } catch (e) {
                 console.warn(`[Repurpose] Slide ${slideIdx + 1} (${slideRole}) failed:`, (e as Error).message);
                 return null;
@@ -2274,6 +2400,9 @@ Return ONLY the JSON array, no other text.`;
               if (result) {
                 slideImages[result.slideIdx] = { imageBase64: result.imageBase64, mimeType: result.mimeType };
                 if (result.imageEngine === "gemini" || result.imageEngine === "openai") renderedEngines.add(result.imageEngine);
+                if (result.slideIdx === 0 && result.source) {
+                  renderedBgSource = result.source === "ai" ? "ai" : result.source === "branded" ? "branded" : "real";
+                }
               }
             }
             const batchNum = Math.floor(batchStart / BATCH_SIZE) + 1;
@@ -2626,6 +2755,6 @@ Return ONLY the JSON array, no other text.`;
 
       // bgSource + imageEngine let the UI refresh the "Image created by X" chip
       // after a regenerate instead of showing the stale engine from the first run.
-      return { url, mediaId: media.id, bgSource: creative.bgSource, imageEngine: creative.imageEngine ?? null };
+      return { url, mediaId: media.id, bgSource: creative.bgSource === "ai" ? "ai" : "real", imageEngine: creative.imageEngine ?? null };
     }),
 });
