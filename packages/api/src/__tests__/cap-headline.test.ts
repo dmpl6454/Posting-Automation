@@ -55,4 +55,16 @@ describe("capHeadline", () => {
   it("collapses internal whitespace", () => {
     expect(capHeadline("hello   world")).toBe("hello world");
   });
+
+  it("is markup-aware: ** emphasis markers don't count toward the char budget", () => {
+    // 14 words, 87 VISIBLE chars (≤90) — but the **killed** markers push the RAW
+    // length to 91 (>90). It must NOT be truncated for the marker characters, and
+    // the markers are preserved for the highlight renderer.
+    const input =
+      "Five IAF personnel **killed** in the AN-32 military transport plane crash near Assam Jorhat";
+    expect(input.length).toBeGreaterThan(90); // raw exceeds the char ceiling…
+    expect(input.replace(/\*\*/g, "").length).toBeLessThanOrEqual(90); // …but visible does not
+    expect(capHeadline(input)).toBe(input);
+    expect(capHeadline(input)).toContain("**killed**");
+  });
 });

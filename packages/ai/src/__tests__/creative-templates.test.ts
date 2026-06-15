@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildStaticCreative, type StaticCreativeOptions } from "../tools/creative-templates";
+import { buildStaticCreative, renderHighlightMarkup, type StaticCreativeOptions } from "../tools/creative-templates";
 
 const base: StaticCreativeOptions = {
   style: "premium_editorial",
@@ -196,6 +196,77 @@ describe("bold_typographic style", () => {
     expect(html).not.toContain("<script>alert(1)</script>");
     expect(html).not.toContain(`https://x/y.jpg');}</style>`);
     expect(html).toContain("linear-gradient(");
+  });
+});
+
+describe("renderHighlightMarkup (** / == markers)", () => {
+  it("wraps **word** in a brand-accent span", () => {
+    const html = renderHighlightMarkup("Five IAF personnel **killed** today", "#ff7f50");
+    expect(html).toContain(`<span style="color:#ff7f50">killed</span>`);
+    expect(html).not.toContain("**");
+  });
+
+  it("strips an ORPHAN marker left by truncation (never renders literal **)", () => {
+    // A truncated headline can leave a dangling "**" — it must be dropped, not shown.
+    const html = renderHighlightMarkup("Five IAF personnel **killed in the cra", "#ff7f50");
+    expect(html).not.toContain("**");
+    expect(html).toContain("killed in the cra");
+  });
+
+  it("still escapes HTML in the surrounding text (no injection via markup)", () => {
+    const html = renderHighlightMarkup("**<img src=x onerror=alert(1)>** ok", "#ff7f50");
+    expect(html).not.toContain("<img");
+    expect(html).toContain("&lt;img");
+  });
+
+  it("falls back to the default accent for an invalid color", () => {
+    const html = renderHighlightMarkup("a **b** c", "javascript:alert(1)");
+    expect(html).not.toContain("javascript:");
+  });
+});
+
+describe("premium_editorial — moviefied mimic (highlight + bold + photo legibility)", () => {
+  it("renders **word** highlight in the brand color + heavy (900) headline", () => {
+    const html = buildStaticCreative({
+      style: "premium_editorial",
+      headline: "Five IAF personnel **killed** in AN-32 crash",
+      channelName: "Demo Account",
+      handle: "@demo",
+      brandColor: "#ff7f50",
+      logoPosition: "top-right",
+      theme: "dark",
+      bgImageUrl: "https://cdn.example.com/photo.jpg",
+    });
+    expect(html).toContain(`<span style="color:#ff7f50">killed</span>`);
+    expect(html).toContain("font-weight:900");
+  });
+
+  it("adds a bottom photo-scrim + text shadow over a real photo on a light-text theme", () => {
+    const html = buildStaticCreative({
+      style: "premium_editorial",
+      headline: "Headline over a busy photo",
+      channelName: "Demo",
+      logoPosition: "top-right",
+      theme: "dark",
+      bgImageUrl: "https://cdn.example.com/photo.jpg",
+    });
+    // The scrim ELEMENT is rendered (not just the CSS class) + a legibility shadow.
+    expect(html).toContain(`<div class="photo-scrim">`);
+    expect(html).toContain("text-shadow:");
+  });
+
+  it("light theme over a photo keeps dark text and NO shadow/scrim element (no regression)", () => {
+    const html = buildStaticCreative({
+      style: "premium_editorial",
+      headline: "Headline",
+      channelName: "Demo",
+      logoPosition: "top-right",
+      theme: "light",
+      bgImageUrl: "https://cdn.example.com/photo.jpg",
+    });
+    // No scrim element, no shadow applied (the CSS class def may exist, the element/shadow must not).
+    expect(html).not.toContain(`<div class="photo-scrim">`);
+    expect(html).not.toContain("text-shadow:");
   });
 });
 
