@@ -20,7 +20,7 @@ export { generateSeedanceVideo, buildSeedancePrompt, SEEDANCE_ASPECT_RATIOS, SEE
 export type { SeedanceGenerateParams, SeedanceResult } from "./providers/seedance.provider";
 export type { NanoBananaGenerateParams, NanoBananaEditParams, NanoBananaResult } from "./providers/nano-banana.provider";
 export { generateImageDallE, editImageDallE, DALLE_SIZES, DALLE_QUALITIES } from "./providers/dalle.provider";
-export type { DallEGenerateParams, DallEResult } from "./providers/dalle.provider";
+export type { DallEGenerateParams, DallEResult, DallESize, DallEQuality } from "./providers/dalle.provider";
 export { generateImageMeta } from "./providers/meta.provider";
 export type { MetaGenerateParams, MetaImageResult } from "./providers/meta.provider";
 export { fetchTrendingNews, detectTrendingIntent } from "./tools/trending-news";

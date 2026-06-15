@@ -1454,6 +1454,7 @@ export const repurposeRouter = createRouter({
         const {
           generateReferenceStyledCard,
           overlayHeadlineAndLogo: overlayFn,
+          generateImage: nanoBananaGenerate,
         } = await import("@postautomation/ai");
 
         // Build heroImage from the article bg slot URL (already SSRF-validated
@@ -1465,14 +1466,17 @@ export const repurposeRouter = createRouter({
           if (fetched) heroImage = { base64: fetched.base64, mimeType: fetched.mimeType };
         }
 
-        // Gemini generate (nano-banana provider).  We build a minimal adapter that
-        // matches ReferenceCardDeps.generateImage using generateImageSafe.
+        // Gemini generate (nano-banana provider — raw, NOT generateImageSafe).
+        // generateImageSafe silently falls to a generic prompt dropping the reference
+        // images, then to DALL-E, and returns a non-empty image WITHOUT throwing.
+        // The mimicry module needs deps.generateImage to throw on Gemini failure so
+        // the ladder advances honestly to rung-2 (openai-described).
         const deps: import("@postautomation/ai").ReferenceCardDeps = {
           generateImage: async (params) => {
-            const result = await generateImageSafe({
+            const result = await nanoBananaGenerate({
               prompt: params.prompt,
               aspectRatio: params.aspectRatio,
-              referenceImages: params.referenceImages,
+              ...(params.referenceImages ? { referenceImages: params.referenceImages } : {}),
             });
             return { imageBase64: result.imageBase64, mimeType: result.mimeType };
           },
@@ -1486,8 +1490,8 @@ export const repurposeRouter = createRouter({
             // reached only when Gemini img2img failed, so we go straight to OpenAI.
             const result = await dallE({
               prompt: params.prompt,
-              ...(params.size ? { size: params.size as any } : {}),
-              ...(params.quality ? { quality: params.quality as any } : {}),
+              ...(params.size ? { size: params.size as import("@postautomation/ai").DallESize } : {}),
+              ...(params.quality ? { quality: params.quality as import("@postautomation/ai").DallEQuality } : {}),
             });
             return { imageBase64: result.imageBase64, mimeType: result.mimeType };
           },
@@ -2598,7 +2602,11 @@ Return ONLY the JSON array, no other text.`;
                 slideImages[result.slideIdx] = { imageBase64: result.imageBase64, mimeType: result.mimeType };
                 if (result.imageEngine === "gemini" || result.imageEngine === "openai") renderedEngines.add(result.imageEngine);
                 if (result.slideIdx === 0 && result.source) {
-                  renderedBgSource = result.source === "ai" ? "ai" : result.source === "branded" ? "branded" : "real";
+                  // Round 10: when mimicry succeeded for the cover, the image IS ai-generated
+                  // regardless of which slot the source URL came from.
+                  renderedBgSource = result.mimicryEngine
+                    ? "ai"
+                    : result.source === "ai" ? "ai" : result.source === "branded" ? "branded" : "real";
                 }
                 // Round 10: record which mimicry rung the cover slide used (only cover).
                 if (result.slideIdx === 0 && result.mimicryEngine) {
@@ -2955,6 +2963,7 @@ Return ONLY the JSON array, no other text.`;
             generateReferenceStyledCard,
             overlayHeadlineAndLogo: overlayFn,
             describeImageStyle,
+            generateImage: nanoBananaGenerate,
           } = await import("@postautomation/ai");
 
           // Build heroImage from the safe article bg url if present.
@@ -2966,10 +2975,12 @@ Return ONLY the JSON array, no other text.`;
 
           const regenDeps: import("@postautomation/ai").ReferenceCardDeps = {
             generateImage: async (params) => {
-              const result = await generateImageSafe({
+              // Raw nano-banana provider (NOT generateImageSafe) so Gemini failure
+              // throws and the mimicry ladder advances honestly to rung-2.
+              const result = await nanoBananaGenerate({
                 prompt: params.prompt,
                 aspectRatio: params.aspectRatio,
-                referenceImages: params.referenceImages,
+                ...(params.referenceImages ? { referenceImages: params.referenceImages } : {}),
               });
               return { imageBase64: result.imageBase64, mimeType: result.mimeType };
             },
@@ -2978,8 +2989,8 @@ Return ONLY the JSON array, no other text.`;
               const { generateImageDallE: dallE } = await import("@postautomation/ai");
               const result = await dallE({
                 prompt: params.prompt,
-                ...(params.size ? { size: params.size as any } : {}),
-                ...(params.quality ? { quality: params.quality as any } : {}),
+                ...(params.size ? { size: params.size as import("@postautomation/ai").DallESize } : {}),
+                ...(params.quality ? { quality: params.quality as import("@postautomation/ai").DallEQuality } : {}),
               });
               return { imageBase64: result.imageBase64, mimeType: result.mimeType };
             },
