@@ -61,6 +61,15 @@ export type { NewsCardOptions, StaticNewsCreativeOptions } from "./tools/news-ca
 export { extractUrlContent, resolveImageFromPageUrl } from "./utils/url-extractor";
 export type { ExtractedContent } from "./utils/url-extractor";
 export { describeImageStyle } from "./tools/describe-image-style";
+export { generateReferenceStyledCard, overlayHeadlineAndLogo } from "./tools/reference-card-generator";
+export type {
+  GenerateReferenceStyledCardArgs,
+  GenerateReferenceStyledCardResult,
+  ReferenceCardEngine,
+  ReferenceCardDeps,
+  RefImageInput,
+  OverlayHeadlineArgs,
+} from "./tools/reference-card-generator";
 export { generateImageSafe, sanitizePrompt, buildGenericPrompt, isSafetyBlock, enforceNoHashtags } from "./utils/safe-image-generator";
 export type { SafeImageParams, SafeImageResult } from "./utils/safe-image-generator";
 export { isAllowedImageUrl, isPublicImageUrl, safeFetchImage, safeFetchPublicImage, isPublicPageUrl } from "./utils/safe-fetch-url";
