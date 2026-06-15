@@ -147,6 +147,12 @@ export function RepurposeTab() {
   // Brand accent color — sourced from the picker below and from a saved
   // template's brandColor. Sent to the router as accentColor when non-empty.
   const [accentColor, setAccentColor] = useState<string>("");
+  // Mirror accentColor into a ref so classifyAndPreselect can read the LATEST
+  // value without taking it as a dep — that keeps the callback stable (deps [])
+  // so every caller (paste/blur/change) uses the same fresh logic. (Without this
+  // the paste path, defined before classifyAndPreselect, captured a stale "".)
+  const accentColorRef = useRef<string>("");
+  useEffect(() => { accentColorRef.current = accentColor; }, [accentColor]);
   const [voiceOver, setVoiceOver] = useState(true);
   const [voiceType, setVoiceType] = useState<string>("nova");
   const [bgMusic, setBgMusic] = useState(true);
@@ -267,16 +273,22 @@ export function RepurposeTab() {
 
   // T2b: classify the just-attached reference and pre-select the closest creative
   // style. Uses the url passed in (not stale state). Null suggestion = no-op.
+  // Also pre-fills accent color + theme from the reference — only when the user
+  // hasn't already set their own accent (don't clobber an explicit brand decision).
   const classifyAndPreselect = useCallback((refUrl: string) => {
     if (!refUrl) return;
     classifyRef.mutate(
       { aestheticRefUrl: refUrl },
       {
         onSuccess: (r) => {
-          if (r.suggestedStyle) {
-            setCreativeStyle(r.suggestedStyle);
-            setStyleAutoSuggested(true);
-          }
+          let touched = false;
+          if (r.suggestedStyle) { setCreativeStyle(r.suggestedStyle); touched = true; }
+          // Pre-fill accent + theme from the reference — only when the user hasn't
+          // already set their own accent (don't clobber an explicit brand decision).
+          // Read the LATEST accent via the ref so this stays dep-free + stable.
+          if (r.accentColor && !accentColorRef.current) { setAccentColor(r.accentColor); touched = true; }
+          if (r.theme) { setTheme(r.theme); touched = true; }
+          if (touched) setStyleAutoSuggested(true);
         },
       },
     );
@@ -943,102 +955,149 @@ export function RepurposeTab() {
                     Advanced — theme, logo &amp; notes
                   </button>
 
-                  {/* ── Saved styles — own bordered section, separate from the logo
-                       controls below. No silent auto-save: a style only lands here
-                       when you click "Save as template". Each can be applied,
-                       renamed, or deleted. Always visible (not gated by advancedOpen). ── */}
-                  {creativeTemplates && creativeTemplates.length > 0 && (
-                    <div className="rounded-lg border border-border p-3 space-y-2">
-                      <div className="flex items-center justify-between">
-                        <Label className="text-xs font-semibold">Saved styles</Label>
-                        <span className="text-[10px] text-muted-foreground">Applied instantly — no AI call</span>
-                      </div>
+                  {/* ── Library — split into "Brand logos" and "Saved styles" sections.
+                       No silent auto-save: items only land here when you click
+                       "Save as template". Each can be applied, renamed, or deleted.
+                       Always visible (not gated by advancedOpen). ── */}
+                  {(() => {
+                    const logoTemplates = (creativeTemplates ?? []).filter((t) => (t as any).kind === "logo");
+                    const styleTemplates = (creativeTemplates ?? []).filter((t) => (t as any).kind !== "logo");
+                    return (
+                      <>
+                        {/* Section 1 — Brand logos */}
+                        {logoTemplates.length > 0 && (
+                          <div className="rounded-lg border border-border p-3 space-y-2">
+                            <div className="flex items-center justify-between">
+                              <Label className="text-xs font-semibold">Brand logos</Label>
+                              <span className="text-[10px] text-muted-foreground">Click to use a logo — won&apos;t change your style</span>
+                            </div>
+                            <div className="flex flex-wrap gap-2 pt-1">
+                              {logoTemplates.map((t) => (
+                                <div
+                                  key={t.id}
+                                  className={`flex items-center gap-1.5 rounded-lg border px-2 py-1.5 text-xs ${logoMediaId === t.logoMediaId && t.logoMediaId ? "border-primary bg-primary/10" : "border-border"}`}
+                                >
+                                  <button
+                                    type="button"
+                                    title="Use this logo"
+                                    onClick={() => {
+                                      setLogoUrl((t as any).logoMedia?.url ?? "");
+                                      setLogoMediaId(t.logoMediaId ?? "");
+                                      if (t.logoPosition) setLogoPosition(t.logoPosition as "top-left" | "top-right");
+                                      // Logo color is only a FALLBACK: if NO style reference is active,
+                                      // adopt the logo's saved brand color; if a reference IS active,
+                                      // never touch the color.
+                                      if (!aestheticRefUrl && t.brandColor) setAccentColor(t.brandColor);
+                                    }}
+                                    className="flex items-center gap-1.5"
+                                  >
+                                    {(t as any).logoMedia?.url ? (
+                                      <img src={(t as any).logoMedia.url} alt={t.name} className="h-10 w-10 rounded object-contain border" />
+                                    ) : (
+                                      <div className="h-10 w-10 rounded border flex items-center justify-center bg-muted text-[10px] text-muted-foreground">logo</div>
+                                    )}
+                                    <span className="max-w-[6rem] truncate">{t.name}</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    title="Rename"
+                                    onClick={async () => {
+                                      const name = window.prompt("Rename this logo:", t.name);
+                                      if (!name || name.trim() === t.name) return;
+                                      await updateTemplate.mutateAsync({ id: t.id, name: name.trim() });
+                                      utils.creativeTemplate.list.invalidate();
+                                    }}
+                                    className="text-muted-foreground hover:text-foreground"
+                                  >
+                                    <Pencil className="h-3 w-3" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    title="Delete"
+                                    onClick={async () => {
+                                      if (!window.confirm(`Delete brand logo "${t.name}"?`)) return;
+                                      await deleteTemplate.mutateAsync({ id: t.id });
+                                      utils.creativeTemplate.list.invalidate();
+                                      toast({ title: "Brand logo deleted" });
+                                    }}
+                                    className="text-muted-foreground hover:text-destructive"
+                                  >
+                                    <Trash2 className="h-3 w-3" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
 
-                      {/* Pick any saved style by name (covers logo-only brand templates too) */}
-                      <Select
-                        value={selectedTemplateId}
-                        onValueChange={(id) => {
-                          setSelectedTemplateId(id);
-                          const t = creativeTemplates.find((x) => x.id === id);
-                          if (t) {
-                            setCreativeStyle(t.style as typeof creativeStyle);
-                            setLogoPosition((t.logoPosition as "top-left" | "top-right") ?? "top-right");
-                            setLogoUrl(t.logoMedia?.url ?? "");
-                            setLogoMediaId(t.logoMediaId ?? "");
-                            if (t.brandColor) setAccentColor(t.brandColor);
-                            const cs = (t as any).cardSpec?.controls;
-                            if (cs?.theme) setTheme(cs.theme);
-                          }
-                        }}
-                      >
-                        <SelectTrigger className="h-8"><SelectValue placeholder="Use a saved style…" /></SelectTrigger>
-                        <SelectContent>
-                          {creativeTemplates.map((t) => (
-                            <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-
-                      {/* Thumbnail gallery (reference-image styles) — click to apply,
-                          ✎ to rename, ✕ to delete. The thumbnail IS the preview. */}
-                      {creativeTemplates.some((t) => (t as any).referenceMedia?.url) && (
-                        <div className="flex flex-wrap gap-2 pt-1">
-                          {creativeTemplates
-                            .filter((t) => (t as any).referenceMedia?.url)
-                            .map((t) => (
-                              <div
-                                key={t.id}
-                                className={`flex items-center gap-1.5 rounded-lg border px-2 py-1.5 text-xs ${selectedTemplateId === t.id ? "border-primary bg-primary/10" : "border-border"}`}
-                              >
-                                <button
-                                  type="button"
-                                  title="Apply this style"
-                                  onClick={() => {
-                                    setSelectedTemplateId(t.id);
-                                    if (t.style) setCreativeStyle(t.style as typeof creativeStyle);
-                                    if (t.brandColor) setAccentColor(t.brandColor);
-                                    if (t.logoPosition) setLogoPosition(t.logoPosition as "top-left" | "top-right");
-                                    const cs = (t as any).cardSpec?.controls;
-                                    if (cs?.theme) setTheme(cs.theme);
-                                  }}
-                                  className="flex items-center gap-1.5"
+                        {/* Section 2 — Saved styles */}
+                        {styleTemplates.length > 0 && (
+                          <div className="rounded-lg border border-border p-3 space-y-2">
+                            <div className="flex items-center justify-between">
+                              <Label className="text-xs font-semibold">Saved styles</Label>
+                              <span className="text-[10px] text-muted-foreground">Click to apply a saved look (style + theme + color)</span>
+                            </div>
+                            <div className="flex flex-wrap gap-2 pt-1">
+                              {styleTemplates.map((t) => (
+                                <div
+                                  key={t.id}
+                                  className={`flex items-center gap-1.5 rounded-lg border px-2 py-1.5 text-xs ${selectedTemplateId === t.id ? "border-primary bg-primary/10" : "border-border"}`}
                                 >
-                                  <img src={(t as any).referenceMedia.url} alt={t.name} className="h-10 w-10 rounded object-cover" />
-                                  <span className="max-w-[6rem] truncate">{t.name}</span>
-                                </button>
-                                <button
-                                  type="button"
-                                  title="Rename"
-                                  onClick={async () => {
-                                    const name = window.prompt("Rename this style:", t.name);
-                                    if (!name || name.trim() === t.name) return;
-                                    await updateTemplate.mutateAsync({ id: t.id, name: name.trim() });
-                                    utils.creativeTemplate.list.invalidate();
-                                  }}
-                                  className="text-muted-foreground hover:text-foreground"
-                                >
-                                  <Pencil className="h-3 w-3" />
-                                </button>
-                                <button
-                                  type="button"
-                                  title="Delete"
-                                  onClick={async () => {
-                                    if (!window.confirm(`Delete saved style "${t.name}"?`)) return;
-                                    await deleteTemplate.mutateAsync({ id: t.id });
-                                    if (selectedTemplateId === t.id) setSelectedTemplateId("");
-                                    utils.creativeTemplate.list.invalidate();
-                                    toast({ title: "Saved style deleted" });
-                                  }}
-                                  className="text-muted-foreground hover:text-destructive"
-                                >
-                                  <Trash2 className="h-3 w-3" />
-                                </button>
-                              </div>
-                            ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
+                                  <button
+                                    type="button"
+                                    title="Apply this style"
+                                    onClick={() => {
+                                      setSelectedTemplateId(t.id);
+                                      if (t.style) setCreativeStyle(t.style as typeof creativeStyle);
+                                      if (t.brandColor) setAccentColor(t.brandColor);
+                                      if (t.logoPosition) setLogoPosition(t.logoPosition as "top-left" | "top-right");
+                                      const cs = (t as any).cardSpec?.controls;
+                                      if (cs?.theme) setTheme(cs.theme);
+                                    }}
+                                    className="flex items-center gap-1.5"
+                                  >
+                                    {(t as any).referenceMedia?.url ? (
+                                      <img src={(t as any).referenceMedia.url} alt={t.name} className="h-10 w-10 rounded object-cover" />
+                                    ) : (
+                                      <div className="h-10 w-10 rounded border flex items-center justify-center bg-muted text-[10px] text-muted-foreground">style</div>
+                                    )}
+                                    <span className="max-w-[6rem] truncate">{t.name}</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    title="Rename"
+                                    onClick={async () => {
+                                      const name = window.prompt("Rename this style:", t.name);
+                                      if (!name || name.trim() === t.name) return;
+                                      await updateTemplate.mutateAsync({ id: t.id, name: name.trim() });
+                                      utils.creativeTemplate.list.invalidate();
+                                    }}
+                                    className="text-muted-foreground hover:text-foreground"
+                                  >
+                                    <Pencil className="h-3 w-3" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    title="Delete"
+                                    onClick={async () => {
+                                      if (!window.confirm(`Delete saved style "${t.name}"?`)) return;
+                                      await deleteTemplate.mutateAsync({ id: t.id });
+                                      if (selectedTemplateId === t.id) setSelectedTemplateId("");
+                                      utils.creativeTemplate.list.invalidate();
+                                      toast({ title: "Saved style deleted" });
+                                    }}
+                                    className="text-muted-foreground hover:text-destructive"
+                                  >
+                                    <Trash2 className="h-3 w-3" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
 
                   <div className="flex items-center gap-2">
                     <input
@@ -1207,6 +1266,7 @@ export function RepurposeTab() {
                         if (!name?.trim()) return;
                         await createTemplate.mutateAsync({
                           name: name.trim(),
+                          kind: aestheticRefMediaId ? "style" : "logo",
                           style: creativeStyle,
                           logoMediaId: logoMediaId || undefined,
                           logoPosition,

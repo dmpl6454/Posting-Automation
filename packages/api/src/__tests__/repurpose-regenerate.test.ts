@@ -37,6 +37,11 @@ const isPublicImageUrl = vi.fn((...a: any[]) => {
   return /^https:\/\//.test(url) && !/169\.254\.|127\.0\.0\.1|localhost|10\.|192\.168\./.test(url);
 });
 const launchCreativeBrowser = vi.fn(async (..._a: any[]) => ({ close: vi.fn(async () => {}) }));
+// Round 9: hoisted so the accent-precedence tests can drive the style-reference
+// path (reference fetch + vision classify). Default: no image / no hint, so the
+// existing tests behave exactly as before (color falls through to picker/logo).
+const safeFetchPublicImage = vi.fn(async (..._a: any[]) => null as { base64: string; mimeType: string } | null);
+const classifyCard = vi.fn(async (..._a: any[]) => null as { accentColor: string } | null);
 
 vi.mock("@postautomation/ai", () => ({
   generateStyledCreativeImage: (...a: any[]) => generateStyledCreativeImage(...a),
@@ -44,8 +49,10 @@ vi.mock("@postautomation/ai", () => ({
   extractDominantColor: (...a: any[]) => extractDominantColor(...a),
   isPublicImageUrl: (...a: any[]) => isPublicImageUrl(...a),
   launchCreativeBrowser: (...a: any[]) => launchCreativeBrowser(...a),
-  // reference fetch on the regenerate path — null/no-op (refs not asserted here)
-  safeFetchPublicImage: vi.fn(async () => null),
+  // reference fetch + vision classify on the regenerate path. Defaults to
+  // null/no-hint so refs aren't asserted unless a precedence test opts in.
+  safeFetchPublicImage: (...a: any[]) => safeFetchPublicImage(...a),
+  classifyCard: (...a: any[]) => classifyCard(...a),
   // unused-by-regenerate exports — present so other code paths don't crash on import
   extractUrlContent: vi.fn(),
   repurposeContent: vi.fn(),
@@ -309,6 +316,59 @@ describe("repurpose.regenerateImage", () => {
     );
     const bgArgs = generateImageSafe.mock.calls[0]?.[0] as any;
     expect(String(bgArgs.prompt)).toContain("A bustling night market in Mumbai");
+  });
+
+  // ── Round 9: accent-color precedence (picker > style-ref > logo > default) ──
+  // Root cause of the user's "the fade copies but the color doesn't" report: the
+  // reference's detected accent was LAST in line behind the logo color, so a logo
+  // (or a saved-style color) shadowed it. These lock the corrected precedence.
+  describe("accent-color precedence", () => {
+    it("a style reference's detected accent is used when no explicit picker color is set", async () => {
+      safeFetchPublicImage.mockResolvedValueOnce({ base64: "REFBYTES", mimeType: "image/png" });
+      classifyCard.mockResolvedValueOnce({ accentColor: "#ff7a00" }); // orange, like the Moviefied ref
+      const caller = makeCaller();
+      await caller.regenerateImage(
+        input({ aestheticRefUrl: "https://cdn.example.com/moviefied-ref.png" }),
+      );
+      const renderArgs = generateStyledCreativeImage.mock.calls[0]?.[0] as any;
+      expect(renderArgs.brandColor).toBe("#ff7a00");
+    });
+
+    it("the explicit picker color WINS over a style reference's detected accent", async () => {
+      safeFetchPublicImage.mockResolvedValueOnce({ base64: "REFBYTES", mimeType: "image/png" });
+      classifyCard.mockResolvedValueOnce({ accentColor: "#ff7a00" });
+      const caller = makeCaller();
+      await caller.regenerateImage(
+        input({ accentColor: "#0055ff", aestheticRefUrl: "https://cdn.example.com/ref.png" }),
+      );
+      const renderArgs = generateStyledCreativeImage.mock.calls[0]?.[0] as any;
+      expect(renderArgs.brandColor).toBe("#0055ff");
+      // The reference is never even classified for color when the picker wins.
+      expect(classifyCard).not.toHaveBeenCalled();
+    });
+
+    it("a style reference's accent BEATS the logo color (the regression this fixes)", async () => {
+      // Logo extraction would return #123456 (mocked); the reference's orange must win.
+      safeFetchPublicImage.mockResolvedValueOnce({ base64: "REFBYTES", mimeType: "image/png" });
+      classifyCard.mockResolvedValueOnce({ accentColor: "#ff7a00" });
+      const caller = makeCaller();
+      await caller.regenerateImage(
+        input({
+          logoUrl: "https://cdn.example.com/logo.png",
+          aestheticRefUrl: "https://cdn.example.com/ref.png",
+        }),
+      );
+      const renderArgs = generateStyledCreativeImage.mock.calls[0]?.[0] as any;
+      expect(renderArgs.brandColor).toBe("#ff7a00");
+      expect(renderArgs.brandColor).not.toBe("#123456"); // NOT the logo color
+    });
+
+    it("falls back to the logo color when there is no reference and no picker color", async () => {
+      const caller = makeCaller();
+      await caller.regenerateImage(input({ logoUrl: "https://cdn.example.com/logo.png" }));
+      const renderArgs = generateStyledCreativeImage.mock.calls[0]?.[0] as any;
+      expect(renderArgs.brandColor).toBe("#123456"); // extractDominantColor mock
+    });
   });
 });
 

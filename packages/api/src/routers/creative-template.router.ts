@@ -41,6 +41,14 @@ const CARD_SPEC = z.any().optional();
 
 const STYLE = z.enum(["premium_editorial", "hook_bars", "tweet_card", "bold_typographic"]);
 const POSITION = z.enum(["top-left", "top-right"]);
+const KIND = z.enum(["logo", "style"]);
+
+/** Derive a template's library kind from its inputs when not explicitly set:
+ *  a saved STYLE has a reference image; everything else is a brand LOGO. */
+export function deriveTemplateKind(input: { kind?: "logo" | "style"; referenceMediaId?: string }): "logo" | "style" {
+  if (input.kind) return input.kind;
+  return input.referenceMediaId ? "style" : "logo";
+}
 
 export const creativeTemplateRouter = createRouter({
   list: orgProcedure.query(async ({ ctx }) => {
@@ -68,6 +76,7 @@ export const creativeTemplateRouter = createRouter({
     .input(
       z.object({
         name: z.string().min(1).max(80),
+        kind: KIND.optional(),
         style: STYLE,
         logoMediaId: z.string().optional(),
         logoPosition: POSITION.default("top-right"),
@@ -89,6 +98,7 @@ export const creativeTemplateRouter = createRouter({
           organizationId: ctx.organizationId,
           createdById: (ctx.session.user as any).id,
           name: input.name,
+          kind: deriveTemplateKind(input),
           style: input.style,
           logoMediaId: input.logoMediaId,
           logoPosition: input.logoPosition,
@@ -106,6 +116,7 @@ export const creativeTemplateRouter = createRouter({
       z.object({
         id: z.string(),
         name: z.string().min(1).max(80).optional(),
+        kind: KIND.optional(),
         style: STYLE.optional(),
         logoMediaId: z.string().nullable().optional(),
         logoPosition: POSITION.optional(),
@@ -126,6 +137,7 @@ export const creativeTemplateRouter = createRouter({
         where: { id: input.id },
         data: {
           ...(input.name !== undefined && { name: input.name }),
+          ...(input.kind !== undefined && { kind: input.kind }),
           ...(input.style !== undefined && { style: input.style }),
           ...(input.logoMediaId !== undefined && { logoMediaId: input.logoMediaId }),
           ...(input.logoPosition !== undefined && { logoPosition: input.logoPosition }),
