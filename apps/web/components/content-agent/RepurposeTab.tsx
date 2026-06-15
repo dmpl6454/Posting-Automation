@@ -187,10 +187,11 @@ export function RepurposeTab() {
   // the reference's LAYOUT via Gemini image-to-image — not just tinted. OFF
   // (default) = today's template render.
   const [referenceMimicry, setReferenceMimicry] = useState(false);
-  // Round 10 D5: "overlay" = AI leaves headline space, code overlays exact text
-  // (always correct/legible). "ai" = AI renders the headline too (most faithful
-  // to the reference, but text can occasionally garble). Default "overlay".
-  const [mimicryTextMode, setMimicryTextMode] = useState<"ai" | "overlay">("overlay");
+  // Round 10 D5: "ai" = AI renders the headline inside the recreated layout
+  // (most faithful — proven cleanest in the visual gate; default). "overlay" =
+  // AI leaves headline space, code overlays exact text (guaranteed-legible, but
+  // its fixed bottom band can collide with a mimicked footer). User-selectable.
+  const [mimicryTextMode, setMimicryTextMode] = useState<"ai" | "overlay">("ai");
   // D2: Real⇄AI image toggle. Default ON preserves the prior always-AI behaviour.
   const [aiImages, setAiImages] = useState<boolean>(true);
   // D10: per-slot user image assignments (all formats). Keyed by slot:
@@ -1271,17 +1272,17 @@ export function RepurposeTab() {
                           <div className="flex gap-2">
                             <button
                               type="button"
-                              onClick={() => setMimicryTextMode("overlay")}
-                              className={`rounded-md border px-2.5 py-1 text-[11px] font-medium ${mimicryTextMode === "overlay" ? "border-primary bg-primary/10" : "border-border"}`}
-                            >
-                              Safe text overlay
-                            </button>
-                            <button
-                              type="button"
                               onClick={() => setMimicryTextMode("ai")}
                               className={`rounded-md border px-2.5 py-1 text-[11px] font-medium ${mimicryTextMode === "ai" ? "border-primary bg-primary/10" : "border-border"}`}
                             >
                               AI text
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setMimicryTextMode("overlay")}
+                              className={`rounded-md border px-2.5 py-1 text-[11px] font-medium ${mimicryTextMode === "overlay" ? "border-primary bg-primary/10" : "border-border"}`}
+                            >
+                              Safe text overlay
                             </button>
                           </div>
                           <p className="text-[10px] text-muted-foreground">

@@ -947,8 +947,10 @@ export const repurposeRouter = createRouter({
         referenceMimicry: z.boolean().default(false),
         // Round 10 D5: "ai" = the model renders the headline too (most faithful);
         // "overlay" = the model leaves headline space and code overlays exact text
-        // (always correct/editable). Default "overlay".
-        mimicryTextMode: z.enum(["ai", "overlay"]).default("overlay"),
+        // (always correct/editable). Default "ai" — the visual gate proved the AI-
+        // rendered headline sits cleanly in the recreated layout, while "overlay"'s
+        // fixed bottom band can collide with a mimicked footer (user decision 2026-06-15).
+        mimicryTextMode: z.enum(["ai", "overlay"]).default("ai"),
         // E3a: free-text style notes appended to the AI background prompt.
         imageContext: z.string().max(300).optional(),
         // E2 / round3: total slides incl. cover + CTA; min 3 = cover+1 content+cta.
@@ -2825,7 +2827,7 @@ Return ONLY the JSON array, no other text.`;
         // Round 10 parity: when true (and aestheticRefUrl is set), regenerate
         // also uses the mimicry render path instead of the template engine.
         referenceMimicry: z.boolean().default(false),
-        mimicryTextMode: z.enum(["ai", "overlay"]).default("overlay"),
+        mimicryTextMode: z.enum(["ai", "overlay"]).default("ai"),
       }),
     )
     .mutation(async ({ ctx, input }) => {
