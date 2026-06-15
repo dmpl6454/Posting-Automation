@@ -236,7 +236,7 @@ describe("repurpose.repurposeFromUrl — imageEngines surfacing", () => {
     // T3: a truly photoless + AI-failed render is now intentionally BLOCKED. This
     // test exercises the engine-chip-hides path, which requires a real fallback
     // photo — so provide an article image; the AI failure falls back to it (source
-    // "article" → bgSource "stock", no engine), preserving the original assertion.
+    // "article" → bgSource "real", no engine), preserving the original assertion.
     extractUrlContent.mockResolvedValueOnce({
       title: "Big news today",
       description: "A short description",
@@ -253,7 +253,7 @@ describe("repurpose.repurposeFromUrl — imageEngines surfacing", () => {
     expect(res.mediaUrls).toHaveLength(1);
     expect(res.mediaFailed).toBe(false);
     // …but no AI engine is claimed.
-    expect(res.bgSource).toBe("stock");
+    expect(res.bgSource).toBe("real");
     expect(res.imageEngine).toBeNull();
     expect(res.imageEngines).toEqual([]);
   });

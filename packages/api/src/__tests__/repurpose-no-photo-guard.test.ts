@@ -227,7 +227,7 @@ describe("repurpose.repurposeFromUrl — T3 no-photo guard", () => {
     const res: any = await caller.repurposeFromUrl(input({ aiImages: false }));
 
     expect(res.mediaUrls).toHaveLength(1);
-    expect(res.bgSource).toBe("stock");
+    expect(res.bgSource).toBe("real");
     // AI was off, so no AI background call was made.
     expect(generateImageSafe).not.toHaveBeenCalled();
   });

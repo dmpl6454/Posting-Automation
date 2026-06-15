@@ -1516,7 +1516,7 @@ KEYWORDS: ${(brief.keywords || []).join(", ")}`;
       // the SAME inputs (capped headline + hook) instead of the raw page title.
       let renderedHeadline: string | undefined;
       let renderedHookLine: string | undefined;
-      let renderedBgSource: "ai" | "stock" | undefined;
+      let renderedBgSource: "ai" | "real" | "branded" | undefined;
       let renderedImageEngine: "gemini" | "openai" | undefined;
       // `renderedEngines` + `lastSlotImageEngine` are declared above (hoisted) so
       // the per-slot AI helper `generateAiSlotImage` can record into them.
@@ -1734,7 +1734,7 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
             carouselMediaIds.push(m.id);
             mediaType = /\.png(\?|$)/i.test(m.url) ? "image/png" : "image/jpeg";
             for (const platform of input.targetPlatforms) perPlatformMedia[platform] = { url: m.url, mediaId: m.id };
-            renderedBgSource = "stock";
+            renderedBgSource = "real";
             progress("Using your image", "done", "Your uploaded image");
             console.log(`[Repurpose] Static using user-assigned background image: ${m.url}`);
           }
@@ -1789,7 +1789,7 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
             }
             // Honest source/engine: AI only when the slot actually resolved to AI;
             // the engine was recorded by generateAiSlotImage into lastSlotImageEngine.
-            renderedBgSource = bgSlot.source === "ai" ? "ai" : "stock";
+            renderedBgSource = bgSlot.source === "ai" ? "ai" : "real";
             if (bgSlot.source === "ai") renderedImageEngine = lastSlotImageEngine;
             progress(
               "Generating creative",
@@ -2273,6 +2273,9 @@ Return ONLY the JSON array, no other text.`;
                 // branded "Follow for more" card. The resolver OWNS the AI rung, so
                 // the render runs aiEnabled:false (overlay-only, no double gen).
                 let slideBg: string | undefined;
+                // The cover slide's resolved bg source, surfaced so the outer
+                // `renderedBgSource` reflects the COVER honestly (cta isn't the cover).
+                let slideSource: "user" | "ai" | "article" | "branded" | undefined;
                 if (isCta) {
                   const ctaUserId = slotMediaId(`slide:${slideIdx}`);
                   if (ctaUserId && userImages[ctaUserId]) slideBg = userImages[ctaUserId]!.url;
@@ -2300,6 +2303,7 @@ Return ONLY the JSON array, no other text.`;
                   // A branded-gradient rung passes no bgImageUrl so the template
                   // renders its own gradient (a CSS gradient string isn't a url).
                   slideBg = slot.source === "branded" ? undefined : slot.url;
+                  slideSource = slot.source;
                 }
                 // T1 (control model): ALWAYS render the cover (and every slide) via
                 // the template engine — the user's picked creativeStyle decides the
@@ -2325,7 +2329,7 @@ Return ONLY the JSON array, no other text.`;
                   creativeMime = creative.mimeType;
                   creativeEngine = creative.imageEngine;
                 }
-                return { slideIdx, imageBase64: creativeBase64, mimeType: creativeMime, imageEngine: creativeEngine };
+                return { slideIdx, imageBase64: creativeBase64, mimeType: creativeMime, imageEngine: creativeEngine, source: isCover ? slideSource : undefined };
               } catch (e) {
                 console.warn(`[Repurpose] Slide ${slideIdx + 1} (${slideRole}) failed:`, (e as Error).message);
                 return null;
@@ -2337,6 +2341,9 @@ Return ONLY the JSON array, no other text.`;
               if (result) {
                 slideImages[result.slideIdx] = { imageBase64: result.imageBase64, mimeType: result.mimeType };
                 if (result.imageEngine === "gemini" || result.imageEngine === "openai") renderedEngines.add(result.imageEngine);
+                if (result.slideIdx === 0 && result.source) {
+                  renderedBgSource = result.source === "ai" ? "ai" : result.source === "branded" ? "branded" : "real";
+                }
               }
             }
             const batchNum = Math.floor(batchStart / BATCH_SIZE) + 1;
@@ -2689,6 +2696,6 @@ Return ONLY the JSON array, no other text.`;
 
       // bgSource + imageEngine let the UI refresh the "Image created by X" chip
       // after a regenerate instead of showing the stale engine from the first run.
-      return { url, mediaId: media.id, bgSource: creative.bgSource, imageEngine: creative.imageEngine ?? null };
+      return { url, mediaId: media.id, bgSource: creative.bgSource === "ai" ? "ai" : "real", imageEngine: creative.imageEngine ?? null };
     }),
 });

@@ -226,11 +226,11 @@ describe("repurpose.regenerateImage", () => {
     expect(res.imageEngine).toBe("openai");
   });
 
-  it("AI-failure regenerate reports a stock background and NO engine (chip hides)", async () => {
+  it("AI-failure regenerate reports a real background and NO engine (chip hides)", async () => {
     generateImageSafe.mockRejectedValueOnce(new Error("ai down"));
     const caller = makeCaller();
     const res = await caller.regenerateImage(input());
-    expect(res.bgSource).toBe("stock");
+    expect(res.bgSource).toBe("real");
     expect(res.imageEngine).toBeNull();
   });
 
