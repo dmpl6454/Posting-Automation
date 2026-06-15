@@ -1741,6 +1741,19 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
         }
 
         if (mediaUrls.length === 0) {
+          // T3 no-photo guard: a branded slot means no user image, no article photo, and
+          // AI off/unavailable. Rather than render a blank gradient + floating headline,
+          // block with an actionable error the UI surfaces as a toast (locked decision).
+          // This MUST be before the try/catch below — that catch swallows render errors
+          // (friendlyAIMessage + continue), so a throw inside it would never reach the
+          // client. Placed here, the TRPCError propagates straight to the UI.
+          if (bgSlot.source === "branded") {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message:
+                "Add a hero photo — paste or upload one — or turn on AI image generation. This style needs a background image and none was available (no article photo found and AI image generation is off or unavailable).",
+            });
+          }
           try {
             progress("Generating creative");
             // T1 (control model): ALWAYS render via the template engine
@@ -1756,10 +1769,10 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
               {
                 // The slot ladder already resolved the bg (incl. AI); bake-only.
                 aiEnabled: false,
-                // A branded-gradient rung passes no bgImageUrl so the template
-                // renders its OWN gradient (passing the CSS gradient string as a
-                // url would just be dropped by safeImageUrl).
-                ...(bgSlot.source === "branded" ? {} : { bgImageUrl: bgSlot.url }),
+                // The T3 guard above threw for the branded-gradient rung, so the
+                // slot here is always user/article/ai — all of which carry a real
+                // bg url to bake into the template.
+                bgImageUrl: bgSlot.url,
               },
             );
 
@@ -2188,6 +2201,30 @@ Return ONLY the JSON array, no other text.`;
         // same source the static-post cover uses). Body/cta slides keep the
         // per-slide variety AI background (cta skips AI entirely in the renderer).
         const coverArticleBg = pickArticleBgImage(extracted.images, isPublicImageUrl);
+
+        // T3 no-photo guard (carousel COVER only — NOT reel, a video path). The
+        // cover mirrors the static post and must have a usable photo; body/cta
+        // slides legitimately use branded gradients by design, so we never block
+        // those. We pre-flight ONLY when AI is effectively OFF for the cover
+        // (!effectiveAiImages): when AI is ON the cover resolves to an AI bg
+        // (source "ai") so it won't be branded — and a check here would have to
+        // call AI a second time, which is unacceptable. With AI off, the cover is
+        // branded iff there's no user image for slide:0 AND no article photo —
+        // cheap to detect up-front (no AI call, no double-resolve). The per-slide
+        // loop below re-resolves the cover normally; this only decides whether to
+        // block, so the UI gets a toast instead of a blank gradient + floating box.
+        if (input.format === "carousel" && !effectiveAiImages) {
+          const coverUserId = slotMediaId("slide:0");
+          const coverHasUserImage = !!(coverUserId && userImages[coverUserId]);
+          const coverHasPhoto = coverHasUserImage || !!coverArticleBg;
+          if (!coverHasPhoto) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message:
+                "Add a hero photo — paste or upload one — or turn on AI image generation. This style needs a background image and none was available (no article photo found and AI image generation is off or unavailable).",
+            });
+          }
+        }
 
         const carouselBrowser = await launchCreativeBrowser();
         try {
