@@ -880,6 +880,10 @@ export const repurposeRouter = createRouter({
         resolveImageSlot,
         // Component 3: structured layout detection for the aesthetic reference.
         classifyCard,
+        // Component 4: block-engine faithful reproduction of the reference layout.
+        extractCardLayout,
+        cardLayoutToSpec,
+        generateCardImage,
       } = await import("@postautomation/ai");
 
       const userId = (ctx.session.user as any).id as string;
@@ -1055,6 +1059,7 @@ export const repurposeRouter = createRouter({
       // style/theme/accent resolution below can let a classified reference DRIVE
       // the actual render — not just name a saved style.
       let detectedCardHint: Awaited<ReturnType<typeof classifyCard>> = null;
+      let detectedLayout: Awaited<ReturnType<typeof extractCardLayout>> = null;
       if (input.aestheticRefUrl) {
         // Surface this step in the activity log: a dead reference url used to
         // degrade with only a server-side console.warn, so users couldn't tell
@@ -1101,6 +1106,10 @@ export const repurposeRouter = createRouter({
             cardHint = null;
           }
           detectedCardHint = cardHint;
+          // Component 4: extract the reference's LAYOUT skeleton for the block engine.
+          // Runs in parallel with classifyCard (both use the same aRef bytes).
+          // Fails closed → null; never blocks generation.
+          try { detectedLayout = await extractCardLayout(aRef.base64, aRef.mimeType); } catch { detectedLayout = null; }
           // Fix B: NO silent auto-save. We used to auto-create a CreativeTemplate
           // ("News Caption — <date>") whenever a reference classified — confusing
           // (it appeared in the styles gallery with no rename/delete and the user
@@ -1676,45 +1685,69 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
         if (mediaUrls.length === 0) {
           try {
             progress("Generating creative");
-            console.log(`[Repurpose] Building branded headline creative (category=${category}, bgSource=${bgSlot.source})...`);
-            const creative = await buildHeadlineCreative(
-              bgPromptWithContext,
-              headlineForCreativeFinal,
-              category,
-              hookLine,
-              {
-                // The slot ladder already resolved the bg (incl. AI); bake-only.
-                aiEnabled: false,
-                // A branded-gradient rung passes no bgImageUrl so the template
-                // renders its OWN gradient (passing the CSS gradient string as a
-                // url would just be dropped by safeImageUrl).
-                ...(bgSlot.source === "branded" ? {} : { bgImageUrl: bgSlot.url }),
-              },
-            );
+            // Component 4: if we extracted a confident layout from the style reference,
+            // reproduce it faithfully via the block engine instead of the fixed template.
+            const useLayout = detectedLayout !== null && detectedLayout.confidence >= 0.5;
+            if (useLayout) {
+              console.log(`[Repurpose] Reference layout detected (confidence=${detectedLayout!.confidence.toFixed(2)}) — using block engine`);
+              const heroUrl = bgSlot.source === "branded" ? undefined : bgSlot.url;
+              const spec = cardLayoutToSpec(detectedLayout!, {
+                headline: headlineForCreativeFinal,
+                ...(heroUrl ? { heroImageUrl: heroUrl } : {}),
+                channelName: displayName,
+                ...(resolvedLogoUrl ? { logoUrl: resolvedLogoUrl } : {}),
+                ...(effectiveBrandColor ? { brandColor: effectiveBrandColor } : {}),
+              });
+              const cardCreative = await generateCardImage(spec);
+              const { url, mediaId } = await uploadAndCreateMedia(cardCreative.imageBase64, cardCreative.mimeType, "static");
+              mediaUrls.push(url);
+              mediaType = cardCreative.mimeType.includes("png") ? "image/png" : "image/jpeg";
+              for (const platform of input.targetPlatforms) perPlatformMedia[platform] = { url, mediaId };
+              renderedBgSource = bgSlot.source === "ai" ? "ai" : "stock";
+              if (bgSlot.source === "ai") renderedImageEngine = lastSlotImageEngine;
+              progress("Generating creative", "done", "Reproduced your reference layout");
+              console.log(`[Repurpose] Block-engine creative uploaded: ${url} (mediaId: ${mediaId})`);
+            } else {
+              console.log(`[Repurpose] Building branded headline creative (category=${category}, bgSource=${bgSlot.source})...`);
+              const creative = await buildHeadlineCreative(
+                bgPromptWithContext,
+                headlineForCreativeFinal,
+                category,
+                hookLine,
+                {
+                  // The slot ladder already resolved the bg (incl. AI); bake-only.
+                  aiEnabled: false,
+                  // A branded-gradient rung passes no bgImageUrl so the template
+                  // renders its OWN gradient (passing the CSS gradient string as a
+                  // url would just be dropped by safeImageUrl).
+                  ...(bgSlot.source === "branded" ? {} : { bgImageUrl: bgSlot.url }),
+                },
+              );
 
-            const { url, mediaId } = await uploadAndCreateMedia(
-              creative.imageBase64,
-              creative.mimeType,
-              "static",
-            );
-            mediaUrls.push(url);
-            mediaType = creative.mimeType.includes("png") ? "image/png" : "image/jpeg";
-            // Same creative for every platform (caption differs per platform).
-            for (const platform of input.targetPlatforms) {
-              perPlatformMedia[platform] = { url, mediaId };
+              const { url, mediaId } = await uploadAndCreateMedia(
+                creative.imageBase64,
+                creative.mimeType,
+                "static",
+              );
+              mediaUrls.push(url);
+              mediaType = creative.mimeType.includes("png") ? "image/png" : "image/jpeg";
+              // Same creative for every platform (caption differs per platform).
+              for (const platform of input.targetPlatforms) {
+                perPlatformMedia[platform] = { url, mediaId };
+              }
+              // Honest source/engine: AI only when the slot actually resolved to AI;
+              // the engine was recorded by generateAiSlotImage into lastSlotImageEngine.
+              renderedBgSource = bgSlot.source === "ai" ? "ai" : "stock";
+              if (bgSlot.source === "ai") renderedImageEngine = lastSlotImageEngine;
+              progress(
+                "Generating creative",
+                "done",
+                bgSlot.source === "ai"
+                  ? "Uploaded to S3"
+                  : "Uploaded to S3 (real/branded background — AI off or unavailable)",
+              );
+              console.log(`[Repurpose] Static creative uploaded: ${url} (mediaId: ${mediaId}, bg: ${bgSlot.source})`);
             }
-            // Honest source/engine: AI only when the slot actually resolved to AI;
-            // the engine was recorded by generateAiSlotImage into lastSlotImageEngine.
-            renderedBgSource = bgSlot.source === "ai" ? "ai" : "stock";
-            if (bgSlot.source === "ai") renderedImageEngine = lastSlotImageEngine;
-            progress(
-              "Generating creative",
-              "done",
-              bgSlot.source === "ai"
-                ? "Uploaded to S3"
-                : "Uploaded to S3 (real/branded background — AI off or unavailable)",
-            );
-            console.log(`[Repurpose] Static creative uploaded: ${url} (mediaId: ${mediaId}, bg: ${bgSlot.source})`);
           } catch (e) {
             // The template renderer itself failed (Puppeteer/asset issue). This
             // is the genuine no-image case — surface it loudly (Fix 4) but with

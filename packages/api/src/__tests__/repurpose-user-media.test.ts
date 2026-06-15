@@ -90,6 +90,9 @@ vi.mock("@postautomation/ai", () => ({
     return { url: ctx.brandGradient, source: "branded" };
   },
   classifyCard: vi.fn(async () => null),
+  extractCardLayout: vi.fn(async () => null),
+  cardLayoutToSpec: vi.fn(() => ({})),
+  generateCardImage: vi.fn(async () => ({ imageBase64: "base64img", mimeType: "image/png", width: 1080, height: 1350 })),
 }));
 
 /* ── S3 mock — never hit the network. ── */
