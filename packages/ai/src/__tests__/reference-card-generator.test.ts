@@ -17,7 +17,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { ReferenceCardDeps, GenerateReferenceStyledCardArgs } from "../tools/reference-card-generator";
+import type { ReferenceCardDeps, GenerateReferenceStyledCardArgs, OverlayHeadlineArgs } from "../tools/reference-card-generator";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -230,5 +230,100 @@ describe("generateReferenceStyledCard", () => {
     expect(result.engine).toBe("openai-described");
     expect((deps.overlayHeadlineAndLogo as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
     expect(result.imageBase64).toBe(OVERLAY_OUTPUT.imageBase64);
+  });
+});
+
+// ── HTML safety tests for buildOverlayHtml ────────────────────────────────────
+
+describe("overlayHeadlineAndLogo HTML safety", () => {
+  // buildOverlayHtml is the pure HTML builder; unit-testable without a browser.
+  async function loadHtmlBuilder() {
+    const mod = await import("../tools/reference-card-generator");
+    return mod.buildOverlayHtml;
+  }
+
+  // Base opts that produce a valid card with a legit inline logo.
+  const BASE_OPTS: OverlayHeadlineArgs = {
+    imageBase64: "iVBORw0KGgoAAAANSUhEUg",
+    mimeType: "image/png",
+    width: 1080,
+    height: 1350,
+    headline: "A Breaking Story",
+    brandName: "TestBrand",
+    handle: "@testbrand",
+    brandColor: "#ff7a00",
+  };
+
+  it("crafted logoMimeType with quote injection falls back to monogram — no onerror in output", async () => {
+    const build = await loadHtmlBuilder();
+    const html = build({
+      ...BASE_OPTS,
+      logoBase64: "AAAA",
+      logoMimeType: 'image/png" onerror="alert(1)',
+    });
+    // The injected attribute must NOT appear verbatim
+    expect(html).not.toContain("onerror");
+    // The monogram fallback div must be present instead
+    expect(html).toContain('<div style="width:44px');
+  });
+
+  it("crafted logoUrl with attribute-breakout chars falls back to monogram — no onerror in output", async () => {
+    const build = await loadHtmlBuilder();
+    const html = build({
+      ...BASE_OPTS,
+      logoUrl: 'https://evil.example/x.png" onerror="fetch(1)',
+    });
+    expect(html).not.toContain("onerror");
+    // Monogram div present
+    expect(html).toContain('<div style="width:44px');
+  });
+
+  it("XSS in headline is entity-encoded — no literal script tag in output", async () => {
+    const build = await loadHtmlBuilder();
+    const html = build({
+      ...BASE_OPTS,
+      headline: "</style><script>alert(1)</script>",
+    });
+    expect(html).not.toContain("<script>");
+    expect(html).toContain("&lt;/style&gt;");
+    expect(html).toContain("&lt;script&gt;");
+  });
+
+  it("CSS-injection in brandColor is rejected — default accent used, no style breakout", async () => {
+    const build = await loadHtmlBuilder();
+    const html = build({
+      ...BASE_OPTS,
+      brandColor: "red;}</style><script>x",
+    });
+    // The injected string must not appear
+    expect(html).not.toContain("</style><script>");
+    // The default accent color (#e11d48) must be used instead
+    expect(html).toContain("#e11d48");
+  });
+
+  it("legitimate inline logo renders the data URL in an img src — happy path not broken", async () => {
+    const build = await loadHtmlBuilder();
+    const goodBase64 = "iVBORw0KGgoAAAANSUhEUg";
+    const html = build({
+      ...BASE_OPTS,
+      logoBase64: goodBase64,
+      logoMimeType: "image/png",
+    });
+    expect(html).toContain(`src="data:image/png;base64,${goodBase64}"`);
+  });
+
+  it("rung-2 OpenAI prompt contains the safety clause text", async () => {
+    const mod = await import("../tools/reference-card-generator");
+    const generateImageDallE = vi.fn().mockResolvedValue(OPENAI_OUTPUT);
+    const deps = makeDeps({
+      generateImage: vi.fn().mockRejectedValue(new Error("Gemini down")),
+      describeImageStyle: vi.fn().mockResolvedValue("vibrant editorial"),
+      generateImageDallE,
+    });
+
+    await mod.generateReferenceStyledCard(BASE_ARGS, deps);
+
+    const promptArg = (generateImageDallE.mock.calls[0]![0] as { prompt: string }).prompt;
+    expect(promptArg).toContain("Do NOT depict any real");
   });
 });

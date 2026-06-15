@@ -54,7 +54,7 @@
  */
 
 import puppeteer from "puppeteer";
-import { safeColor, escapeHtml } from "./card-engine";
+import { safeColor, escapeHtml, safeImageUrl } from "./card-engine";
 import { isPublicImageUrl } from "../utils/safe-fetch-url";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -173,7 +173,7 @@ function buildGeminiPrompt(
   hasHero: boolean,
 ): string {
   const colorHint = safeColor(args.brandColor ?? undefined);
-  const headline = args.headline; // raw — rendered as text inside a prompt, not HTML
+  const headline = args.headline.slice(0, 120); // cap for parity with buildOpenAIPrompt (cost/length safety)
 
   const headlineInstruction =
     args.textMode === "ai"
@@ -343,24 +343,22 @@ function buildOverlayArgs(
 // ── Puppeteer overlay primitive ───────────────────────────────────────────────
 
 /**
- * Composite a headline + optional logo over a generated background image using
- * Puppeteer, mirroring the pattern in overlayLogoOnImage (news-image-generator.ts).
+ * Pure HTML builder for the overlay card. Exported so it can be unit-tested
+ * without launching a real Puppeteer browser, mirroring how buildStaticCreative
+ * is separated from generateStyledCreativeImage in creative-templates.ts.
  *
- * Text placement: lower-third with a subtle scrim for legibility over any
- * background. This is the "always correct" path — it does not attempt to match
- * the reference's exact headline position (that's the "ai" textMode's job).
- *
- * SECURITY contract (all user-controlled inputs sanitized before HTML interpolation):
- *  - brandColor  → safeColor() (strict hex allow-list)
+ * SECURITY contract (all user-controlled inputs sanitized before interpolation):
+ *  - brandColor  → safeColor() (strict hex allow-list, rejects CSS-injection)
  *  - headline, brandName, handle → escapeHtml()
- *  - logoUrl (URL)    → isPublicImageUrl() gate; blocked → monogram avatar
- *  - logoBase64       → data: URL (safe by construction)
- *  - background       → trusted data: URL (we generated it)
+ *  - logoBase64 data URL → assembled then gated through safeImageUrl()
+ *    (rejects any mimeType containing `"'()<>\` — prevents attribute breakout
+ *    via a malicious Content-Type header)
+ *  - logoUrl (public URL) → double-gated: isPublicImageUrl() (SSRF host check)
+ *    AND safeImageUrl() (attribute-breakout char rejection). Both gates MUST be
+ *    kept — safeImageUrl allows any https host so the SSRF gate cannot be removed.
+ *  - background → trusted data: URL (we generated it); interpolated as-is.
  */
-export async function overlayHeadlineAndLogo(
-  opts: OverlayHeadlineArgs,
-  sharedBrowser?: import("puppeteer").Browser,
-): Promise<{ imageBase64: string; mimeType: string }> {
+export function buildOverlayHtml(opts: OverlayHeadlineArgs): string {
   const {
     imageBase64,
     mimeType,
@@ -373,11 +371,7 @@ export async function overlayHeadlineAndLogo(
     logoBase64,
     logoMimeType,
     brandColor,
-    browser: optsBrowser,
   } = opts;
-
-  // Resolve browser: opts.browser > sharedBrowser (legacy arg) > self-launch
-  const resolvedSharedBrowser = optsBrowser ?? sharedBrowser;
 
   const safeAccent = safeColor(brandColor ?? undefined);
   const safeHeadline = escapeHtml(headline);
@@ -387,14 +381,26 @@ export async function overlayHeadlineAndLogo(
 
   // ── Logo HTML ───────────────────────────────────────────────────────────────
   // Priority: inline base64 logo > SSRF-gated URL > monogram avatar.
+  //
+  // Fix 1: the assembled data URL is gated through safeImageUrl() — a malicious
+  //   logoMimeType (e.g. `image/png" onerror="...`) contains a `"` which the
+  //   regex rejects → safeImageUrl returns null → falls through to monogram.
+  //   A normal base64 data URL (alphabet: A-Za-z0-9+/=) passes cleanly.
+  //
+  // Fix 2: logoUrl is double-gated: isPublicImageUrl() (SSRF host check) first,
+  //   then safeImageUrl() (attribute-breakout char rejection). Both must pass.
+  const inlineLogoUrl =
+    logoBase64 && logoMimeType
+      ? safeImageUrl(`data:${logoMimeType};base64,${logoBase64}`)
+      : null;
+  const publicLogoUrl =
+    logoUrl && isPublicImageUrl(logoUrl) ? safeImageUrl(logoUrl) : null;
+
   let logoHtml: string;
-  if (logoBase64 && logoMimeType) {
-    // Inline logo — data URL is safe, no network fetch.
-    const logoDataUrl = `data:${logoMimeType};base64,${logoBase64}`;
-    logoHtml = `<img src="${logoDataUrl}" style="width:44px;height:44px;border-radius:10px;object-fit:cover;border:2px solid rgba(255,255,255,0.2);flex-shrink:0;" />`;
-  } else if (logoUrl && isPublicImageUrl(logoUrl)) {
-    // Public URL — SSRF-gated (mirrors overlayLogoOnImage line ~298).
-    logoHtml = `<img src="${logoUrl}" style="width:44px;height:44px;border-radius:10px;object-fit:cover;border:2px solid rgba(255,255,255,0.2);flex-shrink:0;" crossorigin="anonymous" />`;
+  if (inlineLogoUrl) {
+    logoHtml = `<img src="${inlineLogoUrl}" style="width:44px;height:44px;border-radius:10px;object-fit:cover;border:2px solid rgba(255,255,255,0.2);flex-shrink:0;" />`;
+  } else if (publicLogoUrl) {
+    logoHtml = `<img src="${publicLogoUrl}" style="width:44px;height:44px;border-radius:10px;object-fit:cover;border:2px solid rgba(255,255,255,0.2);flex-shrink:0;" crossorigin="anonymous" />`;
   } else {
     // Fallback: brand-colored monogram initial.
     const initial = escapeHtml((brandName?.[0] ?? "B").toUpperCase());
@@ -414,7 +420,7 @@ export async function overlayHeadlineAndLogo(
 
   // ── Full HTML ────────────────────────────────────────────────────────────────
   // Inter via Google Fonts (same @import as overlayLogoOnImage).
-  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
 *{margin:0;padding:0;box-sizing:border-box;}
 body{width:${width}px;height:${height}px;overflow:hidden;position:relative;font-family:'Inter',system-ui,sans-serif;}
@@ -446,6 +452,28 @@ body{width:${width}px;height:${height}px;overflow:hidden;position:relative;font-
   <div class="headline">${safeHeadline}</div>
 </div>
 </body></html>`;
+}
+
+/**
+ * Composite a headline + optional logo over a generated background image using
+ * Puppeteer, mirroring the pattern in overlayLogoOnImage (news-image-generator.ts).
+ *
+ * Text placement: lower-third with a subtle scrim for legibility over any
+ * background. This is the "always correct" path — it does not attempt to match
+ * the reference's exact headline position (that's the "ai" textMode's job).
+ *
+ * HTML construction is delegated to buildOverlayHtml (pure, testable).
+ */
+export async function overlayHeadlineAndLogo(
+  opts: OverlayHeadlineArgs,
+  sharedBrowser?: import("puppeteer").Browser,
+): Promise<{ imageBase64: string; mimeType: string }> {
+  const { mimeType, width, height, browser: optsBrowser } = opts;
+
+  // Resolve browser: opts.browser > sharedBrowser (legacy arg) > self-launch
+  const resolvedSharedBrowser = optsBrowser ?? sharedBrowser;
+
+  const html = buildOverlayHtml(opts);
 
   const browser = resolvedSharedBrowser ?? (await puppeteer.launch({
     headless: true,
