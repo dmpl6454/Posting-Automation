@@ -1132,17 +1132,22 @@ export const repurposeRouter = createRouter({
         }
       }
 
-      // Resolve a brand accent color from the logo once (reused by every
-      // headline creative). Falls back to the template default on failure.
-      let resolvedBrandColor: string | null = input.accentColor || null;
-      if (!resolvedBrandColor && resolvedLogoUrl) {
+      // Logo dominant color — used ONLY as the no-reference fallback for the
+      // brand accent (see effectiveBrandColor precedence below). An explicit
+      // picker value (input.accentColor) and a detected style-reference accent
+      // both take priority, so we resolve this lazily.
+      let logoFallbackColor: string | null = null;
+      const resolveLogoFallbackColor = async (): Promise<string | null> => {
+        if (logoFallbackColor) return logoFallbackColor;
+        if (!resolvedLogoUrl) return null;
         try {
-          resolvedBrandColor = await extractDominantColor(resolvedLogoUrl);
-          if (resolvedBrandColor) console.log(`[Repurpose] Brand color from logo: ${resolvedBrandColor}`);
+          logoFallbackColor = await extractDominantColor(resolvedLogoUrl);
+          if (logoFallbackColor) console.log(`[Repurpose] Brand color from logo: ${logoFallbackColor}`);
         } catch {
           /* use template default */
         }
-      }
+        return logoFallbackColor;
+      };
 
       // Fetch the brand logo once as a reference image so Gemini can style the
       // AI background to match the brand (B4). Gemini-only — the OpenAI fallback
@@ -1291,7 +1296,15 @@ export const repurposeRouter = createRouter({
       // below), not the style family.
       const effectiveStyle: string = input.creativeStyle;
       const effectiveTheme = detectedCardHint ? detectedCardHint.theme : input.theme;
-      const effectiveBrandColor = resolvedBrandColor || detectedCardHint?.accentColor || null;
+      // Accent precedence (Round 9): explicit picker > style-reference accent > logo color > null.
+      // The reference's detected accent now BEATS the logo color (previously the logo shadowed it,
+      // so a reference's color was never applied). An explicit brand-color pick still wins — a
+      // deliberate brand decision, not a style guess. Logo color is only the no-reference fallback.
+      const effectiveBrandColor: string | null =
+        input.accentColor ||
+        detectedCardHint?.accentColor ||
+        (await resolveLogoFallbackColor()) ||
+        null;
       if (detectedCardHint) {
         console.log(
           `[Repurpose] Reference classified as ${detectedCardHint.preset} → effective style=${effectiveStyle} (user pick wins), theme=${effectiveTheme}, accent=${effectiveBrandColor}`,
@@ -2620,6 +2633,7 @@ Return ONLY the JSON array, no other text.`;
         extractDominantColor,
         isPublicImageUrl,
         safeFetchPublicImage,
+        classifyCard,
       } = await import("@postautomation/ai");
 
       const userId = (ctx.session.user as any).id as string;
@@ -2646,9 +2660,22 @@ Return ONLY the JSON array, no other text.`;
         channelHandle: input.channelHandle,
       });
 
-      // Resolve a brand accent color: prefer the explicit accent, else derive it
-      // from the (validated) logo. Failure → template default.
+      // Resolve a brand accent color (Round 9 precedence, mirrors the main flow):
+      // explicit picker > style-reference detected accent > logo dominant color > default.
+      // Without this, hitting "Regenerate" on a creative built from a style reference
+      // dropped the reference's color (only picker/logo were consulted).
       let brandColor: string | null = input.accentColor || null;
+      if (!brandColor && safeAestheticRef) {
+        try {
+          const refImg = await safeFetchPublicImage(safeAestheticRef);
+          if (refImg) {
+            const hint = await classifyCard(refImg.base64, refImg.mimeType).catch(() => null);
+            if (hint?.accentColor) brandColor = hint.accentColor;
+          }
+        } catch {
+          /* fall through to logo color */
+        }
+      }
       if (!brandColor && safeLogoUrl) {
         try {
           brandColor = await extractDominantColor(safeLogoUrl);
