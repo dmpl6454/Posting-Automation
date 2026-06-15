@@ -72,13 +72,65 @@ export function styleNeedsAiBackground(_style: string): boolean {
  * silently dropped there anyway. `isAllowed` is the `isPublicImageUrl` SSRF gate.
  * Pure + exported for unit testing.
  */
+/**
+ * Is `url` a real RASTER content photo (not a tracking pixel, analytics beacon,
+ * or vector/logo SVG)? CONTENT-QUALITY filter — NOT a security boundary; the
+ * SSRF gate remains `isAllowed` (isPublicImageUrl). Deliberately duplicates the
+ * url-extractor's `isLikelyContentPhoto` intent (defense in depth) because
+ * `pickArticleBgImage` also receives images from other callers/tests. Pure /
+ * no network; malformed urls → false; borderline non-photos REJECTED.
+ * Exported for unit testing.
+ */
+export function isRasterPhotoUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  const lowerUrl = url.toLowerCase();
+  const host = parsed.hostname.toLowerCase();
+  const path = parsed.pathname.toLowerCase();
+
+  const BAD_EXTENSIONS = [".svg", ".gif", ".ico", ".bmp"];
+  if (BAD_EXTENSIONS.some((ext) => path.endsWith(ext))) return false;
+
+  const DENY_SUBSTRINGS = [
+    "scorecardresearch",
+    "doubleclick",
+    "google-analytics",
+    "googletagmanager",
+    "/pixel",
+    "analytics",
+    "quantserve",
+    "chartbeat",
+    "/beacon",
+    "icon",
+    "logo",
+    "avatar",
+    "1x1",
+  ];
+  if (DENY_SUBSTRINGS.some((s) => host.includes(s) || lowerUrl.includes(s))) {
+    return false;
+  }
+
+  return true;
+}
+
 export function pickArticleBgImage(
   images: string[] | undefined,
   isAllowed: (u: string) => boolean,
 ): string | undefined {
   if (!images) return undefined;
   for (const u of images) {
-    if (typeof u === "string" && u.startsWith("https://") && isAllowed(u)) return u;
+    if (
+      typeof u === "string" &&
+      u.startsWith("https://") &&
+      isAllowed(u) &&
+      isRasterPhotoUrl(u)
+    ) {
+      return u;
+    }
   }
   return undefined;
 }

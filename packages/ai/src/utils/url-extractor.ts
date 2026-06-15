@@ -284,26 +284,123 @@ function getTitle(html: string): string {
   return decodeEntities(match?.[1]?.trim() || "");
 }
 
+/**
+ * Heuristic: is `url` likely a real CONTENT photo (raster hero) rather than a
+ * tracking pixel, analytics beacon, logo/icon SVG, or UI chrome?
+ *
+ * CONTENT-QUALITY filter ONLY — NOT a security boundary. The SSRF gate stays
+ * `isPublicImageUrl` / `isPublicPageUrl`; this just keeps junk out of the
+ * `images[]` array so the downstream "hero" pick isn't a 1px pixel or a vector
+ * logo. Pure string/URL inspection — performs NO network I/O. Borderline
+ * non-photos are REJECTED on purpose (a missed real photo just falls back to
+ * AI/branded rendering; a passed pixel is the bug we're fixing).
+ *
+ * Rejects:
+ *   - non-photo file extensions (.svg/.gif/.ico/.bmp) — checks the path only,
+ *     ignoring the query string. Extensionless urls are KEPT (many CDNs serve
+ *     images without one, e.g. `?im=FitAndFill`).
+ *   - known tracker/analytics/pixel/logo substrings on the hostname OR full url.
+ *   - malformed urls (new URL throws) → false.
+ */
+function isLikelyContentPhoto(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  const lowerUrl = url.toLowerCase();
+  const host = parsed.hostname.toLowerCase();
+  const path = parsed.pathname.toLowerCase();
+
+  // Reject known-bad non-photo extensions (path only — ignore ?query).
+  const BAD_EXTENSIONS = [".svg", ".gif", ".ico", ".bmp"];
+  if (BAD_EXTENSIONS.some((ext) => path.endsWith(ext))) return false;
+
+  // Tracker / analytics / pixel / beacon hosts + paths. Some are host
+  // substrings, some path — be pragmatic and check both the hostname and the
+  // full lower-cased url.
+  const TRACKER_SUBSTRINGS = [
+    "scorecardresearch",
+    "doubleclick",
+    "google-analytics",
+    "googletagmanager",
+    "googlesyndication",
+    "facebook.com/tr",
+    "analytics",
+    "/pixel",
+    "quantserve",
+    "chartbeat",
+    "/beacon",
+  ];
+  if (TRACKER_SUBSTRINGS.some((s) => host.includes(s) || lowerUrl.includes(s))) {
+    return false;
+  }
+
+  // Existing keyword rejects — UI chrome / avatars / tracking pixels.
+  const KEYWORD_REJECTS = ["icon", "logo", "avatar", "pixel", "1x1"];
+  if (KEYWORD_REJECTS.some((s) => lowerUrl.includes(s))) return false;
+
+  return true;
+}
+
+/**
+ * Lighter filter for og:image / twitter:image — these are usually the real
+ * hero, so over-filtering on the `logo`/`icon` keyword substrings (which a
+ * legit CDN url can contain incidentally) would drop the actual photo. Only
+ * the unambiguous junk — non-photo EXTENSIONS + TRACKER hosts — is rejected.
+ * Malformed urls → false. Pure / no network.
+ */
+function isLikelyOgPhoto(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  const lowerUrl = url.toLowerCase();
+  const host = parsed.hostname.toLowerCase();
+  const path = parsed.pathname.toLowerCase();
+
+  const BAD_EXTENSIONS = [".svg", ".gif", ".ico", ".bmp"];
+  if (BAD_EXTENSIONS.some((ext) => path.endsWith(ext))) return false;
+
+  const TRACKER_SUBSTRINGS = [
+    "scorecardresearch",
+    "doubleclick",
+    "google-analytics",
+    "googletagmanager",
+    "googlesyndication",
+    "facebook.com/tr",
+    "analytics",
+    "/pixel",
+    "quantserve",
+    "chartbeat",
+    "/beacon",
+  ];
+  if (TRACKER_SUBSTRINGS.some((s) => host.includes(s) || lowerUrl.includes(s))) {
+    return false;
+  }
+
+  return true;
+}
+
 /** Extract main images from HTML */
 function getImages(html: string): string[] {
   const images: string[] = [];
+  // og:image / twitter:image are usually the real hero — keep them FIRST and
+  // only drop them if they're a non-photo extension or a tracker host (an
+  // og:image that is a .svg or a scorecardresearch url is genuinely junk).
   const og = getMeta(html, "og:image");
-  if (og) images.push(og);
+  if (og && isLikelyOgPhoto(og)) images.push(og);
   const tw = getMeta(html, "twitter:image");
-  if (tw && !images.includes(tw)) images.push(tw);
+  if (tw && isLikelyOgPhoto(tw) && !images.includes(tw)) images.push(tw);
   // Get first few article images
   const imgRegex = /<img[^>]+src=["']([^"']+)["']/gi;
   let match;
   while ((match = imgRegex.exec(html)) !== null && images.length < 6) {
     const src = match[1]!;
-    if (
-      src.startsWith("http") &&
-      !src.includes("icon") &&
-      !src.includes("logo") &&
-      !src.includes("avatar") &&
-      !src.includes("pixel") &&
-      !src.includes("1x1")
-    ) {
+    if (src.startsWith("http") && isLikelyContentPhoto(src)) {
       if (!images.includes(src)) images.push(src);
     }
   }
@@ -867,4 +964,4 @@ export async function extractUrlContent(url: string): Promise<ExtractedContent> 
 }
 
 /** @internal test-only access to private extractors */
-export const __test__ = { getMeta, getTitle, stripHtml };
+export const __test__ = { getMeta, getTitle, stripHtml, isLikelyContentPhoto };
