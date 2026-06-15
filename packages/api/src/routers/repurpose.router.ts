@@ -75,10 +75,16 @@ export function styleNeedsAiBackground(_style: string): boolean {
 /**
  * Is `url` a real RASTER content photo (not a tracking pixel, analytics beacon,
  * or vector/logo SVG)? CONTENT-QUALITY filter — NOT a security boundary; the
- * SSRF gate remains `isAllowed` (isPublicImageUrl). Deliberately duplicates the
- * url-extractor's `isLikelyContentPhoto` intent (defense in depth) because
- * `pickArticleBgImage` also receives images from other callers/tests. Pure /
- * no network; malformed urls → false; borderline non-photos REJECTED.
+ * SSRF gate remains `isAllowed` (isPublicImageUrl).
+ *
+ * `pickArticleBgImage` picks the HERO (og:image/first image), so this mirrors
+ * url-extractor's HERO filter (`isLikelyOgPhoto`): bad-extension + tracker ONLY,
+ * NO chrome-keyword (`icon`/`logo`) filter. A loose keyword match was the T5
+ * regression — it dropped legit heroes like `silicon-valley.jpg` and the real
+ * publishers `analyticsindiamag.com` / `analyticsinsight.net`. Tracker tokens
+ * are SPECIFIC (multi-part substrings) plus `analytics` as a full host LABEL.
+ * Replicated here (defense in depth, cross-package) — keep IDENTICAL to the
+ * url-extractor hero rules. Pure / no network; malformed urls → false.
  * Exported for unit testing.
  */
 export function isRasterPhotoUrl(url: string): boolean {
@@ -92,27 +98,28 @@ export function isRasterPhotoUrl(url: string): boolean {
   const host = parsed.hostname.toLowerCase();
   const path = parsed.pathname.toLowerCase();
 
+  // Rule 1: bad non-photo extensions (path only — ignore ?query).
   const BAD_EXTENSIONS = [".svg", ".gif", ".ico", ".bmp"];
   if (BAD_EXTENSIONS.some((ext) => path.endsWith(ext))) return false;
 
-  const DENY_SUBSTRINGS = [
+  // Rule 2: tracker tokens (unambiguous multi-part substrings against host+url)
+  // + `analytics` as a full host LABEL only (NOT a substring — spares
+  // analyticsindiamag.com / img.analyticsinsight.net). `/pixel` and `/beacon`
+  // are intentionally absent (they dropped "Pixel 7" / "Beacon Hill" stories).
+  const TRACKER_TOKENS = [
     "scorecardresearch",
     "doubleclick",
     "google-analytics",
     "googletagmanager",
-    "/pixel",
-    "analytics",
+    "googlesyndication",
+    "facebook.com/tr",
     "quantserve",
     "chartbeat",
-    "/beacon",
-    "icon",
-    "logo",
-    "avatar",
-    "1x1",
   ];
-  if (DENY_SUBSTRINGS.some((s) => host.includes(s) || lowerUrl.includes(s))) {
+  if (TRACKER_TOKENS.some((s) => host.includes(s) || lowerUrl.includes(s))) {
     return false;
   }
+  if (host.split(".").includes("analytics")) return false;
 
   return true;
 }
