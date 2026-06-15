@@ -170,9 +170,10 @@ export async function safeFetchPublicImage(
   }
   if (!res.ok) return null; // manual redirect → res.ok false for 30x; treat as failure
   const ct = (res.headers.get("content-type") || "").toLowerCase();
-  if (!/^image\/(png|jpe?g|webp|gif)/.test(ct)) return null;
+  const mediaType = ct.split(";")[0]?.trim() || "";
+  if (!/^image\/(png|jpe?g|webp|gif)$/.test(mediaType)) return null;
   const buf = Buffer.from(await res.arrayBuffer());
   if (buf.byteLength > maxBytes) return null;
-  const mimeType = ct.split(";")[0]?.trim() || "image/png";
+  const mimeType = mediaType || "image/png";
   return { base64: buf.toString("base64"), mimeType };
 }

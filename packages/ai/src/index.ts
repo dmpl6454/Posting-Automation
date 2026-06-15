@@ -20,7 +20,7 @@ export { generateSeedanceVideo, buildSeedancePrompt, SEEDANCE_ASPECT_RATIOS, SEE
 export type { SeedanceGenerateParams, SeedanceResult } from "./providers/seedance.provider";
 export type { NanoBananaGenerateParams, NanoBananaEditParams, NanoBananaResult } from "./providers/nano-banana.provider";
 export { generateImageDallE, editImageDallE, DALLE_SIZES, DALLE_QUALITIES } from "./providers/dalle.provider";
-export type { DallEGenerateParams, DallEResult } from "./providers/dalle.provider";
+export type { DallEGenerateParams, DallEResult, DallESize, DallEQuality } from "./providers/dalle.provider";
 export { generateImageMeta } from "./providers/meta.provider";
 export type { MetaGenerateParams, MetaImageResult } from "./providers/meta.provider";
 export { fetchTrendingNews, detectTrendingIntent } from "./tools/trending-news";
@@ -61,6 +61,15 @@ export type { NewsCardOptions, StaticNewsCreativeOptions } from "./tools/news-ca
 export { extractUrlContent, resolveImageFromPageUrl } from "./utils/url-extractor";
 export type { ExtractedContent } from "./utils/url-extractor";
 export { describeImageStyle } from "./tools/describe-image-style";
+export { generateReferenceStyledCard, overlayHeadlineAndLogo } from "./tools/reference-card-generator";
+export type {
+  GenerateReferenceStyledCardArgs,
+  GenerateReferenceStyledCardResult,
+  ReferenceCardEngine,
+  ReferenceCardDeps,
+  RefImageInput,
+  OverlayHeadlineArgs,
+} from "./tools/reference-card-generator";
 export { generateImageSafe, sanitizePrompt, buildGenericPrompt, isSafetyBlock, enforceNoHashtags } from "./utils/safe-image-generator";
 export type { SafeImageParams, SafeImageResult } from "./utils/safe-image-generator";
 export { isAllowedImageUrl, isPublicImageUrl, safeFetchImage, safeFetchPublicImage, isPublicPageUrl } from "./utils/safe-fetch-url";

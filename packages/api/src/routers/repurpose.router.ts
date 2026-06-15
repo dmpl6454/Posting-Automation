@@ -939,6 +939,18 @@ export const repurposeRouter = createRouter({
         // E1: an aesthetic/style reference image the AI mimics (Gemini-only —
         // the OpenAI fallback ignores reference images; degrade silently).
         aestheticRefUrl: z.string().optional(),
+        // Round 10: when true (and a usable aesthetic reference exists), the static
+        // post + carousel COVER are generated via Gemini image-to-image that
+        // RECREATES the reference's layout (not just its color). OFF (default) =
+        // the existing 4-template render, byte-identical. UI shows the toggle only
+        // when a reference is attached.
+        referenceMimicry: z.boolean().default(false),
+        // Round 10 D5: "ai" = the model renders the headline too (most faithful);
+        // "overlay" = the model leaves headline space and code overlays exact text
+        // (always correct/editable). Default "ai" — the visual gate proved the AI-
+        // rendered headline sits cleanly in the recreated layout, while "overlay"'s
+        // fixed bottom band can collide with a mimicked footer (user decision 2026-06-15).
+        mimicryTextMode: z.enum(["ai", "overlay"]).default("ai"),
         // E3a: free-text style notes appended to the AI background prompt.
         imageContext: z.string().max(300).optional(),
         // E2 / round3: total slides incl. cover + CTA; min 3 = cover+1 content+cta.
@@ -1169,13 +1181,20 @@ export const repurposeRouter = createRouter({
       // (`isPublicImageUrl`) and cleared if it pointed at a private/internal
       // host, so it is safe to fetch here when truthy. A fetch failure degrades
       // silently to the no-reference path.
+      // Round 10: capture the logo bytes at outer scope so buildMimicryCreative
+      // can pass them as a distinct logoImage reference (separate from the
+      // brandReferenceImages array which conflates logo + aesthetic ref).
+      let logoRefImage: { base64: string; mimeType: string } | null = null;
       const brandReferenceImages: Array<{ base64: string; mimeType?: string }> = [];
       if (resolvedLogoUrl) {
         // SSRF-safe: `safeFetchPublicImage` re-checks `isPublicImageUrl`,
         // uses `redirect:"manual"`, requires an image/* content-type, and caps
         // the body. Returns null on any failure → degrade silently.
         const logoRef = await safeFetchPublicImage(resolvedLogoUrl);
-        if (logoRef) brandReferenceImages.push({ base64: logoRef.base64, mimeType: logoRef.mimeType });
+        if (logoRef) {
+          brandReferenceImages.push({ base64: logoRef.base64, mimeType: logoRef.mimeType });
+          logoRefImage = { base64: logoRef.base64, mimeType: logoRef.mimeType };
+        }
       }
 
       // E1: an aesthetic/style reference image the AI mimics, IN ADDITION to the
@@ -1192,6 +1211,10 @@ export const repurposeRouter = createRouter({
       // post-page yields no image bytes directly, so we fall back to extracting
       // its og:image. All paths fail closed/silently — never throw.
       let aestheticStyleDescriptor: string | undefined;
+      // Round 10: hold the SSRF-fetched aesthetic reference bytes at outer scope so
+      // the mimicry render path (static + carousel cover) can reuse them — NO new
+      // fetch surface (these are the same bytes already fetched + classified below).
+      let aestheticRefImage: { base64: string; mimeType: string } | null = null;
       // Hoisted to outer scope (set inside the reference block) so the effective
       // style/theme/accent resolution below can let a classified reference DRIVE
       // the actual render — not just name a saved style.
@@ -1213,6 +1236,7 @@ export const repurposeRouter = createRouter({
         }
         if (aRef) {
           brandReferenceImages.push({ base64: aRef.base64, mimeType: aRef.mimeType });
+          aestheticRefImage = { base64: aRef.base64, mimeType: aRef.mimeType };
           try {
             // NOTE: this descriptor is appended to the image-gen prompt and, on the
             // prod billing-403 path, reaches gpt-image-1 UNSANITIZED (sanitizePrompt
@@ -1410,6 +1434,88 @@ export const repurposeRouter = createRouter({
         });
       }
 
+      /**
+       * Round 10 — style-mimicry render path (static + carousel cover).
+       *
+       * Calls `generateReferenceStyledCard` with the hoisted `aestheticRefImage`
+       * (the reference fetched + stored in the aRef block above). If both rungs
+       * fail the function returns a result with engine: "template", which the
+       * caller interprets as "fall back to buildHeadlineCreative".
+       *
+       * heroUrl: the article's own photo (bgSlot.url) placed into the reference's
+       * photo region so the generated card uses real content imagery.
+       */
+      async function buildMimicryCreative(
+        headline: string,
+        extra?: { heroUrl?: string },
+      ): Promise<import("@postautomation/ai").GenerateReferenceStyledCardResult & { mimeType: string }> {
+        if (!aestheticRefImage) {
+          // No reference → caller must fall back to template.
+          return { imageBase64: "", mimeType: "", engine: "template" };
+        }
+        const {
+          generateReferenceStyledCard,
+          overlayHeadlineAndLogo: overlayFn,
+          generateImage: nanoBananaGenerate,
+        } = await import("@postautomation/ai");
+
+        // Build heroImage from the article bg slot URL (already SSRF-validated
+        // by isPublicImageUrl at the slot-resolution stage; re-fetch is safe).
+        let heroImage: { base64: string; mimeType: string } | undefined;
+        if (extra?.heroUrl) {
+          const { safeFetchPublicImage: sfp } = await import("@postautomation/ai");
+          const fetched = await sfp(extra.heroUrl).catch(() => null);
+          if (fetched) heroImage = { base64: fetched.base64, mimeType: fetched.mimeType };
+        }
+
+        // Gemini generate (nano-banana provider — raw, NOT generateImageSafe).
+        // generateImageSafe silently falls to a generic prompt dropping the reference
+        // images, then to DALL-E, and returns a non-empty image WITHOUT throwing.
+        // The mimicry module needs deps.generateImage to throw on Gemini failure so
+        // the ladder advances honestly to rung-2 (openai-described).
+        const deps: import("@postautomation/ai").ReferenceCardDeps = {
+          generateImage: async (params) => {
+            const result = await nanoBananaGenerate({
+              prompt: params.prompt,
+              aspectRatio: params.aspectRatio,
+              ...(params.referenceImages ? { referenceImages: params.referenceImages } : {}),
+            });
+            return { imageBase64: result.imageBase64, mimeType: result.mimeType };
+          },
+          describeImageStyle: async (base64, mimeType) => {
+            const { describeImageStyle } = await import("@postautomation/ai");
+            return describeImageStyle(base64, mimeType);
+          },
+          generateImageDallE: async (params) => {
+            const { generateImageDallE: dallE } = await import("@postautomation/ai");
+            // Rung 2: call gpt-image-1 directly (generateImageDallE). This path is
+            // reached only when Gemini img2img failed, so we go straight to OpenAI.
+            const result = await dallE({
+              prompt: params.prompt,
+              ...(params.size ? { size: params.size as import("@postautomation/ai").DallESize } : {}),
+              ...(params.quality ? { quality: params.quality as import("@postautomation/ai").DallEQuality } : {}),
+            });
+            return { imageBase64: result.imageBase64, mimeType: result.mimeType };
+          },
+          overlayHeadlineAndLogo: overlayFn,
+        };
+
+        const result = await generateReferenceStyledCard(
+          {
+            referenceImage: aestheticRefImage,
+            ...(heroImage ? { heroImage } : {}),
+            ...(logoRefImage ? { logoImage: logoRefImage } : {}),
+            headline,
+            brandName: displayName,
+            handle,
+            brandColor: effectiveBrandColor,
+            textMode: input.mimicryTextMode,
+          },
+          deps,
+        );
+        return { ...result, mimeType: result.mimeType || "image/jpeg" };
+      }
+
       // Helper: upload to S3 + create Media record in DB
       async function uploadAndCreateMedia(
         imageBase64: string,
@@ -1602,6 +1708,9 @@ KEYWORDS: ${(brief.keywords || []).join(", ")}`;
       let renderedHookLine: string | undefined;
       let renderedBgSource: "ai" | "real" | "branded" | undefined;
       let renderedImageEngine: "gemini" | "openai" | undefined;
+      // Round 10: records which mimicry rung produced the static/cover image, or
+      // null when mimicry was OFF or fell through to the template path.
+      let renderedMimicryEngine: "gemini-img2img" | "openai-described" | null = null;
       // `renderedEngines` + `lastSlotImageEngine` are declared above (hoisted) so
       // the per-slot AI helper `generateAiSlotImage` can record into them.
 
@@ -1840,25 +1949,62 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
           }
           try {
             progress("Generating creative");
-            // T1 (control model): ALWAYS render via the template engine
-            // (buildHeadlineCreative → buildStaticCreative). The user's picked
-            // creativeStyle decides the layout family; the block engine no longer
-            // hijacks the Repurpose styled-output path.
             console.log(`[Repurpose] Building branded headline creative (category=${category}, bgSource=${bgSlot.source})...`);
-            const creative = await buildHeadlineCreative(
-              bgPromptWithContext,
-              headlineForCreativeFinal,
-              category,
-              hookLine,
-              {
-                // The slot ladder already resolved the bg (incl. AI); bake-only.
-                aiEnabled: false,
-                // The T3 guard above threw for the branded-gradient rung, so the
-                // slot here is always user/article/ai — all of which carry a real
-                // bg url to bake into the template.
-                bgImageUrl: bgSlot.url,
-              },
-            );
+
+            // Round 10: mimicry-first path — attempt to reproduce the reference's
+            // layout via Gemini img2img (+ OpenAI fallback). Only active when the
+            // user has enabled `referenceMimicry` AND an aesthetic reference was
+            // successfully fetched above. Falls through to the 4-template path on
+            // engine: "template" (both rungs failed) or when mimicry is off.
+            let creative: { imageBase64: string; mimeType: string; bgSource?: "ai" | "stock"; imageEngine?: "gemini" | "openai" };
+            if (input.referenceMimicry && aestheticRefImage) {
+              progress("Generating creative", "running", "Mimicking reference layout via Gemini…");
+              const m = await buildMimicryCreative(headlineForCreativeFinal, { heroUrl: bgSlot.url }).catch(() => null);
+              if (m && m.engine !== "template" && m.imageBase64) {
+                creative = { imageBase64: m.imageBase64, mimeType: m.mimeType };
+                renderedMimicryEngine = m.engine as "gemini-img2img" | "openai-described";
+                console.log(`[Repurpose] Mimicry succeeded (engine=${m.engine})`);
+              } else {
+                console.log(`[Repurpose] Mimicry fell through to template path (engine=${m?.engine ?? "null"})`);
+                // T1 (control model): ALWAYS render via the template engine
+                // (buildHeadlineCreative → buildStaticCreative). The user's picked
+                // creativeStyle decides the layout family; the block engine no longer
+                // hijacks the Repurpose styled-output path.
+                creative = await buildHeadlineCreative(
+                  bgPromptWithContext,
+                  headlineForCreativeFinal,
+                  category,
+                  hookLine,
+                  {
+                    // The slot ladder already resolved the bg (incl. AI); bake-only.
+                    aiEnabled: false,
+                    // The T3 guard above threw for the branded-gradient rung, so the
+                    // slot here is always user/article/ai — all of which carry a real
+                    // bg url to bake into the template.
+                    bgImageUrl: bgSlot.url,
+                  },
+                );
+              }
+            } else {
+              // T1 (control model): ALWAYS render via the template engine
+              // (buildHeadlineCreative → buildStaticCreative). The user's picked
+              // creativeStyle decides the layout family; the block engine no longer
+              // hijacks the Repurpose styled-output path.
+              creative = await buildHeadlineCreative(
+                bgPromptWithContext,
+                headlineForCreativeFinal,
+                category,
+                hookLine,
+                {
+                  // The slot ladder already resolved the bg (incl. AI); bake-only.
+                  aiEnabled: false,
+                  // The T3 guard above threw for the branded-gradient rung, so the
+                  // slot here is always user/article/ai — all of which carry a real
+                  // bg url to bake into the template.
+                  bgImageUrl: bgSlot.url,
+                },
+              );
+            }
 
             const { url, mediaId } = await uploadAndCreateMedia(
               creative.imageBase64,
@@ -2389,12 +2535,43 @@ Return ONLY the JSON array, no other text.`;
                   slideBg = slot.source === "branded" ? undefined : slot.url;
                   slideSource = slot.source;
                 }
-                // T1 (control model): ALWAYS render the cover (and every slide) via
-                // the template engine — the user's picked creativeStyle decides the
-                // layout family; the block engine no longer hijacks the cover.
+                // Round 10: for the COVER slide, try mimicry-first when enabled.
+                // Body + CTA slides always use the template engine (mimicry is a
+                // cover-level concern — body slides carry distinct per-slide body
+                // text and are not subject to layout mimicry).
                 let creativeBase64: string;
                 let creativeMime: string;
                 let creativeEngine: string | undefined;
+                let slideMimicryEngine: "gemini-img2img" | "openai-described" | null = null;
+                if (isCover && input.referenceMimicry && aestheticRefImage) {
+                  const m = await buildMimicryCreative(headline, { heroUrl: slideBg }).catch(() => null);
+                  if (m && m.engine !== "template" && m.imageBase64) {
+                    creativeBase64 = m.imageBase64;
+                    creativeMime = m.mimeType || "image/jpeg";
+                    slideMimicryEngine = m.engine as "gemini-img2img" | "openai-described";
+                  } else {
+                    // Mimicry fell through; render via template engine below.
+                    const creative = await buildHeadlineCreative(
+                      bgPrompt,
+                      headline,
+                      category,
+                      undefined,
+                      {
+                        slideRole,
+                        aiEnabled: false,
+                        ...(slideRole === "body" ? { body: slideMeta.body } : {}),
+                        ...(slideBg ? { bgImageUrl: slideBg } : {}),
+                        browser: carouselBrowser,
+                      },
+                    );
+                    creativeBase64 = creative.imageBase64;
+                    creativeMime = creative.mimeType;
+                    creativeEngine = creative.imageEngine;
+                  }
+                } else {
+                // T1 (control model): ALWAYS render the cover (and every slide) via
+                // the template engine — the user's picked creativeStyle decides the
+                // layout family; the block engine no longer hijacks the cover.
                 {
                   const creative = await buildHeadlineCreative(
                     bgPrompt,
@@ -2413,7 +2590,8 @@ Return ONLY the JSON array, no other text.`;
                   creativeMime = creative.mimeType;
                   creativeEngine = creative.imageEngine;
                 }
-                return { slideIdx, imageBase64: creativeBase64, mimeType: creativeMime, imageEngine: creativeEngine, source: isCover ? slideSource : undefined };
+                } // end else (template path)
+                return { slideIdx, imageBase64: creativeBase64!, mimeType: creativeMime!, imageEngine: creativeEngine, source: isCover ? slideSource : undefined, mimicryEngine: slideMimicryEngine };
               } catch (e) {
                 console.warn(`[Repurpose] Slide ${slideIdx + 1} (${slideRole}) failed:`, (e as Error).message);
                 return null;
@@ -2426,7 +2604,15 @@ Return ONLY the JSON array, no other text.`;
                 slideImages[result.slideIdx] = { imageBase64: result.imageBase64, mimeType: result.mimeType };
                 if (result.imageEngine === "gemini" || result.imageEngine === "openai") renderedEngines.add(result.imageEngine);
                 if (result.slideIdx === 0 && result.source) {
-                  renderedBgSource = result.source === "ai" ? "ai" : result.source === "branded" ? "branded" : "real";
+                  // Round 10: when mimicry succeeded for the cover, the image IS ai-generated
+                  // regardless of which slot the source URL came from.
+                  renderedBgSource = result.mimicryEngine
+                    ? "ai"
+                    : result.source === "ai" ? "ai" : result.source === "branded" ? "branded" : "real";
+                }
+                // Round 10: record which mimicry rung the cover slide used (only cover).
+                if (result.slideIdx === 0 && result.mimicryEngine) {
+                  renderedMimicryEngine = result.mimicryEngine;
                 }
               }
             }
@@ -2544,6 +2730,9 @@ Return ONLY the JSON array, no other text.`;
             appliedStyle: detectedCardHint ? effectiveStyle : null,
             appliedTheme: detectedCardHint ? effectiveTheme : null,
             usedRealPhoto: referencePrefersRealPhoto,
+            // Round 10: reel slides don't use mimicry (they are content slides,
+            // not a single styled cover), so this is always null here.
+            mimicryEngine: null as null,
           };
         } else {
           mediaUrls = uploadedUrls;
@@ -2600,6 +2789,9 @@ Return ONLY the JSON array, no other text.`;
         appliedStyle: detectedCardHint ? effectiveStyle : null,
         appliedTheme: detectedCardHint ? effectiveTheme : null,
         usedRealPhoto: referencePrefersRealPhoto,
+        // Round 10: which mimicry rung actually produced the static/cover image.
+        // null = mimicry was OFF or fell through to the template path.
+        mimicryEngine: renderedMimicryEngine,
       };
     }),
 
@@ -2632,6 +2824,10 @@ Return ONLY the JSON array, no other text.`;
         hookLine: z.string().optional(),
         bgImageUrl: z.string().url().optional(),
         bgContext: z.string().max(600).optional(),
+        // Round 10 parity: when true (and aestheticRefUrl is set), regenerate
+        // also uses the mimicry render path instead of the template engine.
+        referenceMimicry: z.boolean().default(false),
+        mimicryTextMode: z.enum(["ai", "overlay"]).default("ai"),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -2701,11 +2897,19 @@ Return ONLY the JSON array, no other text.`;
       // already SSRF-validated above, so fetching them here is safe. A fetch
       // failure degrades silently to no-reference.
       const referenceImages: Array<{ base64: string; mimeType?: string }> = [];
-      for (const refUrl of [safeLogoUrl, safeAestheticRef]) {
+      // Round 10: capture logo + aesthetic ref bytes separately so the mimicry
+      // path can pass them as distinct typed inputs (not a flat merged array).
+      let regenLogoRef: { base64: string; mimeType: string } | null = null;
+      let regenAestheticRef: { base64: string; mimeType: string } | null = null;
+      for (const [refUrl, kind] of [[safeLogoUrl, "logo"], [safeAestheticRef, "ref"]] as [string | undefined, string][]) {
         if (!refUrl) continue;
         // SSRF-safe (content-type + redirect:"manual" + byte cap); null → skip.
         const ref = await safeFetchPublicImage(refUrl);
-        if (ref) referenceImages.push({ base64: ref.base64, mimeType: ref.mimeType });
+        if (ref) {
+          referenceImages.push({ base64: ref.base64, mimeType: ref.mimeType });
+          if (kind === "logo") regenLogoRef = { base64: ref.base64, mimeType: ref.mimeType };
+          if (kind === "ref") regenAestheticRef = { base64: ref.base64, mimeType: ref.mimeType };
+        }
       }
 
       // R3 parity: cap the headline the same way the main flow does (≤16 words /
@@ -2750,26 +2954,116 @@ Return ONLY the JSON array, no other text.`;
         }
       }
 
-      let creative;
-      try {
-        creative = await renderStaticCreative({
-          ai: { generateImageSafe, generateStyledCreativeImage },
-          bgPrompt,
-          headline,
-          category: "news",
-          creativeStyle: input.creativeStyle,
-          theme: input.theme,
-          channelName,
-          handle: input.channelHandle || channelName,
-          logoUrl: safeLogoUrl || null,
-          logoPosition: input.logoPosition,
-          brandColor,
-          referenceImages,
-          ...(regenHookLine ? { hookLine: regenHookLine } : {}),
-          ...(safeBgImageUrl ? { bgImageUrl: safeBgImageUrl } : {}),
-        });
-      } catch (e) {
-        throw toFriendlyAIError(e);
+      // Round 10: mimicry-first path for regenerateImage — mirrors the main flow.
+      // Active when the user has referenceMimicry=true AND the aesthetic ref was
+      // fetchable. Falls through to renderStaticCreative on engine: "template".
+      let regenMimicryEngine: "gemini-img2img" | "openai-described" | null = null;
+      let creative: { imageBase64: string; mimeType: string; bgSource?: "ai" | "stock"; imageEngine?: "gemini" | "openai" };
+      if (input.referenceMimicry && regenAestheticRef) {
+        try {
+          const {
+            generateReferenceStyledCard,
+            overlayHeadlineAndLogo: overlayFn,
+            describeImageStyle,
+            generateImage: nanoBananaGenerate,
+          } = await import("@postautomation/ai");
+
+          // Build heroImage from the safe article bg url if present.
+          let heroImage: { base64: string; mimeType: string } | undefined;
+          if (safeBgImageUrl) {
+            const fetched = await safeFetchPublicImage(safeBgImageUrl).catch(() => null);
+            if (fetched) heroImage = { base64: fetched.base64, mimeType: fetched.mimeType };
+          }
+
+          const regenDeps: import("@postautomation/ai").ReferenceCardDeps = {
+            generateImage: async (params) => {
+              // Raw nano-banana provider (NOT generateImageSafe) so Gemini failure
+              // throws and the mimicry ladder advances honestly to rung-2.
+              const result = await nanoBananaGenerate({
+                prompt: params.prompt,
+                aspectRatio: params.aspectRatio,
+                ...(params.referenceImages ? { referenceImages: params.referenceImages } : {}),
+              });
+              return { imageBase64: result.imageBase64, mimeType: result.mimeType };
+            },
+            describeImageStyle: async (base64, mimeType) => describeImageStyle(base64, mimeType),
+            generateImageDallE: async (params) => {
+              const { generateImageDallE: dallE } = await import("@postautomation/ai");
+              const result = await dallE({
+                prompt: params.prompt,
+                ...(params.size ? { size: params.size as import("@postautomation/ai").DallESize } : {}),
+                ...(params.quality ? { quality: params.quality as import("@postautomation/ai").DallEQuality } : {}),
+              });
+              return { imageBase64: result.imageBase64, mimeType: result.mimeType };
+            },
+            overlayHeadlineAndLogo: overlayFn,
+          };
+
+          const m = await generateReferenceStyledCard(
+            {
+              referenceImage: regenAestheticRef,
+              ...(heroImage ? { heroImage } : {}),
+              ...(regenLogoRef ? { logoImage: regenLogoRef } : {}),
+              headline,
+              brandName: channelName,
+              handle: input.channelHandle || channelName,
+              brandColor,
+              textMode: input.mimicryTextMode,
+            },
+            regenDeps,
+          );
+
+          if (m.engine !== "template" && m.imageBase64) {
+            creative = { imageBase64: m.imageBase64, mimeType: m.mimeType || "image/jpeg" };
+            regenMimicryEngine = m.engine as "gemini-img2img" | "openai-described";
+          } else {
+            // Fall through to template path below.
+            throw new Error("mimicry engine returned template signal — falling through");
+          }
+        } catch {
+          // Mimicry failed entirely — fall through to renderStaticCreative.
+          try {
+            creative = await renderStaticCreative({
+              ai: { generateImageSafe, generateStyledCreativeImage },
+              bgPrompt,
+              headline,
+              category: "news",
+              creativeStyle: input.creativeStyle,
+              theme: input.theme,
+              channelName,
+              handle: input.channelHandle || channelName,
+              logoUrl: safeLogoUrl || null,
+              logoPosition: input.logoPosition,
+              brandColor,
+              referenceImages,
+              ...(regenHookLine ? { hookLine: regenHookLine } : {}),
+              ...(safeBgImageUrl ? { bgImageUrl: safeBgImageUrl } : {}),
+            });
+          } catch (e) {
+            throw toFriendlyAIError(e);
+          }
+        }
+      } else {
+        try {
+          creative = await renderStaticCreative({
+            ai: { generateImageSafe, generateStyledCreativeImage },
+            bgPrompt,
+            headline,
+            category: "news",
+            creativeStyle: input.creativeStyle,
+            theme: input.theme,
+            channelName,
+            handle: input.channelHandle || channelName,
+            logoUrl: safeLogoUrl || null,
+            logoPosition: input.logoPosition,
+            brandColor,
+            referenceImages,
+            ...(regenHookLine ? { hookLine: regenHookLine } : {}),
+            ...(safeBgImageUrl ? { bgImageUrl: safeBgImageUrl } : {}),
+          });
+        } catch (e) {
+          throw toFriendlyAIError(e);
+        }
       }
 
       // Upload to S3 + create a Media row (same pattern as the main flow's
@@ -2794,6 +3088,7 @@ Return ONLY the JSON array, no other text.`;
 
       // bgSource + imageEngine let the UI refresh the "Image created by X" chip
       // after a regenerate instead of showing the stale engine from the first run.
-      return { url, mediaId: media.id, bgSource: creative.bgSource === "ai" ? "ai" : "real", imageEngine: creative.imageEngine ?? null };
+      // Round 10: also surface which mimicry rung was used (null = template path).
+      return { url, mediaId: media.id, bgSource: creative.bgSource === "ai" ? "ai" : "real", imageEngine: creative.imageEngine ?? null, mimicryEngine: regenMimicryEngine };
     }),
 });

@@ -182,6 +182,16 @@ export function RepurposeTab() {
   // T2b: true once a style reference auto-suggested the picker value. Cleared the
   // moment the user clicks a style button (their explicit choice) or clears the ref.
   const [styleAutoSuggested, setStyleAutoSuggested] = useState(false);
+  // Round 10: opt-in true style mimicry. When ON (only offered when a style
+  // reference is attached), the static post + carousel cover are recreated from
+  // the reference's LAYOUT via Gemini image-to-image — not just tinted. OFF
+  // (default) = today's template render.
+  const [referenceMimicry, setReferenceMimicry] = useState(false);
+  // Round 10 D5: "ai" = AI renders the headline inside the recreated layout
+  // (most faithful — proven cleanest in the visual gate; default). "overlay" =
+  // AI leaves headline space, code overlays exact text (guaranteed-legible, but
+  // its fixed bottom band can collide with a mimicked footer). User-selectable.
+  const [mimicryTextMode, setMimicryTextMode] = useState<"ai" | "overlay">("ai");
   // D2: Real⇄AI image toggle. Default ON preserves the prior always-AI behaviour.
   const [aiImages, setAiImages] = useState<boolean>(true);
   // D10: per-slot user image assignments (all formats). Keyed by slot:
@@ -223,6 +233,9 @@ export function RepurposeTab() {
     appliedStyle?: string | null;
     appliedTheme?: string | null;
     usedRealPhoto?: boolean;
+    // Round 10: which mimicry rung produced the static/cover image (honest chip).
+    // null when mimicry was OFF or fell through to the 4-template render.
+    mimicryEngine?: "gemini-img2img" | "openai-described" | null;
   } | null>(null);
   const [copiedPlatform, setCopiedPlatform] = useState<string | null>(null);
 
@@ -556,6 +569,8 @@ export function RepurposeTab() {
         accentColor: accentColor || undefined,
         imageContext: stripBareUrls(imageContext) || undefined,
         aestheticRefUrl: aestheticRefUrl || undefined,
+        referenceMimicry: aestheticRefUrl ? referenceMimicry : false,
+        mimicryTextMode,
         channelName,
         channelHandle,
         // R3 parity: carry the rendered hook line, the article background photo,
@@ -595,7 +610,7 @@ export function RepurposeTab() {
           carouselMediaIds: nextCarouselIds,
           mediaMap: nextMap,
           imageEngines: nextEngines,
-          ...(target === "static" ? { bgSource: res.bgSource as "ai" | "real" | "branded" | null, imageEngine: res.imageEngine } : {}),
+          ...(target === "static" ? { bgSource: res.bgSource as "ai" | "real" | "branded" | null, imageEngine: res.imageEngine, mimicryEngine: res.mimicryEngine ?? null } : {}),
         };
       });
       toast({ title: "Image regenerated" });
@@ -638,6 +653,10 @@ export function RepurposeTab() {
         theme,
         accentColor: accentColor || undefined,
         aestheticRefUrl: aestheticRefUrl || undefined,
+        // Round 10: only meaningful with a reference; the server also guards on a
+        // usable fetched ref. Send the raw flags; server falls back gracefully.
+        referenceMimicry: aestheticRefUrl ? referenceMimicry : false,
+        mimicryTextMode,
         // Strip bare URLs out of the free-text notes at send time so a URL pasted
         // into the NOTES box doesn't leak into the AI prompt as literal text.
         imageContext: stripBareUrls(imageContext) || undefined,
@@ -1215,7 +1234,7 @@ export function RepurposeTab() {
                           <img src={aestheticRefUrl} alt="style reference" className="h-8 w-8 rounded object-cover border shrink-0" />
                           <button
                             type="button"
-                            onClick={() => { setAestheticRefUrl(""); setAestheticRefMediaId(""); setStyleAutoSuggested(false); }}
+                            onClick={() => { setAestheticRefUrl(""); setAestheticRefMediaId(""); setStyleAutoSuggested(false); setReferenceMimicry(false); }}
                             className="text-[10px] text-muted-foreground hover:underline shrink-0"
                           >
                             Clear
@@ -1230,6 +1249,51 @@ export function RepurposeTab() {
                       <p className="text-[10px] text-muted-foreground">We&apos;ll grab the post&apos;s main image automatically. (Instagram links often block automated fetch — uploading the image is more reliable.)</p>
                     )}
                   </div>
+
+                  {aestheticRefUrl && (
+                    <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 space-y-2">
+                      <label className="flex items-start gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={referenceMimicry}
+                          onChange={(e) => setReferenceMimicry(e.target.checked)}
+                          className="mt-0.5"
+                        />
+                        <span className="text-xs">
+                          <span className="font-semibold">Recreate this reference&apos;s layout (AI)</span>
+                          <span className="block text-[10px] text-muted-foreground mt-0.5">
+                            Recreates your reference&apos;s full layout with AI (Google Gemini), not just its colors. Falls back to a styled template if AI is busy.
+                          </span>
+                        </span>
+                      </label>
+                      {referenceMimicry && (
+                        <div className="pl-6 space-y-1">
+                          <p className="text-[10px] font-medium text-muted-foreground">Headline text</p>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setMimicryTextMode("ai")}
+                              className={`rounded-md border px-2.5 py-1 text-[11px] font-medium ${mimicryTextMode === "ai" ? "border-primary bg-primary/10" : "border-border"}`}
+                            >
+                              AI text
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setMimicryTextMode("overlay")}
+                              className={`rounded-md border px-2.5 py-1 text-[11px] font-medium ${mimicryTextMode === "overlay" ? "border-primary bg-primary/10" : "border-border"}`}
+                            >
+                              Safe text overlay
+                            </button>
+                          </div>
+                          <p className="text-[10px] text-muted-foreground">
+                            {mimicryTextMode === "overlay"
+                              ? "AI leaves space for the headline; we overlay your exact text so it's always correct and legible."
+                              : "AI renders the headline inside the layout — most faithful to the reference, but text can occasionally look off."}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* E3a: free-text aesthetic / style notes — Advanced only */}
                   {advancedOpen && (
@@ -1671,7 +1735,22 @@ export function RepurposeTab() {
                   engines={results.imageEngines ?? (results.bgSource === "ai" && results.imageEngine ? [results.imageEngine] : [])}
                   label={results.format === "reel" ? "Slide images created by" : results.format === "carousel" ? "Images created by" : "Image created by"}
                 />
-                {results.referenceApplied && (
+                {results.mimicryEngine === "gemini-img2img" && (
+                  <p className="text-[11px] font-medium text-emerald-600">
+                    ✓ Recreated from your reference (Google Gemini)
+                  </p>
+                )}
+                {results.mimicryEngine === "openai-described" && (
+                  <p className="text-[11px] font-medium text-amber-600">
+                    Styled after your reference (AI approximation)
+                  </p>
+                )}
+                {referenceMimicry && aestheticRefUrl && results.mimicryEngine == null && results.format !== "reel" && results.format !== "ai_video" && results.format !== "seedance_video" && (
+                  <p className="text-[11px] text-muted-foreground">
+                    Style approximated with a template (AI recreation was unavailable)
+                  </p>
+                )}
+                {results.referenceApplied && !results.mimicryEngine && (
                   <p className="text-[11px] text-muted-foreground">
                     Style reference applied for theme &amp; accent
                     {results.appliedTheme ? ` · ${results.appliedTheme} theme` : ""}
