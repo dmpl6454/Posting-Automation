@@ -1521,7 +1521,15 @@ export const repurposeRouter = createRouter({
         if (extra?.heroUrl) {
           const { safeFetchPublicImage: sfp } = await import("@postautomation/ai");
           const fetched = await sfp(extra.heroUrl).catch(() => null);
-          if (fetched) heroImage = { base64: fetched.base64, mimeType: fetched.mimeType };
+          if (fetched) {
+            heroImage = { base64: fetched.base64, mimeType: fetched.mimeType };
+          } else {
+            // FIX 1(c) (Round 16): a hero URL WAS supplied but couldn't be fetched
+            // (e.g. NDTV hard-403s server-side). The mimicry layout-extract rung will
+            // render photoless (branded, no fake face) — flag it so the UI prompts the
+            // user to add their own photo.
+            renderedHeroPhotoMissing = true;
+          }
         }
 
         // Gemini generate (nano-banana provider — raw, NOT generateImageSafe).
@@ -1790,6 +1798,11 @@ KEYWORDS: ${(brief.keywords || []).join(", ")}`;
       // Round 10: records which mimicry rung produced the static/cover image, or
       // null when mimicry was OFF or fell through to the template path.
       let renderedMimicryEngine: "gemini-img2img" | "openai-described" | "gemini-composite" | "layout-extract" | null = null;
+      // FIX 1(c) (Round 16): true when the mimicry path ran with a hero URL supplied
+      // but `safeFetchPublicImage` returned null (e.g. NDTV hard-403s server-side
+      // image fetches). The card is rendered photoless (branded layout, NO fake AI
+      // face) and the UI prompts the user to add their own photo via Replace/adjust.
+      let renderedHeroPhotoMissing = false;
       // `renderedEngines` + `lastSlotImageEngine` are declared above (hoisted) so
       // the per-slot AI helper `generateAiSlotImage` can record into them.
 
@@ -2871,6 +2884,10 @@ Return ONLY the JSON array, no other text.`;
         // Round 10: which mimicry rung actually produced the static/cover image.
         // null = mimicry was OFF or fell through to the template path.
         mimicryEngine: renderedMimicryEngine,
+        // FIX 1(c) (Round 16): true when the article's hero photo was unfetchable
+        // (e.g. NDTV hard-403) so the mimicry card rendered photoless. The UI prompts
+        // the user to add their own photo via Replace/adjust photo.
+        heroPhotoMissing: renderedHeroPhotoMissing,
       };
     }),
 

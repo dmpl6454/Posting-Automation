@@ -813,15 +813,38 @@ describe("generateLayoutExtractCard", () => {
     expect(contentArg.logoUrl).toBe(`data:${LOGO_IMAGE.mimeType};base64,${LOGO_IMAGE.base64}`);
   });
 
-  it("returns null when no heroImage is supplied", async () => {
+  it("returns null when no heroImage AND no styleOverride (no mimicry intent) — existing ladder preserved", async () => {
     const fn = await load();
     const deps = makeDeps();
 
-    const result = await fn(BASE_ARGS, deps); // no heroImage
+    const result = await fn(BASE_ARGS, deps); // no heroImage, no styleOverride
 
     expect(result).toBeNull();
     expect((deps.extractCardLayout as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
     expect((deps.renderLayoutCard as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
+  });
+
+  it("FIX 1(b) (Round 16): renders PHOTOLESS when no heroImage but styleOverride IS set (NDTV-class hard-403 hero)", async () => {
+    // Mimicry intent (picked style) + unfetchable hero → render the real layout WITHOUT
+    // a photo (NOT the fake-AI-face rung). The block engine renders a branded card.
+    const fn = await load();
+    const renderMock = vi.fn().mockResolvedValue(LAYOUT_EXTRACT_OUTPUT);
+    const deps = makeDeps({ renderLayoutCard: renderMock });
+
+    const result = await fn(
+      { ...BASE_ARGS, styleOverride: "premium_editorial" }, // no heroImage
+      deps,
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.engine).toBe("layout-extract");
+    expect(result!.imageBase64).toBe(LAYOUT_EXTRACT_OUTPUT.imageBase64);
+    // The block engine rendered, and heroImageUrl was OMITTED (no photo to place) so
+    // renderBackground falls back to the branded gradient.
+    expect(renderMock).toHaveBeenCalledOnce();
+    const content = renderMock.mock.calls[0]![1] as { heroImageUrl?: string; styleOverride?: string };
+    expect(content.heroImageUrl).toBeUndefined();
+    expect(content.styleOverride).toBe("premium_editorial");
   });
 
   it("FIX 3 (Round 15): when extractCardLayout returns null, still renders with a fallback layout (engine=layout-extract, non-null result)", async () => {
@@ -899,20 +922,37 @@ describe("layout-extract ladder order (Round 11)", () => {
     expect((deps.renderLayoutCard as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
   });
 
-  it("no-hero path: layout-extract is skipped entirely, ladder goes directly to gemini-img2img", async () => {
-    // BASE_ARGS has no heroImage — the no-hero ladder must be byte-identical to pre-Round-11.
+  it("no-hero + no styleOverride: layout-extract is skipped, ladder goes directly to gemini-img2img", async () => {
+    // BASE_ARGS has no heroImage AND no styleOverride — no mimicry intent → the
+    // no-hero ladder must be byte-identical to pre-Round-16.
     const fn = await load();
     const deps = makeDeps();
 
     const result = await fn(BASE_ARGS, deps);
 
-    // extractCardLayout never called (no hero to place)
+    // extractCardLayout never called (no hero + no mimicry intent)
     expect((deps.extractCardLayout as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
     expect((deps.renderLayoutCard as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
     // Falls straight to rung-1 (gemini-img2img)
     expect(result.engine).toBe("gemini-img2img");
     // generateImage called exactly once (rung-1, no composite sentinel call since no hero)
     expect((deps.generateImage as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+  });
+
+  it("FIX 1(b): no-hero BUT styleOverride set → layout-extract renders photoless, NOT the fake-AI rung", async () => {
+    // The NDTV-class fix end-to-end: mimicry intent (picked style) + unfetchable hero
+    // must produce a deterministic branded layout-extract card, never gemini-img2img
+    // (which would fabricate a face). generateImage must NOT be called at all.
+    const fn = await load();
+    const deps = makeDeps();
+
+    const result = await fn({ ...BASE_ARGS, styleOverride: "premium_editorial" }, deps);
+
+    expect(result.engine).toBe("layout-extract");
+    // No Gemini/OpenAI fabrication path was reached.
+    expect((deps.generateImage as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
+    expect((deps.generateImageDallE as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
+    expect((deps.renderLayoutCard as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
   });
 
   it("layout-extract engine beats gemini-img2img in the result when both hero rungs work", async () => {

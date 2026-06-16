@@ -259,12 +259,17 @@ function stripHtml(html: string): string {
 }
 
 /**
- * Strip real HTML markup tags from a captured string value, then collapse
- * whitespace. Applied BEFORE decodeEntities so that entity-encoded angle
- * brackets (`&lt;i&gt;`) are never mistakenly matched as tags — they are still
- * decoded to plain text in the subsequent decodeEntities pass.
+ * Strip real HTML markup tags from a string value, then collapse whitespace.
  *
- * Example: "<i>Movie</i> News &amp; More" → "Movie News & More"
+ * FIX 2 (Round 16): applied AFTER decodeEntities (see getMeta/getTitle), so that
+ * ENTITY-ENCODED tags like `&lt;i&gt;…&lt;/i&gt;` (which NDTV and other publishers
+ * serve in og:title) are first decoded to literal `<i>…</i>` and THEN stripped here
+ * — otherwise the tag syntax leaks into the rendered headline. stripTags is
+ * idempotent, so raw-tag titles (`<i>Movie</i>`) still strip cleanly.
+ *
+ * Example: "&lt;i&gt;Movie&lt;/i&gt; News &amp; More"
+ *   → decodeEntities → "<i>Movie</i> News & More"
+ *   → stripTags     → "Movie News & More"
  */
 function stripTags(text: string): string {
   return text.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
@@ -281,9 +286,11 @@ function getMeta(html: string, property: string): string {
   ];
   for (const re of patterns) {
     const m = html.match(re);
-    // FIX 4 (Round 15): strip HTML tags then decode entities so italicised
-    // titles like <i>Movie</i> don't leak literal tag syntax into the headline.
-    if (m?.[1]) return decodeEntities(stripTags(m[1]));
+    // FIX 2 (Round 16): DECODE entities FIRST, then strip tags. NDTV serves
+    // entity-encoded italics (`&lt;i&gt;`); decoding first turns them into real
+    // `<i>` tags which stripTags then removes. (Round 15 did strip-then-decode,
+    // which left the decoded `<i>` un-stripped → leaked into the headline.)
+    if (m?.[1]) return stripTags(decodeEntities(m[1]));
   }
   return "";
 }
@@ -295,8 +302,9 @@ function getTitle(html: string): string {
   const tw = getMeta(html, "twitter:title");
   if (tw) return tw;
   const match = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  // FIX 4 (Round 15): strip tags before decoding entities (same as getMeta).
-  return decodeEntities(stripTags(match?.[1]?.trim() || ""));
+  // FIX 2 (Round 16): decode entities first, then strip tags (same as getMeta) so
+  // entity-encoded tags (`&lt;i&gt;`) are decoded and then removed, not leaked.
+  return stripTags(decodeEntities(match?.[1]?.trim() || ""));
 }
 
 /**

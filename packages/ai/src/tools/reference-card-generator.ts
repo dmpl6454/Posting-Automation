@@ -652,7 +652,22 @@ export async function generateLayoutExtractCard(
   deps: ReferenceCardDeps,
 ): Promise<GenerateReferenceStyledCardResult | null> {
   const { referenceImage, heroImage, logoImage } = args;
-  if (!heroImage) return null;
+
+  // FIX 1(b) (Round 16): a hero photo is NOT required to render. When MIMICRY INTENT
+  // exists (the user picked a style → args.styleOverride is set) but the hero photo is
+  // unfetchable (e.g. NDTV hard-403s server-side image fetches), render the layout
+  // DETERMINISTICALLY WITHOUT a photo — a clean branded card (the background block
+  // falls back to the branded gradient in renderBackground when no imageUrl is given;
+  // scrim/colors/eyebrow/headline are still placed). This replaces the old
+  // `if (!heroImage) return null` that silently degraded NDTV-class URLs to the
+  // fake-AI-face rungs (gemini-img2img / openai-described fabricates a face).
+  //
+  // We KEY ON styleOverride (not just the always-present referenceImage) so the
+  // EXISTING no-hero Gemini-ladder behavior is preserved when there is no mimicry
+  // intent: with no hero AND no styleOverride we bail to the original ladder below.
+  // In production the Repurpose mimicry path always passes styleOverride (= the
+  // user's picked creativeStyle), so a photoless NDTV-class card always renders here.
+  if (!heroImage && !args.styleOverride) return null;
 
   try {
     // Step 1: vision-extract the reference's layout. Tolerates celebrity faces —
@@ -685,7 +700,13 @@ export async function generateLayoutExtractCard(
     }
 
     // Step 2: build the hero data URL (the user's REAL photo — never AI-touched).
-    const heroDataUrl = `data:${heroImage.mimeType};base64,${heroImage.base64}`;
+    // FIX 1(b): heroImage is optional now — when absent (unfetchable photo), omit
+    // heroImageUrl entirely. cardLayoutToSpec's background block then renders with
+    // no imageUrl, and renderBackground falls back to the branded gradient (mode
+    // "photo" with no url → `grad`), giving a clean photoless branded card.
+    const heroDataUrl = heroImage
+      ? `data:${heroImage.mimeType};base64,${heroImage.base64}`
+      : undefined;
 
     // Step 3: build logo URL if a logo image is provided.
     // safeImageUrl gates the assembled data: URL to block attribute-breakout mimeTypes.
@@ -699,7 +720,7 @@ export async function generateLayoutExtractCard(
     const render = deps.renderLayoutCard ?? defaultRenderLayoutCard;
     const out = await render(layout, {
       headline: args.headline,
-      heroImageUrl: heroDataUrl,
+      ...(heroDataUrl ? { heroImageUrl: heroDataUrl } : {}),
       channelName: args.brandName,
       ...(logoUrl ? { logoUrl } : {}),
       ...(args.brandColor ? { brandColor: safeColor(args.brandColor) } : {}),
@@ -761,12 +782,18 @@ export async function generateReferenceStyledCard(
     console.warn("[reference-card-generator] Rung-0 (Gemini composite) unavailable — advancing to layout-extract.");
   }
 
-  // ── Rung 0b: Layout-extract (hero only) — the RELIABLE celebrity-face path ──
+  // ── Rung 0b: Layout-extract — the RELIABLE deterministic path ──────────────
   // OpenAI vision reads the reference's LAYOUT (tolerates celebrity photos in the
   // ref — it reads composition, not identity), then the block engine renders it
   // deterministically with the REAL hero photo. No Gemini, no refusal, 100% reliable.
-  // Skipped entirely when no hero exists (the block engine needs a photo to place).
-  if (heroImage) {
+  //
+  // FIX 1(b) (Round 16): this rung now ALSO runs when there is NO hero photo, as long
+  // as there's mimicry intent (a reference image or a styleOverride). With no hero it
+  // renders a clean PHOTOLESS branded card (branded-gradient background) — NEVER the
+  // fake-AI-face rungs below. This is the key fix for NDTV-class URLs whose hero photo
+  // hard-403s server-side: we render the real layout + branding and the UI prompts the
+  // user to add their own photo, instead of fabricating a face.
+  {
     const layoutCard = await generateLayoutExtractCard(args, deps);
     if (layoutCard) return layoutCard;
     console.warn("[reference-card-generator] Layout-extract rung unavailable — advancing to rung 1.");
