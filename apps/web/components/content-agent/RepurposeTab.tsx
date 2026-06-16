@@ -220,7 +220,10 @@ export function RepurposeTab() {
   // (most faithful — proven cleanest in the visual gate; default). "overlay" =
   // AI leaves headline space, code overlays exact text (guaranteed-legible, but
   // its fixed bottom band can collide with a mimicked footer). User-selectable.
-  const [mimicryTextMode, setMimicryTextMode] = useState<"ai" | "overlay">("ai");
+  // The static + regen mimicry paths always render text deterministically (the
+  // engine ignores this), so there's no user-facing text-mode toggle anymore. Kept
+  // as a constant default so the mutation payload contract is unchanged.
+  const [mimicryTextMode] = useState<"ai" | "overlay">("ai");
   // D2: Real⇄AI image toggle. Default ON preserves the prior always-AI behaviour.
   const [aiImages, setAiImages] = useState<boolean>(true);
   // D10: per-slot user image assignments (all formats). Keyed by slot:
@@ -1581,41 +1584,12 @@ export function RepurposeTab() {
                           className="mt-0.5"
                         />
                         <span className="text-xs">
-                          <span className="font-semibold">Recreate this reference&apos;s layout (AI)</span>
+                          <span className="font-semibold">Recreate this reference&apos;s layout</span>
                           <span className="block text-[10px] text-muted-foreground mt-0.5">
-                            Recreates your reference&apos;s full layout with AI (Google Gemini), not just its colors. Falls back to a styled template if AI is busy.
+                            Matches your reference&apos;s layout — its colors, logo position, alignment and headline treatment — using your real photo and your exact text.
                           </span>
                         </span>
                       </label>
-                      {referenceMimicry && (
-                        <div className="pl-6 space-y-1">
-                          <p className="text-[10px] font-medium text-muted-foreground">Headline text</p>
-                          <div className="flex gap-2">
-                            <button
-                              type="button"
-                              onClick={() => setMimicryTextMode("ai")}
-                              className={`rounded-md border px-2.5 py-1 text-[11px] font-medium ${mimicryTextMode === "ai" ? "border-primary bg-primary/10" : "border-border"}`}
-                            >
-                              AI text
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setMimicryTextMode("overlay")}
-                              className={`rounded-md border px-2.5 py-1 text-[11px] font-medium ${mimicryTextMode === "overlay" ? "border-primary bg-primary/10" : "border-border"}`}
-                            >
-                              Safe text overlay
-                            </button>
-                          </div>
-                          <p className="text-[10px] text-muted-foreground">
-                            {mimicryTextMode === "overlay"
-                              ? "AI leaves space for the headline; we overlay your exact text so it's always correct and legible."
-                              : "AI renders the headline inside the layout — most faithful to the reference, but text can occasionally look off."}
-                          </p>
-                          <p className="text-[10px] text-muted-foreground mt-1">
-                            Applies only when AI re-draws the whole card. Most reference recreations render your exact text automatically.
-                          </p>
-                        </div>
-                      )}
                     </div>
                   )}
 

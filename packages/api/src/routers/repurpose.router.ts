@@ -2680,7 +2680,11 @@ Return ONLY the JSON array, no other text.`;
                 let creativeEngine: string | undefined;
                 let slideMimicryEngine: "gemini-img2img" | "openai-described" | "gemini-composite" | "layout-extract" | null = null;
                 if (isCover && input.referenceMimicry && aestheticRefImage) {
-                  const m = await buildMimicryCreative(headline, { heroUrl: slideBg }).catch(() => null);
+                  // Round 21: the carousel COVER uses the SAME deterministic engine as
+                  // the static post (deterministicOnly) — layout-extract or the
+                  // deterministic template only, never the AI-generation rungs. Keeps
+                  // covers consistent + fast and prevents the fabricated-face output.
+                  const m = await buildMimicryCreative(headline, { heroUrl: slideBg, deterministicOnly: true }).catch(() => null);
                   if (m && m.engine !== "template" && m.imageBase64) {
                     creativeBase64 = m.imageBase64;
                     creativeMime = m.mimeType || "image/jpeg";
