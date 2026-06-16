@@ -61,7 +61,14 @@ export type { NewsCardOptions, StaticNewsCreativeOptions } from "./tools/news-ca
 export { extractUrlContent, resolveImageFromPageUrl } from "./utils/url-extractor";
 export type { ExtractedContent } from "./utils/url-extractor";
 export { describeImageStyle } from "./tools/describe-image-style";
-export { generateReferenceStyledCard, overlayHeadlineAndLogo } from "./tools/reference-card-generator";
+export {
+  generateReferenceStyledCard,
+  generateCompositeStyledCard,
+  overlayHeadlineAndLogo,
+  detectSentinelRegion,
+  compositeHeroIntoRegion,
+  findSentinelBBox,
+} from "./tools/reference-card-generator";
 export type {
   GenerateReferenceStyledCardArgs,
   GenerateReferenceStyledCardResult,
@@ -69,6 +76,8 @@ export type {
   ReferenceCardDeps,
   RefImageInput,
   OverlayHeadlineArgs,
+  CompositeHeroArgs,
+  SentinelBBox,
 } from "./tools/reference-card-generator";
 export { generateImageSafe, sanitizePrompt, buildGenericPrompt, isSafetyBlock, enforceNoHashtags } from "./utils/safe-image-generator";
 export type { SafeImageParams, SafeImageResult } from "./utils/safe-image-generator";
