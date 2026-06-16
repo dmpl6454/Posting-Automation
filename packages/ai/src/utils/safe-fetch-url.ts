@@ -164,14 +164,28 @@ export async function safeFetchPublicImage(
   const timeoutMs = opts?.timeoutMs ?? 10_000;
   let res: Response;
   try {
-    res = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(timeoutMs) });
+    // FIX 1(a) (Round 16): send a realistic browser User-Agent + Accept header so
+    // CDNs that gate image bytes on UA/Accept (many news publishers) serve us the
+    // file instead of a 403. SSRF posture is unchanged — redirect:"manual" still
+    // blocks 30x chaining and isPublicImageUrl already gated the host above. Used
+    // widely (logos, refs, hero photos) — adding these headers is backward-compatible.
+    res = await fetch(url, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        Accept: "image/avif,image/webp,image/png,image/*,*/*;q=0.8",
+      },
+    });
   } catch {
     return null;
   }
   if (!res.ok) return null; // manual redirect → res.ok false for 30x; treat as failure
   const ct = (res.headers.get("content-type") || "").toLowerCase();
   const mediaType = ct.split(";")[0]?.trim() || "";
-  if (!/^image\/(png|jpe?g|webp|gif)$/.test(mediaType)) return null;
+  // FIX 1(a): also accept avif (modern CDNs increasingly serve it).
+  if (!/^image\/(png|jpe?g|webp|gif|avif)$/.test(mediaType)) return null;
   const buf = Buffer.from(await res.arrayBuffer());
   if (buf.byteLength > maxBytes) return null;
   const mimeType = mediaType || "image/png";

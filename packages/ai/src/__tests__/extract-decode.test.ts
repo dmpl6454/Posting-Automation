@@ -13,8 +13,9 @@ describe("getMeta/getTitle decode entities", () => {
   });
 });
 
-// FIX 4 (Round 15): strip HTML tags from titles before decoding entities
-describe("getMeta/getTitle strip HTML tags (FIX 4 Round 15)", () => {
+// FIX 2 (Round 16): DECODE entities first, THEN strip tags — so entity-encoded
+// tags (`&lt;i&gt;`, served by NDTV et al.) are decoded to real tags then removed.
+describe("getMeta/getTitle decode-then-strip HTML tags (FIX 2 Round 16)", () => {
   it("strips <i>…</i> italic tags from og:title", () => {
     const html = `<meta property="og:title" content="<i>Main Vaapas Aaunga</i> — Review">`;
     expect(__test__.getMeta(html, "og:title")).toBe("Main Vaapas Aaunga — Review");
@@ -25,21 +26,27 @@ describe("getMeta/getTitle strip HTML tags (FIX 4 Round 15)", () => {
     expect(__test__.getTitle(html)).toBe("Breaking: Election Results");
   });
 
-  it("strips tags then decodes entities: '<i>Movie</i> News &amp; More' → 'Movie News & More'", () => {
+  it("decodes then strips: '<i>Movie</i> News &amp; More' → 'Movie News & More'", () => {
     const html = `<meta property="og:title" content="<i>Movie</i> News &amp; More">`;
     expect(__test__.getMeta(html, "og:title")).toBe("Movie News & More");
   });
 
-  it("entity-encoded tags (&lt;i&gt;) are decoded to plain text, not stripped as tags", () => {
-    // &lt;i&gt; is not a real HTML tag — decode should turn it into literal text <i>
-    // then the second pass leaves it as text (no actual tags to strip on that pass).
-    // getMeta decodes first, so the result should contain the angle-bracket text.
+  it("ENTITY-encoded tags (&lt;i&gt;) are decoded THEN stripped (no tag leak)", () => {
+    // NDTV serves entity-encoded italics. decode-first turns &lt;i&gt; into a real
+    // <i> tag, which the subsequent stripTags removes — so the headline is clean
+    // text, NOT the leaked "<i>…</i>" the Round-15 strip-then-decode order produced.
     const html = `<meta property="og:title" content="Word &lt;i&gt;italicized&lt;/i&gt;">`;
-    const result = __test__.getMeta(html, "og:title");
-    // The regex captures the raw content= value; stripTags removes real tags only;
-    // decodeEntities then turns &lt; → <.  Final: "Word <i>italicized</i>" which
-    // is decoded-text, not a real rendered element.
-    expect(result).toBe("Word <i>italicized</i>");
+    expect(__test__.getMeta(html, "og:title")).toBe("Word italicized");
+  });
+
+  it("entity-encoded title: '&lt;i&gt;Movie&lt;/i&gt; News &amp; More' → 'Movie News & More'", () => {
+    const html = `<title>&lt;i&gt;Movie&lt;/i&gt; News &amp; More</title>`;
+    expect(__test__.getTitle(html)).toBe("Movie News & More");
+  });
+
+  it("raw-tag title still works: '<i>Movie</i> News' → 'Movie News'", () => {
+    const html = `<title><i>Movie</i> News</title>`;
+    expect(__test__.getTitle(html)).toBe("Movie News");
   });
 
   it("strips multiple nested tags from og:title", () => {

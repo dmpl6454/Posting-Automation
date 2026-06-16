@@ -297,6 +297,9 @@ export function RepurposeTab() {
     // Round 10: which mimicry rung produced the static/cover image (honest chip).
     // null when mimicry was OFF or fell through to the 4-template render.
     mimicryEngine?: "gemini-img2img" | "openai-described" | "gemini-composite" | "layout-extract" | null;
+    // FIX 1(c) (Round 16): the article's hero photo was unfetchable (e.g. NDTV
+    // hard-403), so the mimicry card rendered photoless — prompt the user to add one.
+    heroPhotoMissing?: boolean;
   } | null>(null);
   const [copiedPlatform, setCopiedPlatform] = useState<string | null>(null);
 
@@ -607,10 +610,14 @@ export function RepurposeTab() {
     const ch = selectedChannelIds.length > 0
       ? activeChannels.find((c: any) => c.id === selectedChannelIds[0])
       : primaryChannel;
+    // FIX 3(a) (Round 16): mirror handleGenerate — on the mimicry path send ONLY an
+    // explicit logo (no channel-avatar fallback) so the avatar never renders as a
+    // logo circle on the mimicked/layout-extract card. Template path keeps the avatar.
+    const mimicryActive = !!aestheticRefUrl && referenceMimicry;
     return {
       channelName: ch?.name || "Channel",
       channelHandle: ch?.username || "",
-      logoUrl: logoUrl || ch?.avatar || undefined,
+      logoUrl: logoUrl || (mimicryActive ? undefined : ch?.avatar || undefined),
     };
   };
 
@@ -702,20 +709,16 @@ export function RepurposeTab() {
   };
 
   // Compute the active brand name to send as `brandName` to the router, so the
-  // mimicry eyebrow uses it instead of the bare channel username.
-  // Priority: explicit brandNameInput → saved-style name → logo template name → channel name.
+  // mimicry eyebrow shows a real on-card brand — NOT a UI library label.
+  //
+  // FIX 3(b) (Round 16): a SAVED-STYLE template's `name` (e.g. "moviefied template")
+  // and a LOGO template's `name` are LIBRARY LABELS, not brand names — they were
+  // leaking into the eyebrow. Removed both. The user sets the on-card brand explicitly
+  // via the brand-name input (a "name" kind template applies itself by setting
+  // brandNameInput, so it flows through the first branch).
+  // Priority: explicit brandNameInput → channel name → undefined.
   const computeActiveBrandName = (): string | undefined => {
     if (brandNameInput.trim()) return brandNameInput.trim();
-    const styleTemplates = (creativeTemplates ?? []).filter((t) => (t as any).kind === "style");
-    if (selectedTemplateId) {
-      const t = styleTemplates.find((t) => t.id === selectedTemplateId);
-      if (t?.name) return t.name;
-    }
-    if (logoMediaId) {
-      const logoTemplates = (creativeTemplates ?? []).filter((t) => (t as any).kind === "logo");
-      const lt = logoTemplates.find((t) => t.logoMediaId === logoMediaId);
-      if (lt?.name) return lt.name;
-    }
     const ch = selectedChannelIds.length > 0
       ? activeChannels.find((c: any) => c.id === selectedChannelIds[0])
       : primaryChannel;
@@ -756,12 +759,21 @@ export function RepurposeTab() {
         channelHandle: selectedChannelIds.length > 0
           ? activeChannels.find((c: any) => c.id === selectedChannelIds[0])?.username || ""
           : primaryChannel?.username || "",
-        logoUrl: logoUrl || (() => {
-          const ch = selectedChannelIds.length > 0
-            ? activeChannels.find((c: any) => c.id === selectedChannelIds[0])
-            : primaryChannel;
-          return ch?.avatar || "";
-        })(),
+        // FIX 3(a) (Round 16): only send an EXPLICITLY chosen brand logo as logoUrl.
+        // For the mimicry/layout-extract path, do NOT fall back to the channel avatar
+        // — the avatar is a generic profile picture, not a brand logo, and was rendering
+        // as an orange logo circle on the mimicked card (resolveLogoForOrg classifies any
+        // incoming logoUrl as "explicit"). When mimicry is active and there's no explicit
+        // logo, send undefined → the card renders with NO logo. The non-mimicry template
+        // path keeps the avatar fallback (it relies on it for brand consistency).
+        logoUrl: logoUrl || ((aestheticRefUrl && referenceMimicry)
+          ? undefined
+          : (() => {
+              const ch = selectedChannelIds.length > 0
+                ? activeChannels.find((c: any) => c.id === selectedChannelIds[0])
+                : primaryChannel;
+              return ch?.avatar || "";
+            })()),
         creativeStyle,
         logoPosition,
         theme,
@@ -1997,6 +2009,11 @@ export function RepurposeTab() {
                 )}
                 {Object.keys(imageAssignments).length > 0 && (
                   <p className="text-[11px] text-muted-foreground">Includes your uploaded image(s) for the slot(s) you assigned.</p>
+                )}
+                {results.heroPhotoMissing && (
+                  <p className="text-[11px] font-medium text-amber-600">
+                    We couldn&apos;t load the article&apos;s photo — the card uses your brand background. Add your own photo via Replace/adjust photo for a richer card.
+                  </p>
                 )}
               </CardHeader>
               <CardContent>
