@@ -1024,6 +1024,15 @@ export const repurposeRouter = createRouter({
           "montserrat", "poppins", "bebas", "anton", "archivo_black",
           "dm_serif", "lora", "roboto_slab", "bitter", "space_grotesk", "libre_franklin",
         ]).optional(),
+        // Round 17: brand-name / eyebrow label color (forwarded as labelColor to
+        // the reference-card engine; safeColor-gated downstream, invalid → default).
+        labelColor: z.string().max(9).optional(),
+        // Round 17: explicit logo size (4–40) on the layout-extract rung; unset →
+        // the engine's shape-aware default.
+        logoSize: z.number().int().min(4).max(40).optional(),
+        // Round 17: headline alignment override (wins over the reference's detected
+        // alignment on the layout-extract rung).
+        headlineAlign: z.enum(["left", "center", "right"]).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -1597,6 +1606,9 @@ export const repurposeRouter = createRouter({
             styleOverride: effectiveStyle,
             ...(input.headlineColor ? { headlineColor: input.headlineColor } : {}),
             ...(input.headlineFont ? { fontOverride: input.headlineFont } : {}),
+            ...(input.labelColor ? { labelColor: input.labelColor } : {}),
+            ...(input.logoSize ? { logoSize: input.logoSize } : {}),
+            ...(input.headlineAlign ? { alignOverride: input.headlineAlign } : {}),
           },
           deps,
         );
@@ -2936,6 +2948,12 @@ Return ONLY the JSON array, no other text.`;
           "montserrat", "poppins", "bebas", "anton", "archivo_black",
           "dm_serif", "lora", "roboto_slab", "bitter", "space_grotesk", "libre_franklin",
         ]).optional(),
+        // Round 17: brand-name / eyebrow label color (forwarded as labelColor).
+        labelColor: z.string().max(9).optional(),
+        // Round 17: explicit logo size (4–40) on the layout-extract rung.
+        logoSize: z.number().int().min(4).max(40).optional(),
+        // Round 17: headline alignment override.
+        headlineAlign: z.enum(["left", "center", "right"]).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -3124,6 +3142,9 @@ Return ONLY the JSON array, no other text.`;
               styleOverride: input.creativeStyle,
               ...(input.headlineColor ? { headlineColor: input.headlineColor } : {}),
               ...(input.headlineFont ? { fontOverride: input.headlineFont } : {}),
+              ...(input.labelColor ? { labelColor: input.labelColor } : {}),
+              ...(input.logoSize ? { logoSize: input.logoSize } : {}),
+              ...(input.headlineAlign ? { alignOverride: input.headlineAlign } : {}),
             },
             regenDeps,
           );
