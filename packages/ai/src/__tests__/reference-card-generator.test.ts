@@ -29,7 +29,9 @@ const GEMINI_OUTPUT = { imageBase64: "Z2VtaW5p", mimeType: "image/png" };
 const OPENAI_OUTPUT = { imageBase64: "b3Blbg==", mimeType: "image/png" };
 const OVERLAY_OUTPUT = { imageBase64: "b3ZlcmxheQ==", mimeType: "image/png" };
 const COMPOSITE_OUTPUT = { imageBase64: "Y29tcG9zaXRl", mimeType: "image/png" };
+const LAYOUT_EXTRACT_OUTPUT = { imageBase64: "bGF5b3V0", mimeType: "image/png" };
 const SENTINEL_BBOX = { x: 100, y: 120, w: 400, h: 500 };
+const MOCK_LAYOUT = { theme: "dark", accentColor: "#ff7a00", background: { mode: "photo", scrimMode: "brand" }, headline: { variant: "plain", align: "left" }, brandLabel: true, logo: { present: true, anchor: "tl", shape: "circle" }, confidence: 0.9 };
 
 function makeDeps(overrides: Partial<ReferenceCardDeps> = {}): ReferenceCardDeps {
   return {
@@ -42,6 +44,10 @@ function makeDeps(overrides: Partial<ReferenceCardDeps> = {}): ReferenceCardDeps
     // returns engine "gemini-composite" unless a test overrides them.
     detectSentinelRegion: vi.fn().mockResolvedValue(SENTINEL_BBOX),
     compositeHeroIntoRegion: vi.fn().mockResolvedValue(COMPOSITE_OUTPUT),
+    // Layout-extract path mocks — always injected so tests NEVER call OpenAI or Puppeteer.
+    // Default to a successful layout extraction + render so tests can override selectively.
+    extractCardLayout: vi.fn().mockResolvedValue(MOCK_LAYOUT),
+    renderLayoutCard: vi.fn().mockResolvedValue(LAYOUT_EXTRACT_OUTPUT),
     ...overrides,
   };
 }
@@ -78,10 +84,13 @@ describe("generateReferenceStyledCard", () => {
 
   it("passes [ref, hero, logo] to generateImage at the rung-1 img2img call when all three provided", async () => {
     const fn = await load();
-    // With a hero, rung-0 (composite) runs FIRST. Force it to bail (no sentinel
-    // region detected) so the ladder advances to rung-1, where the [ref,hero,logo]
+    // With a hero, rung-0 (composite) runs FIRST, then layout-extract (rung-0b).
+    // Force BOTH to bail so the ladder advances to rung-1, where the [ref,hero,logo]
     // referenceImages assembly under test happens.
-    const deps = makeDeps({ detectSentinelRegion: vi.fn().mockResolvedValue(null) });
+    const deps = makeDeps({
+      detectSentinelRegion: vi.fn().mockResolvedValue(null),   // rung-0 bails
+      extractCardLayout: vi.fn().mockResolvedValue(null),       // rung-0b bails
+    });
 
     await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE, logoImage: LOGO_IMAGE }, deps);
 
@@ -166,9 +175,13 @@ describe("generateReferenceStyledCard", () => {
     // different identity — never the blanket "no real person" ban that made
     // Gemini refuse every celebrity reference.
     const fn = await load();
-    // With a hero, rung-0 (composite) runs FIRST. Force it to bail so the ladder
-    // advances to rung-1, where the hero-aware img2img prompt under test is built.
-    const deps = makeDeps({ detectSentinelRegion: vi.fn().mockResolvedValue(null) });
+    // With a hero, rung-0 (composite) runs FIRST, then layout-extract (rung-0b).
+    // Force BOTH to bail so the ladder reaches rung-1, where the hero-aware
+    // img2img prompt under test is built.
+    const deps = makeDeps({
+      detectSentinelRegion: vi.fn().mockResolvedValue(null),   // rung-0 bails
+      extractCardLayout: vi.fn().mockResolvedValue(null),       // rung-0b bails
+    });
     await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE }, deps);
     const calls = (deps.generateImage as ReturnType<typeof vi.fn>).mock.calls;
     // The LAST generateImage call is rung-1 img2img (rung-0 sentinel is calls[0]).
@@ -507,24 +520,47 @@ describe("composite ladder integration (Round 11)", () => {
     expect(compositeArgs.baseImageBase64).toBe(GEMINI_OUTPUT.imageBase64);
   });
 
-  it("falls through to rung-1 (gemini-img2img) when no sentinel region is detected", async () => {
+  it("composite bails → layout-extract succeeds when no sentinel region is detected", async () => {
+    // With the Round-11 ladder: composite (rung-0) fails → layout-extract (rung-0b)
+    // is the RELIABLE fallback. It should succeed here because makeDeps injects a
+    // working extractCardLayout + renderLayoutCard by default.
     const fn = await load();
     const deps = makeDeps({
-      detectSentinelRegion: vi.fn().mockResolvedValue(null),
+      detectSentinelRegion: vi.fn().mockResolvedValue(null), // rung-0 bails
     });
 
     const result = await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE }, deps);
 
-    // Composite bailed → rung-1 img2img succeeded with the default GEMINI_OUTPUT.
+    // Composite bailed → layout-extract took over (the reliable celebrity path).
+    expect(result.engine).toBe("layout-extract");
+    expect(result.imageBase64).toBe(LAYOUT_EXTRACT_OUTPUT.imageBase64);
+    expect((deps.compositeHeroIntoRegion as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
+    // extractCardLayout was called with the reference image.
+    expect((deps.extractCardLayout as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+  });
+
+  it("falls through to rung-1 (gemini-img2img) when composite AND layout-extract both bail", async () => {
+    const fn = await load();
+    // Disable both hero rungs: no sentinel + layout extraction returns null.
+    const deps = makeDeps({
+      detectSentinelRegion: vi.fn().mockResolvedValue(null),   // rung-0 bails
+      extractCardLayout: vi.fn().mockResolvedValue(null),       // rung-0b bails
+    });
+
+    const result = await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE }, deps);
+
+    // Falls through to rung-1 img2img.
     expect(result.engine).toBe("gemini-img2img");
     expect((deps.compositeHeroIntoRegion as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
     // generateImage called twice: rung-0 sentinel + rung-1 img2img.
     expect((deps.generateImage as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(2);
   });
 
-  it("falls through to rung-1 when the sentinel Gemini call throws (refusal)", async () => {
+  it("falls through to layout-extract when the sentinel Gemini call throws (refusal)", async () => {
+    // Gemini REFUSES the sentinel call (celebrity face in the reference) → composite
+    // bails → layout-extract is the RELIABLE fallback (no Gemini involved).
     const fn = await load();
-    // First generateImage call (rung-0 sentinel) throws; second (rung-1) succeeds.
+    // First generateImage call (rung-0 sentinel) throws; layout-extract succeeds.
     const generateImage = vi
       .fn()
       .mockRejectedValueOnce(new Error("finishReason OTHER (policy refusal)"))
@@ -533,14 +569,33 @@ describe("composite ladder integration (Round 11)", () => {
 
     const result = await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE }, deps);
 
+    expect(result.engine).toBe("layout-extract");
+    expect(result.imageBase64).toBe(LAYOUT_EXTRACT_OUTPUT.imageBase64);
+    expect((deps.compositeHeroIntoRegion as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
+  });
+
+  it("falls through to rung-1 when sentinel throws AND layout-extract bails", async () => {
+    const fn = await load();
+    const generateImage = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("finishReason OTHER (policy refusal)"))
+      .mockResolvedValueOnce(GEMINI_OUTPUT);
+    const deps = makeDeps({
+      generateImage,
+      extractCardLayout: vi.fn().mockResolvedValue(null), // layout-extract bails
+    });
+
+    const result = await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE }, deps);
+
     expect(result.engine).toBe("gemini-img2img");
     expect((deps.compositeHeroIntoRegion as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
   });
 
-  it("falls through to rung-2 (openai-described) when composite bails AND rung-1 throws", async () => {
+  it("falls through to rung-2 (openai-described) when composite bails AND layout-extract bails AND rung-1 throws", async () => {
     const fn = await load();
     const deps = makeDeps({
-      detectSentinelRegion: vi.fn().mockResolvedValue(null), // rung-0 bails
+      detectSentinelRegion: vi.fn().mockResolvedValue(null),   // rung-0 bails
+      extractCardLayout: vi.fn().mockResolvedValue(null),       // rung-0b bails
       generateImage: vi.fn().mockRejectedValue(new Error("Gemini billing hold")), // rung-1 throws
     });
 
@@ -669,5 +724,184 @@ describe("resolveHeroSrc + buildCompositeHtml safety", () => {
     expect(html).toContain("top:1300px");
     expect(html).toContain("width:80px");
     expect(html).toContain("height:50px");
+  });
+});
+
+// ── generateLayoutExtractCard unit tests (Round 11) ───────────────────────────
+
+describe("generateLayoutExtractCard", () => {
+  async function load() {
+    const mod = await import("../tools/reference-card-generator");
+    return mod.generateLayoutExtractCard;
+  }
+
+  it("returns engine=layout-extract when extractCardLayout returns a layout and renderLayoutCard returns an image", async () => {
+    const fn = await load();
+    const deps = makeDeps();
+
+    const result = await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE }, deps);
+
+    expect(result).not.toBeNull();
+    expect(result!.engine).toBe("layout-extract");
+    expect(result!.imageBase64).toBe(LAYOUT_EXTRACT_OUTPUT.imageBase64);
+    expect(result!.mimeType).toBe(LAYOUT_EXTRACT_OUTPUT.mimeType);
+  });
+
+  it("passes the hero as a data URL heroImageUrl and brandName as channelName to renderLayoutCard", async () => {
+    const fn = await load();
+    const deps = makeDeps();
+
+    await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE }, deps);
+
+    const renderCalls = (deps.renderLayoutCard as ReturnType<typeof vi.fn>).mock.calls;
+    expect(renderCalls).toHaveLength(1);
+    const contentArg = renderCalls[0]![1] as {
+      headline: string;
+      heroImageUrl?: string;
+      channelName: string;
+    };
+    // Hero must be passed as a data: URL (pixel-real, never re-encoded by an AI).
+    expect(contentArg.heroImageUrl).toBe(`data:${HERO_IMAGE.mimeType};base64,${HERO_IMAGE.base64}`);
+    // channelName must come from brandName.
+    expect(contentArg.channelName).toBe(BASE_ARGS.brandName);
+    expect(contentArg.headline).toBe(BASE_ARGS.headline);
+  });
+
+  it("passes brandColor (safeColor-sanitized) to renderLayoutCard when provided", async () => {
+    const fn = await load();
+    const deps = makeDeps();
+
+    await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE, brandColor: "#ff7a00" }, deps);
+
+    const renderCalls = (deps.renderLayoutCard as ReturnType<typeof vi.fn>).mock.calls;
+    const contentArg = renderCalls[0]![1] as { brandColor?: string };
+    expect(contentArg.brandColor).toBe("#ff7a00");
+  });
+
+  it("passes the layout (from extractCardLayout) as first arg to renderLayoutCard", async () => {
+    const fn = await load();
+    const deps = makeDeps();
+
+    await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE }, deps);
+
+    const renderCalls = (deps.renderLayoutCard as ReturnType<typeof vi.fn>).mock.calls;
+    const layoutArg = renderCalls[0]![0];
+    expect(layoutArg).toEqual(MOCK_LAYOUT);
+  });
+
+  it("passes logoUrl as a data URL when logoImage is provided", async () => {
+    const fn = await load();
+    const deps = makeDeps();
+
+    await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE, logoImage: LOGO_IMAGE }, deps);
+
+    const renderCalls = (deps.renderLayoutCard as ReturnType<typeof vi.fn>).mock.calls;
+    const contentArg = renderCalls[0]![1] as { logoUrl?: string };
+    expect(contentArg.logoUrl).toBe(`data:${LOGO_IMAGE.mimeType};base64,${LOGO_IMAGE.base64}`);
+  });
+
+  it("returns null when no heroImage is supplied", async () => {
+    const fn = await load();
+    const deps = makeDeps();
+
+    const result = await fn(BASE_ARGS, deps); // no heroImage
+
+    expect(result).toBeNull();
+    expect((deps.extractCardLayout as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
+    expect((deps.renderLayoutCard as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
+  });
+
+  it("returns null when extractCardLayout returns null", async () => {
+    const fn = await load();
+    const deps = makeDeps({
+      extractCardLayout: vi.fn().mockResolvedValue(null),
+    });
+
+    const result = await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE }, deps);
+
+    expect(result).toBeNull();
+    expect((deps.renderLayoutCard as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
+  });
+
+  it("returns null when renderLayoutCard throws", async () => {
+    const fn = await load();
+    const deps = makeDeps({
+      renderLayoutCard: vi.fn().mockRejectedValue(new Error("Puppeteer crash")),
+    });
+
+    const result = await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE }, deps);
+
+    expect(result).toBeNull();
+  });
+
+  it("returns null when renderLayoutCard returns empty imageBase64", async () => {
+    const fn = await load();
+    const deps = makeDeps({
+      renderLayoutCard: vi.fn().mockResolvedValue({ imageBase64: "", mimeType: "image/png" }),
+    });
+
+    const result = await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE }, deps);
+
+    expect(result).toBeNull();
+  });
+});
+
+// ── Ladder order: layout-extract before gemini-img2img (Round 11) ─────────────
+
+describe("layout-extract ladder order (Round 11)", () => {
+  async function load() {
+    const mod = await import("../tools/reference-card-generator");
+    return mod.generateReferenceStyledCard;
+  }
+
+  it("with a hero, layout-extract runs BEFORE gemini-img2img (rung-1): when it succeeds, generateImage is NOT called for rung-1", async () => {
+    // composite bails → layout-extract succeeds → rung-1 must NOT run.
+    const fn = await load();
+    const generateImage = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("finishReason OTHER (sentinel call for composite)"))
+      .mockResolvedValue(GEMINI_OUTPUT); // this would be the rung-1 call
+    const deps = makeDeps({ generateImage }); // extractCardLayout returns MOCK_LAYOUT by default
+
+    const result = await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE }, deps);
+
+    // layout-extract should have won
+    expect(result.engine).toBe("layout-extract");
+    // generateImage was called once (rung-0 sentinel which threw) — NOT for rung-1
+    expect(generateImage).toHaveBeenCalledTimes(1);
+    expect((deps.renderLayoutCard as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+  });
+
+  it("no-hero path: layout-extract is skipped entirely, ladder goes directly to gemini-img2img", async () => {
+    // BASE_ARGS has no heroImage — the no-hero ladder must be byte-identical to pre-Round-11.
+    const fn = await load();
+    const deps = makeDeps();
+
+    const result = await fn(BASE_ARGS, deps);
+
+    // extractCardLayout never called (no hero to place)
+    expect((deps.extractCardLayout as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
+    expect((deps.renderLayoutCard as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
+    // Falls straight to rung-1 (gemini-img2img)
+    expect(result.engine).toBe("gemini-img2img");
+    // generateImage called exactly once (rung-1, no composite sentinel call since no hero)
+    expect((deps.generateImage as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+  });
+
+  it("layout-extract engine beats gemini-img2img in the result when both hero rungs work", async () => {
+    // With default makeDeps: composite succeeds → returns gemini-composite.
+    // To see layout-extract win over img2img we need composite to fail.
+    const fn = await load();
+    const deps = makeDeps({
+      detectSentinelRegion: vi.fn().mockResolvedValue(null), // composite bails
+      // extractCardLayout + renderLayoutCard succeed by default
+    });
+
+    const result = await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE }, deps);
+
+    expect(result.engine).toBe("layout-extract");
+    // rung-1 generateImage was NOT called (layout-extract returned before it)
+    // The only generateImage call is the rung-0 sentinel which returned "no sentinel"
+    expect((deps.generateImage as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
   });
 });

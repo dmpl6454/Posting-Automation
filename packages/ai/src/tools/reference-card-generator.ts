@@ -69,6 +69,8 @@
 import puppeteer from "puppeteer";
 import { safeColor, escapeHtml, safeImageUrl } from "./card-engine";
 import { isPublicImageUrl } from "../utils/safe-fetch-url";
+import { extractCardLayout, cardLayoutToSpec } from "./extract-card-layout";
+import { generateCardImage } from "./news-image-generator";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -96,6 +98,7 @@ export interface GenerateReferenceStyledCardArgs {
 
 export type ReferenceCardEngine =
   | "gemini-composite"
+  | "layout-extract"
   | "gemini-img2img"
   | "openai-described"
   | "template";
@@ -218,6 +221,29 @@ export interface ReferenceCardDeps {
    * The router relies on this default; tests inject a mock so Puppeteer never launches.
    */
   compositeHeroIntoRegion?: (opts: CompositeHeroArgs) => Promise<{ imageBase64: string; mimeType: string }>;
+
+  /**
+   * OPTIONAL: OpenAI-vision layout extractor (extractCardLayout from
+   * extract-card-layout.ts). Given a reference image as base64 + mimeType, returns
+   * a CardLayout skeleton describing the reference's composition, or null on failure.
+   * Defaults to the real impl when omitted (the router relies on this default).
+   * Tests inject a mock so no real OpenAI call is made.
+   */
+  extractCardLayout?: (imageBase64: string, imageMimeType: string) => Promise<unknown | null>;
+
+  /**
+   * OPTIONAL: block-engine renderer for the layout-extract rung. Given a CardLayout
+   * (as returned by extractCardLayout) and the card content, returns a PNG.
+   * Defaults to (layout, content) => generateCardImage(cardLayoutToSpec(layout, content)).
+   * Tests inject a mock so Puppeteer is never launched.
+   */
+  renderLayoutCard?: (layout: unknown, content: {
+    headline: string;
+    heroImageUrl?: string;
+    channelName: string;
+    logoUrl?: string;
+    brandColor?: string;
+  }) => Promise<{ imageBase64: string; mimeType: string }>;
 }
 
 // ── Internal constants ────────────────────────────────────────────────────────
@@ -540,23 +566,128 @@ export async function generateCompositeStyledCard(
   }
 }
 
+// ── Layout-extract path (the RELIABLE celebrity-face rung) ────────────────────
+
+/**
+ * Default block-engine renderer for the layout-extract rung.
+ * Converts a CardLayout (from extractCardLayout) + card content into a PNG via
+ * cardLayoutToSpec → generateCardImage. Defined at module level (not inline) so
+ * it is stable across calls and avoids allocation on the hot path.
+ */
+async function defaultRenderLayoutCard(
+  layout: unknown,
+  content: {
+    headline: string;
+    heroImageUrl?: string;
+    channelName: string;
+    logoUrl?: string;
+    brandColor?: string;
+  },
+): Promise<{ imageBase64: string; mimeType: string }> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const spec = cardLayoutToSpec(layout as any, content as any);
+  const r = await generateCardImage(spec);
+  return { imageBase64: r.imageBase64, mimeType: r.mimeType };
+}
+
+/**
+ * The LAYOUT-EXTRACT rung — the RELIABLE celebrity-face path.
+ *
+ * Uses OpenAI vision to read the reference image's LAYOUT structure (tolerates
+ * celebrity faces in the reference — it reads composition, not identity), then
+ * deterministically reproduces that layout via the block engine with the REAL hero
+ * photo. No Gemini, no refusal, no AI-altered faces.
+ *
+ * Steps:
+ *  1. Call extractCardLayout (OpenAI gpt-4o-mini vision) → CardLayout skeleton
+ *     describing the reference's background mode, scrim, headline placement, logo
+ *     anchor, theme, and accent. Returns null on any failure → this rung bails.
+ *  2. Build a hero data URL from args.heroImage (the real photo — pixel-perfect).
+ *  3. Call cardLayoutToSpec (pure) → fill in OUR headline/hero/brand content.
+ *  4. Call generateCardImage (Puppeteer block engine) → 1080×1350 PNG.
+ *
+ * Returns { imageBase64, mimeType, engine: "layout-extract" } on success, or null
+ * on ANY failure (extractCardLayout returned null, render threw, empty output). Never
+ * throws — the caller advances to the next ladder rung on null.
+ *
+ * Precondition: args.heroImage is defined (the caller gates on it). Returns null
+ * immediately when absent — the layout has nothing to place in the photo slot.
+ *
+ * NOTE: textMode does NOT apply here. The block engine always renders the headline
+ * deterministically from the CardSpec — that IS the "always correct text" property
+ * and is exactly what we want for the reliable path.
+ */
+export async function generateLayoutExtractCard(
+  args: GenerateReferenceStyledCardArgs,
+  deps: ReferenceCardDeps,
+): Promise<GenerateReferenceStyledCardResult | null> {
+  const { referenceImage, heroImage, logoImage } = args;
+  if (!heroImage) return null;
+
+  try {
+    // Step 1: vision-extract the reference's layout. Tolerates celebrity faces —
+    // we are reading COMPOSITION (grid, scrim, headline position) not identity.
+    const extract = deps.extractCardLayout ?? extractCardLayout;
+    const layout = await extract(referenceImage.base64, referenceImage.mimeType);
+    if (!layout) {
+      console.warn("[reference-card-generator] Layout-extract rung: extractCardLayout returned null.");
+      return null;
+    }
+
+    // Step 2: build the hero data URL (the user's REAL photo — never AI-touched).
+    const heroDataUrl = `data:${heroImage.mimeType};base64,${heroImage.base64}`;
+
+    // Step 3: build logo URL if a logo image is provided.
+    // safeImageUrl gates the assembled data: URL to block attribute-breakout mimeTypes.
+    const logoUrl = logoImage
+      ? safeImageUrl(`data:${logoImage.mimeType};base64,${logoImage.base64}`) ?? undefined
+      : undefined;
+
+    // Step 4: render via the block engine.
+    const render = deps.renderLayoutCard ?? defaultRenderLayoutCard;
+    const out = await render(layout, {
+      headline: args.headline,
+      heroImageUrl: heroDataUrl,
+      channelName: args.brandName,
+      ...(logoUrl ? { logoUrl } : {}),
+      ...(args.brandColor ? { brandColor: safeColor(args.brandColor) } : {}),
+    });
+
+    if (!out.imageBase64) {
+      console.warn("[reference-card-generator] Layout-extract rung: renderLayoutCard returned empty image.");
+      return null;
+    }
+
+    return { imageBase64: out.imageBase64, mimeType: out.mimeType, engine: "layout-extract" };
+  } catch (err) {
+    console.warn("[reference-card-generator] Layout-extract rung failed:", (err as Error).message);
+    return null;
+  }
+}
+
 // ── Main function ─────────────────────────────────────────────────────────────
 
 /**
  * Generate a 1080×1350 social card that recreates the reference image's LAYOUT.
  *
  * Ladder:
- *   0. Gemini composite → engine: "gemini-composite"  (ONLY when heroImage exists,
+ *   0. Gemini composite  → engine: "gemini-composite"  (ONLY when heroImage exists,
  *      tried FIRST — Gemini renders the layout with a magenta sentinel photo region,
  *      the real hero photo is pasted into it locally; the face is never AI-altered.)
- *   1. Gemini img2img   → engine: "gemini-img2img"
- *   2. OpenAI described → engine: "openai-described"
- *   3. Template signal  → engine: "template", imageBase64: "" (caller falls back)
+ *   0b. Layout-extract   → engine: "layout-extract"  (ONLY when heroImage exists,
+ *      tried after composite fails — OpenAI vision extracts the reference's LAYOUT
+ *      structure (tolerates celebrity refs), the block engine deterministically
+ *      renders it with the REAL hero photo. No Gemini, no refusal, 100% reliable.)
+ *   1. Gemini img2img    → engine: "gemini-img2img"
+ *   2. OpenAI described  → engine: "openai-described"
+ *   3. Template signal   → engine: "template", imageBase64: "" (caller falls back)
  *
  * In "overlay" textMode, after a successful rung-1 or rung-2, the headline and
  * logo are composited deterministically via deps.overlayHeadlineAndLogo. (The
  * composite rung renders text via Gemini in "ai" mode or composites the headline
  * via overlayHeadlineAndLogo in "overlay" mode — see generateCompositeStyledCard.)
+ * The layout-extract rung always renders text deterministically via the block engine,
+ * regardless of textMode — that is its primary reliability guarantee.
  */
 export async function generateReferenceStyledCard(
   args: GenerateReferenceStyledCardArgs,
@@ -568,11 +699,22 @@ export async function generateReferenceStyledCard(
   // The best + safest result for the celebrity-news case: recreate the reference
   // layout via Gemini with a magenta sentinel photo region (no person → no refusal)
   // then paste the REAL hero into it. Skipped entirely with no hero. On any failure
-  // (refusal / empty / no sentinel detected) it returns null → fall through to rung-1.
+  // (refusal / empty / no sentinel detected) it returns null → fall through.
   if (heroImage) {
     const composite = await generateCompositeStyledCard(args, deps);
     if (composite) return composite;
-    console.warn("[reference-card-generator] Rung-0 (Gemini composite) unavailable — advancing to rung 1.");
+    console.warn("[reference-card-generator] Rung-0 (Gemini composite) unavailable — advancing to layout-extract.");
+  }
+
+  // ── Rung 0b: Layout-extract (hero only) — the RELIABLE celebrity-face path ──
+  // OpenAI vision reads the reference's LAYOUT (tolerates celebrity photos in the
+  // ref — it reads composition, not identity), then the block engine renders it
+  // deterministically with the REAL hero photo. No Gemini, no refusal, 100% reliable.
+  // Skipped entirely when no hero exists (the block engine needs a photo to place).
+  if (heroImage) {
+    const layoutCard = await generateLayoutExtractCard(args, deps);
+    if (layoutCard) return layoutCard;
+    console.warn("[reference-card-generator] Layout-extract rung unavailable — advancing to rung 1.");
   }
 
   // Build the ordered referenceImages array: [ref, hero?, logo?] (compact — filter undefined).
