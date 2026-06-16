@@ -733,7 +733,13 @@ export function RepurposeTab() {
         // D2 (Real⇄AI) + D10 (per-slot images). When off, slots resolve real-first;
         // each assignment overrides AI/article for that one slot.
         aiImages,
-        imageAssignments: Object.entries(imageAssignments).map(([slot, v]) => ({ slot, mediaId: v.mediaId })),
+        // Only send assignments backed by a real Media id. A url-only entry (the
+        // tainted-canvas "use uncropped" fallback for the background slot) has an
+        // empty mediaId — it can't be an imageAssignment (schema requires min(1)
+        // + IDOR-checks the id); it reaches the render via bgImageUrl on regen instead.
+        imageAssignments: Object.entries(imageAssignments)
+          .filter(([, v]) => !!v.mediaId)
+          .map(([slot, v]) => ({ slot, mediaId: v.mediaId })),
         brandName: computeActiveBrandName(),
         slideCount,
         videoDuration,
@@ -1997,11 +2003,14 @@ export function RepurposeTab() {
                           toast({ title: "Hero photo applied", description: "Click Regenerate to re-render with the new photo." });
                           setHeroEditorOpen(false);
                         } catch (err: any) {
-                          // Canvas taint: fall back to assigning the raw URL directly.
+                          // Canvas taint: a non-CORS article image can't be exported client-side.
+                          // Honest + useful fallback: assign the chosen image UN-CROPPED so the
+                          // user's pick still takes effect (the router accepts a url-only hero via
+                          // bgImageUrl, SSRF-gated server-side). Regenerate then uses it as-is.
                           if (heroSrcUrl && (err?.message?.includes("tainted") || err?.message?.includes("Canvas"))) {
-                            // We can't export a tainted canvas — upload the src URL as a ref instead by
-                            // just assigning it as a URL-only placeholder (no mediaId crop).
-                            toast({ title: "Couldn't crop — assigning photo URL directly", variant: "destructive" });
+                            setImageAssignments((prev) => ({ ...prev, background: { mediaId: "", url: heroSrcUrl } }));
+                            setHeroEditorOpen(false);
+                            toast({ title: "Using this photo without cropping", description: "This image couldn't be cropped here — it'll be used as-is. Upload your own photo to crop it." });
                           } else {
                             toast({ title: "Hero crop failed", description: err?.message, variant: "destructive" });
                           }
