@@ -41,7 +41,7 @@ export interface StyleControls {
   highlightColor: string;
   bgOpacity: number; // 0–100 default caption-pill opacity
   fontFamily: FontFamily;
-  textAlign: "left" | "center";
+  textAlign: "left" | "center" | "right";
   logoPosition: "tl" | "tr" | "bl" | "br";
   fontScale?: number; // clamp [0.8, 1.5]
 }
@@ -135,7 +135,7 @@ export interface CaptionPill {
   bg?: string;
   bgOpacity?: number;
   textColor?: string;
-  align?: "left" | "center";
+  align?: "left" | "center" | "right";
   shape?: "pill" | "bar";
   emoji?: string;
   /**
@@ -149,10 +149,18 @@ export interface CaptionPill {
 export type CaptionStackBlockProps = {
   pills: CaptionPill[];
   /**
-   * Optional brand label / wordmark rendered ABOVE the pills with a brand-accent
-   * underline (moviefied "Moviefied"; premium-editorial italic channel label).
+   * Optional brand label / wordmark rendered ABOVE the pills.
+   *
+   * `underline` (default false, Round 17): emit a short brand-accent underline bar
+   * beneath the label ONLY when explicitly true. A style reference WITHOUT an
+   * underline (the common case) renders no underline; only references that actually
+   * show one opt in. The old behavior ALWAYS drew the bar — that was the bug.
+   *
+   * `color` (Round 17): the label text color. Defaults to the theme's textColor when
+   * unset; callers pass the SAME resolved color the headline uses so the eyebrow and
+   * headline never diverge (fixes "label turns black on regenerate" on a light theme).
    */
-  label?: { text: string; italic?: boolean };
+  label?: { text: string; italic?: boolean; underline?: boolean; color?: string };
 };
 
 export type StatCardsBlockProps = {
@@ -248,8 +256,8 @@ export function safeFontFamily(f: string | undefined): FontFamily {
   return FONT_ALLOWLIST.includes(f as FontFamily) ? (f as FontFamily) : "inter";
 }
 
-export function safeAlign(a: string | undefined): "left" | "center" {
-  return a === "center" ? "center" : "left";
+export function safeAlign(a: string | undefined): "left" | "center" | "right" {
+  return a === "center" ? "center" : a === "right" ? "right" : "left";
 }
 
 export function safeShape(s: string | undefined): "pill" | "bar" {
@@ -535,7 +543,14 @@ export function renderCircularInset(props: CircularInsetBlockProps, controls: St
 /** Boxless-headline font size (px): fewer words → bigger, like a real news card. */
 function plainCaptionFontSize(text: string): number {
   const words = text.trim().split(/\s+/).length;
-  return words <= 6 ? 80 : words <= 10 ? 68 : words <= 14 ? 60 : words <= 20 ? 52 : 46;
+  // Round 17: add a smaller >20-word step so very long headlines shrink further
+  // (paired with the .caption-stack max-height bound below) instead of clipping.
+  return words <= 6 ? 80
+    : words <= 10 ? 68
+    : words <= 14 ? 60
+    : words <= 20 ? 52
+    : words <= 28 ? 46
+    : 40;
 }
 
 export function renderCaptionStack(props: CaptionStackBlockProps, controls: StyleControls): string {
@@ -562,19 +577,32 @@ export function renderCaptionStack(props: CaptionStackBlockProps, controls: Styl
       return `<div class="caption-pill" style="background:${bg};opacity:${opacity};color:${textColor};border-radius:${radius}px;padding:18px 24px;text-align:${align};font-weight:800;font-size:42px;line-height:1.15;box-shadow:0 6px 24px rgba(0,0,0,0.3);word-break:break-word;">${inner}</div>`;
     })
     .join("");
-  // Optional brand label / wordmark above the headline, with a brand-accent underline.
+  // Optional brand label / wordmark above the headline.
   let label = "";
   if (props.label?.text) {
     const tokens = themeTokens(controls);
     const accent = safeColor(controls.brandColor);
     const labelShadow = controls.theme === "dark" ? "text-shadow:0 2px 14px rgba(0,0,0,0.55);" : "";
     const fontStyle = props.label.italic === false ? "normal" : "italic";
+    // Round 17 FIX 3: label color defaults to the theme textColor but a caller can
+    // pass its own (the SAME resolved color the headline uses) so they never diverge.
+    const labelColor = safeColor(props.label.color ?? tokens.textColor);
+    // Round 17 FIX 2: the brand-accent underline is per-reference, default OFF. Only
+    // emit the bar when the caller (a reference that actually has one) opts in.
+    const underline =
+      props.label.underline === true
+        ? `<div style="width:72px;height:5px;background:${accent};border-radius:3px;margin-top:10px;"></div>`
+        : "";
     label =
-      `<div class="caption-label" style="color:${tokens.textColor};font-style:${fontStyle};font-weight:700;font-size:30px;letter-spacing:0.01em;${labelShadow}">` +
+      `<div class="caption-label" style="color:${labelColor};font-style:${fontStyle};font-weight:700;font-size:30px;letter-spacing:0.01em;${labelShadow}">` +
       `${escapeHtml(props.label.text)}` +
-      `<div style="width:72px;height:5px;background:${accent};border-radius:3px;margin-top:10px;"></div></div>`;
+      underline +
+      `</div>`;
   }
-  return `<div class="caption-stack" style="position:absolute;left:36px;right:36px;bottom:48px;display:flex;flex-direction:column;gap:14px;z-index:3;">${label}${pills}</div>`;
+  // Round 17 FIX 6: bound the stack height so a long headline can't run off the top
+  // of the canvas (overflow:hidden clips the worst-case overflow; max-height keeps the
+  // block within the lower ~62% of the card).
+  return `<div class="caption-stack" style="position:absolute;left:36px;right:36px;bottom:48px;max-height:62%;overflow:hidden;display:flex;flex-direction:column;gap:14px;z-index:3;">${label}${pills}</div>`;
 }
 
 // ── statCards block ─────────────────────────────────────────────────────────

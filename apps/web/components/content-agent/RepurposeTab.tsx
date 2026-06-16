@@ -248,6 +248,13 @@ export function RepurposeTab() {
   const [headlineFont, setHeadlineFont] = useState<HeadlineFont>("");
   const [headlineColor, setHeadlineColor] = useState<string>("");
 
+  // Round 17 — additional reference-card controls (all "" / "" = auto/default).
+  // headlineAlign: headline alignment override; labelColor: brand-name/eyebrow
+  // color; logoSize: explicit logo size (4–40, only meaningful when a logo is set).
+  const [headlineAlign, setHeadlineAlign] = useState<"left" | "center" | "right" | "">("");
+  const [labelColor, setLabelColor] = useState<string>("");
+  const [logoSize, setLogoSize] = useState<number | "">("");
+
   // FIX C — Hero photo editor state.
   // Whether the hero editor panel is open (only shown for the static result card).
   const [heroEditorOpen, setHeroEditorOpen] = useState(false);
@@ -308,6 +315,10 @@ export function RepurposeTab() {
   const [progressSteps, setProgressSteps] = useState<ProgressStep[]>([]);
   const [progressId, setProgressId] = useState<string | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+  // Round 17 — honest cancel. When the user cancels a running generation we set
+  // this; the mutation onSuccess/onError check it at the top and bail so a
+  // late-arriving server response does NOT overwrite the cancelled UI state.
+  const cancelledRef = useRef(false);
 
   // Async video (reel / seedance): the mutation returns { videoPending } and the
   // worker pushes a terminal `video_ready`/`video_error` over the SAME SSE the
@@ -521,10 +532,14 @@ export function RepurposeTab() {
   // Text-based repurpose (existing)
   const repurpose = trpc.repurpose.repurpose.useMutation({
     onSuccess: (data) => {
+      // Round 17: a cancelled run must not overwrite the cleared UI even if the
+      // server eventually responds. Reset the flag and bail.
+      if (cancelledRef.current) { cancelledRef.current = false; return; }
       setResults({ platformContent: data.platformContent, mediaUrls: [], mediaType: "", format: "text" });
       toast({ title: "Content repurposed!" });
     },
     onError: (err) => {
+      if (cancelledRef.current) { cancelledRef.current = false; return; }
       toast({ title: "Repurpose failed", description: humanizeError(err), variant: "destructive" });
     },
   });
@@ -532,6 +547,9 @@ export function RepurposeTab() {
   // URL-based repurpose
   const repurposeFromUrl = trpc.repurpose.repurposeFromUrl.useMutation({
     onSuccess: (data) => {
+      // Round 17: honest cancel — if the user cancelled, the server response is
+      // discarded so it can't repopulate results behind the cancelled state.
+      if (cancelledRef.current) { cancelledRef.current = false; return; }
       // Async video path (reel / seedance): the mutation returns immediately with
       // `videoPending` while the worker generates. Render the captions NOW (they're
       // already in `data.platformContent`; `data.mediaUrls` is [] so the video card
@@ -585,6 +603,8 @@ export function RepurposeTab() {
       }
     },
     onError: (err) => {
+      // Round 17: a cancelled run's late error is a no-op (UI already reset).
+      if (cancelledRef.current) { cancelledRef.current = false; return; }
       // Clear the static/carousel wall-clock guard — the mutation errored normally.
       if (syncTimeoutRef.current) { clearTimeout(syncTimeoutRef.current); syncTimeoutRef.current = null; }
       toast({ title: "Repurpose failed", description: humanizeError(err), variant: "destructive" });
@@ -603,6 +623,21 @@ export function RepurposeTab() {
   // index for a carousel slide (so each button shows its own spinner).
   const [regenTarget, setRegenTarget] = useState<"static" | number | null>(null);
   const regenerateImage = trpc.repurpose.regenerateImage.useMutation();
+
+  // Round 17 — honest cancel of a running generation. Sets the cancel flag (so the
+  // mutation's late onSuccess/onError bail), closes the SSE, clears the safety
+  // timeouts, drops the video spinner, marks any running activity-log steps as
+  // errored, and resets the mutations so isLoading flips back to false.
+  const cancelGeneration = useCallback(() => {
+    cancelledRef.current = true;
+    closeVideoStream();
+    if (syncTimeoutRef.current) { clearTimeout(syncTimeoutRef.current); syncTimeoutRef.current = null; }
+    setVideoGenerating(false);
+    setProgressSteps((prev) => finalizeRunningSteps(prev, "error"));
+    repurposeFromUrl.reset();
+    repurpose.reset();
+    toast({ title: "Generation cancelled" });
+  }, [closeVideoStream, repurposeFromUrl, repurpose, toast]);
 
   // Resolve the channel name/handle/avatar the same way handleGenerate does, so
   // the regenerated creative keeps the same branding as the original.
@@ -660,6 +695,10 @@ export function RepurposeTab() {
         brandName: computeActiveBrandName(),
         headlineFont: headlineFont || undefined,
         headlineColor: headlineColor || undefined,
+        // Round 17: alignment / brand-name color / logo size overrides.
+        headlineAlign: headlineAlign || undefined,
+        labelColor: labelColor || undefined,
+        logoSize: typeof logoSize === "number" ? logoSize : undefined,
       });
       // Swap the displayed image (and its Media id for publish) in `results`.
       setResults((prev) => {
@@ -726,6 +765,8 @@ export function RepurposeTab() {
   };
 
   const handleGenerate = () => {
+    // Round 17: fresh run — clear any prior cancel flag so this run's response is honoured.
+    cancelledRef.current = false;
     if (sourceMode === "url") {
       if (!url || selectedPlatforms.length === 0) return;
       const pid = startProgress();
@@ -806,6 +847,10 @@ export function RepurposeTab() {
         bgMusic: (format === "reel" || format === "ai_video") ? bgMusic : false,
         headlineFont: headlineFont || undefined,
         headlineColor: headlineColor || undefined,
+        // Round 17: alignment / brand-name color / logo size overrides.
+        headlineAlign: headlineAlign || undefined,
+        labelColor: labelColor || undefined,
+        logoSize: typeof logoSize === "number" ? logoSize : undefined,
       });
     } else {
       if (!originalContent || selectedPlatforms.length === 0) return;
@@ -1256,6 +1301,23 @@ export function RepurposeTab() {
                                   >
                                     <Trash2 className="h-3 w-3" />
                                   </button>
+                                  {/* Round 17 — off-switch for the selected style: clears the
+                                      selection AND the reference it armed. */}
+                                  {selectedTemplateId === t.id && (
+                                    <button
+                                      type="button"
+                                      title="Unselect this style"
+                                      onClick={() => {
+                                        setSelectedTemplateId("");
+                                        setAestheticRefUrl("");
+                                        setAestheticRefMediaId("");
+                                        setReferenceMimicry(false);
+                                      }}
+                                      className="text-muted-foreground hover:text-foreground"
+                                    >
+                                      <X className="h-3 w-3" />
+                                    </button>
+                                  )}
                                 </div>
                               ))}
                             </div>
@@ -1343,6 +1405,43 @@ export function RepurposeTab() {
                     <Button type="button" variant="outline" size="sm" onClick={() => document.getElementById("logo-upload")?.click()}>
                       {logoUrl ? "Change logo" : "Upload logo"}
                     </Button>
+                    {/* Round 17 — remove the current logo. */}
+                    {(logoUrl || logoMediaId) && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="text-muted-foreground hover:text-destructive"
+                        onClick={() => { setLogoUrl(""); setLogoMediaId(""); }}
+                      >
+                        Remove
+                      </Button>
+                    )}
+                    {/* Round 17 — save the current logo to the "Brand logos" library. */}
+                    {(logoUrl || logoMediaId) && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        title="Save this logo for reuse"
+                        onClick={async () => {
+                          const fallbackName = computeActiveBrandName() || "Brand logo";
+                          const name = (prompt("Name this logo", `${fallbackName} logo`) || "").trim();
+                          if (!name) return;
+                          await createTemplate.mutateAsync({
+                            name,
+                            kind: "logo",
+                            logoMediaId: logoMediaId || undefined,
+                            logoPosition,
+                            ...(accentColor ? { brandColor: accentColor } : {}),
+                          } as any);
+                          utils.creativeTemplate.list.invalidate();
+                          toast({ title: "Logo saved" });
+                        }}
+                      >
+                        Save logo
+                      </Button>
+                    )}
                     {logoUrl && <img src={logoUrl} alt="logo" className="h-8 w-8 rounded object-contain border" />}
                     {advancedOpen && (
                       <Select value={logoPosition} onValueChange={(v) => setLogoPosition(v as "top-left" | "top-right")}>
@@ -1471,7 +1570,7 @@ export function RepurposeTab() {
                           <img src={aestheticRefUrl} alt="style reference" className="h-8 w-8 rounded object-cover border shrink-0" />
                           <button
                             type="button"
-                            onClick={() => { setAestheticRefUrl(""); setAestheticRefMediaId(""); setStyleAutoSuggested(false); setReferenceMimicry(false); }}
+                            onClick={() => { setAestheticRefUrl(""); setAestheticRefMediaId(""); setStyleAutoSuggested(false); setReferenceMimicry(false); setSelectedTemplateId(""); }}
                             className="text-[10px] text-muted-foreground hover:underline shrink-0"
                           >
                             Clear
@@ -1556,21 +1655,23 @@ export function RepurposeTab() {
                     </div>
                   )}
 
-                  {/* Explicit save (replaces the old silent auto-save). Available
-                      whenever there's something worth keeping — a logo, an uploaded
-                      style reference, or a brand color. Persists the style + theme
-                      + accent + reference thumbnail so it re-applies in one click. */}
+                  {/* Round 17 — "Save style": persists the current style/reference look
+                      (style + theme + accent + reference thumbnail) into the "Saved styles"
+                      library section. FORCES kind:"style" (logos save via "Save logo" beside
+                      the uploader; names via "Save name"). Available whenever there's a look
+                      worth keeping — a logo, an uploaded reference, or a brand color. */}
                   {(logoUrl || aestheticRefMediaId || accentColor) && (
                     <Button
                       type="button"
                       variant="ghost"
                       size="sm"
+                      title="Save the current style / reference look"
                       onClick={async () => {
                         const name = window.prompt("Name this style:");
                         if (!name?.trim()) return;
                         await createTemplate.mutateAsync({
                           name: name.trim(),
-                          kind: aestheticRefMediaId ? "style" : "logo",
+                          kind: "style",
                           style: creativeStyle,
                           logoMediaId: logoMediaId || undefined,
                           logoPosition,
@@ -1590,7 +1691,7 @@ export function RepurposeTab() {
                         toast({ title: "Style saved" });
                       }}
                     >
-                      Save as template
+                      Save style
                     </Button>
                   )}
                 </div>
@@ -1876,6 +1977,20 @@ export function RepurposeTab() {
                 ? "Generate Captions"
                 : `Repurpose as ${FORMAT_OPTIONS.find((f) => f.id === format)?.label || "Static Post"}`}
           </Button>
+
+          {/* Round 17 — honest cancel: only while a generation is running. */}
+          {isLoading && (
+            <Button
+              type="button"
+              variant="outline"
+              size="lg"
+              className="mt-2 w-full gap-2"
+              onClick={cancelGeneration}
+            >
+              <X className="h-4 w-4" />
+              Cancel
+            </Button>
+          )}
         </CardContent>
       </Card>
 
@@ -2118,6 +2233,105 @@ export function RepurposeTab() {
                       </div>
                       <p className="text-[10px] text-muted-foreground">Pick any color</p>
                     </div>
+
+                    {/* Round 17 — Headline alignment override (Auto = use the
+                        reference's detected alignment). */}
+                    <div className="w-full max-w-xs space-y-1">
+                      <Label className="text-xs text-muted-foreground">Headline alignment</Label>
+                      <div className="flex items-center gap-2">
+                        {([
+                          { value: "left", label: "Left" },
+                          { value: "center", label: "Center" },
+                          { value: "right", label: "Right" },
+                        ] as const).map((a) => (
+                          <button
+                            key={a.value}
+                            type="button"
+                            title={a.label}
+                            onClick={() => setHeadlineAlign(a.value)}
+                            className={`rounded border px-3 py-1 text-xs transition-colors ${headlineAlign === a.value ? "border-primary bg-primary/10" : "border-border hover:bg-muted"}`}
+                          >
+                            {a.label}
+                          </button>
+                        ))}
+                        <button
+                          type="button"
+                          title="Auto (match reference)"
+                          onClick={() => setHeadlineAlign("")}
+                          className={`rounded border px-3 py-1 text-xs transition-colors ${headlineAlign === "" ? "border-primary bg-primary/10" : "border-border hover:bg-muted"}`}
+                        >
+                          Auto
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Round 17 — Brand name (eyebrow/label) color. Mirrors the
+                        headline text-color picker; Auto = use the theme/reference default. */}
+                    <div className="w-full max-w-xs space-y-1">
+                      <Label className="text-xs text-muted-foreground">Brand name color</Label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="color"
+                          value={labelColor || "#ffffff"}
+                          onChange={(e) => setLabelColor(e.target.value)}
+                          className="h-9 w-16 cursor-pointer rounded border border-border bg-background p-0"
+                          title="Pick any color"
+                          aria-label="Pick any brand name color"
+                        />
+                        <button
+                          type="button"
+                          title="White"
+                          onClick={() => setLabelColor("#ffffff")}
+                          className={`h-8 w-8 rounded border-2 bg-white transition-colors ${labelColor === "#ffffff" ? "border-primary" : "border-border"}`}
+                        />
+                        <button
+                          type="button"
+                          title="Dark"
+                          onClick={() => setLabelColor("#0f1419")}
+                          className={`h-8 w-8 rounded border-2 bg-[#0f1419] transition-colors ${labelColor === "#0f1419" ? "border-primary" : "border-border"}`}
+                        />
+                        {labelColor && (
+                          <button
+                            type="button"
+                            onClick={() => setLabelColor("")}
+                            className="rounded border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-muted transition-colors"
+                          >
+                            Auto
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Round 17 — Logo size (4–40). Only meaningful when a logo is
+                        set; Auto = the engine's shape-aware default. */}
+                    {logoUrl && (
+                      <div className="w-full max-w-xs space-y-1">
+                        <Label className="text-xs text-muted-foreground">Logo size</Label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="range"
+                            min={4}
+                            max={40}
+                            value={typeof logoSize === "number" ? logoSize : 12}
+                            onChange={(e) => setLogoSize(Number(e.target.value))}
+                            className="h-2 flex-1 cursor-pointer"
+                            aria-label="Logo size"
+                          />
+                          <span className="w-8 text-right text-xs text-muted-foreground">
+                            {typeof logoSize === "number" ? logoSize : "Auto"}
+                          </span>
+                          {typeof logoSize === "number" && (
+                            <button
+                              type="button"
+                              onClick={() => setLogoSize("")}
+                              className="rounded border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-muted transition-colors"
+                            >
+                              Auto
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
 
                     <div className="flex items-center gap-2 flex-wrap justify-center">
                       <a
