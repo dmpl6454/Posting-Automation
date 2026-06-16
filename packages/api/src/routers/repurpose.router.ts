@@ -1510,6 +1510,21 @@ export const repurposeRouter = createRouter({
         // instead of the user's workspace name.
         const mimicryBrandName = input.brandName?.trim() || displayName;
 
+        // Round 13: on the mimicry path the reference's OWN detected accent should
+        // beat the logo's dominant color. The precedence is:
+        //   explicit picker (input.accentColor) — a deliberate user decision → wins
+        //   reference accent (layout.accentColor inside layout-extract rung) → next
+        //   logo color (effectiveBrandColor fallback) — only if nothing else set
+        //
+        // To implement this: pass ONLY the explicit picker color as brandColor.
+        // When null, cardLayoutToSpec falls back to layout.accentColor (the
+        // reference's own vision-extracted color) — which is exactly what we want.
+        // effectiveBrandColor is NOT passed here; it may contain the logo color
+        // which would incorrectly shadow the reference's accent on the layout-extract
+        // rung. The template path (non-mimicry) is unchanged and still uses
+        // effectiveBrandColor for brand consistency.
+        const mimicryBrandColor: string | null = input.accentColor || null;
+
         const result = await generateReferenceStyledCard(
           {
             referenceImage: aestheticRefImage,
@@ -1518,7 +1533,7 @@ export const repurposeRouter = createRouter({
             headline,
             brandName: mimicryBrandName,
             handle,
-            brandColor: effectiveBrandColor,
+            brandColor: mimicryBrandColor,
             textMode: input.mimicryTextMode,
             styleOverride: effectiveStyle,
           },

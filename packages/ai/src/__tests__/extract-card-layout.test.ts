@@ -4,6 +4,7 @@ import { parseCardLayout, cardLayoutToSpec, type CardLayout } from "../tools/ext
 const MOVIEFIED: CardLayout = {
   theme: "dark",
   accentColor: "#ff7f50",
+  fontFamily: "inter",
   background: { mode: "photo", scrimMode: "brand" },
   headline: { variant: "plain", align: "left" },
   brandLabel: true,
@@ -223,5 +224,149 @@ describe("cardLayoutToSpec — styleOverride", () => {
     expect(cap.props.label?.text).toBe("Moviefied");
     // logo anchor still comes from layout.logo.anchor === "tr"
     expect(logo.props.logos[0].anchor).toBe("tr");
+  });
+});
+
+// ── Round 13: font family from reference ────────────────────────────────────
+
+describe("parseCardLayout — fontFamily (Round 13)", () => {
+  it("parses 'serif_display' fontFamily", () => {
+    const raw = JSON.stringify({
+      theme: "dark",
+      accentColor: "#ff7f50",
+      fontFamily: "serif_display",
+      background: { mode: "photo", scrimMode: "brand" },
+      headline: { variant: "plain", align: "left" },
+      brandLabel: true,
+      logo: { present: true, anchor: "tr", shape: "circle" },
+      confidence: 0.9,
+    });
+    const l = parseCardLayout(raw)!;
+    expect(l.fontFamily).toBe("serif_display");
+  });
+
+  it("parses 'condensed' fontFamily", () => {
+    const raw = JSON.stringify({
+      theme: "dark",
+      accentColor: "#e11d48",
+      fontFamily: "condensed",
+      background: { mode: "photo", scrimMode: "dark" },
+      headline: { variant: "box", align: "left" },
+      brandLabel: false,
+      logo: { present: false, anchor: "tr", shape: "circle" },
+      confidence: 0.8,
+    });
+    const l = parseCardLayout(raw)!;
+    expect(l.fontFamily).toBe("condensed");
+  });
+
+  it("defaults fontFamily to 'inter' when the field is missing", () => {
+    const raw = JSON.stringify({
+      theme: "dark",
+      accentColor: "#ff7f50",
+      // no fontFamily
+      background: { mode: "photo", scrimMode: "brand" },
+      headline: { variant: "plain", align: "left" },
+      brandLabel: false,
+      logo: { present: false, anchor: "tr", shape: "circle" },
+      confidence: 0.7,
+    });
+    const l = parseCardLayout(raw)!;
+    expect(l.fontFamily).toBe("inter");
+  });
+
+  it("defaults fontFamily to 'inter' on an unknown value", () => {
+    const raw = JSON.stringify({
+      theme: "light",
+      accentColor: "#e11d48",
+      fontFamily: "comic_sans", // invalid
+      background: { mode: "gradient", scrimMode: "none" },
+      headline: { variant: "box", align: "center" },
+      brandLabel: false,
+      logo: { present: false, anchor: "tl", shape: "circle" },
+      confidence: 0.5,
+    });
+    const l = parseCardLayout(raw)!;
+    expect(l.fontFamily).toBe("inter");
+  });
+});
+
+describe("cardLayoutToSpec — fontFamily propagation (Round 13)", () => {
+  const SERIF_LAYOUT: CardLayout = {
+    ...MOVIEFIED,
+    fontFamily: "serif_display",
+  };
+
+  const CONDENSED_LAYOUT: CardLayout = {
+    ...MOVIEFIED,
+    fontFamily: "condensed",
+  };
+
+  it("sets controls.fontFamily from layout.fontFamily (serif_display)", () => {
+    const spec = cardLayoutToSpec(SERIF_LAYOUT, { headline: "X", channelName: "C" });
+    expect(spec.controls.fontFamily).toBe("serif_display");
+  });
+
+  it("sets controls.fontFamily from layout.fontFamily (condensed)", () => {
+    const spec = cardLayoutToSpec(CONDENSED_LAYOUT, { headline: "X", channelName: "C" });
+    expect(spec.controls.fontFamily).toBe("condensed");
+  });
+
+  it("styleOverride does NOT override fontFamily — font stays from reference", () => {
+    // The picker overrides layout treatment (bg mode / headline variant) but NOT
+    // the font — font is a reference-fidelity property.
+    const spec = cardLayoutToSpec(SERIF_LAYOUT, {
+      headline: "X",
+      channelName: "C",
+      styleOverride: "hook_bars",
+    });
+    expect(spec.controls.fontFamily).toBe("serif_display");
+  });
+
+  it("styleOverride premium_editorial also does NOT override fontFamily", () => {
+    const spec = cardLayoutToSpec(CONDENSED_LAYOUT, {
+      headline: "Bold Headline",
+      channelName: "Newsdesk",
+      styleOverride: "premium_editorial",
+    });
+    expect(spec.controls.fontFamily).toBe("condensed");
+  });
+});
+
+// ── Round 13: color precedence regression guards ────────────────────────────
+
+describe("cardLayoutToSpec — color precedence (Round 13 regression guards)", () => {
+  it("explicit content.brandColor wins over layout.accentColor", () => {
+    // Explicit picker color (user decision) must always beat the reference's detected accent.
+    const spec = cardLayoutToSpec(MOVIEFIED, {
+      headline: "X",
+      channelName: "C",
+      brandColor: "#aabbcc", // explicit picker
+    });
+    // MOVIEFIED.accentColor = "#ff7f50" — picker "#aabbcc" must win
+    expect(spec.controls.brandColor).toBe("#aabbcc");
+  });
+
+  it("when no content.brandColor, falls back to layout.accentColor (reference beats logo)", () => {
+    // No brandColor passed → cardLayoutToSpec uses layout.accentColor.
+    // This is the key Round 13 guarantee: on the mimicry path, passing brandColor=null
+    // lets the reference's own extracted accent drive the card color.
+    const spec = cardLayoutToSpec(MOVIEFIED, {
+      headline: "X",
+      channelName: "C",
+      // no brandColor
+    });
+    expect(spec.controls.brandColor).toBe("#ff7f50"); // layout.accentColor
+  });
+
+  it("safeColor sanitizes a malicious brandColor and falls back to DEFAULT_ACCENT", () => {
+    const spec = cardLayoutToSpec(MOVIEFIED, {
+      headline: "X",
+      channelName: "C",
+      brandColor: "<script>evil</script>",
+    });
+    // safeColor rejects non-hex → falls back to DEFAULT_ACCENT (#e11d48)
+    expect(spec.controls.brandColor).toMatch(/^#[0-9a-fA-F]{3,8}$/);
+    expect(spec.controls.brandColor).not.toContain("<");
   });
 });
