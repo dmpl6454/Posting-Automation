@@ -905,3 +905,48 @@ describe("layout-extract ladder order (Round 11)", () => {
     expect((deps.generateImage as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
   });
 });
+
+// ── Round 12: styleOverride forwarded through generateLayoutExtractCard ────────
+
+describe("generateLayoutExtractCard — styleOverride forwarded to renderLayoutCard", () => {
+  async function loadLayoutExtract() {
+    const { generateLayoutExtractCard } = await import(
+      "../tools/reference-card-generator"
+    );
+    return generateLayoutExtractCard;
+  }
+
+  it("passes styleOverride into renderLayoutCard content when args.styleOverride is set", async () => {
+    const fn = await loadLayoutExtract();
+    const renderMock = vi.fn().mockResolvedValue(LAYOUT_EXTRACT_OUTPUT);
+    const deps = makeDeps({
+      detectSentinelRegion: vi.fn().mockResolvedValue(null),
+      extractCardLayout: vi.fn().mockResolvedValue(MOCK_LAYOUT),
+      renderLayoutCard: renderMock,
+    });
+
+    await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE, styleOverride: "premium_editorial" }, deps);
+
+    expect(renderMock).toHaveBeenCalledOnce();
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    const content = renderMock.mock.calls[0]![1] as Record<string, unknown>;
+    expect(content.styleOverride).toBe("premium_editorial");
+  });
+
+  it("does NOT pass styleOverride when args.styleOverride is absent", async () => {
+    const fn = await loadLayoutExtract();
+    const renderMock = vi.fn().mockResolvedValue(LAYOUT_EXTRACT_OUTPUT);
+    const deps = makeDeps({
+      detectSentinelRegion: vi.fn().mockResolvedValue(null),
+      extractCardLayout: vi.fn().mockResolvedValue(MOCK_LAYOUT),
+      renderLayoutCard: renderMock,
+    });
+
+    await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE }, deps);
+
+    expect(renderMock).toHaveBeenCalledOnce();
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    const content = renderMock.mock.calls[0]![1] as Record<string, unknown>;
+    expect(content.styleOverride).toBeUndefined();
+  });
+});

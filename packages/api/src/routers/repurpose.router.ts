@@ -984,6 +984,11 @@ export const repurposeRouter = createRouter({
         voiceOver: z.boolean().default(false),
         voiceType: z.enum(["nova", "shimmer", "alloy", "echo", "fable", "onyx"]).default("nova"),
         bgMusic: z.boolean().default(false),
+        // Round 12: explicit brand name for the mimicry eyebrow/brandLabel.
+        // The UI sends the saved-style name or logo name when mimicry is active so
+        // the card shows "Moviefied" instead of the account/workspace display name.
+        // Preference chain (mimicry path): input.brandName > displayName fallback.
+        brandName: z.string().max(60).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -1500,16 +1505,22 @@ export const repurposeRouter = createRouter({
           overlayHeadlineAndLogo: overlayFn,
         };
 
+        // Round 12: prefer the client-supplied brand name (saved-style name / logo
+        // name) over the account display name so the eyebrow shows "Moviefied"
+        // instead of the user's workspace name.
+        const mimicryBrandName = input.brandName?.trim() || displayName;
+
         const result = await generateReferenceStyledCard(
           {
             referenceImage: aestheticRefImage,
             ...(heroImage ? { heroImage } : {}),
             ...(logoRefImage ? { logoImage: logoRefImage } : {}),
             headline,
-            brandName: displayName,
+            brandName: mimicryBrandName,
             handle,
             brandColor: effectiveBrandColor,
             textMode: input.mimicryTextMode,
+            styleOverride: effectiveStyle,
           },
           deps,
         );
@@ -2828,6 +2839,9 @@ Return ONLY the JSON array, no other text.`;
         // also uses the mimicry render path instead of the template engine.
         referenceMimicry: z.boolean().default(false),
         mimicryTextMode: z.enum(["ai", "overlay"]).default("ai"),
+        // Round 12: explicit brand name for the mimicry eyebrow/brandLabel.
+        // Same chain as repurposeFromUrl — UI sends the saved-style/logo name.
+        brandName: z.string().max(60).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -2999,16 +3013,21 @@ Return ONLY the JSON array, no other text.`;
             overlayHeadlineAndLogo: overlayFn,
           };
 
+          // Round 12: prefer the client-supplied brand name (saved-style/logo name)
+          // over the channel name so the eyebrow shows the real brand label.
+          const regenMimicryBrandName = input.brandName?.trim() || channelName;
+
           const m = await generateReferenceStyledCard(
             {
               referenceImage: regenAestheticRef,
               ...(heroImage ? { heroImage } : {}),
               ...(regenLogoRef ? { logoImage: regenLogoRef } : {}),
               headline,
-              brandName: channelName,
-              handle: input.channelHandle || channelName,
+              brandName: regenMimicryBrandName,
+              handle: input.channelHandle || regenMimicryBrandName,
               brandColor,
               textMode: input.mimicryTextMode,
+              styleOverride: input.creativeStyle,
             },
             regenDeps,
           );

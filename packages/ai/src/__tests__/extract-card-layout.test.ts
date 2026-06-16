@@ -133,3 +133,95 @@ describe("cardLayoutToSpec (layout skeleton + our content → CardSpec)", () => 
     expect(spec.controls.brandColor).toBe("#123456");
   });
 });
+
+// ── Round 12: styleOverride — picker wins over vision-detected treatment ────────
+
+describe("cardLayoutToSpec — styleOverride", () => {
+  /** A layout with BOX variant and gradient bg — the OPPOSITE of premium_editorial. */
+  const BOX_LAYOUT: CardLayout = {
+    ...MOVIEFIED,
+    background: { mode: "gradient", scrimMode: "none" },
+    headline: { variant: "box", align: "center" },
+  };
+
+  it("premium_editorial overrides box→plain variant, gradient→photo bg, and sets scrimMode brand", () => {
+    const spec = cardLayoutToSpec(BOX_LAYOUT, {
+      headline: "Big Headline",
+      channelName: "Moviefied",
+      styleOverride: "premium_editorial",
+    });
+    const bg = spec.blocks.find((b) => b.kind === "background") as any;
+    const cap = spec.blocks.find((b) => b.kind === "captionStack") as any;
+
+    expect(bg.props.mode).toBe("photo");
+    expect(bg.props.scrimMode).toBe("brand");
+    expect(cap.props.pills[0].variant).toBe("plain");
+  });
+
+  it("hook_bars overrides plain→box variant (background mode unchanged)", () => {
+    const spec = cardLayoutToSpec(MOVIEFIED, {
+      headline: "Hook Headline",
+      channelName: "Newsdesk",
+      styleOverride: "hook_bars",
+    });
+    const cap = spec.blocks.find((b) => b.kind === "captionStack") as any;
+    const bg = spec.blocks.find((b) => b.kind === "background") as any;
+
+    expect(cap.props.pills[0].variant).toBe("box");
+    // bg mode comes from the ref (MOVIEFIED = "photo") — hook_bars doesn't touch it
+    expect(bg.props.mode).toBe("photo");
+  });
+
+  it("bold_typographic forces variant plain; keeps the ref's background mode", () => {
+    const spec = cardLayoutToSpec(BOX_LAYOUT, {
+      headline: "Bold Headline",
+      channelName: "Brand",
+      styleOverride: "bold_typographic",
+    });
+    const cap = spec.blocks.find((b) => b.kind === "captionStack") as any;
+    const bg = spec.blocks.find((b) => b.kind === "background") as any;
+
+    expect(cap.props.pills[0].variant).toBe("plain");
+    // bg mode NOT overridden by bold_typographic — stays as the ref's "gradient"
+    expect(bg.props.mode).toBe("gradient");
+  });
+
+  it("tweet_card leaves variant + background mode exactly as detected (no override)", () => {
+    const spec = cardLayoutToSpec(BOX_LAYOUT, {
+      headline: "Tweet Headline",
+      channelName: "Brand",
+      styleOverride: "tweet_card",
+    });
+    const cap = spec.blocks.find((b) => b.kind === "captionStack") as any;
+    const bg = spec.blocks.find((b) => b.kind === "background") as any;
+
+    expect(cap.props.pills[0].variant).toBe("box");   // unchanged from BOX_LAYOUT
+    expect(bg.props.mode).toBe("gradient");            // unchanged from BOX_LAYOUT
+    expect(bg.props.scrimMode).toBe("none");           // unchanged from BOX_LAYOUT
+  });
+
+  it("no styleOverride → uses the layout's detected variant + mode (regression guard)", () => {
+    const spec = cardLayoutToSpec(BOX_LAYOUT, { headline: "X", channelName: "C" });
+    const cap = spec.blocks.find((b) => b.kind === "captionStack") as any;
+    const bg = spec.blocks.find((b) => b.kind === "background") as any;
+
+    expect(cap.props.pills[0].variant).toBe("box");
+    expect(bg.props.mode).toBe("gradient");
+    expect(bg.props.scrimMode).toBe("none");
+  });
+
+  it("brandLabel + logo anchor are preserved from the reference regardless of styleOverride", () => {
+    const spec = cardLayoutToSpec(MOVIEFIED, {
+      headline: "X",
+      channelName: "Moviefied",
+      styleOverride: "hook_bars",
+    });
+    const cap = spec.blocks.find((b) => b.kind === "captionStack") as any;
+    const logo = spec.blocks.find((b) => b.kind === "logo") as any;
+
+    // brandLabel still comes from layout.brandLabel === true
+    expect(cap.props.label?.text).toBe("Moviefied");
+    // logo anchor still comes from layout.logo.anchor === "tr"
+    expect(logo.props.logos[0].anchor).toBe("tr");
+  });
+});
