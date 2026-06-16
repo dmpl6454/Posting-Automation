@@ -12,7 +12,7 @@
  * safeColor, confidence clamped) and again downstream in renderCard. Fails graceful
  * → null; the caller falls back to the legacy template so generation never blocks.
  */
-import { safeColor, type CardSpec, type Block, type StyleControls } from "./card-engine";
+import { safeColor, safeFontFamily, type CardSpec, type Block, type StyleControls } from "./card-engine";
 
 /** Background treatments the extractor may pick (subset the engine renders well). */
 export type LayoutBackgroundMode =
@@ -26,6 +26,8 @@ export type LayoutBackgroundMode =
 export interface CardLayout {
   theme: "light" | "dark";
   accentColor: string; // #hex, safeColor-sanitized
+  /** Headline typeface family, mapped from the reference's actual font style. */
+  fontFamily: import("./card-engine").FontFamily; // "inter" | "serif_display" | "condensed"
   background: {
     mode: LayoutBackgroundMode;
     /** Bottom scrim over a photo: "brand" = photo bleeds into the brand color
@@ -76,6 +78,7 @@ export function parseCardLayout(raw: string): CardLayout | null {
   return {
     theme: o.theme === "dark" ? "dark" : "light",
     accentColor: safeColor(typeof o.accentColor === "string" ? o.accentColor : undefined),
+    fontFamily: safeFontFamily(typeof o.fontFamily === "string" ? o.fontFamily : undefined),
     background: {
       mode: oneOf(bg.mode, BG_MODES, "photo"),
       scrimMode: oneOf(bg.scrimMode, ["dark", "brand", "none"] as const, "dark"),
@@ -100,6 +103,10 @@ Return ONLY this JSON (no prose):
 {
   "theme": "light" | "dark",                         // overall lightness of the card
   "accentColor": "#rrggbb",                          // dominant brand/accent color
+  "fontFamily": "inter" | "serif_display" | "condensed",  // headline typeface style:
+                                                     //   "serif_display" = elegant serif (Playfair/Times/Georgia — premium editorial, Hollywood-style)
+                                                     //   "condensed"     = tall narrow bold sans (Oswald/Bebas/Impact — bold news headlines)
+                                                     //   "inter"         = clean modern sans-serif (default, minimal, tech)
   "background": {
     "mode": "photo" | "gradient" | "splitPhotos" | "photoGrid" | "screenshot" | "topTextBottomPhoto",
     "scrimMode": "brand" | "dark" | "none"           // "brand" if the photo fades into a colored gradient where the text sits
@@ -226,7 +233,10 @@ export function cardLayoutToSpec(layout: CardLayout, content: CardContent): Card
     brandColor,
     highlightColor: brandColor,
     bgOpacity: 100,
-    fontFamily: "inter",
+    // Font comes from the reference's detected typeface — the picker overrides
+    // layout treatment (headline variant / bg mode) but NOT the font, which is a
+    // reference-fidelity property. safeFontFamily defaults to "inter" on missing.
+    fontFamily: safeFontFamily(layout.fontFamily),
     textAlign: layout.headline.align,
     logoPosition: layout.logo.anchor,
     fontScale: 1,

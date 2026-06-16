@@ -208,6 +208,14 @@ export function RepurposeTab() {
   // AI-styling controls are irrelevant in that case (parity w/ the old behaviour).
   const useOwnImage = format === "static" && !!imageAssignments["background"];
 
+  // Feature 2 — Brand name on card. Explicit name wins over any saved-style name
+  // in computeActiveBrandName. Saved as "name" kind templates.
+  const [brandNameInput, setBrandNameInput] = useState<string>("");
+
+  // Feature 3 — Inline headline edit. Initialized from renderedHeadline when
+  // results arrive; Regenerate prefers this over the server's rendered value.
+  const [editedHeadline, setEditedHeadline] = useState<string>("");
+
   // FIX C — Hero photo editor state.
   // Whether the hero editor panel is open (only shown for the static result card).
   const [heroEditorOpen, setHeroEditorOpen] = useState(false);
@@ -522,6 +530,8 @@ export function RepurposeTab() {
       // Clear the static/carousel wall-clock guard — we got a normal response.
       if (syncTimeoutRef.current) { clearTimeout(syncTimeoutRef.current); syncTimeoutRef.current = null; }
       setResults(data);
+      // Feature 3: initialize the editable headline from the server's rendered value.
+      setEditedHeadline(data.renderedHeadline ?? data.extracted?.title ?? "");
       const mediaCount = data.mediaUrls.length;
       // Be honest: if captions generated but media failed, this is NOT a clean
       // success — show a warning toast that points at the activity log, not a
@@ -574,10 +584,9 @@ export function RepurposeTab() {
 
   const handleRegenerate = async (target: "static" | number) => {
     if (!results) return;
-    // Headline: prefer the EXACT headline the server rendered the original with
-    // (capped + synthesized), falling back to the raw extracted title. This makes
-    // the regenerated image match the original instead of diverging (R3).
-    const headline = (results.renderedHeadline ?? results.extracted?.title ?? "").trim();
+    // Headline: prefer the user's inline edit (Feature 3) over the server's
+    // rendered value so "edit headline → Regenerate" re-renders with the new text.
+    const headline = (editedHeadline.trim() || results.renderedHeadline ?? results.extracted?.title ?? "").trim();
     if (!headline) {
       toast({ title: "Can't regenerate", description: "No headline found for this image.", variant: "destructive" });
       return;
@@ -660,9 +669,10 @@ export function RepurposeTab() {
 
   // Compute the active brand name to send as `brandName` to the router, so the
   // mimicry eyebrow uses it instead of the bare channel username.
-  // Priority: saved-style name → logo template name → channel name.
+  // Priority: explicit brandNameInput → saved-style name → logo template name → channel name.
   const computeActiveBrandName = (): string | undefined => {
-    const styleTemplates = (creativeTemplates ?? []).filter((t) => (t as any).kind !== "logo");
+    if (brandNameInput.trim()) return brandNameInput.trim();
+    const styleTemplates = (creativeTemplates ?? []).filter((t) => (t as any).kind === "style");
     if (selectedTemplateId) {
       const t = styleTemplates.find((t) => t.id === selectedTemplateId);
       if (t?.name) return t.name;
@@ -1057,7 +1067,8 @@ export function RepurposeTab() {
                        Always visible (not gated by advancedOpen). ── */}
                   {(() => {
                     const logoTemplates = (creativeTemplates ?? []).filter((t) => (t as any).kind === "logo");
-                    const styleTemplates = (creativeTemplates ?? []).filter((t) => (t as any).kind !== "logo");
+                    const styleTemplates = (creativeTemplates ?? []).filter((t) => (t as any).kind === "style");
+                    const nameTemplates = (creativeTemplates ?? []).filter((t) => (t as any).kind === "name");
                     return (
                       <>
                         {/* Section 1 — Brand logos */}
@@ -1126,7 +1137,7 @@ export function RepurposeTab() {
                           </div>
                         )}
 
-                        {/* Section 2 — Saved styles */}
+                        {/* Section 2 — Saved styles (kind === "style" only) */}
                         {styleTemplates.length > 0 && (
                           <div className="rounded-lg border border-border p-3 space-y-2">
                             <div className="flex items-center justify-between">
@@ -1202,6 +1213,59 @@ export function RepurposeTab() {
                             </div>
                           </div>
                         )}
+
+                        {/* Section 3 — Saved names (kind === "name") */}
+                        {nameTemplates.length > 0 && (
+                          <div className="rounded-lg border border-border p-3 space-y-2">
+                            <div className="flex items-center justify-between">
+                              <Label className="text-xs font-semibold">Saved names</Label>
+                              <span className="text-[10px] text-muted-foreground">Click to set the brand name shown on the card</span>
+                            </div>
+                            <div className="flex flex-wrap gap-2 pt-1">
+                              {nameTemplates.map((t) => (
+                                <div
+                                  key={t.id}
+                                  className={`flex items-center gap-1.5 rounded-lg border px-2 py-1.5 text-xs ${brandNameInput === t.name ? "border-primary bg-primary/10" : "border-border"}`}
+                                >
+                                  <button
+                                    type="button"
+                                    title="Use this name"
+                                    onClick={() => setBrandNameInput(t.name)}
+                                    className="max-w-[8rem] truncate"
+                                  >
+                                    {t.name}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    title="Rename"
+                                    onClick={async () => {
+                                      const name = window.prompt("Rename this saved name:", t.name);
+                                      if (!name || name.trim() === t.name) return;
+                                      await updateTemplate.mutateAsync({ id: t.id, name: name.trim() });
+                                      utils.creativeTemplate.list.invalidate();
+                                    }}
+                                    className="text-muted-foreground hover:text-foreground"
+                                  >
+                                    <Pencil className="h-3 w-3" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    title="Delete"
+                                    onClick={async () => {
+                                      if (!window.confirm(`Delete saved name "${t.name}"?`)) return;
+                                      await deleteTemplate.mutateAsync({ id: t.id });
+                                      utils.creativeTemplate.list.invalidate();
+                                      toast({ title: "Saved name deleted" });
+                                    }}
+                                    className="text-muted-foreground hover:text-destructive"
+                                  >
+                                    <Trash2 className="h-3 w-3" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </>
                     );
                   })()}
@@ -1263,6 +1327,43 @@ export function RepurposeTab() {
                       <button
                         type="button"
                         onClick={() => setAccentColor("")}
+                        className="text-[10px] text-muted-foreground hover:underline"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+
+                  {/* ── Brand name on card (optional) — Feature 2 ── */}
+                  <div className="flex items-center gap-2 pt-1">
+                    <Label className="text-xs" htmlFor="brand-name-input">Brand name on card</Label>
+                    <Input
+                      id="brand-name-input"
+                      value={brandNameInput}
+                      onChange={(e) => setBrandNameInput(e.target.value)}
+                      placeholder="e.g. Dashmani Media"
+                      className="h-8 flex-1 text-xs"
+                    />
+                    {brandNameInput.trim() && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const name = brandNameInput.trim();
+                          if (!name) return;
+                          await createTemplate.mutateAsync({ name, kind: "name" } as any);
+                          utils.creativeTemplate.list.invalidate();
+                          toast({ title: "Name saved" });
+                        }}
+                        className="text-[10px] text-primary hover:underline whitespace-nowrap"
+                        title="Save this name for reuse"
+                      >
+                        Save name
+                      </button>
+                    )}
+                    {brandNameInput && (
+                      <button
+                        type="button"
+                        onClick={() => setBrandNameInput("")}
                         className="text-[10px] text-muted-foreground hover:underline"
                       >
                         Clear
@@ -1887,6 +1988,19 @@ export function RepurposeTab() {
                       alt="Generated post"
                       className="w-full max-w-xs rounded-xl shadow-lg"
                     />
+                    {/* Feature 3 — Inline headline edit. Edit text → Regenerate applies it. */}
+                    <div className="w-full max-w-xs space-y-1">
+                      <Label className="text-xs text-muted-foreground" htmlFor="edited-headline">Headline</Label>
+                      <Input
+                        id="edited-headline"
+                        value={editedHeadline}
+                        onChange={(e) => setEditedHeadline(e.target.value)}
+                        placeholder="Edit headline before regenerating…"
+                        className="text-sm"
+                      />
+                      <p className="text-[10px] text-muted-foreground">Edit the headline, then click Regenerate to re-render.</p>
+                    </div>
+
                     <div className="flex items-center gap-2 flex-wrap justify-center">
                       <a
                         href={results.mediaUrls[0]}
@@ -1928,24 +2042,44 @@ export function RepurposeTab() {
                       const PREVIEW_W = 270;
                       const PREVIEW_H = 337; // 270 * (5/4) = 337.5 ≈ 4:5
 
-                      /** Load a URL into heroImgRef, applying crossOrigin for canvas use. */
+                      /**
+                       * Load a source into heroImgRef so canvas can read it without taint.
+                       *
+                       * - For an article HTTPS URL: route through the same-origin
+                       *   /api/proxy-image endpoint. The server fetches the image (SSRF-gated)
+                       *   and returns it from our own origin, so the <img> is never cross-
+                       *   origin and toBlob() / drawImage() never throw "operation is insecure".
+                       *   We use this proxied URL for BOTH the preview and the canvas export.
+                       *
+                       * - For a data: URL (already same-origin by construction): load directly.
+                       *
+                       * The old "reload without crossOrigin" fallback is REMOVED — that path
+                       * was the canvas-taint bug itself (the CORS-failed img taints the canvas).
+                       */
                       const loadHeroSrc = (src: string) => {
-                        setHeroSrcUrl(src);
                         setHeroZoom(1);
                         setHeroOffsetX(0);
                         setHeroOffsetY(0);
+
+                        // Choose the URL to actually set on <img> / heroSrcUrl.
+                        // data: URLs are already same-origin; everything else goes via the proxy.
+                        const loadUrl = src.startsWith("data:")
+                          ? src
+                          : `/api/proxy-image?url=${encodeURIComponent(src)}`;
+
+                        setHeroSrcUrl(loadUrl);
                         const img = new window.Image();
-                        img.crossOrigin = "anonymous";
                         img.onload = () => { heroImgRef.current = img; };
                         img.onerror = () => {
-                          // CORS failure: reload without crossOrigin so canvas can at
-                          // least preview, but warn that export will use the raw URL.
-                          const img2 = new window.Image();
-                          img2.onload = () => { heroImgRef.current = img2; };
-                          img2.src = src;
-                          toast({ title: "CORS — using URL as-is (no crop)", description: "This image can't be cropped in the browser. It will be assigned directly." });
+                          toast({
+                            title: "Couldn't load this image — try another",
+                            description: "The image could not be fetched via the server proxy.",
+                            variant: "destructive",
+                          });
+                          setHeroSrcUrl(null);
+                          heroImgRef.current = null;
                         };
-                        img.src = src;
+                        img.src = loadUrl;
                       };
 
                       /** Export the cropped region to canvas → upload → assign to background slot. */
@@ -2003,17 +2137,7 @@ export function RepurposeTab() {
                           toast({ title: "Hero photo applied", description: "Click Regenerate to re-render with the new photo." });
                           setHeroEditorOpen(false);
                         } catch (err: any) {
-                          // Canvas taint: a non-CORS article image can't be exported client-side.
-                          // Honest + useful fallback: assign the chosen image UN-CROPPED so the
-                          // user's pick still takes effect (the router accepts a url-only hero via
-                          // bgImageUrl, SSRF-gated server-side). Regenerate then uses it as-is.
-                          if (heroSrcUrl && (err?.message?.includes("tainted") || err?.message?.includes("Canvas"))) {
-                            setImageAssignments((prev) => ({ ...prev, background: { mediaId: "", url: heroSrcUrl } }));
-                            setHeroEditorOpen(false);
-                            toast({ title: "Using this photo without cropping", description: "This image couldn't be cropped here — it'll be used as-is. Upload your own photo to crop it." });
-                          } else {
-                            toast({ title: "Hero crop failed", description: err?.message, variant: "destructive" });
-                          }
+                          toast({ title: "Hero crop failed", description: err?.message, variant: "destructive" });
                         } finally {
                           setHeroUploading(false);
                         }
@@ -2089,13 +2213,27 @@ export function RepurposeTab() {
                                   if (!file) return;
                                   setHeroUploading(true);
                                   try {
+                                    // Read as data URL for the CROPPER — data: URLs are
+                                    // same-origin so canvas.toBlob() never throws "insecure".
+                                    const dataUrl = await new Promise<string>((resolve, reject) => {
+                                      const reader = new FileReader();
+                                      reader.onload = () => resolve(reader.result as string);
+                                      reader.onerror = reject;
+                                      reader.readAsDataURL(file);
+                                    });
+                                    // Also upload to S3 so a Media id exists for the non-cropped
+                                    // fallback (the imageAssignments path needs a mediaId).
                                     const fd = new FormData();
                                     fd.append("file", file);
                                     fd.append("category", "hero");
                                     const resp = await fetch("/api/upload", { method: "POST", body: fd });
                                     if (!resp.ok) throw new Error("Upload failed");
-                                    const { url: uploadedUrl } = await resp.json();
-                                    loadHeroSrc(uploadedUrl);
+                                    const { id: uploadedId, url: uploadedUrl } = await resp.json();
+                                    // Load the data URL into the cropper (taint-safe).
+                                    // Store the S3 mediaId so Apply can reference it if needed.
+                                    (heroImgRef as any)._uploadedMediaId = uploadedId;
+                                    (heroImgRef as any)._uploadedUrl = uploadedUrl;
+                                    loadHeroSrc(dataUrl);
                                   } catch {
                                     toast({ title: "Upload failed", variant: "destructive" });
                                   } finally {
