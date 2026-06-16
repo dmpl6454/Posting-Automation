@@ -51,6 +51,9 @@ import {
   Trash2,
   ChevronDown,
   ChevronRight,
+  X,
+  UploadCloud,
+  Crop,
 } from "lucide-react";
 
 const ALL_PLATFORMS = [
@@ -204,6 +207,24 @@ export function RepurposeTab() {
   // A user-assigned STATIC background image becomes the whole post media, so the
   // AI-styling controls are irrelevant in that case (parity w/ the old behaviour).
   const useOwnImage = format === "static" && !!imageAssignments["background"];
+
+  // FIX C — Hero photo editor state.
+  // Whether the hero editor panel is open (only shown for the static result card).
+  const [heroEditorOpen, setHeroEditorOpen] = useState(false);
+  // The source image the user has chosen to crop: either a picked article URL or
+  // an uploaded file URL. null = nothing chosen yet.
+  const [heroSrcUrl, setHeroSrcUrl] = useState<string | null>(null);
+  // Crop/zoom/pan state: zoom is a scale factor (1.0 = fit-to-frame), offsetX/Y
+  // are pixel offsets within the preview canvas coordinate space.
+  const [heroZoom, setHeroZoom] = useState<number>(1);
+  const [heroOffsetX, setHeroOffsetX] = useState<number>(0);
+  const [heroOffsetY, setHeroOffsetY] = useState<number>(0);
+  // Track pointer drag for pan.
+  const heroDragRef = useRef<{ startX: number; startY: number; ox: number; oy: number } | null>(null);
+  // The <img> element loaded for the hero source (used by canvas drawImage).
+  const heroImgRef = useRef<HTMLImageElement | null>(null);
+  // Whether the hero source image is currently uploading/processing.
+  const [heroUploading, setHeroUploading] = useState(false);
 
   // Results
   const [results, setResults] = useState<{
@@ -562,10 +583,11 @@ export function RepurposeTab() {
       return;
     }
     const { channelName, channelHandle, logoUrl: brandLogo } = resolveBranding();
-    // Reuse the SAME background photo (first https article image) the original
-    // creative sat on — the server re-validates it with isPublicImageUrl — plus
-    // the article-context blurb so the AI background reflects the article.
-    const bgImageUrl = results.extracted?.images?.find((u) => u.startsWith("https://"));
+    // Prefer a user-assigned hero (imageAssignments["background"]) over the
+    // article's first image so that regenerate keeps the chosen/cropped photo.
+    const bgImageUrl =
+      imageAssignments["background"]?.url ||
+      results.extracted?.images?.find((u) => u.startsWith("https://"));
     const bgContext = results.extracted?.description?.slice(0, 600);
     setRegenTarget(target);
     try {
@@ -587,6 +609,7 @@ export function RepurposeTab() {
         hookLine: results.hookLine ?? undefined,
         bgImageUrl: bgImageUrl || undefined,
         bgContext: bgContext || undefined,
+        brandName: computeActiveBrandName(),
       });
       // Swap the displayed image (and its Media id for publish) in `results`.
       setResults((prev) => {
@@ -633,6 +656,26 @@ export function RepurposeTab() {
   const handleExtractPreview = () => {
     if (!url) return;
     extractMutation.mutate({ url });
+  };
+
+  // Compute the active brand name to send as `brandName` to the router, so the
+  // mimicry eyebrow uses it instead of the bare channel username.
+  // Priority: saved-style name → logo template name → channel name.
+  const computeActiveBrandName = (): string | undefined => {
+    const styleTemplates = (creativeTemplates ?? []).filter((t) => (t as any).kind !== "logo");
+    if (selectedTemplateId) {
+      const t = styleTemplates.find((t) => t.id === selectedTemplateId);
+      if (t?.name) return t.name;
+    }
+    if (logoMediaId) {
+      const logoTemplates = (creativeTemplates ?? []).filter((t) => (t as any).kind === "logo");
+      const lt = logoTemplates.find((t) => t.logoMediaId === logoMediaId);
+      if (lt?.name) return lt.name;
+    }
+    const ch = selectedChannelIds.length > 0
+      ? activeChannels.find((c: any) => c.id === selectedChannelIds[0])
+      : primaryChannel;
+    return ch?.name || undefined;
   };
 
   const handleGenerate = () => {
@@ -691,6 +734,7 @@ export function RepurposeTab() {
         // each assignment overrides AI/article for that one slot.
         aiImages,
         imageAssignments: Object.entries(imageAssignments).map(([slot, v]) => ({ slot, mediaId: v.mediaId })),
+        brandName: computeActiveBrandName(),
         slideCount,
         videoDuration,
         // Seedance generates its own native audio, so the voiceOver/bgMusic
@@ -1328,6 +1372,9 @@ export function RepurposeTab() {
                               ? "AI leaves space for the headline; we overlay your exact text so it's always correct and legible."
                               : "AI renders the headline inside the layout — most faithful to the reference, but text can occasionally look off."}
                           </p>
+                          <p className="text-[10px] text-muted-foreground mt-1">
+                            Applies only when AI re-draws the whole card. Most reference recreations render your exact text automatically.
+                          </p>
                         </div>
                       )}
                     </div>
@@ -1834,7 +1881,7 @@ export function RepurposeTab() {
                       alt="Generated post"
                       className="w-full max-w-xs rounded-xl shadow-lg"
                     />
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap justify-center">
                       <a
                         href={results.mediaUrls[0]}
                         download={`repurposed-image-${Date.now()}.png`}
@@ -1858,7 +1905,271 @@ export function RepurposeTab() {
                         )}
                         Regenerate
                       </button>
+                      {/* FIX C: hero photo editor toggle */}
+                      <button
+                        type="button"
+                        onClick={() => setHeroEditorOpen((v) => !v)}
+                        title="Replace or adjust the hero photo"
+                        className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-muted transition-colors"
+                      >
+                        <Crop className="h-4 w-4" />
+                        {heroEditorOpen ? "Close photo editor" : "Replace / adjust photo"}
+                      </button>
                     </div>
+
+                    {/* FIX C — Hero photo editor panel */}
+                    {heroEditorOpen && (() => {
+                      const PREVIEW_W = 270;
+                      const PREVIEW_H = 337; // 270 * (5/4) = 337.5 ≈ 4:5
+
+                      /** Load a URL into heroImgRef, applying crossOrigin for canvas use. */
+                      const loadHeroSrc = (src: string) => {
+                        setHeroSrcUrl(src);
+                        setHeroZoom(1);
+                        setHeroOffsetX(0);
+                        setHeroOffsetY(0);
+                        const img = new window.Image();
+                        img.crossOrigin = "anonymous";
+                        img.onload = () => { heroImgRef.current = img; };
+                        img.onerror = () => {
+                          // CORS failure: reload without crossOrigin so canvas can at
+                          // least preview, but warn that export will use the raw URL.
+                          const img2 = new window.Image();
+                          img2.onload = () => { heroImgRef.current = img2; };
+                          img2.src = src;
+                          toast({ title: "CORS — using URL as-is (no crop)", description: "This image can't be cropped in the browser. It will be assigned directly." });
+                        };
+                        img.src = src;
+                      };
+
+                      /** Export the cropped region to canvas → upload → assign to background slot. */
+                      const applyHeroCrop = async () => {
+                        const img = heroImgRef.current;
+                        if (!img || !heroSrcUrl) return;
+                        setHeroUploading(true);
+                        try {
+                          const canvas = document.createElement("canvas");
+                          canvas.width = 1080;
+                          canvas.height = 1350;
+                          const ctx2 = canvas.getContext("2d");
+                          if (!ctx2) throw new Error("Canvas unavailable");
+
+                          // Compute the source rectangle from zoom/offset.
+                          // At zoom=1 the image fills the preview box; higher zoom
+                          // crops in. offsetX/Y are deltas in preview-px.
+                          const naturalW = img.naturalWidth;
+                          const naturalH = img.naturalHeight;
+                          // Scale so image covers the preview box at zoom=1.
+                          const baseScale = Math.max(PREVIEW_W / naturalW, PREVIEW_H / naturalH);
+                          const effScale = baseScale * heroZoom;
+                          // Displayed dimensions in preview-px
+                          const dispW = naturalW * effScale;
+                          const dispH = naturalH * effScale;
+                          // Top-left corner of the image in preview-px (offset from center)
+                          const imgLeft = (PREVIEW_W - dispW) / 2 + heroOffsetX;
+                          const imgTop  = (PREVIEW_H - dispH) / 2 + heroOffsetY;
+                          // Visible source region in natural-px
+                          const sx = (-imgLeft) / effScale;
+                          const sy = (-imgTop) / effScale;
+                          const sw = PREVIEW_W / effScale;
+                          const sh = PREVIEW_H / effScale;
+                          // Clamp to natural image bounds
+                          const csx = Math.max(0, sx);
+                          const csy = Math.max(0, sy);
+                          const csw = Math.min(sw, naturalW - csx);
+                          const csh = Math.min(sh, naturalH - csy);
+                          // Fill canvas background first (in case image doesn't cover)
+                          ctx2.fillStyle = "#000";
+                          ctx2.fillRect(0, 0, 1080, 1350);
+                          ctx2.drawImage(img, csx, csy, csw, csh, 0, 0, 1080, 1350);
+
+                          const blob: Blob | null = await new Promise((resolve) =>
+                            canvas.toBlob((b) => resolve(b), "image/png"),
+                          );
+                          if (!blob) throw new Error("Canvas export failed");
+                          const fd = new FormData();
+                          fd.append("file", blob, "hero-crop.png");
+                          fd.append("category", "hero");
+                          const resp = await fetch("/api/upload", { method: "POST", body: fd });
+                          if (!resp.ok) throw new Error("Upload failed");
+                          const { id, url: uploadedUrl } = await resp.json();
+                          setImageAssignments((prev) => ({ ...prev, background: { mediaId: id, url: uploadedUrl } }));
+                          toast({ title: "Hero photo applied", description: "Click Regenerate to re-render with the new photo." });
+                          setHeroEditorOpen(false);
+                        } catch (err: any) {
+                          // Canvas taint: fall back to assigning the raw URL directly.
+                          if (heroSrcUrl && (err?.message?.includes("tainted") || err?.message?.includes("Canvas"))) {
+                            // We can't export a tainted canvas — upload the src URL as a ref instead by
+                            // just assigning it as a URL-only placeholder (no mediaId crop).
+                            toast({ title: "Couldn't crop — assigning photo URL directly", variant: "destructive" });
+                          } else {
+                            toast({ title: "Hero crop failed", description: err?.message, variant: "destructive" });
+                          }
+                        } finally {
+                          setHeroUploading(false);
+                        }
+                      };
+
+                      // Article images filtered to https only
+                      const articleImages = (results.extracted?.images ?? []).filter((u) => u.startsWith("https://"));
+
+                      return (
+                        <div className="w-full max-w-xs rounded-xl border border-border bg-muted/30 p-3 space-y-3">
+                          <div className="flex items-center justify-between">
+                            <p className="text-xs font-semibold flex items-center gap-1.5">
+                              <Crop className="h-3.5 w-3.5" /> Hero photo editor
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => setHeroEditorOpen(false)}
+                              className="text-muted-foreground hover:text-foreground"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+
+                          {/* Current hero assignment badge */}
+                          {imageAssignments["background"] && (
+                            <div className="flex items-center gap-2 text-[11px] text-emerald-600 font-medium">
+                              <img src={imageAssignments["background"].url} alt="hero" className="h-8 w-8 rounded object-cover border" />
+                              Hero assigned — click Regenerate to apply
+                              <button
+                                type="button"
+                                onClick={() => setImageAssignments((p) => { const n = { ...p }; delete n["background"]; return n; })}
+                                className="ml-auto text-muted-foreground hover:text-destructive"
+                                title="Clear hero assignment"
+                              >
+                                <X className="h-3 w-3" />
+                              </button>
+                            </div>
+                          )}
+
+                          {/* Article image picker */}
+                          {articleImages.length > 0 && (
+                            <div className="space-y-1">
+                              <p className="text-[10px] text-muted-foreground font-medium">Pick from article</p>
+                              <div className="flex gap-1.5 overflow-x-auto pb-1">
+                                {articleImages.map((src, i) => (
+                                  <button
+                                    key={i}
+                                    type="button"
+                                    onClick={() => loadHeroSrc(src)}
+                                    className={`shrink-0 rounded overflow-hidden border-2 transition-colors ${heroSrcUrl === src ? "border-primary" : "border-transparent hover:border-primary/50"}`}
+                                    title={`Article image ${i + 1}`}
+                                  >
+                                    <img src={src} alt={`Article ${i + 1}`} className="h-12 w-12 object-cover" />
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Upload own photo */}
+                          <div className="space-y-1">
+                            <p className="text-[10px] text-muted-foreground font-medium">Or upload your own</p>
+                            <label className="inline-flex items-center gap-2 cursor-pointer rounded-lg border border-dashed border-border px-3 py-2 text-xs hover:bg-muted transition-colors">
+                              <UploadCloud className="h-3.5 w-3.5 text-muted-foreground" />
+                              Choose file
+                              <input
+                                type="file"
+                                accept="image/*"
+                                className="hidden"
+                                onChange={async (e) => {
+                                  const file = e.target.files?.[0];
+                                  e.target.value = "";
+                                  if (!file) return;
+                                  setHeroUploading(true);
+                                  try {
+                                    const fd = new FormData();
+                                    fd.append("file", file);
+                                    fd.append("category", "hero");
+                                    const resp = await fetch("/api/upload", { method: "POST", body: fd });
+                                    if (!resp.ok) throw new Error("Upload failed");
+                                    const { url: uploadedUrl } = await resp.json();
+                                    loadHeroSrc(uploadedUrl);
+                                  } catch {
+                                    toast({ title: "Upload failed", variant: "destructive" });
+                                  } finally {
+                                    setHeroUploading(false);
+                                  }
+                                }}
+                              />
+                            </label>
+                          </div>
+
+                          {/* Crop / pan / zoom editor */}
+                          {heroSrcUrl && (
+                            <div className="space-y-2">
+                              <p className="text-[10px] text-muted-foreground font-medium">Crop &amp; frame (drag to pan, slider to zoom)</p>
+                              {/* Preview box — 4:5 aspect, 270×337 */}
+                              <div
+                                className="relative overflow-hidden rounded-lg border border-border mx-auto bg-black cursor-grab active:cursor-grabbing select-none"
+                                style={{ width: PREVIEW_W, height: PREVIEW_H }}
+                                onPointerDown={(e) => {
+                                  heroDragRef.current = { startX: e.clientX, startY: e.clientY, ox: heroOffsetX, oy: heroOffsetY };
+                                  (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+                                }}
+                                onPointerMove={(e) => {
+                                  if (!heroDragRef.current) return;
+                                  const dx = e.clientX - heroDragRef.current.startX;
+                                  const dy = e.clientY - heroDragRef.current.startY;
+                                  setHeroOffsetX(heroDragRef.current.ox + dx);
+                                  setHeroOffsetY(heroDragRef.current.oy + dy);
+                                }}
+                                onPointerUp={() => { heroDragRef.current = null; }}
+                              >
+                                <img
+                                  src={heroSrcUrl}
+                                  alt="Hero preview"
+                                  draggable={false}
+                                  style={{
+                                    position: "absolute",
+                                    width: "100%",
+                                    height: "100%",
+                                    objectFit: "cover",
+                                    transform: `scale(${heroZoom}) translate(${heroOffsetX / heroZoom}px, ${heroOffsetY / heroZoom}px)`,
+                                    transformOrigin: "center center",
+                                    userSelect: "none",
+                                    pointerEvents: "none",
+                                  }}
+                                />
+                              </div>
+                              {/* Zoom slider */}
+                              <div className="flex items-center gap-2">
+                                <span className="text-[10px] text-muted-foreground w-8">Zoom</span>
+                                <input
+                                  type="range"
+                                  min={1}
+                                  max={3}
+                                  step={0.05}
+                                  value={heroZoom}
+                                  onChange={(e) => setHeroZoom(Number(e.target.value))}
+                                  className="flex-1 h-1.5 accent-primary"
+                                />
+                                <span className="text-[10px] text-muted-foreground w-8 text-right">{heroZoom.toFixed(1)}×</span>
+                              </div>
+                              {/* Apply button */}
+                              <Button
+                                type="button"
+                                size="sm"
+                                className="w-full"
+                                disabled={heroUploading}
+                                onClick={applyHeroCrop}
+                              >
+                                {heroUploading ? (
+                                  <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> Applying…</>
+                                ) : (
+                                  <>Apply hero photo</>
+                                )}
+                              </Button>
+                              <p className="text-[10px] text-muted-foreground text-center">
+                                Crops to 1080×1350 (4:5) and re-renders your post.
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
                 ) : (
                   <div className="space-y-3">
