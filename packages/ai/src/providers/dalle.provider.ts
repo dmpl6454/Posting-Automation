@@ -110,6 +110,7 @@ export async function generateImageDallE(
     // `response_format` param (400 "Unknown parameter"). Do not re-add it.
   };
 
+  // 120 s timeout — gpt-image-1 is slow but must not hang forever.
   const response = await fetch(OPENAI_IMAGES_URL, {
     method: "POST",
     headers: {
@@ -117,6 +118,7 @@ export async function generateImageDallE(
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(120_000),
   });
 
   if (!response.ok) {

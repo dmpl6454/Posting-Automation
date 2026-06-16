@@ -34,7 +34,11 @@ interface NanoBananaResult {
 async function fetchWithRetry(url: string, init: RequestInit, label = "generate"): Promise<any> {
   const MAX_RETRIES = 3;
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    const response = await fetch(url, init);
+    // 120 s per-attempt timeout — prevents the perpetual-spinner bug where a
+    // hung upstream socket never resolves. AbortError is treated as a failure
+    // and retried like any other error; after MAX_RETRIES the caller's .catch()
+    // falls back to the template/branded renderer instead of hanging forever.
+    const response = await fetch(url, { ...init, signal: AbortSignal.timeout(120_000) });
 
     if (response.ok) {
       return response.json();
