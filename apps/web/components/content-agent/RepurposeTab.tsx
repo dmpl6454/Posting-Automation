@@ -624,21 +624,6 @@ export function RepurposeTab() {
   const [regenTarget, setRegenTarget] = useState<"static" | number | null>(null);
   const regenerateImage = trpc.repurpose.regenerateImage.useMutation();
 
-  // Round 17 — honest cancel of a running generation. Sets the cancel flag (so the
-  // mutation's late onSuccess/onError bail), closes the SSE, clears the safety
-  // timeouts, drops the video spinner, marks any running activity-log steps as
-  // errored, and resets the mutations so isLoading flips back to false.
-  const cancelGeneration = useCallback(() => {
-    cancelledRef.current = true;
-    closeVideoStream();
-    if (syncTimeoutRef.current) { clearTimeout(syncTimeoutRef.current); syncTimeoutRef.current = null; }
-    setVideoGenerating(false);
-    setProgressSteps((prev) => finalizeRunningSteps(prev, "error"));
-    repurposeFromUrl.reset();
-    repurpose.reset();
-    toast({ title: "Generation cancelled" });
-  }, [closeVideoStream, repurposeFromUrl, repurpose, toast]);
-
   // Resolve the channel name/handle/avatar the same way handleGenerate does, so
   // the regenerated creative keeps the same branding as the original.
   const resolveBranding = () => {
@@ -1978,19 +1963,6 @@ export function RepurposeTab() {
                 : `Repurpose as ${FORMAT_OPTIONS.find((f) => f.id === format)?.label || "Static Post"}`}
           </Button>
 
-          {/* Round 17 — honest cancel: only while a generation is running. */}
-          {isLoading && (
-            <Button
-              type="button"
-              variant="outline"
-              size="lg"
-              className="mt-2 w-full gap-2"
-              onClick={cancelGeneration}
-            >
-              <X className="h-4 w-4" />
-              Cancel
-            </Button>
-          )}
         </CardContent>
       </Card>
 
