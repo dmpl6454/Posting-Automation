@@ -1055,3 +1055,115 @@ describe("generateLayoutExtractCard — styleOverride forwarded to renderLayoutC
     expect(content.styleOverride).toBeUndefined();
   });
 });
+
+// ── Round 19 FIX 1: deterministicOnly mode ─────────────────────────────────────
+//
+// When deterministicOnly:true, generateReferenceStyledCard runs ONLY the
+// layout-extract block engine. On success → engine "layout-extract". On null →
+// engine "template" IMMEDIATELY — NEVER the AI-generation rungs (gemini-composite /
+// gemini-img2img / openai-described). This is the reliability guarantee: same input
+// → same output, fast, never a fabricated AI face.
+describe("generateReferenceStyledCard — deterministicOnly mode (Round 19)", () => {
+  async function load() {
+    const mod = await import("../tools/reference-card-generator");
+    return mod.generateReferenceStyledCard;
+  }
+
+  it("deterministicOnly + layout-extract succeeds → engine=layout-extract, NO AI generation", async () => {
+    const fn = await load();
+    const deps = makeDeps(); // extractCardLayout + renderLayoutCard succeed by default
+    const result = await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE, deterministicOnly: true }, deps);
+
+    expect(result.engine).toBe("layout-extract");
+    expect(result.imageBase64).toBe(LAYOUT_EXTRACT_OUTPUT.imageBase64);
+    // NONE of the AI-generation rungs were touched.
+    expect(deps.generateImage).not.toHaveBeenCalled();
+    expect(deps.generateImageDallE).not.toHaveBeenCalled();
+    expect(deps.detectSentinelRegion).not.toHaveBeenCalled();
+    expect(deps.compositeHeroIntoRegion).not.toHaveBeenCalled();
+  });
+
+  it("deterministicOnly + layout-extract returns null → engine=template, NOT openai-described, NO AI generation", async () => {
+    const fn = await load();
+    // Force layout-extract to bail entirely: no vision (fallback layout) AND the
+    // render returns empty even after the single retry.
+    const deps = makeDeps({
+      extractCardLayout: vi.fn().mockResolvedValue(null),
+      renderLayoutCard: vi.fn().mockResolvedValue({ imageBase64: "", mimeType: "" }),
+    });
+    const result = await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE, deterministicOnly: true }, deps);
+
+    // Template signal — the caller falls back to its deterministic 4-template render.
+    expect(result.engine).toBe("template");
+    expect(result.imageBase64).toBe("");
+    // Critically: it did NOT fall through to the fabricated-AI-image rungs.
+    expect(result.engine).not.toBe("openai-described");
+    expect(deps.generateImage).not.toHaveBeenCalled();
+    expect(deps.generateImageDallE).not.toHaveBeenCalled();
+  });
+
+  it("deterministicOnly renders PHOTOLESS (no hero) via styleOverride → engine=layout-extract", async () => {
+    const fn = await load();
+    const renderMock = vi.fn().mockResolvedValue(LAYOUT_EXTRACT_OUTPUT);
+    const deps = makeDeps({ renderLayoutCard: renderMock });
+    // No heroImage; styleOverride present (mimicry intent) → layout-extract renders a
+    // clean photoless branded card, never a fake AI face.
+    const result = await fn(
+      { ...BASE_ARGS, styleOverride: "premium_editorial", deterministicOnly: true },
+      deps,
+    );
+
+    expect(result.engine).toBe("layout-extract");
+    expect(deps.generateImage).not.toHaveBeenCalled();
+    // No heroImageUrl in the content (photoless path).
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    const content = renderMock.mock.calls[0]![1] as Record<string, unknown>;
+    expect(content.heroImageUrl).toBeUndefined();
+  });
+
+  it("generateLayoutExtractCard retries the render once on first-attempt empty (FIX 1 hardening)", async () => {
+    const mod = await import("../tools/reference-card-generator");
+    const fn = mod.generateLayoutExtractCard;
+    // First render returns empty (transient Puppeteer hiccup), second succeeds.
+    const renderMock = vi
+      .fn()
+      .mockResolvedValueOnce({ imageBase64: "", mimeType: "" })
+      .mockResolvedValueOnce(LAYOUT_EXTRACT_OUTPUT);
+    const deps = makeDeps({ renderLayoutCard: renderMock });
+
+    const result = await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE }, deps);
+
+    expect(renderMock).toHaveBeenCalledTimes(2);
+    expect(result).not.toBeNull();
+    expect(result!.engine).toBe("layout-extract");
+    expect(result!.imageBase64).toBe(LAYOUT_EXTRACT_OUTPUT.imageBase64);
+  });
+
+  it("generateLayoutExtractCard retries the render once on first-attempt throw (FIX 1 hardening)", async () => {
+    const mod = await import("../tools/reference-card-generator");
+    const fn = mod.generateLayoutExtractCard;
+    const renderMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("puppeteer launch race"))
+      .mockResolvedValueOnce(LAYOUT_EXTRACT_OUTPUT);
+    const deps = makeDeps({ renderLayoutCard: renderMock });
+
+    const result = await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE }, deps);
+
+    expect(renderMock).toHaveBeenCalledTimes(2);
+    expect(result).not.toBeNull();
+    expect(result!.engine).toBe("layout-extract");
+  });
+
+  it("generateLayoutExtractCard returns null when BOTH render attempts fail (final outcome unchanged)", async () => {
+    const mod = await import("../tools/reference-card-generator");
+    const fn = mod.generateLayoutExtractCard;
+    const renderMock = vi.fn().mockResolvedValue({ imageBase64: "", mimeType: "" });
+    const deps = makeDeps({ renderLayoutCard: renderMock });
+
+    const result = await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE }, deps);
+
+    expect(renderMock).toHaveBeenCalledTimes(2);
+    expect(result).toBeNull();
+  });
+});
