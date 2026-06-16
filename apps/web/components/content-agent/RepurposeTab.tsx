@@ -586,7 +586,7 @@ export function RepurposeTab() {
     if (!results) return;
     // Headline: prefer the user's inline edit (Feature 3) over the server's
     // rendered value so "edit headline → Regenerate" re-renders with the new text.
-    const headline = (editedHeadline.trim() || results.renderedHeadline ?? results.extracted?.title ?? "").trim();
+    const headline = (editedHeadline.trim() || (results.renderedHeadline ?? results.extracted?.title ?? "")).trim();
     if (!headline) {
       toast({ title: "Can't regenerate", description: "No headline found for this image.", variant: "destructive" });
       return;
