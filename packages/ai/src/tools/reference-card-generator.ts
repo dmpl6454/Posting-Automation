@@ -813,32 +813,40 @@ export async function generateReferenceStyledCard(
 ): Promise<GenerateReferenceStyledCardResult> {
   const { referenceImage, heroImage, logoImage, textMode } = args;
 
-  // ── Rung 0: Gemini composite (hero only) ────────────────────────────────────
-  // The best + safest result for the celebrity-news case: recreate the reference
-  // layout via Gemini with a magenta sentinel photo region (no person → no refusal)
-  // then paste the REAL hero into it. Skipped entirely with no hero. On any failure
-  // (refusal / empty / no sentinel detected) it returns null → fall through.
-  if (heroImage) {
-    const composite = await generateCompositeStyledCard(args, deps);
-    if (composite) return composite;
-    console.warn("[reference-card-generator] Rung-0 (Gemini composite) unavailable — advancing to layout-extract.");
-  }
-
-  // ── Rung 0b: Layout-extract — the RELIABLE deterministic path ──────────────
-  // OpenAI vision reads the reference's LAYOUT (tolerates celebrity photos in the
-  // ref — it reads composition, not identity), then the block engine renders it
-  // deterministically with the REAL hero photo. No Gemini, no refusal, 100% reliable.
+  // ── Rung 0: Layout-extract — the PRIMARY, RELIABLE, DETERMINISTIC path ───────
+  // (Round 18) Promoted to FIRST for EVERY reference. OpenAI vision reads the
+  // reference's LAYOUT (tolerates celebrity photos in the ref — it reads composition,
+  // not identity), then the block engine renders it deterministically with the REAL
+  // hero photo, honoring the reference's detected colors/scrim/alignment (hasReference)
+  // and the user's controls (font/color/align/logo size). No Gemini, no refusal, no
+  // fabricated faces, no broken magenta-sentinel cards — consistent + controllable for
+  // ALL references. This is the engine that already produced the good Moviefied output.
   //
-  // FIX 1(b) (Round 16): this rung now ALSO runs when there is NO hero photo, as long
-  // as there's mimicry intent (a reference image or a styleOverride). With no hero it
-  // renders a clean PHOTOLESS branded card (branded-gradient background) — NEVER the
-  // fake-AI-face rungs below. This is the key fix for NDTV-class URLs whose hero photo
-  // hard-403s server-side: we render the real layout + branding and the UI prompts the
-  // user to add their own photo, instead of fabricating a face.
+  // WHY it leads now (Round 18): the Gemini rungs below are a "rung roulette" — they
+  // fire only for refs Gemini doesn't refuse, and the composite/sentinel path produced
+  // broken output (mispasted photo + raw magenta blocks) for non-celebrity refs like
+  // MAM. Making layout-extract primary removes that inconsistency. The Gemini rungs
+  // remain ONLY as fallbacks if layout-extract itself can't render (rare — the
+  // synthesized fallbackLayout makes it almost always succeed).
+  //
+  // Also runs when there is NO hero photo (mimicry intent via a reference or
+  // styleOverride): it renders a clean PHOTOLESS branded card — NEVER the fake-AI-face
+  // rungs below — which is the fix for NDTV-class URLs whose hero hard-403s server-side.
   {
     const layoutCard = await generateLayoutExtractCard(args, deps);
     if (layoutCard) return layoutCard;
-    console.warn("[reference-card-generator] Layout-extract rung unavailable — advancing to rung 1.");
+    console.warn("[reference-card-generator] Layout-extract rung unavailable — advancing to Gemini fallbacks.");
+  }
+
+  // ── Rung 0b (FALLBACK): Gemini composite (hero only) ─────────────────────────
+  // Only reached if layout-extract failed (very rare). Recreates the reference layout
+  // via Gemini with a magenta sentinel photo region then pastes the REAL hero in. Kept
+  // as a fallback; no longer the primary because its sentinel detection is fragile on
+  // arbitrary reference layouts.
+  if (heroImage) {
+    const composite = await generateCompositeStyledCard(args, deps);
+    if (composite) return composite;
+    console.warn("[reference-card-generator] Gemini-composite fallback unavailable — advancing to rung 1.");
   }
 
   // Build the ordered referenceImages array: [ref, hero?, logo?] (compact — filter undefined).
