@@ -522,7 +522,11 @@ describe("cardLayoutToSpec — hasReference suppresses the styleOverride stomp (
     headline: { variant: "box", align: "center" },
   };
 
-  it("hasReference:true + styleOverride premium_editorial → KEEPS the detected gradient + box (no stomp)", () => {
+  it("Round 20: hasReference:true + premium_editorial → picker treatment STILL applies (photo/brand/plain)", () => {
+    // Round 20 reversed R17 here: the style PICKER owns the TREATMENT (variant +
+    // scrim + bg mode) even with a reference, so premium_editorial reliably produces
+    // the Moviefied look (gradient + plain white headline, no white box). The
+    // reference still drives accent/logo/alignment/brandLabel (asserted elsewhere).
     const spec = cardLayoutToSpec(GRADIENT_BOX, {
       headline: "Big Headline",
       channelName: "Brand",
@@ -531,10 +535,9 @@ describe("cardLayoutToSpec — hasReference suppresses the styleOverride stomp (
     });
     const bg = spec.blocks.find((b) => b.kind === "background") as any;
     const cap = spec.blocks.find((b) => b.kind === "captionStack") as any;
-    // premium_editorial would normally force photo/brand/plain — but hasReference wins.
-    expect(bg.props.mode).toBe("gradient");
-    expect(bg.props.scrimMode).toBe("none");
-    expect(cap.props.pills[0].variant).toBe("box");
+    expect(bg.props.mode).toBe("photo");
+    expect(bg.props.scrimMode).toBe("brand");
+    expect(cap.props.pills[0].variant).toBe("plain");
   });
 
   it("hasReference:false + styleOverride premium_editorial → STILL forces photo/brand/plain (regression guard)", () => {
