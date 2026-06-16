@@ -235,7 +235,7 @@ export function RepurposeTab() {
     usedRealPhoto?: boolean;
     // Round 10: which mimicry rung produced the static/cover image (honest chip).
     // null when mimicry was OFF or fell through to the 4-template render.
-    mimicryEngine?: "gemini-img2img" | "openai-described" | "gemini-composite" | null;
+    mimicryEngine?: "gemini-img2img" | "openai-described" | "gemini-composite" | "layout-extract" | null;
   } | null>(null);
   const [copiedPlatform, setCopiedPlatform] = useState<string | null>(null);
 
@@ -1781,6 +1781,11 @@ export function RepurposeTab() {
                 {results.mimicryEngine === "gemini-img2img" && (
                   <p className="text-[11px] font-medium text-emerald-600">
                     ✓ Recreated from your reference (Google Gemini)
+                  </p>
+                )}
+                {results.mimicryEngine === "layout-extract" && (
+                  <p className="text-[11px] font-medium text-emerald-600">
+                    ✓ Recreated your reference&apos;s layout with your real photo
                   </p>
                 )}
                 {results.mimicryEngine === "openai-described" && (
