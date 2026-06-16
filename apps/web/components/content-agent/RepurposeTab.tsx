@@ -216,6 +216,11 @@ export function RepurposeTab() {
   // results arrive; Regenerate prefers this over the server's rendered value.
   const [editedHeadline, setEditedHeadline] = useState<string>("");
 
+  // Round 14 — Headline font + text-color pickers.
+  // Empty string = use the reference-detected value (server default).
+  const [headlineFont, setHeadlineFont] = useState<"inter" | "serif_display" | "condensed" | "">("");
+  const [headlineColor, setHeadlineColor] = useState<string>("");
+
   // FIX C — Hero photo editor state.
   // Whether the hero editor panel is open (only shown for the static result card).
   const [heroEditorOpen, setHeroEditorOpen] = useState(false);
@@ -619,6 +624,8 @@ export function RepurposeTab() {
         bgImageUrl: bgImageUrl || undefined,
         bgContext: bgContext || undefined,
         brandName: computeActiveBrandName(),
+        headlineFont: headlineFont || undefined,
+        headlineColor: headlineColor || undefined,
       });
       // Swap the displayed image (and its Media id for publish) in `results`.
       setResults((prev) => {
@@ -758,6 +765,8 @@ export function RepurposeTab() {
         voiceOver: (format === "reel" || format === "ai_video") ? voiceOver : false,
         voiceType: voiceType as any,
         bgMusic: (format === "reel" || format === "ai_video") ? bgMusic : false,
+        headlineFont: headlineFont || undefined,
+        headlineColor: headlineColor || undefined,
       });
     } else {
       if (!originalContent || selectedPlatforms.length === 0) return;
@@ -1998,7 +2007,66 @@ export function RepurposeTab() {
                         placeholder="Edit headline before regenerating…"
                         className="text-sm"
                       />
-                      <p className="text-[10px] text-muted-foreground">Edit the headline, then click Regenerate to re-render.</p>
+                      <p className="text-[10px] text-muted-foreground">Edit headline, pick font &amp; color, then click Regenerate to re-render.</p>
+                    </div>
+
+                    {/* Round 14 — Headline font picker */}
+                    <div className="w-full max-w-xs space-y-1">
+                      <Label className="text-xs text-muted-foreground">Headline font</Label>
+                      <div className="flex gap-1">
+                        {([
+                          { id: "inter", label: "Modern" },
+                          { id: "serif_display", label: "Elegant serif" },
+                          { id: "condensed", label: "Bold condensed" },
+                        ] as const).map((f) => (
+                          <button
+                            key={f.id}
+                            type="button"
+                            onClick={() => setHeadlineFont(headlineFont === f.id ? "" : f.id)}
+                            className={`flex-1 rounded-lg border px-2 py-2 text-xs font-medium transition-colors ${headlineFont === f.id ? "border-primary bg-primary/10" : "border-border"}`}
+                          >
+                            {f.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Round 14 — Headline text-color picker */}
+                    <div className="w-full max-w-xs space-y-1">
+                      <Label className="text-xs text-muted-foreground">Text color</Label>
+                      <div className="flex items-center gap-2">
+                        {/* Quick swatches */}
+                        <button
+                          type="button"
+                          title="White"
+                          onClick={() => setHeadlineColor("#ffffff")}
+                          className={`h-7 w-7 rounded border-2 bg-white transition-colors ${headlineColor === "#ffffff" ? "border-primary" : "border-border"}`}
+                        />
+                        <button
+                          type="button"
+                          title="Dark"
+                          onClick={() => setHeadlineColor("#0f1419")}
+                          className={`h-7 w-7 rounded border-2 bg-[#0f1419] transition-colors ${headlineColor === "#0f1419" ? "border-primary" : "border-border"}`}
+                        />
+                        {/* Native color picker */}
+                        <input
+                          type="color"
+                          value={headlineColor || "#ffffff"}
+                          onChange={(e) => setHeadlineColor(e.target.value)}
+                          className="h-7 w-7 cursor-pointer rounded border border-border bg-background p-0"
+                          title="Custom text color"
+                        />
+                        {/* Auto/reset */}
+                        {headlineColor && (
+                          <button
+                            type="button"
+                            onClick={() => setHeadlineColor("")}
+                            className="rounded border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-muted transition-colors"
+                          >
+                            Auto
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     <div className="flex items-center gap-2 flex-wrap justify-center">

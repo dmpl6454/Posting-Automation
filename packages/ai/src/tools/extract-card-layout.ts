@@ -171,12 +171,23 @@ export interface CardContent {
   heroImageUrl?: string;
   heroImageUrls?: string[];
   channelName: string;
-  /** Brand logo image url (the user's). Absent → a monogram from channelName. */
+  /** Brand logo image url (the user's). Absent → no logo block rendered (FIX 1). */
   logoUrl?: string;
   /** Brand accent (user's explicit color wins over the reference's detected accent). */
   brandColor?: string;
   /** Optional body for a carousel body slide (unused for the static cover). */
   body?: string;
+  /**
+   * When set, overrides the headline pill textColor AND the brand label color.
+   * Must be a valid hex color (safeColor-gated — rejects non-hex → falls back to
+   * the theme default, NOT the accent). Allows the user's font-color picker to win.
+   */
+  headlineColor?: string;
+  /**
+   * When set, overrides the font family from the reference's detected typeface.
+   * The explicit pick wins; without it the reference's detected font is used.
+   */
+  fontOverride?: "inter" | "serif_display" | "condensed";
   /**
    * When set, the user's style PICKER overrides the vision-detected headline
    * treatment and background mode. The reference still supplies eyebrow/brandLabel,
@@ -228,15 +239,16 @@ export function cardLayoutToSpec(layout: CardLayout, content: CardContent): Card
     }
   }
 
+  // FIX 3: fontOverride wins over the reference's detected font when the user
+  // explicitly picks one; otherwise the reference's detected typeface is used.
+  const effectiveFontFamily = safeFontFamily(content.fontOverride ?? layout.fontFamily);
+
   const controls: StyleControls = {
     theme: layout.theme,
     brandColor,
     highlightColor: brandColor,
     bgOpacity: 100,
-    // Font comes from the reference's detected typeface — the picker overrides
-    // layout treatment (headline variant / bg mode) but NOT the font, which is a
-    // reference-fidelity property. safeFontFamily defaults to "inter" on missing.
-    fontFamily: safeFontFamily(layout.fontFamily),
+    fontFamily: effectiveFontFamily,
     textAlign: layout.headline.align,
     logoPosition: layout.logo.anchor,
     fontScale: 1,
@@ -257,35 +269,31 @@ export function cardLayoutToSpec(layout: CardLayout, content: CardContent): Card
     },
   });
 
-  // Logo: the user's brand logo (image) at the detected anchor; else a monogram from
-  // the channel initial. A "circle" shape wraps it in a circular brand box.
-  if (layout.logo.present) {
+  // FIX 1: render a logo block ONLY when the reference has a logo AND the user
+  // has supplied a logoUrl. When logoUrl is absent, render nothing — no monogram,
+  // no avatar circle — so the card is clean instead of showing a blank placeholder.
+  if (layout.logo.present && content.logoUrl) {
     const circleBox =
       layout.logo.shape === "circle"
         ? { box: { bg: brandColor, opacity: 100, radius: 999, pad: 14 } }
         : {};
-    if (content.logoUrl) {
-      blocks.push({
-        kind: "logo",
-        props: { logos: [{ kind: "image", src: content.logoUrl, anchor: layout.logo.anchor, size: 9, opacity: 100, ...circleBox }] },
-      });
-    } else {
-      blocks.push({
-        kind: "logo",
-        props: {
-          logos: [
-            {
-              kind: "monogram",
-              text: (content.channelName[0] ?? "N").toUpperCase(),
-              anchor: layout.logo.anchor,
-              size: 8,
-              opacity: 100,
-            },
-          ],
-        },
-      });
-    }
+    blocks.push({
+      kind: "logo",
+      props: { logos: [{ kind: "image", src: content.logoUrl, anchor: layout.logo.anchor, size: 9, opacity: 100, ...circleBox }] },
+    });
   }
+
+  // FIX 2: headline text color. When the user's picker supplies headlineColor,
+  // validate it directly (same hex regex as safeColor) — only a valid hex passes.
+  // Falls back to the theme default when absent or invalid (NOT to the accent, so
+  // a bad value like "red;}" never corrupts the card). The brand label (small
+  // eyebrow) inherits the same color so the two typographic elements are cohesive.
+  const HEX_RE = /^#[0-9a-fA-F]{3,8}$/;
+  const themeTextDefault = layout.theme === "dark" ? "#ffffff" : "#0f1419";
+  const resolvedHeadlineColor =
+    content.headlineColor && HEX_RE.test(content.headlineColor)
+      ? content.headlineColor
+      : themeTextDefault;
 
   // Headline (+ optional brand wordmark above it). Text + highlight markup come from
   // the repurpose flow. The variant is the picker-effective value (overrides detected
@@ -299,7 +307,7 @@ export function cardLayoutToSpec(layout: CardLayout, content: CardContent): Card
           text: content.headline,
           variant: effectiveHeadlineVariant,
           align: layout.headline.align,
-          textColor: layout.theme === "dark" ? "#ffffff" : "#0f1419",
+          textColor: resolvedHeadlineColor,
         },
       ],
     },

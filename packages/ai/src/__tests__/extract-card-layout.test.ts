@@ -107,11 +107,11 @@ describe("cardLayoutToSpec (layout skeleton + our content → CardSpec)", () => 
     expect(cap.props.pills[0].variant).toBe("plain");
   });
 
-  it("falls back to a monogram from the channel initial when no logoUrl", () => {
+  it("renders NO logo block when logo.present=true but no logoUrl (FIX 1: no monogram placeholder)", () => {
+    // Prior behaviour rendered a monogram circle — user reported it as a "blank profile-picture".
+    // New behaviour: zero logo blocks → clean card.
     const spec = cardLayoutToSpec(MOVIEFIED, { headline: "X", channelName: "newsdesk" });
-    const logo = spec.blocks.find((b) => b.kind === "logo") as any;
-    expect(logo.props.logos[0].kind).toBe("monogram");
-    expect(logo.props.logos[0].text).toBe("N");
+    expect(spec.blocks.find((b) => b.kind === "logo")).toBeUndefined();
   });
 
   it("omits the logo block when the reference has no logo", () => {
@@ -211,19 +211,26 @@ describe("cardLayoutToSpec — styleOverride", () => {
     expect(bg.props.scrimMode).toBe("none");
   });
 
-  it("brandLabel + logo anchor are preserved from the reference regardless of styleOverride", () => {
-    const spec = cardLayoutToSpec(MOVIEFIED, {
+  it("brandLabel is preserved from the reference regardless of styleOverride; logo only renders with a logoUrl", () => {
+    // Without logoUrl: brandLabel still rendered, no logo block (FIX 1).
+    const specNoLogo = cardLayoutToSpec(MOVIEFIED, {
       headline: "X",
       channelName: "Moviefied",
       styleOverride: "hook_bars",
     });
-    const cap = spec.blocks.find((b) => b.kind === "captionStack") as any;
-    const logo = spec.blocks.find((b) => b.kind === "logo") as any;
+    const capNoLogo = specNoLogo.blocks.find((b) => b.kind === "captionStack") as any;
+    expect(capNoLogo.props.label?.text).toBe("Moviefied");
+    expect(specNoLogo.blocks.find((b) => b.kind === "logo")).toBeUndefined();
 
-    // brandLabel still comes from layout.brandLabel === true
-    expect(cap.props.label?.text).toBe("Moviefied");
-    // logo anchor still comes from layout.logo.anchor === "tr"
-    expect(logo.props.logos[0].anchor).toBe("tr");
+    // With logoUrl: logo block appears with the ref's anchor.
+    const specWithLogo = cardLayoutToSpec(MOVIEFIED, {
+      headline: "X",
+      channelName: "Moviefied",
+      styleOverride: "hook_bars",
+      logoUrl: "https://cdn.example.com/logo.png",
+    });
+    const logo = specWithLogo.blocks.find((b) => b.kind === "logo") as any;
+    expect(logo.props.logos[0].anchor).toBe("tr"); // from layout.logo.anchor
   });
 });
 
@@ -368,5 +375,120 @@ describe("cardLayoutToSpec — color precedence (Round 13 regression guards)", (
     // safeColor rejects non-hex → falls back to DEFAULT_ACCENT (#e11d48)
     expect(spec.controls.brandColor).toMatch(/^#[0-9a-fA-F]{3,8}$/);
     expect(spec.controls.brandColor).not.toContain("<");
+  });
+});
+
+// ── Round 14: no-logo, headlineColor, fontOverride ──────────────────────────
+
+describe("cardLayoutToSpec — no-logo (Round 14 FIX 1)", () => {
+  it("logo.present=true BUT no content.logoUrl → zero logo blocks (no monogram)", () => {
+    // The reference wants a logo but the user hasn't uploaded one.
+    // FIX 1: render nothing — clean card, no blank placeholder circle.
+    const spec = cardLayoutToSpec(MOVIEFIED, { headline: "X", channelName: "MyBrand" });
+    expect(spec.blocks.filter((b) => b.kind === "logo").length).toBe(0);
+  });
+
+  it("logo.present=true WITH content.logoUrl → exactly one image logo block", () => {
+    const spec = cardLayoutToSpec(MOVIEFIED, {
+      headline: "X",
+      channelName: "MyBrand",
+      logoUrl: "https://cdn.example.com/logo.png",
+    });
+    const logos = spec.blocks.filter((b) => b.kind === "logo");
+    expect(logos.length).toBe(1);
+    expect((logos[0] as any).props.logos[0].kind).toBe("image");
+    expect((logos[0] as any).props.logos[0].src).toBe("https://cdn.example.com/logo.png");
+  });
+
+  it("logo.present=false → zero logo blocks (reference has no logo)", () => {
+    const noLogo: CardLayout = { ...MOVIEFIED, logo: { present: false, anchor: "tr", shape: "circle" } };
+    const spec = cardLayoutToSpec(noLogo, { headline: "X", channelName: "C", logoUrl: "https://cdn.example.com/logo.png" });
+    expect(spec.blocks.filter((b) => b.kind === "logo").length).toBe(0);
+  });
+});
+
+describe("cardLayoutToSpec — headlineColor (Round 14 FIX 2)", () => {
+  it("valid headlineColor is used as the pill textColor", () => {
+    const spec = cardLayoutToSpec(MOVIEFIED, {
+      headline: "White on Orange",
+      channelName: "C",
+      headlineColor: "#ffffff",
+    });
+    const cap = spec.blocks.find((b) => b.kind === "captionStack") as any;
+    expect(cap.props.pills[0].textColor).toBe("#ffffff");
+  });
+
+  it("without headlineColor → pill textColor is the theme default (dark theme → white)", () => {
+    const spec = cardLayoutToSpec(MOVIEFIED, { headline: "X", channelName: "C" });
+    const cap = spec.blocks.find((b) => b.kind === "captionStack") as any;
+    expect(cap.props.pills[0].textColor).toBe("#ffffff"); // dark theme default
+  });
+
+  it("without headlineColor on a light theme → pill textColor is the light default", () => {
+    const lightLayout: CardLayout = { ...MOVIEFIED, theme: "light" };
+    const spec = cardLayoutToSpec(lightLayout, { headline: "X", channelName: "C" });
+    const cap = spec.blocks.find((b) => b.kind === "captionStack") as any;
+    expect(cap.props.pills[0].textColor).toBe("#0f1419"); // light theme default
+  });
+
+  it("invalid headlineColor ('red;}') → falls back to theme default, NOT accent", () => {
+    const spec = cardLayoutToSpec(MOVIEFIED, {
+      headline: "X",
+      channelName: "C",
+      headlineColor: "red;}",
+    });
+    const cap = spec.blocks.find((b) => b.kind === "captionStack") as any;
+    // Must be the theme default (#ffffff for dark), not the accent (#ff7f50) or anything malicious
+    expect(cap.props.pills[0].textColor).toBe("#ffffff");
+    expect(cap.props.pills[0].textColor).not.toContain(";");
+    expect(cap.props.pills[0].textColor).not.toContain("}");
+  });
+
+  it("invalid headlineColor (CSS injection attempt) → falls back to theme default", () => {
+    const spec = cardLayoutToSpec(MOVIEFIED, {
+      headline: "X",
+      channelName: "C",
+      headlineColor: "#fff</style><script>alert(1)</script>",
+    });
+    const cap = spec.blocks.find((b) => b.kind === "captionStack") as any;
+    expect(cap.props.pills[0].textColor).toBe("#ffffff");
+    expect(cap.props.pills[0].textColor).not.toContain("<");
+  });
+});
+
+describe("cardLayoutToSpec — fontOverride (Round 14 FIX 3)", () => {
+  it("fontOverride 'serif_display' wins over layout.fontFamily 'inter'", () => {
+    // layout.fontFamily = "inter" (MOVIEFIED), but the user picks "serif_display"
+    const spec = cardLayoutToSpec(MOVIEFIED, {
+      headline: "X",
+      channelName: "C",
+      fontOverride: "serif_display",
+    });
+    expect(spec.controls.fontFamily).toBe("serif_display");
+  });
+
+  it("fontOverride 'condensed' wins over layout.fontFamily", () => {
+    const spec = cardLayoutToSpec(MOVIEFIED, {
+      headline: "X",
+      channelName: "C",
+      fontOverride: "condensed",
+    });
+    expect(spec.controls.fontFamily).toBe("condensed");
+  });
+
+  it("without fontOverride → controls.fontFamily comes from layout.fontFamily", () => {
+    const serifLayout: CardLayout = { ...MOVIEFIED, fontFamily: "serif_display" };
+    const spec = cardLayoutToSpec(serifLayout, { headline: "X", channelName: "C" });
+    expect(spec.controls.fontFamily).toBe("serif_display");
+  });
+
+  it("fontOverride 'inter' overrides a layout 'condensed' reference", () => {
+    const condensedLayout: CardLayout = { ...MOVIEFIED, fontFamily: "condensed" };
+    const spec = cardLayoutToSpec(condensedLayout, {
+      headline: "X",
+      channelName: "C",
+      fontOverride: "inter",
+    });
+    expect(spec.controls.fontFamily).toBe("inter");
   });
 });
