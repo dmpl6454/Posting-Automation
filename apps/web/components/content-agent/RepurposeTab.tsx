@@ -235,7 +235,7 @@ export function RepurposeTab() {
     usedRealPhoto?: boolean;
     // Round 10: which mimicry rung produced the static/cover image (honest chip).
     // null when mimicry was OFF or fell through to the 4-template render.
-    mimicryEngine?: "gemini-img2img" | "openai-described" | null;
+    mimicryEngine?: "gemini-img2img" | "openai-described" | "gemini-composite" | "layout-extract" | null;
   } | null>(null);
   const [copiedPlatform, setCopiedPlatform] = useState<string | null>(null);
 
@@ -251,6 +251,10 @@ export function RepurposeTab() {
   // up via this flag (the mutation has long since resolved, so isLoading is false).
   const [videoGenerating, setVideoGenerating] = useState(false);
   const videoTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Wall-clock guard for the synchronous static/carousel path: if the server
+  // dies mid-render and the SSE never emits __finished__, this fires after 4
+  // minutes and clears the spinner rather than leaving it stuck forever.
+  const syncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Stop the SSE + clear the safety timeout in one place.
   const closeVideoStream = useCallback(() => {
@@ -399,10 +403,11 @@ export function RepurposeTab() {
     return id;
   }, []);
 
-  // Cleanup SSE + safety timeout on unmount
+  // Cleanup SSE + safety timeouts on unmount
   useEffect(() => {
     return () => {
       if (videoTimeoutRef.current) clearTimeout(videoTimeoutRef.current);
+      if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
       eventSourceRef.current?.close();
     };
   }, []);
@@ -493,6 +498,8 @@ export function RepurposeTab() {
         }, 10 * 60 * 1000);
         return;
       }
+      // Clear the static/carousel wall-clock guard — we got a normal response.
+      if (syncTimeoutRef.current) { clearTimeout(syncTimeoutRef.current); syncTimeoutRef.current = null; }
       setResults(data);
       const mediaCount = data.mediaUrls.length;
       // Be honest: if captions generated but media failed, this is NOT a clean
@@ -512,6 +519,8 @@ export function RepurposeTab() {
       }
     },
     onError: (err) => {
+      // Clear the static/carousel wall-clock guard — the mutation errored normally.
+      if (syncTimeoutRef.current) { clearTimeout(syncTimeoutRef.current); syncTimeoutRef.current = null; }
       toast({ title: "Repurpose failed", description: humanizeError(err), variant: "destructive" });
       setProgressSteps((prev) => [...prev, { step: "Request failed", status: "error" as const, detail: err.message, ts: Date.now() }]);
       eventSourceRef.current?.close();
@@ -630,6 +639,24 @@ export function RepurposeTab() {
     if (sourceMode === "url") {
       if (!url || selectedPlatforms.length === 0) return;
       const pid = startProgress();
+      // Wall-clock guard for the synchronous static/carousel path. Video formats
+      // have their own 10-min timeout (videoTimeoutRef); this covers the case
+      // where the server dies mid-render and the SSE never sends __finished__,
+      // leaving the spinner stuck indefinitely. Cleared on onSuccess / onError.
+      if (format !== "reel" && format !== "ai_video" && format !== "seedance_video") {
+        if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+        syncTimeoutRef.current = setTimeout(() => {
+          syncTimeoutRef.current = null;
+          setProgressSteps((prev) => finalizeRunningSteps(prev, "error"));
+          eventSourceRef.current?.close();
+          eventSourceRef.current = null;
+          toast({
+            title: "Generation timed out",
+            description: "The server took too long to respond — please try again.",
+            variant: "destructive",
+          });
+        }, 4 * 60 * 1000); // 4 minutes
+      }
       repurposeFromUrl.mutate({
         url,
         progressId: pid,
@@ -1072,6 +1099,17 @@ export function RepurposeTab() {
                                       if (t.logoPosition) setLogoPosition(t.logoPosition as "top-left" | "top-right");
                                       const cs = (t as any).cardSpec?.controls;
                                       if (cs?.theme) setTheme(cs.theme);
+                                      // Round 11: a saved STYLE that stored its reference image IS the
+                                      // "mimic this look" intent. Hand the reference to the mimicry engine
+                                      // (sets aestheticRefUrl so the toggle appears) and auto-arm it — this
+                                      // was the gap that made saved-style picks silently run the old
+                                      // template path. Clearing the ref / unticking still fully opts out.
+                                      const refUrl = (t as any).referenceMedia?.url as string | undefined;
+                                      if (refUrl) {
+                                        setAestheticRefUrl(refUrl);
+                                        setAestheticRefMediaId(t.referenceMediaId ?? "");
+                                        setReferenceMimicry(true);
+                                      }
                                     }}
                                     className="flex items-center gap-1.5"
                                   >
@@ -1735,9 +1773,19 @@ export function RepurposeTab() {
                   engines={results.imageEngines ?? (results.bgSource === "ai" && results.imageEngine ? [results.imageEngine] : [])}
                   label={results.format === "reel" ? "Slide images created by" : results.format === "carousel" ? "Images created by" : "Image created by"}
                 />
+                {results.mimicryEngine === "gemini-composite" && (
+                  <p className="text-[11px] font-medium text-emerald-600">
+                    ✓ Recreated from your reference with your real photo (Google Gemini)
+                  </p>
+                )}
                 {results.mimicryEngine === "gemini-img2img" && (
                   <p className="text-[11px] font-medium text-emerald-600">
                     ✓ Recreated from your reference (Google Gemini)
+                  </p>
+                )}
+                {results.mimicryEngine === "layout-extract" && (
+                  <p className="text-[11px] font-medium text-emerald-600">
+                    ✓ Recreated your reference&apos;s layout with your real photo
                   </p>
                 )}
                 {results.mimicryEngine === "openai-described" && (

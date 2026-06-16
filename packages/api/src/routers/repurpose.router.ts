@@ -1710,7 +1710,7 @@ KEYWORDS: ${(brief.keywords || []).join(", ")}`;
       let renderedImageEngine: "gemini" | "openai" | undefined;
       // Round 10: records which mimicry rung produced the static/cover image, or
       // null when mimicry was OFF or fell through to the template path.
-      let renderedMimicryEngine: "gemini-img2img" | "openai-described" | null = null;
+      let renderedMimicryEngine: "gemini-img2img" | "openai-described" | "gemini-composite" | "layout-extract" | null = null;
       // `renderedEngines` + `lastSlotImageEngine` are declared above (hoisted) so
       // the per-slot AI helper `generateAiSlotImage` can record into them.
 
@@ -1962,7 +1962,7 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
               const m = await buildMimicryCreative(headlineForCreativeFinal, { heroUrl: bgSlot.url }).catch(() => null);
               if (m && m.engine !== "template" && m.imageBase64) {
                 creative = { imageBase64: m.imageBase64, mimeType: m.mimeType };
-                renderedMimicryEngine = m.engine as "gemini-img2img" | "openai-described";
+                renderedMimicryEngine = m.engine as "gemini-img2img" | "openai-described" | "gemini-composite" | "layout-extract";
                 console.log(`[Repurpose] Mimicry succeeded (engine=${m.engine})`);
               } else {
                 console.log(`[Repurpose] Mimicry fell through to template path (engine=${m?.engine ?? "null"})`);
@@ -2542,13 +2542,13 @@ Return ONLY the JSON array, no other text.`;
                 let creativeBase64: string;
                 let creativeMime: string;
                 let creativeEngine: string | undefined;
-                let slideMimicryEngine: "gemini-img2img" | "openai-described" | null = null;
+                let slideMimicryEngine: "gemini-img2img" | "openai-described" | "gemini-composite" | "layout-extract" | null = null;
                 if (isCover && input.referenceMimicry && aestheticRefImage) {
                   const m = await buildMimicryCreative(headline, { heroUrl: slideBg }).catch(() => null);
                   if (m && m.engine !== "template" && m.imageBase64) {
                     creativeBase64 = m.imageBase64;
                     creativeMime = m.mimeType || "image/jpeg";
-                    slideMimicryEngine = m.engine as "gemini-img2img" | "openai-described";
+                    slideMimicryEngine = m.engine as "gemini-img2img" | "openai-described" | "gemini-composite" | "layout-extract";
                   } else {
                     // Mimicry fell through; render via template engine below.
                     const creative = await buildHeadlineCreative(
@@ -2957,7 +2957,7 @@ Return ONLY the JSON array, no other text.`;
       // Round 10: mimicry-first path for regenerateImage — mirrors the main flow.
       // Active when the user has referenceMimicry=true AND the aesthetic ref was
       // fetchable. Falls through to renderStaticCreative on engine: "template".
-      let regenMimicryEngine: "gemini-img2img" | "openai-described" | null = null;
+      let regenMimicryEngine: "gemini-img2img" | "openai-described" | "gemini-composite" | "layout-extract" | null = null;
       let creative: { imageBase64: string; mimeType: string; bgSource?: "ai" | "stock"; imageEngine?: "gemini" | "openai" };
       if (input.referenceMimicry && regenAestheticRef) {
         try {
@@ -3015,7 +3015,7 @@ Return ONLY the JSON array, no other text.`;
 
           if (m.engine !== "template" && m.imageBase64) {
             creative = { imageBase64: m.imageBase64, mimeType: m.mimeType || "image/jpeg" };
-            regenMimicryEngine = m.engine as "gemini-img2img" | "openai-described";
+            regenMimicryEngine = m.engine as "gemini-img2img" | "openai-described" | "gemini-composite" | "layout-extract";
           } else {
             // Fall through to template path below.
             throw new Error("mimicry engine returned template signal — falling through");

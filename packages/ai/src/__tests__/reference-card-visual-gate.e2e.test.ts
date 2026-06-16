@@ -106,6 +106,40 @@ body{width:1080px;height:1350px;background:#f4ece0;font-family:'Inter',sans-seri
   }
 }
 
+d("Round 11 COMPOSITE gate — REAL Moviefied celebrity reference + real hero photo", () => {
+  mkdirSync(OUT_DIR, { recursive: true });
+  // The user's ACTUAL reference (contains a real celebrity → Gemini refuses full
+  // img2img). The composite path passes ONLY this ref to Gemini (with the photo
+  // region as a magenta sentinel — no face), then pastes the REAL hero photo into
+  // the detected region locally. The hero here is a real celebrity portrait; in
+  // prod it's the article's own photo. This is the true test of the user's case.
+  const reference = loadRef("MoviefiedPostRef.jpg");
+  const hero = loadRef("MoviefiedPostRef.jpg"); // real face, composited locally (never sent to Gemini)
+  const headline = "Shah Rukh Khan Announces Surprise Comeback Film After Two-Year Break";
+  const brandName = "Moviefied";
+  const handle = "@moviefiedbollywood";
+
+  it('composite path: layout via Gemini sentinel + real photo pasted — "ai" text', async () => {
+    const out = await generateReferenceStyledCard(
+      { referenceImage: reference, heroImage: hero, headline, brandName, handle, brandColor: "#ff7a00", textMode: "ai" },
+      realDeps,
+    );
+    console.log(`    [gate composite ai] engine=${out.engine} bytes=${out.imageBase64.length}`);
+    expect(out.imageBase64.length).toBeGreaterThan(5000);
+    writeFileSync(join(OUT_DIR, `composite-ai-${out.engine}.${out.mimeType.includes("png") ? "png" : "jpg"}`), Buffer.from(out.imageBase64, "base64"));
+  }, 240_000);
+
+  it('composite path: "overlay" text mode', async () => {
+    const out = await generateReferenceStyledCard(
+      { referenceImage: reference, heroImage: hero, headline, brandName, handle, brandColor: "#ff7a00", textMode: "overlay" },
+      realDeps,
+    );
+    console.log(`    [gate composite overlay] engine=${out.engine} bytes=${out.imageBase64.length}`);
+    expect(out.imageBase64.length).toBeGreaterThan(5000);
+    writeFileSync(join(OUT_DIR, `composite-overlay-${out.engine}.${out.mimeType.includes("png") ? "png" : "jpg"}`), Buffer.from(out.imageBase64, "base64"));
+  }, 240_000);
+});
+
 d("Round 10 visual gate — Moviefied reference", () => {
   mkdirSync(OUT_DIR, { recursive: true });
   // The Moviefied reference is the WHOLE Instagram screenshot; the card we want
