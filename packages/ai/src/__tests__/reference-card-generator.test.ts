@@ -495,23 +495,54 @@ describe("composite ladder integration (Round 11)", () => {
     return mod.generateReferenceStyledCard;
   }
 
-  it("with a hero, attempts gemini-composite FIRST and returns engine=gemini-composite on success", async () => {
+  it("with a hero + layout-extract available, returns engine=layout-extract (layout-extract is primary, Round 18)", async () => {
+    // Round 18: layout-extract is the PRIMARY rung — it runs FIRST for every
+    // reference. With default makeDeps (extractCardLayout + renderLayoutCard both
+    // succeed), a hero case now returns "layout-extract", NOT "gemini-composite".
+    // The composite rung is demoted to a fallback (see the next test).
     const fn = await load();
     const deps = makeDeps();
+
+    const result = await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE }, deps);
+
+    expect(result.engine).toBe("layout-extract");
+    expect(result.imageBase64).toBe(LAYOUT_EXTRACT_OUTPUT.imageBase64);
+    // layout-extract won → the composite rung was never reached.
+    expect((deps.compositeHeroIntoRegion as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
+    // No Gemini generation happened (layout-extract is deterministic, no img2img/sentinel).
+    expect((deps.generateImage as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
+  });
+
+  it("with a hero, reaches gemini-composite as a FALLBACK when layout-extract bails, returning engine=gemini-composite", async () => {
+    // Round 18: composite now only runs AFTER layout-extract fails. Force
+    // layout-extract to bail (extractCardLayout=null → synthesized fallback;
+    // renderLayoutCard returns empty → rung bails entirely) so the ladder reaches
+    // the composite fallback, then assert it succeeds with engine=gemini-composite.
+    const fn = await load();
+    const deps = makeDeps({
+      extractCardLayout: vi.fn().mockResolvedValue(null),                          // no vision → fallback layout
+      renderLayoutCard: vi.fn().mockResolvedValue({ imageBase64: "", mimeType: "" }), // render empty → layout-extract bails
+    });
 
     const result = await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE }, deps);
 
     expect(result.engine).toBe("gemini-composite");
     expect(result.imageBase64).toBe(COMPOSITE_OUTPUT.imageBase64);
     // Sentinel generate ran; detection + composite ran; rung-1 img2img did NOT.
+    // (One generateImage call = the rung-0 composite sentinel; rung-1 never reached.)
     expect((deps.generateImage as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
     expect((deps.detectSentinelRegion as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
     expect((deps.compositeHeroIntoRegion as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
   });
 
-  it("composite passes the detected region + the real hero (base64) to compositeHeroIntoRegion", async () => {
+  it("composite (as fallback) passes the detected region + the real hero (base64) to compositeHeroIntoRegion", async () => {
+    // Round 18: composite only runs as a fallback. Force layout-extract to bail
+    // first, then assert the composite dep wiring (region + real hero + base layer).
     const fn = await load();
-    const deps = makeDeps();
+    const deps = makeDeps({
+      extractCardLayout: vi.fn().mockResolvedValue(null),                          // no vision → fallback layout
+      renderLayoutCard: vi.fn().mockResolvedValue({ imageBase64: "", mimeType: "" }), // render empty → layout-extract bails
+    });
 
     await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE }, deps);
 
@@ -629,9 +660,14 @@ describe("composite ladder integration (Round 11)", () => {
     expect((deps.compositeHeroIntoRegion as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
   });
 
-  it("composite overlay mode composites the headline after pasting the hero", async () => {
+  it("composite (as fallback) overlay mode composites the headline after pasting the hero", async () => {
+    // Round 18: composite only runs as a fallback. Force layout-extract to bail
+    // first so the composite overlay path under test is reached.
     const fn = await load();
-    const deps = makeDeps();
+    const deps = makeDeps({
+      extractCardLayout: vi.fn().mockResolvedValue(null),                          // no vision → fallback layout
+      renderLayoutCard: vi.fn().mockResolvedValue({ imageBase64: "", mimeType: "" }), // render empty → layout-extract bails
+    });
 
     const result = await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE, textMode: "overlay" }, deps);
 
@@ -904,21 +940,22 @@ describe("layout-extract ladder order (Round 11)", () => {
     return mod.generateReferenceStyledCard;
   }
 
-  it("with a hero, layout-extract runs BEFORE gemini-img2img (rung-1): when it succeeds, generateImage is NOT called for rung-1", async () => {
-    // composite bails → layout-extract succeeds → rung-1 must NOT run.
+  it("with a hero, layout-extract runs BEFORE both composite AND gemini-img2img (rung-1): when it succeeds, generateImage is NOT called at all", async () => {
+    // Round 18: layout-extract is the PRIMARY rung — it runs FIRST, before BOTH the
+    // composite (rung-0 sentinel) and rung-1 img2img. When it succeeds, NO Gemini
+    // generateImage call happens (neither the sentinel nor the img2img). So with
+    // default makeDeps (layout-extract succeeds), generateImage is called 0 times.
     const fn = await load();
-    const generateImage = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("finishReason OTHER (sentinel call for composite)"))
-      .mockResolvedValue(GEMINI_OUTPUT); // this would be the rung-1 call
+    const generateImage = vi.fn().mockResolvedValue(GEMINI_OUTPUT); // would be sentinel/rung-1, but never reached
     const deps = makeDeps({ generateImage }); // extractCardLayout returns MOCK_LAYOUT by default
 
     const result = await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE }, deps);
 
-    // layout-extract should have won
+    // layout-extract should have won (it is primary now)
     expect(result.engine).toBe("layout-extract");
-    // generateImage was called once (rung-0 sentinel which threw) — NOT for rung-1
-    expect(generateImage).toHaveBeenCalledTimes(1);
+    // generateImage was NOT called — layout-extract returned before the composite
+    // sentinel call AND before rung-1 img2img.
+    expect(generateImage).toHaveBeenCalledTimes(0);
     expect((deps.renderLayoutCard as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
   });
 
@@ -955,21 +992,22 @@ describe("layout-extract ladder order (Round 11)", () => {
     expect((deps.renderLayoutCard as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
   });
 
-  it("layout-extract engine beats gemini-img2img in the result when both hero rungs work", async () => {
-    // With default makeDeps: composite succeeds → returns gemini-composite.
-    // To see layout-extract win over img2img we need composite to fail.
+  it("layout-extract engine beats both gemini-composite and gemini-img2img when layout-extract succeeds", async () => {
+    // Round 18: layout-extract is PRIMARY — it runs FIRST. With default makeDeps it
+    // succeeds, so it wins over BOTH the composite rung and rung-1 img2img without
+    // any of the Gemini paths running. No detectSentinelRegion override is needed
+    // (composite is never reached); generateImage is never called.
     const fn = await load();
-    const deps = makeDeps({
-      detectSentinelRegion: vi.fn().mockResolvedValue(null), // composite bails
-      // extractCardLayout + renderLayoutCard succeed by default
-    });
+    const deps = makeDeps(); // extractCardLayout + renderLayoutCard succeed by default
 
     const result = await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE }, deps);
 
     expect(result.engine).toBe("layout-extract");
-    // rung-1 generateImage was NOT called (layout-extract returned before it)
-    // The only generateImage call is the rung-0 sentinel which returned "no sentinel"
-    expect((deps.generateImage as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+    // No Gemini generation ran (neither the composite sentinel nor rung-1 img2img) —
+    // layout-extract returned before either was reached.
+    expect((deps.generateImage as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
+    expect((deps.detectSentinelRegion as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
+    expect((deps.compositeHeroIntoRegion as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
   });
 });
 
