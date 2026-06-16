@@ -270,7 +270,19 @@ export function cardLayoutToSpec(layout: CardLayout, content: CardContent): Card
   let effectiveScrimMode = layout.background.scrimMode;
   let effectiveHeadlineVariant = layout.headline.variant;
 
-  if (!content.hasReference && content.styleOverride && content.styleOverride !== "tweet_card") {
+  // Round 20: the style PICKER owns the TREATMENT (headline variant + scrim +
+  // bg mode); the reference owns the CONTENT (accent color, logo position,
+  // alignment, brand label, label underline). This applies EVEN when a reference
+  // is attached — premium_editorial must reliably produce the Moviefied look
+  // (full-bleed photo + brand-color GRADIENT scrim + boxless plain white headline)
+  // regardless of what the vision model guessed for the reference's variant/scrim.
+  //
+  // Why this changed from R17: making the reference drive the variant + scrim threw
+  // away premium's defining treatment — the headline flickered to a white "box"
+  // pill (vision mis-detecting "box") and the orange gradient disappeared (vision
+  // detecting scrim "none"). The picker is the user's explicit style choice, so it
+  // must win on treatment; the reference still supplies the color/logo/photo.
+  if (content.styleOverride && content.styleOverride !== "tweet_card") {
     switch (content.styleOverride) {
       case "premium_editorial":
         // Moviefied look: full-bleed photo with brand-color scrim + boxless big headline.
