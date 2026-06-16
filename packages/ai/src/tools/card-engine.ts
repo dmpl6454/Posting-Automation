@@ -7,7 +7,33 @@
 export const CANVAS = { w: 1080 as const, h: 1350 as const };
 
 // ── StyleControls (Component 2) ─────────────────────────────────────────────
-export type FontFamily = "inter" | "serif_display" | "condensed";
+/**
+ * Supported font families for social cards.
+ *
+ * The first three ("inter", "serif_display", "condensed") are the ORIGINAL
+ * values — all callers (NewsGrid, media-editor, autopilot, vision classifier)
+ * that use these names continue to work byte-identically. The remaining values
+ * are user-pick-only additions (Round 15). The vision classifier in
+ * extract-card-layout.ts still returns only the original three; any of the new
+ * values can be set via the UI font-family picker (fontOverride).
+ */
+export type FontFamily =
+  // ── Original three (behavior unchanged) ──
+  | "inter"           // clean modern sans-serif (default)
+  | "serif_display"   // elegant editorial serif (Playfair Display)
+  | "condensed"       // tall narrow bold sans (Oswald)
+  // ── Round 15 additions (user-pick only) ──
+  | "montserrat"      // geometric sans — bold, modern
+  | "poppins"         // rounded geometric sans — friendly, contemporary
+  | "bebas"           // Bebas Neue — heavy display condensed
+  | "anton"           // Anton — ultra-heavy display sans
+  | "archivo_black"   // Archivo Black — bold grotesque
+  | "dm_serif"        // DM Serif Display — modern editorial serif
+  | "lora"            // Lora — refined text serif with italic flair
+  | "roboto_slab"     // Roboto Slab — slab serif, technical editorial
+  | "bitter"          // Bitter — screen-optimised slab serif
+  | "space_grotesk"   // Space Grotesk — tech/startup geometric sans
+  | "libre_franklin"; // Libre Franklin — news/editorial grotesque
 
 export interface StyleControls {
   theme: "light" | "dark";
@@ -183,7 +209,13 @@ export type CardSpec = {
 };
 
 // ── Sanitizers (Component 2 / §4) ───────────────────────────────────────────
-const FONT_ALLOWLIST: readonly FontFamily[] = ["inter", "serif_display", "condensed"];
+const FONT_ALLOWLIST: readonly FontFamily[] = [
+  // Original three — must stay first (vision classifier + existing callers use these)
+  "inter", "serif_display", "condensed",
+  // Round 15 additions
+  "montserrat", "poppins", "bebas", "anton", "archivo_black",
+  "dm_serif", "lora", "roboto_slab", "bitter", "space_grotesk", "libre_franklin",
+];
 
 /** Allow only valid CSS hex colors; else fall back to the default accent. */
 export function safeColor(color: string | undefined): string {
@@ -237,13 +269,48 @@ export function safeEmoji(e: string | undefined): string {
   return cps.every((c) => EMOJI.test(c)) ? cps.join("") : "";
 }
 
+/**
+ * All available font families with human-readable labels for UI dropdowns.
+ * The original three appear first (preserving existing default/ordering); the
+ * Round 15 additions follow. The UI font picker should render this list directly.
+ */
+export const FONT_OPTIONS: ReadonlyArray<{ value: FontFamily; label: string }> = [
+  { value: "inter",          label: "Inter (modern sans)" },
+  { value: "serif_display",  label: "Playfair (elegant serif)" },
+  { value: "condensed",      label: "Oswald (condensed news)" },
+  { value: "montserrat",     label: "Montserrat (bold geometric)" },
+  { value: "poppins",        label: "Poppins (rounded modern)" },
+  { value: "bebas",          label: "Bebas Neue (display impact)" },
+  { value: "anton",          label: "Anton (ultra-heavy display)" },
+  { value: "archivo_black",  label: "Archivo Black (bold grotesque)" },
+  { value: "dm_serif",       label: "DM Serif (modern editorial)" },
+  { value: "lora",           label: "Lora (refined serif)" },
+  { value: "roboto_slab",    label: "Roboto Slab (technical slab)" },
+  { value: "bitter",         label: "Bitter (screen slab)" },
+  { value: "space_grotesk",  label: "Space Grotesk (tech sans)" },
+  { value: "libre_franklin", label: "Libre Franklin (news grotesque)" },
+] as const;
+
 /** Map a FontFamily enum to a real CSS font-family stack. */
 export function fontStack(f: FontFamily): string {
   switch (f) {
-    case "serif_display": return "'Playfair Display',Georgia,serif";
-    case "condensed": return "'Oswald','Arial Narrow',sans-serif";
+    // ── Original three (behavior unchanged) ─────────────────────────────────
+    case "serif_display":  return "'Playfair Display',Georgia,serif";
+    case "condensed":      return "'Oswald','Arial Narrow',sans-serif";
+    // ── Round 15 additions ───────────────────────────────────────────────────
+    case "montserrat":     return "'Montserrat','Trebuchet MS',sans-serif";
+    case "poppins":        return "'Poppins','Helvetica Neue',sans-serif";
+    case "bebas":          return "'Bebas Neue','Impact',sans-serif";
+    case "anton":          return "'Anton','Impact',sans-serif";
+    case "archivo_black":  return "'Archivo Black','Arial Black',sans-serif";
+    case "dm_serif":       return "'DM Serif Display',Georgia,serif";
+    case "lora":           return "'Lora',Georgia,serif";
+    case "roboto_slab":    return "'Roboto Slab','Rockwell',serif";
+    case "bitter":         return "'Bitter','Georgia',serif";
+    case "space_grotesk":  return "'Space Grotesk','Helvetica Neue',sans-serif";
+    case "libre_franklin": return "'Libre Franklin','Franklin Gothic Medium',sans-serif";
     case "inter":
-    default: return "'Inter',system-ui,sans-serif";
+    default:               return "'Inter',system-ui,sans-serif";
   }
 }
 
@@ -591,7 +658,10 @@ export function renderCtaCard(props: CtaCardBlockProps, controls: StyleControls)
 }
 
 // ── renderCard composer ─────────────────────────────────────────────────────
-const FONT_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Playfair+Display:wght@700;900&family=Oswald:wght@500;700&display=swap');`;
+// Original three families + Round 15 additions.
+// Display/impact fonts request 700;800;900 so headlines are always bold; text
+// serifs add 400;700 for body + heading weight variety.
+const FONT_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Playfair+Display:wght@700;900&family=Oswald:wght@500;700&family=Montserrat:wght@700;800;900&family=Poppins:wght@700;800;900&family=Bebas+Neue&family=Anton&family=Archivo+Black&family=DM+Serif+Display&family=Lora:wght@400;700&family=Roboto+Slab:wght@700;800;900&family=Bitter:wght@400;700&family=Space+Grotesk:wght@700;800&family=Libre+Franklin:wght@700;800;900&display=swap');`;
 
 function renderBlock(block: Block, controls: StyleControls): string {
   switch (block.kind) {

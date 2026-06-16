@@ -67,9 +67,9 @@
  */
 
 import puppeteer from "puppeteer";
-import { safeColor, escapeHtml, safeImageUrl } from "./card-engine";
+import { safeColor, safeFontFamily, escapeHtml, safeImageUrl } from "./card-engine";
 import { isPublicImageUrl } from "../utils/safe-fetch-url";
-import { extractCardLayout, cardLayoutToSpec } from "./extract-card-layout";
+import { extractCardLayout, cardLayoutToSpec, type CardLayout } from "./extract-card-layout";
 import { generateCardImage } from "./news-image-generator";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -113,8 +113,9 @@ export interface GenerateReferenceStyledCardArgs {
    * User's font-family picker value. Forwarded to cardLayoutToSpec as
    * content.fontOverride on the layout-extract rung. The explicit pick wins over
    * the reference's detected font. Has no effect on the generation-based rungs.
+   * Accepts any value from the FontFamily union (including Round 15 additions).
    */
-  fontOverride?: "inter" | "serif_display" | "condensed";
+  fontOverride?: import("./card-engine").FontFamily;
 }
 
 export type ReferenceCardEngine =
@@ -268,7 +269,7 @@ export interface ReferenceCardDeps {
     brandColor?: string;
     styleOverride?: string;
     headlineColor?: string;
-    fontOverride?: "inter" | "serif_display" | "condensed";
+    fontOverride?: import("./card-engine").FontFamily;
   }) => Promise<{ imageBase64: string; mimeType: string }>;
 }
 
@@ -610,7 +611,7 @@ async function defaultRenderLayoutCard(
     brandColor?: string;
     styleOverride?: string;
     headlineColor?: string;
-    fontOverride?: "inter" | "serif_display" | "condensed";
+    fontOverride?: import("./card-engine").FontFamily;
   },
 ): Promise<{ imageBase64: string; mimeType: string }> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -657,10 +658,30 @@ export async function generateLayoutExtractCard(
     // Step 1: vision-extract the reference's layout. Tolerates celebrity faces —
     // we are reading COMPOSITION (grid, scrim, headline position) not identity.
     const extract = deps.extractCardLayout ?? extractCardLayout;
-    const layout = await extract(referenceImage.base64, referenceImage.mimeType);
-    if (!layout) {
-      console.warn("[reference-card-generator] Layout-extract rung: extractCardLayout returned null.");
-      return null;
+    const rawLayout = await extract(referenceImage.base64, referenceImage.mimeType);
+
+    // FIX 3 (Round 15): when extractCardLayout returns null (vision rate-limit,
+    // quota, timeout, or OpenAI key absent), synthesize a deterministic fallback
+    // CardLayout from the user's own brand color + font picker instead of bailing
+    // out and falling through to the slow "openai-described" rung. The fallback
+    // produces a clean premium_editorial card (photo + brand-scrim + plain
+    // headline) which is always correct and visually consistent. The user's
+    // styleOverride (passed in via content.styleOverride below) still overrides
+    // the headline variant, so a picker choice is respected even on vision failure.
+    const fallbackLayout: CardLayout = {
+      theme: "dark",
+      accentColor: safeColor(args.brandColor ?? undefined),
+      fontFamily: safeFontFamily(args.fontOverride),
+      background: { mode: "photo", scrimMode: "brand" },
+      headline: { variant: "plain", align: "left" },
+      brandLabel: !!args.brandName,
+      logo: { present: false, anchor: "tr", shape: "circle" },
+      confidence: 0,
+    };
+
+    const layout: unknown = rawLayout ?? fallbackLayout;
+    if (!rawLayout) {
+      console.warn("[reference-card-generator] Layout-extract rung: extractCardLayout returned null — using fallback layout.");
     }
 
     // Step 2: build the hero data URL (the user's REAL photo — never AI-touched).

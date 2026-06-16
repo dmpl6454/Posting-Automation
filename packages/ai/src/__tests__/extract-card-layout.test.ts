@@ -424,11 +424,29 @@ describe("cardLayoutToSpec — headlineColor (Round 14 FIX 2)", () => {
     expect(cap.props.pills[0].textColor).toBe("#ffffff"); // dark theme default
   });
 
-  it("without headlineColor on a light theme → pill textColor is the light default", () => {
-    const lightLayout: CardLayout = { ...MOVIEFIED, theme: "light" };
-    const spec = cardLayoutToSpec(lightLayout, { headline: "X", channelName: "C" });
+  it("without headlineColor on a light theme with no scrim → pill textColor is the light default", () => {
+    // scrimMode "none" means no dark overlay — a light-theme card with no scrim
+    // should default to a dark text color for legibility on a bright background.
+    const lightNoScrimLayout: CardLayout = { ...MOVIEFIED, theme: "light", background: { mode: "photo", scrimMode: "none" } };
+    const spec = cardLayoutToSpec(lightNoScrimLayout, { headline: "X", channelName: "C" });
     const cap = spec.blocks.find((b) => b.kind === "captionStack") as any;
-    expect(cap.props.pills[0].textColor).toBe("#0f1419"); // light theme default
+    expect(cap.props.pills[0].textColor).toBe("#0f1419"); // light theme + no scrim → dark text
+  });
+
+  it("brand scrim on a light theme → pill textColor is white (FIX 1 Round 15: scrim-aware default)", () => {
+    // MOVIEFIED has scrimMode:"brand" — the headline sits over the brand-color
+    // gradient at the bottom. Even on a light theme, white text is correct here.
+    const lightBrandScrimLayout: CardLayout = { ...MOVIEFIED, theme: "light" };
+    const spec = cardLayoutToSpec(lightBrandScrimLayout, { headline: "X", channelName: "C" });
+    const cap = spec.blocks.find((b) => b.kind === "captionStack") as any;
+    expect(cap.props.pills[0].textColor).toBe("#ffffff"); // brand scrim → white default
+  });
+
+  it("dark scrim on a light theme → pill textColor is white (dark scrim also forces white)", () => {
+    const lightDarkScrimLayout: CardLayout = { ...MOVIEFIED, theme: "light", background: { mode: "photo", scrimMode: "dark" } };
+    const spec = cardLayoutToSpec(lightDarkScrimLayout, { headline: "X", channelName: "C" });
+    const cap = spec.blocks.find((b) => b.kind === "captionStack") as any;
+    expect(cap.props.pills[0].textColor).toBe("#ffffff"); // dark scrim → white default
   });
 
   it("invalid headlineColor ('red;}') → falls back to theme default, NOT accent", () => {

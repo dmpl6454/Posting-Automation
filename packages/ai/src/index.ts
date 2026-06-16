@@ -39,9 +39,11 @@ export {
   dedupeHook,
   jaccardSimilarity,
   safeColor,
+  safeFontFamily,
   safeImageUrl,
   CANVAS as CARD_CANVAS,
   DEFAULT_CONTROLS as CARD_DEFAULT_CONTROLS,
+  FONT_OPTIONS,
 } from "./tools/card-engine";
 export type {
   CardSpec,

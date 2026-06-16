@@ -705,12 +705,28 @@ type LogoResolverPrisma = {
  * (fetch / extractDominantColor / render) is safe. All DB work is best-effort:
  * any read failure degrades to the no-logo path rather than throwing.
  */
+/**
+ * Source classification for a resolved logo URL (FIX 2, Round 15).
+ *
+ *   "explicit" — the user supplied an explicit logo URL OR a category:"logo"
+ *                Media row exists for the channel OR the channel metadata has a
+ *                logo_path (a real brand mark in every case).
+ *   "avatar"   — fell back to the channel's generic social-profile avatar (the
+ *                circular profile picture). This is acceptable in the template
+ *                (brand-consistency fallback) but MUST NOT be passed as a logo
+ *                reference image into the mimicry path — it renders as a blank
+ *                or semi-blank circle and confuses the model.
+ *   "none"     — no logo resolved at all.
+ */
+export type LogoSource = "explicit" | "avatar" | "none";
+
 export async function resolveLogoForOrg(
   prisma: LogoResolverPrisma,
   opts: { organizationId: string; logoUrl?: string | null; channelName?: string; channelHandle?: string },
-): Promise<{ logoUrl: string | undefined }> {
+): Promise<{ logoUrl: string | undefined; logoSource: LogoSource }> {
   const { isPublicImageUrl } = await import("@postautomation/ai");
   let resolved = (opts.logoUrl || "").trim();
+  let source: LogoSource = resolved ? "explicit" : "none";
   const channelName = opts.channelName || "";
   const channelHandle = opts.channelHandle || "";
 
@@ -730,9 +746,16 @@ export async function resolveLogoForOrg(
         });
         if (logoMedia) {
           resolved = logoMedia.url;
+          source = "explicit"; // a category:"logo" Media row is a real brand logo
         } else {
           const meta = channel.metadata as any;
-          resolved = meta?.logo_path || channel.avatar || "";
+          if (meta?.logo_path) {
+            resolved = meta.logo_path;
+            source = "explicit"; // metadata logo_path is a curated brand logo
+          } else if (channel.avatar) {
+            resolved = channel.avatar;
+            source = "avatar"; // generic social-profile avatar — NOT a brand logo
+          }
         }
       }
     } catch {
@@ -744,8 +767,9 @@ export async function resolveLogoForOrg(
   if (resolved && !isPublicImageUrl(resolved)) {
     console.warn("[repurpose] logo URL blocked (private/internal host) — dropping logo");
     resolved = "";
+    source = "none";
   }
-  return { logoUrl: resolved || undefined };
+  return { logoUrl: resolved || undefined, logoSource: resolved ? source : "none" };
 }
 
 /**
@@ -992,9 +1016,14 @@ export const repurposeRouter = createRouter({
         // Round 14: user's font-color picker for the headline on the layout-extract rung.
         // Must be a valid hex (safeColor-gated in cardLayoutToSpec; invalid → theme default).
         headlineColor: z.string().max(9).optional(),
-        // Round 14: user's font-family picker for the layout-extract rung.
+        // Round 14/15: user's font-family picker for the layout-extract rung.
         // Explicit pick wins over the reference's detected typeface.
-        headlineFont: z.enum(["inter", "serif_display", "condensed"]).optional(),
+        // Round 15: expanded to include all FontFamily values from card-engine.ts.
+        headlineFont: z.enum([
+          "inter", "serif_display", "condensed",
+          "montserrat", "poppins", "bebas", "anton", "archivo_black",
+          "dm_serif", "lora", "roboto_slab", "bitter", "space_grotesk", "libre_franklin",
+        ]).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -1127,7 +1156,7 @@ export const repurposeRouter = createRouter({
       // buildHeadlineCreative, applyLogoOverlay) is therefore safe.
       const channelName = input.channelName || "";
       const channelHandle = input.channelHandle || "";
-      const { logoUrl: resolvedLogoOrUndef } = await resolveLogoForOrg(ctx.prisma, {
+      const { logoUrl: resolvedLogoOrUndef, logoSource } = await resolveLogoForOrg(ctx.prisma, {
         organizationId,
         logoUrl: input.logoUrl,
         channelName,
@@ -1195,9 +1224,16 @@ export const repurposeRouter = createRouter({
       // Round 10: capture the logo bytes at outer scope so buildMimicryCreative
       // can pass them as a distinct logoImage reference (separate from the
       // brandReferenceImages array which conflates logo + aesthetic ref).
+      //
+      // FIX 2 (Round 15): only fetch + pass the logo into the MIMICRY path when
+      // logoSource === "explicit" (a real brand logo the user uploaded or a
+      // curated logo_path). When it's "avatar" (the channel's generic circular
+      // profile picture) we skip it for the mimicry logoImage but still allow
+      // the template path (buildHeadlineCreative) to use resolvedLogoUrl as a
+      // brand-mark fallback — that path's existing behavior is unchanged.
       let logoRefImage: { base64: string; mimeType: string } | null = null;
       const brandReferenceImages: Array<{ base64: string; mimeType?: string }> = [];
-      if (resolvedLogoUrl) {
+      if (resolvedLogoUrl && logoSource === "explicit") {
         // SSRF-safe: `safeFetchPublicImage` re-checks `isPublicImageUrl`,
         // uses `redirect:"manual"`, requires an image/* content-type, and caps
         // the body. Returns null on any failure → degrade silently.
@@ -1205,6 +1241,15 @@ export const repurposeRouter = createRouter({
         if (logoRef) {
           brandReferenceImages.push({ base64: logoRef.base64, mimeType: logoRef.mimeType });
           logoRefImage = { base64: logoRef.base64, mimeType: logoRef.mimeType };
+        }
+      } else if (resolvedLogoUrl && logoSource === "avatar") {
+        // Avatar: use in brandReferenceImages for Gemini color-conditioning only
+        // (not as a logoImage — it would render as a blank profile pic in the
+        // mimicry layout). The template path uses resolvedLogoUrl directly.
+        const logoRef = await safeFetchPublicImage(resolvedLogoUrl);
+        if (logoRef) {
+          brandReferenceImages.push({ base64: logoRef.base64, mimeType: logoRef.mimeType });
+          // logoRefImage intentionally stays null — no logo block in mimicry layout
         }
       }
 
@@ -2867,8 +2912,13 @@ Return ONLY the JSON array, no other text.`;
         brandName: z.string().max(60).optional(),
         // Round 14: user's font-color picker for the headline on the layout-extract rung.
         headlineColor: z.string().max(9).optional(),
-        // Round 14: user's font-family picker for the layout-extract rung.
-        headlineFont: z.enum(["inter", "serif_display", "condensed"]).optional(),
+        // Round 14/15: user's font-family picker for the layout-extract rung.
+        // Round 15: expanded to include all FontFamily values from card-engine.ts.
+        headlineFont: z.enum([
+          "inter", "serif_display", "condensed",
+          "montserrat", "poppins", "bebas", "anton", "archivo_black",
+          "dm_serif", "lora", "roboto_slab", "bitter", "space_grotesk", "libre_franklin",
+        ]).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   safeColor, safeImageUrl, escapeHtml,
   clampOpacity, safeFontFamily, safeAlign, safeShape, safeEmoji,
+  fontStack, FONT_OPTIONS,
   DEFAULT_ACCENT,
 } from "../tools/card-engine";
 
@@ -45,10 +46,55 @@ describe("clampOpacity", () => {
 });
 
 describe("enum guards", () => {
-  it("safeFontFamily allowlists fonts", () => {
+  it("safeFontFamily allowlists original 3 fonts (regression: existing callers unchanged)", () => {
+    expect(safeFontFamily("inter")).toBe("inter");
     expect(safeFontFamily("serif_display")).toBe("serif_display");
+    expect(safeFontFamily("condensed")).toBe("condensed");
     expect(safeFontFamily("evil; }")).toBe("inter");
     expect(safeFontFamily(undefined)).toBe("inter");
+  });
+
+  it("safeFontFamily accepts all Round 15 additions", () => {
+    const newFonts = [
+      "montserrat", "poppins", "bebas", "anton", "archivo_black",
+      "dm_serif", "lora", "roboto_slab", "bitter", "space_grotesk", "libre_franklin",
+    ] as const;
+    for (const f of newFonts) {
+      expect(safeFontFamily(f)).toBe(f);
+    }
+  });
+
+  it("FONT_OPTIONS has 14 entries (3 original + 11 new)", () => {
+    expect(FONT_OPTIONS.length).toBe(14);
+  });
+
+  it("FONT_OPTIONS first three entries are the original fonts in order", () => {
+    expect(FONT_OPTIONS[0]!.value).toBe("inter");
+    expect(FONT_OPTIONS[1]!.value).toBe("serif_display");
+    expect(FONT_OPTIONS[2]!.value).toBe("condensed");
+  });
+
+  it("FONT_OPTIONS values are all unique and accepted by safeFontFamily", () => {
+    const seen = new Set<string>();
+    for (const { value } of FONT_OPTIONS) {
+      expect(seen.has(value)).toBe(false); // no duplicates
+      seen.add(value);
+      expect(safeFontFamily(value)).toBe(value); // every value is allowlisted
+    }
+  });
+
+  it("fontStack returns a string for every FONT_OPTIONS value (no missing cases)", () => {
+    for (const { value } of FONT_OPTIONS) {
+      const stack = fontStack(value);
+      expect(typeof stack).toBe("string");
+      expect(stack.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("fontStack original 3 stacks are unchanged (regression guard)", () => {
+    expect(fontStack("inter")).toContain("Inter");
+    expect(fontStack("serif_display")).toContain("Playfair Display");
+    expect(fontStack("condensed")).toContain("Oswald");
   });
   it("safeAlign / safeShape enums", () => {
     expect(safeAlign("center")).toBe("center");

@@ -87,9 +87,12 @@ describe("generateReferenceStyledCard", () => {
     // With a hero, rung-0 (composite) runs FIRST, then layout-extract (rung-0b).
     // Force BOTH to bail so the ladder advances to rung-1, where the [ref,hero,logo]
     // referenceImages assembly under test happens.
+    // FIX 3: extractCardLayout=null now uses a fallback layout, so renderLayoutCard
+    // must also return empty to bail rung-0b entirely.
     const deps = makeDeps({
       detectSentinelRegion: vi.fn().mockResolvedValue(null),   // rung-0 bails
-      extractCardLayout: vi.fn().mockResolvedValue(null),       // rung-0b bails
+      extractCardLayout: vi.fn().mockResolvedValue(null),       // no vision → fallback used
+      renderLayoutCard: vi.fn().mockResolvedValue({ imageBase64: "", mimeType: "" }), // rung-0b bails
     });
 
     await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE, logoImage: LOGO_IMAGE }, deps);
@@ -178,9 +181,12 @@ describe("generateReferenceStyledCard", () => {
     // With a hero, rung-0 (composite) runs FIRST, then layout-extract (rung-0b).
     // Force BOTH to bail so the ladder reaches rung-1, where the hero-aware
     // img2img prompt under test is built.
+    // FIX 3: extractCardLayout=null now uses a fallback layout, so renderLayoutCard
+    // must also return empty to bail rung-0b entirely.
     const deps = makeDeps({
       detectSentinelRegion: vi.fn().mockResolvedValue(null),   // rung-0 bails
-      extractCardLayout: vi.fn().mockResolvedValue(null),       // rung-0b bails
+      extractCardLayout: vi.fn().mockResolvedValue(null),       // no vision → fallback used
+      renderLayoutCard: vi.fn().mockResolvedValue({ imageBase64: "", mimeType: "" }), // rung-0b bails
     });
     await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE }, deps);
     const calls = (deps.generateImage as ReturnType<typeof vi.fn>).mock.calls;
@@ -539,12 +545,15 @@ describe("composite ladder integration (Round 11)", () => {
     expect((deps.extractCardLayout as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
   });
 
-  it("falls through to rung-1 (gemini-img2img) when composite AND layout-extract both bail", async () => {
+  it("falls through to rung-1 (gemini-img2img) when composite AND layout-extract BOTH fully bail (FIX 3: requires renderLayoutCard to also fail)", async () => {
+    // FIX 3 (Round 15): when extractCardLayout returns null the layout-extract rung
+    // no longer bails — it synthesizes a fallback layout and calls renderLayoutCard.
+    // To bail the layout-extract rung entirely, renderLayoutCard must ALSO fail.
     const fn = await load();
-    // Disable both hero rungs: no sentinel + layout extraction returns null.
     const deps = makeDeps({
-      detectSentinelRegion: vi.fn().mockResolvedValue(null),   // rung-0 bails
-      extractCardLayout: vi.fn().mockResolvedValue(null),       // rung-0b bails
+      detectSentinelRegion: vi.fn().mockResolvedValue(null),                      // rung-0 bails
+      extractCardLayout: vi.fn().mockResolvedValue(null),                          // no vision layout → fallback used
+      renderLayoutCard: vi.fn().mockResolvedValue({ imageBase64: "", mimeType: "" }), // render returns empty → rung-0b bails
     });
 
     const result = await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE }, deps);
@@ -574,7 +583,9 @@ describe("composite ladder integration (Round 11)", () => {
     expect((deps.compositeHeroIntoRegion as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
   });
 
-  it("falls through to rung-1 when sentinel throws AND layout-extract bails", async () => {
+  it("falls through to rung-1 when sentinel throws AND layout-extract fully bails (FIX 3: renderLayoutCard must also fail)", async () => {
+    // FIX 3 (Round 15): extractCardLayout=null now uses a fallback layout, so
+    // renderLayoutCard must also fail (return empty) to bail layout-extract entirely.
     const fn = await load();
     const generateImage = vi
       .fn()
@@ -582,7 +593,8 @@ describe("composite ladder integration (Round 11)", () => {
       .mockResolvedValueOnce(GEMINI_OUTPUT);
     const deps = makeDeps({
       generateImage,
-      extractCardLayout: vi.fn().mockResolvedValue(null), // layout-extract bails
+      extractCardLayout: vi.fn().mockResolvedValue(null),                          // no vision → fallback used
+      renderLayoutCard: vi.fn().mockResolvedValue({ imageBase64: "", mimeType: "" }), // render fails → rung-0b bails
     });
 
     const result = await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE }, deps);
@@ -591,11 +603,12 @@ describe("composite ladder integration (Round 11)", () => {
     expect((deps.compositeHeroIntoRegion as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
   });
 
-  it("falls through to rung-2 (openai-described) when composite bails AND layout-extract bails AND rung-1 throws", async () => {
+  it("falls through to rung-2 (openai-described) when composite bails AND layout-extract fully bails AND rung-1 throws", async () => {
     const fn = await load();
     const deps = makeDeps({
       detectSentinelRegion: vi.fn().mockResolvedValue(null),   // rung-0 bails
-      extractCardLayout: vi.fn().mockResolvedValue(null),       // rung-0b bails
+      extractCardLayout: vi.fn().mockResolvedValue(null),       // no vision → fallback used
+      renderLayoutCard: vi.fn().mockResolvedValue({ imageBase64: "", mimeType: "" }), // FIX 3: render also fails → rung-0b bails
       generateImage: vi.fn().mockRejectedValue(new Error("Gemini billing hold")), // rung-1 throws
     });
 
@@ -811,16 +824,30 @@ describe("generateLayoutExtractCard", () => {
     expect((deps.renderLayoutCard as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
   });
 
-  it("returns null when extractCardLayout returns null", async () => {
+  it("FIX 3 (Round 15): when extractCardLayout returns null, still renders with a fallback layout (engine=layout-extract, non-null result)", async () => {
+    // Prior behavior: returned null → fell through to slow openai-described rung.
+    // New behavior: synthesizes a deterministic fallback CardLayout (premium_editorial
+    // dark/brand-scrim) and renders via the block engine — same engine, same path,
+    // but no vision call needed. Ensures vision failure → consistent fast card.
     const fn = await load();
     const deps = makeDeps({
       extractCardLayout: vi.fn().mockResolvedValue(null),
+      renderLayoutCard: vi.fn().mockResolvedValue(LAYOUT_EXTRACT_OUTPUT),
     });
 
     const result = await fn({ ...BASE_ARGS, heroImage: HERO_IMAGE }, deps);
 
-    expect(result).toBeNull();
-    expect((deps.renderLayoutCard as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
+    // Must still return a result (not null) with engine=layout-extract
+    expect(result).not.toBeNull();
+    expect(result!.engine).toBe("layout-extract");
+    expect(result!.imageBase64).toBe(LAYOUT_EXTRACT_OUTPUT.imageBase64);
+    // renderLayoutCard WAS called (fallback layout used as the layout arg)
+    const renderCalls = (deps.renderLayoutCard as ReturnType<typeof vi.fn>).mock.calls;
+    expect(renderCalls).toHaveLength(1);
+    // The fallback layout has confidence=0 (distinguishes it from a real vision result)
+    const layoutArg = renderCalls[0]![0] as { confidence: number; background: { scrimMode: string } };
+    expect(layoutArg.confidence).toBe(0);
+    expect(layoutArg.background.scrimMode).toBe("brand"); // premium_editorial default
   });
 
   it("returns null when renderLayoutCard throws", async () => {
