@@ -402,15 +402,61 @@ describe("captionStack — plain variant + brand label (moviefied headline)", ()
     expect(html).not.toContain("text-shadow:");
   });
 
-  it("renders a brand label/wordmark with an accent underline above the headline", () => {
+  it("renders a brand label/wordmark with an accent underline above the headline (underline:true)", () => {
     const html = renderCaptionStack(
-      { label: { text: "Moviefied", italic: true }, pills: [{ text: "Big news", variant: "plain" }] },
+      { label: { text: "Moviefied", italic: true, underline: true }, pills: [{ text: "Big news", variant: "plain" }] },
       { ...C, brandColor: "#ff7f50" },
     );
     expect(html).toContain("caption-label");
     expect(html).toContain("Moviefied");
     expect(html).toContain("font-style:italic");
     expect(html).toContain("background:#ff7f50"); // the underline rule
+  });
+
+  // ── Round 17: per-reference underline (default OFF) + label color ──────────────
+  it("Round 17 FIX 2: omits the underline bar when underline is unset (default off)", () => {
+    const html = renderCaptionStack(
+      { label: { text: "MAM", italic: true }, pills: [{ text: "Big news", variant: "plain" }] },
+      { ...C, brandColor: "#ff7f50" },
+    );
+    expect(html).toContain("caption-label");
+    expect(html).toContain("MAM");
+    // no underline div → the accent background rule is not emitted for the label
+    expect(html).not.toContain("background:#ff7f50");
+  });
+
+  it("Round 17 FIX 2: omits the underline bar when underline:false", () => {
+    const html = renderCaptionStack(
+      { label: { text: "MAM", italic: true, underline: false }, pills: [{ text: "x", variant: "plain" }] },
+      { ...C, brandColor: "#ff7f50" },
+    );
+    expect(html).not.toContain("background:#ff7f50");
+  });
+
+  it("Round 17 FIX 3: label color defaults to the theme textColor when unset", () => {
+    const html = renderCaptionStack(
+      { label: { text: "MAM" }, pills: [{ text: "x", variant: "plain" }] },
+      { ...C, theme: "dark" },
+    );
+    // dark theme textColor is #ffffff
+    expect(html).toMatch(/caption-label[^>]*color:#ffffff/);
+  });
+
+  it("Round 17 FIX 3: explicit label color wins over the theme textColor", () => {
+    const html = renderCaptionStack(
+      { label: { text: "MAM", color: "#123abc" }, pills: [{ text: "x", variant: "plain" }] },
+      { ...C, theme: "light" }, // light theme textColor is #0f1419, but explicit wins
+    );
+    expect(html).toMatch(/caption-label[^>]*color:#123abc/);
+  });
+
+  it("Round 17 FIX 3: an invalid label color falls back through safeColor (no CSS injection)", () => {
+    const html = renderCaptionStack(
+      { label: { text: "MAM", color: "red;}</style>" }, pills: [{ text: "x", variant: "plain" }] },
+      C,
+    );
+    expect(html).not.toContain("red;}");
+    expect(html).not.toContain("</style>");
   });
 
   it("escapes a malicious brand label (no injection)", () => {

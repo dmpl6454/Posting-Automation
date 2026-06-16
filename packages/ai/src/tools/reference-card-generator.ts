@@ -116,6 +116,26 @@ export interface GenerateReferenceStyledCardArgs {
    * Accepts any value from the FontFamily union (including Round 15 additions).
    */
   fontOverride?: import("./card-engine").FontFamily;
+  /**
+   * Round 17 FIX 3 — user's brand-LABEL (eyebrow) color picker value (hex). Forwarded
+   * to cardLayoutToSpec as content.labelColor on the layout-extract rung. Defaults to
+   * the headline color there when unset. safeColor/HEX_RE-gated. No effect on the
+   * generation-based rungs.
+   */
+  labelColor?: string;
+  /**
+   * Round 17 FIX 4 — explicit logo size (% of canvas width). Forwarded to
+   * cardLayoutToSpec as content.logoSize on the layout-extract rung. When unset a
+   * shape-aware default is used there. Clamped [4, 40]. No effect on the
+   * generation-based rungs.
+   */
+  logoSize?: number;
+  /**
+   * Round 17 FIX 5 — explicit headline alignment override. Forwarded to
+   * cardLayoutToSpec as content.alignOverride on the layout-extract rung; wins over
+   * the reference's detected alignment. No effect on the generation-based rungs.
+   */
+  alignOverride?: "left" | "center" | "right";
 }
 
 export type ReferenceCardEngine =
@@ -270,6 +290,11 @@ export interface ReferenceCardDeps {
     styleOverride?: string;
     headlineColor?: string;
     fontOverride?: import("./card-engine").FontFamily;
+    /** Round 17: when true, the reference's detected layout drives the look (picker skipped). */
+    hasReference?: boolean;
+    labelColor?: string;
+    logoSize?: number;
+    alignOverride?: "left" | "center" | "right";
   }) => Promise<{ imageBase64: string; mimeType: string }>;
 }
 
@@ -612,6 +637,10 @@ async function defaultRenderLayoutCard(
     styleOverride?: string;
     headlineColor?: string;
     fontOverride?: import("./card-engine").FontFamily;
+    hasReference?: boolean;
+    labelColor?: string;
+    logoSize?: number;
+    alignOverride?: "left" | "center" | "right";
   },
 ): Promise<{ imageBase64: string; mimeType: string }> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -690,10 +719,17 @@ export async function generateLayoutExtractCard(
       background: { mode: "photo", scrimMode: "brand" },
       headline: { variant: "plain", align: "left" },
       brandLabel: !!args.brandName,
+      // Round 17 FIX 2: the synthesized fallback has no real detected underline → off.
+      labelUnderline: false,
       logo: { present: false, anchor: "tr", shape: "circle" },
       confidence: 0,
     };
 
+    // Round 17 FIX 1: hasReference is true ONLY when a REAL vision-extracted layout was
+    // used. When the fallback was synthesized (vision failed), there's no detected
+    // layout to trust, so hasReference is false and the picker (styleOverride) still
+    // shapes the fallback in cardLayoutToSpec.
+    const usedRealLayout = !!rawLayout;
     const layout: unknown = rawLayout ?? fallbackLayout;
     if (!rawLayout) {
       console.warn("[reference-card-generator] Layout-extract rung: extractCardLayout returned null — using fallback layout.");
@@ -727,6 +763,12 @@ export async function generateLayoutExtractCard(
       ...(args.styleOverride ? { styleOverride: args.styleOverride } : {}),
       ...(args.headlineColor ? { headlineColor: args.headlineColor } : {}),
       ...(args.fontOverride ? { fontOverride: args.fontOverride } : {}),
+      // Round 17: a REAL vision-extracted layout drives the look (picker skipped);
+      // the synthesized fallback does not (picker still shapes it).
+      hasReference: usedRealLayout,
+      ...(args.labelColor ? { labelColor: args.labelColor } : {}),
+      ...(args.logoSize != null ? { logoSize: args.logoSize } : {}),
+      ...(args.alignOverride ? { alignOverride: args.alignOverride } : {}),
     });
 
     if (!out.imageBase64) {

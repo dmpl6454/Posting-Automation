@@ -98,7 +98,10 @@ describe("enum guards", () => {
   });
   it("safeAlign / safeShape enums", () => {
     expect(safeAlign("center")).toBe("center");
-    expect(safeAlign("right")).toBe("left");
+    // Round 17 FIX 5: "right" now passes through (was clamped to "left").
+    expect(safeAlign("right")).toBe("right");
+    expect(safeAlign("left")).toBe("left");
+    expect(safeAlign("diagonal")).toBe("left"); // unknown → left
     expect(safeShape("bar")).toBe("bar");
     expect(safeShape("octagon")).toBe("pill");
   });

@@ -37,10 +37,17 @@ export interface CardLayout {
   headline: {
     /** "plain" = boxless huge text on the image (moviefied); "box" = boxed bars. */
     variant: "plain" | "box";
-    align: "left" | "center";
+    align: "left" | "center" | "right";
   };
-  /** A brand wordmark / label sits above the headline (e.g. "Moviefied" + underline). */
+  /** A brand wordmark / label sits above the headline (e.g. "Moviefied"). */
   brandLabel: boolean;
+  /**
+   * Whether the brand name/eyebrow has a colored underline beneath it (Round 17).
+   * Per-reference, default false: a ref WITHOUT an underline (e.g. MAM) renders no
+   * underline; only refs that actually show one opt in. Replaces the old behavior
+   * where renderCaptionStack ALWAYS drew the 72px accent bar.
+   */
+  labelUnderline: boolean;
   logo: {
     present: boolean;
     anchor: "tl" | "tr" | "bl" | "br";
@@ -85,9 +92,11 @@ export function parseCardLayout(raw: string): CardLayout | null {
     },
     headline: {
       variant: hl.variant === "box" ? "box" : "plain",
-      align: hl.align === "center" ? "center" : "left",
+      align: hl.align === "center" ? "center" : hl.align === "right" ? "right" : "left",
     },
     brandLabel: lg.present === undefined ? o.brandLabel === true : o.brandLabel === true,
+    // Round 17: per-reference underline under the brand label; default false.
+    labelUnderline: o.labelUnderline === true,
     logo: {
       present: lg.present === true,
       anchor: oneOf(lg.anchor, ANCHORS, "tr"),
@@ -113,9 +122,10 @@ Return ONLY this JSON (no prose):
   },
   "headline": {
     "variant": "plain" | "box",                      // "plain"=big text directly on the image; "box"=text inside solid bars/boxes
-    "align": "left" | "center"
+    "align": "left" | "center" | "right"
   },
   "brandLabel": true | false,                        // is there a small brand name/wordmark near the headline?
+  "labelUnderline": true | false,                    // does the brand name/eyebrow have a colored underline beneath it?
   "logo": { "present": true|false, "anchor": "tl"|"tr"|"bl"|"br", "shape": "circle"|"square" },
   "confidence": 0..1
 }
@@ -199,8 +209,43 @@ export interface CardContent {
    *   bold_typographic  → headline variant "plain" (boxless); bg mode unchanged from ref
    *   hook_bars         → headline variant "box" (boxed pill bars)
    *   tweet_card        → no override (tweet card is structurally specific; use as-detected)
+   *
+   * Round 17: the styleOverride is HONORED ONLY when `hasReference` is false/undefined
+   * (the picker is the fallback when NO reference is attached). When `hasReference` is
+   * true, the vision-detected layout drives the look and the styleOverride is ignored.
    */
   styleOverride?: "premium_editorial" | "hook_bars" | "tweet_card" | "bold_typographic";
+  /**
+   * Round 17 FIX 1 — THE CORE FIX. When true, a real style reference's vision-detected
+   * layout was extracted; trust `layout.background.mode`, `layout.background.scrimMode`,
+   * and `layout.headline.variant` AS DETECTED and SKIP the styleOverride stomp entirely.
+   * The reference drives the look; the picker is only a fallback when there is NO
+   * reference (hasReference false/undefined → the styleOverride block runs as before).
+   *
+   * In the layout-extract rung a reference always exists, so the caller passes true —
+   * EXCEPT when the vision call failed and a synthesized fallback layout was used (then
+   * false, so the picker still shapes the fallback).
+   */
+  hasReference?: boolean;
+  /**
+   * Round 17 FIX 3 — the brand-LABEL (eyebrow) text color. Must be a valid hex
+   * (HEX_RE-gated). DEFAULTS to the resolved headline color when not provided, so the
+   * eyebrow matches the headline color by default (fixes "label turns black on
+   * regenerate" — the old code used raw tokens.textColor which flipped black on a
+   * light theme).
+   */
+  labelColor?: string;
+  /**
+   * Round 17 FIX 4 — explicit logo size as a % of canvas width. When unset, a
+   * SHAPE-AWARE default is used (square/wordmark → larger, circle/icon → smaller),
+   * because the old hard-coded 9% rendered wordmarks tiny. Clamped to [4, 40].
+   */
+  logoSize?: number;
+  /**
+   * Round 17 FIX 5 — explicit headline alignment override. When set, wins over the
+   * reference's detected `layout.headline.align` (controls.textAlign + pill align).
+   */
+  alignOverride?: "left" | "center" | "right";
 }
 
 /**
@@ -214,14 +259,18 @@ export interface CardContent {
 export function cardLayoutToSpec(layout: CardLayout, content: CardContent): CardSpec {
   const brandColor = safeColor(content.brandColor ?? layout.accentColor);
 
-  // ── Picker override: user's style choice wins over vision-detected treatment ──
-  // The reference supplies the STRUCTURE (logo, brandLabel, positions, theme, colors);
-  // the picker overrides only the headline variant + background mode.
+  // ── Round 17 FIX 1 (THE CORE FIX): the REFERENCE drives the look ──────────────
+  // When a real reference layout was vision-extracted (content.hasReference === true),
+  // TRUST the detected background mode / scrim / headline variant and DO NOT let the
+  // picker stomp them — the whole point is that a NEW reference renders its OWN look,
+  // not the picker's forced template. The picker is the FALLBACK only when there is NO
+  // reference (hasReference false/undefined → the styleOverride block runs as before,
+  // exactly preserving the no-reference path).
   let effectiveBgMode = layout.background.mode;
   let effectiveScrimMode = layout.background.scrimMode;
   let effectiveHeadlineVariant = layout.headline.variant;
 
-  if (content.styleOverride && content.styleOverride !== "tweet_card") {
+  if (!content.hasReference && content.styleOverride && content.styleOverride !== "tweet_card") {
     switch (content.styleOverride) {
       case "premium_editorial":
         // Moviefied look: full-bleed photo with brand-color scrim + boxless big headline.
@@ -244,13 +293,16 @@ export function cardLayoutToSpec(layout: CardLayout, content: CardContent): Card
   // explicitly picks one; otherwise the reference's detected typeface is used.
   const effectiveFontFamily = safeFontFamily(content.fontOverride ?? layout.fontFamily);
 
+  // Round 17 FIX 5: alignOverride wins over the reference's detected alignment when set.
+  const effectiveAlign = content.alignOverride ?? layout.headline.align;
+
   const controls: StyleControls = {
     theme: layout.theme,
     brandColor,
     highlightColor: brandColor,
     bgOpacity: 100,
     fontFamily: effectiveFontFamily,
-    textAlign: layout.headline.align,
+    textAlign: effectiveAlign,
     logoPosition: layout.logo.anchor,
     fontScale: 1,
   };
@@ -278,9 +330,15 @@ export function cardLayoutToSpec(layout: CardLayout, content: CardContent): Card
       layout.logo.shape === "circle"
         ? { box: { bg: brandColor, opacity: 100, radius: 999, pad: 14 } }
         : {};
+    // Round 17 FIX 4: logo size is shape-aware by default — a "square"/wordmark logo
+    // needs more width (~20%) than a "circle"/icon (~11%), because the old hard-coded
+    // 9% rendered wordmarks tiny (~97px). An explicit content.logoSize wins; clamp to
+    // [4, 40] to keep it sane (renderOneLogo clamps 1–100 but this is the layout ceiling).
+    const shapeDefaultSize = layout.logo.shape === "square" ? 20 : 11;
+    const logoSize = Math.max(4, Math.min(40, content.logoSize ?? shapeDefaultSize));
     blocks.push({
       kind: "logo",
-      props: { logos: [{ kind: "image", src: content.logoUrl, anchor: layout.logo.anchor, size: 9, opacity: 100, ...circleBox }] },
+      props: { logos: [{ kind: "image", src: content.logoUrl, anchor: layout.logo.anchor, size: logoSize, opacity: 100, ...circleBox }] },
     });
   }
 
@@ -302,18 +360,42 @@ export function cardLayoutToSpec(layout: CardLayout, content: CardContent): Card
       ? content.headlineColor
       : themeTextDefault;
 
+  // Round 17 FIX 3: the brand-LABEL (eyebrow) color. An explicit content.labelColor
+  // (HEX_RE-gated) wins; otherwise it DEFAULTS to the resolved headline color so the
+  // eyebrow and headline never diverge (the old label used raw tokens.textColor →
+  // flipped black on a light theme on regenerate). An invalid hex falls back to the
+  // headline color (NOT the accent), matching the headlineColor sanitization posture.
+  const resolvedLabelColor =
+    content.labelColor && HEX_RE.test(content.labelColor)
+      ? content.labelColor
+      : resolvedHeadlineColor;
+
   // Headline (+ optional brand wordmark above it). Text + highlight markup come from
-  // the repurpose flow. The variant is the picker-effective value (overrides detected
-  // variant when styleOverride is set); alignment is always from the reference.
+  // the repurpose flow. The variant is the picker-effective value (overrides the
+  // detected variant only when there is NO reference); alignment is effectiveAlign
+  // (alignOverride wins, else the reference's detected alignment).
+  //
+  // Round 17 FIX 2: the brand-label underline is per-reference — set from
+  // layout.labelUnderline (default false), so a ref WITHOUT an underline renders none.
+  // Round 17 FIX 3: the label color defaults to the headline color (resolvedLabelColor).
   blocks.push({
     kind: "captionStack",
     props: {
-      ...(layout.brandLabel ? { label: { text: content.channelName, italic: true } } : {}),
+      ...(layout.brandLabel
+        ? {
+            label: {
+              text: content.channelName,
+              italic: true,
+              underline: layout.labelUnderline === true,
+              color: resolvedLabelColor,
+            },
+          }
+        : {}),
       pills: [
         {
           text: content.headline,
           variant: effectiveHeadlineVariant,
-          align: layout.headline.align,
+          align: effectiveAlign,
           textColor: resolvedHeadlineColor,
         },
       ],

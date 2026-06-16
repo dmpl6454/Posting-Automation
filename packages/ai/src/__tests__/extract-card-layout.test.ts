@@ -8,6 +8,7 @@ const MOVIEFIED: CardLayout = {
   background: { mode: "photo", scrimMode: "brand" },
   headline: { variant: "plain", align: "left" },
   brandLabel: true,
+  labelUnderline: false,
   logo: { present: true, anchor: "tr", shape: "circle" },
   confidence: 0.9,
 };
@@ -508,5 +509,203 @@ describe("cardLayoutToSpec — fontOverride (Round 14 FIX 3)", () => {
       fontOverride: "inter",
     });
     expect(spec.controls.fontFamily).toBe("inter");
+  });
+});
+
+// ── Round 17 FIX 1: the REFERENCE drives the look (picker is fallback only) ─────
+
+describe("cardLayoutToSpec — hasReference suppresses the styleOverride stomp (Round 17 FIX 1)", () => {
+  /** A gradient + box layout — the OPPOSITE of premium_editorial. */
+  const GRADIENT_BOX: CardLayout = {
+    ...MOVIEFIED,
+    background: { mode: "gradient", scrimMode: "none" },
+    headline: { variant: "box", align: "center" },
+  };
+
+  it("hasReference:true + styleOverride premium_editorial → KEEPS the detected gradient + box (no stomp)", () => {
+    const spec = cardLayoutToSpec(GRADIENT_BOX, {
+      headline: "Big Headline",
+      channelName: "Brand",
+      styleOverride: "premium_editorial",
+      hasReference: true,
+    });
+    const bg = spec.blocks.find((b) => b.kind === "background") as any;
+    const cap = spec.blocks.find((b) => b.kind === "captionStack") as any;
+    // premium_editorial would normally force photo/brand/plain — but hasReference wins.
+    expect(bg.props.mode).toBe("gradient");
+    expect(bg.props.scrimMode).toBe("none");
+    expect(cap.props.pills[0].variant).toBe("box");
+  });
+
+  it("hasReference:false + styleOverride premium_editorial → STILL forces photo/brand/plain (regression guard)", () => {
+    const spec = cardLayoutToSpec(GRADIENT_BOX, {
+      headline: "Big Headline",
+      channelName: "Brand",
+      styleOverride: "premium_editorial",
+      hasReference: false,
+    });
+    const bg = spec.blocks.find((b) => b.kind === "background") as any;
+    const cap = spec.blocks.find((b) => b.kind === "captionStack") as any;
+    expect(bg.props.mode).toBe("photo");
+    expect(bg.props.scrimMode).toBe("brand");
+    expect(cap.props.pills[0].variant).toBe("plain");
+  });
+
+  it("hasReference undefined (no reference) + styleOverride → forces the picker treatment (no-reference path unchanged)", () => {
+    const spec = cardLayoutToSpec(GRADIENT_BOX, {
+      headline: "Big Headline",
+      channelName: "Brand",
+      styleOverride: "hook_bars",
+      // no hasReference
+    });
+    const cap = spec.blocks.find((b) => b.kind === "captionStack") as any;
+    expect(cap.props.pills[0].variant).toBe("box"); // hook_bars → box
+  });
+
+  it("hasReference:true with NO styleOverride → still renders the detected layout", () => {
+    const spec = cardLayoutToSpec(GRADIENT_BOX, {
+      headline: "X",
+      channelName: "Brand",
+      hasReference: true,
+    });
+    const bg = spec.blocks.find((b) => b.kind === "background") as any;
+    const cap = spec.blocks.find((b) => b.kind === "captionStack") as any;
+    expect(bg.props.mode).toBe("gradient");
+    expect(cap.props.pills[0].variant).toBe("box");
+  });
+});
+
+// ── Round 17 FIX 2: per-reference label underline ──────────────────────────────
+
+describe("cardLayoutToSpec — labelUnderline (Round 17 FIX 2)", () => {
+  it("parseCardLayout defaults labelUnderline to false", () => {
+    const l = parseCardLayout(
+      JSON.stringify({ theme: "dark", background: {}, headline: {}, logo: {}, brandLabel: true }),
+    )!;
+    expect(l.labelUnderline).toBe(false);
+  });
+
+  it("parseCardLayout reads labelUnderline:true", () => {
+    const l = parseCardLayout(
+      JSON.stringify({ theme: "dark", background: {}, headline: {}, logo: {}, brandLabel: true, labelUnderline: true }),
+    )!;
+    expect(l.labelUnderline).toBe(true);
+  });
+
+  it("cardLayoutToSpec: label.underline is false when layout.labelUnderline is false (default)", () => {
+    const spec = cardLayoutToSpec(MOVIEFIED, { headline: "X", channelName: "Moviefied" });
+    const cap = spec.blocks.find((b) => b.kind === "captionStack") as any;
+    expect(cap.props.label.underline).toBe(false);
+  });
+
+  it("cardLayoutToSpec: label.underline is true when layout.labelUnderline is true", () => {
+    const underlined: CardLayout = { ...MOVIEFIED, labelUnderline: true };
+    const spec = cardLayoutToSpec(underlined, { headline: "X", channelName: "Moviefied" });
+    const cap = spec.blocks.find((b) => b.kind === "captionStack") as any;
+    expect(cap.props.label.underline).toBe(true);
+  });
+});
+
+// ── Round 17 FIX 3: brand-label color defaults to the headline color ───────────
+
+describe("cardLayoutToSpec — labelColor (Round 17 FIX 3)", () => {
+  it("label color defaults to the resolved headline color when not provided", () => {
+    // MOVIEFIED has scrimMode brand → headline default is #ffffff; the label matches it.
+    const spec = cardLayoutToSpec(MOVIEFIED, { headline: "X", channelName: "Moviefied" });
+    const cap = spec.blocks.find((b) => b.kind === "captionStack") as any;
+    expect(cap.props.label.color).toBe("#ffffff");
+    expect(cap.props.label.color).toBe(cap.props.pills[0].textColor); // never diverges
+  });
+
+  it("label color follows a custom headlineColor when labelColor is unset", () => {
+    const spec = cardLayoutToSpec(MOVIEFIED, {
+      headline: "X",
+      channelName: "Moviefied",
+      headlineColor: "#abcdef",
+    });
+    const cap = spec.blocks.find((b) => b.kind === "captionStack") as any;
+    expect(cap.props.label.color).toBe("#abcdef");
+  });
+
+  it("an explicit valid labelColor wins over the headline color", () => {
+    const spec = cardLayoutToSpec(MOVIEFIED, {
+      headline: "X",
+      channelName: "Moviefied",
+      headlineColor: "#abcdef",
+      labelColor: "#102030",
+    });
+    const cap = spec.blocks.find((b) => b.kind === "captionStack") as any;
+    expect(cap.props.label.color).toBe("#102030");
+  });
+
+  it("an invalid labelColor falls back to the headline color (NOT the accent)", () => {
+    const spec = cardLayoutToSpec(MOVIEFIED, {
+      headline: "X",
+      channelName: "Moviefied",
+      labelColor: "red;}</style>",
+    });
+    const cap = spec.blocks.find((b) => b.kind === "captionStack") as any;
+    // headline default for MOVIEFIED (brand scrim) is #ffffff; the accent is #ff7f50.
+    expect(cap.props.label.color).toBe("#ffffff");
+    expect(cap.props.label.color).not.toBe("#ff7f50");
+    expect(cap.props.label.color).not.toContain(";");
+  });
+});
+
+// ── Round 17 FIX 4: shape-aware logo size + override ───────────────────────────
+
+describe("cardLayoutToSpec — logoSize (Round 17 FIX 4)", () => {
+  const SQUARE: CardLayout = { ...MOVIEFIED, logo: { present: true, anchor: "tr", shape: "square" } };
+  const CIRCLE: CardLayout = { ...MOVIEFIED, logo: { present: true, anchor: "tr", shape: "circle" } };
+
+  it("square/wordmark logo defaults LARGER than a circle/icon logo", () => {
+    const squareSpec = cardLayoutToSpec(SQUARE, { headline: "X", channelName: "C", logoUrl: "https://cdn.x/l.png" });
+    const circleSpec = cardLayoutToSpec(CIRCLE, { headline: "X", channelName: "C", logoUrl: "https://cdn.x/l.png" });
+    const squareSize = (squareSpec.blocks.find((b) => b.kind === "logo") as any).props.logos[0].size;
+    const circleSize = (circleSpec.blocks.find((b) => b.kind === "logo") as any).props.logos[0].size;
+    expect(squareSize).toBeGreaterThan(circleSize);
+  });
+
+  it("explicit logoSize wins over the shape-aware default", () => {
+    const spec = cardLayoutToSpec(SQUARE, { headline: "X", channelName: "C", logoUrl: "https://cdn.x/l.png", logoSize: 15 });
+    const size = (spec.blocks.find((b) => b.kind === "logo") as any).props.logos[0].size;
+    expect(size).toBe(15);
+  });
+
+  it("logoSize is clamped to [4, 40]", () => {
+    const tooBig = cardLayoutToSpec(SQUARE, { headline: "X", channelName: "C", logoUrl: "https://cdn.x/l.png", logoSize: 999 });
+    const tooSmall = cardLayoutToSpec(SQUARE, { headline: "X", channelName: "C", logoUrl: "https://cdn.x/l.png", logoSize: 1 });
+    expect((tooBig.blocks.find((b) => b.kind === "logo") as any).props.logos[0].size).toBe(40);
+    expect((tooSmall.blocks.find((b) => b.kind === "logo") as any).props.logos[0].size).toBe(4);
+  });
+});
+
+// ── Round 17 FIX 5: alignment override (+ "right") ─────────────────────────────
+
+describe("cardLayoutToSpec — alignOverride (Round 17 FIX 5)", () => {
+  it("parseCardLayout allows headline.align 'right'", () => {
+    const l = parseCardLayout(
+      JSON.stringify({ theme: "dark", background: {}, headline: { align: "right" }, logo: {} }),
+    )!;
+    expect(l.headline.align).toBe("right");
+  });
+
+  it("alignOverride 'right' flows to controls.textAlign AND the pill align", () => {
+    const spec = cardLayoutToSpec(MOVIEFIED, {
+      headline: "X",
+      channelName: "C",
+      alignOverride: "right",
+    });
+    const cap = spec.blocks.find((b) => b.kind === "captionStack") as any;
+    expect(spec.controls.textAlign).toBe("right");
+    expect(cap.props.pills[0].align).toBe("right");
+  });
+
+  it("without alignOverride → uses the reference's detected alignment", () => {
+    const centered: CardLayout = { ...MOVIEFIED, headline: { variant: "plain", align: "center" } };
+    const spec = cardLayoutToSpec(centered, { headline: "X", channelName: "C" });
+    const cap = spec.blocks.find((b) => b.kind === "captionStack") as any;
+    expect(spec.controls.textAlign).toBe("center");
+    expect(cap.props.pills[0].align).toBe("center");
   });
 });
