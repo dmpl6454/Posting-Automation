@@ -41,11 +41,12 @@ const CARD_SPEC = z.any().optional();
 
 const STYLE = z.enum(["premium_editorial", "hook_bars", "tweet_card", "bold_typographic"]);
 const POSITION = z.enum(["top-left", "top-right"]);
-const KIND = z.enum(["logo", "style"]);
+const KIND = z.enum(["logo", "style", "name"]);
 
 /** Derive a template's library kind from its inputs when not explicitly set:
+ *  a "name" template is created explicitly (the on-card brand name to display);
  *  a saved STYLE has a reference image; everything else is a brand LOGO. */
-export function deriveTemplateKind(input: { kind?: "logo" | "style"; referenceMediaId?: string }): "logo" | "style" {
+export function deriveTemplateKind(input: { kind?: "logo" | "style" | "name"; referenceMediaId?: string }): "logo" | "style" | "name" {
   if (input.kind) return input.kind;
   return input.referenceMediaId ? "style" : "logo";
 }
@@ -77,7 +78,9 @@ export const creativeTemplateRouter = createRouter({
       z.object({
         name: z.string().min(1).max(80),
         kind: KIND.optional(),
-        style: STYLE,
+        // A "name" template only carries the on-card brand name (its `name`); style
+        // is irrelevant for it, so default rather than require it.
+        style: STYLE.default("premium_editorial"),
         logoMediaId: z.string().optional(),
         logoPosition: POSITION.default("top-right"),
         brandColor: z.string().optional(),
