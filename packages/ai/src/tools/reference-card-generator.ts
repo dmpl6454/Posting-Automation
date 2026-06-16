@@ -103,6 +103,18 @@ export interface GenerateReferenceStyledCardArgs {
    * prompt-based generation, not the block engine).
    */
   styleOverride?: string;
+  /**
+   * User's headline font-color picker value (hex). Forwarded to cardLayoutToSpec
+   * as content.headlineColor on the layout-extract rung. safeColor-gated there.
+   * Has no effect on the Gemini img2img or OpenAI-described rungs.
+   */
+  headlineColor?: string;
+  /**
+   * User's font-family picker value. Forwarded to cardLayoutToSpec as
+   * content.fontOverride on the layout-extract rung. The explicit pick wins over
+   * the reference's detected font. Has no effect on the generation-based rungs.
+   */
+  fontOverride?: "inter" | "serif_display" | "condensed";
 }
 
 export type ReferenceCardEngine =
@@ -255,6 +267,8 @@ export interface ReferenceCardDeps {
     logoUrl?: string;
     brandColor?: string;
     styleOverride?: string;
+    headlineColor?: string;
+    fontOverride?: "inter" | "serif_display" | "condensed";
   }) => Promise<{ imageBase64: string; mimeType: string }>;
 }
 
@@ -595,6 +609,8 @@ async function defaultRenderLayoutCard(
     logoUrl?: string;
     brandColor?: string;
     styleOverride?: string;
+    headlineColor?: string;
+    fontOverride?: "inter" | "serif_display" | "condensed";
   },
 ): Promise<{ imageBase64: string; mimeType: string }> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -667,6 +683,8 @@ export async function generateLayoutExtractCard(
       ...(logoUrl ? { logoUrl } : {}),
       ...(args.brandColor ? { brandColor: safeColor(args.brandColor) } : {}),
       ...(args.styleOverride ? { styleOverride: args.styleOverride } : {}),
+      ...(args.headlineColor ? { headlineColor: args.headlineColor } : {}),
+      ...(args.fontOverride ? { fontOverride: args.fontOverride } : {}),
     });
 
     if (!out.imageBase64) {

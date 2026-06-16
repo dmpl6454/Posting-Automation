@@ -989,6 +989,12 @@ export const repurposeRouter = createRouter({
         // the card shows "Moviefied" instead of the account/workspace display name.
         // Preference chain (mimicry path): input.brandName > displayName fallback.
         brandName: z.string().max(60).optional(),
+        // Round 14: user's font-color picker for the headline on the layout-extract rung.
+        // Must be a valid hex (safeColor-gated in cardLayoutToSpec; invalid → theme default).
+        headlineColor: z.string().max(9).optional(),
+        // Round 14: user's font-family picker for the layout-extract rung.
+        // Explicit pick wins over the reference's detected typeface.
+        headlineFont: z.enum(["inter", "serif_display", "condensed"]).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -1536,6 +1542,8 @@ export const repurposeRouter = createRouter({
             brandColor: mimicryBrandColor,
             textMode: input.mimicryTextMode,
             styleOverride: effectiveStyle,
+            ...(input.headlineColor ? { headlineColor: input.headlineColor } : {}),
+            ...(input.headlineFont ? { fontOverride: input.headlineFont } : {}),
           },
           deps,
         );
@@ -2857,6 +2865,10 @@ Return ONLY the JSON array, no other text.`;
         // Round 12: explicit brand name for the mimicry eyebrow/brandLabel.
         // Same chain as repurposeFromUrl — UI sends the saved-style/logo name.
         brandName: z.string().max(60).optional(),
+        // Round 14: user's font-color picker for the headline on the layout-extract rung.
+        headlineColor: z.string().max(9).optional(),
+        // Round 14: user's font-family picker for the layout-extract rung.
+        headlineFont: z.enum(["inter", "serif_display", "condensed"]).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -3043,6 +3055,8 @@ Return ONLY the JSON array, no other text.`;
               brandColor,
               textMode: input.mimicryTextMode,
               styleOverride: input.creativeStyle,
+              ...(input.headlineColor ? { headlineColor: input.headlineColor } : {}),
+              ...(input.headlineFont ? { fontOverride: input.headlineFont } : {}),
             },
             regenDeps,
           );
