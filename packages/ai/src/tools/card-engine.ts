@@ -559,7 +559,18 @@ export function renderCaptionStack(props: CaptionStackBlockProps, controls: Styl
     .map((p) => {
       const align = safeAlign(p.align ?? controls.textAlign);
       const emoji = safeEmoji(p.emoji);
+      // Round 19 FIX 3: a pill whose text is empty/whitespace-only must NOT render an
+      // empty box. The "box" variant paints a solid background even with no text →
+      // a blank white/dark rectangle (the "empty headline box" bug some refs hit on
+      // first generation when the headline reaches the pill empty). Skip the pill
+      // entirely when there is no actual text to show — render nothing, not an empty
+      // box. (The "plain" variant has no background so a stray empty plain pill is
+      // harmless, but skip it too for cleanliness.) Tested in card-engine-render.
+      if (!p.text || p.text.trim().length === 0) return "";
       const inner = renderHighlightMarkup(p.text, controls.highlightColor) + (emoji ? ` ${emoji}` : "");
+      // Defence-in-depth: if markup somehow strips to empty (it shouldn't for
+      // non-empty text), still skip rather than paint an empty box.
+      if (inner.trim().length === 0) return "";
       // "plain" — boxless huge bold headline on the background (moviefied look).
       // No box, large font, drop shadow for legibility; highlight markup still applies.
       if (p.variant === "plain") {

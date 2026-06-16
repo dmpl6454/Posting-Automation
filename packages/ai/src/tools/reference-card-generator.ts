@@ -136,6 +136,20 @@ export interface GenerateReferenceStyledCardArgs {
    * the reference's detected alignment. No effect on the generation-based rungs.
    */
   alignOverride?: "left" | "center" | "right";
+  /**
+   * Round 19 FIX 1 — DETERMINISTIC-ONLY mode. When true, generateReferenceStyledCard
+   * runs ONLY the deterministic block-engine rung (generateLayoutExtractCard) and
+   * NEVER the AI-generation rungs (gemini-composite / gemini-img2img / openai-described).
+   * If the block engine can't render (returns null), it returns engine "template"
+   * IMMEDIATELY so the caller falls back to its deterministic 4-template render —
+   * NEVER a fabricated AI image (no laughing-AI-celebrity, no garbled overlay text).
+   *
+   * This is THE fix for the non-determinism: same url + template → same output, fast,
+   * never an AI face. The Repurpose static + regen mimicry paths pass this true.
+   * Defaults false/undefined → the EXISTING ladder runs byte-identical (non-mimicry
+   * and all other callers unchanged).
+   */
+  deterministicOnly?: boolean;
 }
 
 export type ReferenceCardEngine =
@@ -754,7 +768,7 @@ export async function generateLayoutExtractCard(
     // styleOverride (when set) is forwarded so the user's picker overrides the
     // vision-detected headline variant + background mode in cardLayoutToSpec.
     const render = deps.renderLayoutCard ?? defaultRenderLayoutCard;
-    const out = await render(layout, {
+    const content = {
       headline: args.headline,
       ...(heroDataUrl ? { heroImageUrl: heroDataUrl } : {}),
       channelName: args.brandName,
@@ -769,10 +783,28 @@ export async function generateLayoutExtractCard(
       ...(args.labelColor ? { labelColor: args.labelColor } : {}),
       ...(args.logoSize != null ? { logoSize: args.logoSize } : {}),
       ...(args.alignOverride ? { alignOverride: args.alignOverride } : {}),
-    });
+    };
+
+    // Round 19 FIX 1: the remaining null cause is the Puppeteer render throwing or
+    // returning empty under load (the deterministic-only path must NOT then fall
+    // through to a fabricated AI image). Try once; on throw OR empty output, retry
+    // once before giving up. A transient Puppeteer hiccup (page launch race, paint
+    // timeout) usually clears on the second attempt → far fewer null returns → far
+    // fewer "template" fallbacks → far more consistent layout-extract renders.
+    let out: { imageBase64: string; mimeType: string };
+    try {
+      out = await render(layout, content);
+      if (!out.imageBase64) throw new Error("renderLayoutCard returned empty image (attempt 1)");
+    } catch (renderErr) {
+      console.warn(
+        "[reference-card-generator] Layout-extract rung: render attempt 1 failed, retrying once:",
+        (renderErr as Error).message,
+      );
+      out = await render(layout, content);
+    }
 
     if (!out.imageBase64) {
-      console.warn("[reference-card-generator] Layout-extract rung: renderLayoutCard returned empty image.");
+      console.warn("[reference-card-generator] Layout-extract rung: renderLayoutCard returned empty image after retry.");
       return null;
     }
 
@@ -812,6 +844,22 @@ export async function generateReferenceStyledCard(
   deps: ReferenceCardDeps,
 ): Promise<GenerateReferenceStyledCardResult> {
   const { referenceImage, heroImage, logoImage, textMode } = args;
+
+  // ── Round 19 FIX 1: DETERMINISTIC-ONLY short-circuit ─────────────────────────
+  // When the caller demands a deterministic render (the Repurpose static + regen
+  // mimicry paths), run ONLY the layout-extract block engine. On success → return it.
+  // On null → return engine "template" IMMEDIATELY so the caller falls back to its
+  // deterministic 4-template render. We NEVER touch the AI-generation rungs
+  // (gemini-composite / gemini-img2img / openai-described) in this mode, so the
+  // SAME url + template always produces the SAME output — never a fabricated AI face
+  // (the laughing-AI-celebrity-with-garbled-text failure mode), never the slow Gemini
+  // round trips. This is the single reliable path the Round-19 brief requires.
+  if (args.deterministicOnly === true) {
+    const layoutCard = await generateLayoutExtractCard(args, deps);
+    if (layoutCard) return layoutCard;
+    console.warn("[reference-card-generator] deterministicOnly: layout-extract returned null — signalling template fallback (NO AI-generation rungs).");
+    return { imageBase64: "", mimeType: "", engine: "template" };
+  }
 
   // ── Rung 0: Layout-extract — the PRIMARY, RELIABLE, DETERMINISTIC path ───────
   // (Round 18) Promoted to FIRST for EVERY reference. OpenAI vision reads the

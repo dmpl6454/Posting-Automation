@@ -252,6 +252,27 @@ describe("renderCaptionStack", () => {
   it("emits nothing when no pills", () => {
     expect(renderCaptionStack({ pills: [] }, C)).toBe("");
   });
+  // Round 19 FIX 3 — blank-headline-box bug. A pill with empty/whitespace text must
+  // NOT render an empty box (the "box" variant paints a solid background even with
+  // no text → a blank white/dark rectangle some refs hit on first generation).
+  it("skips an empty-text box pill (no blank background box)", () => {
+    const html = renderCaptionStack({ pills: [{ text: "" }] }, C);
+    expect(html).not.toContain("caption-pill");
+  });
+  it("skips a whitespace-only box pill", () => {
+    const html = renderCaptionStack({ pills: [{ text: "   " }] }, C);
+    expect(html).not.toContain("caption-pill");
+  });
+  it("skips an empty-text plain pill (no stray empty headline)", () => {
+    const html = renderCaptionStack({ pills: [{ text: "  ", variant: "plain" }] }, C);
+    expect(html).not.toContain("caption-plain");
+  });
+  it("still renders a non-empty pill but skips an adjacent empty one", () => {
+    const html = renderCaptionStack({ pills: [{ text: "" }, { text: "Real headline" }] }, C);
+    expect(html).toContain("Real headline");
+    // exactly one caption-pill div, not two
+    expect(html.match(/caption-pill/g)?.length ?? 0).toBe(1);
+  });
 });
 
 import { renderStatCards, type StatCardsBlockProps } from "../tools/card-engine";

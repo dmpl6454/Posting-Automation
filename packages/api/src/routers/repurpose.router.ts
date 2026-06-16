@@ -1512,7 +1512,7 @@ export const repurposeRouter = createRouter({
        */
       async function buildMimicryCreative(
         headline: string,
-        extra?: { heroUrl?: string },
+        extra?: { heroUrl?: string; deterministicOnly?: boolean },
       ): Promise<import("@postautomation/ai").GenerateReferenceStyledCardResult & { mimeType: string }> {
         if (!aestheticRefImage) {
           // No reference → caller must fall back to template.
@@ -1609,6 +1609,9 @@ export const repurposeRouter = createRouter({
             ...(input.labelColor ? { labelColor: input.labelColor } : {}),
             ...(input.logoSize ? { logoSize: input.logoSize } : {}),
             ...(input.headlineAlign ? { alignOverride: input.headlineAlign } : {}),
+            // Round 19 FIX 2: forward deterministicOnly so the static + regen mimicry
+            // calls never run the AI-generation rungs (no fabricated faces, no drift).
+            ...(extra?.deterministicOnly ? { deterministicOnly: true } : {}),
           },
           deps,
         );
@@ -1997,7 +2000,12 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
         // a live "Creating background image" step around the resolve when the AI
         // rung will actually run (AI on + no user-assigned image), then report the
         // honest outcome (AI ready / fell back to the real photo or branding).
-        const willGenerateAiBg = effectiveAiImages && !slotMediaId("background");
+        // Round 19 FIX 2: the static MIMICRY path renders DETERMINISTICALLY from the
+        // REAL photo via the block engine — it never needs (and must NOT run) the slow
+        // ~20-40s AI background generation, which both drifts per regen AND is the
+        // wrong input (mimicry conditions on the real article photo, not a fresh AI bg).
+        const isMimicry = input.referenceMimicry && !!aestheticRefImage;
+        const willGenerateAiBg = effectiveAiImages && !slotMediaId("background") && !isMimicry;
         if (willGenerateAiBg) progress("Creating background image");
         const bgSlot = await resolveImageSlot(
           {
@@ -2016,6 +2024,16 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
               : "AI unavailable — using the article photo / branded background",
           );
         }
+
+        // Round 19 FIX 2: the mimicry hero is the REAL photo — the user-assigned image
+        // first, else the article's own photo (`articleBg`) — NOT the AI-generated
+        // bgSlot. This makes mimicry deterministic (same article photo → same render)
+        // and removes the drift from re-rolling an AI background each generation. When
+        // neither exists (NDTV-class hard-403 hero), it's undefined → layout-extract
+        // renders a clean PHOTOLESS branded card (R16 behavior).
+        const mimicryHeroUrl = isMimicry
+          ? ((slotMediaId("background") && userImages[slotMediaId("background")!]?.url) || articleBg || undefined)
+          : undefined;
 
         // A user-assigned background IS the post media — skip the branded render
         // (parity with the legacy userMediaIds attach, single image). The url came
@@ -2044,7 +2062,12 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
           // This MUST be before the try/catch below — that catch swallows render errors
           // (friendlyAIMessage + continue), so a throw inside it would never reach the
           // client. Placed here, the TRPCError propagates straight to the UI.
-          if (bgSlot.source === "branded") {
+          //
+          // Round 19 FIX 2: do NOT throw on the MIMICRY path when there's no photo.
+          // Layout-extract renders a clean PHOTOLESS branded card (R16 behavior) and
+          // the UI surfaces the heroPhotoMissing prompt — so the user still gets a
+          // deterministic, non-fabricated card instead of a hard error.
+          if (bgSlot.source === "branded" && !isMimicry) {
             throw new TRPCError({
               code: "BAD_REQUEST",
               message:
@@ -2062,8 +2085,17 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
             // engine: "template" (both rungs failed) or when mimicry is off.
             let creative: { imageBase64: string; mimeType: string; bgSource?: "ai" | "stock"; imageEngine?: "gemini" | "openai" };
             if (input.referenceMimicry && aestheticRefImage) {
-              progress("Generating creative", "running", "Mimicking reference layout via Gemini…");
-              const m = await buildMimicryCreative(headlineForCreativeFinal, { heroUrl: bgSlot.url }).catch(() => null);
+              // Round 19 FIX 2: render the mimicry card DETERMINISTICALLY (block engine
+              // only — never a fabricated AI image) from the REAL photo. mimicryHeroUrl
+              // is the user-assigned image / article photo / undefined (NDTV-class
+              // photoless), NEVER the AI bgSlot. deterministicOnly:true forbids the
+              // gemini/openai-described rungs so the SAME input always renders the SAME
+              // card, fast, and never a laughing-AI-celebrity face.
+              progress("Generating creative", "running", "Mimicking reference layout (deterministic)…");
+              const m = await buildMimicryCreative(headlineForCreativeFinal, {
+                heroUrl: mimicryHeroUrl,
+                deterministicOnly: true,
+              }).catch(() => null);
               if (m && m.engine !== "template" && m.imageBase64) {
                 creative = { imageBase64: m.imageBase64, mimeType: m.mimeType };
                 renderedMimicryEngine = m.engine as "gemini-img2img" | "openai-described" | "gemini-composite" | "layout-extract";
@@ -3145,6 +3177,10 @@ Return ONLY the JSON array, no other text.`;
               ...(input.labelColor ? { labelColor: input.labelColor } : {}),
               ...(input.logoSize ? { logoSize: input.logoSize } : {}),
               ...(input.headlineAlign ? { alignOverride: input.headlineAlign } : {}),
+              // Round 19 FIX 2: regen is deterministic too — block engine only, never a
+              // fabricated AI face. The hero is the REAL article photo (safeBgImageUrl,
+              // fetched into heroImage above), NOT an AI background.
+              deterministicOnly: true,
             },
             regenDeps,
           );
