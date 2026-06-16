@@ -170,15 +170,57 @@ export interface CardContent {
   brandColor?: string;
   /** Optional body for a carousel body slide (unused for the static cover). */
   body?: string;
+  /**
+   * When set, the user's style PICKER overrides the vision-detected headline
+   * treatment and background mode. The reference still supplies eyebrow/brandLabel,
+   * logo position, colors, and theme — the picker changes only the layout treatment:
+   *
+   *   premium_editorial → bg mode "photo", headline variant "plain", scrimMode "brand"
+   *                        (moviefied blend: photo fades into brand color)
+   *   bold_typographic  → headline variant "plain" (boxless); bg mode unchanged from ref
+   *   hook_bars         → headline variant "box" (boxed pill bars)
+   *   tweet_card        → no override (tweet card is structurally specific; use as-detected)
+   */
+  styleOverride?: "premium_editorial" | "hook_bars" | "tweet_card" | "bold_typographic";
 }
 
 /**
  * Pure: map an extracted CardLayout + our content → a CardSpec the engine renders.
- * The reference dictates STYLE (layout/treatment/positions/theme); we supply the
- * TEXT and IMAGES. Exported for unit testing.
+ * The reference dictates STRUCTURE (positions/logo/brandLabel/theme/colors); we supply
+ * the TEXT and IMAGES. When content.styleOverride is set, the PICKER overrides the
+ * reference-detected headline variant + background mode — the reference still supplies
+ * everything else (logo anchor, brandLabel, accent, theme, alignment).
+ * Exported for unit testing.
  */
 export function cardLayoutToSpec(layout: CardLayout, content: CardContent): CardSpec {
   const brandColor = safeColor(content.brandColor ?? layout.accentColor);
+
+  // ── Picker override: user's style choice wins over vision-detected treatment ──
+  // The reference supplies the STRUCTURE (logo, brandLabel, positions, theme, colors);
+  // the picker overrides only the headline variant + background mode.
+  let effectiveBgMode = layout.background.mode;
+  let effectiveScrimMode = layout.background.scrimMode;
+  let effectiveHeadlineVariant = layout.headline.variant;
+
+  if (content.styleOverride && content.styleOverride !== "tweet_card") {
+    switch (content.styleOverride) {
+      case "premium_editorial":
+        // Moviefied look: full-bleed photo with brand-color scrim + boxless big headline.
+        effectiveBgMode = "photo";
+        effectiveScrimMode = "brand";
+        effectiveHeadlineVariant = "plain";
+        break;
+      case "bold_typographic":
+        // Huge headline directly on the image; keep whatever bg mode the ref has.
+        effectiveHeadlineVariant = "plain";
+        break;
+      case "hook_bars":
+        // Boxed pill headline (viral desi-news style).
+        effectiveHeadlineVariant = "box";
+        break;
+    }
+  }
+
   const controls: StyleControls = {
     theme: layout.theme,
     brandColor,
@@ -192,15 +234,16 @@ export function cardLayoutToSpec(layout: CardLayout, content: CardContent): Card
 
   const blocks: Block[] = [];
 
-  // Background: the hero photo (or split/grid tiles) with the reference's scrim/blend.
+  // Background: the hero photo (or split/grid tiles) with the effective scrim/blend.
+  // effectiveBgMode / effectiveScrimMode are from the picker when set, else from the ref.
   blocks.push({
     kind: "background",
     props: {
-      mode: layout.background.mode,
+      mode: effectiveBgMode,
       ...(content.heroImageUrl ? { imageUrl: content.heroImageUrl } : {}),
       ...(content.heroImageUrls?.length ? { imageUrls: content.heroImageUrls } : {}),
       accentColor: brandColor,
-      scrimMode: layout.background.scrimMode,
+      scrimMode: effectiveScrimMode,
     },
   });
 
@@ -235,7 +278,8 @@ export function cardLayoutToSpec(layout: CardLayout, content: CardContent): Card
   }
 
   // Headline (+ optional brand wordmark above it). Text + highlight markup come from
-  // the repurpose flow; the reference dictates plain-vs-box + alignment.
+  // the repurpose flow. The variant is the picker-effective value (overrides detected
+  // variant when styleOverride is set); alignment is always from the reference.
   blocks.push({
     kind: "captionStack",
     props: {
@@ -243,7 +287,7 @@ export function cardLayoutToSpec(layout: CardLayout, content: CardContent): Card
       pills: [
         {
           text: content.headline,
-          variant: layout.headline.variant,
+          variant: effectiveHeadlineVariant,
           align: layout.headline.align,
           textColor: layout.theme === "dark" ? "#ffffff" : "#0f1419",
         },

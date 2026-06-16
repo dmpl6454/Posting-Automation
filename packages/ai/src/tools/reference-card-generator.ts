@@ -94,6 +94,15 @@ export interface GenerateReferenceStyledCardArgs {
    */
   brandColor?: string | null;
   textMode: "ai" | "overlay";
+  /**
+   * The user's style picker choice. When set, the layout-extract rung passes this
+   * through to cardLayoutToSpec as `styleOverride`, so the picker overrides the
+   * vision-detected headline variant + background mode while the reference still
+   * supplies logo position, brandLabel, colors, and theme.
+   * Has no effect on the Gemini img2img or OpenAI-described rungs (those use
+   * prompt-based generation, not the block engine).
+   */
+  styleOverride?: string;
 }
 
 export type ReferenceCardEngine =
@@ -236,6 +245,8 @@ export interface ReferenceCardDeps {
    * (as returned by extractCardLayout) and the card content, returns a PNG.
    * Defaults to (layout, content) => generateCardImage(cardLayoutToSpec(layout, content)).
    * Tests inject a mock so Puppeteer is never launched.
+   * `content.styleOverride` (when present) is forwarded to cardLayoutToSpec so the
+   * user's picker overrides the vision-detected headline variant + background mode.
    */
   renderLayoutCard?: (layout: unknown, content: {
     headline: string;
@@ -243,6 +254,7 @@ export interface ReferenceCardDeps {
     channelName: string;
     logoUrl?: string;
     brandColor?: string;
+    styleOverride?: string;
   }) => Promise<{ imageBase64: string; mimeType: string }>;
 }
 
@@ -582,6 +594,7 @@ async function defaultRenderLayoutCard(
     channelName: string;
     logoUrl?: string;
     brandColor?: string;
+    styleOverride?: string;
   },
 ): Promise<{ imageBase64: string; mimeType: string }> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -644,6 +657,8 @@ export async function generateLayoutExtractCard(
       : undefined;
 
     // Step 4: render via the block engine.
+    // styleOverride (when set) is forwarded so the user's picker overrides the
+    // vision-detected headline variant + background mode in cardLayoutToSpec.
     const render = deps.renderLayoutCard ?? defaultRenderLayoutCard;
     const out = await render(layout, {
       headline: args.headline,
@@ -651,6 +666,7 @@ export async function generateLayoutExtractCard(
       channelName: args.brandName,
       ...(logoUrl ? { logoUrl } : {}),
       ...(args.brandColor ? { brandColor: safeColor(args.brandColor) } : {}),
+      ...(args.styleOverride ? { styleOverride: args.styleOverride } : {}),
     });
 
     if (!out.imageBase64) {
