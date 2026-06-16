@@ -258,6 +258,18 @@ function stripHtml(html: string): string {
   return decodeEntities(stripped);
 }
 
+/**
+ * Strip real HTML markup tags from a captured string value, then collapse
+ * whitespace. Applied BEFORE decodeEntities so that entity-encoded angle
+ * brackets (`&lt;i&gt;`) are never mistakenly matched as tags — they are still
+ * decoded to plain text in the subsequent decodeEntities pass.
+ *
+ * Example: "<i>Movie</i> News &amp; More" → "Movie News & More"
+ */
+function stripTags(text: string): string {
+  return text.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+}
+
 /** Extract meta tag content from raw HTML */
 function getMeta(html: string, property: string): string {
   // Try og: / twitter: / name= patterns
@@ -269,7 +281,9 @@ function getMeta(html: string, property: string): string {
   ];
   for (const re of patterns) {
     const m = html.match(re);
-    if (m?.[1]) return decodeEntities(m[1]);
+    // FIX 4 (Round 15): strip HTML tags then decode entities so italicised
+    // titles like <i>Movie</i> don't leak literal tag syntax into the headline.
+    if (m?.[1]) return decodeEntities(stripTags(m[1]));
   }
   return "";
 }
@@ -281,7 +295,8 @@ function getTitle(html: string): string {
   const tw = getMeta(html, "twitter:title");
   if (tw) return tw;
   const match = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  return decodeEntities(match?.[1]?.trim() || "");
+  // FIX 4 (Round 15): strip tags before decoding entities (same as getMeta).
+  return decodeEntities(stripTags(match?.[1]?.trim() || ""));
 }
 
 /**

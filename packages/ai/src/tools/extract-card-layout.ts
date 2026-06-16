@@ -12,7 +12,7 @@
  * safeColor, confidence clamped) and again downstream in renderCard. Fails graceful
  * → null; the caller falls back to the legacy template so generation never blocks.
  */
-import { safeColor, safeFontFamily, type CardSpec, type Block, type StyleControls } from "./card-engine";
+import { safeColor, safeFontFamily, type CardSpec, type Block, type StyleControls, type FontFamily } from "./card-engine";
 
 /** Background treatments the extractor may pick (subset the engine renders well). */
 export type LayoutBackgroundMode =
@@ -27,7 +27,7 @@ export interface CardLayout {
   theme: "light" | "dark";
   accentColor: string; // #hex, safeColor-sanitized
   /** Headline typeface family, mapped from the reference's actual font style. */
-  fontFamily: import("./card-engine").FontFamily; // "inter" | "serif_display" | "condensed"
+  fontFamily: FontFamily;
   background: {
     mode: LayoutBackgroundMode;
     /** Bottom scrim over a photo: "brand" = photo bleeds into the brand color
@@ -186,8 +186,9 @@ export interface CardContent {
   /**
    * When set, overrides the font family from the reference's detected typeface.
    * The explicit pick wins; without it the reference's detected font is used.
+   * Accepts any value from the FontFamily union (including the Round 15 additions).
    */
-  fontOverride?: "inter" | "serif_display" | "condensed";
+  fontOverride?: FontFamily;
   /**
    * When set, the user's style PICKER overrides the vision-detected headline
    * treatment and background mode. The reference still supplies eyebrow/brandLabel,
@@ -283,13 +284,19 @@ export function cardLayoutToSpec(layout: CardLayout, content: CardContent): Card
     });
   }
 
-  // FIX 2: headline text color. When the user's picker supplies headlineColor,
-  // validate it directly (same hex regex as safeColor) — only a valid hex passes.
-  // Falls back to the theme default when absent or invalid (NOT to the accent, so
-  // a bad value like "red;}" never corrupts the card). The brand label (small
-  // eyebrow) inherits the same color so the two typographic elements are cohesive.
+  // FIX 1 (Round 15): headline text color default is scrim-aware, not just theme-aware.
+  // A card with a brand-scrim (photo bleeds into brand color — the Moviefied look)
+  // or a dark-scrim places the headline over a DARK surface regardless of the card's
+  // overall `theme` value.  The old code used theme:"light" → black (#0f1419) which
+  // gave an invisible black headline over an orange-gradient scrim.  New logic:
+  //   – scrimMode "brand" or "dark" → white (#ffffff) is always legible
+  //   – otherwise fall back to the existing theme heuristic
+  // The user's explicit headlineColor picker value (HEX_RE-gated) still wins when set.
   const HEX_RE = /^#[0-9a-fA-F]{3,8}$/;
-  const themeTextDefault = layout.theme === "dark" ? "#ffffff" : "#0f1419";
+  const themeTextDefault =
+    (effectiveScrimMode === "brand" || effectiveScrimMode === "dark")
+      ? "#ffffff"
+      : (layout.theme === "dark" ? "#ffffff" : "#0f1419");
   const resolvedHeadlineColor =
     content.headlineColor && HEX_RE.test(content.headlineColor)
       ? content.headlineColor
