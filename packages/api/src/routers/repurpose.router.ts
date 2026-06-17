@@ -10,7 +10,7 @@ import {
   repurposeVideoQueue,
   type RepurposeVideoJobData,
 } from "@postautomation/queue";
-import { toFriendlyAIError, isMissingAIKeyError, friendlyAIMessage } from "../lib/ai-errors";
+import { toFriendlyAIError, isMissingAIKeyError, isProviderBillingError, friendlyAIMessage } from "../lib/ai-errors";
 import { requirePlan, enforcePlanLimit } from "../middleware/plan-limit.middleware";
 
 // S3 helpers
@@ -599,9 +599,6 @@ export async function renderStaticCreative(args: {
   // REP-3: resolved tile images for the postcard_grid style.
   gridImageUrls?: string[];
   gridPreset?: "two_up" | "three_up" | "grid_2x2";
-  // REP-4: free-drag logo / hook-text positions (% of canvas, 0-100). Absent = corner default.
-  logoPosXY?: { xPct: number; yPct: number };
-  hookPosXY?: { xPct: number; yPct: number };
 }): Promise<{ imageBase64: string; mimeType: string; bgSource: "ai" | "stock"; imageEngine?: "gemini" | "openai" }> {
   const { generateImageSafe, generateStyledCreativeImage } = args.ai;
   let backgroundImageUrl: string | undefined = args.bgImageUrl;
@@ -678,9 +675,6 @@ export async function renderStaticCreative(args: {
     // REP-3: postcard_grid tile images.
     ...(args.gridImageUrls?.length ? { gridImageUrls: args.gridImageUrls } : {}),
     ...(args.gridPreset ? { gridPreset: args.gridPreset } : {}),
-    // REP-4: free-drag positions — absent means corner/flow default (byte-identical).
-    ...(args.logoPosXY ? { logoPosXY: args.logoPosXY } : {}),
-    ...(args.hookPosXY ? { hookPosXY: args.hookPosXY } : {}),
   });
   return { imageBase64: creative.imageBase64, mimeType: creative.mimeType, bgSource, imageEngine };
 }
@@ -1049,9 +1043,6 @@ export const repurposeRouter = createRouter({
         // Round 17: headline alignment override (wins over the reference's detected
         // alignment on the layout-extract rung).
         headlineAlign: z.enum(["left", "center", "right"]).optional(),
-        // REP-4: free-drag logo / hook-text positions (% of canvas, 0-100). Absent = corner default.
-        logoPosXY: z.object({ xPct: z.number(), yPct: z.number() }).optional(),
-        hookPosXY: z.object({ xPct: z.number(), yPct: z.number() }).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -1492,9 +1483,6 @@ export const repurposeRouter = createRouter({
           // REP-3: postcard_grid tile images — pass-through to renderStaticCreative.
           gridImageUrls?: string[];
           gridPreset?: "two_up" | "three_up" | "grid_2x2";
-          // REP-4: free-drag positions — pass-through to renderStaticCreative.
-          logoPosXY?: { xPct: number; yPct: number };
-          hookPosXY?: { xPct: number; yPct: number };
         },
       ): Promise<{ imageBase64: string; mimeType: string; bgSource: "ai" | "stock"; imageEngine?: "gemini" | "openai" }> {
         // Delegate to the module-level renderer (E3b) so the repurpose flow and
@@ -1524,9 +1512,6 @@ export const repurposeRouter = createRouter({
           // REP-3: postcard_grid tile images.
           ...(extra?.gridImageUrls?.length ? { gridImageUrls: extra.gridImageUrls } : {}),
           ...(extra?.gridPreset ? { gridPreset: extra.gridPreset } : {}),
-          // REP-4: free-drag positions.
-          ...(extra?.logoPosXY ? { logoPosXY: extra.logoPosXY } : {}),
-          ...(extra?.hookPosXY ? { hookPosXY: extra.hookPosXY } : {}),
         });
       }
 
@@ -2081,8 +2066,15 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
             progress("Generating postcard grid", "done", "Uploaded to S3");
             console.log(`[Repurpose] Postcard grid uploaded: ${url} (mediaId: ${mediaId})`);
           } catch (e) {
+            // R4: do NOT swallow — a failed postcard render must surface a HARD,
+            // friendly error so the UI blocks instead of letting the user create a
+            // media-less draft (which fails to publish to IG/FB). Mirrors the
+            // captions catch above: keep the progress event + console log, then
+            // rethrow via toFriendlyAIError (re-throws existing TRPCErrors, maps
+            // billing/permission to "temporarily unavailable", sanitizes the rest).
             progress("Generating postcard grid", "error", friendlyAIMessage(e));
             console.error(`[Repurpose] Postcard grid FAILED:`, (e as Error).message);
+            throw toFriendlyAIError(e);
           }
         } else {
 
@@ -2218,9 +2210,6 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
                     // slot here is always user/article/ai — all of which carry a real
                     // bg url to bake into the template.
                     bgImageUrl: bgSlot.url,
-                    // REP-4: free-drag positions (absent = corner default).
-                    ...(input.logoPosXY ? { logoPosXY: input.logoPosXY } : {}),
-                    ...(input.hookPosXY ? { hookPosXY: input.hookPosXY } : {}),
                   },
                 );
               }
@@ -2241,9 +2230,6 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
                   // slot here is always user/article/ai — all of which carry a real
                   // bg url to bake into the template.
                   bgImageUrl: bgSlot.url,
-                  // REP-4: free-drag positions (absent = corner default).
-                  ...(input.logoPosXY ? { logoPosXY: input.logoPosXY } : {}),
-                  ...(input.hookPosXY ? { hookPosXY: input.hookPosXY } : {}),
                 },
               );
             }
@@ -2272,11 +2258,27 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
             );
             console.log(`[Repurpose] Static creative uploaded: ${url} (mediaId: ${mediaId}, bg: ${bgSlot.source})`);
           } catch (e) {
-            // The template renderer itself failed (Puppeteer/asset issue). This
-            // is the genuine no-image case — surface it loudly (Fix 4) but with
-            // a sanitized message (no raw provider internals / project IDs).
+            // The template renderer / upload itself failed (Puppeteer/asset issue,
+            // S3 write, DB Media-row create). This is the genuine no-image case —
+            // R4: it MUST surface a HARD error, not be swallowed. Swallowing left
+            // mediaUrls empty and returned a soft mediaFailed:true (200), so the UI
+            // still let the user "Create Drafts" → a media-less draft that fails to
+            // publish to Instagram/Facebook. Surface it loudly, sanitized (no raw
+            // provider internals / project IDs).
             progress("Generating creative", "error", friendlyAIMessage(e));
             console.error(`[Repurpose] Static creative FAILED:`, (e as Error).message);
+            // Classified AI errors (missing key / billing / existing TRPCError) get
+            // their friendly mapping; a genuinely-unknown render/upload failure gets
+            // an actionable BAD_REQUEST telling the user to retry or add their own
+            // photo — better UX than a bare INTERNAL_SERVER_ERROR.
+            if (e instanceof TRPCError || isMissingAIKeyError(e) || isProviderBillingError(e)) {
+              throw toFriendlyAIError(e);
+            }
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message:
+                "Couldn't generate the image — please try again, or add your own photo via Replace / adjust photo before publishing.",
+            });
           }
         }
         } // end else (non-postcard_grid single-bg path)
@@ -3111,9 +3113,6 @@ Return ONLY the JSON array, no other text.`;
         logoSize: z.number().int().min(4).max(40).optional(),
         // Round 17: headline alignment override.
         headlineAlign: z.enum(["left", "center", "right"]).optional(),
-        // REP-4: free-drag logo / hook-text positions (% of canvas, 0-100). Absent = corner default.
-        logoPosXY: z.object({ xPct: z.number(), yPct: z.number() }).optional(),
-        hookPosXY: z.object({ xPct: z.number(), yPct: z.number() }).optional(),
         // REP-2: optional slide-role + body for re-rendering a body/cta slide.
         // When absent, behaviour is byte-identical to the existing cover/static path.
         slideRole: z.enum(["cover", "body", "cta"]).optional(),
@@ -3348,9 +3347,6 @@ Return ONLY the JSON array, no other text.`;
               // REP-2: thread slide-role + body (absent = no-op, byte-identical).
               ...(input.slideRole ? { slideRole: input.slideRole } : {}),
               ...(input.slideBody !== undefined ? { body: input.slideBody } : {}),
-              // REP-4: free-drag positions (absent = corner default, byte-identical).
-              ...(input.logoPosXY ? { logoPosXY: input.logoPosXY } : {}),
-              ...(input.hookPosXY ? { hookPosXY: input.hookPosXY } : {}),
             });
           } catch (e) {
             throw toFriendlyAIError(e);
@@ -3376,9 +3372,6 @@ Return ONLY the JSON array, no other text.`;
             // REP-2: thread slide-role + body (absent = no-op, byte-identical).
             ...(input.slideRole ? { slideRole: input.slideRole } : {}),
             ...(input.slideBody !== undefined ? { body: input.slideBody } : {}),
-            // REP-4: free-drag positions (absent = corner default, byte-identical).
-            ...(input.logoPosXY ? { logoPosXY: input.logoPosXY } : {}),
-            ...(input.hookPosXY ? { hookPosXY: input.hookPosXY } : {}),
           });
         } catch (e) {
           throw toFriendlyAIError(e);

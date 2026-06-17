@@ -39,10 +39,6 @@ export interface StaticCreativeOptions {
   /** Logo URL; null/undefined → logo block omitted (no-reference path). */
   logoUrl?: string | null;
   logoPosition: "top-left" | "top-right";
-  /** REP-4: optional free-drag logo position (% of canvas). Absent → logoPosition corner. */
-  logoPosXY?: { xPct: number; yPct: number };
-  /** REP-4: optional free-drag hook-line position (% of canvas, hook_bars). Absent → flow. */
-  hookPosXY?: { xPct: number; yPct: number };
   /** Brand accent color (hex). Defaults applied per style if absent. */
   brandColor?: string;
   channelName: string;
@@ -89,21 +85,6 @@ export function renderHighlightMarkup(text: string, accent: string): string {
     .replace(/\*\*([^*]+)\*\*/g, `<span style="color:${safe}">$1</span>`)
     .replace(/==([^=]+)==/g, `<span style="color:${safe}">$1</span>`)
     .replace(/\*\*|==/g, "");
-}
-
-/** REP-4: clamp a free-drag percentage to a finite 0–100 (numeric CSS context; no string sink). */
-function clampPct(n: number): number {
-  return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : 0;
-}
-
-/** REP-4: the .logo CSS body. Absent logoPosXY → existing corner placement (byte-identical);
- *  present → absolute at the dragged point (centered). `tail` carries any builder-specific
- *  extra rules (e.g. bold_typographic's flex). */
-function logoCssBody(opts: StaticCreativeOptions, topPx: number, corner: string, tail = ""): string {
-  if (opts.logoPosXY) {
-    return `position:absolute;left:${clampPct(opts.logoPosXY.xPct)}%;top:${clampPct(opts.logoPosXY.yPct)}%;transform:translate(-50%,-50%);${tail}`;
-  }
-  return `position:absolute;top:${topPx}px;${corner}${tail}`;
 }
 
 export interface ThemeTokens {
@@ -210,7 +191,7 @@ body{width:${CANVAS.width}px;height:${CANVAS.height}px;overflow:hidden;position:
 .bg{position:absolute;inset:0;${bg}}
 .scrim{position:absolute;inset:0;background:${tokens.scrim};}
 .photo-scrim{position:absolute;left:0;right:0;bottom:0;height:62%;background:linear-gradient(to top, rgba(0,0,0,0.82) 0%, rgba(0,0,0,0.45) 40%, rgba(0,0,0,0) 100%);}
-.logo{${logoCssBody(opts, 44, corner)}}
+.logo{position:absolute;top:44px;${corner}}
 .block{position:absolute;left:56px;right:56px;bottom:96px;}
 .label{font-style:italic;font-size:26px;font-weight:600;color:${tokens.subTextColor};letter-spacing:0.01em;${headlineShadow}}
 .rule{width:64px;height:4px;background:${accent};border-radius:2px;margin:14px 0 22px;}
@@ -248,7 +229,7 @@ ${FONT_IMPORT}
 *{margin:0;padding:0;box-sizing:border-box;}
 body{width:${CANVAS.width}px;height:${CANVAS.height}px;overflow:hidden;position:relative;font-family:'Inter',system-ui,sans-serif;background:${tokens.bgFallback};}
 .bg{position:absolute;inset:0;${bg}}
-.logo{${logoCssBody(opts, 36, corner)}}
+.logo{position:absolute;top:36px;${corner}}
 .bars{position:absolute;left:36px;right:36px;bottom:48px;display:flex;flex-direction:column;gap:14px;}
 .bar{background:#fff;border-radius:10px;padding:18px 24px;box-shadow:0 6px 24px rgba(0,0,0,0.35);}
 .hook{font-size:40px;font-weight:800;line-height:1.15;color:#111;}
@@ -259,8 +240,8 @@ body{width:${CANVAS.width}px;height:${CANVAS.height}px;overflow:hidden;position:
 <div class="logo">${logoHtml(opts, 56)}</div>
 ${inset}
 <div class="bars">
-  ${hookHtml ? `<div class="bar"${opts.hookPosXY ? ` style="position:absolute;left:${clampPct(opts.hookPosXY.xPct)}%;top:${clampPct(opts.hookPosXY.yPct)}%;transform:translate(-50%,-50%);"` : ""}><div class="hook">${hookHtml}</div></div>` : ""}
-  <div class="bar"><div class="headline">${escapeHtml(opts.headline)}</div></div>
+  ${hookHtml ? `<div class="bar"><div class="hook">${hookHtml}</div></div>` : ""}
+  ${opts.headline?.trim() ? `<div class="bar"><div class="headline">${escapeHtml(opts.headline)}</div></div>` : ""}
 </div>
 </body></html>`;
 }
@@ -371,7 +352,7 @@ ${FONT_IMPORT}
 *{margin:0;padding:0;box-sizing:border-box;}
 body{width:${CANVAS.width}px;height:${CANVAS.height}px;overflow:hidden;position:relative;font-family:'Inter',system-ui,sans-serif;${bgLayer}display:flex;align-items:center;padding:0 64px;}
 .accent-band{position:absolute;top:0;left:0;width:14px;height:100%;background:${accent};}
-.logo{${logoCssBody(opts, 56, corner, "display:flex;align-items:center;gap:14px;")}}
+.logo{position:absolute;top:56px;${corner}display:flex;align-items:center;gap:14px;}
 .brand-tag{color:${subTextColor};font-size:22px;font-weight:600;}
 .headline{color:${textColor};font-size:${fs}px;font-weight:900;line-height:1.02;letter-spacing:-0.03em;}
 .rule{position:absolute;bottom:96px;left:64px;width:80px;height:5px;background:${accent};border-radius:3px;}
@@ -433,7 +414,7 @@ body{width:${CANVAS.width}px;height:${CANVAS.height}px;overflow:hidden;position:
 .bg{position:absolute;inset:0;${bg}}
 .scrim{position:absolute;inset:0;background:${tokens.scrim};}
 .accent-band{position:absolute;top:0;left:0;width:14px;height:100%;background:${accent};}
-.logo{${logoCssBody(opts, 44, corner)}}
+.logo{position:absolute;top:44px;${corner}}
 .block{position:absolute;left:56px;right:56px;bottom:96px;}
 .label{font-style:italic;font-size:26px;font-weight:600;color:${tokens.subTextColor};letter-spacing:0.01em;}
 .rule{width:64px;height:4px;background:${accent};border-radius:2px;margin:14px 0 22px;}
