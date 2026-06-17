@@ -244,6 +244,8 @@ export function RepurposeTab() {
   // Feature 3 — Inline headline edit. Initialized from renderedHeadline when
   // results arrive; Regenerate prefers this over the server's rendered value.
   const [editedHeadline, setEditedHeadline] = useState<string>("");
+  // REP-2 — Per-slide carousel text edits. Keyed by slide index; cleared on each new generate.
+  const [slideEdits, setSlideEdits] = useState<Record<number, { title?: string; body?: string }>>({});
 
   // Round 14/15 — Headline font + text-color pickers.
   // Empty string = use the reference-detected value (server default).
@@ -310,6 +312,8 @@ export function RepurposeTab() {
     // FIX 1(c) (Round 16): the article's hero photo was unfetchable (e.g. NDTV
     // hard-403), so the mimicry card rendered photoless — prompt the user to add one.
     heroPhotoMissing?: boolean;
+    // REP-2: per-slide text returned by the backend so the editor can seed each slide.
+    carouselSlides?: { index: number; role: string; title: string; body: string; mediaId: string }[];
   } | null>(null);
   const [copiedPlatform, setCopiedPlatform] = useState<string | null>(null);
 
@@ -588,6 +592,8 @@ export function RepurposeTab() {
       setResults(data);
       // Feature 3: initialize the editable headline from the server's rendered value.
       setEditedHeadline(data.renderedHeadline ?? data.extracted?.title ?? "");
+      // REP-2: reset per-slide edits on each new generate (carouselSlides seeds from fresh data).
+      setSlideEdits({});
       const mediaCount = data.mediaUrls.length;
       // Be honest: if captions generated but media failed, this is NOT a clean
       // success — show a warning toast that points at the activity log, not a
@@ -646,9 +652,21 @@ export function RepurposeTab() {
 
   const handleRegenerate = async (target: "static" | number) => {
     if (!results) return;
-    // Headline: prefer the user's inline edit (Feature 3) over the server's
-    // rendered value so "edit headline → Regenerate" re-renders with the new text.
-    const headline = (editedHeadline.trim() || (results.renderedHeadline ?? results.extracted?.title ?? "")).trim();
+    // REP-2: for a numbered (carousel slide) target, source headline from the slide's
+    // own text — NOT from editedHeadline which belongs to the cover/static image.
+    // Use the COMPACTED position: carouselSlides is built lock-step with
+    // mediaUrls/carouselMediaIds (same `if (!slide) continue`), so position i in
+    // the display map aligns with carouselSlides[i] even if a middle slide failed
+    // to render. (Do NOT match on s.index — that's the original allSlides index,
+    // which diverges from the compacted display index on a mid-carousel failure.)
+    const slideForTarget = typeof target === "number"
+      ? results.carouselSlides?.[target]
+      : undefined;
+    const slideEdit = typeof target === "number" ? slideEdits[target] : undefined;
+    // Headline: for a slide use the edited/seed slide title; for "static" keep the existing editedHeadline path verbatim.
+    const headline = typeof target === "number"
+      ? (slideEdit?.title ?? slideForTarget?.title ?? "").trim()
+      : (editedHeadline.trim() || (results.renderedHeadline ?? results.extracted?.title ?? "")).trim();
     if (!headline) {
       toast({ title: "Can't regenerate", description: "No headline found for this image.", variant: "destructive" });
       return;
@@ -687,6 +705,9 @@ export function RepurposeTab() {
         headlineAlign: headlineAlign || undefined,
         labelColor: labelColor || undefined,
         logoSize: typeof logoSize === "number" ? logoSize : undefined,
+        // REP-2: pass slide role + body text for body-slide regeneration.
+        slideRole: slideForTarget?.role as "cover" | "body" | "cta" | undefined,
+        slideBody: slideForTarget?.role === "body" ? (slideEdit?.body ?? slideForTarget?.body) : undefined,
       });
       // Swap the displayed image (and its Media id for publish) in `results`.
       setResults((prev) => {
@@ -713,12 +734,30 @@ export function RepurposeTab() {
             : res.imageEngine && !prevEngines.includes(res.imageEngine)
               ? [...prevEngines, res.imageEngine]
               : prevEngines;
+        // REP-2: sync the edited title/body back into carouselSlides so the editor
+        // stays in sync after a slide regen (the new mediaId is also updated).
+        let nextCarouselSlides = prev.carouselSlides;
+        if (typeof target === "number" && nextCarouselSlides) {
+          // Match on the COMPACTED position (slotIdx), consistent with how the
+          // display map and handleRegenerate(target) index carouselSlides — NOT
+          // on s.index (the original allSlides index, which can diverge).
+          nextCarouselSlides = nextCarouselSlides.map((s, slotIdx) => {
+            if (slotIdx !== target) return s;
+            return {
+              ...s,
+              mediaId: res.mediaId,
+              ...(slideEdit?.title !== undefined ? { title: slideEdit.title } : {}),
+              ...(slideEdit?.body !== undefined ? { body: slideEdit.body } : {}),
+            };
+          });
+        }
         return {
           ...prev,
           mediaUrls: nextUrls,
           carouselMediaIds: nextCarouselIds,
           mediaMap: nextMap,
           imageEngines: nextEngines,
+          carouselSlides: nextCarouselSlides,
           ...(target === "static" ? { bgSource: res.bgSource as "ai" | "real" | "branded" | null, imageEngine: res.imageEngine, mimicryEngine: res.mimicryEngine ?? null } : {}),
         };
       });
@@ -2634,6 +2673,55 @@ export function RepurposeTab() {
                               </button>
                             )}
                           </div>
+                          {/* REP-2: per-slide text editor for body/content slides (i >= 1). */}
+                          {(() => {
+                            // Positional match: carouselSlides[i] aligns with the
+                            // compacted mediaUrls[i] (both skip failed slides together).
+                            const slide = results.carouselSlides?.[i];
+                            if (!slide || slide.role === "cta") return null;
+                            return (
+                              <div className="mt-2 space-y-1.5 w-full">
+                                <Input
+                                  value={slideEdits[i]?.title ?? slide.title ?? ""}
+                                  onChange={(e) =>
+                                    setSlideEdits((prev) => ({
+                                      ...prev,
+                                      [i]: { ...prev[i], title: e.target.value },
+                                    }))
+                                  }
+                                  placeholder="Slide title…"
+                                  className="text-xs h-7"
+                                />
+                                {slide.role === "body" && (
+                                  <Textarea
+                                    value={slideEdits[i]?.body ?? slide.body ?? ""}
+                                    onChange={(e) =>
+                                      setSlideEdits((prev) => ({
+                                        ...prev,
+                                        [i]: { ...prev[i], body: e.target.value },
+                                      }))
+                                    }
+                                    placeholder="Slide body…"
+                                    className="text-xs min-h-[56px] resize-none"
+                                    rows={3}
+                                  />
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => handleRegenerate(i)}
+                                  disabled={regenTarget !== null}
+                                  className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1 text-xs font-medium hover:bg-muted transition-colors disabled:opacity-50"
+                                >
+                                  {regenTarget === i ? (
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                  ) : (
+                                    <RefreshCw className="h-3 w-3" />
+                                  )}
+                                  Regenerate
+                                </button>
+                              </div>
+                            );
+                          })()}
                         </div>
                       ))}
                     </div>
