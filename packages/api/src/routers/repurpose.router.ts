@@ -599,6 +599,9 @@ export async function renderStaticCreative(args: {
   // REP-3: resolved tile images for the postcard_grid style.
   gridImageUrls?: string[];
   gridPreset?: "two_up" | "three_up" | "grid_2x2";
+  // REP-4: free-drag logo / hook-text positions (% of canvas, 0-100). Absent = corner default.
+  logoPosXY?: { xPct: number; yPct: number };
+  hookPosXY?: { xPct: number; yPct: number };
 }): Promise<{ imageBase64: string; mimeType: string; bgSource: "ai" | "stock"; imageEngine?: "gemini" | "openai" }> {
   const { generateImageSafe, generateStyledCreativeImage } = args.ai;
   let backgroundImageUrl: string | undefined = args.bgImageUrl;
@@ -675,6 +678,9 @@ export async function renderStaticCreative(args: {
     // REP-3: postcard_grid tile images.
     ...(args.gridImageUrls?.length ? { gridImageUrls: args.gridImageUrls } : {}),
     ...(args.gridPreset ? { gridPreset: args.gridPreset } : {}),
+    // REP-4: free-drag positions — absent means corner/flow default (byte-identical).
+    ...(args.logoPosXY ? { logoPosXY: args.logoPosXY } : {}),
+    ...(args.hookPosXY ? { hookPosXY: args.hookPosXY } : {}),
   });
   return { imageBase64: creative.imageBase64, mimeType: creative.mimeType, bgSource, imageEngine };
 }
@@ -1043,6 +1049,9 @@ export const repurposeRouter = createRouter({
         // Round 17: headline alignment override (wins over the reference's detected
         // alignment on the layout-extract rung).
         headlineAlign: z.enum(["left", "center", "right"]).optional(),
+        // REP-4: free-drag logo / hook-text positions (% of canvas, 0-100). Absent = corner default.
+        logoPosXY: z.object({ xPct: z.number(), yPct: z.number() }).optional(),
+        hookPosXY: z.object({ xPct: z.number(), yPct: z.number() }).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -1483,6 +1492,9 @@ export const repurposeRouter = createRouter({
           // REP-3: postcard_grid tile images — pass-through to renderStaticCreative.
           gridImageUrls?: string[];
           gridPreset?: "two_up" | "three_up" | "grid_2x2";
+          // REP-4: free-drag positions — pass-through to renderStaticCreative.
+          logoPosXY?: { xPct: number; yPct: number };
+          hookPosXY?: { xPct: number; yPct: number };
         },
       ): Promise<{ imageBase64: string; mimeType: string; bgSource: "ai" | "stock"; imageEngine?: "gemini" | "openai" }> {
         // Delegate to the module-level renderer (E3b) so the repurpose flow and
@@ -1512,6 +1524,9 @@ export const repurposeRouter = createRouter({
           // REP-3: postcard_grid tile images.
           ...(extra?.gridImageUrls?.length ? { gridImageUrls: extra.gridImageUrls } : {}),
           ...(extra?.gridPreset ? { gridPreset: extra.gridPreset } : {}),
+          // REP-4: free-drag positions.
+          ...(extra?.logoPosXY ? { logoPosXY: extra.logoPosXY } : {}),
+          ...(extra?.hookPosXY ? { hookPosXY: extra.hookPosXY } : {}),
         });
       }
 
@@ -2203,6 +2218,9 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
                     // slot here is always user/article/ai — all of which carry a real
                     // bg url to bake into the template.
                     bgImageUrl: bgSlot.url,
+                    // REP-4: free-drag positions (absent = corner default).
+                    ...(input.logoPosXY ? { logoPosXY: input.logoPosXY } : {}),
+                    ...(input.hookPosXY ? { hookPosXY: input.hookPosXY } : {}),
                   },
                 );
               }
@@ -2223,6 +2241,9 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
                   // slot here is always user/article/ai — all of which carry a real
                   // bg url to bake into the template.
                   bgImageUrl: bgSlot.url,
+                  // REP-4: free-drag positions (absent = corner default).
+                  ...(input.logoPosXY ? { logoPosXY: input.logoPosXY } : {}),
+                  ...(input.hookPosXY ? { hookPosXY: input.hookPosXY } : {}),
                 },
               );
             }
@@ -3090,6 +3111,9 @@ Return ONLY the JSON array, no other text.`;
         logoSize: z.number().int().min(4).max(40).optional(),
         // Round 17: headline alignment override.
         headlineAlign: z.enum(["left", "center", "right"]).optional(),
+        // REP-4: free-drag logo / hook-text positions (% of canvas, 0-100). Absent = corner default.
+        logoPosXY: z.object({ xPct: z.number(), yPct: z.number() }).optional(),
+        hookPosXY: z.object({ xPct: z.number(), yPct: z.number() }).optional(),
         // REP-2: optional slide-role + body for re-rendering a body/cta slide.
         // When absent, behaviour is byte-identical to the existing cover/static path.
         slideRole: z.enum(["cover", "body", "cta"]).optional(),
@@ -3324,6 +3348,9 @@ Return ONLY the JSON array, no other text.`;
               // REP-2: thread slide-role + body (absent = no-op, byte-identical).
               ...(input.slideRole ? { slideRole: input.slideRole } : {}),
               ...(input.slideBody !== undefined ? { body: input.slideBody } : {}),
+              // REP-4: free-drag positions (absent = corner default, byte-identical).
+              ...(input.logoPosXY ? { logoPosXY: input.logoPosXY } : {}),
+              ...(input.hookPosXY ? { hookPosXY: input.hookPosXY } : {}),
             });
           } catch (e) {
             throw toFriendlyAIError(e);
@@ -3349,6 +3376,9 @@ Return ONLY the JSON array, no other text.`;
             // REP-2: thread slide-role + body (absent = no-op, byte-identical).
             ...(input.slideRole ? { slideRole: input.slideRole } : {}),
             ...(input.slideBody !== undefined ? { body: input.slideBody } : {}),
+            // REP-4: free-drag positions (absent = corner default, byte-identical).
+            ...(input.logoPosXY ? { logoPosXY: input.logoPosXY } : {}),
+            ...(input.hookPosXY ? { hookPosXY: input.hookPosXY } : {}),
           });
         } catch (e) {
           throw toFriendlyAIError(e);
