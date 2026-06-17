@@ -55,3 +55,47 @@ describe("resolveImageSlot — real-first ladder", () => {
     expect(r.source).toBe("article");
   });
 });
+
+// REP-3 postcard tiles must honor user → ARTICLE → AI: a tile with a real photo
+// (user or article) must NOT be replaced by an AI image even when aiImages=true.
+// The resolver's AI rung fires on aiToggle ALONE (ignores aiPrompt), so the router
+// gates aiToggle OFF per-tile when a real photo exists. This models that decision.
+describe("postcard per-tile precedence (REP-3 regression guard) — user → article → AI", () => {
+  const resolveTile = (
+    args: { userId?: string; artUrl?: string },
+    ctxAiToggle: boolean,
+  ) => {
+    const hasRealPhoto = !!args.userId || !!args.artUrl;
+    return resolveImageSlot(
+      {
+        ...(args.userId ? { userImageId: args.userId } : {}),
+        ...(args.artUrl ? { articleImageUrl: args.artUrl } : {}),
+        ...(!hasRealPhoto ? { aiPrompt: "tile" } : {}),
+      },
+      { ...baseCtx(), aiToggle: hasRealPhoto ? false : ctxAiToggle, articleImages: [] },
+    );
+  };
+
+  it("a tile WITH an article image uses the article photo, NOT AI (even with aiImages on)", async () => {
+    const r = await resolveTile({ artUrl: "https://cdn/a.jpg" }, true);
+    expect(r).toEqual({ url: "https://cdn/a.jpg", source: "article" });
+  });
+
+  it("a tile WITH a user image uses the user photo, NOT AI (even with aiImages on)", async () => {
+    // A user-assigned tile gates aiToggle off → AI never runs, user photo wins.
+    const ctx = { ...baseCtx(), aiToggle: false, userImages: { u1: { url: "https://cdn/u.jpg" } } };
+    const r = await resolveImageSlot({ userImageId: "u1" }, ctx);
+    expect(r).toEqual({ url: "https://cdn/u.jpg", source: "user" });
+    expect(ctx.generateAi).not.toHaveBeenCalled();
+  });
+
+  it("an EMPTY tile (no user, no article) DOES generate AI when aiImages on", async () => {
+    const r = await resolveTile({}, true);
+    expect(r.source).toBe("ai");
+  });
+
+  it("an EMPTY tile falls to branded when aiImages off", async () => {
+    const r = await resolveTile({}, false);
+    expect(r.source).toBe("branded");
+  });
+});

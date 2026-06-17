@@ -596,6 +596,9 @@ export async function renderStaticCreative(args: {
    */
   aiEnabled?: boolean;
   browser?: unknown;
+  // REP-3: resolved tile images for the postcard_grid style.
+  gridImageUrls?: string[];
+  gridPreset?: "two_up" | "three_up" | "grid_2x2";
 }): Promise<{ imageBase64: string; mimeType: string; bgSource: "ai" | "stock"; imageEngine?: "gemini" | "openai" }> {
   const { generateImageSafe, generateStyledCreativeImage } = args.ai;
   let backgroundImageUrl: string | undefined = args.bgImageUrl;
@@ -669,6 +672,9 @@ export async function renderStaticCreative(args: {
     ...(args.hookLine ? { hookLine: args.hookLine } : {}),
     ...(backgroundImageUrl ? { bgImageUrl: backgroundImageUrl } : {}),
     ...(args.brandColor ? { brandColor: args.brandColor } : {}),
+    // REP-3: postcard_grid tile images.
+    ...(args.gridImageUrls?.length ? { gridImageUrls: args.gridImageUrls } : {}),
+    ...(args.gridPreset ? { gridPreset: args.gridPreset } : {}),
   });
   return { imageBase64: creative.imageBase64, mimeType: creative.mimeType, bgSource, imageEngine };
 }
@@ -956,8 +962,12 @@ export const repurposeRouter = createRouter({
         channelHandle: z.string().optional().default(""),
         logoUrl: z.string().optional().default(""),
         creativeStyle: z
-          .enum(["premium_editorial", "hook_bars", "tweet_card", "bold_typographic"])
+          .enum(["premium_editorial", "hook_bars", "tweet_card", "bold_typographic", "postcard_grid"])
           .default("premium_editorial"),
+        // REP-3: grid preset for the postcard_grid style.
+        // two_up = 2 tiles, three_up = 3 tiles, grid_2x2 = 4 tiles.
+        // Ignored when creativeStyle !== "postcard_grid".
+        gridPreset: z.enum(["two_up", "three_up", "grid_2x2"]).optional(),
         logoPosition: z.enum(["top-left", "top-right"]).default("top-right"),
         accentColor: z.string().nullish(),
         // E1: an aesthetic/style reference image the AI mimics (Gemini-only —
@@ -1470,6 +1480,9 @@ export const repurposeRouter = createRouter({
           // and bakes the overlay onto `bgImageUrl` as-is. The repurpose flow sets
           // this false because resolveImageSlot already produced the background.
           aiEnabled?: boolean;
+          // REP-3: postcard_grid tile images — pass-through to renderStaticCreative.
+          gridImageUrls?: string[];
+          gridPreset?: "two_up" | "three_up" | "grid_2x2";
         },
       ): Promise<{ imageBase64: string; mimeType: string; bgSource: "ai" | "stock"; imageEngine?: "gemini" | "openai" }> {
         // Delegate to the module-level renderer (E3b) so the repurpose flow and
@@ -1496,6 +1509,9 @@ export const repurposeRouter = createRouter({
           ...(extra?.browser ? { browser: extra.browser } : {}),
           ...(extra?.bgImageUrl ? { bgImageUrl: extra.bgImageUrl } : {}),
           ...(extra?.aiEnabled !== undefined ? { aiEnabled: extra.aiEnabled } : {}),
+          // REP-3: postcard_grid tile images.
+          ...(extra?.gridImageUrls?.length ? { gridImageUrls: extra.gridImageUrls } : {}),
+          ...(extra?.gridPreset ? { gridPreset: extra.gridPreset } : {}),
         });
       }
 
@@ -1989,6 +2005,72 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
         // https-only (safeImageUrl drops http:// downstream anyway).
         const articleBg = pickArticleBgImage(extracted.images, isPublicImageUrl);
 
+        // ── REP-3: postcard_grid branch ────────────────────────────────────────
+        // Resolve N tile images (user → article → AI as last resort) and render
+        // ONE composited postcard image. This is a SINGLE static image (mediaMap),
+        // not a carousel — carouselMediaIds stays [].
+        if (effectiveStyle === "postcard_grid") {
+          const preset = input.gridPreset ?? "two_up";
+          const tileCount = preset === "two_up" ? 2 : preset === "three_up" ? 3 : 4;
+
+          progress("Generating postcard grid");
+          console.log(`[Repurpose] postcard_grid: preset=${preset}, tiles=${tileCount}`);
+
+          const gridImageUrls: string[] = [];
+          for (let i = 0; i < tileCount; i++) {
+            const userId = slotMediaId(`grid:${i}`);
+            const artUrl = articleImagesList[i];
+            const hasRealPhoto = !!userId || !!artUrl;
+            // AI only as a last resort: when neither a user nor an article image
+            // exists for this tile. resolveImageSlot's AI rung fires on ctx.aiToggle
+            // ALONE (it ignores whether aiPrompt was set), so we must turn the toggle
+            // OFF per-tile when a real photo exists — otherwise the default
+            // aiImages=true would replace the user's/article's photo with an AI image.
+            // With aiToggle gated this way, the ladder yields user → article → AI →
+            // branded, matching the intended precedence (shared resolver untouched).
+            const slotResolved = await resolveImageSlot(
+              {
+                ...(userId ? { userImageId: userId } : {}),
+                ...(artUrl ? { articleImageUrl: artUrl } : {}),
+                ...(!hasRealPhoto ? { aiPrompt: bgPromptWithContext } : {}),
+              },
+              { ...slotCtx(), aiToggle: hasRealPhoto ? false : slotCtx().aiToggle },
+            ).catch(() => ({ url: brandGradient, source: "branded" as const }));
+            gridImageUrls.push(slotResolved.url);
+            console.log(`[Repurpose] postcard_grid tile[${i}]: source=${slotResolved.source}, url=${slotResolved.url.slice(0, 60)}`);
+          }
+
+          try {
+            const creative = await buildHeadlineCreative(
+              bgPromptWithContext,
+              headlineForCreativeFinal,
+              category,
+              hookLine,
+              {
+                aiEnabled: false,
+                gridImageUrls,
+                gridPreset: preset,
+              },
+            );
+            const { url, mediaId } = await uploadAndCreateMedia(
+              creative.imageBase64,
+              creative.mimeType,
+              "postcard",
+            );
+            mediaUrls.push(url);
+            mediaType = creative.mimeType.includes("png") ? "image/png" : "image/jpeg";
+            for (const platform of input.targetPlatforms) {
+              perPlatformMedia[platform] = { url, mediaId };
+            }
+            renderedBgSource = "real";
+            progress("Generating postcard grid", "done", "Uploaded to S3");
+            console.log(`[Repurpose] Postcard grid uploaded: ${url} (mediaId: ${mediaId})`);
+          } catch (e) {
+            progress("Generating postcard grid", "error", friendlyAIMessage(e));
+            console.error(`[Repurpose] Postcard grid FAILED:`, (e as Error).message);
+          }
+        } else {
+
         // D10/D2: resolve the single background slot through the real-first ladder:
         //   user-assigned (imageAssignments "background") → AI (if aiImages on, via
         //   generateAiSlotImage) → article og:image → branded gradient.
@@ -2176,6 +2258,7 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
             console.error(`[Repurpose] Static creative FAILED:`, (e as Error).message);
           }
         }
+        } // end else (non-postcard_grid single-bg path)
       } else if (input.format === "ai_video") {
         // ── Veo3 Ultra AI Video Generation ─────────────────────────────
         // 1. Break content into key points for video scenes

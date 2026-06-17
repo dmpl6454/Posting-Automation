@@ -54,6 +54,7 @@ import {
   X,
   UploadCloud,
   Crop,
+  LayoutGrid,
 } from "lucide-react";
 
 // Round 15 — the 14 headline fonts the renderer supports.
@@ -96,6 +97,7 @@ const PROVIDER_LABELS: Record<typeof providers[number], string> = {
 
 const FORMAT_OPTIONS = [
   { id: "static" as const, label: "Static Post", icon: Image, desc: "Single branded image + caption" },
+  { id: "postcard" as const, label: "Postcard", icon: LayoutGrid, desc: "Tweet-style header + photo grid" },
   { id: "carousel" as const, label: "Carousel", icon: Layers, desc: "Multi-slide carousel post" },
   { id: "reel" as const, label: "Slideshow Reel", icon: Film, desc: "Your key points become video slides with optional voiceover + music" },
   { id: "seedance_video" as const, label: "AI Video", icon: Video, desc: "Real AI-generated cinematic footage with native audio", badge: "NEW" },
@@ -153,7 +155,7 @@ export function RepurposeTab() {
   const [originalContent, setOriginalContent] = useState("");
 
   // Options
-  const [format, setFormat] = useState<"static" | "carousel" | "reel" | "ai_video" | "seedance_video">("static");
+  const [format, setFormat] = useState<"static" | "carousel" | "reel" | "ai_video" | "seedance_video" | "postcard">("static");
   // No platforms pre-selected — the user explicitly picks targets (the
   // Generate button stays disabled until at least one is chosen).
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
@@ -186,6 +188,9 @@ export function RepurposeTab() {
   const [voiceType, setVoiceType] = useState<string>("nova");
   const [bgMusic, setBgMusic] = useState(true);
   const [creativeStyle, setCreativeStyle] = useState<"premium_editorial" | "hook_bars" | "tweet_card" | "bold_typographic">("premium_editorial");
+  // REP-3: postcard-specific state. UI-only — maps to format:"static" + creativeStyle:"postcard_grid" at send time.
+  const [gridPreset, setGridPreset] = useState<"two_up" | "three_up" | "grid_2x2">("two_up");
+  const gridSlotCount = gridPreset === "two_up" ? 2 : gridPreset === "three_up" ? 3 : 4;
   const [logoPosition, setLogoPosition] = useState<"top-left" | "top-right">("top-right");
   // E2: number of CONTENT slides in a carousel (cover + cta added around these).
   // Default 5 preserves prior behaviour. Only shown when format === "carousel".
@@ -818,7 +823,8 @@ export function RepurposeTab() {
       repurposeFromUrl.mutate({
         url,
         progressId: pid,
-        format,
+        // REP-3: "postcard" is UI-only — map to backend format:"static" + creativeStyle:"postcard_grid"
+        format: format === "postcard" ? "static" : format,
         targetPlatforms: selectedPlatforms,
         provider,
         channelName: selectedChannelIds.length > 0
@@ -842,7 +848,8 @@ export function RepurposeTab() {
                 : primaryChannel;
               return ch?.avatar || "";
             })()),
-        creativeStyle,
+        creativeStyle: format === "postcard" ? "postcard_grid" : creativeStyle,
+        gridPreset: format === "postcard" ? gridPreset : undefined,
         logoPosition,
         theme,
         accentColor: accentColor || undefined,
@@ -1023,7 +1030,7 @@ export function RepurposeTab() {
                   toggle governs whether the AI invents a photo for any slot with no
                   assigned image; the picker assigns YOUR photo to a specific slot
                   (it overrides AI/article for that slot only). */}
-              {(format === "static" || format === "carousel" || format === "reel") && (
+              {(format === "static" || format === "carousel" || format === "reel" || format === "postcard") && (
                 <div className="space-y-3">
                   <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2">
                     <div className="pr-3">
@@ -1037,18 +1044,47 @@ export function RepurposeTab() {
                     <Switch checked={aiImages} onCheckedChange={setAiImages} />
                   </div>
 
-                  {(format === "static" || format === "carousel") && (() => {
+                  {(format === "static" || format === "carousel" || format === "postcard") && (() => {
+                    // REP-3: preset picker is rendered inline above the slots when postcard is active
                     const slotKeys =
                       format === "carousel"
                         ? Array.from({ length: slideCount }, (_, i) => `slide:${i}`)
-                        : ["background"];
+                        : format === "postcard"
+                          ? Array.from({ length: gridSlotCount }, (_, i) => `grid:${i}`)
+                          : ["background"];
                     const slotLabel = (slot: string) =>
-                      slot === "background" ? "Background" : `Slide ${Number(slot.split(":")[1]) + 1}`;
+                      slot === "background" ? "Background"
+                        : slot.startsWith("grid:") ? `Image ${Number(slot.split(":")[1]) + 1}`
+                        : `Slide ${Number(slot.split(":")[1]) + 1}`;
                     return (
                       <div className="space-y-2">
+                        {/* REP-3: grid preset picker — only shown for postcard format */}
+                        {format === "postcard" && (
+                          <div className="space-y-1.5">
+                            <Label className="text-sm font-medium">Grid layout</Label>
+                            <div className="flex gap-2">
+                              {(["two_up", "three_up", "grid_2x2"] as const).map((preset) => (
+                                <button
+                                  key={preset}
+                                  type="button"
+                                  onClick={() => setGridPreset(preset)}
+                                  className={`rounded-md border px-3 py-1.5 text-xs font-medium transition-all ${
+                                    gridPreset === preset
+                                      ? "border-primary bg-primary/5 ring-1 ring-primary text-primary"
+                                      : "border-border hover:border-primary/50 text-muted-foreground"
+                                  }`}
+                                >
+                                  {preset === "two_up" ? "2-up" : preset === "three_up" ? "3-up" : "2×2"}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                         <Label className="text-sm font-medium">Your images (optional)</Label>
                         <p className="text-xs text-muted-foreground">
-                          Assign your own photo to a slot — it overrides AI/article for that slot only.
+                          {format === "postcard"
+                            ? "Assign your own photos to grid slots — empty slots use article images or AI."
+                            : "Assign your own photo to a slot — it overrides AI/article for that slot only."}
                         </p>
                         {slotKeys.map((slot) => {
                           const cur = imageAssignments[slot];
@@ -1132,7 +1168,7 @@ export function RepurposeTab() {
               {/* Creative style + brand reference (static + carousel cover).
                   Hidden when the user attached their own static image (no AI
                   image is generated, so the styling controls are irrelevant). */}
-              {((format === "static" && !useOwnImage) || format === "carousel") && (
+              {format !== "postcard" && ((format === "static" && !useOwnImage) || format === "carousel") && (
                 <div className="space-y-2">
                   {/* ── Creative Style ── ALWAYS visible (T2b). This picker DECIDES
                        the rendered layout; a style reference only pre-selects the

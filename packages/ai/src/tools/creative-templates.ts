@@ -8,7 +8,8 @@ export type CreativeStyle =
   | "premium_editorial"
   | "hook_bars"
   | "tweet_card"
-  | "bold_typographic";
+  | "bold_typographic"
+  | "postcard_grid";
 
 /** Visual theme. Light is the default (read at builder time). */
 export type CreativeTheme = "dark" | "light" | "gradient";
@@ -45,6 +46,10 @@ export interface StaticCreativeOptions {
   verified?: boolean;
   tag?: string;
   date?: string;
+  /** Postcard collage tiles (postcard_grid style only). Each URL is safeImageUrl-gated. */
+  gridImageUrls?: string[];
+  /** Postcard collage layout. Defaults to "two_up" when absent. */
+  gridPreset?: "two_up" | "three_up" | "grid_2x2";
 }
 
 const CANVAS = { width: 1080, height: 1350 };
@@ -284,6 +289,50 @@ ${imgPair}
 </body></html>`;
 }
 
+function buildPostcardGrid(opts: StaticCreativeOptions): string {
+  const accent = opts.brandColor && /^#[0-9a-fA-F]{3,8}$/.test(opts.brandColor) ? opts.brandColor : "#1d9bf0";
+  const theme = opts.theme ?? "light";
+  const tokens = themeTokens(theme, opts.brandColor ?? DEFAULT_ACCENT);
+  // Tweet card is a surface: light keeps the white card; dark/gradient flip to a dark card.
+  const surface = theme === "light" ? "#ffffff" : tokens.bgFallback;
+  const tick = opts.verified
+    ? `<svg class="verified-tick" width="26" height="26" viewBox="0 0 24 24" fill="${accent}"><path d="M22.5 12.5c0-1.58-.875-2.95-2.148-3.6.154-.435.238-.905.238-1.4 0-2.21-1.71-3.998-3.818-3.998-.47 0-.92.084-1.336.25C14.818 2.415 13.51 1.5 12 1.5s-2.816.917-3.437 2.25c-.415-.165-.866-.25-1.336-.25-2.11 0-3.818 1.79-3.818 4 0 .494.083.964.237 1.4-1.272.65-2.147 2.018-2.147 3.6 0 1.495.782 2.798 1.942 3.486-.02.16-.032.322-.032.486 0 2.21 1.708 4 3.818 4 .47 0 .92-.086 1.335-.25.62 1.334 1.926 2.25 3.437 2.25 1.512 0 2.818-.916 3.437-2.25.415.163.865.248 1.336.248 2.11 0 3.818-1.79 3.818-4 0-.164-.012-.326-.032-.486 1.16-.688 1.943-1.99 1.943-3.486zm-6.616-3.334l-4.334 6.5c-.145.217-.382.334-.625.334-.143 0-.288-.04-.416-.126l-.115-.094-2.415-2.415c-.293-.293-.293-.768 0-1.06s.768-.294 1.06 0l1.77 1.767 3.825-5.74c.23-.345.696-.436 1.04-.207.346.23.44.696.21 1.04z"/></svg>`
+    : "";
+  const tiles = (opts.gridImageUrls ?? []).map(safeImageUrl).filter((u): u is string => !!u);
+  const preset = opts.gridPreset ?? "two_up";
+  const tileCount = preset === "two_up" ? 2 : preset === "three_up" ? 3 : 4;
+  const used = tiles.slice(0, tileCount);
+  const collage = used.length
+    ? `<div class="collage ${preset}">${used.map((u) => `<img src="${u}"/>`).join("")}</div>`
+    : "";
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+${FONT_IMPORT}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{width:${CANVAS.width}px;height:${CANVAS.height}px;overflow:hidden;font-family:'Inter',system-ui,sans-serif;background:${surface};padding:64px 56px;display:flex;flex-direction:column;}
+.head{display:flex;align-items:center;gap:18px;margin-bottom:28px;}
+.name-row{display:flex;align-items:center;gap:8px;}
+.name{font-size:34px;font-weight:800;color:${tokens.textColor};}
+.handle{font-size:26px;color:${tokens.subTextColor};margin-top:2px;}
+.text{font-size:40px;line-height:1.3;color:${tokens.textColor};font-weight:400;margin-bottom:32px;}
+.collage{display:grid;gap:10px;flex:1;border-radius:18px;overflow:hidden;}
+.collage img{width:100%;height:100%;object-fit:cover;}
+.collage.two_up{grid-template-columns:1fr 1fr;}
+.collage.three_up{grid-template-columns:1fr 1fr;grid-template-rows:1.4fr 1fr;}
+.collage.three_up img:first-child{grid-column:1 / span 2;}
+.collage.grid_2x2{grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;}
+</style></head><body>
+<div class="head">
+  ${logoHtml(opts, 72)}
+  <div>
+    <div class="name-row"><span class="name">${escapeHtml(opts.channelName)}</span>${tick}</div>
+    ${opts.handle ? `<div class="handle">${escapeHtml(opts.handle)}</div>` : ""}
+  </div>
+</div>
+<div class="text">${escapeHtml(opts.headline)}</div>
+${collage}
+</body></html>`;
+}
+
 function buildBoldTypographic(opts: StaticCreativeOptions): string {
   const accent = safeColor(opts.brandColor);
   const words = opts.headline.trim().split(/\s+/).length;
@@ -400,6 +449,8 @@ export function buildStaticCreative(opts: StaticCreativeOptions): string {
       return buildTweetCard(opts);
     case "bold_typographic":
       return buildBoldTypographic(opts);
+    case "postcard_grid":
+      return buildPostcardGrid(opts);
     default:
       return buildPremiumEditorial(opts);
   }

@@ -26,6 +26,7 @@ const STYLES: CreativeStyle[] = [
   "hook_bars",
   "tweet_card",
   "bold_typographic",
+  "postcard_grid",
 ];
 
 /** A fixed, feature-option-free base for each style (the "today" default path). */
@@ -89,4 +90,50 @@ describe("Repurpose render golden gate — default path is byte-identical (Phase
       expect(buildStaticCreative(opts)).toMatchSnapshot();
     });
   }
+
+  // postcard_grid golden snapshots — one per preset with fixed deterministic tiles.
+  const POSTCARD_TILES = [
+    "https://cdn.example.com/tile1.jpg",
+    "https://cdn.example.com/tile2.jpg",
+    "https://cdn.example.com/tile3.jpg",
+    "https://cdn.example.com/tile4.jpg",
+  ];
+
+  it("postcard_grid two_up render is deterministic", () => {
+    expect(
+      buildStaticCreative({
+        ...baseFor("postcard_grid"),
+        gridImageUrls: POSTCARD_TILES.slice(0, 2),
+        gridPreset: "two_up",
+      })
+    ).toMatchSnapshot();
+  });
+
+  it("postcard_grid three_up render is deterministic", () => {
+    expect(
+      buildStaticCreative({
+        ...baseFor("postcard_grid"),
+        gridImageUrls: POSTCARD_TILES.slice(0, 3),
+        gridPreset: "three_up",
+      })
+    ).toMatchSnapshot();
+  });
+
+  it("postcard_grid grid_2x2 render is deterministic", () => {
+    expect(
+      buildStaticCreative({
+        ...baseFor("postcard_grid"),
+        gridImageUrls: POSTCARD_TILES,
+        gridPreset: "grid_2x2",
+      })
+    ).toMatchSnapshot();
+  });
+
+  it("postcard_grid no-tiles render is deterministic (header-only)", () => {
+    expect(
+      buildStaticCreative({
+        ...baseFor("postcard_grid"),
+      })
+    ).toMatchSnapshot();
+  });
 });
