@@ -210,10 +210,16 @@ export function generateStaticNewsCreativeHtml(options: StaticNewsCreativeOption
     .slice(0, 3)
     .map((w) => w.toLowerCase())
     .join(",");
-  // Fix #56: use local fallback backgrounds instead of loremflickr.com (external service)
+  // Fix (NG-1): the template is rasterized via page.setContent (base URL = about:blank),
+  // so a RELATIVE /newsgrid-bg/bg-N.svg never resolves → .bg-photo stays empty →
+  // body{background:#000} showed through as a pure-black card. Use a self-contained
+  // inline CSS linear-gradient as the no-AI fallback (deterministic per `seed`,
+  // mirroring the old 6-SVG hue rotation). Real photos still arrive as a data: URI
+  // in options.backgroundImageUrl and override this on .bg-photo.
   const LOCAL_BG_COUNT = 6;
-  const localBg = `/newsgrid-bg/bg-${(seed % LOCAL_BG_COUNT) + 1}.svg`;
-  const bgUrl = options.backgroundImageUrl || localBg;
+  const fallbackHue = (seed % LOCAL_BG_COUNT) * 60; // 0,60,120,180,240,300 — same rotation as the old SVGs
+  const fallbackGradient = `linear-gradient(135deg, hsl(${fallbackHue}, 38%, 18%) 0%, hsl(${fallbackHue}, 42%, 9%) 100%)`;
+  const bgUrl = options.backgroundImageUrl || "";
 
   const words = options.headline.trim().split(/\s+/).length;
   const fontSize = words <= 5 ? 82 : words <= 8 ? 66 : words <= 12 ? 54 : words <= 16 ? 46 : 40;
@@ -237,7 +243,7 @@ export function generateStaticNewsCreativeHtml(options: StaticNewsCreativeOption
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
 *{margin:0;padding:0;box-sizing:border-box;}
 body{width:1080px;height:1350px;overflow:hidden;position:relative;font-family:'Inter',system-ui,-apple-system,sans-serif;background:#000;-webkit-font-smoothing:antialiased;}
-.bg-photo{position:absolute;inset:0;background-image:url(${bgUrl});background-size:cover;background-position:center top;}
+.bg-photo{position:absolute;inset:0;background:${fallbackGradient};${bgUrl ? `background-image:url(${bgUrl});background-size:cover;background-position:center top;` : ""}}
 .overlay{position:absolute;inset:0;background:${theme.overlayGradient};}
 /* Tag badge */
 .tag{position:absolute;top:48px;left:48px;background:${theme.tagBg};color:${theme.tagColor};padding:10px 20px;border-radius:4px;font-size:13px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;}

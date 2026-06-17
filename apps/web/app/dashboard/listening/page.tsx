@@ -140,6 +140,10 @@ export default function ListeningPage() {
     onSuccess: () => {
       utils.listening.mentions.invalidate();
       utils.listening.sentimentOverview.invalidate();
+      // SL-1: the per-query tab badge reads q._count.mentions from listQueries,
+      // so it must be refetched after a sync brings in new mentions — otherwise
+      // the badge stays stale (shows the old count) until a manual page refresh.
+      utils.listening.listQueries.invalidate();
     },
   });
 

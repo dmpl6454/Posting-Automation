@@ -161,6 +161,23 @@ export default function PostDetailPage() {
 
   const [retryingTargetId, setRetryingTargetId] = useState<string | null>(null);
 
+  // ── Submit for review (APPR-1) ──────────────────────────────────────────────
+  const [reviewerOpen, setReviewerOpen] = useState(false);
+  const [reviewerIds, setReviewerIds] = useState<string[]>([]);
+  const { data: teamMembers } = trpc.team.members.useQuery(undefined, {
+    enabled: post?.status === "DRAFT",
+  });
+  const submitForReview = trpc.approval.submit.useMutation({
+    onSuccess: () => {
+      toast({ title: "Sent for review", description: "Reviewers have been notified." });
+      setReviewerOpen(false);
+      setReviewerIds([]);
+      refetch();
+    },
+    onError: (err) => toast({ title: "Couldn't submit", description: humanizeError(err), variant: "destructive" }),
+  });
+  // ────────────────────────────────────────────────────────────────────────────
+
   const handleRetryTarget = (targetId: string) => {
     setRetryingTargetId(targetId);
     publishNow.mutate(
@@ -708,6 +725,13 @@ export default function PostDetailPage() {
             </Button>
           )}
 
+          {/* Submit for review — for DRAFT */}
+          {post.status === "DRAFT" && (
+            <Button variant="outline" onClick={() => setReviewerOpen((v) => !v)}>
+              Submit for review
+            </Button>
+          )}
+
           {/* Retry All Failed — for FAILED */}
           {post.status === "FAILED" && (
             <Button onClick={handlePublishAll} disabled={publishNow.isPending}>
@@ -734,6 +758,40 @@ export default function PostDetailPage() {
               ))}
         </div>
       </div>
+
+      {/* Reviewer picker panel — shown when Submit for review is toggled on a DRAFT post */}
+      {reviewerOpen && post.status === "DRAFT" && (
+        <div className="mt-3 rounded-lg border p-3 space-y-2 pb-8">
+          <Label>Choose reviewers</Label>
+          <div className="flex flex-col gap-1">
+            {(teamMembers ?? []).map((m: any) => {
+              const uid = m.user.id as string;
+              const checked = reviewerIds.includes(uid);
+              return (
+                <label key={uid} className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() =>
+                      setReviewerIds((ids) =>
+                        checked ? ids.filter((x) => x !== uid) : [...ids, uid]
+                      )
+                    }
+                  />
+                  {m.user.name ?? m.user.email}
+                </label>
+              );
+            })}
+          </div>
+          <Button
+            size="sm"
+            disabled={reviewerIds.length === 0 || submitForReview.isPending}
+            onClick={() => submitForReview.mutate({ postId, reviewerIds })}
+          >
+            {submitForReview.isPending ? "Submitting…" : "Send for review"}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
