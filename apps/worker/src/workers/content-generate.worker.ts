@@ -323,9 +323,11 @@ export function createContentGenerateWorker() {
         }
 
         // 11. Determine review status
-        const skipReview =
-          agent.accountGroup?.skipReviewGate ||
-          autopilotPost.sensitivity === "LOW";
+        // Auto-approval is governed ONLY by the account group's explicit
+        // skipReviewGate opt-in. Sensitivity is advisory metadata and must NOT
+        // bypass review — a LOW classification (also the classifier's default
+        // when no keywords match) previously auto-approved nearly every post.
+        const skipReview = agent.accountGroup?.skipReviewGate === true;
         const finalStatus = skipReview ? "APPROVED" : "REVIEWING";
 
         // 12. Update AutopilotPost with postId and finalStatus
