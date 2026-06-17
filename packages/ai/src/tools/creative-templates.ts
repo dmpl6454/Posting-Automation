@@ -241,7 +241,7 @@ body{width:${CANVAS.width}px;height:${CANVAS.height}px;overflow:hidden;position:
 ${inset}
 <div class="bars">
   ${hookHtml ? `<div class="bar"><div class="hook">${hookHtml}</div></div>` : ""}
-  <div class="bar"><div class="headline">${escapeHtml(opts.headline)}</div></div>
+  ${opts.headline?.trim() ? `<div class="bar"><div class="headline">${escapeHtml(opts.headline)}</div></div>` : ""}
 </div>
 </body></html>`;
 }

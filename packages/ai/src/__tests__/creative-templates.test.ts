@@ -53,6 +53,46 @@ describe("hook_bars style", () => {
     });
     expect(html).not.toContain("inset-cutout");
   });
+  it("does NOT render an empty headline pill when headline is empty (R3)", () => {
+    const html = buildStaticCreative({
+      style: "hook_bars",
+      headline: "",
+      hookLine: "TMC ka **Pushpa** kaise jhukega nahi 🚨",
+      channelName: "NewsPage",
+      logoPosition: "top-right",
+    });
+    // The empty white pill bug: a `.bar` wrapping an empty `.headline`.
+    expect(html).not.toContain(`<div class="headline"></div>`);
+    // The hook bar must still render so the layout isn't entirely empty.
+    expect(html).toContain("Pushpa");
+    expect(html).toContain(`<div class="hook">`);
+  });
+  it("does NOT render an empty headline pill when headline is whitespace-only (R3)", () => {
+    const html = buildStaticCreative({
+      style: "hook_bars",
+      headline: "   ",
+      hookLine: "TMC ka **Pushpa** kaise jhukega nahi 🚨",
+      channelName: "NewsPage",
+      logoPosition: "top-right",
+    });
+    // escapeHtml("   ") preserves whitespace → a whitespace-only `.headline`.
+    expect(html).not.toContain(`<div class="headline">   </div>`);
+    // No headline element of any kind should be emitted for a blank headline.
+    expect(html).not.toContain(`<div class="headline">`);
+    // The hook bar must still render.
+    expect(html).toContain("Pushpa");
+  });
+  it("STILL renders the headline bar when headline is non-empty (regression guard)", () => {
+    const html = buildStaticCreative({
+      style: "hook_bars",
+      headline: "TMC's Jahangir Khan arrested near Nepal border",
+      hookLine: "Hook!",
+      channelName: "NewsPage",
+      logoPosition: "top-right",
+    });
+    expect(html).toContain(`<div class="headline">`);
+    expect(html).toContain("Nepal border");
+  });
 });
 
 describe("tweet_card style", () => {
