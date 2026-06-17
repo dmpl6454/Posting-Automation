@@ -4,6 +4,7 @@ import { humanizeError } from "~/lib/errors";
 import { buildCreatePostQuery } from "~/lib/repurpose-create-post-params";
 import { parseVideoReadyEvent, isVideoErrorEvent, finalizeRunningSteps } from "~/lib/parse-video-event";
 import { stripBareUrls } from "~/lib/strip-bare-urls";
+import { shouldBlockMediaLessPublish } from "~/lib/repurpose-media-guard";
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { trpc } from "~/lib/trpc/client";
@@ -2898,6 +2899,26 @@ export function RepurposeTab() {
                           seen.add(m.mediaId);
                         }
                       }
+                    }
+
+                    // R4 guard (defense-in-depth): a media-less IMAGE post would
+                    // create a draft that fails to publish to Instagram/Facebook
+                    // ("requires an attached image; none attached"). The backend
+                    // now THROWS on a failed static render, so this should rarely
+                    // fire — but block locally as a backstop. Video formats deliver
+                    // media async (videoPending), so they're intentionally exempt.
+                    const selectedPlatforms = selectedChannelIds.map(
+                      (id) => (activeChannels as any[]).find((c: any) => c.id === id)?.platform as string | undefined,
+                    );
+                    if (shouldBlockMediaLessPublish(mediaIds, results.format, selectedPlatforms)) {
+                      toast({
+                        title: "Image generation failed",
+                        description:
+                          "Regenerate the image before publishing — Instagram/Facebook require an attached image.",
+                        variant: "destructive",
+                      });
+                      setPublishingState("idle");
+                      return;
                     }
 
                     await createPost.mutateAsync({

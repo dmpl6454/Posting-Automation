@@ -10,7 +10,7 @@ import {
   repurposeVideoQueue,
   type RepurposeVideoJobData,
 } from "@postautomation/queue";
-import { toFriendlyAIError, isMissingAIKeyError, friendlyAIMessage } from "../lib/ai-errors";
+import { toFriendlyAIError, isMissingAIKeyError, isProviderBillingError, friendlyAIMessage } from "../lib/ai-errors";
 import { requirePlan, enforcePlanLimit } from "../middleware/plan-limit.middleware";
 
 // S3 helpers
@@ -2066,8 +2066,15 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
             progress("Generating postcard grid", "done", "Uploaded to S3");
             console.log(`[Repurpose] Postcard grid uploaded: ${url} (mediaId: ${mediaId})`);
           } catch (e) {
+            // R4: do NOT swallow — a failed postcard render must surface a HARD,
+            // friendly error so the UI blocks instead of letting the user create a
+            // media-less draft (which fails to publish to IG/FB). Mirrors the
+            // captions catch above: keep the progress event + console log, then
+            // rethrow via toFriendlyAIError (re-throws existing TRPCErrors, maps
+            // billing/permission to "temporarily unavailable", sanitizes the rest).
             progress("Generating postcard grid", "error", friendlyAIMessage(e));
             console.error(`[Repurpose] Postcard grid FAILED:`, (e as Error).message);
+            throw toFriendlyAIError(e);
           }
         } else {
 
@@ -2251,11 +2258,27 @@ Use the SUBJECT and CONTEXT above to depict exactly who/what this is about (e.g.
             );
             console.log(`[Repurpose] Static creative uploaded: ${url} (mediaId: ${mediaId}, bg: ${bgSlot.source})`);
           } catch (e) {
-            // The template renderer itself failed (Puppeteer/asset issue). This
-            // is the genuine no-image case — surface it loudly (Fix 4) but with
-            // a sanitized message (no raw provider internals / project IDs).
+            // The template renderer / upload itself failed (Puppeteer/asset issue,
+            // S3 write, DB Media-row create). This is the genuine no-image case —
+            // R4: it MUST surface a HARD error, not be swallowed. Swallowing left
+            // mediaUrls empty and returned a soft mediaFailed:true (200), so the UI
+            // still let the user "Create Drafts" → a media-less draft that fails to
+            // publish to Instagram/Facebook. Surface it loudly, sanitized (no raw
+            // provider internals / project IDs).
             progress("Generating creative", "error", friendlyAIMessage(e));
             console.error(`[Repurpose] Static creative FAILED:`, (e as Error).message);
+            // Classified AI errors (missing key / billing / existing TRPCError) get
+            // their friendly mapping; a genuinely-unknown render/upload failure gets
+            // an actionable BAD_REQUEST telling the user to retry or add their own
+            // photo — better UX than a bare INTERNAL_SERVER_ERROR.
+            if (e instanceof TRPCError || isMissingAIKeyError(e) || isProviderBillingError(e)) {
+              throw toFriendlyAIError(e);
+            }
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message:
+                "Couldn't generate the image — please try again, or add your own photo via Replace / adjust photo before publishing.",
+            });
           }
         }
         } // end else (non-postcard_grid single-bg path)
