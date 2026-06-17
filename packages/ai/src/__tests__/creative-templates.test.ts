@@ -199,6 +199,115 @@ describe("bold_typographic style", () => {
   });
 });
 
+describe("postcard_grid style", () => {
+  const basePostcard: StaticCreativeOptions = {
+    style: "postcard_grid",
+    headline: "Five cities, one weekend — the ultimate travel roundup",
+    channelName: "Travelwise",
+    handle: "@travelwise",
+    verified: true,
+    logoPosition: "top-left",
+    brandColor: "#1d9bf0",
+  };
+
+  it("renders the header: channelName, handle, verified tick, canvas size", () => {
+    const html = buildStaticCreative({ ...basePostcard });
+    expect(html).toContain("Travelwise");
+    expect(html).toContain("@travelwise");
+    expect(html).toContain("verified-tick");
+    expect(html).toContain("width:1080px");
+    expect(html).toContain("height:1350px");
+  });
+
+  it("two_up renders 2 tiles", () => {
+    const html = buildStaticCreative({
+      ...basePostcard,
+      gridImageUrls: ["https://cdn.example.com/a.jpg", "https://cdn.example.com/b.jpg"],
+      gridPreset: "two_up",
+    });
+    expect(html).toContain("collage two_up");
+    expect(html).toContain("https://cdn.example.com/a.jpg");
+    expect(html).toContain("https://cdn.example.com/b.jpg");
+    // Only 2 imgs in collage
+    const matches = html.match(/collage two_up/g);
+    expect(matches).toHaveLength(1);
+  });
+
+  it("three_up renders 3 tiles and includes span-2 CSS for the first tile", () => {
+    const html = buildStaticCreative({
+      ...basePostcard,
+      gridImageUrls: [
+        "https://cdn.example.com/a.jpg",
+        "https://cdn.example.com/b.jpg",
+        "https://cdn.example.com/c.jpg",
+      ],
+      gridPreset: "three_up",
+    });
+    expect(html).toContain("collage three_up");
+    expect(html).toContain("https://cdn.example.com/a.jpg");
+    expect(html).toContain("https://cdn.example.com/b.jpg");
+    expect(html).toContain("https://cdn.example.com/c.jpg");
+    // The CSS for the span-2 first tile must be present
+    expect(html).toContain("grid-column:1 / span 2");
+  });
+
+  it("grid_2x2 renders 4 tiles", () => {
+    const html = buildStaticCreative({
+      ...basePostcard,
+      gridImageUrls: [
+        "https://cdn.example.com/a.jpg",
+        "https://cdn.example.com/b.jpg",
+        "https://cdn.example.com/c.jpg",
+        "https://cdn.example.com/d.jpg",
+      ],
+      gridPreset: "grid_2x2",
+    });
+    expect(html).toContain("collage grid_2x2");
+    expect(html).toContain("https://cdn.example.com/a.jpg");
+    expect(html).toContain("https://cdn.example.com/d.jpg");
+  });
+
+  it("escapes a malicious headline/channelName", () => {
+    const html = buildStaticCreative({
+      ...basePostcard,
+      headline: `A <b>"x"</b> & y`,
+      channelName: `<script>evil()</script>`,
+    });
+    expect(html).toContain("&lt;b&gt;");
+    expect(html).toContain("&amp;");
+    expect(html).not.toContain(`<b>"x"</b>`);
+    expect(html).not.toContain(`<script>evil()</script>`);
+    expect(html).toContain("&lt;script&gt;");
+  });
+
+  it("drops malicious gridImageUrls entries; valid https URL is present; no script/javascript", () => {
+    const html = buildStaticCreative({
+      ...basePostcard,
+      gridImageUrls: [
+        "https://ok.example/a.jpg",
+        `"><script>alert(1)</script>`,
+        "javascript:alert(1)",
+      ],
+      gridPreset: "two_up",
+    });
+    expect(html).not.toContain("<script>");
+    expect(html).not.toContain("javascript:");
+    expect(html).toContain("https://ok.example/a.jpg");
+  });
+
+  it("omits the collage div element cleanly when gridImageUrls is absent", () => {
+    const html = buildStaticCreative({ ...basePostcard });
+    // The CSS rule `.collage` is always emitted; the DIV element must NOT be.
+    expect(html).not.toContain(`<div class="collage`);
+  });
+
+  it("omits the collage div element cleanly when gridImageUrls is empty", () => {
+    const html = buildStaticCreative({ ...basePostcard, gridImageUrls: [] });
+    // The CSS rule `.collage` is always emitted; the DIV element must NOT be.
+    expect(html).not.toContain(`<div class="collage`);
+  });
+});
+
 describe("renderHighlightMarkup (** / == markers)", () => {
   it("wraps **word** in a brand-accent span", () => {
     const html = renderHighlightMarkup("Five IAF personnel **killed** today", "#ff7f50");
