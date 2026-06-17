@@ -68,31 +68,31 @@ export default function PipelineLogsPage() {
 
                 {/* Stats */}
                 <div className="ml-auto flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                  {run.discovered != null && (
-                    <span>Discovered: {run.discovered}</span>
+                  {run.itemsDiscovered != null && (
+                    <span>Discovered: {run.itemsDiscovered}</span>
                   )}
-                  {run.scored != null && <span>Scored: {run.scored}</span>}
-                  {run.generated != null && (
-                    <span>Generated: {run.generated}</span>
+                  {run.itemsScored != null && <span>Scored: {run.itemsScored}</span>}
+                  {run.postsGenerated != null && (
+                    <span>Generated: {run.postsGenerated}</span>
                   )}
-                  {run.approved != null && (
-                    <span>Approved: {run.approved}</span>
+                  {run.postsApproved != null && (
+                    <span>Approved: {run.postsApproved}</span>
                   )}
-                  {run.scheduled != null && (
-                    <span>Scheduled: {run.scheduled}</span>
+                  {run.postsScheduled != null && (
+                    <span>Scheduled: {run.postsScheduled}</span>
                   )}
-                  {run.failed != null && run.failed > 0 && (
+                  {run.postsFailed != null && run.postsFailed > 0 && (
                     <span className="font-medium text-destructive">
-                      Failed: {run.failed}
+                      Failed: {run.postsFailed}
                     </span>
                   )}
                 </div>
 
                 {/* Duration */}
-                {run.finishedAt && run.startedAt && (
+                {run.completedAt && run.startedAt && (
                   <span className="text-xs text-muted-foreground">
                     {Math.round(
-                      (new Date(run.finishedAt).getTime() -
+                      (new Date(run.completedAt).getTime() -
                         new Date(run.startedAt).getTime()) /
                         1000
                     )}
