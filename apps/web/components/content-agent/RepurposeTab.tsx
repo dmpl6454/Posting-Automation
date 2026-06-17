@@ -278,6 +278,10 @@ export function RepurposeTab() {
   const [heroOffsetY, setHeroOffsetY] = useState<number>(0);
   // Track pointer drag for pan.
   const heroDragRef = useRef<{ startX: number; startY: number; ox: number; oy: number } | null>(null);
+  // REP-4: free-drag logo / hook-text positions (% of preview box, 0-100). null = corner default.
+  const [logoPosXY, setLogoPosXY] = useState<{ xPct: number; yPct: number } | null>(null);
+  const [hookPosXY, setHookPosXY] = useState<{ xPct: number; yPct: number } | null>(null);
+  const posDragRef = useRef<{ which: "logo" | "hook"; startX: number; startY: number; ox: number; oy: number } | null>(null);
   // The <img> element loaded for the hero source (used by canvas drawImage).
   const heroImgRef = useRef<HTMLImageElement | null>(null);
   // Whether the hero source image is currently uploading/processing.
@@ -599,6 +603,9 @@ export function RepurposeTab() {
       setEditedHeadline(data.renderedHeadline ?? data.extracted?.title ?? "");
       // REP-2: reset per-slide edits on each new generate (carouselSlides seeds from fresh data).
       setSlideEdits({});
+      // REP-4: reset free-drag positions on each new generate.
+      setLogoPosXY(null);
+      setHookPosXY(null);
       const mediaCount = data.mediaUrls.length;
       // Be honest: if captions generated but media failed, this is NOT a clean
       // success — show a warning toast that points at the activity log, not a
@@ -710,6 +717,9 @@ export function RepurposeTab() {
         headlineAlign: headlineAlign || undefined,
         labelColor: labelColor || undefined,
         logoSize: typeof logoSize === "number" ? logoSize : undefined,
+        // REP-4: free-drag positions (null → absent → corner default, byte-identical).
+        ...(logoPosXY ? { logoPosXY } : {}),
+        ...(hookPosXY ? { hookPosXY } : {}),
         // REP-2: pass slide role + body text for body-slide regeneration.
         slideRole: slideForTarget?.role as "cover" | "body" | "cta" | undefined,
         slideBody: slideForTarget?.role === "body" ? (slideEdit?.body ?? slideForTarget?.body) : undefined,
@@ -885,6 +895,9 @@ export function RepurposeTab() {
         headlineAlign: headlineAlign || undefined,
         labelColor: labelColor || undefined,
         logoSize: typeof logoSize === "number" ? logoSize : undefined,
+        // REP-4: free-drag positions (null → absent → corner default, byte-identical).
+        ...(logoPosXY ? { logoPosXY } : {}),
+        ...(hookPosXY ? { hookPosXY } : {}),
       });
     } else {
       if (!originalContent || selectedPlatforms.length === 0) return;
@@ -2172,11 +2185,85 @@ export function RepurposeTab() {
                   </div>
                 ) : results.mediaUrls.length === 1 ? (
                   <div className="flex flex-col items-center gap-3">
-                    <img
-                      src={results.mediaUrls[0]}
-                      alt="Generated post"
-                      className="w-full max-w-xs rounded-xl shadow-lg"
-                    />
+                    {/* REP-4: drag-preview layer — 270×337 (1080×1350 ratio). Drag chips to reposition, then Regenerate. */}
+                    <div
+                      className="relative rounded-xl shadow-lg overflow-hidden select-none"
+                      style={{ width: 270, height: 337 }}
+                      onPointerMove={(e) => {
+                        if (!posDragRef.current) return;
+                        const dx = e.clientX - posDragRef.current.startX;
+                        const dy = e.clientY - posDragRef.current.startY;
+                        const xPct = Math.min(100, Math.max(0, posDragRef.current.ox + (dx / 270) * 100));
+                        const yPct = Math.min(100, Math.max(0, posDragRef.current.oy + (dy / 337) * 100));
+                        if (posDragRef.current.which === "logo") setLogoPosXY({ xPct, yPct });
+                        else setHookPosXY({ xPct, yPct });
+                      }}
+                      onPointerUp={() => { posDragRef.current = null; }}
+                      onPointerLeave={() => { posDragRef.current = null; }}
+                    >
+                      <img
+                        src={results.mediaUrls[0]}
+                        alt="Generated post"
+                        draggable={false}
+                        style={{ width: 270, height: 337, objectFit: "cover", display: "block" }}
+                      />
+                      {/* Draggable logo chip */}
+                      {(logoUrl || logoMediaId) && (
+                        <div
+                          title="Drag to reposition logo"
+                          className="absolute cursor-grab active:cursor-grabbing rounded-full border-2 border-white shadow-md bg-white/80 flex items-center justify-center overflow-hidden"
+                          style={{
+                            width: 36,
+                            height: 36,
+                            left: `${logoPosXY?.xPct ?? (logoPosition === "top-left" ? 8 : 92)}%`,
+                            top: `${logoPosXY?.yPct ?? 6}%`,
+                            transform: "translate(-50%, -50%)",
+                            touchAction: "none",
+                          }}
+                          onPointerDown={(e) => {
+                            e.currentTarget.setPointerCapture(e.pointerId);
+                            posDragRef.current = {
+                              which: "logo",
+                              startX: e.clientX,
+                              startY: e.clientY,
+                              ox: logoPosXY?.xPct ?? (logoPosition === "top-left" ? 8 : 92),
+                              oy: logoPosXY?.yPct ?? 6,
+                            };
+                          }}
+                        >
+                          {logoUrl
+                            ? <img src={logoUrl} alt="logo" className="w-full h-full object-contain" draggable={false} />
+                            : <span className="text-[9px] font-bold text-gray-600">Logo</span>
+                          }
+                        </div>
+                      )}
+                      {/* Draggable hook-text chip (only when hook line exists) */}
+                      {results.hookLine && (
+                        <div
+                          title="Drag to reposition hook text"
+                          className="absolute cursor-grab active:cursor-grabbing rounded bg-black/60 text-white px-2 py-0.5 text-[9px] font-semibold max-w-[80%] truncate shadow"
+                          style={{
+                            left: `${hookPosXY?.xPct ?? 50}%`,
+                            top: `${hookPosXY?.yPct ?? 85}%`,
+                            transform: "translate(-50%, -50%)",
+                            touchAction: "none",
+                          }}
+                          onPointerDown={(e) => {
+                            e.currentTarget.setPointerCapture(e.pointerId);
+                            posDragRef.current = {
+                              which: "hook",
+                              startX: e.clientX,
+                              startY: e.clientY,
+                              ox: hookPosXY?.xPct ?? 50,
+                              oy: hookPosXY?.yPct ?? 85,
+                            };
+                          }}
+                        >
+                          {results.hookLine.length > 40 ? `${results.hookLine.slice(0, 40)}…` : results.hookLine}
+                        </div>
+                      )}
+                    </div>
+                    <p className="text-[10px] text-muted-foreground text-center">Drag the logo / hook text to reposition, then click Regenerate to re-render.</p>
                     {/* Feature 3 — Inline headline edit. Edit text → Regenerate applies it. */}
                     <div className="w-full max-w-xs space-y-1">
                       <Label className="text-xs text-muted-foreground" htmlFor="edited-headline">Headline</Label>
@@ -2378,6 +2465,17 @@ export function RepurposeTab() {
                         )}
                         Regenerate
                       </button>
+                      {/* REP-4: reset free-drag positions back to corner defaults */}
+                      {(logoPosXY || hookPosXY) && (
+                        <button
+                          type="button"
+                          onClick={() => { setLogoPosXY(null); setHookPosXY(null); }}
+                          title="Reset logo and hook text to their default positions"
+                          className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-muted transition-colors"
+                        >
+                          Reset positions
+                        </button>
+                      )}
                       {/* FIX C: hero photo editor toggle */}
                       <button
                         type="button"

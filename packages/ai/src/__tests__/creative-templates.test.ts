@@ -379,6 +379,66 @@ describe("premium_editorial — moviefied mimic (highlight + bold + photo legibi
   });
 });
 
+describe("REP-4 free-drag positioning", () => {
+  const premiumBase: StaticCreativeOptions = {
+    style: "premium_editorial",
+    headline: "Markets rally as central banks signal a pause",
+    channelName: "Acme Newsroom",
+    handle: "@acmenews",
+    logoPosition: "top-right",
+    brandColor: "#e11d48",
+  };
+
+  const hookBase: StaticCreativeOptions = {
+    style: "hook_bars",
+    headline: "TMC arrested near Nepal border",
+    hookLine: "Breaking news today",
+    channelName: "NewsPage",
+    logoPosition: "top-right",
+    brandColor: "#e11d48",
+  };
+
+  it("logoPosXY present: logo is absolutely positioned at xPct/yPct with translate centering", () => {
+    const html = buildStaticCreative({ ...premiumBase, logoPosXY: { xPct: 25, yPct: 60 } });
+    expect(html).toContain("left:25%;top:60%;transform:translate(-50%,-50%)");
+    // The corner default (top:44px) must NOT appear in the logo rule
+    expect(html).not.toContain("top:44px;");
+  });
+
+  it("logoPosXY clamp: values >100 clamp to 100, values <0 clamp to 0", () => {
+    const html = buildStaticCreative({ ...premiumBase, logoPosXY: { xPct: 150, yPct: -10 } });
+    expect(html).toContain("left:100%;top:0%");
+  });
+
+  it("logoPosXY NaN guard: NaN falls back to 0", () => {
+    const html = buildStaticCreative({ ...premiumBase, logoPosXY: { xPct: NaN as unknown as number, yPct: 50 } });
+    expect(html).toContain("left:0%;top:50%");
+  });
+
+  it("hookPosXY present: hook .bar gets absolute inline style", () => {
+    const html = buildStaticCreative({ ...hookBase, hookPosXY: { xPct: 30, yPct: 80 } });
+    expect(html).toContain(`style="position:absolute;left:30%;top:80%`);
+  });
+
+  it("bold_typographic with logoPosXY preserves display:flex tail in the logo rule", () => {
+    const html = buildStaticCreative({
+      style: "bold_typographic",
+      headline: "Big headline today.",
+      channelName: "Moviefied",
+      handle: "@moviefied",
+      brandColor: "#e11d48",
+      logoPosition: "top-left",
+      logoPosXY: { xPct: 10, yPct: 10 },
+    });
+    expect(html).toContain("left:10%;top:10%;transform:translate(-50%,-50%);display:flex;align-items:center;gap:14px;");
+  });
+
+  it("ABSENT logoPosXY → premium_editorial still uses corner default (top:44px)", () => {
+    const html = buildStaticCreative({ ...premiumBase });
+    expect(html).toContain("top:44px;");
+  });
+});
+
 describe("hook_bars no-photo fallback", () => {
   it("uses a branded gradient (not a flat near-white fill) when no bgImageUrl + light theme", () => {
     const html = buildStaticCreative({
