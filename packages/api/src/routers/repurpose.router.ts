@@ -1803,6 +1803,9 @@ KEYWORDS: ${(brief.keywords || []).join(", ")}`;
       // Ordered slide media IDs for carousel posts (post.create needs real
       // Media rows, not raw S3 urls). Empty for non-carousel formats.
       const carouselMediaIds: string[] = [];
+      // REP-2: per-slide text + mediaId, parallel to carouselMediaIds.
+      // Empty for non-carousel formats; populated inside the upload loop.
+      const carouselSlides: Array<{ index: number; role: "cover" | "body" | "cta"; title: string; body: string; mediaId: string }> = [];
       // The EXACT headline + hook line used to render the creative, surfaced in
       // the response (PART A) so the per-image "Regenerate" can re-render with
       // the SAME inputs (capped headline + hook) instead of the raw page title.
@@ -2788,6 +2791,17 @@ Return ONLY the JSON array, no other text.`;
             },
           });
           carouselMediaIds.push(media.id);
+          // REP-2: record per-slide text alongside its mediaId (built here where
+          // we know both the original slide index i and the created media.id, so
+          // failed/skipped slides never produce a misaligned entry).
+          const slideType = allSlides[i]?.type ?? "content";
+          carouselSlides.push({
+            index: i,
+            role: slideType === "cover" ? "cover" : slideType === "cta" ? "cta" : "body",
+            title: allSlides[i]?.title ?? "",
+            body: allSlides[i]?.body ?? "",
+            mediaId: media.id,
+          });
         }
 
         progress(`Generating ${allSlides.length} carousel slides`, "done", `${uploadedUrls.length} uploaded`);
@@ -2908,6 +2922,9 @@ Return ONLY the JSON array, no other text.`;
         mediaUrls,
         mediaMap: perPlatformMedia,
         carouselMediaIds,
+        // REP-2: per-slide text + mediaId for seeding the client-side text editors.
+        // Only present when format is carousel (reel returns early without this).
+        carouselSlides,
         mediaType,
         format: input.format,
         // Truthful signal for the UI: captions exist but no media was produced.
@@ -2990,6 +3007,10 @@ Return ONLY the JSON array, no other text.`;
         logoSize: z.number().int().min(4).max(40).optional(),
         // Round 17: headline alignment override.
         headlineAlign: z.enum(["left", "center", "right"]).optional(),
+        // REP-2: optional slide-role + body for re-rendering a body/cta slide.
+        // When absent, behaviour is byte-identical to the existing cover/static path.
+        slideRole: z.enum(["cover", "body", "cta"]).optional(),
+        slideBody: z.string().max(400).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -3121,7 +3142,10 @@ Return ONLY the JSON array, no other text.`;
       // fetchable. Falls through to renderStaticCreative on engine: "template".
       let regenMimicryEngine: "gemini-img2img" | "openai-described" | "gemini-composite" | "layout-extract" | null = null;
       let creative: { imageBase64: string; mimeType: string; bgSource?: "ai" | "stock"; imageEngine?: "gemini" | "openai" };
-      if (input.referenceMimicry && regenAestheticRef) {
+      // REP-2: body slides never use mimicry in the main carousel flow — enforce
+      // the same constraint here so a body-slide regenerate always takes the fast
+      // template path (mimicry is only meaningful for cover/static images).
+      if (input.referenceMimicry && regenAestheticRef && input.slideRole !== "body") {
         try {
           const {
             generateReferenceStyledCard,
@@ -3214,6 +3238,9 @@ Return ONLY the JSON array, no other text.`;
               referenceImages,
               ...(regenHookLine ? { hookLine: regenHookLine } : {}),
               ...(safeBgImageUrl ? { bgImageUrl: safeBgImageUrl } : {}),
+              // REP-2: thread slide-role + body (absent = no-op, byte-identical).
+              ...(input.slideRole ? { slideRole: input.slideRole } : {}),
+              ...(input.slideBody !== undefined ? { body: input.slideBody } : {}),
             });
           } catch (e) {
             throw toFriendlyAIError(e);
@@ -3236,6 +3263,9 @@ Return ONLY the JSON array, no other text.`;
             referenceImages,
             ...(regenHookLine ? { hookLine: regenHookLine } : {}),
             ...(safeBgImageUrl ? { bgImageUrl: safeBgImageUrl } : {}),
+            // REP-2: thread slide-role + body (absent = no-op, byte-identical).
+            ...(input.slideRole ? { slideRole: input.slideRole } : {}),
+            ...(input.slideBody !== undefined ? { body: input.slideBody } : {}),
           });
         } catch (e) {
           throw toFriendlyAIError(e);
