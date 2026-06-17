@@ -23,11 +23,27 @@ export function humanizeError(
   err: unknown,
   fallback = "Something went wrong. Please try again."
 ): string {
+  // Prefer the structured Zod error the tRPC errorFormatter already populates
+  // (shape: { formErrors: string[], fieldErrors: Record<string, string[]> }).
+  const zodError = (err as any)?.data?.zodError;
+  if (zodError && typeof zodError === "object") {
+    const formErrors: string[] | undefined = zodError.formErrors;
+    const fieldErrors: Record<string, string[] | undefined> | undefined = zodError.fieldErrors;
+    const firstField = fieldErrors
+      ? Object.values(fieldErrors).flat().filter(Boolean)[0]
+      : undefined;
+    const first = formErrors?.[0] ?? firstField;
+    if (first) return String(first);
+    return "Please check the highlighted fields and try again.";
+  }
+
   const msg =
     typeof err === "string"
       ? err
       : (err as any)?.message ?? "";
   if (!msg) return fallback;
+  // A raw Zod issue array leaks as JSON starting with "[{" — never show it.
+  if (msg.trim().startsWith("[{")) return "Please check your input and try again.";
   if (TECHNICAL_PATTERNS.some((re) => re.test(msg))) return fallback;
   if (msg.length > 240) return fallback;
   return msg;

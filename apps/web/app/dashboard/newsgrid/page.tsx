@@ -768,7 +768,7 @@ export default function NewsGridPage() {
               disabled={generate.isPending || selectedChannelIds.size === 0 || !headline.trim()}
             >
               {generate.isPending ? (
-                <><Loader2 className="h-4 w-4 animate-spin" /> Generating for {selectedChannelIds.size} channels…</>
+                <><Loader2 className="h-4 w-4 animate-spin" /> Generating for {selectedChannelIds.size} channel{selectedChannelIds.size !== 1 ? "s" : ""}…</>
               ) : (
                 <><Zap className="h-4 w-4" /> Generate for {selectedChannelIds.size} channel{selectedChannelIds.size !== 1 ? "s" : ""}</>
               )}
@@ -881,7 +881,7 @@ export default function NewsGridPage() {
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-muted/30 p-4">
             <div className="flex items-center gap-3">
               <p className="text-sm font-medium">
-                {results.length} channels generated
+                {results.length} channel{results.length !== 1 ? "s" : ""} generated
                 {approvedResults.length > 0 && (
                   <span className="ml-2 text-green-600 font-semibold">· {approvedResults.length} approved</span>
                 )}

@@ -207,7 +207,7 @@ export default function AutopilotAgentsPage() {
                     variant="ghost"
                     className="h-7 w-7 text-muted-foreground hover:text-destructive"
                     disabled={deleteMutation.isPending}
-                    onClick={() => deleteMutation.mutate({ id: agent.id })}
+                    onClick={() => { if (confirm(`Delete agent "${agent.name}"? This cannot be undone.`)) deleteMutation.mutate({ id: agent.id }); }}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
