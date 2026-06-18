@@ -433,7 +433,13 @@ function getDefaultScopes(platform: string): string[] {
     // providers never read the FB-provided email. Dropping it slims the Meta
     // App Review surface (one fewer permission to get Advanced Access for).
     FACEBOOK: ["public_profile", "pages_show_list", "pages_manage_posts", "pages_read_engagement"],
-    INSTAGRAM: ["public_profile", "pages_show_list", "pages_read_engagement", "instagram_basic", "instagram_content_publish", "instagram_manage_comments", "business_management"],
+    // `instagram_manage_comments` intentionally omitted: Meta rejected it as a
+    // "disallowed use case" (Dev Policy 1.6) in the 2026-06 App Review because the
+    // app never reads/creates/hides/deletes comment threads — getPostAnalytics
+    // (instagram.provider.ts) only reads the `comments_count` integer, which rides
+    // on `instagram_basic`. Re-adding it requires building an actual comment-
+    // moderation feature first, or it will be rejected again.
+    INSTAGRAM: ["public_profile", "pages_show_list", "pages_read_engagement", "instagram_basic", "instagram_content_publish", "business_management"],
     REDDIT: ["submit", "identity", "read"],
     // TikTok Content Posting API. `video.publish` = Direct Post (what publishPost
     // uses via PULL_FROM_URL); `video.upload` = upload-to-drafts; `user.info.basic`
