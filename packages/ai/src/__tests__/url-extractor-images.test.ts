@@ -134,3 +134,41 @@ describe("isLikelyOgPhoto (hero — no chrome-keyword filter)", () => {
     expect(__test__.isLikelyOgPhoto("not a url")).toBe(false);
   });
 });
+
+// R5: a premium_editorial render produced a PHOTOLESS card (flat brand gradient)
+// because the article hero URL kept its HTML entities (`&amp;` instead of `&`).
+// Baked into CSS `background-image:url("...&amp;ar=...")`, the malformed query
+// made the CDN return nothing → silent gradient fallback. The og:image path was
+// already decoded (getMeta → stripTags(decodeEntities(...))); the inline-<img>
+// fallback pushed the URL RAW. These tests pin the inline path to decode too.
+describe("getImages entity decoding (R5)", () => {
+  it("decodes &amp; in an inline <img> hero url (no og:image present)", () => {
+    const html =
+      '<html><body><article>' +
+      '<img src="https://cf-images.assettype.com/x/PTI.jpg?w=1200&amp;ar=40%3A21&amp;auto=format">' +
+      '</article></body></html>';
+    const images = __test__.getImages(html);
+    expect(images[0]).toBe(
+      "https://cf-images.assettype.com/x/PTI.jpg?w=1200&ar=40%3A21&auto=format",
+    );
+    expect(images[0]).not.toContain("&amp;");
+  });
+
+  it("passes a non-encoded inline <img> url through unchanged", () => {
+    const html =
+      '<html><body><article>' +
+      '<img src="https://cf-images.assettype.com/x/PTI.jpg?w=1200&ar=40%3A21">' +
+      '</article></body></html>';
+    const images = __test__.getImages(html);
+    expect(images[0]).toBe("https://cf-images.assettype.com/x/PTI.jpg?w=1200&ar=40%3A21");
+  });
+
+  it("still extracts (already-decoded) og:image hero", () => {
+    const html =
+      '<html><head>' +
+      '<meta property="og:image" content="https://cf-images.assettype.com/og/hero.jpg?w=1200">' +
+      '</head><body></body></html>';
+    const images = __test__.getImages(html);
+    expect(images[0]).toBe("https://cf-images.assettype.com/og/hero.jpg?w=1200");
+  });
+});

@@ -433,7 +433,12 @@ function getImages(html: string): string[] {
   const imgRegex = /<img[^>]+src=["']([^"']+)["']/gi;
   let match;
   while ((match = imgRegex.exec(html)) !== null && images.length < 6) {
-    const src = match[1]!;
+    // R5: DECODE HTML entities (mirrors the og path's getMeta →
+    // stripTags(decodeEntities(...))). The raw src keeps `&amp;`, which baked
+    // into CSS `background-image:url("...&amp;ar=...")` produces a malformed
+    // query → the CDN returns nothing → silent gradient (photoless) fallback.
+    // Decode and use the decoded value for BOTH the dedup check and the push.
+    const src = decodeEntities(match[1]!);
     if (src.startsWith("http") && isLikelyContentPhoto(src)) {
       if (!images.includes(src)) images.push(src);
     }
@@ -998,4 +1003,4 @@ export async function extractUrlContent(url: string): Promise<ExtractedContent> 
 }
 
 /** @internal test-only access to private extractors */
-export const __test__ = { getMeta, getTitle, stripHtml, isLikelyContentPhoto, isLikelyOgPhoto };
+export const __test__ = { getMeta, getTitle, stripHtml, isLikelyContentPhoto, isLikelyOgPhoto, getImages };

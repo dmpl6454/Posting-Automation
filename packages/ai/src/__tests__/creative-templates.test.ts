@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildStaticCreative, renderHighlightMarkup, type StaticCreativeOptions } from "../tools/creative-templates";
+import { buildStaticCreative, renderHighlightMarkup, safeImageUrl, type StaticCreativeOptions } from "../tools/creative-templates";
 
 const base: StaticCreativeOptions = {
   style: "premium_editorial",
@@ -180,6 +180,26 @@ describe("creative-templates security (XSS / CSS injection)", () => {
       secondaryImageUrl: `"><script>alert(1)</script>`,
     });
     expect(html).not.toContain("<script>alert(1)</script>");
+  });
+
+  // R5 defense-in-depth: safeImageUrl is a security gate, not a normalizer — it
+  // passed `&amp;`-encoded URLs through UNCHANGED, so a hero URL that escaped
+  // decoding upstream still baked a broken CSS bg → photoless render. Add a
+  // NARROW repair (`&amp;`→`&` ONLY) BEFORE the allowlist test, so the gate
+  // still runs after and STILL fails closed on real breakout chars.
+  it("repairs &amp; → & in an otherwise-clean https url", () => {
+    expect(safeImageUrl("https://cdn.x/p.jpg?w=1200&amp;ar=40")).toBe(
+      "https://cdn.x/p.jpg?w=1200&ar=40",
+    );
+  });
+  it("still REJECTS an entity that exposes a breakout char after repair (fail-closed)", () => {
+    // After `&amp;`→`&` the string contains a literal `"` → must be rejected.
+    expect(safeImageUrl(`https://cdn.x/p.jpg?a=1&amp;b="onerror`)).toBeNull();
+  });
+  it("leaves a clean https url unchanged", () => {
+    expect(safeImageUrl("https://cdn.x/photo_1.png?x=1")).toBe(
+      "https://cdn.x/photo_1.png?x=1",
+    );
   });
 });
 

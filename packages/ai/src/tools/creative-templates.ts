@@ -63,8 +63,15 @@ export function safeColor(color: string | undefined): string {
 /** Allow only https: or data:image base64 URLs with no CSS/HTML-breakout chars. */
 export function safeImageUrl(url: string | undefined | null): string | null {
   if (!url) return null;
-  const ok = /^(https:\/\/|data:image\/(png|jpeg|jpg|webp|gif);base64,)[^"')\s<>\\]+$/i.test(url);
-  return ok ? url : null;
+  // R5 defense-in-depth: an article hero URL that escaped entity-decoding
+  // upstream keeps `&amp;`, which bakes a malformed CSS `background-image:url()`
+  // query → the CDN returns nothing → photoless gradient render. Repair ONLY
+  // the literal `&amp;` sequence (NOT a full entity decoder — that would widen
+  // the attack surface) BEFORE the allowlist test, so the gate still runs after
+  // and STILL fails closed on `"`, `'`, `)`, `<`, `>`, `\`, whitespace.
+  const repaired = url.replace(/&amp;/g, "&");
+  const ok = /^(https:\/\/|data:image\/(png|jpeg|jpg|webp|gif);base64,)[^"')\s<>\\]+$/i.test(repaired);
+  return ok ? repaired : null;
 }
 
 export function escapeHtml(text: string): string {
