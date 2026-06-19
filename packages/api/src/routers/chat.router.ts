@@ -789,13 +789,22 @@ export const chatRouter = createRouter({
           const p = input.payload as any;
           if (!p.id) throw new TRPCError({ code: "BAD_REQUEST", message: "Influencer ID required" });
 
-          const influencer = await ctx.prisma.influencer.update({
-            where: { id: p.id },
+          // IDOR fix (audit 2026-06-19 / H7): org-scope the write so an AI-supplied
+          // id cannot mutate another org's influencer. Mirrors
+          // campaign.router.ts:updateInfluencer (updateMany + count check + scoped re-fetch).
+          const updated = await ctx.prisma.influencer.updateMany({
+            where: { id: p.id, organizationId: ctx.organizationId },
             data: {
               ...(p.status && { status: p.status }),
               ...(p.notes && { notes: p.notes }),
               ...(p.contactEmail && { contactEmail: p.contactEmail }),
             },
+          });
+          if (updated.count === 0) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Influencer not found" });
+          }
+          const influencer = await ctx.prisma.influencer.findFirstOrThrow({
+            where: { id: p.id, organizationId: ctx.organizationId },
           });
 
           await ctx.prisma.chatMessage.create({

@@ -9,6 +9,11 @@
  *   the new BrandTracker with NO check it belongs to the acting org — a cross-org
  *   association/leak. Fixed by verifying the campaign is in the org first.
  *
+ * H7 update_influencer (audit 2026-06-19): the update where-clause was a bare
+ *   { id }, so an AI-supplied influencer id could mutate ANY org's influencer
+ *   (cross-tenant write IDOR). Fixed by an org-scoped updateMany + count check
+ *   (mirrors campaign.router.ts:updateInfluencer).
+ *
  * These exercise the REAL executeAction mutation through a tRPC caller with a
  * fully-mocked prisma. The actor is a superadmin so orgProcedure's membership
  * gate passes (mocked) and its plan-expiry read is skipped; isSuperAdmin is only
@@ -38,15 +43,30 @@ type PrismaMock = {
   agentUpdate: ReturnType<typeof vi.fn>;
   campaignFindFirst: ReturnType<typeof vi.fn>;
   brandTrackerCreate: ReturnType<typeof vi.fn>;
+  influencerUpdateMany: ReturnType<typeof vi.fn>;
+  influencerFindFirstOrThrow: ReturnType<typeof vi.fn>;
 };
+
+const INFLUENCER_ID = "influencer-1";
 
 function buildCaller(opts: {
   threadAgentId?: string | null;
   campaignFindFirst?: any;
+  /** rows matched by influencer.updateMany; 0 = foreign id / not found */
+  influencerUpdateCount?: number;
 }) {
   const agentUpdate = vi.fn(async ({ data }: any) => ({ id: AGENT_ID, ...data }));
   const campaignFindFirst = vi.fn(async () => opts.campaignFindFirst ?? null);
   const brandTrackerCreate = vi.fn(async ({ data }: any) => ({ id: "brand-1", ...data }));
+  const influencerUpdateMany = vi.fn(async () => ({
+    count: opts.influencerUpdateCount ?? 1,
+  }));
+  const influencerFindFirstOrThrow = vi.fn(async ({ where }: any) => ({
+    id: where.id,
+    organizationId: where.organizationId,
+    name: "Acme Influencer",
+    status: "contacted",
+  }));
 
   const prisma = {
     // orgProcedure membership gate (superadmin still requires a real membership)
@@ -64,6 +84,10 @@ function buildCaller(opts: {
     agent: { update: agentUpdate },
     campaign: { findFirst: campaignFindFirst },
     brandTracker: { create: brandTrackerCreate },
+    influencer: {
+      updateMany: influencerUpdateMany,
+      findFirstOrThrow: influencerFindFirstOrThrow,
+    },
     chatMessage: { create: vi.fn(async () => ({ id: "msg-1" })) },
   } as any;
 
@@ -73,7 +97,16 @@ function buildCaller(opts: {
     organizationId: ORG_ID,
   });
 
-  return { caller, mock: { agentUpdate, campaignFindFirst, brandTrackerCreate } as PrismaMock };
+  return {
+    caller,
+    mock: {
+      agentUpdate,
+      campaignFindFirst,
+      brandTrackerCreate,
+      influencerUpdateMany,
+      influencerFindFirstOrThrow,
+    } as PrismaMock,
+  };
 }
 
 describe("executeAction cross-org IDOR guards (N7/N8)", () => {
@@ -138,5 +171,37 @@ describe("executeAction cross-org IDOR guards (N7/N8)", () => {
     expect(mock.campaignFindFirst).not.toHaveBeenCalled();
     expect(mock.brandTrackerCreate).toHaveBeenCalledTimes(1);
     expect(mock.brandTrackerCreate.mock.calls[0]![0].data.campaignId).toBeUndefined();
+  });
+
+  it("update_influencer org-scopes the prisma.influencer.updateMany where clause (H7)", async () => {
+    const { caller, mock } = buildCaller({ influencerUpdateCount: 1 });
+    await caller.executeAction({
+      threadId: THREAD_ID,
+      actionType: "update_influencer",
+      payload: { id: INFLUENCER_ID, status: "responded" },
+    });
+    expect(mock.influencerUpdateMany).toHaveBeenCalledTimes(1);
+    const arg = mock.influencerUpdateMany.mock.calls[0]![0];
+    // The where MUST carry the org scope, not just the AI-supplied id.
+    expect(arg.where).toMatchObject({ id: INFLUENCER_ID, organizationId: ORG_ID });
+  });
+
+  it("update_influencer rejects a foreign influencer id (updateMany count 0 -> NOT_FOUND) (H7)", async () => {
+    const { caller, mock } = buildCaller({ influencerUpdateCount: 0 });
+    await expect(
+      caller.executeAction({
+        threadId: THREAD_ID,
+        actionType: "update_influencer",
+        payload: { id: "influencer-other-org", status: "responded" },
+      })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    // It attempted the org-scoped update...
+    expect(mock.influencerUpdateMany).toHaveBeenCalledTimes(1);
+    expect(mock.influencerUpdateMany.mock.calls[0]![0].where).toMatchObject({
+      id: "influencer-other-org",
+      organizationId: ORG_ID,
+    });
+    // ...and never re-fetched / wrote a confirmation for a row it doesn't own.
+    expect(mock.influencerFindFirstOrThrow).not.toHaveBeenCalled();
   });
 });

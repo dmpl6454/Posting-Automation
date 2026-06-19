@@ -191,8 +191,10 @@ export const listeningRouter = createRouter({
     .query(async ({ ctx, input }) => {
       const since = new Date(Date.now() - input.days * 24 * 60 * 60 * 1000);
 
+      // IDOR fix (audit 2026-06-19 / H6): always anchor to the acting org, even
+      // when a specific queryId is supplied — mirrors mentions/sentimentOverview.
       const queryFilter = input.queryId
-        ? { listeningQueryId: input.queryId }
+        ? { listeningQueryId: input.queryId, listeningQuery: { organizationId: ctx.organizationId } }
         : { listeningQuery: { organizationId: ctx.organizationId } };
 
       const mentions = await ctx.prisma.mention.findMany({

@@ -134,7 +134,11 @@ export const campaignRouter = createRouter({
     .query(async ({ ctx, input }) => {
       const where: any = {};
       if (input.brandTrackerId) {
+        // IDOR fix (audit 2026-06-19 / M22): scope the supplied brandTrackerId to
+        // a tracker owned by the acting org (the campaignId/default branches
+        // already scope via brandTracker.organizationId).
         where.brandTrackerId = input.brandTrackerId;
+        where.brandTracker = { organizationId: ctx.organizationId };
       } else if (input.campaignId) {
         where.brandTracker = { campaignId: input.campaignId, organizationId: ctx.organizationId };
       } else {
