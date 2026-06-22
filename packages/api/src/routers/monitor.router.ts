@@ -196,6 +196,40 @@ export const monitorRouter = createRouter({
     }),
 
   /**
+   * Resolve EVERY unresolved error matching the current source/severity filter
+   * (super-admin only). One server-side updateMany — NOT the ≤50 IDs of the
+   * loaded list page.
+   *
+   * Why this exists: the Monitoring "Resolve All" button used to map the IDs of
+   * the paginated list (limit 50) and call bulkResolve, so clicking it on a
+   * 6000-row backlog only ever resolved the 50 visible rows. The displayed count
+   * comes from `stats` (a COUNT over the whole filter scope), so the button must
+   * resolve over that SAME scope. `resolved: false` is always pinned so this can
+   * never touch already-resolved rows.
+   */
+  resolveAll: superAdminProcedure
+    .input(
+      z.object({
+        source: errorLogSourceFilterSchema.default("all"),
+        severity: z.enum(["error", "warning", "critical", "all"]).default("all"),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const where: any = { resolved: false };
+      if (input.source !== "all") where.source = input.source;
+      if (input.severity !== "all") where.severity = input.severity;
+
+      return ctx.prisma.errorLog.updateMany({
+        where,
+        data: {
+          resolved: true,
+          resolvedAt: new Date(),
+          resolvedBy: (ctx.session?.user as any)?.id,
+        },
+      });
+    }),
+
+  /**
    * Hard-delete ALL resolved errors on demand (super-admin only).
    * The manual companion to the daily auto-purge cron — lets an operator
    * clear the resolved backlog from the Monitoring page in one click.
