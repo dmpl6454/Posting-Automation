@@ -46,10 +46,16 @@ export default function MonitoringPage() {
   const [copied, setCopied] = useState(false);
 
   const stats = trpc.monitor.stats.useQuery(undefined, { refetchInterval: 30_000 });
-  const errors = trpc.monitor.list.useQuery(
+  const errors = trpc.monitor.list.useInfiniteQuery(
     { source: source as any, resolved, limit: 50 },
-    { refetchInterval: 15_000 }
+    {
+      refetchInterval: 15_000,
+      getNextPageParam: (lastPage) => lastPage.nextCursor,
+    }
   );
+  // Flatten all loaded pages into one list. tRPC infinite-query data is
+  // { pages: [{ errors, nextCursor }, ...] } — the UI treats it as one stream.
+  const loadedErrors = errors.data?.pages.flatMap((p) => p.errors) ?? [];
   const claudeReport = trpc.monitor.exportForClaude.useQuery(
     { unresolvedOnly: true, limit: 20 },
     { enabled: false }
@@ -63,11 +69,11 @@ export default function MonitoringPage() {
     },
   });
 
-  const bulkResolveMut = trpc.monitor.bulkResolve.useMutation({
-    onSuccess: () => {
+  const resolveAllMut = trpc.monitor.resolveAll.useMutation({
+    onSuccess: (res) => {
       errors.refetch();
       stats.refetch();
-      toast({ title: "All resolved" });
+      toast({ title: "All resolved", description: `${res.count} resolved` });
     },
   });
 
@@ -191,22 +197,24 @@ export default function MonitoringPage() {
           {resolved ? <CheckCircle2 className="h-3 w-3 mr-1" /> : <XCircle className="h-3 w-3 mr-1" />}
           {resolved ? "Showing Resolved" : "Showing Open"}
         </Button>
-        {!resolved && errors.data && errors.data.errors.length > 0 && (
+        {!resolved && loadedErrors.length > 0 && (
           <Button
             variant="outline"
             size="sm"
             className="text-xs"
             onClick={() => {
-              const ids = errors.data!.errors.map((e) => e.id);
-              bulkResolveMut.mutate({ ids });
+              const count = s?.unresolved ?? 0;
+              if (confirm(`Resolve all ${count} open error${count === 1 ? "" : "s"}${source === "all" ? "" : ` in "${source}"`}? This marks them resolved across the whole backlog, not just the rows shown.`)) {
+                resolveAllMut.mutate({ source: source as any });
+              }
             }}
-            disabled={bulkResolveMut.isPending}
+            disabled={resolveAllMut.isPending}
           >
-            {bulkResolveMut.isPending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <CheckCircle2 className="h-3 w-3 mr-1" />}
+            {resolveAllMut.isPending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <CheckCircle2 className="h-3 w-3 mr-1" />}
             Resolve All
           </Button>
         )}
-        {resolved && errors.data && errors.data.errors.length > 0 && (
+        {resolved && loadedErrors.length > 0 && (
           <Button
             variant="outline"
             size="sm"
@@ -232,7 +240,7 @@ export default function MonitoringPage() {
           </div>
         )}
 
-        {errors.data?.errors.length === 0 && (
+        {!errors.isLoading && loadedErrors.length === 0 && (
           <Card>
             <CardContent className="py-12 text-center">
               <CheckCircle2 className="h-10 w-10 text-green-500 mx-auto mb-2" />
@@ -244,7 +252,7 @@ export default function MonitoringPage() {
           </Card>
         )}
 
-        {errors.data?.errors.map((err) => {
+        {loadedErrors.map((err) => {
           const Icon = SOURCE_ICONS[err.source] || Bug;
           const meta = (err.metadata || {}) as Record<string, any>;
           return (
@@ -304,6 +312,32 @@ export default function MonitoringPage() {
             </Card>
           );
         })}
+
+        {loadedErrors.length > 0 && (
+          <div className="flex flex-col items-center gap-2 pt-2">
+            {s && (
+              <p className="text-[10px] text-muted-foreground">
+                Showing {loadedErrors.length} of {resolved ? s.total - s.unresolved : s.unresolved}
+              </p>
+            )}
+            {errors.hasNextPage && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-xs"
+                onClick={() => errors.fetchNextPage()}
+                disabled={errors.isFetchingNextPage}
+              >
+                {errors.isFetchingNextPage ? (
+                  <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-3 w-3 mr-1" />
+                )}
+                Load more
+              </Button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
