@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { prisma, encryptToken } from "@postautomation/db";
+import { prisma, encryptToken, resolveChannelErrorsOnReconnect } from "@postautomation/db";
 import { getSocialProvider, FacebookProvider, InstagramProvider, LinkedInProvider, verifyState } from "@postautomation/social";
 import { auth } from "~/lib/auth";
 
@@ -92,7 +92,7 @@ export async function GET(
       const tokens = await provider.exchangeCodeForTokens(oauthVerifier, config, oauthToken);
       const profile = await provider.getProfile(tokens);
 
-      await prisma.channel.upsert({
+      const twitterChannel = await prisma.channel.upsert({
         where: {
           organizationId_platform_platformId: {
             organizationId,
@@ -123,6 +123,9 @@ export async function GET(
           scopes: ["tweet.read", "tweet.write", "media.write"],
         },
       });
+
+      // Fresh token → clear this channel's open token/auth monitoring errors.
+      await resolveChannelErrorsOnReconnect(prisma, twitterChannel.id);
 
       return NextResponse.redirect(
         `${process.env.APP_URL}/dashboard/channels?success=connected&platform=twitter`
@@ -200,7 +203,7 @@ export async function GET(
       } else {
         // Save each Facebook Page as a separate channel
         for (const page of pages) {
-          await prisma.channel.upsert({
+          const fbChannel = await prisma.channel.upsert({
             where: {
               organizationId_platform_platformId: {
                 organizationId,
@@ -239,6 +242,8 @@ export async function GET(
               metadata: { pageId: page.id, userAccessToken: encryptToken(tokens.accessToken) },
             },
           });
+          // Fresh token → clear this channel's open token/auth monitoring errors.
+          await resolveChannelErrorsOnReconnect(prisma, fbChannel.id);
         }
       }
 
@@ -262,7 +267,7 @@ export async function GET(
       }
 
       for (const ig of igAccounts) {
-        await prisma.channel.upsert({
+        const igChannel = await prisma.channel.upsert({
           where: {
             organizationId_platform_platformId: {
               organizationId,
@@ -295,6 +300,8 @@ export async function GET(
             metadata: { igUserId: ig.id },
           },
         });
+        // Fresh token → clear this channel's open token/auth monitoring errors.
+        await resolveChannelErrorsOnReconnect(prisma, igChannel.id);
       }
 
       return NextResponse.redirect(
@@ -305,7 +312,7 @@ export async function GET(
     // For LinkedIn, save personal profile + managed company pages
     if (platform === "LINKEDIN" && provider instanceof LinkedInProvider) {
       // Save personal profile
-      await prisma.channel.upsert({
+      const liPersonal = await prisma.channel.upsert({
         where: {
           organizationId_platform_platformId: {
             organizationId,
@@ -334,13 +341,15 @@ export async function GET(
           scopes: tokens.scopes || [],
         },
       });
+      // Fresh token → clear this channel's open token/auth monitoring errors.
+      await resolveChannelErrorsOnReconnect(prisma, liPersonal.id);
 
       // Fetch and save LinkedIn Pages (organizations)
       let pageCount = 0;
       try {
         const pages = await provider.getPages(tokens);
         for (const page of pages) {
-          await prisma.channel.upsert({
+          const liPage = await prisma.channel.upsert({
             where: {
               organizationId_platform_platformId: {
                 organizationId,
@@ -371,6 +380,7 @@ export async function GET(
               metadata: { orgId: page.id },
             },
           });
+          await resolveChannelErrorsOnReconnect(prisma, liPage.id);
           pageCount++;
         }
       } catch (e: any) {
@@ -386,7 +396,7 @@ export async function GET(
     // Store token metadata (e.g. WordPress blog_id) in channel metadata
     const channelMetadata = (tokens as any).metadata || undefined;
 
-    await prisma.channel.upsert({
+    const genericChannel = await prisma.channel.upsert({
       where: {
         organizationId_platform_platformId: {
           organizationId,
@@ -419,6 +429,8 @@ export async function GET(
         ...(channelMetadata && { metadata: channelMetadata }),
       },
     });
+    // Fresh token → clear this channel's open token/auth monitoring errors.
+    await resolveChannelErrorsOnReconnect(prisma, genericChannel.id);
 
     return NextResponse.redirect(
       `${process.env.APP_URL}/dashboard/channels?success=connected&platform=${params.provider}`

@@ -135,3 +135,5 @@ export type { PrismaClient } from "@prisma/client";
 export { getPreauthOrgData, PREAUTH_EMAILS } from "./preauth";
 // S2: single idempotent personal-org provisioner — see ensure-personal-org.ts.
 export { ensurePersonalOrg } from "./ensure-personal-org";
+// Monitoring hygiene: auto-resolve a channel's open token/auth errors on reconnect.
+export { resolveChannelErrorsOnReconnect } from "./resolve-channel-errors";

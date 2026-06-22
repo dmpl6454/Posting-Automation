@@ -475,6 +475,44 @@ export async function watchdogPublishingPosts() {
 }
 
 /**
+ * Build the where-clause for purging old ErrorLog rows.
+ *
+ * Pure (takes `now` + windows) so the date math is unit-testable without a DB.
+ *   - resolved rows older than `resolvedDays` (by resolvedAt; fallback lastSeenAt
+ *     for legacy rows resolved before resolvedAt was populated)
+ *   - unresolved rows older than `staleDays` (never actioned → drop the noise)
+ */
+export function buildErrorLogPurgeWhere(now: Date, resolvedDays: number, staleDays: number) {
+  const resolvedCutoff = new Date(now.getTime() - resolvedDays * 24 * 60 * 60 * 1000);
+  const staleCutoff = new Date(now.getTime() - staleDays * 24 * 60 * 60 * 1000);
+  return {
+    OR: [
+      {
+        resolved: true,
+        OR: [
+          { resolvedAt: { lt: resolvedCutoff } },
+          { resolvedAt: null, lastSeenAt: { lt: resolvedCutoff } },
+        ],
+      },
+      { resolved: false, lastSeenAt: { lt: staleCutoff } },
+    ],
+  };
+}
+
+/**
+ * Auto-purge old ErrorLog rows to keep the Monitoring table clean.
+ * Run daily. Resolved>30d and stale-unresolved>90d are deleted.
+ */
+export async function purgeOldErrorLogs(): Promise<number> {
+  const where = buildErrorLogPurgeWhere(new Date(), 30, 90);
+  const { count } = await prisma.errorLog.deleteMany({ where });
+  if (count > 0) {
+    console.log(`[Cron:Cleanup] Purged ${count} old ErrorLog rows (resolved>30d, stale-unresolved>90d)`);
+  }
+  return count;
+}
+
+/**
  * Start all cron jobs
  */
 export function startCronJobs() {
@@ -549,6 +587,11 @@ export function startCronJobs() {
   setInterval(watchdogPublishingPosts, 5 * 60 * 1000); // every 5 minutes
   setTimeout(watchdogPublishingPosts, 2 * 60 * 1000); // Start after 2 min warmup
 
+  // ErrorLog auto-purge: keep the Monitoring table clean. Run daily.
+  setInterval(purgeOldErrorLogs, 24 * 60 * 60 * 1000); // every 24 hours
+  setTimeout(purgeOldErrorLogs, 6 * 60 * 1000); // Start after 6 min warmup
+
   console.log("[Cron]   - Auto-healer: every 10 min");
   console.log("[Cron]   - Publishing watchdog: every 5 min");
+  console.log("[Cron]   - ErrorLog purge: every 24 hours");
 }

@@ -142,3 +142,15 @@ export function terminalizeStuckClaim(opts: {
 }): boolean {
   return opts.claimCount === 0 && opts.isFinalAttempt;
 }
+
+/**
+ * True when a publish-job failure belongs to demo SEED data (`pnpm db:seed`
+ * creates posts `seed-post-001..00N` on demo channels with fake
+ * `demo-access-token-*` credentials). Those always 401 → token_expired noise
+ * that pollutes Monitoring with non-bugs. The publish worker uses this to SKIP
+ * the ErrorLog write for seed failures. Real posts use cuid ids and never carry
+ * the `seed-post-` prefix, so this can't false-positive on production failures.
+ */
+export function isSeedNoise(jobData: { postId?: string }): boolean {
+  return typeof jobData.postId === "string" && jobData.postId.startsWith("seed-post-");
+}
