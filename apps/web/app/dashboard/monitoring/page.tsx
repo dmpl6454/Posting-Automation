@@ -20,6 +20,8 @@ import {
   Zap,
   Send,
   XCircle,
+  Wrench,
+  Trash2,
 } from "lucide-react";
 import { useToast } from "~/hooks/use-toast";
 
@@ -28,6 +30,7 @@ const SOURCE_ICONS: Record<string, any> = {
   api: Server,
   worker: Zap,
   publish: Send,
+  "auto-healer": Wrench,
 };
 
 const SEVERITY_COLORS: Record<string, string> = {
@@ -65,6 +68,14 @@ export default function MonitoringPage() {
       errors.refetch();
       stats.refetch();
       toast({ title: "All resolved" });
+    },
+  });
+
+  const clearResolvedMut = trpc.monitor.clearResolved.useMutation({
+    onSuccess: (res) => {
+      errors.refetch();
+      stats.refetch();
+      toast({ title: "Cleared resolved errors", description: `${res.count} deleted` });
     },
   });
 
@@ -168,6 +179,7 @@ export default function MonitoringPage() {
             <TabsTrigger value="api">API</TabsTrigger>
             <TabsTrigger value="worker">Worker</TabsTrigger>
             <TabsTrigger value="publish">Publish</TabsTrigger>
+            <TabsTrigger value="auto-healer">Auto-Heal</TabsTrigger>
           </TabsList>
         </Tabs>
         <Button
@@ -192,6 +204,22 @@ export default function MonitoringPage() {
           >
             {bulkResolveMut.isPending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <CheckCircle2 className="h-3 w-3 mr-1" />}
             Resolve All
+          </Button>
+        )}
+        {resolved && errors.data && errors.data.errors.length > 0 && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-xs text-destructive hover:text-destructive"
+            onClick={() => {
+              if (confirm("Permanently delete ALL resolved errors? This cannot be undone.")) {
+                clearResolvedMut.mutate();
+              }
+            }}
+            disabled={clearResolvedMut.isPending}
+          >
+            {clearResolvedMut.isPending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Trash2 className="h-3 w-3 mr-1" />}
+            Clear Resolved
           </Button>
         )}
       </div>

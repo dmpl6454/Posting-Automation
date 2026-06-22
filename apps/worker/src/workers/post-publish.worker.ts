@@ -3,7 +3,7 @@ import { prisma } from "@postautomation/db";
 import { getSocialProvider } from "@postautomation/social";
 import { QUEUE_NAMES, postPublishQueue, type PostPublishJobData, createRedisConnection } from "@postautomation/queue";
 import IORedis from "ioredis";
-import { markTargetFailed, buildPublishNotifications, mediaRequiredReason, terminalizeStuckClaim } from "../lib/publish-recovery";
+import { markTargetFailed, buildPublishNotifications, mediaRequiredReason, terminalizeStuckClaim, isSeedNoise } from "../lib/publish-recovery";
 
 // Redis pub/sub publisher for upload progress SSE
 const progressPublisher = new IORedis(process.env.REDIS_URL || "redis://localhost:6379", {
@@ -732,8 +732,10 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
         }
       }
 
-      // Log to ErrorLog for monitoring dashboard
-      if (isFinalAttempt) {
+      // Log to ErrorLog for monitoring dashboard.
+      // Skip demo SEED posts (seed-post-NNN on fake-token channels) — their
+      // guaranteed 401s are not bugs and only pollute the Monitoring page.
+      if (isFinalAttempt && !isSeedNoise(job.data)) {
         try {
           const fp = require("crypto").createHash("md5").update(`${err.message}::${job.data.platform}`).digest("hex");
           const existing = await prisma.errorLog.findFirst({

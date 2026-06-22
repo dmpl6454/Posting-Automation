@@ -2,6 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
 import { getSocialProvider, getSupportedPlatforms, signState } from "@postautomation/social";
+import { resolveChannelErrorsOnReconnect } from "@postautomation/db";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 import { enforcePlanLimit } from "../middleware/plan-limit.middleware";
 import {
@@ -340,6 +341,9 @@ export const channelRouter = createRouter({
           isActive: true,
         },
       });
+
+      // Fresh credentials → clear this channel's open token/auth monitoring errors.
+      await resolveChannelErrorsOnReconnect(ctx.prisma as any, channel.id);
 
       createAuditLog({
         organizationId: ctx.organizationId,

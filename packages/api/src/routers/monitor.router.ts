@@ -2,6 +2,21 @@ import { z } from "zod";
 import { createRouter, protectedProcedure, superAdminProcedure } from "../trpc";
 import crypto from "crypto";
 
+/**
+ * Every `source` string the codebase writes to the ErrorLog table.
+ * SINGLE source of truth — the router enums + UI tabs derive from this so a
+ * worker can't write a source value the Monitoring UI silently can't filter on.
+ * `auto-healer` added 2026-06-22 (the auto-healer worker already wrote it, but
+ * the filter enum omitted it → its summary rows were invisible in the dashboard).
+ */
+export const ERROR_LOG_SOURCES = ["frontend", "api", "worker", "publish", "auto-healer"] as const;
+
+/** Schema for a written source (logError). */
+export const errorLogSourceSchema = z.enum(ERROR_LOG_SOURCES);
+
+/** Schema for the list filter (adds the "all" pseudo-source). */
+export const errorLogSourceFilterSchema = z.enum([...ERROR_LOG_SOURCES, "all"]);
+
 /** Generate a fingerprint for deduplication */
 function errorFingerprint(message: string, stack?: string): string {
   const input = `${message}::${(stack || "").split("\n").slice(0, 3).join("")}`;
@@ -22,7 +37,7 @@ export const monitorRouter = createRouter({
   logError: protectedProcedure
     .input(
       z.object({
-        source: z.enum(["frontend", "api", "worker", "publish"]),
+        source: errorLogSourceSchema,
         severity: z.enum(["error", "warning", "critical"]).default("error"),
         message: z.string().max(5000),
         stack: z.string().max(10000).optional(),
@@ -84,7 +99,7 @@ export const monitorRouter = createRouter({
   list: superAdminProcedure
     .input(
       z.object({
-        source: z.enum(["frontend", "api", "worker", "publish", "all"]).default("all"),
+        source: errorLogSourceFilterSchema.default("all"),
         severity: z.enum(["error", "warning", "critical", "all"]).default("all"),
         resolved: z.boolean().optional(),
         limit: z.number().min(1).max(200).default(50),
@@ -179,6 +194,15 @@ export const monitorRouter = createRouter({
         },
       });
     }),
+
+  /**
+   * Hard-delete ALL resolved errors on demand (super-admin only).
+   * The manual companion to the daily auto-purge cron — lets an operator
+   * clear the resolved backlog from the Monitoring page in one click.
+   */
+  clearResolved: superAdminProcedure.mutation(async ({ ctx }) => {
+    return ctx.prisma.errorLog.deleteMany({ where: { resolved: true } });
+  }),
 
   /** Export errors as Claude-friendly report (super-admin only) */
   exportForClaude: superAdminProcedure
