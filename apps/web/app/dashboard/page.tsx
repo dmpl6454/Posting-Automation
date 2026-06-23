@@ -18,7 +18,7 @@ import {
   ExternalLink,
   TrendingUp,
   Repeat2,
-  Newspaper,
+  // Newspaper, // NewsGrid Bot hidden from UI 2026-06-23 — re-add with the feature card below
   Zap,
   Bot,
   Layers,
@@ -71,16 +71,18 @@ const featureCards: {
     accentTo: "to-cyan-400",
     glowColor: "blue",
   },
-  {
-    href: "/dashboard/newsgrid",
-    icon: Newspaper,
-    title: "NewsGrid Bot",
-    desc: "Auto-create branded news graphics from trending headlines",
-    accentFrom: "from-rose-500",
-    accentTo: "to-orange-400",
-    glowColor: "rose",
-    minPlan: "STARTER",
-  },
+  // NewsGrid Bot card hidden from UI 2026-06-23 — redundant with Repurpose (same render stack).
+  // Route + newsgrid.router.ts kept intact; re-add this card object to restore.
+  // {
+  //   href: "/dashboard/newsgrid",
+  //   icon: Newspaper,
+  //   title: "NewsGrid Bot",
+  //   desc: "Auto-create branded news graphics from trending headlines",
+  //   accentFrom: "from-rose-500",
+  //   accentTo: "to-orange-400",
+  //   glowColor: "rose",
+  //   minPlan: "STARTER",
+  // },
   {
     href: "/dashboard/autopilot",
     icon: Zap,
@@ -233,7 +235,7 @@ export default function DashboardPage() {
             ))}
       </div>
 
-      {/* Feature Cards — Content Studio, Repurpose, NewsGrid, Autopilot */}
+      {/* Feature Cards — Content Studio, Repurpose, Autopilot */}
       <div>
         <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-muted-foreground">
           <Bot className="h-3.5 w-3.5" />
