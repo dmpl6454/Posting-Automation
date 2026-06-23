@@ -26,7 +26,7 @@ import {
   CheckCircle,
   BookOpen,
   Zap,
-  Newspaper,
+  // Newspaper, // NewsGrid Bot hidden from UI 2026-06-23 — re-add with the nav entry below
   Monitor,
   GitBranch,
   Ear,
@@ -58,7 +58,9 @@ const navigation: NavItem[] = [
   { name: "Analytics", href: "/dashboard/analytics", icon: BarChart3 },
   { name: "RSS Feeds", href: "/dashboard/rss", icon: Rss },
   { name: "Short Links", href: "/dashboard/links", icon: Link2 },
-  { name: "NewsGrid Bot", href: "/dashboard/newsgrid", icon: Newspaper, minPlan: "STARTER" },
+  // NewsGrid Bot hidden from UI 2026-06-23 — redundant with Repurpose (same render stack).
+  // Route + newsgrid.router.ts kept intact; re-add this nav entry to restore.
+  // { name: "NewsGrid Bot", href: "/dashboard/newsgrid", icon: Newspaper, minPlan: "STARTER" },
   { name: "Autopilot", href: "/dashboard/autopilot", icon: Zap, minPlan: "STARTER" },
   { name: "Social Listening", href: "/dashboard/listening", icon: Ear, minPlan: "STARTER" },
   { name: "Campaigns", href: "/dashboard/campaigns", icon: Target, minPlan: "PROFESSIONAL" },
