@@ -21,7 +21,7 @@ import Link from "next/link";
 import {
   Loader2, Zap, CheckCircle2, XCircle, Edit2, Send,
   ChevronDown, ChevronUp, Settings2, Hash, MessageSquare,
-  CheckSquare, Square, Download, Image as ImageIcon,
+  CheckSquare, Square, Download, Image as ImageIcon, AlertTriangle,
 } from "lucide-react";
 
 const TEMPLATE_TYPES = [
@@ -56,6 +56,9 @@ type GeneratedPayload = {
   scheduleTime:     string | null;
   backgroundImageUrl?:  string | null;
   backgroundGenerating?: boolean;
+  // Gap #5: set by the server when BOTH render paths failed. When present, the
+  // creative could not be produced — the channel must not be published imageless.
+  imageError?:          string | null;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -571,9 +574,22 @@ export default function NewsGridPage() {
 
   const handleBulkPublish = () => {
     if (approvedResults.length === 0) { toast({ title: "Approve at least one channel result", variant: "destructive" }); return; }
+    // Gap #5: NewsGrid is an image-card product — never publish a channel whose
+    // creative failed to render (it would go out imageless / fail on IG/FB). The
+    // approve guards below should already prevent this, but enforce it here too.
+    const publishable = approvedResults.filter((r) => !r.imageError);
+    const blocked = approvedResults.length - publishable.length;
+    if (blocked > 0) {
+      toast({
+        title: `${blocked} channel${blocked > 1 ? "s" : ""} skipped — creative failed to render`,
+        description: "Regenerate the failed channels before publishing them.",
+        variant: "destructive",
+      });
+    }
+    if (publishable.length === 0) return;
     bulkPublish.mutate({
       headline,
-      payloads: approvedResults.map((r) => ({
+      payloads: publishable.map((r) => ({
         channelId:          r.channelId,
         caption:            editingCaption[r.channelId] ?? r.caption,
         hashtags:           r.hashtags,
@@ -584,8 +600,16 @@ export default function NewsGridPage() {
     });
   };
 
-  const toggleApprove    = (id: string) => setResults((p) => p.map((r) => r.channelId === id ? { ...r, approved: !r.approved } : r));
-  const approveAll       = () => setResults((p) => p.map((r) => ({ ...r, approved: true })));
+  const toggleApprove    = (id: string) => setResults((p) => p.map((r) => {
+    if (r.channelId !== id) return r;
+    // Gap #5: refuse to approve a channel whose creative failed to render.
+    if (!r.approved && r.imageError) {
+      toast({ title: "Can't approve — creative failed to render", description: "Regenerate this channel first.", variant: "destructive" });
+      return r;
+    }
+    return { ...r, approved: !r.approved };
+  }));
+  const approveAll       = () => setResults((p) => p.map((r) => r.imageError ? r : ({ ...r, approved: true })));
   const unapproveAll     = () => setResults((p) => p.map((r) => ({ ...r, approved: false })));
   const toggleCard       = (id: string) => setExpandedCards((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
@@ -959,6 +983,18 @@ export default function NewsGridPage() {
                               className="w-full rounded-lg object-cover"
                               style={{ aspectRatio: "4/5" }}
                             />
+                          ) : r.imageError ? (
+                            // Gap #5: the server could not render a creative. Show the
+                            // failure honestly instead of a CSS preview that masks it
+                            // (which led to imageless posts being published).
+                            <div
+                              className="flex w-full flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-destructive/50 bg-destructive/5 p-4 text-center"
+                              style={{ aspectRatio: "4/5" }}
+                            >
+                              <AlertTriangle className="h-7 w-7 text-destructive/70" />
+                              <p className="text-xs font-medium text-destructive">Creative failed to render</p>
+                              <p className="text-[10px] text-muted-foreground">Can&apos;t publish without an image. Try regenerating.</p>
+                            </div>
                           ) : (
                             <StaticNewsCreative
                               template={r.creativeSpec.template}

@@ -61,6 +61,9 @@ export const agentRouter = createRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // AI Agents are a STARTER+ feature — gate the mutation, not just the list
+      // query (a FREE org could otherwise create agents by calling create directly).
+      await requirePlan(ctx.organizationId, "STARTER", "AI Agents", ctx.isSuperAdmin);
       // SECURITY: ensure every channelId belongs to the current org (IDOR fix).
       // Dedup first so repeated ids in the input don't trip the count check.
       const ids = [...new Set(input.channelIds)];
@@ -111,6 +114,8 @@ export const agentRouter = createRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // AI Agents are a STARTER+ feature — gate the mutation, not just the list query.
+      await requirePlan(ctx.organizationId, "STARTER", "AI Agents", ctx.isSuperAdmin);
       const { id, ...data } = input;
       const existing = await ctx.prisma.agent.findFirst({
         where: { id, organizationId: ctx.organizationId },

@@ -6,18 +6,25 @@ export interface RssItem {
   published: Date | null;
 }
 
+/** Strip any HTML tags from extracted feed content, leaving plain text. */
+function stripTags(value: string): string {
+  return value.replace(/<[^>]+>/g, "").trim();
+}
+
 export function extractTag(xml: string, tag: string): string {
   const cdataRegex = new RegExp(
     `<${tag}[^>]*>\\s*<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>\\s*</${tag}>`,
     "i"
   );
   const cdataMatch = xml.match(cdataRegex);
-  if (cdataMatch && cdataMatch[1]) return cdataMatch[1].trim();
+  // CDATA frequently wraps raw HTML (e.g. <description><![CDATA[<p>..</p>]]></description>).
+  // Strip tags here too so summaries destined for plain-text social posts stay clean.
+  if (cdataMatch && cdataMatch[1]) return stripTags(cdataMatch[1]);
 
   const regex = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "i");
   const match = xml.match(regex);
   if (match && match[1]) {
-    return match[1].replace(/<[^>]+>/g, "").trim();
+    return stripTags(match[1]);
   }
   return "";
 }

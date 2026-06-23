@@ -2,7 +2,16 @@ import { Worker, type Job } from "bullmq";
 import { prisma } from "@postautomation/db";
 import { QUEUE_NAMES, type OutreachSendJobData, createRedisConnection } from "@postautomation/queue";
 
-async function sendEmail(messageId: string, subject: string | null, body: string, brandEmail: string): Promise<void> {
+// A send attempt has three honest outcomes (a thrown error is the fourth,
+// handled by the caller's try/catch → FAILED):
+//   "sent"           — the message was actually delivered via a real API.
+//   "pending_manual" — the channel has no programmatic send API (LinkedIn/IG
+//                      DM). The copy is ready; the operator must send by hand.
+//                      We must NOT mark these SENT — that would falsely claim
+//                      delivery (the gap this fix closes).
+type SendOutcome = "sent" | "pending_manual";
+
+async function sendEmail(messageId: string, subject: string | null, body: string, brandEmail: string): Promise<SendOutcome> {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) throw new Error("RESEND_API_KEY not set");
 
@@ -22,22 +31,26 @@ async function sendEmail(messageId: string, subject: string | null, body: string
     const text = await res.text();
     throw new Error(`Resend API error ${res.status}: ${text}`);
   }
+  return "sent";
 }
 
-async function sendLinkedInDM(messageId: string, body: string, linkedinUrl: string | null): Promise<void> {
-  // LinkedIn DM API requires Marketing Developer Platform access.
-  // Until that access is granted, log the message for manual review.
-  console.log(`[OutreachSend] LinkedIn DM (manual review required): ${linkedinUrl ?? "no URL"}`);
-  console.log(`[OutreachSend] Message: ${body.substring(0, 100)}...`);
-  // Store as sent with a note — user will copy-paste from dashboard
+async function sendLinkedInDM(messageId: string, body: string, linkedinUrl: string | null): Promise<SendOutcome> {
+  // LinkedIn DM API requires Marketing Developer Platform access we don't have.
+  // We CANNOT send programmatically, so report "pending_manual" — the dashboard
+  // shows the generated copy for the operator to send by hand. Do NOT return
+  // "sent" / mark SENT here: that falsely claims a DM was delivered.
+  console.log(`[OutreachSend] LinkedIn DM pending manual send: ${linkedinUrl ?? "no URL"}`);
+  return "pending_manual";
 }
 
-async function sendTwitterDM(messageId: string, body: string, twitterHandle: string | null): Promise<void> {
+async function sendTwitterDM(messageId: string, body: string, twitterHandle: string | null): Promise<SendOutcome> {
   const bearerToken = process.env.TWITTER_BEARER_TOKEN;
   const accessToken = process.env.TWITTER_ACCESS_TOKEN;
   if (!bearerToken || !accessToken || !twitterHandle) {
-    console.log(`[OutreachSend] Twitter DM skipped — missing credentials or handle`);
-    return;
+    // Can't send (no DM credentials / no handle) — fall back to manual, don't
+    // pretend it was sent.
+    console.log(`[OutreachSend] Twitter DM pending manual send — missing credentials or handle`);
+    return "pending_manual";
   }
 
   const cleanHandle = twitterHandle.replace(/^@/, "");
@@ -67,13 +80,14 @@ async function sendTwitterDM(messageId: string, body: string, twitterHandle: str
     const text = await dmRes.text();
     throw new Error(`Twitter DM error ${dmRes.status}: ${text}`);
   }
+  return "sent";
 }
 
-async function sendInstagramDM(messageId: string, body: string, igHandle: string | null): Promise<void> {
-  // Instagram DM via API requires approved Business or Creator access.
-  // Until access is granted, log for manual review.
-  console.log(`[OutreachSend] Instagram DM (manual review required): @${igHandle ?? "unknown"}`);
-  console.log(`[OutreachSend] Message: ${body.substring(0, 100)}...`);
+async function sendInstagramDM(messageId: string, body: string, igHandle: string | null): Promise<SendOutcome> {
+  // Instagram DM via API requires approved Business/Creator access we don't have.
+  // Report "pending_manual" (not "sent") — the operator sends from the dashboard.
+  console.log(`[OutreachSend] Instagram DM pending manual send: @${igHandle ?? "unknown"}`);
+  return "pending_manual";
 }
 
 export function createOutreachSendWorker() {
@@ -110,36 +124,46 @@ export function createOutreachSendWorker() {
       });
 
       let error: string | null = null;
-      let responseBody: string | null = null;
+      let outcome: SendOutcome | null = null;
 
       try {
         switch (message.channel) {
           case "EMAIL":
             if (!signal.brandEmail) throw new Error("No email for brand");
-            await sendEmail(messageId, message.subject, message.body, signal.brandEmail);
+            outcome = await sendEmail(messageId, message.subject, message.body, signal.brandEmail);
             break;
           case "LINKEDIN":
-            await sendLinkedInDM(messageId, message.body, signal.brandLinkedin);
+            outcome = await sendLinkedInDM(messageId, message.body, signal.brandLinkedin);
             break;
           case "TWITTER":
-            await sendTwitterDM(messageId, message.body, signal.brandTwitter);
+            outcome = await sendTwitterDM(messageId, message.body, signal.brandTwitter);
             break;
           case "INSTAGRAM":
-            await sendInstagramDM(messageId, message.body, signal.brandInstagram);
+            outcome = await sendInstagramDM(messageId, message.body, signal.brandInstagram);
             break;
         }
-        responseBody = "ok";
       } catch (err) {
         error = err instanceof Error ? err.message : String(err);
         console.error(`[OutreachSend] Channel ${message.channel} failed: ${error}`);
       }
 
-      // Log the delivery attempt
+      // Map the outcome to an honest message status:
+      //   error            → FAILED
+      //   "pending_manual" → PENDING_MANUAL (no real send happened; operator sends)
+      //   "sent"           → SENT (actually delivered)
+      const newStatus = error
+        ? "FAILED"
+        : outcome === "pending_manual"
+        ? "PENDING_MANUAL"
+        : "SENT";
+
+      // Log the delivery attempt. A pending-manual outcome is not a 200 "delivered"
+      // — record it as 0/"pending_manual" so the delivery log doesn't read as a send.
       await prisma.outreachDeliveryLog.create({
         data: {
           messageId,
-          responseCode: error ? 500 : 200,
-          responseBody,
+          responseCode: error ? 500 : newStatus === "PENDING_MANUAL" ? 0 : 200,
+          responseBody: error ? null : newStatus === "PENDING_MANUAL" ? "pending_manual" : "ok",
           error,
         },
       });
@@ -148,16 +172,21 @@ export function createOutreachSendWorker() {
       await prisma.outreachMessage.update({
         where: { id: messageId },
         data: {
-          status: error ? "FAILED" : "SENT",
-          sentAt: error ? null : new Date(),
+          status: newStatus,
+          // sentAt is set ONLY on a real send — never for PENDING_MANUAL.
+          sentAt: newStatus === "SENT" ? new Date() : null,
         },
       });
 
       if (error) throw new Error(error);
 
-      // Check if all messages for this lead are done → mark lead as sent
+      // Mark the lead SENT only when every message has reached a TERMINAL-SENT
+      // state. DRAFT/QUEUED are still in-flight; PENDING_MANUAL is awaiting a
+      // human action — both mean the lead is NOT done, so they keep it out of
+      // SENT. (Previously only DRAFT/QUEUED counted, so a LinkedIn-only lead
+      // flipped to SENT while nothing was actually delivered.)
       const pendingMsgs = await prisma.outreachMessage.count({
-        where: { leadId, status: { in: ["DRAFT", "QUEUED"] } },
+        where: { leadId, status: { in: ["DRAFT", "QUEUED", "PENDING_MANUAL"] } },
       });
       if (pendingMsgs === 0) {
         await prisma.outreachLead.update({

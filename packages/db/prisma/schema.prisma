@@ -1193,6 +1193,15 @@ enum OutreachStatus {
   REJECTED
   SENT
   FAILED
+  // Post-send manual outcomes. The operator sets these by hand after a reply
+  // lands in their own inbox — there is NO automated inbox/IMAP integration
+  // (deliberate: see the Brand Outreach gap #3 decision). They track what
+  // happened AFTER a message was sent and are orthogonal to the auto pipeline
+  // states above.
+  REPLIED        // brand responded (neutral)
+  INTERESTED     // positive response — worth pursuing
+  NOT_INTERESTED // declined
+  CLOSED         // concluded / archived (won or lost)
 }
 
 enum OutreachChannel {
@@ -1207,6 +1216,11 @@ enum MessageStatus {
   QUEUED
   SENT
   FAILED
+  // Channel has no programmatic send API yet (LinkedIn/Instagram DM require
+  // platform access we don't have). The message copy is generated and ready;
+  // the operator must send it by hand. NOT "SENT" — that would falsely claim
+  // delivery. Surfaced in the Brand Leads dashboard with copy-to-clipboard.
+  PENDING_MANUAL
 }
 
 // A detected signal that a brand has onboarded a celebrity
