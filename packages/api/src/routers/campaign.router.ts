@@ -3,13 +3,21 @@ import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
 import { requirePlan } from "../middleware/plan-limit.middleware";
 
+// Campaigns (incl. brand trackers + influencer discovery) are a PROFESSIONAL+
+// feature. M23 fix: previously only `list` gated this — every sibling query and
+// mutation was reachable directly, so a FREE org could bypass the gate. Every
+// data-touching procedure now calls this on its first line. Dormant under
+// BILLING_DISABLED (requirePlan returns early), exactly like the other gates.
+function gateCampaigns(ctx: { organizationId: string; isSuperAdmin: boolean }) {
+  return requirePlan(ctx.organizationId, "PROFESSIONAL", "Campaigns", ctx.isSuperAdmin);
+}
+
 export const campaignRouter = createRouter({
   // ==================== CAMPAIGNS ====================
   list: orgProcedure
     .input(z.object({ status: z.enum(["DRAFT", "ACTIVE", "PAUSED", "COMPLETED", "ARCHIVED"]).optional() }).optional())
     .query(async ({ ctx, input }) => {
-      // Campaigns is a PROFESSIONAL+ feature
-      await requirePlan(ctx.organizationId, "PROFESSIONAL", "Campaigns", ctx.isSuperAdmin);
+      await gateCampaigns(ctx);
       return ctx.prisma.campaign.findMany({
         where: { organizationId: ctx.organizationId, ...(input?.status ? { status: input.status } : {}) },
         include: {
@@ -20,6 +28,7 @@ export const campaignRouter = createRouter({
     }),
 
   byId: orgProcedure.input(z.object({ id: z.string() })).query(async ({ ctx, input }) => {
+    await gateCampaigns(ctx);
     return ctx.prisma.campaign.findFirstOrThrow({
       where: { id: input.id, organizationId: ctx.organizationId },
       include: {
@@ -40,6 +49,7 @@ export const campaignRouter = createRouter({
       goalType: z.string().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
+      await gateCampaigns(ctx);
       return ctx.prisma.campaign.create({
         data: { organizationId: ctx.organizationId, ...input, status: "ACTIVE" },
       });
@@ -54,11 +64,13 @@ export const campaignRouter = createRouter({
       hashtags: z.array(z.string()).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
+      await gateCampaigns(ctx);
       const { id, ...data } = input;
       return ctx.prisma.campaign.update({ where: { id, organizationId: ctx.organizationId }, data });
     }),
 
   delete: orgProcedure.input(z.object({ id: z.string() })).mutation(async ({ ctx, input }) => {
+    await gateCampaigns(ctx);
     await ctx.prisma.campaign.delete({ where: { id: input.id, organizationId: ctx.organizationId } });
     return { success: true };
   }),
@@ -67,6 +79,7 @@ export const campaignRouter = createRouter({
   listBrands: orgProcedure
     .input(z.object({ campaignId: z.string().optional() }).optional())
     .query(async ({ ctx, input }) => {
+      await gateCampaigns(ctx);
       return ctx.prisma.brandTracker.findMany({
         where: {
           organizationId: ctx.organizationId,
@@ -91,6 +104,7 @@ export const campaignRouter = createRouter({
       websiteUrl: z.string().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
+      await gateCampaigns(ctx);
       return ctx.prisma.brandTracker.create({
         data: { organizationId: ctx.organizationId, ...input },
       });
@@ -112,6 +126,7 @@ export const campaignRouter = createRouter({
       isActive: z.boolean().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
+      await gateCampaigns(ctx);
       const { id, ...data } = input;
       return ctx.prisma.brandTracker.update({
         where: { id, organizationId: ctx.organizationId },
@@ -120,6 +135,7 @@ export const campaignRouter = createRouter({
     }),
 
   deleteBrand: orgProcedure.input(z.object({ id: z.string() })).mutation(async ({ ctx, input }) => {
+    await gateCampaigns(ctx);
     await ctx.prisma.brandTracker.delete({ where: { id: input.id, organizationId: ctx.organizationId } });
     return { success: true };
   }),
@@ -132,6 +148,7 @@ export const campaignRouter = createRouter({
       limit: z.number().min(1).max(100).default(30),
     }))
     .query(async ({ ctx, input }) => {
+      await gateCampaigns(ctx);
       const where: any = {};
       if (input.brandTrackerId) {
         // IDOR fix (audit 2026-06-19 / M22): scope the supplied brandTrackerId to
@@ -161,6 +178,7 @@ export const campaignRouter = createRouter({
       sortBy: z.enum(["relevanceScore", "followers", "avgEngagement", "createdAt"]).default("relevanceScore"),
     }).optional())
     .query(async ({ ctx, input }) => {
+      await gateCampaigns(ctx);
       return ctx.prisma.influencer.findMany({
         where: {
           organizationId: ctx.organizationId,
@@ -188,6 +206,7 @@ export const campaignRouter = createRouter({
       notes: z.string().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
+      await gateCampaigns(ctx);
       return ctx.prisma.influencer.create({
         data: {
           organizationId: ctx.organizationId,
@@ -208,6 +227,7 @@ export const campaignRouter = createRouter({
       lastContactedAt: z.string().datetime().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
+      await gateCampaigns(ctx);
       const { id, lastContactedAt, ...data } = input;
       const result = await ctx.prisma.influencer.updateMany({
         where: { id, organizationId: ctx.organizationId },
@@ -221,6 +241,7 @@ export const campaignRouter = createRouter({
     }),
 
   deleteInfluencer: orgProcedure.input(z.object({ id: z.string() })).mutation(async ({ ctx, input }) => {
+    await gateCampaigns(ctx);
     const result = await ctx.prisma.influencer.deleteMany({ where: { id: input.id, organizationId: ctx.organizationId } });
     if (result.count === 0) throw new TRPCError({ code: "NOT_FOUND" });
     return { success: true };
@@ -228,6 +249,7 @@ export const campaignRouter = createRouter({
 
   // Influencer stats summary
   influencerStats: orgProcedure.query(async ({ ctx }) => {
+    await gateCampaigns(ctx);
     const [total, shortlisted, contacted, responded] = await Promise.all([
       ctx.prisma.influencer.count({ where: { organizationId: ctx.organizationId } }),
       ctx.prisma.influencer.count({ where: { organizationId: ctx.organizationId, status: "shortlisted" } }),

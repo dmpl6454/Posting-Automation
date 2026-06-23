@@ -263,6 +263,12 @@ export const newsgridRouter = createRouter({
             // Step 1: Generate a relevant background image via Gemini AI
             // Step 2: Composite headline text + logo via Puppeteer HTML template
             let backgroundImageUrl: string | null = null;
+            // Gap #5: if BOTH the Gemini path AND the Puppeteer-only fallback fail,
+            // we must NOT silently return backgroundImageUrl:null. A null was being
+            // masked by the client-side CSS preview, so the operator saw a nice card,
+            // approved it, and published an IMAGELESS post (which then fails on
+            // IG/FB). Capture the failure reason and surface it instead of swallowing.
+            let imageError: string | null = null;
 
             // Generate background image with Gemini (no text — just a relevant visual)
             try {
@@ -301,7 +307,7 @@ Requirements:
               console.log(`[NewsGrid] Composited creative with Gemini bg + Puppeteer text/logo`);
             } catch (e) {
               console.warn(`[NewsGrid] Gemini bg failed, using Puppeteer-only fallback:`, (e as Error).message);
-              // Fallback: Puppeteer template with stock background
+              // Fallback: Puppeteer template (gradient background, no Gemini photo)
               try {
                 const imgResult = await generateStaticNewsCreativeImage({
                   headline:    rephrasedHeadline,
@@ -313,7 +319,14 @@ Requirements:
                   ...(brandColor && { brandColor }),
                 });
                 backgroundImageUrl = `data:${imgResult.mimeType};base64,${imgResult.imageBase64}`;
-              } catch { /* total fallback failure */ }
+              } catch (fallbackErr) {
+                // Gap #5: BOTH render paths failed (e.g. Puppeteer/Chromium
+                // unavailable). Record it honestly — do NOT leave backgroundImageUrl
+                // null with no signal, which the UI masks with a CSS preview and then
+                // publishes imageless.
+                imageError = (fallbackErr as Error)?.message || "Image rendering failed";
+                console.error(`[NewsGrid] Image render FAILED for channel ${channel.id}: ${imageError}`);
+              }
             }
 
             return {
@@ -331,6 +344,9 @@ Requirements:
               approved:     false,
               scheduleTime: null as string | null,
               backgroundImageUrl,
+              // Non-null only when BOTH render paths failed; the UI uses it to show
+              // the failure and block publishing this channel imageless.
+              imageError,
             };
           })
         );

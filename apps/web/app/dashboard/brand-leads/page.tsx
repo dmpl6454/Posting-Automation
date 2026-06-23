@@ -33,6 +33,7 @@ import {
   Target,
   Send,
   Clock,
+  Copy,
   Search,
   Flame,
   Newspaper,
@@ -79,12 +80,26 @@ type Lead = {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const STATUS_STYLES: Record<string, string> = {
-  PENDING:  "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400",
-  APPROVED: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400",
-  REJECTED: "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400",
-  SENT:     "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400",
-  FAILED:   "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400",
+  PENDING:        "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400",
+  APPROVED:       "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400",
+  REJECTED:       "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400",
+  SENT:           "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400",
+  FAILED:         "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400",
+  // Manual post-send outcomes (gap #3)
+  REPLIED:        "bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-400",
+  INTERESTED:     "bg-teal-100 text-teal-800 dark:bg-teal-900/30 dark:text-teal-400",
+  NOT_INTERESTED: "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400",
+  CLOSED:         "bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
 };
+
+// Human label for the manual outcome statuses (raw enum would show NOT_INTERESTED).
+const LEAD_STATUS_LABEL: Record<string, string> = {
+  PENDING: "Pending", APPROVED: "Approved", REJECTED: "Rejected", SENT: "Sent", FAILED: "Failed",
+  REPLIED: "Replied", INTERESTED: "Interested", NOT_INTERESTED: "Not interested", CLOSED: "Closed",
+};
+
+// The manual outcomes an operator can set on a lead after sending (gap #3).
+const MANUAL_OUTCOMES = ["REPLIED", "INTERESTED", "NOT_INTERESTED", "CLOSED"] as const;
 
 const SIGNAL_META: Record<string, { label: string; icon: React.ReactNode; color: string }> = {
   AD_LIBRARY:   { label: "Meta Ads",    icon: <TrendingUp className="h-3 w-3" />,  color: "bg-blue-50 text-blue-700 border-blue-200" },
@@ -101,10 +116,21 @@ const CHANNEL_META: Record<string, { icon: React.ReactNode; label: string }> = {
 };
 
 const MSG_STATUS_STYLES: Record<string, string> = {
-  DRAFT:  "text-muted-foreground",
-  QUEUED: "text-blue-500",
-  SENT:   "text-emerald-600",
-  FAILED: "text-red-500",
+  DRAFT:          "text-muted-foreground",
+  QUEUED:         "text-blue-500",
+  SENT:           "text-emerald-600",
+  FAILED:         "text-red-500",
+  PENDING_MANUAL: "text-amber-600",
+};
+
+// Friendly label for each message status (PENDING_MANUAL would otherwise read as
+// the raw enum). Channels with no send API land here for a manual copy-paste send.
+const MSG_STATUS_LABEL: Record<string, string> = {
+  DRAFT:          "Draft",
+  QUEUED:         "Queued",
+  SENT:           "Sent",
+  FAILED:         "Failed",
+  PENDING_MANUAL: "Send manually",
 };
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -141,11 +167,12 @@ function ChannelDots({ lead }: { lead: Lead }) {
         return (
           <span
             key={ch}
-            title={`${CHANNEL_META[ch]?.label}: ${sent ? sent.status : "not sent"}`}
+            title={`${CHANNEL_META[ch]?.label}: ${sent ? (MSG_STATUS_LABEL[sent.status] ?? sent.status) : "not sent"}`}
             className={`p-1 rounded-md border ${
-              sent?.status === "SENT"   ? "border-emerald-200 bg-emerald-50 text-emerald-600" :
-              sent?.status === "FAILED" ? "border-red-200 bg-red-50 text-red-500" :
-              sent?.status === "QUEUED" ? "border-blue-200 bg-blue-50 text-blue-500" :
+              sent?.status === "SENT"           ? "border-emerald-200 bg-emerald-50 text-emerald-600" :
+              sent?.status === "FAILED"         ? "border-red-200 bg-red-50 text-red-500" :
+              sent?.status === "QUEUED"         ? "border-blue-200 bg-blue-50 text-blue-500" :
+              sent?.status === "PENDING_MANUAL" ? "border-amber-200 bg-amber-50 text-amber-600" :
               "border-border/50 text-muted-foreground"
             }`}
           >
@@ -186,7 +213,7 @@ function LeadCard({ lead, onApprove, onReject, onView, isApproving, isRejecting 
                 {signal.label}
               </span>
               <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${STATUS_STYLES[lead.status]}`}>
-                {lead.status}
+                {LEAD_STATUS_LABEL[lead.status] ?? lead.status}
               </span>
             </div>
 
@@ -256,10 +283,20 @@ function MessagePreviewDialog({ lead, open, onClose }: {
   open: boolean;
   onClose: () => void;
 }) {
+  const utils = trpc.useUtils();
   const { data: messages, isLoading } = trpc.brandLeads.messages.useQuery(
     { leadId: lead?.id ?? "" },
     { enabled: open && !!lead }
   );
+
+  // Gap #3: log a manual reply/outcome on the lead (no inbox automation exists —
+  // the operator records what happened after they sent the outreach by hand).
+  const setStatus = trpc.brandLeads.setStatus.useMutation({
+    onSuccess: () => {
+      utils.brandLeads.list.invalidate();
+      utils.brandLeads.stats.invalidate();
+    },
+  });
 
   if (!lead) return null;
 
@@ -312,6 +349,34 @@ function MessagePreviewDialog({ lead, open, onClose }: {
           )}
         </div>
 
+        {/* Manual reply / outcome tracking (gap #3). No inbox automation exists —
+            the operator logs what happened after they reached out. */}
+        <div className="rounded-lg border border-border/50 p-3 space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-muted-foreground">Log a reply / outcome</span>
+            <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${STATUS_STYLES[lead.status]}`}>
+              {LEAD_STATUS_LABEL[lead.status] ?? lead.status}
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {MANUAL_OUTCOMES.map((outcome) => (
+              <Button
+                key={outcome}
+                size="sm"
+                variant={lead.status === outcome ? "default" : "outline"}
+                disabled={setStatus.isPending}
+                className="h-7 text-[11px]"
+                onClick={() => setStatus.mutate({ leadId: lead.id, status: outcome })}
+              >
+                {LEAD_STATUS_LABEL[outcome]}
+              </Button>
+            ))}
+          </div>
+          <p className="text-[10px] text-muted-foreground">
+            Replies aren&apos;t tracked automatically — set the outcome here after you hear back.
+          </p>
+        </div>
+
         {/* Outreach messages */}
         <div className="space-y-3">
           <h3 className="text-sm font-semibold">Outreach Messages</h3>
@@ -344,10 +409,31 @@ function MessagePreviewDialog({ lead, open, onClose }: {
                   {msg.status === "SENT" && <CheckCircle2 className="h-3 w-3" />}
                   {msg.status === "FAILED" && <AlertCircle className="h-3 w-3" />}
                   {msg.status === "QUEUED" && <Loader2 className="h-3 w-3 animate-spin" />}
-                  {msg.status}
+                  {msg.status === "PENDING_MANUAL" && <Clock className="h-3 w-3" />}
+                  {MSG_STATUS_LABEL[msg.status] ?? msg.status}
                   {msg.sentAt && ` · ${new Date(msg.sentAt).toLocaleTimeString("en-IN", { timeStyle: "short" })}`}
                 </span>
               </div>
+              {/* Channels with no send API (LinkedIn/Instagram DM) come back as
+                  PENDING_MANUAL — the copy is ready but the operator must send it
+                  by hand. Make that explicit and one-click-copyable. */}
+              {msg.status === "PENDING_MANUAL" && (
+                <div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200/60 dark:border-amber-800/40">
+                  <span className="text-[11px] text-amber-700 dark:text-amber-400">
+                    No automatic send for {CHANNEL_META[msg.channel]?.label} — copy and send it manually.
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-6 px-2 text-[11px]"
+                    onClick={() => {
+                      navigator.clipboard.writeText(msg.subject ? `${msg.subject}\n\n${msg.body}` : msg.body);
+                    }}
+                  >
+                    <Copy className="h-3 w-3 mr-1" /> Copy
+                  </Button>
+                </div>
+              )}
               <pre className="p-3 text-xs whitespace-pre-wrap text-foreground/80 font-sans leading-relaxed max-h-48 overflow-y-auto">
                 {msg.body}
               </pre>

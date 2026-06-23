@@ -23,7 +23,7 @@ export const brandLeadsRouter = createRouter({
 
   list: orgProcedure
     .input(z.object({
-      status: z.enum(["PENDING", "APPROVED", "REJECTED", "SENT", "FAILED"]).optional(),
+      status: z.enum(["PENDING", "APPROVED", "REJECTED", "SENT", "FAILED", "REPLIED", "INTERESTED", "NOT_INTERESTED", "CLOSED"]).optional(),
       signalType: z.enum(["AD_LIBRARY", "SOCIAL_MEDIA", "PR_NEWS", "JOB_POSTING"]).optional(),
       days: z.number().min(1).max(90).default(30),
     }).optional())
@@ -100,6 +100,29 @@ export const brandLeadsRouter = createRouter({
           createdAt: { gte: today },
         },
         data: { status: "APPROVED" },
+      });
+    }),
+
+  // Gap #3 (2026-06-22): manual reply / outcome tracking. There is NO automated
+  // inbox integration — replies land in the operator's own inbox, and they log
+  // the outcome here by hand. Restricted to the post-send MANUAL states so this
+  // control can't shove a lead back into the auto-pipeline states
+  // (PENDING/APPROVED/SENT/FAILED are owned by the workers).
+  setStatus: orgProcedure
+    .input(z.object({
+      leadId: z.string(),
+      status: z.enum(["REPLIED", "INTERESTED", "NOT_INTERESTED", "CLOSED"]),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      // Brand Outreach is PROFESSIONAL+ — gate the mutation explicitly (M23 lesson).
+      await requirePlan(ctx.organizationId, "PROFESSIONAL", "Brand Outreach", ctx.isSuperAdmin);
+      // IDOR guard: the lead must belong to the acting org (via its signal).
+      const lead = await ctx.prisma.outreachLead.findFirstOrThrow({
+        where: { id: input.leadId, signal: { organizationId: ctx.organizationId } },
+      });
+      return ctx.prisma.outreachLead.update({
+        where: { id: lead.id },
+        data: { status: input.status },
       });
     }),
 });
