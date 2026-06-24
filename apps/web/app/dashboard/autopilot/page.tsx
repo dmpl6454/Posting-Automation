@@ -93,10 +93,13 @@ export default function AutopilotOverviewPage() {
           <strong>How Autopilot works:</strong> It runs in 4 stages —{" "}
           <strong>Discover</strong> trending topics →{" "}
           <strong>Generate</strong> drafts →{" "}
-          <strong>Review</strong> in the approvals queue →{" "}
+          <strong>Review</strong> in the Review Queue →{" "}
           <strong>Post</strong> approved drafts on schedule.
-          Click <em>Run Pipeline Now</em> to trigger a one-off run; the latest
-          results appear in <em>Trending</em> and <em>Approvals</em>.
+          Click <em>Run Pipeline Now</em> (or run an individual agent) to trigger
+          a one-off run; the latest results appear in <em>Trending</em> and the{" "}
+          <em>Review Queue</em>. Drafts wait there for your approval before
+          publishing — unless an agent’s Account Group has <em>Skip review</em>{" "}
+          turned on, in which case its posts publish automatically.
         </AlertDescription>
       </Alert>
 

@@ -86,4 +86,29 @@ describe("storeGeneratedNewsImage (generate_news_image stores S3 URL, not data U
     expect(result.url.startsWith("data:")).toBe(false);
     expect(result.mediaId).toBe("media-123");
   });
+
+  // Bug #1 (2026-06-24): when S3 credentials are missing the helper used to call
+  // uploadBase64ToS3 with empty creds → the bucket rejected it → the chat UI
+  // showed a bare "Upload failed". It now pre-flights config and throws a clear,
+  // actionable error WITHOUT attempting the (doomed) upload or DB write.
+  it("throws a clear error and does NOT attempt upload when S3 is unconfigured", async () => {
+    delete process.env.S3_ACCESS_KEY_ID;
+    delete process.env.S3_SECRET_ACCESS_KEY;
+    delete process.env.S3_ACCESS_KEY;
+    delete process.env.S3_SECRET_KEY;
+    const { prisma, create } = mockPrisma();
+
+    await expect(
+      storeGeneratedNewsImage(prisma, {
+        organizationId: "org-1",
+        uploadedById: "user-1",
+        imageBase64: "aGVsbG8=",
+        mimeType: "image/png",
+      })
+    ).rejects.toThrow(/storage isn't configured|S3 credentials/i);
+
+    // No doomed upload, no orphan Media row.
+    expect(s3Send).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+  });
 });
