@@ -73,7 +73,7 @@ export default function AutopilotAgentsPage() {
   });
 
   const runNowMutation = trpc.agent.runNow.useMutation({
-    onSuccess: () => alert("Agent queued! Check Autopilot → Posts in a minute."),
+    onSuccess: () => alert("Agent queued! It will generate drafts in a minute — review and approve them in Autopilot → Review Queue (they publish after approval, unless this agent's account group skips review)."),
     onError: (e) => alert(e.message),
   });
 

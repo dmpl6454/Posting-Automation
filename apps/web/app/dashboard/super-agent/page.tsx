@@ -239,14 +239,17 @@ export default function SuperAgentPage() {
       const res = await fetch("/api/upload", { method: "POST", body: form });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || "Upload failed");
+        // When the server returns a non-JSON error (500 HTML page, gateway
+        // timeout, etc.) body.error is empty — fall back to the HTTP status so
+        // the message isn't the useless "Upload failed: Upload failed" (Bug #1).
+        throw new Error(body.error || `Upload failed (HTTP ${res.status} ${res.statusText || ""})`.trim());
       }
       const { id, url, fileType } = await res.json();
       setAttachments((prev) => [...prev, { mediaId: id, url, fileType: fileType || file.type }]);
     } catch (e: any) {
       setMessages((prev) => [
         ...prev,
-        { id: `err-${Date.now()}`, role: "system", content: `Upload failed: ${e.message}` },
+        { id: `err-${Date.now()}`, role: "system", content: `Upload failed: ${e?.message || "network error — please try again"}` },
       ]);
     }
   }, []);

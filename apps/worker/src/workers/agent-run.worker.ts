@@ -4,6 +4,7 @@ import { QUEUE_NAMES, postPublishQueue, type AgentRunJobData, createRedisConnect
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import crypto from "crypto";
 import { resolveOrgAuthor } from "../lib/system-user";
+import { resolveAgentRunReview } from "./agent-run-review";
 
 const SCHEDULE_HOURS = [9, 12, 15, 18]; // 9am, 12pm, 3pm, 6pm
 
@@ -34,10 +35,19 @@ export function createAgentRunWorker() {
       const { agentId } = job.data;
       console.log(`[AgentRun] Processing job ${job.id} for agent ${agentId}`);
 
-      // 1. Fetch the Agent with its config
+      // 1. Fetch the Agent with its config (+ accountGroup for the review gate)
       const agent = await prisma.agent.findUniqueOrThrow({
         where: { id: agentId },
+        include: { accountGroup: true },
       });
+
+      // Bug #2 (2026-06-24): route agent-run posts through the SAME review gate
+      // as the pipeline path. By default posts land in the Autopilot Review
+      // Queue as DRAFTs (status REVIEWING) and only publish after approval;
+      // they auto-approve + publish immediately ONLY when the agent's Account
+      // Group opts into skipReviewGate. Previously this worker created every
+      // post as SCHEDULED and published it with no review step at all.
+      const review = resolveAgentRunReview(agent);
 
       // 2. Fetch connected channels
       const channels = await prisma.channel.findMany({
@@ -158,17 +168,19 @@ export function createAgentRunWorker() {
             scheduledAt.setDate(scheduledAt.getDate() + 1);
           }
 
-          // Create a Post record
+          // Create a Post record. When review is required the post is a DRAFT
+          // with no scheduledAt until a human approves it in the Review Queue;
+          // when the account group skips review it goes straight to SCHEDULED.
           const post = await prisma.post.create({
             data: {
               organizationId: agent.organizationId,
               createdById: authorId,
               content,
-              status: "SCHEDULED",
+              status: review.postStatus,
               aiGenerated: true,
               aiProvider: agent.aiProvider,
               aiPrompt: userPrompt,
-              scheduledAt,
+              ...(review.publishNow ? { scheduledAt } : {}),
             },
           });
 
@@ -237,6 +249,7 @@ export function createAgentRunWorker() {
 
           // Create PostTarget — ONE per unique platform (not all channels)
           const mediaRequiredPlatforms = ["INSTAGRAM", "FACEBOOK"];
+          let targetsCreated = 0;
           for (let chIdx = 0; chIdx < uniqueChannels.length; chIdx++) {
             const channel = uniqueChannels[chIdx]!;
             // Autopilot only generates still images, never video. YouTube requires
@@ -256,29 +269,86 @@ export function createAgentRunWorker() {
               data: {
                 postId: post.id,
                 channelId: channel.id,
-                status: "SCHEDULED",
+                status: review.targetStatus,
+              },
+            });
+            targetsCreated++;
+
+            // Only enqueue publishing when the account group skips review.
+            // Otherwise the target stays DRAFT and is published later by the
+            // approve flow (approvePost → autopilot-schedule → publish cron).
+            if (review.publishNow) {
+              const baseDelay = scheduledAt.getTime() - Date.now();
+              const staggerMs = (i * uniqueChannels.length + chIdx) * 10_000;
+              await postPublishQueue.add(
+                `agent-publish-${post.id}-${channel.id}`,
+                {
+                  postId: post.id,
+                  postTargetId: postTarget.id,
+                  channelId: channel.id,
+                  platform: channel.platform,
+                  organizationId: agent.organizationId,
+                },
+                {
+                  delay: Math.max(baseDelay, 0) + staggerMs,
+                  attempts: 3,
+                  backoff: { type: "exponential", delay: 60_000 },
+                  removeOnComplete: true,
+                  removeOnFail: 100,
+                }
+              );
+            }
+          }
+
+          // If every channel was skipped there is nothing to publish or review —
+          // drop the empty post so it doesn't linger as an orphan DRAFT.
+          if (targetsCreated === 0) {
+            await prisma.post.delete({ where: { id: post.id } }).catch(() => {});
+            console.warn(`[AgentRun] Post ${post.id} had no publishable targets; removed.`);
+            continue;
+          }
+
+          // Bug #2: record an AutopilotPost so this post is visible + actionable
+          // in the Review Queue (and counted by the "Pending Review" stat). The
+          // pipeline path keys AutopilotPost off a TrendingItem; the agent-run
+          // path has no pipeline TrendingItem, so persist the headline we used
+          // as a lightweight one to satisfy the relation. Best-effort: a failure
+          // here must NOT lose the post (skip-review posts are already queued).
+          try {
+            const itemTitle = (headline?.title || topic).slice(0, 280);
+            const sourceId = `agent-${post.id}`;
+            const trendingItem = await prisma.trendingItem.create({
+              data: {
+                organizationId: agent.organizationId,
+                sourceType: "RSS",
+                sourceId,
+                titleHash: crypto.createHash("sha256").update(itemTitle).digest("hex"),
+                title: itemTitle,
+                summary: headline?.summary ?? null,
+                sourceUrl: headline?.link || "https://news.google.com",
+                sourceName: "Agent",
+                topics: [topic],
+                publishedAt: new Date(),
+                status: "POSTED",
+                sensitivity: "LOW",
+                // Agent-run items aren't part of a pipeline run; expire in 7 days.
+                expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
               },
             });
 
-            const baseDelay = scheduledAt.getTime() - Date.now();
-            const staggerMs = (i * uniqueChannels.length + chIdx) * 10_000;
-            await postPublishQueue.add(
-              `agent-publish-${post.id}-${channel.id}`,
-              {
-                postId: post.id,
-                postTargetId: postTarget.id,
-                channelId: channel.id,
-                platform: channel.platform,
+            await prisma.autopilotPost.create({
+              data: {
                 organizationId: agent.organizationId,
+                trendingItemId: trendingItem.id,
+                agentId: agent.id,
+                postId: post.id,
+                status: review.autopilotStatus,
+                sensitivity: "LOW",
+                trendScore: 0,
               },
-              {
-                delay: Math.max(baseDelay, 0) + staggerMs,
-                attempts: 3,
-                backoff: { type: "exponential", delay: 60_000 },
-                removeOnComplete: true,
-                removeOnFail: 100,
-              }
-            );
+            });
+          } catch (apErr) {
+            console.warn(`[AgentRun] Could not create AutopilotPost for review for post ${post.id}:`, apErr);
           }
 
           postsCreated++;

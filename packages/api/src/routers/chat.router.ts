@@ -5,7 +5,7 @@ import { agentRunQueue, postPublishQueue } from "@postautomation/queue";
 import { requirePlan, enforcePlanLimit } from "../middleware/plan-limit.middleware";
 import type { PrismaClient } from "@postautomation/db";
 import crypto from "crypto";
-import { uploadBase64ToS3 } from "../lib/s3";
+import { uploadBase64ToS3, isS3Configured } from "../lib/s3";
 import { mediaRequiredBlock } from "../lib/media-required";
 
 /**
@@ -142,11 +142,33 @@ export async function storeGeneratedNewsImage(
     height?: number;
   }
 ): Promise<{ mediaId: string; url: string }> {
+  // Pre-flight S3 config so a missing credential surfaces a clear, actionable
+  // message instead of an opaque AWS SDK error that reaches the chat UI as a
+  // bare "Upload failed" (Bug #1, 2026-06-24). Without keys, uploadBase64ToS3
+  // signs the request with "" and the bucket rejects it.
+  if (!isS3Configured()) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        "Image storage isn't configured (missing S3 credentials), so the generated image can't be saved. Ask the operator to set S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY.",
+    });
+  }
+
   const ext = args.mimeType.includes("png") ? "png" : "jpg";
   const contentType = args.mimeType.includes("png") ? "image/png" : "image/jpeg";
   const key = `chat-news/news-${Date.now()}-${crypto.randomBytes(3).toString("hex")}.${ext}`;
 
-  const url = await uploadBase64ToS3({ base64: args.imageBase64, mimeType: contentType, key });
+  let url: string;
+  try {
+    url = await uploadBase64ToS3({ base64: args.imageBase64, mimeType: contentType, key });
+  } catch (err: any) {
+    // The raw S3 error is opaque ("Upload failed"); wrap it so the operator
+    // sees the real cause (bucket missing, endpoint unreachable, bad creds).
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: `Could not save the generated image to storage: ${err?.message ?? "unknown S3 error"}`,
+    });
+  }
   const fileSize = Buffer.from(args.imageBase64, "base64").length;
 
   const media = await prisma.media.create({
@@ -178,7 +200,7 @@ export const SUPPORTED_ACTIONS = [
   { action: "create_brand_tracker",     label: "Track brands & competitors",     description: "Monitor brand mentions and competitor activity", color: "text-red-400" },
   { action: "create_listening_query",   label: "Monitor social mentions",        description: "Listen for brand or keyword mentions across platforms", color: "text-cyan-500" },
   { action: "update_influencer",        label: "Manage brand outreach",          description: "Update influencer or outreach contact details", color: "text-pink-500" },
-  { action: "trigger_agent_run",        label: "Fetch trending news",            description: "Run an agent to discover and post trending topics now", color: "text-orange-500" },
+  { action: "trigger_agent_run",        label: "Fetch trending news",            description: "Run an agent to discover trends and generate drafts for review", color: "text-orange-500" },
   { action: "get_analytics",            label: "Get analytics",                  description: "Fetch engagement and performance data for your posts", color: "text-indigo-500" },
 ] as const;
 
@@ -838,7 +860,7 @@ export const chatRouter = createRouter({
             data: {
               threadId: input.threadId,
               role: "system",
-              content: `Agent "${agent.name}" triggered manually. It will discover trends and generate content shortly.`,
+              content: `Agent "${agent.name}" triggered manually. It will discover trends and generate drafts shortly — they'll appear in Autopilot → Review Queue for your approval before publishing (unless the agent's account group has review skipping enabled).`,
               metadata: { type: "agent_triggered", agentId: agent.id },
             },
           });

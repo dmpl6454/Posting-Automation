@@ -258,8 +258,15 @@ export default function ListeningPage() {
         <Info className="h-4 w-4" />
         <AlertTitle>How Listening works</AlertTitle>
         <AlertDescription>
-          Create a query of keywords and platforms to monitor. The system polls each platform on a schedule and
-          captures mentions with sentiment. Click Sync now to refresh; open Alerts to be notified of spikes.
+          Create a query of keywords (and optionally pick platforms). The system polls those sources every
+          30 minutes, saves matching mentions, and scores each one’s sentiment. The first results appear after
+          the next sync — click <strong>Sync now</strong> to fetch immediately; open <strong>Alerts</strong> to
+          be notified of volume spikes.
+          <span className="block mt-1 text-xs text-muted-foreground">
+            <strong>Google News</strong> works out of the box. Twitter/X, Reddit, TikTok and Instagram/LinkedIn
+            only return mentions when their API keys are configured (or, for IG/LinkedIn, a channel is connected) —
+            otherwise those sources are simply skipped. Facebook isn’t supported for listening.
+          </span>
         </AlertDescription>
       </Alert>
 
