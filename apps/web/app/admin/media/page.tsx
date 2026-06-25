@@ -153,7 +153,7 @@ export default function AdminMediaPage() {
       <DataTable
         columns={columns}
         data={(items as MediaRow[]) ?? []}
-        isLoading={isLoading}
+        isLoading={isLoading || isFetchingNextPage}
         hasMore={hasNextPage}
         onLoadMore={() => fetchNextPage()}
       />

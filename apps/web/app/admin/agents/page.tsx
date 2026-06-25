@@ -115,7 +115,7 @@ export default function AdminAgentsPage() {
       <DataTable
         columns={columns}
         data={(items as AgentRow[]) ?? []}
-        isLoading={isLoading}
+        isLoading={isLoading || isFetchingNextPage}
         hasMore={hasNextPage}
         onLoadMore={() => fetchNextPage()}
       />

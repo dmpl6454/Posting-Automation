@@ -195,7 +195,7 @@ export default function AdminPostsPage() {
       <DataTable
         columns={columns}
         data={(items as PostRow[]) ?? []}
-        isLoading={isLoading}
+        isLoading={isLoading || isFetchingNextPage}
         hasMore={hasNextPage}
         onLoadMore={() => fetchNextPage()}
       />

@@ -167,7 +167,7 @@ export default function AdminUsersPage() {
         data={(items as UserRow[]) ?? []}
         searchPlaceholder="Search by name or email..."
         onSearch={setSearch}
-        isLoading={isLoading}
+        isLoading={isLoading || isFetchingNextPage}
         hasMore={hasNextPage}
         onLoadMore={() => fetchNextPage()}
       />

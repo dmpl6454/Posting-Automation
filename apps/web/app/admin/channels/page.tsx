@@ -121,7 +121,7 @@ export default function AdminChannelsPage() {
       <DataTable
         columns={columns}
         data={(items as ChannelRow[]) ?? []}
-        isLoading={isLoading}
+        isLoading={isLoading || isFetchingNextPage}
         hasMore={hasNextPage}
         onLoadMore={() => fetchNextPage()}
       />

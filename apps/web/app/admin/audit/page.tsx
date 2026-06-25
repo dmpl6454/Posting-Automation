@@ -106,7 +106,7 @@ export default function AdminAuditPage() {
       <DataTable
         columns={columns}
         data={(items as AuditRow[]) ?? []}
-        isLoading={isLoading}
+        isLoading={isLoading || isFetchingNextPage}
         hasMore={hasNextPage}
         onLoadMore={() => fetchNextPage()}
       />

@@ -142,7 +142,7 @@ export default function AdminOrgsPage() {
         data={(items as OrgRow[]) ?? []}
         searchPlaceholder="Search by name..."
         onSearch={setSearch}
-        isLoading={isLoading}
+        isLoading={isLoading || isFetchingNextPage}
         hasMore={hasNextPage}
         onLoadMore={() => fetchNextPage()}
       />
