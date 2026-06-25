@@ -187,7 +187,7 @@ export default function AccountGroupsPage() {
                     variant="ghost"
                     className="h-8 w-8 text-muted-foreground hover:text-destructive"
                     disabled={deleteMutation.isPending}
-                    onClick={() => deleteMutation.mutate({ id: group.id } as any)}
+                    onClick={() => { if (confirm(`Delete group "${group.name}"? This cannot be undone.`)) deleteMutation.mutate({ id: group.id } as any); }}
                   >
                     <Trash2 className="h-4 w-4" />
                   </Button>

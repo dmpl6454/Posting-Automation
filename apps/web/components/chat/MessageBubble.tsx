@@ -128,12 +128,15 @@ export function MessageBubble({ message, onExecuteAction, isExecuting, executedA
           {message.content}
         </div>
 
-        {/* Content action bar for generated content */}
+        {/* Content action bar for generated content.
+            "Open in Composer" navigates to /dashboard/content-agent?tab=compose&content=…
+            so the user can select channels before publishing — the generate_content
+            action payload has no channelIds, so dispatching publish_now directly
+            always threw BAD_REQUEST "Select at least one channel to post to." */}
         {!isUser && isContentDraft && action?.payload && (
           <ContentActionBar
             content={action.payload.content as string}
             platform={action.payload.platform as string}
-            onPostNow={() => onExecuteAction?.({ ...action, type: "publish_now" })}
             isExecuting={isExecuting}
           />
         )}
