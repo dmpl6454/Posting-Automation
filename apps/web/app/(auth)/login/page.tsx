@@ -16,6 +16,10 @@ type PhoneStep = "enter-phone" | "enter-otp";
 export default function LoginPage() {
   const searchParams = useSearchParams();
   const callbackUrl = searchParams.get("callbackUrl") || "/dashboard";
+  const invite = searchParams.get("invite");
+  // If an invite token is present it takes priority: after auth send the user
+  // back to /invite/<token> so acceptInvite fires. Otherwise use callbackUrl.
+  const postLoginDest = invite ? `/invite/${encodeURIComponent(invite)}` : callbackUrl;
 
   const [tab, setTab] = useState<LoginTab>("email");
 
@@ -66,7 +70,7 @@ export default function LoginPage() {
         setError("Invalid email or password");
       }
     } else {
-      window.location.href = callbackUrl;
+      window.location.href = postLoginDest;
     }
     setLoading(false);
   };
@@ -97,7 +101,7 @@ export default function LoginPage() {
     if (result?.error) {
       setError("Invalid or expired OTP. Please try again.");
     } else {
-      window.location.href = callbackUrl;
+      window.location.href = postLoginDest;
     }
     setLoading(false);
   };
@@ -116,7 +120,7 @@ export default function LoginPage() {
 
       {/* OAuth Providers */}
       <button
-        onClick={() => signIn("google", { callbackUrl })}
+        onClick={() => signIn("google", { callbackUrl: postLoginDest })}
         className="flex w-full items-center justify-center gap-2 rounded-xl border border-border/60 bg-background/50 px-4 py-2.5 text-sm font-medium text-foreground transition-all hover:bg-background hover:shadow-sm active:scale-[0.98]"
       >
         <svg className="h-4 w-4" viewBox="0 0 24 24">

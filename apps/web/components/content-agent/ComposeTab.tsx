@@ -298,8 +298,9 @@ ${content}`;
       const result = await generateAI.mutateAsync({ prompt: enhancePrompt, provider });
       setContent(result.content);
       toast({ title: "Content enhanced!", description: "AI verified and improved your content." });
-    } catch (err: any) {
-      toast({ title: "AI generation failed", description: humanizeError(err) || "Please try again.", variant: "destructive" });
+    } catch {
+      // Error toast is surfaced by the global mutationCacheOnError handler
+      // (lib/trpc/react.tsx). Do NOT toast here too — it would double-toast.
     }
     setIsGenerating(false);
   };
@@ -326,8 +327,9 @@ ${content}`;
       setContent(result.content);
       setAiPrompt("");
       toast({ title: "Content created!", description: "AI generated your post. You can edit it before publishing." });
-    } catch (err: any) {
-      toast({ title: "AI generation failed", description: humanizeError(err) || "Please try again.", variant: "destructive" });
+    } catch {
+      // Error toast is surfaced by the global mutationCacheOnError handler
+      // (lib/trpc/react.tsx). Do NOT toast here too — it would double-toast.
     }
     setIsCreatingWithAI(false);
   };
@@ -370,12 +372,9 @@ ${content}`;
         title: "Carousel generated!",
         description: `${result.slideCount} slides created and ready to post.`,
       });
-    } catch (err: any) {
-      toast({
-        title: "Carousel generation failed",
-        description: humanizeError(err) || "Please try again.",
-        variant: "destructive",
-      });
+    } catch {
+      // Error toast is surfaced by the global mutationCacheOnError handler
+      // (lib/trpc/react.tsx). Do NOT toast here too — it would double-toast.
     }
     setIsGeneratingCarousel(false);
   };

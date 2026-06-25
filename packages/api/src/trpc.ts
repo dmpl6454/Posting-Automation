@@ -17,6 +17,37 @@ export interface TRPCContext {
   isSuperAdmin?: boolean;
 }
 
+/** The impersonated user's identity fields, loaded from the DB during impersonation. */
+export interface ImpersonatedUser {
+  id: string;
+  email: string | null;
+  name: string | null;
+  image: string | null;
+}
+
+/**
+ * Build the swapped session for impersonation: the acting identity becomes the
+ * target user in full. Critically it sets `isSuperAdmin: false` so an admin
+ * impersonating an ordinary user does NOT inherit superadmin (which would
+ * bypass plan/quota gates and superAdminProcedure). Pure + exported for testing.
+ */
+export function buildImpersonatedSession(
+  adminSession: Session & { user: { id: string; email: string } },
+  impersonatedUser: ImpersonatedUser
+): Session & { user: { id: string; email: string } } {
+  return {
+    ...adminSession,
+    user: {
+      ...adminSession.user,
+      id: impersonatedUser.id,
+      email: impersonatedUser.email!,
+      name: impersonatedUser.name,
+      image: impersonatedUser.image,
+      isSuperAdmin: false,
+    },
+  } as any;
+}
+
 export const createTRPCContext = async (opts: {
   session: Session | null;
   organizationId?: string;
@@ -69,24 +100,19 @@ export const protectedProcedure = t.procedure.use(async ({ ctx, next }) => {
       const secret = new TextEncoder().encode(process.env.NEXTAUTH_SECRET);
       const { payload } = await jwtVerify(ctx.impersonationToken, secret);
 
+      // The impersonate mutation signs `impersonatedUserId` (admin/users.router.ts).
+      // Read the SAME field — a prior mismatch read `targetUserId` (signed nowhere),
+      // so impersonation silently no-op'd while the banner falsely showed success.
       const impersonatedUser = await prisma.user.findUnique({
-        where: { id: payload.targetUserId as string },
+        where: { id: payload.impersonatedUserId as string },
         select: { id: true, email: true, name: true, image: true },
       });
 
       if (impersonatedUser) {
+        // Capture the admin id BEFORE the swap (for the banner / audit trail).
         adminUserId = (session.user as any).id;
         isImpersonating = true;
-        session = {
-          ...session,
-          user: {
-            ...session.user,
-            id: impersonatedUser.id,
-            email: impersonatedUser.email!,
-            name: impersonatedUser.name,
-            image: impersonatedUser.image,
-          },
-        } as any;
+        session = buildImpersonatedSession(session, impersonatedUser);
       }
     } catch {
       // Invalid impersonation token — ignore and continue with original session

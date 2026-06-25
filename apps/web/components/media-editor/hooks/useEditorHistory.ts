@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useCallback, useEffect } from "react";
+import { useRef, useCallback, useEffect, useState } from "react";
 import type { Canvas } from "fabric";
 
 const MAX_HISTORY = 50;
@@ -9,6 +9,13 @@ export function useEditorHistory(canvas: Canvas | null) {
   const historyRef = useRef<string[]>([]);
   const currentIndexRef = useRef(-1);
   const isUndoRedoRef = useRef(false);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+
+  const syncButtonState = useCallback(() => {
+    setCanUndo(currentIndexRef.current > 0);
+    setCanRedo(currentIndexRef.current < historyRef.current.length - 1);
+  }, []);
 
   const saveState = useCallback(() => {
     if (!canvas || isUndoRedoRef.current) return;
@@ -20,7 +27,8 @@ export function useEditorHistory(canvas: Canvas | null) {
     } else {
       currentIndexRef.current++;
     }
-  }, [canvas]);
+    syncButtonState();
+  }, [canvas, syncButtonState]);
 
   useEffect(() => {
     if (!canvas) return;
@@ -46,7 +54,8 @@ export function useEditorHistory(canvas: Canvas | null) {
       canvas.renderAll();
     }
     isUndoRedoRef.current = false;
-  }, [canvas]);
+    syncButtonState();
+  }, [canvas, syncButtonState]);
 
   const redo = useCallback(async () => {
     if (!canvas || currentIndexRef.current >= historyRef.current.length - 1) return;
@@ -58,10 +67,8 @@ export function useEditorHistory(canvas: Canvas | null) {
       canvas.renderAll();
     }
     isUndoRedoRef.current = false;
-  }, [canvas]);
-
-  const canUndo = currentIndexRef.current > 0;
-  const canRedo = currentIndexRef.current < historyRef.current.length - 1;
+    syncButtonState();
+  }, [canvas, syncButtonState]);
 
   return { undo, redo, canUndo, canRedo, saveState };
 }

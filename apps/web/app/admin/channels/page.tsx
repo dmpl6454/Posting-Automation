@@ -24,9 +24,13 @@ type ChannelRow = {
 export default function AdminChannelsPage() {
   const { toast } = useToast();
 
-  const { data, isLoading, refetch } = trpc.admin.channels.list.useQuery({
-    limit: 50,
-  });
+  const { data, isLoading, isFetchingNextPage, fetchNextPage, hasNextPage, refetch } =
+    trpc.admin.channels.list.useInfiniteQuery(
+      { limit: 50 },
+      { getNextPageParam: (lastPage) => lastPage.nextCursor }
+    );
+
+  const items = data?.pages.flatMap((p) => p.items) ?? [];
 
   const refreshToken = trpc.admin.channels.refreshToken.useMutation({
     onSuccess: (result) => {
@@ -116,9 +120,10 @@ export default function AdminChannelsPage() {
       <h1 className="text-2xl font-bold">Channels</h1>
       <DataTable
         columns={columns}
-        data={(data?.items as ChannelRow[]) ?? []}
-        isLoading={isLoading}
-        hasMore={!!data?.nextCursor}
+        data={(items as ChannelRow[]) ?? []}
+        isLoading={isLoading || isFetchingNextPage}
+        hasMore={hasNextPage}
+        onLoadMore={() => fetchNextPage()}
       />
     </div>
   );

@@ -35,10 +35,13 @@ export default function AdminOrgsPage() {
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search, 300);
 
-  const { data, isLoading, refetch } = trpc.admin.orgs.list.useQuery({
-    search: debouncedSearch || undefined,
-    limit: 50,
-  });
+  const { data, isLoading, isFetchingNextPage, fetchNextPage, hasNextPage, refetch } =
+    trpc.admin.orgs.list.useInfiniteQuery(
+      { search: debouncedSearch || undefined, limit: 50 },
+      { getNextPageParam: (lastPage) => lastPage.nextCursor }
+    );
+
+  const items = data?.pages.flatMap((p) => p.items) ?? [];
 
   const changePlan = trpc.admin.orgs.changePlan.useMutation({
     onSuccess: () => {
@@ -136,11 +139,12 @@ export default function AdminOrgsPage() {
       <h1 className="text-2xl font-bold">Organizations</h1>
       <DataTable
         columns={columns}
-        data={(data?.items as OrgRow[]) ?? []}
+        data={(items as OrgRow[]) ?? []}
         searchPlaceholder="Search by name..."
         onSearch={setSearch}
-        isLoading={isLoading}
-        hasMore={!!data?.nextCursor}
+        isLoading={isLoading || isFetchingNextPage}
+        hasMore={hasNextPage}
+        onLoadMore={() => fetchNextPage()}
       />
     </div>
   );

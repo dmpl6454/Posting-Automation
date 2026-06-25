@@ -32,10 +32,13 @@ export default function AdminUsersPage() {
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search, 300);
 
-  const { data, isLoading, refetch } = trpc.admin.users.list.useQuery({
-    search: debouncedSearch || undefined,
-    limit: 50,
-  });
+  const { data, isLoading, isFetchingNextPage, fetchNextPage, hasNextPage, refetch } =
+    trpc.admin.users.list.useInfiniteQuery(
+      { search: debouncedSearch || undefined, limit: 50 },
+      { getNextPageParam: (lastPage) => lastPage.nextCursor }
+    );
+
+  const items = data?.pages.flatMap((p) => p.items) ?? [];
 
   const toggleAdmin = trpc.admin.users.toggleSuperAdmin.useMutation({
     onSuccess: () => {
@@ -161,11 +164,12 @@ export default function AdminUsersPage() {
       <h1 className="text-2xl font-bold">Users</h1>
       <DataTable
         columns={columns}
-        data={(data?.items as UserRow[]) ?? []}
+        data={(items as UserRow[]) ?? []}
         searchPlaceholder="Search by name or email..."
         onSearch={setSearch}
-        isLoading={isLoading}
-        hasMore={!!data?.nextCursor}
+        isLoading={isLoading || isFetchingNextPage}
+        hasMore={hasNextPage}
+        onLoadMore={() => fetchNextPage()}
       />
     </div>
   );

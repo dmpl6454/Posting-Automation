@@ -88,10 +88,14 @@ export default function MonitoringPage() {
   const handleCopyForClaude = async () => {
     const result = await claudeReport.refetch();
     if (result.data?.report) {
-      navigator.clipboard.writeText(result.data.report);
-      setCopied(true);
-      toast({ title: "Copied to clipboard", description: "Paste this into Claude to get fix suggestions" });
-      setTimeout(() => setCopied(false), 3000);
+      try {
+        await navigator.clipboard.writeText(result.data.report);
+        setCopied(true);
+        toast({ title: "Copied to clipboard", description: "Paste this into Claude to get fix suggestions" });
+        setTimeout(() => setCopied(false), 3000);
+      } catch {
+        toast({ title: "Copy failed", description: "Could not write to clipboard — check browser permissions.", variant: "destructive" });
+      }
     }
   };
 

@@ -510,6 +510,8 @@ export default function BrandLeadsPage() {
 
   const filteredLeads = leads ?? [];
   const pendingCount = filteredLeads.filter((l) => l.status === "PENDING").length;
+  const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
+  const pendingTodayCount = filteredLeads.filter((l) => l.status === "PENDING" && new Date(l.createdAt) >= startOfToday).length;
 
   return (
     <div className="p-6 space-y-6">
@@ -531,7 +533,7 @@ export default function BrandLeadsPage() {
             <RefreshCw className="h-3.5 w-3.5" />
             Refresh
           </Button>
-          {pendingCount > 0 && (
+          {pendingTodayCount > 0 && (
             <Button
               size="sm"
               className="gap-1.5 bg-emerald-600 hover:bg-emerald-700"
@@ -541,7 +543,7 @@ export default function BrandLeadsPage() {
               {approveAll.isPending
                 ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 : <CheckCircle className="h-3.5 w-3.5" />}
-              Approve All Today ({pendingCount})
+              Approve All Today ({pendingTodayCount})
             </Button>
           )}
         </div>
