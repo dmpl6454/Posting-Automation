@@ -3,6 +3,7 @@
 import { useEffect, useRef, useCallback } from "react";
 import { trpc } from "~/lib/trpc/client";
 import { useChatStream } from "~/hooks/use-chat-stream";
+import { actionKey } from "~/lib/chat-action-key";
 import { MessageBubble } from "./MessageBubble";
 import { ChatInput } from "./ChatInput";
 import { TypingIndicator } from "./TypingIndicator";
@@ -23,6 +24,8 @@ export function ChatView({ threadId, onThreadCreated }: ChatViewProps) {
     executeAction,
     loadMessages,
     isExecuting,
+    executedActionIds,
+    setExecutedActionIds,
   } = useChatStream(threadId);
 
   const createThread = trpc.chat.createThread.useMutation();
@@ -36,8 +39,31 @@ export function ChatView({ threadId, onThreadCreated }: ChatViewProps) {
   useEffect(() => {
     if (threadData?.messages) {
       loadMessages(threadData.messages as any);
+
+      // A1: re-seed the executedActionIds lock from persisted markers so the
+      // "Done" state survives a getThread refetch (triggered by invalidation
+      // after a successful executeAction). Each successful executeAction stamps
+      // metadata.executedActionId = clientActionId on a result ChatMessage.
+      // We reconstruct the SAME key (actionKey(msgId, idempotencyKey)) that the
+      // click path uses, so the two sets of keys agree.
+      const executedMarkers = new Set<string>();
+      for (const m of threadData.messages as any[]) {
+        const marker = (m.metadata as any)?.executedActionId;
+        if (typeof marker === "string" && marker) {
+          executedMarkers.add(marker);
+        }
+        // Also re-derive the key from the action message itself, so the lock
+        // covers the click-path key even if the result message hasn't arrived yet.
+        const msgAction = (m.metadata as any)?.action;
+        if (msgAction) {
+          executedMarkers.add(actionKey(m.id as string, msgAction.idempotencyKey));
+        }
+      }
+      if (executedMarkers.size > 0) {
+        setExecutedActionIds((prev) => new Set([...prev, ...executedMarkers]));
+      }
     }
-  }, [threadData, loadMessages]);
+  }, [threadData, loadMessages, setExecutedActionIds]);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -138,8 +164,9 @@ export function ChatView({ threadId, onThreadCreated }: ChatViewProps) {
           <MessageBubble
             key={msg.id}
             message={msg}
-            onExecuteAction={executeAction}
+            onExecuteAction={(action) => executeAction(action, msg.id)}
             isExecuting={isExecuting}
+            executedActionIds={executedActionIds}
           />
         ))}
 

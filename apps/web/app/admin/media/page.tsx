@@ -34,9 +34,13 @@ export default function AdminMediaPage() {
 
   const { data: storageStats, isLoading: statsLoading } =
     trpc.admin.media.storageStats.useQuery();
-  const { data, isLoading, refetch } = trpc.admin.media.list.useQuery({
-    limit: 50,
-  });
+  const { data, isLoading, isFetchingNextPage, fetchNextPage, hasNextPage, refetch } =
+    trpc.admin.media.list.useInfiniteQuery(
+      { limit: 50 },
+      { getNextPageParam: (lastPage) => lastPage.nextCursor }
+    );
+
+  const items = data?.pages.flatMap((p) => p.items) ?? [];
 
   const deleteMedia = trpc.admin.media.delete.useMutation({
     onSuccess: () => {
@@ -148,9 +152,10 @@ export default function AdminMediaPage() {
 
       <DataTable
         columns={columns}
-        data={(data?.items as MediaRow[]) ?? []}
+        data={(items as MediaRow[]) ?? []}
         isLoading={isLoading}
-        hasMore={!!data?.nextCursor}
+        hasMore={hasNextPage}
+        onLoadMore={() => fetchNextPage()}
       />
     </div>
   );

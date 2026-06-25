@@ -2,6 +2,9 @@
 
 import { useState, useCallback, useRef } from "react";
 import { trpc } from "~/lib/trpc/client";
+// Pure utility — no React deps; also imported by ChatView.tsx and MessageBubble.tsx
+export { actionKey } from "~/lib/chat-action-key";
+import { actionKey } from "~/lib/chat-action-key";
 
 interface ChatMessageData {
   id: string;
@@ -18,12 +21,17 @@ interface ChatMessageData {
 // It belongs here ONLY as an explicit user-clicked button (see MessageBubble).
 const AUTO_EXECUTE_ACTIONS = new Set<string>([]);
 
+
 export function useChatStream(threadId: string | null) {
   const [messages, setMessages] = useState<ChatMessageData[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
+  // A1: per-action lock — prevents duplicate LIVE/scheduled posts on double-click.
+  // Keyed on actionKey(msgId, idempotencyKey). Seeded from persisted
+  // metadata.executedActionId markers so the Done state survives a getThread refetch.
+  const [executedActionIds, setExecutedActionIds] = useState<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
-  const executeActionRef = useRef<(action: any) => Promise<any>>();
+  const executeActionRef = useRef<(action: any, msgId?: string) => Promise<any>>();
 
   const utils = trpc.useUtils();
 
@@ -176,15 +184,26 @@ export function useChatStream(threadId: string | null) {
   );
 
   const executeAction = useCallback(
-    async (action: any) => {
+    async (action: any, msgId?: string) => {
       if (!threadId) return;
+
+      // A1: derive the stable lock key — same derivation used by MessageBubble
+      // and the ChatView seeding useEffect so all three agree.
+      const key = actionKey(msgId ?? `action-${Date.now()}`, action.idempotencyKey);
+
+      // Return early if already executed (defensive — button is also disabled).
+      if (executedActionIds.has(key)) return;
 
       try {
         const result = await executeActionMutation.mutateAsync({
           threadId,
           actionType: action.type,
           payload: action.payload,
+          clientActionId: key,
         });
+
+        // Lock on SUCCESS only — a failed publish must allow a retry.
+        setExecutedActionIds((prev) => new Set(prev).add(key));
 
         // Refresh thread data
         utils.chat.getThread.invalidate({ id: threadId });
@@ -202,7 +221,7 @@ export function useChatStream(threadId: string | null) {
         setMessages((prev) => [...prev, errorMsg]);
       }
     },
-    [threadId, executeActionMutation, utils]
+    [threadId, executeActionMutation, utils, executedActionIds]
   );
 
   // Keep ref in sync so the streaming callback can auto-execute actions
@@ -221,5 +240,7 @@ export function useChatStream(threadId: string | null) {
     loadMessages,
     stopStreaming,
     isExecuting: executeActionMutation.isPending,
+    executedActionIds,
+    setExecutedActionIds,
   };
 }

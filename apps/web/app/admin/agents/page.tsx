@@ -23,9 +23,13 @@ type AgentRow = {
 export default function AdminAgentsPage() {
   const { toast } = useToast();
 
-  const { data, isLoading, refetch } = trpc.admin.agents.list.useQuery({
-    limit: 50,
-  });
+  const { data, isLoading, isFetchingNextPage, fetchNextPage, hasNextPage, refetch } =
+    trpc.admin.agents.list.useInfiniteQuery(
+      { limit: 50 },
+      { getNextPageParam: (lastPage) => lastPage.nextCursor }
+    );
+
+  const items = data?.pages.flatMap((p) => p.items) ?? [];
 
   const toggleActive = trpc.admin.agents.toggleActive.useMutation({
     onSuccess: () => {
@@ -110,9 +114,10 @@ export default function AdminAgentsPage() {
       <h1 className="text-2xl font-bold">Agents</h1>
       <DataTable
         columns={columns}
-        data={(data?.items as AgentRow[]) ?? []}
+        data={(items as AgentRow[]) ?? []}
         isLoading={isLoading}
-        hasMore={!!data?.nextCursor}
+        hasMore={hasNextPage}
+        onLoadMore={() => fetchNextPage()}
       />
     </div>
   );

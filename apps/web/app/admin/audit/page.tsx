@@ -22,12 +22,18 @@ export default function AdminAuditPage() {
   const [endDate, setEndDate] = useState("");
   const debouncedAction = useDebounce(actionFilter, 300);
 
-  const { data, isLoading } = trpc.admin.audit.list.useQuery({
-    action: debouncedAction || undefined,
-    startDate: startDate ? new Date(startDate) : undefined,
-    endDate: endDate ? new Date(endDate) : undefined,
-    limit: 50,
-  });
+  const { data, isLoading, isFetchingNextPage, fetchNextPage, hasNextPage } =
+    trpc.admin.audit.list.useInfiniteQuery(
+      {
+        action: debouncedAction || undefined,
+        startDate: startDate ? new Date(startDate) : undefined,
+        endDate: endDate ? new Date(endDate) : undefined,
+        limit: 50,
+      },
+      { getNextPageParam: (lastPage) => lastPage.nextCursor }
+    );
+
+  const items = data?.pages.flatMap((p) => p.items) ?? [];
 
   const columns: Column<AuditRow>[] = [
     {
@@ -99,9 +105,10 @@ export default function AdminAuditPage() {
 
       <DataTable
         columns={columns}
-        data={(data?.items as AuditRow[]) ?? []}
+        data={(items as AuditRow[]) ?? []}
         isLoading={isLoading}
-        hasMore={!!data?.nextCursor}
+        hasMore={hasNextPage}
+        onLoadMore={() => fetchNextPage()}
       />
     </div>
   );

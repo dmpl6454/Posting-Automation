@@ -45,12 +45,17 @@ export default function AdminPostsPage() {
   const [status, setStatus] = useState<string>("all");
   const [organizationId, setOrganizationId] = useState<string>("all");
 
-  const { data, isLoading, refetch } = trpc.admin.posts.list.useQuery({
-    status:
-      status === "all" ? undefined : (status as (typeof STATUSES)[number]),
-    organizationId: organizationId === "all" ? undefined : organizationId,
-    limit: 50,
-  });
+  const { data, isLoading, isFetchingNextPage, fetchNextPage, hasNextPage, refetch } =
+    trpc.admin.posts.list.useInfiniteQuery(
+      {
+        status: status === "all" ? undefined : (status as (typeof STATUSES)[number]),
+        organizationId: organizationId === "all" ? undefined : organizationId,
+        limit: 50,
+      },
+      { getNextPageParam: (lastPage) => lastPage.nextCursor }
+    );
+
+  const items = data?.pages.flatMap((p) => p.items) ?? [];
 
   const retryFailed = trpc.admin.posts.retryFailed.useMutation({
     onSuccess: () => {
@@ -168,8 +173,8 @@ export default function AdminPostsPage() {
           <SelectContent>
             <SelectItem value="all">All organizations</SelectItem>
             {/* Unique orgs from current data */}
-            {data?.items
-              ?.reduce<Array<{ id: string; name: string }>>((acc, post) => {
+            {items
+              .reduce<Array<{ id: string; name: string }>>((acc, post) => {
                 if (
                   post.organization &&
                   !acc.find((o) => o.id === post.organization!.id)
@@ -189,9 +194,10 @@ export default function AdminPostsPage() {
 
       <DataTable
         columns={columns}
-        data={(data?.items as PostRow[]) ?? []}
+        data={(items as PostRow[]) ?? []}
         isLoading={isLoading}
-        hasMore={!!data?.nextCursor}
+        hasMore={hasNextPage}
+        onLoadMore={() => fetchNextPage()}
       />
     </div>
   );

@@ -594,7 +594,7 @@ export default function NewsGridPage() {
         caption:            editingCaption[r.channelId] ?? r.caption,
         hashtags:           r.hashtags,
         cta:                r.cta,
-        scheduleTime:       scheduleMap[r.channelId] || null,
+        scheduleTime:       scheduleMap[r.channelId] ? new Date(scheduleMap[r.channelId]!).toISOString() : null,
         backgroundImageUrl: r.backgroundImageUrl || null,
       })),
     });
