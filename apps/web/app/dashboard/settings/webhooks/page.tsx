@@ -11,7 +11,8 @@ import { Label } from "~/components/ui/label";
 import { Badge } from "~/components/ui/badge";
 import { Skeleton } from "~/components/ui/skeleton";
 import { useToast } from "~/hooks/use-toast";
-import { Webhook, Plus, Trash2, Copy } from "lucide-react";
+import Link from "next/link";
+import { Webhook, Plus, Trash2, Eye } from "lucide-react";
 
 const EVENTS = [
   "post.published",
@@ -136,6 +137,16 @@ export default function WebhooksPage() {
                       ))}
                     </div>
                   </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                    asChild
+                  >
+                    <Link href={`/dashboard/settings/webhooks/${wh.id}`}>
+                      <Eye className="h-4 w-4" />
+                    </Link>
+                  </Button>
                   <Button
                     variant="ghost"
                     size="icon"

@@ -28,7 +28,11 @@ export function AIPanel({ canvas, exportCanvasDataUrl }: AIPanelProps) {
   const { toast } = useToast();
   const [editPrompt, setEditPrompt] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
-  const editImage = trpc.image.edit.useMutation();
+  // The catch in applyAIEdit also covers post-mutation render failures
+  // (FabricImage.fromURL), not just the mutation, so we keep its toast and use a
+  // no-op hook-level onError to make the global mutationCacheOnError guard
+  // (lib/trpc/react.tsx) skip this mutation — otherwise it would double-toast.
+  const editImage = trpc.image.edit.useMutation({ onError: () => {} });
 
   const applyAIEdit = async (prompt: string) => {
     if (!canvas) return;

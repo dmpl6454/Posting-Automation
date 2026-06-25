@@ -3,12 +3,19 @@
 import { useState } from "react";
 import { signIn } from "next-auth/react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
 import { Loader2, AlertCircle, ArrowRight } from "lucide-react";
 
 export default function RegisterPage() {
+  const searchParams = useSearchParams();
+  const invite = searchParams.get("invite");
+  // If an invite token is present, route to /invite/<token> after registration
+  // so acceptInvite fires. Otherwise fall back to the dashboard.
+  const postRegisterDest = invite ? `/invite/${encodeURIComponent(invite)}` : "/dashboard";
+
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -36,7 +43,7 @@ export default function RegisterPage() {
       await signIn("credentials", {
         email,
         password,
-        callbackUrl: "/dashboard",
+        callbackUrl: postRegisterDest,
       });
     } catch (err: any) {
       setError(err.message);
@@ -58,7 +65,7 @@ export default function RegisterPage() {
 
       {/* OAuth Providers */}
       <button
-        onClick={() => signIn("google", { callbackUrl: "/dashboard" })}
+        onClick={() => signIn("google", { callbackUrl: postRegisterDest })}
         className="flex w-full items-center justify-center gap-2 rounded-xl border border-border/60 bg-background/50 px-4 py-2.5 text-sm font-medium text-foreground transition-all hover:bg-background hover:shadow-sm active:scale-[0.98]"
       >
         <svg className="h-4 w-4" viewBox="0 0 24 24">

@@ -175,9 +175,14 @@ export default function ChannelsPage() {
     return map;
   }, [platformAuthInfo]);
 
-  const getOAuthUrl = trpc.channel.getOAuthUrl.useMutation();
-  const connectWithToken = trpc.channel.connectWithToken.useMutation();
-  const detectTelegramChats = trpc.channel.detectTelegramChats.useMutation();
+  // These three are awaited via mutateAsync inside try/catch blocks that show a
+  // domain-specific, more-actionable destructive toast than the generic global
+  // handler (lib/trpc/react.tsx) would. A no-op hook-level onError makes the
+  // global mutationCacheOnError guard skip them, so they toast exactly once.
+  const noopOnError = () => {};
+  const getOAuthUrl = trpc.channel.getOAuthUrl.useMutation({ onError: noopOnError });
+  const connectWithToken = trpc.channel.connectWithToken.useMutation({ onError: noopOnError });
+  const detectTelegramChats = trpc.channel.detectTelegramChats.useMutation({ onError: noopOnError });
   const disconnect = trpc.channel.disconnect.useMutation({
     onSuccess: () => {
       refetch();

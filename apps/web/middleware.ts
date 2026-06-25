@@ -42,8 +42,15 @@ export async function middleware(request: NextRequest) {
 
   const isAuthenticated = hasSessionCookie(request);
 
-  // Redirect authenticated users from public pages to dashboard
+  // Redirect authenticated users from public pages to dashboard.
+  // Special case: if an authenticated user hits /login or /register with an
+  // ?invite=<token> param, send them directly to /invite/<token> so the
+  // accept flow fires instead of silently dropping the token.
   if (isAuthenticated && (pathname === "/" || pathname === "/login" || pathname === "/register")) {
+    const inviteToken = request.nextUrl.searchParams.get("invite");
+    if (inviteToken && (pathname === "/login" || pathname === "/register")) {
+      return NextResponse.redirect(new URL(`/invite/${encodeURIComponent(inviteToken)}`, request.url));
+    }
     return NextResponse.redirect(new URL("/dashboard", request.url));
   }
 
