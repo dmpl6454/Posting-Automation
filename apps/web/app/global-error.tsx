@@ -17,7 +17,7 @@ export default function GlobalError({ error, reset }: { error: Error & { digest?
 
   return (
     <html>
-      <body className="flex min-h-screen items-center justify-center bg-background">
+      <body className="flex min-h-dvh items-center justify-center bg-background">
         <div className="text-center space-y-4">
           <h2 className="text-2xl font-bold">Something went wrong!</h2>
           <p className="text-muted-foreground">An unexpected error occurred. Our team has been notified.</p>

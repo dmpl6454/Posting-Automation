@@ -128,10 +128,10 @@ export function MediaEditor({
   };
 
   return (
-    <div className="flex h-[calc(100vh-200px)] min-h-[500px] flex-col overflow-hidden rounded-xl border bg-background">
-      <div className="flex items-center justify-between border-b px-4 py-2">
+    <div className="flex h-[calc(100dvh-200px)] min-h-[500px] flex-col overflow-hidden rounded-xl border bg-background">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2 sm:px-4">
         <h3 className="text-sm font-semibold">Design Editor</h3>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2">
           {onSaveToLibrary && (
             <Button variant="outline" size="sm" onClick={() => onSaveToLibrary(exportCanvas("png"))}>
               <Save className="mr-1.5 h-3.5 w-3.5" />
@@ -161,7 +161,7 @@ export function MediaEditor({
         onResizeCanvas={resizeCanvas}
       />
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="relative flex flex-1 overflow-hidden">
         <EditorSidebar activePanel={activePanel} onPanelChange={setActivePanel}>
           {activePanel === "elements" && <ElementsPanel canvas={canvas} />}
           {activePanel === "text" && <TextPanel canvas={canvas} />}

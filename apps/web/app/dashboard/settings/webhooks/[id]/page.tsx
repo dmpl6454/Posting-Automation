@@ -189,8 +189,11 @@ export default function WebhookDeliveryPage() {
             </div>
           ) : (
             <>
+              {/* Horizontally scrollable on small screens so the 5 fixed columns
+                  keep their alignment instead of overflowing the viewport. */}
+              <div className="overflow-x-auto">
               {/* Table Header */}
-              <div className="grid grid-cols-[1fr_100px_80px_140px_100px] gap-4 border-b bg-muted/50 px-6 py-2 text-xs font-medium text-muted-foreground">
+              <div className="grid min-w-[640px] grid-cols-[1fr_100px_80px_140px_100px] gap-4 border-b bg-muted/50 px-6 py-2 text-xs font-medium text-muted-foreground">
                 <span>Event</span>
                 <span>Status</span>
                 <span>Code</span>
@@ -202,7 +205,7 @@ export default function WebhookDeliveryPage() {
               <div className="divide-y">
                 {deliveriesData.deliveries.map((delivery: any) => (
                   <div key={delivery.id}>
-                    <div className="grid grid-cols-[1fr_100px_80px_140px_100px] items-center gap-4 px-6 py-3">
+                    <div className="grid min-w-[640px] grid-cols-[1fr_100px_80px_140px_100px] items-center gap-4 px-6 py-3">
                       <span className="truncate font-mono text-sm">
                         {delivery.event}
                       </span>
@@ -310,6 +313,7 @@ export default function WebhookDeliveryPage() {
                     )}
                   </div>
                 ))}
+              </div>
               </div>
 
               {/* Pagination */}

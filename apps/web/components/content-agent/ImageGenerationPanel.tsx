@@ -771,7 +771,7 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
                 {/* Aspect Ratio */}
                 <div>
                   <p className="mb-1.5 text-xs font-medium text-muted-foreground">Aspect Ratio</p>
-                  <div className="grid grid-cols-6 gap-1.5">
+                  <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-6">
                     {ASPECT_RATIOS.map((ar) => {
                       const Icon = ar.icon;
                       return (

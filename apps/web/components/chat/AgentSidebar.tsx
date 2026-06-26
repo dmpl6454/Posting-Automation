@@ -10,6 +10,8 @@ interface AgentSidebarProps {
   activeThreadId: string | null;
   onSelectThread: (threadId: string) => void;
   onNewChat: () => void;
+  /** Mobile drawer open state. On lg+ the rail is always shown regardless. */
+  open?: boolean;
 }
 
 function formatTimeAgo(date: string | Date | null): string {
@@ -31,6 +33,7 @@ export function AgentSidebar({
   activeThreadId,
   onSelectThread,
   onNewChat,
+  open = false,
 }: AgentSidebarProps) {
   const { data: threads } = trpc.chat.listThreads.useQuery();
   const deleteThread = trpc.chat.deleteThread.useMutation({
@@ -41,7 +44,14 @@ export function AgentSidebar({
   const utils = trpc.useUtils();
 
   return (
-    <div className="flex h-full w-72 flex-col border-r bg-muted/20">
+    <div
+      className={cn(
+        "flex h-full w-72 flex-col border-r bg-muted/20 transition-transform duration-200",
+        // Mobile: absolute slide-in drawer over the chat. lg+: static rail.
+        "absolute inset-y-0 left-0 z-40 lg:static lg:z-auto lg:translate-x-0",
+        open ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
+      )}
+    >
       {/* Header */}
       <div className="flex items-center justify-between border-b p-4">
         <div className="flex items-center gap-2">

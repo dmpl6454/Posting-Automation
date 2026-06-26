@@ -160,7 +160,10 @@ export function ActivityPanel() {
   return (
     <div
       className={cn(
-        "flex flex-col border-l border-border/40 bg-card/30 backdrop-blur-sm transition-all duration-300 ease-in-out",
+        // Desktop-only rail. On < lg the activity feed is reached via the header
+        // NotificationBell (same notification source), so it's hidden here to
+        // avoid stealing horizontal space from <main> on phones/tablets.
+        "hidden flex-col border-l border-border/40 bg-card/30 backdrop-blur-sm transition-all duration-300 ease-in-out lg:flex",
         expanded ? "w-[300px]" : "w-10"
       )}
     >

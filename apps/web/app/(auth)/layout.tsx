@@ -13,7 +13,7 @@ export const metadata: Metadata = {
 export default function AuthLayout({ children }: { children: React.ReactNode }) {
   return (
     <Providers>
-      <div className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden bg-background">
+      <div className="relative flex min-h-dvh flex-col items-center justify-center overflow-hidden bg-background">
         {/* Ambient mesh gradient background */}
         <div className="pointer-events-none absolute inset-0 mesh-gradient" />
 

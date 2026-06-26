@@ -8,7 +8,7 @@ export default function ContentAgentChatPage() {
   const threadId = params.id as string;
 
   return (
-    <div className="flex h-[calc(100vh-4rem)] flex-col overflow-hidden">
+    <div className="flex h-[calc(100dvh-4rem)] flex-col overflow-hidden">
       <div className="h-full">
         <ChatLayout initialThreadId={threadId} />
       </div>

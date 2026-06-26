@@ -747,7 +747,7 @@ export default function NewsGridPage() {
                         <Input value={moodStyle} onChange={(e) => setMoodStyle(e.target.value)} placeholder="e.g. glamorous" />
                       </div>
                     </div>
-                    <div className="grid grid-cols-3 gap-3">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                       <div className="space-y-1">
                         <Label className="text-xs">Language</Label>
                         <Select value={language} onValueChange={(v) => setLanguage(v as any)}>

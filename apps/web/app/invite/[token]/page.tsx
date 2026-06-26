@@ -34,7 +34,7 @@ export default function InviteAcceptPage() {
 
   if (status === "loading" || isLoading) {
     return (
-      <div className="flex min-h-screen items-center justify-center">
+      <div className="flex min-h-dvh items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
       </div>
     );
@@ -42,7 +42,7 @@ export default function InviteAcceptPage() {
 
   if (error) {
     return (
-      <div className="flex min-h-screen items-center justify-center p-4">
+      <div className="flex min-h-dvh items-center justify-center p-4">
         <Card className="w-full max-w-sm">
           <CardHeader className="text-center">
             <AlertCircle className="mx-auto mb-2 h-10 w-10 text-destructive" />
@@ -62,7 +62,7 @@ export default function InviteAcceptPage() {
   if (!invite) return null;
 
   return (
-    <div className="flex min-h-screen items-center justify-center p-4">
+    <div className="flex min-h-dvh items-center justify-center p-4">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
           <CheckCircle2 className="mx-auto mb-2 h-10 w-10 text-green-500" />
