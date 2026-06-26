@@ -185,6 +185,30 @@ export function RepurposeTab() {
   // the paste path, defined before classifyAndPreselect, captured a stale "".)
   const accentColorRef = useRef<string>("");
   useEffect(() => { accentColorRef.current = accentColor; }, [accentColor]);
+
+  // REP-2/Bug-B: snapshot of the exact LOOK inputs used for the last Generate.
+  // The per-image "Regenerate" re-uses THESE (not the live picker state) so a
+  // user who changes the style/theme/accent picker AFTER generating still gets the
+  // SAME-looking image back on Regenerate (only the headline text / hero photo are
+  // intentionally editable). Null until the first Generate. Also records whether
+  // the result was a Postcard (creativeStyle "postcard_grid") + its grid preset, so
+  // Regenerate keeps the grid layout instead of collapsing to premium_editorial.
+  const lastRenderInputsRef = useRef<{
+    creativeStyle: "premium_editorial" | "hook_bars" | "tweet_card" | "bold_typographic" | "postcard_grid";
+    theme: "dark" | "light" | "gradient";
+    accentColor: string;
+    logoPosition: "top-left" | "top-right";
+    aestheticRefUrl: string;
+    referenceMimicry: boolean;
+    mimicryTextMode: "ai" | "overlay";
+    headlineFont: HeadlineFont;
+    headlineColor: string;
+    headlineAlign: "left" | "center" | "right" | "";
+    labelColor: string;
+    logoSize: number | "";
+    isPostcard: boolean;
+    gridPreset?: "two_up" | "three_up" | "grid_2x2";
+  } | null>(null);
   const [voiceOver, setVoiceOver] = useState(true);
   const [voiceType, setVoiceType] = useState<string>("nova");
   const [bgMusic, setBgMusic] = useState(true);
@@ -637,6 +661,11 @@ export function RepurposeTab() {
   // tracks which card is loading: "static" for the single image, or the slide
   // index for a carousel slide (so each button shows its own spinner).
   const [regenTarget, setRegenTarget] = useState<"static" | number | null>(null);
+  // Bug-A: render-visible flag for "the current result is a Postcard". A postcard's
+  // per-tile photos aren't retained client-side, so per-image Regenerate can't
+  // faithfully rebuild the grid — we disable the button for postcards (the user
+  // re-generates from the top instead) rather than silently corrupt the layout.
+  const [resultIsPostcard, setResultIsPostcard] = useState(false);
   const regenerateImage = trpc.repurpose.regenerateImage.useMutation();
 
   // Resolve the channel name/handle/avatar the same way handleGenerate does, so
@@ -685,18 +714,30 @@ export function RepurposeTab() {
       results.extracted?.images?.find((u) => u.startsWith("https://"));
     const bgContext = results.extracted?.description?.slice(0, 600);
     setRegenTarget(target);
+    // Bug-B: re-use the LOOK inputs captured at Generate time so Regenerate yields
+    // the SAME-looking image even if the user changed the pickers afterward. Falls
+    // back to live state for a result generated before this ref existed (e.g. an
+    // older session) — byte-identical to the prior behaviour in that case.
+    const snap = lastRenderInputsRef.current;
     try {
       const res = await regenerateImage.mutateAsync({
         headline,
-        creativeStyle,
-        theme,
+        // Bug-A: keep the postcard_grid layout on regenerate (was collapsing to
+        // premium_editorial because the live `creativeStyle` state can't hold it).
+        // NOTE: the per-tile photos aren't retained client-side (the router composits
+        // them server-side and returns only the final image), so postcard regenerate
+        // is gated OFF at the button (see the Regenerate button's disabled guard).
+        // This snapshot path still applies for the non-postcard styles.
+        creativeStyle: snap?.creativeStyle ?? creativeStyle,
+        ...(snap?.isPostcard && snap.gridPreset ? { gridPreset: snap.gridPreset } : {}),
+        theme: snap?.theme ?? theme,
         logoUrl: brandLogo,
-        logoPosition,
-        accentColor: accentColor || undefined,
+        logoPosition: snap?.logoPosition ?? logoPosition,
+        accentColor: (snap?.accentColor ?? accentColor) || undefined,
         imageContext: stripBareUrls(imageContext) || undefined,
-        aestheticRefUrl: aestheticRefUrl || undefined,
-        referenceMimicry: aestheticRefUrl ? referenceMimicry : false,
-        mimicryTextMode,
+        aestheticRefUrl: (snap?.aestheticRefUrl ?? aestheticRefUrl) || undefined,
+        referenceMimicry: snap ? snap.referenceMimicry : (aestheticRefUrl ? referenceMimicry : false),
+        mimicryTextMode: snap?.mimicryTextMode ?? mimicryTextMode,
         channelName,
         channelHandle,
         // R3 parity: carry the rendered hook line, the article background photo,
@@ -705,12 +746,12 @@ export function RepurposeTab() {
         bgImageUrl: bgImageUrl || undefined,
         bgContext: bgContext || undefined,
         brandName: computeActiveBrandName(),
-        headlineFont: headlineFont || undefined,
-        headlineColor: headlineColor || undefined,
+        headlineFont: (snap?.headlineFont ?? headlineFont) || undefined,
+        headlineColor: (snap?.headlineColor ?? headlineColor) || undefined,
         // Round 17: alignment / brand-name color / logo size overrides.
-        headlineAlign: headlineAlign || undefined,
-        labelColor: labelColor || undefined,
-        logoSize: typeof logoSize === "number" ? logoSize : undefined,
+        headlineAlign: (snap?.headlineAlign ?? headlineAlign) || undefined,
+        labelColor: (snap?.labelColor ?? labelColor) || undefined,
+        logoSize: typeof (snap?.logoSize ?? logoSize) === "number" ? (snap?.logoSize ?? logoSize) as number : undefined,
         // REP-2: pass slide role + body text for body-slide regeneration.
         slideRole: slideForTarget?.role as "cover" | "body" | "cta" | undefined,
         slideBody: slideForTarget?.role === "body" ? (slideEdit?.body ?? slideForTarget?.body) : undefined,
@@ -802,6 +843,26 @@ export function RepurposeTab() {
     cancelledRef.current = false;
     if (sourceMode === "url") {
       if (!url || selectedPlatforms.length === 0) return;
+      // Bug-B: snapshot the LOOK inputs for this run so a later Regenerate re-uses
+      // them (not whatever the pickers hold by then). Captured at send time, mirrors
+      // the exact values placed into the mutate payload below.
+      lastRenderInputsRef.current = {
+        creativeStyle: format === "postcard" ? "postcard_grid" : creativeStyle,
+        theme,
+        accentColor,
+        logoPosition,
+        aestheticRefUrl,
+        referenceMimicry: aestheticRefUrl ? referenceMimicry : false,
+        mimicryTextMode,
+        headlineFont,
+        headlineColor,
+        headlineAlign,
+        labelColor,
+        logoSize,
+        isPostcard: format === "postcard",
+        gridPreset: format === "postcard" ? gridPreset : undefined,
+      };
+      setResultIsPostcard(format === "postcard");
       const pid = startProgress();
       // Wall-clock guard for the synchronous static/carousel path. Video formats
       // have their own 10-min timeout (videoTimeoutRef); this covers the case
@@ -2368,8 +2429,10 @@ export function RepurposeTab() {
                       <button
                         type="button"
                         onClick={() => handleRegenerate("static")}
-                        disabled={regenTarget !== null}
-                        title="Generate a new version of this image"
+                        disabled={regenTarget !== null || resultIsPostcard}
+                        title={resultIsPostcard
+                          ? "Re-generate Postcards from the top — the per-tile photos can't be re-rolled individually"
+                          : "Generate a new version of this image"}
                         className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-muted transition-colors disabled:opacity-60"
                       >
                         {regenTarget === "static" ? (
