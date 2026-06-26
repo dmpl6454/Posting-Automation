@@ -3075,8 +3075,15 @@ Return ONLY the JSON array, no other text.`;
       z.object({
         headline: z.string().min(1),
         creativeStyle: z
-          .enum(["premium_editorial", "hook_bars", "tweet_card", "bold_typographic"])
+          .enum(["premium_editorial", "hook_bars", "tweet_card", "bold_typographic", "postcard_grid"])
           .default("premium_editorial"),
+        // REP-3 regenerate parity: a Postcard result has creativeStyle "postcard_grid".
+        // Without these the postcard re-rendered as a plain premium_editorial card
+        // (the enum rejected postcard_grid → default), destroying the tweet-header +
+        // grid layout. The tiles come from the original generate's resolved URLs and
+        // are SSRF-gated server-side (isPublicImageUrl) before any fetch.
+        gridPreset: z.enum(["two_up", "three_up", "grid_2x2"]).optional(),
+        gridImageUrls: z.array(z.string()).max(4).optional(),
         theme: z.enum(["dark", "light", "gradient"]).default("light"),
         logoUrl: z.string().optional(),
         logoPosition: z.enum(["top-left", "top-right"]).default("top-right"),
@@ -3210,6 +3217,14 @@ Return ONLY the JSON array, no other text.`;
       // public one as the creative background (the real article photo).
       const safeBgImageUrl =
         input.bgImageUrl && isPublicImageUrl(input.bgImageUrl) ? input.bgImageUrl : undefined;
+      // REP-3 regenerate: SSRF-gate the postcard grid tile URLs the same way —
+      // each tile must be a public host (private/loopback/metadata blocked) before
+      // renderStaticCreative fetches it. Empty/unsafe → undefined (falls back to the
+      // default postcard background), never a media-less render.
+      const safeGridImageUrls =
+        input.creativeStyle === "postcard_grid" && input.gridImageUrls && input.gridImageUrls.length > 0
+          ? input.gridImageUrls.filter((u) => isPublicImageUrl(u))
+          : undefined;
       // Build the cinematic background prompt the same way the static path does,
       // then append the user's free-text style notes AND the article-context blurb
       // (bgContext) so the AI background reflects the article, not just the
@@ -3347,6 +3362,9 @@ Return ONLY the JSON array, no other text.`;
               // REP-2: thread slide-role + body (absent = no-op, byte-identical).
               ...(input.slideRole ? { slideRole: input.slideRole } : {}),
               ...(input.slideBody !== undefined ? { body: input.slideBody } : {}),
+              // REP-3 regenerate: keep the postcard grid layout (tiles + preset).
+              ...(safeGridImageUrls && safeGridImageUrls.length > 0 ? { gridImageUrls: safeGridImageUrls } : {}),
+              ...(input.gridPreset ? { gridPreset: input.gridPreset } : {}),
             });
           } catch (e) {
             throw toFriendlyAIError(e);

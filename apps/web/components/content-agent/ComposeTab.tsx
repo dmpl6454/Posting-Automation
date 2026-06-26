@@ -495,6 +495,85 @@ ${content}`;
     return result.id;
   };
 
+  /**
+   * Turn the current `postMedia` into the ordered mediaIds the post needs,
+   * resolving EVERY item shape — and NEVER silently dropping one.
+   *
+   * Item shapes:
+   *  - { mediaId }            → use it directly (already an org Media row)
+   *  - { file }               → upload now → mediaId
+   *  - { url } (no id, no file) → resolve to an existing org Media row by URL
+   *      (lossless), else download+reupload as a last resort.
+   *
+   * Bug this fixes (live-repro'd on prod 2026-06-26): a Repurpose "Create Post"
+   * deep link `?aiImage=<url>` that arrives WITHOUT `aiMediaId` hydrates a
+   * url-only `postMedia` item. The old create handlers persisted only
+   * `mediaId`/`file`, so the url-only item was SKIPPED → a post with no image
+   * while the preview still showed it. We now resolve it; if an image item
+   * genuinely can't be resolved we THROW so the caller blocks the create with a
+   * clear toast instead of silently saving a media-less post.
+   *
+   * blob: object-URLs are local-only previews and are NEVER a resolvable source
+   * on their own — such an item must also carry a `file` (it always does), so a
+   * blob-without-file is treated as unresolvable.
+   */
+  const resolvePostMediaIds = async (): Promise<string[]> => {
+    // First pass: collect url-only items (no mediaId, no file, non-blob) and
+    // resolve them to existing org Media ids in ONE round-trip.
+    const urlOnly = postMedia
+      .filter((m) => !m.mediaId && !m.file && m.url && !m.url.startsWith("blob:"))
+      .map((m) => m.url);
+    let urlToId: Record<string, string> = {};
+    if (urlOnly.length > 0) {
+      try {
+        const { map } = await utils.media.resolveByUrl.fetch({ urls: Array.from(new Set(urlOnly)) });
+        urlToId = map;
+      } catch {
+        // resolver unavailable → fall through to per-item download+reupload below
+      }
+    }
+
+    const mediaIds: string[] = [];
+    const unresolved: string[] = [];
+    for (const item of postMedia) {
+      if (item.mediaId) {
+        mediaIds.push(item.mediaId);
+      } else if (item.file) {
+        mediaIds.push(await uploadFileToS3(item.file, item.url));
+      } else if (item.url && !item.url.startsWith("blob:")) {
+        // Prefer the lossless resolve (existing org Media row for this URL)…
+        const resolved = urlToId[item.url];
+        if (resolved) {
+          mediaIds.push(resolved);
+          continue;
+        }
+        // …otherwise download the external URL and re-upload it. If THAT fails,
+        // record it as unresolved (do NOT silently drop — the old bug).
+        try {
+          const resp = await fetch(item.url);
+          if (!resp.ok) throw new Error(`fetch ${resp.status}`);
+          const blob = await resp.blob();
+          const ext = item.url.match(/\.(png|jpg|jpeg|webp|gif|mp4|webm|mov)(?:\?|$)/i)?.[1] || "jpg";
+          const file = new File([blob], `compose-${Date.now()}.${ext}`, { type: blob.type || "image/jpeg" });
+          mediaIds.push(await uploadFileToS3(file));
+        } catch {
+          unresolved.push(item.url);
+        }
+      } else {
+        // blob: with no file, or empty url — nothing we can persist.
+        unresolved.push(item.url || "(unknown)");
+      }
+    }
+
+    if (unresolved.length > 0) {
+      throw new Error(
+        `${unresolved.length} attached ${unresolved.length === 1 ? "image" : "images"} could not be saved. ` +
+          `Please re-attach the image and try again.`,
+      );
+    }
+    return mediaIds;
+  };
+
   const handleSubmit = async (publishNow: boolean) => {
     if (!content || selectedChannels.length === 0) {
       toast({
@@ -518,28 +597,9 @@ ${content}`;
 
     try {
       setIsUploading(true);
-      // Upload any files that don't have a mediaId yet
-      const mediaIds: string[] = [];
-      for (const item of postMedia) {
-        if (item.mediaId) {
-          mediaIds.push(item.mediaId);
-        } else if (item.file) {
-          const mediaId = await uploadFileToS3(item.file);
-          mediaIds.push(mediaId);
-        } else if (item.url && !item.url.startsWith("blob:")) {
-          // External URL (e.g. from repurpose AI image) — download and upload
-          try {
-            const resp = await fetch(item.url);
-            const blob = await resp.blob();
-            const ext = item.url.match(/\.(png|jpg|jpeg|webp|mp4)(?:\?|$)/i)?.[1] || "jpg";
-            const file = new File([blob], `repurpose-${Date.now()}.${ext}`, { type: blob.type || "image/jpeg" });
-            const mediaId = await uploadFileToS3(file);
-            mediaIds.push(mediaId);
-          } catch (dlErr) {
-            console.warn("Failed to download external image:", dlErr);
-          }
-        }
-      }
+      // Resolve every attached media item to a real mediaId. Throws (and blocks
+      // the create) if an attached image can't be saved — no silent media-less post.
+      const mediaIds = await resolvePostMediaIds();
 
       createPost.mutate({
         content,
@@ -551,8 +611,8 @@ ${content}`;
       });
     } catch (err: any) {
       toast({
-        title: "Upload failed",
-        description: humanizeError(err) || "Failed to upload images. Please try again.",
+        title: "Couldn't attach your image",
+        description: humanizeError(err) || "Failed to save the attached image. Please re-attach and try again.",
         variant: "destructive",
       });
     } finally {
@@ -1162,20 +1222,27 @@ ${content}`;
             <Button
               variant="outline"
               onClick={async () => {
+                if (postMedia.some((item) => item.uploading)) {
+                  toast({ title: "Please wait", description: "Media is still uploading...", variant: "destructive" });
+                  return;
+                }
                 try {
                   setIsUploading(true);
-                  const mediaIds: string[] = [];
-                  for (const item of postMedia) {
-                    if (item.mediaId) mediaIds.push(item.mediaId);
-                    else if (item.file) mediaIds.push(await uploadFileToS3(item.file));
-                  }
+                  // Resolve EVERY attached item (incl. url-only deep-link images) to a
+                  // real mediaId. Throws if an image can't be saved → we block the
+                  // create instead of silently saving a draft with no image (the bug).
+                  const mediaIds = await resolvePostMediaIds();
                   createPost.mutate({
                     content,
                     channelIds: selectedChannels.length > 0 ? selectedChannels : [],
                     ...(mediaIds.length > 0 && { mediaIds }),
                   });
-                } catch {
-                  toast({ title: "Upload failed", variant: "destructive" });
+                } catch (err: any) {
+                  toast({
+                    title: "Couldn't attach your image",
+                    description: humanizeError(err) || "Failed to save the attached image. Please re-attach and try again.",
+                    variant: "destructive",
+                  });
                 } finally {
                   setIsUploading(false);
                 }

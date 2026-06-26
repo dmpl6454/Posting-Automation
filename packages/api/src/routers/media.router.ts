@@ -55,6 +55,31 @@ export const mediaRouter = createRouter({
       return { items, nextCursor };
     }),
 
+  /**
+   * Resolve already-uploaded media URLs to their owning Media row ids, org-scoped.
+   *
+   * Used by ComposeTab when a `postMedia` item carries only a `url` (e.g. a
+   * Repurpose "Create Post" deep link `?aiImage=<url>` that arrived WITHOUT
+   * `aiMediaId`). Before this, such items were silently dropped at create time
+   * (the create handlers persisted only `mediaId`/`file`), producing a post with
+   * NO image while the preview still showed it. Resolving the URL back to its
+   * existing Media id is lossless (no re-download/re-upload) and org-scoped, so
+   * it can't leak another org's media. URLs that don't resolve are simply omitted
+   * from the returned map — the caller decides whether to fall back or block.
+   */
+  resolveByUrl: orgProcedure
+    .input(z.object({ urls: z.array(z.string()).min(1).max(20) }))
+    .query(async ({ ctx, input }) => {
+      const rows = await ctx.prisma.media.findMany({
+        where: { organizationId: ctx.organizationId, url: { in: input.urls } },
+        select: { id: true, url: true },
+      });
+      // url -> mediaId (org-owned only). Missing urls are absent from the map.
+      const map: Record<string, string> = {};
+      for (const r of rows) map[r.url] = r.id;
+      return { map };
+    }),
+
   getUploadUrl: orgProcedure
     .input(
       z.object({
