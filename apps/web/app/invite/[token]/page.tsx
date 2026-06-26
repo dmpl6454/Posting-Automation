@@ -1,20 +1,20 @@
 "use client";
 
-import { use, useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useSession } from "next-auth/react";
-import { useRouter } from "next/navigation";
+import { useRouter, useParams } from "next/navigation";
 import { trpc } from "~/lib/trpc/client";
 import { Button } from "~/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle, CardDescription } from "~/components/ui/card";
 import { Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 import Link from "next/link";
 
-interface PageProps {
-  params: Promise<{ token: string }>;
-}
-
-export default function InviteAcceptPage({ params }: PageProps) {
-  const { token } = use(params);
+export default function InviteAcceptPage() {
+  // Next 14: route params for a client component come from useParams() — NOT the
+  // Next 15 async `params` prop + `use(params)`, which throws
+  // "An unsupported type was passed to use()" here (params is a plain object in 14).
+  const params = useParams();
+  const token = params.token as string;
   const { data: session, status } = useSession();
   const router = useRouter();
 
