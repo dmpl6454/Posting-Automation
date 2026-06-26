@@ -120,7 +120,10 @@ export default function SuperAgentPage() {
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  // Drawer state governs the MOBILE overlay only — on lg+ the thread rail is
+  // always shown via responsive classes regardless of this flag. Default closed
+  // so a phone doesn't open with a 288px sidebar covering the chat (mobile fix).
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   // Media attachments the user adds via upload or the library picker (audit fix 2026-06-06)
   const [attachments, setAttachments] = useState<{ mediaId: string; url: string; fileType: string }[]>([]);
   const [showMediaPicker, setShowMediaPicker] = useState(false);
@@ -390,6 +393,10 @@ export default function SuperAgentPage() {
   const handleSelectThread = (threadId: string) => {
     setActiveThreadId(threadId);
     setStreamingContent("");
+    // On mobile the sidebar is an overlay drawer — close it after picking a thread.
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 1023px)").matches) {
+      setSidebarOpen(false);
+    }
   };
 
   const handleDeleteThread = (threadId: string) => {
@@ -404,12 +411,23 @@ export default function SuperAgentPage() {
   const hasMessages = messages.length > 0 || !!streamingContent;
 
   return (
-    <div className="flex h-[calc(100vh-4rem)] overflow-hidden">
-      {/* ── Thread Sidebar ── */}
+    <div className="relative flex h-[calc(100dvh-4rem)] overflow-hidden">
+      {/* Mobile drawer backdrop — only when the sidebar is open below lg */}
+      {sidebarOpen && (
+        <div
+          className="absolute inset-0 z-30 bg-black/40 lg:hidden"
+          aria-hidden="true"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+      {/* ── Thread Sidebar ──
+          Mobile: absolute slide-in overlay drawer (does not push chat).
+          lg+: static in-flow rail, always visible regardless of drawer state. */}
       <div
         className={cn(
-          "flex flex-col border-r bg-muted/20 transition-all duration-200",
-          sidebarOpen ? "w-72" : "w-0 overflow-hidden"
+          "flex flex-col border-r bg-muted/20 transition-transform duration-200",
+          "absolute inset-y-0 left-0 z-40 w-72 lg:static lg:z-auto lg:w-72 lg:translate-x-0",
+          sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
         )}
       >
         <div className="flex items-center justify-between border-b p-3">

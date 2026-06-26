@@ -15,8 +15,15 @@ import {
   ScrollText,
   ArrowLeft,
   LogOut,
+  X,
 } from "lucide-react";
 import { cn } from "~/lib/utils";
+
+interface AdminSidebarProps {
+  /** Mobile drawer open state. On lg+ the rail is always shown regardless. */
+  open?: boolean;
+  onClose?: () => void;
+}
 
 const navItems = [
   { label: "Overview", href: "/admin", icon: LayoutDashboard },
@@ -30,7 +37,7 @@ const navItems = [
   { label: "Audit Logs", href: "/admin/audit", icon: ScrollText },
 ];
 
-export function AdminSidebar() {
+export function AdminSidebar({ open = false, onClose }: AdminSidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
 
@@ -40,13 +47,29 @@ export function AdminSidebar() {
   }
 
   return (
-    <aside className="flex h-screen w-60 flex-col bg-gray-950">
+    <aside
+      className={cn(
+        "flex h-dvh w-60 flex-col bg-gray-950 transition-transform duration-200",
+        // Mobile: fixed slide-in drawer over content. lg+: static in-flow rail.
+        "fixed inset-y-0 left-0 z-40 lg:static lg:z-auto lg:translate-x-0",
+        open ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
+      )}
+    >
       {/* Logo */}
-      <div className="flex items-center gap-3 px-4 py-5">
-        <div className="flex h-8 w-8 items-center justify-center rounded-md bg-red-600 text-xs font-bold text-white">
-          SA
+      <div className="flex items-center justify-between px-4 py-5">
+        <div className="flex items-center gap-3">
+          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-red-600 text-xs font-bold text-white">
+            SA
+          </div>
+          <span className="text-sm font-semibold text-white">Super Admin</span>
         </div>
-        <span className="text-sm font-semibold text-white">Super Admin</span>
+        <button
+          onClick={onClose}
+          className="rounded-md p-1 text-gray-400 hover:bg-gray-900 hover:text-gray-200 lg:hidden"
+          aria-label="Close menu"
+        >
+          <X className="h-4 w-4" />
+        </button>
       </div>
 
       {/* Navigation */}
@@ -61,6 +84,7 @@ export function AdminSidebar() {
             <Link
               key={item.href}
               href={item.href}
+              onClick={onClose}
               className={cn(
                 "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
                 isActive

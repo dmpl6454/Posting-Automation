@@ -134,7 +134,7 @@ export default function ApprovalsPage() {
   return (
     <div className="space-y-6">
       {/* Page header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
           <h1 className="text-2xl font-bold">Approvals</h1>
           {pendingCount > 0 && (
@@ -146,7 +146,7 @@ export default function ApprovalsPage() {
           value={statusFilter}
           onValueChange={(value) => setStatusFilter(value)}
         >
-          <SelectTrigger className="w-[160px]">
+          <SelectTrigger className="w-full sm:w-[160px]">
             <SelectValue placeholder="Filter by status" />
           </SelectTrigger>
           <SelectContent>

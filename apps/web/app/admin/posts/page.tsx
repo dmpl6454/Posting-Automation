@@ -151,9 +151,9 @@ export default function AdminPostsPage() {
     <div className="space-y-6">
       <h1 className="text-2xl font-bold">Posts</h1>
 
-      <div className="flex items-center gap-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
         <Select value={status} onValueChange={setStatus}>
-          <SelectTrigger className="w-[160px]">
+          <SelectTrigger className="w-full sm:w-[160px]">
             <SelectValue placeholder="All statuses" />
           </SelectTrigger>
           <SelectContent>
@@ -167,7 +167,7 @@ export default function AdminPostsPage() {
         </Select>
 
         <Select value={organizationId} onValueChange={setOrganizationId}>
-          <SelectTrigger className="w-[200px]">
+          <SelectTrigger className="w-full sm:w-[200px]">
             <SelectValue placeholder="All organizations" />
           </SelectTrigger>
           <SelectContent>

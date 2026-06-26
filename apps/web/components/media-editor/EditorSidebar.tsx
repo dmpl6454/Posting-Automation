@@ -30,19 +30,19 @@ interface EditorSidebarProps {
 export function EditorSidebar({ activePanel, onPanelChange, children }: EditorSidebarProps) {
   return (
     <div className="flex h-full">
-      {/* Icon Strip */}
-      <div className="flex w-14 flex-col gap-1 border-r bg-muted/30 p-1.5">
+      {/* Icon Strip — narrower on mobile to leave room for the canvas */}
+      <div className="flex w-12 shrink-0 flex-col gap-1 overflow-y-auto border-r bg-muted/30 p-1 sm:w-14 sm:p-1.5">
         {PANELS.map(({ id, icon: Icon, label }) => (
           <button
             key={id}
             onClick={() => onPanelChange(activePanel === id ? null : id)}
             className={cn(
-              "flex flex-col items-center gap-0.5 rounded-lg p-2 text-[10px] transition-colors",
+              "flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-[10px] transition-colors sm:p-2",
               activePanel === id
                 ? "bg-primary text-primary-foreground"
                 : "text-muted-foreground hover:bg-muted hover:text-foreground"
             )}
-            title={label}
+            title={label ?? undefined}
           >
             <Icon className="h-5 w-5" />
             <span>{label}</span>
@@ -50,9 +50,17 @@ export function EditorSidebar({ activePanel, onPanelChange, children }: EditorSi
         ))}
       </div>
 
-      {/* Expandable Panel */}
+      {/* Expandable Panel.
+          Mobile: overlay drawer anchored next to the rail (does not shrink the
+          canvas to nothing). lg+: in-flow side column as before. */}
       {activePanel && (
-        <div className="w-64 overflow-y-auto border-r bg-background p-3">
+        <div
+          className={cn(
+            "overflow-y-auto border-r bg-background p-3 shadow-xl",
+            "absolute inset-y-0 left-12 z-20 w-[min(16rem,calc(100%-3rem))] sm:left-14",
+            "lg:static lg:left-auto lg:z-auto lg:w-64 lg:shadow-none"
+          )}
+        >
           {children}
         </div>
       )}

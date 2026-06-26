@@ -559,7 +559,7 @@ export function ImageTab({ onImageGenerated }: ImageTabProps = {}) {
               <Card>
                 <CardHeader className="pb-3"><CardTitle className="text-base">Aspect Ratio</CardTitle></CardHeader>
                 <CardContent>
-                  <div className="grid grid-cols-5 gap-2">
+                  <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
                     {ASPECT_RATIOS.map((ar) => {
                       const Icon = ar.icon;
                       return (
@@ -577,7 +577,7 @@ export function ImageTab({ onImageGenerated }: ImageTabProps = {}) {
                 <Card>
                   <CardHeader className="pb-3"><CardTitle className="text-base">Image Size</CardTitle></CardHeader>
                   <CardContent>
-                    <div className="grid grid-cols-4 gap-2">
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                       {IMAGE_SIZES.map((size) => (
                         <button key={size.value} onClick={() => setImageSize(size.value)} className={`rounded-lg border px-3 py-2 text-sm font-medium transition-all ${imageSize === size.value ? "border-primary bg-primary/5 text-primary ring-1 ring-primary" : "border-border text-muted-foreground hover:border-muted-foreground/50 hover:bg-muted/50"}`}>{size.label}</button>
                       ))}

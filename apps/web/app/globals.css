@@ -83,6 +83,30 @@
     letter-spacing: -0.025em;
     font-weight: 600;
   }
+
+  /*
+   * Touch-target floor on touchscreens only (`pointer: coarse` = phones/tablets,
+   * never mouse-driven desktops, so desktop toolbar density is untouched).
+   * Guarantees interactive controls meet the ~44px iOS / 48dp Android minimum.
+   * Opt out on a genuinely-dense control with `data-compact` (e.g. inline chip
+   * dismiss buttons) where 44px would distort layout.
+   */
+  @media (pointer: coarse) {
+    button:not([data-compact]),
+    [role="button"]:not([data-compact]),
+    a[role="button"]:not([data-compact]),
+    [role="menuitem"]:not([data-compact]),
+    [role="tab"]:not([data-compact]) {
+      min-height: 44px;
+    }
+    /* Square/icon-only controls also need horizontal room to be tappable. */
+    button.aspect-square:not([data-compact]),
+    button[class*="w-9"]:not([data-compact]),
+    button[class*="w-10"]:not([data-compact]),
+    [role="button"][class*="w-9"]:not([data-compact]) {
+      min-width: 44px;
+    }
+  }
 }
 
 @layer components {

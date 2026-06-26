@@ -10,7 +10,7 @@ export const metadata: Metadata = {
 
 export default function NotFound() {
   return (
-    <div className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden bg-background px-4 text-center">
+    <div className="relative flex min-h-dvh flex-col items-center justify-center overflow-hidden bg-background px-4 text-center">
       {/* Ambient mesh gradient background */}
       <div className="pointer-events-none absolute inset-0 mesh-gradient" />
 

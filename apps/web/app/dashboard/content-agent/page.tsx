@@ -50,7 +50,7 @@ function ContentStudioInner() {
   const [pendingMedia, setPendingMedia] = useState<{ dataUrl: string } | null>(null);
 
   return (
-    <div className="h-[calc(100vh-4rem)] overflow-y-auto">
+    <div className="h-[calc(100dvh-4rem)] overflow-y-auto">
       <div className="mx-auto max-w-4xl space-y-4 p-4">
           {/* Header */}
           <div>
@@ -161,7 +161,7 @@ export default function ContentStudioPage() {
   return (
     <Suspense
       fallback={
-        <div className="flex h-[calc(100vh-4rem)] items-center justify-center">
+        <div className="flex h-[calc(100dvh-4rem)] items-center justify-center">
           Loading...
         </div>
       }

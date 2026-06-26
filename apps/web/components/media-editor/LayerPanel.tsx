@@ -87,17 +87,18 @@ export function LayerPanel({ canvas, isOpen, onToggle }: LayerPanelProps) {
   };
 
   return (
-    <div className="flex flex-col border-l">
+    <div className="relative flex flex-col border-l">
       <button
         onClick={onToggle}
-        className="flex h-10 items-center gap-2 border-b px-3 text-xs font-medium hover:bg-muted/50"
+        className="flex h-10 shrink-0 items-center gap-2 border-b px-2 text-xs font-medium hover:bg-muted/50 sm:px-3"
       >
         <Layers className="h-4 w-4" />
-        Layers ({objects.length})
+        <span className="hidden sm:inline">Layers ({objects.length})</span>
+        <span className="sm:hidden">{objects.length}</span>
       </button>
 
       {isOpen && (
-        <div className="w-48 overflow-y-auto">
+        <div className="absolute inset-y-0 right-0 top-10 z-20 w-48 overflow-y-auto border-l bg-background shadow-xl lg:static lg:top-auto lg:z-auto lg:border-l-0 lg:shadow-none">
           {objects.length === 0 ? (
             <p className="p-3 text-center text-[10px] text-muted-foreground">No objects</p>
           ) : (
