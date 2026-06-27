@@ -208,6 +208,9 @@ export function RepurposeTab() {
     logoSize: number | "";
     isPostcard: boolean;
     gridPreset?: "two_up" | "three_up" | "grid_2x2";
+    // BUGFIX 2026-06-27: the AI image toggle at generate time, so Regenerate
+    // re-uses the SAME intent (AI off must stay off on regenerate).
+    aiImages: boolean;
   } | null>(null);
   const [voiceOver, setVoiceOver] = useState(true);
   const [voiceType, setVoiceType] = useState<string>("nova");
@@ -755,6 +758,11 @@ export function RepurposeTab() {
         // REP-2: pass slide role + body text for body-slide regeneration.
         slideRole: slideForTarget?.role as "cover" | "body" | "cta" | undefined,
         slideBody: slideForTarget?.role === "body" ? (slideEdit?.body ?? slideForTarget?.body) : undefined,
+        // BUGFIX 2026-06-27: carry the AI image toggle so regenerate respects it.
+        // Without this, regenerate fabricated an AI background even when the user
+        // had AI OFF (the deterministic layout-extract fallthrough re-enabled AI).
+        // Use the snapshot from generate time when available, else the live toggle.
+        aiImages: snap?.aiImages ?? aiImages,
       });
       // Swap the displayed image (and its Media id for publish) in `results`.
       setResults((prev) => {
@@ -861,6 +869,7 @@ export function RepurposeTab() {
         logoSize,
         isPostcard: format === "postcard",
         gridPreset: format === "postcard" ? gridPreset : undefined,
+        aiImages,
       };
       setResultIsPostcard(format === "postcard");
       const pid = startProgress();
