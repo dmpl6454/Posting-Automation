@@ -13,6 +13,7 @@ const ALLOWED_TYPES = [
   "image/png",
   "image/gif",
   "image/webp",
+  "image/avif", // modern phone exports / CDN downloads — browsers + Chrome render it
   "video/mp4",
   "video/quicktime",
   "video/webm",

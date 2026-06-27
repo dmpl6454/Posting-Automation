@@ -666,6 +666,11 @@ export async function renderStaticCreative(args: {
     logoUrl: args.logoUrl || null,
     logoPosition: args.logoPosition,
     theme: args.theme,
+    // No logo provided → render NO logo mark (never a fabricated monogram of the
+    // brand/display name — that was the phantom "m" circle). Repurpose always
+    // wants this; the flag defaults false elsewhere so NewsGrid/autopilot are
+    // byte-identical (golden-render gate stays green).
+    suppressLogoFallback: !(args.logoUrl && args.logoUrl.length > 0),
     ...(args.slideRole ? { slideRole: args.slideRole } : {}),
     ...(args.body !== undefined ? { body: args.body } : {}),
     ...(args.browser ? { browser: args.browser } : {}),
