@@ -233,7 +233,10 @@ export function safeColor(color: string | undefined): string {
 /** Allow only https: or data:image base64 URLs with no CSS/HTML-breakout chars. */
 export function safeImageUrl(url: string | undefined | null): string | null {
   if (!url) return null;
-  const ok = /^(https:\/\/|data:image\/(png|jpeg|jpg|webp|gif);base64,)[^"')\s<>\\]+$/i.test(url);
+  // AVIF added: news CDNs content-negotiate AVIF on the Accept header, so a fetched
+  // hero arrives as `data:image/avif;base64,…`; Chrome renders it, but this allowlist
+  // was dropping it → photoless layout-extract card. `svg+xml` stays OUT (active content).
+  const ok = /^(https:\/\/|data:image\/(png|jpeg|jpg|webp|gif|avif);base64,)[^"')\s<>\\]+$/i.test(url);
   return ok ? url : null;
 }
 

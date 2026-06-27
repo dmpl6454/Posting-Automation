@@ -58,7 +58,8 @@ function isPrivateOrLoopbackHost(rawHost: string): boolean {
  */
 export function isAllowedImageUrl(url: string): boolean {
   // Inline base64 image data — no network fetch, safe by construction.
-  if (/^data:image\/(png|jpeg|jpg|webp|gif);base64,/i.test(url)) return true;
+  // `avif` included to match the content-type set accepted on real fetches below.
+  if (/^data:image\/(png|jpeg|jpg|webp|gif|avif);base64,/i.test(url)) return true;
 
   let parsed: URL;
   try {
@@ -89,7 +90,8 @@ export function isAllowedImageUrl(url: string): boolean {
  */
 export function isPublicImageUrl(url: string): boolean {
   // Inline base64 image data — no network fetch, safe by construction.
-  if (/^data:image\/(png|jpeg|jpg|webp|gif);base64,/i.test(url)) return true;
+  // `avif` included to match the content-type set accepted on real fetches below.
+  if (/^data:image\/(png|jpeg|jpg|webp|gif|avif);base64,/i.test(url)) return true;
 
   let parsed: URL;
   try {
@@ -157,7 +159,7 @@ export async function safeFetchPublicImage(
   if (!isPublicImageUrl(url)) return null;
   if (url.startsWith("data:image/")) {
     const [, mimeType = "image/png", b64 = ""] =
-      url.match(/^data:(image\/(?:png|jpe?g|webp|gif));base64,(.*)$/s) ?? [];
+      url.match(/^data:(image\/(?:png|jpe?g|webp|gif|avif));base64,(.*)$/s) ?? [];
     return b64 ? { base64: b64, mimeType } : null;
   }
   const maxBytes = opts?.maxBytes ?? 8 * 1024 * 1024;

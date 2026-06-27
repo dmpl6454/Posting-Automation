@@ -38,6 +38,13 @@ export interface StaticCreativeOptions {
   secondaryImageUrl?: string;
   /** Logo URL; null/undefined → logo block omitted (no-reference path). */
   logoUrl?: string | null;
+  /**
+   * When true AND no usable `logoUrl` resolves, render NO logo mark at all
+   * (instead of the monogram-initial fallback). Repurpose passes this so that
+   * "no logo selected" → no fabricated logo. Defaults to false (the legacy
+   * monogram fallback) so NewsGrid/autopilot renders stay byte-identical.
+   */
+  suppressLogoFallback?: boolean;
   logoPosition: "top-left" | "top-right";
   /** Brand accent color (hex). Defaults applied per style if absent. */
   brandColor?: string;
@@ -70,7 +77,13 @@ export function safeImageUrl(url: string | undefined | null): string | null {
   // the attack surface) BEFORE the allowlist test, so the gate still runs after
   // and STILL fails closed on `"`, `'`, `)`, `<`, `>`, `\`, whitespace.
   const repaired = url.replace(/&amp;/g, "&");
-  const ok = /^(https:\/\/|data:image\/(png|jpeg|jpg|webp|gif);base64,)[^"')\s<>\\]+$/i.test(repaired);
+  // AVIF added to the raster allowlist: news CDNs (Hindustan Times, NDTV, …)
+  // content-negotiate AVIF on the Accept header, so a `.jpg` hero comes back as
+  // image/avif → `data:image/avif;base64,…`. Chrome decodes AVIF natively, so the
+  // ONLY thing dropping the photo (→ blank gradient card) was this allowlist
+  // omitting `avif`. Mirrors `safeFetchPublicImage`'s content-type set. NOTE:
+  // `svg+xml` is deliberately NOT allowed — SVG is active content (script/XSS).
+  const ok = /^(https:\/\/|data:image\/(png|jpeg|jpg|webp|gif|avif);base64,)[^"')\s<>\\]+$/i.test(repaired);
   return ok ? repaired : null;
 }
 
@@ -161,7 +174,11 @@ function logoHtml(opts: StaticCreativeOptions, size: number): string {
   if (safeLogo) {
     return `<img src="${safeLogo}" style="width:${size}px;height:${size}px;border-radius:${Math.round(size * 0.22)}px;object-fit:contain;background:rgba(255,255,255,0.06);" />`;
   }
-  const initial = (opts.channelName[0] ?? "N").toUpperCase();
+  // No usable logo. When the caller opted out of the fallback (Repurpose, where
+  // "no logo selected" must mean NO logo), render nothing — never fabricate a
+  // monogram from the brand/display name (that was the phantom "m" circle).
+  if (opts.suppressLogoFallback) return "";
+  const initial = (opts.channelName?.[0] ?? "N").toUpperCase();
   return `<div style="width:${size}px;height:${size}px;border-radius:${Math.round(size * 0.22)}px;background:${accent};display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:${Math.round(size * 0.42)}px;">${initial}</div>`;
 }
 
