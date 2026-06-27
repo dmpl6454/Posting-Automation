@@ -3129,6 +3129,13 @@ Return ONLY the JSON array, no other text.`;
         // When absent, behaviour is byte-identical to the existing cover/static path.
         slideRole: z.enum(["cover", "body", "cta"]).optional(),
         slideBody: z.string().max(400).optional(),
+        // BUGFIX 2026-06-27: the AI image toggle. Mirrors the main flow's `aiImages`.
+        // When false, regenerate MUST NOT fabricate an AI background — not on the
+        // mimicry path, and CRUCIALLY not on the template fallthrough (which used to
+        // call renderStaticCreative WITHOUT aiEnabled:false → a fabricated AI image
+        // even though the user had AI off). Defaults true to preserve prior behaviour
+        // for any caller that doesn't send it.
+        aiImages: z.boolean().optional().default(true),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -3362,6 +3369,12 @@ Return ONLY the JSON array, no other text.`;
               logoPosition: input.logoPosition,
               brandColor,
               referenceImages,
+              // BUGFIX 2026-06-27: honor the AI-off toggle on the mimicry FALLTHROUGH.
+              // Previously this defaulted aiEnabled:true → when the deterministic
+              // layout-extract rung returned null (engine:"template"), this fallback
+              // fabricated an AI background even though the user had AI OFF. With AI
+              // off we bake the real photo / branded bg only — never generate.
+              aiEnabled: input.aiImages,
               ...(regenHookLine ? { hookLine: regenHookLine } : {}),
               ...(safeBgImageUrl ? { bgImageUrl: safeBgImageUrl } : {}),
               // REP-2: thread slide-role + body (absent = no-op, byte-identical).
@@ -3390,11 +3403,17 @@ Return ONLY the JSON array, no other text.`;
             logoPosition: input.logoPosition,
             brandColor,
             referenceImages,
+            // BUGFIX 2026-06-27: honor the AI-off toggle on the non-mimicry template
+            // path too (a plain static regenerate with AI off must never generate).
+            aiEnabled: input.aiImages,
             ...(regenHookLine ? { hookLine: regenHookLine } : {}),
             ...(safeBgImageUrl ? { bgImageUrl: safeBgImageUrl } : {}),
             // REP-2: thread slide-role + body (absent = no-op, byte-identical).
             ...(input.slideRole ? { slideRole: input.slideRole } : {}),
             ...(input.slideBody !== undefined ? { body: input.slideBody } : {}),
+            // REP-3 regenerate: keep the postcard grid layout (tiles + preset).
+            ...(safeGridImageUrls && safeGridImageUrls.length > 0 ? { gridImageUrls: safeGridImageUrls } : {}),
+            ...(input.gridPreset ? { gridPreset: input.gridPreset } : {}),
           });
         } catch (e) {
           throw toFriendlyAIError(e);

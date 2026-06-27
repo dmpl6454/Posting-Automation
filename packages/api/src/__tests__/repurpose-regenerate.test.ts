@@ -409,3 +409,62 @@ describe("resolveLogoForOrg", () => {
     expect(res.logoUrl).toBe("https://cdn.example.com/av.png");
   });
 });
+
+/**
+ * BUGFIX 2026-06-27 — regenerate must respect the AI image toggle.
+ *
+ * The bug: with referenceMimicry on, the mimicry rung runs deterministically
+ * (block engine, no AI). But when that rung returned engine:"template" (or threw),
+ * the router fell through to renderStaticCreative WITHOUT aiEnabled:false → it
+ * called generateImageSafe and fabricated an AI background — EVEN THOUGH the user
+ * had AI OFF. `aiImages` was not plumbed into regenerate at all.
+ *
+ * This suite forces the fallthrough (the mock has no generateReferenceStyledCard,
+ * so the mimicry import is undefined → the branch throws → fallback render runs)
+ * and asserts: aiImages:false → generateImageSafe is NEVER called; default → AI
+ * is still allowed (no regression).
+ */
+describe("repurpose.regenerateImage — AI toggle is respected", () => {
+  it("aiImages:false → fallthrough render does NOT call generateImageSafe (no fabricated AI image)", async () => {
+    const caller = makeCaller();
+    const res = await caller.regenerateImage(
+      input({
+        // referenceMimicry forces the mimicry branch; the mock lacks
+        // generateReferenceStyledCard → it throws → falls to renderStaticCreative.
+        referenceMimicry: true,
+        aestheticRefUrl: "https://cdn.example.com/ref.png",
+        bgImageUrl: "https://cdn.example.com/hero.jpg",
+        headlineAlign: "right",
+        aiImages: false,
+      }),
+    );
+    // The render still produced an image (from the real photo / branded bg)…
+    expect(res.url).toBeTruthy();
+    // …but AI background generation was NEVER invoked.
+    expect(generateImageSafe).not.toHaveBeenCalled();
+    // …and the result is reported as a real (non-AI) background.
+    expect(res.bgSource).toBe("real");
+    expect(res.imageEngine).toBeNull();
+  });
+
+  it("non-mimicry static regenerate with aiImages:false also skips generateImageSafe", async () => {
+    const caller = makeCaller();
+    const res = await caller.regenerateImage(
+      input({ bgImageUrl: "https://cdn.example.com/hero.jpg", aiImages: false }),
+    );
+    expect(res.url).toBeTruthy();
+    expect(generateImageSafe).not.toHaveBeenCalled();
+    expect(res.bgSource).toBe("real");
+  });
+
+  it("default (aiImages omitted → true) STILL allows AI background (no regression)", async () => {
+    const caller = makeCaller();
+    const res = await caller.regenerateImage(
+      input({ bgImageUrl: "https://cdn.example.com/hero.jpg" }),
+    );
+    expect(res.url).toBeTruthy();
+    // premium_editorial needs an AI bg by default → generateImageSafe IS called.
+    expect(generateImageSafe).toHaveBeenCalled();
+    expect(res.bgSource).toBe("ai");
+  });
+});
