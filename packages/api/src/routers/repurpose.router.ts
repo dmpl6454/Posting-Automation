@@ -3255,18 +3255,33 @@ Return ONLY the JSON array, no other text.`;
       const regenNotes = input.imageContext?.trim() || "";
       let regenHookLine = input.hookLine;
       if (input.creativeStyle === "hook_bars" && regenNotes) {
-        const { generateContent } = await import("@postautomation/ai");
+        const { generateContent, withTextProviderFallback } = await import("@postautomation/ai");
         try {
-          const rawHook = await generateContent({
-            provider: "openai",
-            platform: "INSTAGRAM",
-            userPrompt: buildHookLinePrompt(headline, regenNotes),
-            tone: "professional",
-          });
+          // Resilient text-gen: escalate through [openai → anthropic] (same policy
+          // as initial-generate's generateContentResilient) instead of pinning to
+          // OpenAI. Previously this was hardcoded to provider:"openai" with no
+          // fallback, so when OpenAI was depleted the hook rewrite silently degraded
+          // to the stale original hook — never reaching healthy Anthropic. The
+          // regenerate input has no provider field, so chosen=undefined → the chain
+          // defaults to [openai → anthropic].
+          const rawHook = await withTextProviderFallback(
+            undefined,
+            (provider) =>
+              generateContent({
+                provider: provider as Parameters<typeof generateContent>[0]["provider"],
+                platform: "INSTAGRAM",
+                userPrompt: buildHookLinePrompt(headline, regenNotes),
+                tone: "professional",
+              }),
+            (failed, next, e) =>
+              console.warn(
+                `[Repurpose] regenerate hook via ${failed} failed (${e instanceof Error ? e.message.slice(0, 80) : String(e)}), trying ${next}`,
+              ),
+          );
           const trimmed = rawHook.replace(/^["']|["']$/g, "").replace(/\n[\s\S]*$/, "").trim();
           if (trimmed.length > 0) regenHookLine = capHookLine(trimmed);
         } catch {
-          // degrade to original hookLine
+          // degrade to original hookLine (whole chain exhausted)
         }
       }
 

@@ -44,4 +44,16 @@ describe("getAnthropicModel default model id", () => {
       (model as unknown as { model?: string }).model;
     expect(modelName).toBe("claude-opus-4-6");
   });
+
+  // Regression: @langchain/anthropic@0.3.x defaults topP to a -1 "unset"
+  // sentinel and only strips it for opus-4-1/sonnet-4-5/haiku-4-5 model names.
+  // claude-sonnet-4-6 leaks top_p:-1 onto the wire → Anthropic 400. We pass an
+  // explicit valid topP so this never reaches the API (e.g. when the
+  // openai->anthropic text-fallback hits the anthropic hop with OpenAI down).
+  it("never sends the top_p=-1 sentinel for the default model", () => {
+    vi.stubEnv("ANTHROPIC_MODEL", "");
+    const model = getAnthropicModel();
+    expect((model as unknown as { topP?: number }).topP).toBe(1);
+    expect((model as unknown as { topP?: number }).topP).not.toBe(-1);
+  });
 });
