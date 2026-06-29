@@ -18,12 +18,25 @@ export const campaignRouter = createRouter({
     .input(z.object({ status: z.enum(["DRAFT", "ACTIVE", "PAUSED", "COMPLETED", "ARCHIVED"]).optional() }).optional())
     .query(async ({ ctx, input }) => {
       await gateCampaigns(ctx);
-      return ctx.prisma.campaign.findMany({
+      const campaigns = await ctx.prisma.campaign.findMany({
         where: { organizationId: ctx.organizationId, ...(input?.status ? { status: input.status } : {}) },
         include: {
+          // brandTrackers selected (id + isActive only) so the UI can derive the
+          // campaign-level "Monitoring" toggle: ON when ANY tracker is active.
+          // This is the HONEST replacement for the old ACTIVE/PAUSED status —
+          // a tracker's isActive is what the brand-content-sync cron actually
+          // reads, so the toggle reflects real background work (not a fake state).
+          brandTrackers: { select: { id: true, isActive: true } },
           _count: { select: { campaignPosts: true, brandTrackers: true } },
         },
         orderBy: { createdAt: "desc" },
+      });
+      // Derive monitoring counts per campaign (active vs total trackers).
+      return campaigns.map((c) => {
+        const totalTrackers = c.brandTrackers.length;
+        const activeTrackers = c.brandTrackers.filter((t) => t.isActive).length;
+        const { brandTrackers, ...rest } = c;
+        return { ...rest, totalTrackers, activeTrackers, monitoring: activeTrackers > 0 };
       });
     }),
 
@@ -67,6 +80,28 @@ export const campaignRouter = createRouter({
       await gateCampaigns(ctx);
       const { id, ...data } = input;
       return ctx.prisma.campaign.update({ where: { id, organizationId: ctx.organizationId }, data });
+    }),
+
+  // Toggle monitoring for a campaign. HONEST replacement for the old fake
+  // ACTIVE/PAUSED play-pause: this flips isActive on EVERY brand tracker in the
+  // campaign, which is exactly what the brand-content-sync cron reads
+  // (`brandTracker.findMany({ where: { isActive: true } })`). ON = the campaign's
+  // brands are fetched for new content every ~6h; OFF = paused. Org-scoped via
+  // the campaignId+organizationId filter on updateMany (IDOR-safe).
+  setMonitoring: orgProcedure
+    .input(z.object({ id: z.string(), enabled: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      await gateCampaigns(ctx);
+      // Confirm the campaign belongs to the acting org (throws if not) before any write.
+      await ctx.prisma.campaign.findFirstOrThrow({
+        where: { id: input.id, organizationId: ctx.organizationId },
+        select: { id: true },
+      });
+      const result = await ctx.prisma.brandTracker.updateMany({
+        where: { campaignId: input.id, organizationId: ctx.organizationId },
+        data: { isActive: input.enabled },
+      });
+      return { count: result.count, enabled: input.enabled };
     }),
 
   delete: orgProcedure.input(z.object({ id: z.string() })).mutation(async ({ ctx, input }) => {

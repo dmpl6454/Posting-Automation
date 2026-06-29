@@ -11,6 +11,7 @@ import {
   CardTitle,
 } from "~/components/ui/card";
 import { Badge } from "~/components/ui/badge";
+import { Switch } from "~/components/ui/switch";
 import { Skeleton } from "~/components/ui/skeleton";
 import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
@@ -42,14 +43,6 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
-
-const statusColors: Record<string, string> = {
-  DRAFT: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
-  ACTIVE: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300",
-  PAUSED: "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300",
-  COMPLETED: "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300",
-  ARCHIVED: "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-500",
-};
 
 const influencerStatusColors: Record<string, string> = {
   discovered: "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300",
@@ -103,6 +96,10 @@ export default function CampaignDetailPage() {
     onSuccess: () => utils.campaign.byId.invalidate({ id }),
   });
 
+  const setMonitoring = trpc.campaign.setMonitoring.useMutation({
+    onSuccess: () => utils.campaign.byId.invalidate({ id }),
+  });
+
   const updateInfluencer = trpc.campaign.updateInfluencer.useMutation({
     onSuccess: () => utils.campaign.listInfluencers.invalidate(),
   });
@@ -128,6 +125,11 @@ export default function CampaignDetailPage() {
   ) ?? [];
 
   const totalContent = campaign.brandTrackers.reduce((s, b) => s + b._count.contentItems, 0);
+  // Monitoring is derived from the brand trackers' isActive (the field the
+  // brand-content-sync cron reads). ON when any tracker is active.
+  const totalTrackers = campaign.brandTrackers.length;
+  const activeTrackers = campaign.brandTrackers.filter((b) => b.isActive).length;
+  const monitoring = activeTrackers > 0;
 
   return (
     <div className="space-y-6">
@@ -140,13 +142,31 @@ export default function CampaignDetailPage() {
           <ArrowLeft className="h-3.5 w-3.5" />
           Back to Campaigns
         </Link>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center justify-between gap-3">
           <h1 className="text-2xl font-semibold tracking-tight">{campaign.name}</h1>
-          <Badge className={`text-xs ${statusColors[campaign.status] ?? ""}`}>{campaign.status}</Badge>
+          <div
+            className="flex items-center gap-2 shrink-0"
+            title={totalTrackers === 0 ? "Add a brand below to enable monitoring" : monitoring ? "Monitoring on — fetching new content ~6h" : "Monitoring off"}
+          >
+            <span className="text-sm text-muted-foreground">
+              Monitoring{monitoring ? ` (${activeTrackers}/${totalTrackers})` : ""}
+            </span>
+            <Switch
+              checked={monitoring}
+              disabled={totalTrackers === 0 || setMonitoring.isPending}
+              onCheckedChange={(enabled) => setMonitoring.mutate({ id, enabled })}
+              aria-label="Toggle monitoring for this campaign"
+            />
+          </div>
         </div>
         {campaign.description && (
           <p className="mt-1 text-sm text-muted-foreground">{campaign.description}</p>
         )}
+        <p className="mt-1 text-xs text-muted-foreground">
+          {totalTrackers === 0
+            ? "Add a brand to monitor its recent posts. Campaigns track competitors’ content — they don’t schedule your own posts."
+            : "Monitoring fetches recent posts from these brands every ~6 hours. Campaigns track competitors’ content — they don’t schedule your own posts."}
+        </p>
         {campaign.hashtags.length > 0 && (
           <div className="mt-2 flex flex-wrap items-center gap-2">
             {campaign.hashtags.map((tag) => (
@@ -244,6 +264,11 @@ export default function CampaignDetailPage() {
                     <div className="flex items-center gap-2">
                       <h4 className="text-sm font-semibold">{brand.brandName}</h4>
                       <span className="text-xs text-muted-foreground">{brand._count.contentItems} items</span>
+                      <Badge
+                        className={`text-[10px] ${brand.isActive ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300" : "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400"}`}
+                      >
+                        {brand.isActive ? "Monitoring" : "Paused"}
+                      </Badge>
                     </div>
                     <div className="mt-1 flex flex-wrap gap-2">
                       {brand.twitterHandle && <Badge variant="outline" className="text-[10px] gap-1"><Twitter className="h-2.5 w-2.5" />{brand.twitterHandle}</Badge>}
