@@ -294,8 +294,12 @@ export default function ListeningPage() {
                   variant="ghost"
                   size="sm"
                   className="shrink-0 text-xs"
+                  disabled={markAlertRead.isPending && markAlertRead.variables?.id === alert.id}
                   onClick={() => markAlertRead.mutate({ id: alert.id })}
                 >
+                  {markAlertRead.isPending && markAlertRead.variables?.id === alert.id && (
+                    <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                  )}
                   Dismiss
                 </Button>
               </div>
@@ -527,11 +531,14 @@ export default function ListeningPage() {
                         size="icon"
                         variant="ghost"
                         className="h-7 w-7"
+                        disabled={updateMutation.isPending && updateMutation.variables?.id === q.id}
                         onClick={() =>
                           updateMutation.mutate({ id: q.id, isActive: !q.isActive })
                         }
                       >
-                        {q.isActive ? (
+                        {updateMutation.isPending && updateMutation.variables?.id === q.id ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : q.isActive ? (
                           <Power className="h-3 w-3 text-emerald-500" />
                         ) : (
                           <PowerOff className="h-3 w-3 text-muted-foreground" />
@@ -541,13 +548,16 @@ export default function ListeningPage() {
                         size="icon"
                         variant="ghost"
                         className="h-7 w-7 text-destructive"
+                        disabled={deleteMutation.isPending && deleteMutation.variables?.id === q.id}
                         onClick={() => {
                           if (confirm("Delete this query and all its mentions?")) {
                             deleteMutation.mutate({ id: q.id });
                           }
                         }}
                       >
-                        <Trash2 className="h-3 w-3" />
+                        {deleteMutation.isPending && deleteMutation.variables?.id === q.id
+                          ? <Loader2 className="h-3 w-3 animate-spin" />
+                          : <Trash2 className="h-3 w-3" />}
                       </Button>
                     </div>
                   </div>

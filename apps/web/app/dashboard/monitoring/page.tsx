@@ -44,6 +44,7 @@ export default function MonitoringPage() {
   const [source, setSource] = useState<string>("all");
   const [resolved, setResolved] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const stats = trpc.monitor.stats.useQuery(undefined, { refetchInterval: 30_000 });
   const errors = trpc.monitor.list.useInfiniteQuery(
@@ -56,6 +57,17 @@ export default function MonitoringPage() {
   // Flatten all loaded pages into one list. tRPC infinite-query data is
   // { pages: [{ errors, nextCursor }, ...] } — the UI treats it as one stream.
   const loadedErrors = errors.data?.pages.flatMap((p) => p.errors) ?? [];
+
+  const handleRefresh = async () => {
+    if (isRefreshing) return;
+    setIsRefreshing(true);
+    try {
+      await Promise.all([errors.refetch(), stats.refetch()]);
+      toast({ title: "Refreshed", description: "Error monitoring is up to date." });
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
   const claudeReport = trpc.monitor.exportForClaude.useQuery(
     { unresolvedOnly: true, limit: 20 },
     { enabled: false }
@@ -113,9 +125,9 @@ export default function MonitoringPage() {
           <p className="text-xs text-muted-foreground">Track bugs and issues across frontend, API, and workers</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => { errors.refetch(); stats.refetch(); }}>
-            <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
-            Refresh
+          <Button variant="outline" size="sm" onClick={handleRefresh} disabled={isRefreshing}>
+            <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${isRefreshing ? "animate-spin" : ""}`} />
+            {isRefreshing ? "Refreshing…" : "Refresh"}
           </Button>
           <Button size="sm" onClick={handleCopyForClaude} disabled={claudeReport.isFetching}>
             {claudeReport.isFetching ? (

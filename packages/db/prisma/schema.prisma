@@ -1040,6 +1040,9 @@ model Campaign {
   goalTarget     Float?
 
   // Metrics (aggregated)
+  // DORMANT: CampaignPost rows are never created (no posting→campaign linkage in this
+  // product — Campaigns is a monitoring tool for external brands), so these aggregate
+  // to 0 and are intentionally NOT surfaced in the UI. Do not "fix" by displaying them.
   totalImpressions Int   @default(0)
   totalClicks      Int   @default(0)
   totalEngagements Int   @default(0)

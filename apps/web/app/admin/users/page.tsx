@@ -8,6 +8,7 @@ import {
   Ban,
   LogIn,
   Trash2,
+  Loader2,
 } from "lucide-react";
 import { trpc } from "~/lib/trpc/client";
 import { DataTable, type Column } from "~/components/admin/DataTable";
@@ -122,25 +123,34 @@ export default function AdminUsersPage() {
             variant="ghost"
             size="icon"
             title="Toggle admin"
+            disabled={toggleAdmin.isPending && toggleAdmin.variables?.userId === row.id}
             onClick={() => toggleAdmin.mutate({ userId: row.id })}
           >
-            <Shield className={`h-4 w-4 ${row.isSuperAdmin ? "text-red-600" : ""}`} />
+            {toggleAdmin.isPending && toggleAdmin.variables?.userId === row.id
+              ? <Loader2 className="h-4 w-4 animate-spin" />
+              : <Shield className={`h-4 w-4 ${row.isSuperAdmin ? "text-red-600" : ""}`} />}
           </Button>
           <Button
             variant="ghost"
             size="icon"
             title="Toggle ban"
+            disabled={toggleBan.isPending && toggleBan.variables?.userId === row.id}
             onClick={() => toggleBan.mutate({ userId: row.id })}
           >
-            <Ban className={`h-4 w-4 ${row.isBanned ? "text-red-600" : ""}`} />
+            {toggleBan.isPending && toggleBan.variables?.userId === row.id
+              ? <Loader2 className="h-4 w-4 animate-spin" />
+              : <Ban className={`h-4 w-4 ${row.isBanned ? "text-red-600" : ""}`} />}
           </Button>
           <Button
             variant="ghost"
             size="icon"
             title="Impersonate"
+            disabled={impersonate.isPending && impersonate.variables?.userId === row.id}
             onClick={() => impersonate.mutate({ userId: row.id })}
           >
-            <LogIn className="h-4 w-4" />
+            {impersonate.isPending && impersonate.variables?.userId === row.id
+              ? <Loader2 className="h-4 w-4 animate-spin" />
+              : <LogIn className="h-4 w-4" />}
           </Button>
           <ConfirmDialog
             trigger={

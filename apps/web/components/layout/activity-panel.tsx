@@ -99,6 +99,17 @@ export function ActivityPanel() {
     { refetchInterval: 10_000 }
   );
 
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const handleRefresh = async () => {
+    if (isRefreshing) return;
+    setIsRefreshing(true);
+    try {
+      await Promise.all([refetch(), postActivity.refetch()]);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   // Listen for SSE events to trigger refetch
   useEffect(() => {
     const es = new EventSource("/api/notifications/sse");
@@ -195,8 +206,8 @@ export function ActivityPanel() {
                 <Badge variant="destructive" className="h-4 px-1 text-[9px]">{errorCount} errors</Badge>
               )}
             </div>
-            <Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => { refetch(); postActivity.refetch(); }}>
-              <RefreshCw className="h-3 w-3" />
+            <Button variant="ghost" size="icon" className="h-5 w-5" onClick={handleRefresh} disabled={isRefreshing} title="Refresh activity">
+              <RefreshCw className={`h-3 w-3 ${isRefreshing ? "animate-spin" : ""}`} />
             </Button>
           </div>
 
