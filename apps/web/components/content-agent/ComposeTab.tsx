@@ -662,9 +662,9 @@ ${content}`;
 
   return (
     <div className="mx-auto max-w-6xl space-y-6">
-      <div className="grid gap-6 lg:grid-cols-[1fr,400px]">
+      <div className="grid min-w-0 gap-6 lg:grid-cols-[1fr,400px]">
         {/* Left column - Editor */}
-        <div className="space-y-6">
+        <div className="min-w-0 space-y-6">
           {editorOpen ? (
             <MediaEditor
               initialImage={editingImageIndex !== null ? postMedia[editingImageIndex]?.url : undefined}
@@ -1286,7 +1286,7 @@ ${content}`;
         </div>
 
         {/* Right column - Preview Panel */}
-        <div className="space-y-4 lg:sticky lg:top-6 lg:self-start">
+        <div className="min-w-0 space-y-4 lg:sticky lg:top-6 lg:self-start">
           <div className="flex items-center gap-2">
             <Eye className="h-4 w-4 text-muted-foreground" />
             <h2 className="text-sm font-semibold text-foreground">Post Preview</h2>
