@@ -62,7 +62,7 @@ function ContentStudioInner() {
 
           {/* ── Unified Tabs ── */}
           <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabsList className="grid w-full grid-cols-4">
+            <TabsList className="grid w-full grid-cols-2 sm:grid-cols-4">
               {tabs.map(({ id, label, icon: Icon }) => (
                 <TabsTrigger key={id} value={id} className="gap-1.5 text-xs">
                   <Icon className="h-3.5 w-3.5" />
