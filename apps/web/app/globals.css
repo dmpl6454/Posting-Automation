@@ -215,3 +215,13 @@ html {
   background: rgba(99, 102, 241, 0.2);
   color: inherit;
 }
+
+@layer utilities {
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+}
