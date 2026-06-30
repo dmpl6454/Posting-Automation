@@ -189,9 +189,9 @@ export default function ApprovalsPage() {
         <div className="flex flex-col items-center justify-center py-16 text-center">
           <FileText className="mb-4 h-12 w-12 text-muted-foreground/50" />
           <h3 className="text-lg font-medium">No approval requests</h3>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <p className="mt-1 text-sm text-muted-foreground max-w-md">
             {statusFilter === "all"
-              ? "There are no approval requests assigned to you."
+              ? "Nothing to review right now. Posts sent for approval — by Autopilot, scheduled content, or teammates with restricted roles — will appear here, and you'll be notified when one needs your review."
               : `No ${statusFilter.toLowerCase()} approval requests found.`}
           </p>
         </div>

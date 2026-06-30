@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { trpc } from "~/lib/trpc/client";
+import { useToast } from "~/hooks/use-toast";
 import { Button } from "~/components/ui/button";
 import { Badge } from "~/components/ui/badge";
 import { Skeleton } from "~/components/ui/skeleton";
@@ -454,8 +455,24 @@ export default function BrandLeadsPage() {
   const [previewLead, setPreviewLead] = useState<Lead | null>(null);
   const [approvingId, setApprovingId] = useState<string | null>(null);
   const [rejectingId, setRejectingId] = useState<string | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const utils = trpc.useUtils();
+  const { toast } = useToast();
+
+  const handleRefresh = async () => {
+    if (isRefreshing) return;
+    setIsRefreshing(true);
+    try {
+      await Promise.all([
+        utils.brandLeads.list.invalidate(),
+        utils.brandLeads.stats.invalidate(),
+      ]);
+      toast({ title: "Leads refreshed", description: "Showing the latest saved leads." });
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
 
   const { data: stats, isLoading: statsLoading } = trpc.brandLeads.stats.useQuery();
 
@@ -521,7 +538,7 @@ export default function BrandLeadsPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Brand Outreach</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Celebrity brand campaigns detected automatically — approve to queue personalized outreach
+            Leads are found automatically — your job here is to <strong>review and approve</strong> the brands worth contacting.
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -529,10 +546,12 @@ export default function BrandLeadsPage() {
             variant="outline"
             size="sm"
             className="gap-1.5"
-            onClick={() => { utils.brandLeads.list.invalidate(); utils.brandLeads.stats.invalidate(); }}
+            title="Re-reads saved leads — detection runs automatically in the background"
+            onClick={handleRefresh}
+            disabled={isRefreshing}
           >
-            <RefreshCw className="h-3.5 w-3.5" />
-            Refresh
+            <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
+            {isRefreshing ? "Refreshing…" : "Reload"}
           </Button>
           {pendingTodayCount > 0 && (
             <Button
@@ -560,6 +579,15 @@ export default function BrandLeadsPage() {
           email goes out automatically (if a brand email was found); LinkedIn/Instagram DMs are marked
           <em> “Send manually”</em> with the copy ready to paste — we never mark those “Sent” unless they
           were actually delivered. Replies land in your own inbox; log the outcome on the lead.
+          <span className="block mt-1.5">
+            <strong>What you can do here:</strong> you don&apos;t add or remove brands — the detector finds them.
+            You <strong>approve</strong> a lead to generate and send outreach, <strong>reject</strong> to dismiss it,
+            and log replies manually after you hear back.
+          </span>
+          <span className="block mt-1.5">
+            Brand Outreach is a <strong>standalone tool</strong> — it finds its own leads on a schedule and is
+            <strong> not fed by your Listening, Campaigns, or Approvals data</strong>.
+          </span>
           <span className="block mt-1 text-xs text-muted-foreground">
             Detection coverage depends on configured API keys (Meta Ad Library, Twitter, Hunter). With none set,
             no new leads are found.

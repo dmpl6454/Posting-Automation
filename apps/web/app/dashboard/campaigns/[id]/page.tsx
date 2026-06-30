@@ -37,6 +37,8 @@ import {
   Loader2,
   Star,
   Mail,
+  Pause,
+  Play,
 } from "lucide-react";
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
@@ -91,6 +93,10 @@ export default function CampaignDetailPage() {
       setBrandName(""); setTwitterHandle(""); setInstagramHandle("");
       setFacebookPageId(""); setLinkedinHandle(""); setTiktokHandle("");
     },
+  });
+
+  const updateBrand = trpc.campaign.updateBrand.useMutation({
+    onSuccess: () => utils.campaign.byId.invalidate({ id }),
   });
 
   const deleteBrand = trpc.campaign.deleteBrand.useMutation({
@@ -247,9 +253,20 @@ export default function CampaignDetailPage() {
                       {brand.tiktokHandle && <Badge variant="outline" className="text-[10px] gap-1"><Globe className="h-2.5 w-2.5" />{brand.tiktokHandle}</Badge>}
                     </div>
                   </div>
-                  <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive opacity-0 group-hover:opacity-100" onClick={() => { if (confirm(`Remove "${brand.brandName}"?`)) deleteBrand.mutate({ id: brand.id }); }}>
-                    <Trash2 className="h-3 w-3" />
-                  </Button>
+                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    {brand.isActive ? (
+                      <Button size="icon" variant="ghost" className="h-7 w-7" title="Pause syncing" onClick={() => updateBrand.mutate({ id: brand.id, isActive: false })}>
+                        <Pause className="h-3 w-3" />
+                      </Button>
+                    ) : (
+                      <Button size="icon" variant="ghost" className="h-7 w-7" title="Resume syncing" onClick={() => updateBrand.mutate({ id: brand.id, isActive: true })}>
+                        <Play className="h-3 w-3" />
+                      </Button>
+                    )}
+                    <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive" onClick={() => { if (confirm(`Remove "${brand.brandName}"?`)) deleteBrand.mutate({ id: brand.id }); }}>
+                      <Trash2 className="h-3 w-3" />
+                    </Button>
+                  </div>
                 </div>
               ))}
             </div>

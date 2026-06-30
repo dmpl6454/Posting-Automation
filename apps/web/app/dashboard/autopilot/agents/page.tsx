@@ -237,6 +237,7 @@ export default function AutopilotAgentsPage() {
                   <span className="text-xs text-muted-foreground">Active</span>
                   <Switch
                     checked={agent.isActive}
+                    disabled={toggleMutation.isPending && toggleMutation.variables?.id === agent.id}
                     onCheckedChange={(v) => toggleMutation.mutate({ id: agent.id, isActive: v })}
                   />
                 </div>

@@ -211,12 +211,15 @@ export default function AccountGroupsPage() {
                         >
                           {agent.name}
                           <button
-                            className="ml-0.5 hover:text-destructive"
+                            className="ml-0.5 hover:text-destructive disabled:opacity-50"
+                            disabled={removeAgentMutation.isPending && (removeAgentMutation.variables as any)?.agentId === agent.id}
                             onClick={() =>
                               removeAgentMutation.mutate({ agentId: agent.id } as any)
                             }
                           >
-                            <X className="h-2.5 w-2.5" />
+                            {removeAgentMutation.isPending && (removeAgentMutation.variables as any)?.agentId === agent.id
+                              ? <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                              : <X className="h-2.5 w-2.5" />}
                           </button>
                         </Badge>
                       ))}

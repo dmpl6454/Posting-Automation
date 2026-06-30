@@ -2,7 +2,7 @@
 
 import { humanizeError } from "~/lib/errors";
 
-import { Power, Trash2 } from "lucide-react";
+import { Power, Trash2, Loader2 } from "lucide-react";
 import { trpc } from "~/lib/trpc/client";
 import { DataTable, type Column } from "~/components/admin/DataTable";
 import { ConfirmDialog } from "~/components/admin/ConfirmDialog";
@@ -86,11 +86,14 @@ export default function AdminAgentsPage() {
             variant="ghost"
             size="icon"
             title="Toggle active"
+            disabled={toggleActive.isPending && toggleActive.variables?.agentId === row.id}
             onClick={() => toggleActive.mutate({ agentId: row.id })}
           >
-            <Power
-              className={`h-4 w-4 ${row.isActive ? "text-green-600" : "text-gray-400"}`}
-            />
+            {toggleActive.isPending && toggleActive.variables?.agentId === row.id
+              ? <Loader2 className="h-4 w-4 animate-spin" />
+              : <Power
+                  className={`h-4 w-4 ${row.isActive ? "text-green-600" : "text-gray-400"}`}
+                />}
           </Button>
           <ConfirmDialog
             trigger={

@@ -144,6 +144,10 @@ export default function CampaignsPage() {
     },
   });
 
+  const updateBrand = trpc.campaign.updateBrand.useMutation({
+    onSuccess: () => utils.campaign.listBrands.invalidate(),
+  });
+
   const deleteBrand = trpc.campaign.deleteBrand.useMutation({
     onSuccess: () => utils.campaign.listBrands.invalidate(),
   });
@@ -190,7 +194,7 @@ export default function CampaignsPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Campaign Tracking</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Track brands, monitor their content releases, and discover key influencers
+            Monitor <strong>other brands&apos;</strong> public posts and discover influencers — this watches external accounts, it does not publish your own content.
           </p>
         </div>
         <div className="flex gap-2">
@@ -347,6 +351,7 @@ export default function CampaignsPage() {
         <AlertDescription>
           Track brands you want to follow, the influencers around them, and the content they release.
           Use the Brands tab to add a brand; the system surfaces relevant posts in the Content tab.
+          This is a <strong>monitoring tool for external brands</strong> — it&apos;s separate from your own posting, Approvals, and Brand Outreach.
         </AlertDescription>
       </Alert>
 
@@ -435,21 +440,29 @@ export default function CampaignsPage() {
                     </div>
                   </div>
                   <div className="ml-4 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                    {campaign.status === "ACTIVE" ? (
-                      <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => updateCampaign.mutate({ id: campaign.id, status: "PAUSED" })}>
-                        <Pause className="h-3.5 w-3.5" />
-                      </Button>
-                    ) : campaign.status === "PAUSED" || campaign.status === "DRAFT" ? (
-                      <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => updateCampaign.mutate({ id: campaign.id, status: "ACTIVE" })}>
-                        <Play className="h-3.5 w-3.5" />
-                      </Button>
-                    ) : null}
-                    <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => updateCampaign.mutate({ id: campaign.id, status: "ARCHIVED" })}>
-                      <Archive className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm("Delete this campaign?")) deleteCampaign.mutate({ id: campaign.id }); }}>
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
+                    {(() => {
+                      const busy = updateCampaign.isPending && updateCampaign.variables?.id === campaign.id;
+                      const deleting = deleteCampaign.isPending && deleteCampaign.variables?.id === campaign.id;
+                      return (
+                        <>
+                          {campaign.status === "ACTIVE" ? (
+                            <Button size="icon" variant="ghost" className="h-8 w-8" disabled={busy} onClick={() => updateCampaign.mutate({ id: campaign.id, status: "PAUSED" })}>
+                              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Pause className="h-3.5 w-3.5" />}
+                            </Button>
+                          ) : campaign.status === "PAUSED" || campaign.status === "DRAFT" ? (
+                            <Button size="icon" variant="ghost" className="h-8 w-8" disabled={busy} onClick={() => updateCampaign.mutate({ id: campaign.id, status: "ACTIVE" })}>
+                              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+                            </Button>
+                          ) : null}
+                          <Button size="icon" variant="ghost" className="h-8 w-8" disabled={busy} onClick={() => updateCampaign.mutate({ id: campaign.id, status: "ARCHIVED" })}>
+                            <Archive className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" disabled={deleting} onClick={() => { if (confirm("Delete this campaign?")) deleteCampaign.mutate({ id: campaign.id }); }}>
+                            {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                          </Button>
+                        </>
+                      );
+                    })()}
                   </div>
                 </div>
               </div>
@@ -528,9 +541,26 @@ export default function CampaignsPage() {
                     )}
                   </div>
                   <div className="ml-4 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm(`Delete brand tracker "${brand.brandName}"?`)) deleteBrand.mutate({ id: brand.id }); }}>
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
+                    {(() => {
+                      const syncing = updateBrand.isPending && updateBrand.variables?.id === brand.id;
+                      const removing = deleteBrand.isPending && deleteBrand.variables?.id === brand.id;
+                      return (
+                        <>
+                          {brand.isActive ? (
+                            <Button size="icon" variant="ghost" className="h-8 w-8" title="Pause syncing" disabled={syncing} onClick={() => updateBrand.mutate({ id: brand.id, isActive: false })}>
+                              {syncing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Pause className="h-3.5 w-3.5" />}
+                            </Button>
+                          ) : (
+                            <Button size="icon" variant="ghost" className="h-8 w-8" title="Resume syncing" disabled={syncing} onClick={() => updateBrand.mutate({ id: brand.id, isActive: true })}>
+                              {syncing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+                            </Button>
+                          )}
+                          <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" disabled={removing} onClick={() => { if (confirm(`Delete brand tracker "${brand.brandName}"?`)) deleteBrand.mutate({ id: brand.id }); }}>
+                            {removing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                          </Button>
+                        </>
+                      );
+                    })()}
                   </div>
                 </div>
               </div>
@@ -662,24 +692,32 @@ export default function CampaignsPage() {
                       </div>
                     </div>
                     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      {inf.status === "discovered" && (
-                        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => updateInfluencer.mutate({ id: inf.id, status: "shortlisted" })}>
-                          Shortlist
-                        </Button>
-                      )}
-                      {inf.status === "shortlisted" && (
-                        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => updateInfluencer.mutate({ id: inf.id, status: "contacted" })}>
-                          <Mail className="mr-1 h-3 w-3" /> Mark Contacted
-                        </Button>
-                      )}
-                      {inf.status === "contacted" && (
-                        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => updateInfluencer.mutate({ id: inf.id, status: "responded" })}>
-                          Responded
-                        </Button>
-                      )}
-                      <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive" onClick={() => { if (confirm(`Remove influencer "${inf.name}"?`)) deleteInfluencer.mutate({ id: inf.id }); }}>
-                        <Trash2 className="h-3 w-3" />
-                      </Button>
+                      {(() => {
+                        const updating = updateInfluencer.isPending && updateInfluencer.variables?.id === inf.id;
+                        const removing = deleteInfluencer.isPending && deleteInfluencer.variables?.id === inf.id;
+                        return (
+                          <>
+                            {inf.status === "discovered" && (
+                              <Button size="sm" variant="outline" className="h-7 text-xs" disabled={updating} onClick={() => updateInfluencer.mutate({ id: inf.id, status: "shortlisted" })}>
+                                {updating && <Loader2 className="mr-1 h-3 w-3 animate-spin" />} Shortlist
+                              </Button>
+                            )}
+                            {inf.status === "shortlisted" && (
+                              <Button size="sm" variant="outline" className="h-7 text-xs" disabled={updating} onClick={() => updateInfluencer.mutate({ id: inf.id, status: "contacted" })}>
+                                {updating ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Mail className="mr-1 h-3 w-3" />} Mark Contacted
+                              </Button>
+                            )}
+                            {inf.status === "contacted" && (
+                              <Button size="sm" variant="outline" className="h-7 text-xs" disabled={updating} onClick={() => updateInfluencer.mutate({ id: inf.id, status: "responded" })}>
+                                {updating && <Loader2 className="mr-1 h-3 w-3 animate-spin" />} Responded
+                              </Button>
+                            )}
+                            <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive" disabled={removing} onClick={() => { if (confirm(`Remove influencer "${inf.name}"?`)) deleteInfluencer.mutate({ id: inf.id }); }}>
+                              {removing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                            </Button>
+                          </>
+                        );
+                      })()}
                     </div>
                   </div>
                 </div>
