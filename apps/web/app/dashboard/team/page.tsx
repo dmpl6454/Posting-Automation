@@ -215,7 +215,7 @@ export default function TeamPage() {
                           updateRole.mutate({ memberId: member.id, role: newRole })
                         }
                       >
-                        <SelectTrigger className="w-28 h-8 text-xs">
+                        <SelectTrigger className="w-full sm:w-28 h-8 text-xs">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>

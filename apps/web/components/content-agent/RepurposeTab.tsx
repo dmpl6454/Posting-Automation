@@ -1579,7 +1579,7 @@ export function RepurposeTab() {
                     {logoUrl && <img src={logoUrl} alt="logo" className="h-8 w-8 rounded object-contain border" />}
                     {advancedOpen && (
                       <Select value={logoPosition} onValueChange={(v) => setLogoPosition(v as "top-left" | "top-right")}>
-                        <SelectTrigger className="w-36"><SelectValue /></SelectTrigger>
+                        <SelectTrigger className="w-full sm:w-36"><SelectValue /></SelectTrigger>
                         <SelectContent>
                           <SelectItem value="top-right">Logo top-right</SelectItem>
                           <SelectItem value="top-left">Logo top-left</SelectItem>

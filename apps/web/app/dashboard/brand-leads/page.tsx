@@ -608,7 +608,7 @@ export default function BrandLeadsPage() {
         </ScrollableTabRow>
 
         <Select value={signalFilter} onValueChange={setSignalFilter}>
-          <SelectTrigger className="w-40 h-8 text-xs">
+          <SelectTrigger className="w-full sm:w-40 h-8 text-xs">
             <SelectValue placeholder="Signal type" />
           </SelectTrigger>
           <SelectContent>
