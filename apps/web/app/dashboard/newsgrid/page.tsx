@@ -365,7 +365,7 @@ function ChannelProfileModal({ channel, onClose, onSave }: {
                   value={form.logo_path}
                   onChange={(e) => setForm((p) => ({ ...p, logo_path: e.target.value }))}
                   placeholder="https://… or pick from library"
-                  className="text-xs"
+                  className="min-w-0 text-xs"
                 />
                 <Button
                   type="button"
@@ -824,7 +824,7 @@ export default function NewsGridPage() {
               ) : (
                 <div className="space-y-2">
                   {/* Search & Platform Filter */}
-                  <div className="flex gap-2">
+                  <div className="flex flex-col gap-2 sm:flex-row">
                     <Input
                       placeholder="Search channels..."
                       value={channelSearch}
@@ -832,7 +832,7 @@ export default function NewsGridPage() {
                       className="h-8 text-sm"
                     />
                     <Select value={platformFilter} onValueChange={setPlatformFilter}>
-                      <SelectTrigger className="h-8 w-[140px] text-xs">
+                      <SelectTrigger className="h-8 w-full text-xs sm:w-[140px]">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>

@@ -1036,7 +1036,7 @@ export function RepurposeTab() {
                     value={url}
                     onChange={(e) => { setUrl(e.target.value); setExtractedPreview(null); }}
                     placeholder="https://example.com/article, youtube.com/watch?v=..., x.com/post/..."
-                    className="flex-1"
+                    className="min-w-0 flex-1"
                   />
                   <Button
                     variant="outline"
@@ -1697,7 +1697,7 @@ export function RepurposeTab() {
                           if (/^https?:\/\//i.test(v)) classifyAndPreselect(v);
                         }}
                         placeholder="Paste an image (Cmd/Ctrl+V) or a post URL"
-                        className="h-8 flex-1 text-xs"
+                        className="h-8 min-w-0 flex-1 text-xs"
                       />
                       {aestheticRefUrl && (
                         <>

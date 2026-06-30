@@ -137,7 +137,7 @@ export default function TeamPage() {
           <CardDescription>Send an invitation to join your organization</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="flex gap-3">
+          <div className="flex flex-col gap-3 sm:flex-row">
             <Input
               type="email"
               value={email}
@@ -147,7 +147,7 @@ export default function TeamPage() {
               disabled={usage && !usage.teamMembers.allowed}
             />
             <Select value={role} onValueChange={setRole} disabled={usage && !usage.teamMembers.allowed}>
-              <SelectTrigger className="w-32">
+              <SelectTrigger className="w-full sm:w-32">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -156,6 +156,7 @@ export default function TeamPage() {
               </SelectContent>
             </Select>
             <Button
+              className="w-full sm:w-auto"
               onClick={() => invite.mutate({ email, role: role as any })}
               disabled={!email || invite.isPending || (usage && !usage.teamMembers.allowed)}
             >
