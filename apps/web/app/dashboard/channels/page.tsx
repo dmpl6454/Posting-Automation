@@ -796,7 +796,7 @@ export default function ChannelsPage() {
                           <Input
                             value={editingGroupName}
                             onChange={(e) => setEditingGroupName(e.target.value)}
-                            className="h-7 flex-1 text-sm"
+                            className="h-7 min-w-0 flex-1 text-sm"
                             autoFocus
                           />
                           <Button

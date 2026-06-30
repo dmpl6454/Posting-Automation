@@ -559,7 +559,7 @@ export function ImageTab({ onImageGenerated }: ImageTabProps = {}) {
               <Card>
                 <CardHeader className="pb-3"><CardTitle className="text-base">Aspect Ratio</CardTitle></CardHeader>
                 <CardContent>
-                  <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-5">
                     {ASPECT_RATIOS.map((ar) => {
                       const Icon = ar.icon;
                       return (
@@ -714,7 +714,7 @@ export function ImageTab({ onImageGenerated }: ImageTabProps = {}) {
                 <div className="flex items-center justify-between"><CardTitle className="text-base">Session History</CardTitle><Button variant="ghost" size="sm" onClick={() => setHistory([])} className="gap-1 text-xs text-muted-foreground"><Trash2 className="h-3 w-3" />Clear</Button></div>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                   {history.map((item) => (
                     <button key={item.id} onClick={() => handleHistorySelect(item)} className={`group relative overflow-hidden rounded-lg border transition-all hover:ring-2 hover:ring-primary/50 ${resultImage === item.imageUrl ? "ring-2 ring-primary" : ""}`}>
                       <img src={item.imageUrl} alt={item.prompt} className="aspect-square w-full object-cover" />

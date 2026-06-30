@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "~/lib/utils";
+import { ScrollableTabRow } from "~/components/ui/scrollable-tab-row";
 
 const tabs = [
   { name: "Overview", href: "/dashboard/autopilot" },
@@ -30,7 +31,7 @@ export default function AutopilotLayout({
         </p>
       </div>
 
-      <nav className="flex gap-1 border-b">
+      <ScrollableTabRow role="tablist" className="-mb-px gap-1 border-b">
         {tabs.map((tab) => {
           const isActive =
             tab.href === "/dashboard/autopilot"
@@ -40,8 +41,10 @@ export default function AutopilotLayout({
             <Link
               key={tab.href}
               href={tab.href}
+              role="tab"
+              aria-selected={isActive}
               className={cn(
-                "border-b-2 px-4 py-2 text-sm font-medium transition-colors",
+                "shrink-0 border-b-2 px-4 py-2 text-sm font-medium transition-colors",
                 isActive
                   ? "border-foreground text-foreground"
                   : "border-transparent text-muted-foreground hover:text-foreground"
@@ -51,7 +54,7 @@ export default function AutopilotLayout({
             </Link>
           );
         })}
-      </nav>
+      </ScrollableTabRow>
 
       <div>{children}</div>
     </div>

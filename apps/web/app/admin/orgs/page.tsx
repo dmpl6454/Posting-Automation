@@ -106,7 +106,7 @@ export default function AdminOrgsPage() {
               })
             }
           >
-            <SelectTrigger className="h-8 w-[130px]">
+            <SelectTrigger className="h-8 w-full sm:w-[130px]">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>

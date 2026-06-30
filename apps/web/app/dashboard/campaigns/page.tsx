@@ -11,6 +11,7 @@ import {
 } from "~/components/ui/card";
 import { Badge } from "~/components/ui/badge";
 import { Skeleton } from "~/components/ui/skeleton";
+import { ScrollableTabRow } from "~/components/ui/scrollable-tab-row";
 import { Input } from "~/components/ui/input";
 import { Textarea } from "~/components/ui/textarea";
 import { Label } from "~/components/ui/label";
@@ -375,12 +376,14 @@ export default function CampaignsPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex border-b border-border/50">
+      <ScrollableTabRow role="tablist" className="-mb-px border-b border-border/50">
         {tabs.map((tab) => (
           <button
             key={tab.key}
+            role="tab"
+            aria-selected={activeTab === tab.key}
             onClick={() => setActiveTab(tab.key)}
-            className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+            className={`shrink-0 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
               activeTab === tab.key
                 ? "border-primary text-foreground"
                 : "border-transparent text-muted-foreground hover:text-foreground"
@@ -392,7 +395,7 @@ export default function CampaignsPage() {
             )}
           </button>
         ))}
-      </div>
+      </ScrollableTabRow>
 
       {/* Tab Content */}
       {activeTab === "campaigns" && (

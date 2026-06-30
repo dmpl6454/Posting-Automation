@@ -560,7 +560,7 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
         {open && (
           <CardContent className="space-y-4 pt-0">
             <Tabs value={activeTab} onValueChange={setActiveTab}>
-              <TabsList className="grid w-full grid-cols-3">
+              <TabsList className="grid w-full grid-cols-1 sm:grid-cols-3">
                 <TabsTrigger value="generate" className="gap-2"><Wand2 className="h-3.5 w-3.5" />Generate</TabsTrigger>
                 <TabsTrigger value="edit" className="gap-2"><Pencil className="h-3.5 w-3.5" />Edit</TabsTrigger>
                 <TabsTrigger value="upload" className="gap-2"><Image className="h-3.5 w-3.5" />Upload</TabsTrigger>
@@ -695,7 +695,7 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
                       <button type="button" onClick={() => setSelectedNewsStyle(null)} className="ml-auto text-[10px] text-muted-foreground hover:text-destructive">Clear</button>
                     )}
                   </div>
-                  <div className="grid grid-cols-3 gap-1.5">
+                  <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
                     {NEWS_STYLES.map((style) => (
                       <button
                         key={style.value}
@@ -771,7 +771,7 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
                 {/* Aspect Ratio */}
                 <div>
                   <p className="mb-1.5 text-xs font-medium text-muted-foreground">Aspect Ratio</p>
-                  <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-6">
+                  <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 md:grid-cols-6">
                     {ASPECT_RATIOS.map((ar) => {
                       const Icon = ar.icon;
                       return (
@@ -793,7 +793,7 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
                 {(imageProvider === "nano-banana" || imageProvider === "nano-banana-pro") && (
                   <div>
                     <p className="mb-1.5 text-xs font-medium text-muted-foreground">Image Size</p>
-                    <div className="grid grid-cols-4 gap-1.5">
+                    <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
                       {IMAGE_SIZES.map((s) => (
                         <button
                           key={s.value}
@@ -1075,7 +1075,7 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
                     </Button>
                   )}
                 </div>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                   {Array.from({ length: carouselCount }).map((_, i) => (
                     <div key={i} className="relative aspect-[4/5] overflow-hidden rounded-lg border bg-muted/30">
                       {carouselImages[i] ? (
@@ -1143,7 +1143,7 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
                     <Trash2 className="h-3 w-3" />Clear
                   </button>
                 </div>
-                <div className="grid grid-cols-4 gap-1.5">
+                <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
                   {history.map((item) => (
                     <button
                       key={item.id}
