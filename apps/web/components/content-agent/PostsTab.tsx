@@ -55,10 +55,12 @@ export function PostsTab({ onSwitchTab }: PostsTabProps) {
             Manage and schedule your social media posts
           </p>
         </div>
-        <Button onClick={() => onSwitchTab?.("compose")}>
-          <Plus className="mr-2 h-4 w-4" />
-          New Post
-        </Button>
+        {!(data && data.posts.length === 0) && (
+          <Button onClick={() => onSwitchTab?.("compose")}>
+            <Plus className="mr-2 h-4 w-4" />
+            New Post
+          </Button>
+        )}
       </div>
 
       {/* Status filters */}
