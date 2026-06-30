@@ -586,7 +586,7 @@ export default function BrandLeadsPage() {
 
       {/* Tabs + Filter */}
       <div className="flex items-center justify-between gap-4 flex-wrap">
-        <ScrollableTabRow role="tablist" className="-mb-px border-b border-border/50">
+        <ScrollableTabRow role="tablist" className="min-w-0 flex-1 -mb-px border-b border-border/50">
           {tabs.map((tab) => (
             <button
               key={tab.key}
