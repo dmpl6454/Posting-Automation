@@ -129,14 +129,14 @@ export default function RssPage() {
               Add Feed
             </Button>
           </DialogTrigger>
-          <DialogContent className="sm:max-w-[500px]">
+          <DialogContent className="flex max-h-[85vh] flex-col overflow-hidden sm:max-w-[500px]">
             <DialogHeader>
               <DialogTitle>Add RSS Feed</DialogTitle>
               <DialogDescription>
                 Add a new RSS feed to monitor and automatically generate posts from.
               </DialogDescription>
             </DialogHeader>
-            <div className="space-y-4 py-4">
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto py-4">
               <div className="space-y-1.5">
                 <Label htmlFor="feed-name">Feed Name</Label>
                 <Input
