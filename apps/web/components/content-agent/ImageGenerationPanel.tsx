@@ -560,10 +560,10 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
         {open && (
           <CardContent className="space-y-4 pt-0">
             <Tabs value={activeTab} onValueChange={setActiveTab}>
-              <TabsList className="grid w-full grid-cols-1 sm:grid-cols-3">
-                <TabsTrigger value="generate" className="gap-2"><Wand2 className="h-3.5 w-3.5" />Generate</TabsTrigger>
-                <TabsTrigger value="edit" className="gap-2"><Pencil className="h-3.5 w-3.5" />Edit</TabsTrigger>
-                <TabsTrigger value="upload" className="gap-2"><Image className="h-3.5 w-3.5" />Upload</TabsTrigger>
+              <TabsList className="grid h-auto w-full grid-cols-3">
+                <TabsTrigger value="generate" className="gap-1.5 py-1.5 text-xs"><Wand2 className="h-3.5 w-3.5 shrink-0" />Generate</TabsTrigger>
+                <TabsTrigger value="edit" className="gap-1.5 py-1.5 text-xs"><Pencil className="h-3.5 w-3.5 shrink-0" />Edit</TabsTrigger>
+                <TabsTrigger value="upload" className="gap-1.5 py-1.5 text-xs"><Image className="h-3.5 w-3.5 shrink-0" />Upload</TabsTrigger>
               </TabsList>
 
               {/* GENERATE TAB */}

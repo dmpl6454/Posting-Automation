@@ -48,11 +48,11 @@ export function CalendarTab() {
     <div className="space-y-6">
       <Card>
         <CardHeader className="pb-3">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <CardTitle>{format(currentDate, "MMMM yyyy")}</CardTitle>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
               {/* Status filter */}
-              <div className="flex items-center gap-1">
+              <div className="flex flex-wrap items-center gap-1">
                 <Filter className="mr-1 h-3.5 w-3.5 text-muted-foreground" />
                 {FILTER_OPTIONS.map((opt) => (
                   <Button
@@ -115,7 +115,7 @@ export function CalendarTab() {
               <div className="grid grid-cols-7 gap-1">
                 {/* Padding for first day */}
                 {Array.from({ length: monthStart.getDay() }).map((_, i) => (
-                  <div key={`pad-${i}`} className="min-h-[100px] rounded-lg" />
+                  <div key={`pad-${i}`} className="min-h-[60px] rounded-lg sm:min-h-[100px]" />
                 ))}
                 {days.map((day) => {
                   const dayPosts = posts.filter((p: any) => {
@@ -126,7 +126,7 @@ export function CalendarTab() {
                   return (
                     <div
                       key={day.toISOString()}
-                      className={`min-h-[100px] rounded-lg border p-1.5 transition-colors ${
+                      className={`min-h-[60px] rounded-lg border p-1.5 transition-colors sm:min-h-[100px] ${
                         isToday
                           ? "border-primary bg-primary/5"
                           : "border-transparent hover:border-muted-foreground/20 hover:bg-muted/30"

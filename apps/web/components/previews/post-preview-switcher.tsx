@@ -94,13 +94,15 @@ export function PostPreviewSwitcher({
   return (
     <div className="space-y-3">
       <Tabs value={activePlatform} onValueChange={setActivePlatform}>
-        <TabsList className="w-full">
-          {availablePlatforms.map((p) => (
-            <TabsTrigger key={p} value={p} className="flex-1 text-xs">
-              {getPlatformLabel(p)}
-            </TabsTrigger>
-          ))}
-        </TabsList>
+        <div className="overflow-x-auto">
+          <TabsList className="inline-flex w-auto min-w-full">
+            {availablePlatforms.map((p) => (
+              <TabsTrigger key={p} value={p} className="shrink-0 text-xs">
+                {getPlatformLabel(p)}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </div>
 
         {availablePlatforms.map((p) => (
           <TabsContent key={p} value={p}>

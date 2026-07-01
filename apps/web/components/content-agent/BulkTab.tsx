@@ -134,7 +134,7 @@ function BulkScheduleSection() {
         <CardDescription>Select draft posts and schedule them all at once</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="flex items-end gap-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:gap-4">
           <div className="flex-1">
             <Label htmlFor="bulk-schedule-date">Schedule Date & Time</Label>
             <DateTimePicker
@@ -147,6 +147,7 @@ function BulkScheduleSection() {
           <Button
             onClick={handleSchedule}
             disabled={selectedIds.size === 0 || !scheduledAt || bulkSchedule.isPending}
+            className="w-full shrink-0 sm:w-auto"
           >
             {bulkSchedule.isPending ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -570,18 +571,18 @@ export function BulkTab() {
   return (
     <div className="space-y-6">
       <Tabs defaultValue="schedule" className="space-y-4">
-        <TabsList>
-          <TabsTrigger value="schedule">
-            <Calendar className="mr-2 h-4 w-4" />
-            Bulk Schedule
+        <TabsList className="grid h-auto w-full grid-cols-3">
+          <TabsTrigger value="schedule" className="gap-1.5 py-1.5 text-xs sm:text-sm">
+            <Calendar className="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4" />
+            <span>Bulk Schedule</span>
           </TabsTrigger>
-          <TabsTrigger value="import">
-            <Upload className="mr-2 h-4 w-4" />
-            CSV Import
+          <TabsTrigger value="import" className="gap-1.5 py-1.5 text-xs sm:text-sm">
+            <Upload className="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4" />
+            <span>CSV Import</span>
           </TabsTrigger>
-          <TabsTrigger value="export">
-            <Download className="mr-2 h-4 w-4" />
-            CSV Export
+          <TabsTrigger value="export" className="gap-1.5 py-1.5 text-xs sm:text-sm">
+            <Download className="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4" />
+            <span>CSV Export</span>
           </TabsTrigger>
         </TabsList>
 
