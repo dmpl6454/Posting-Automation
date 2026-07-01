@@ -662,7 +662,7 @@ ${content}`;
 
   return (
     <div className="mx-auto max-w-6xl space-y-6">
-      <div className="grid min-w-0 gap-6 lg:grid-cols-[1fr,400px]">
+      <div className="grid min-w-0 gap-6 xl:grid-cols-[1fr,400px]">
         {/* Left column - Editor */}
         <div className="min-w-0 space-y-6">
           {editorOpen ? (
@@ -1108,9 +1108,9 @@ ${content}`;
                                   </div>
                                 )}
                                 <div className="min-w-0 flex-1">
-                                  <span className="truncate font-medium">{channel.name}</span>
+                                  <p className="truncate text-sm font-medium leading-tight">{channel.name}</p>
                                   {channel.username && (
-                                    <span className="ml-1.5 text-xs text-muted-foreground">@{channel.username}</span>
+                                    <p className="truncate text-xs leading-tight text-muted-foreground">@{channel.username}</p>
                                   )}
                                 </div>
                                 <Badge variant="outline" className="shrink-0 text-[9px]">{channel.platform}</Badge>
@@ -1218,9 +1218,10 @@ ${content}`;
 
           {/* Actions */}
           <Separator />
-          <div className="flex justify-end gap-3 pb-8">
+          <div className="flex flex-col gap-2 pb-8 sm:flex-row sm:justify-end sm:gap-3">
             <Button
               variant="outline"
+              className="w-full sm:w-auto"
               onClick={async () => {
                 if (postMedia.some((item) => item.uploading)) {
                   toast({ title: "Please wait", description: "Media is still uploading...", variant: "destructive" });
@@ -1254,6 +1255,7 @@ ${content}`;
             </Button>
             <Button
               variant="secondary"
+              className="w-full sm:w-auto"
               onClick={() => handleSubmit(false)}
               disabled={
                 !content || selectedChannels.length === 0 || !scheduledAt || createPost.isPending || isUploading || !!youtubeBlockReason
@@ -1264,6 +1266,7 @@ ${content}`;
               Schedule
             </Button>
             <Button
+              className="w-full sm:w-auto"
               onClick={() => handleSubmit(true)}
               disabled={!content || selectedChannels.length === 0 || createPost.isPending || isUploading || !!youtubeBlockReason}
               title={youtubeBlockReason ?? undefined}
@@ -1286,7 +1289,7 @@ ${content}`;
         </div>
 
         {/* Right column - Preview Panel */}
-        <div className="min-w-0 space-y-4 lg:sticky lg:top-6 lg:self-start">
+        <div className="min-w-0 space-y-4 xl:sticky xl:top-6 xl:self-start">
           <div className="flex items-center gap-2">
             <Eye className="h-4 w-4 text-muted-foreground" />
             <h2 className="text-sm font-semibold text-foreground">Post Preview</h2>

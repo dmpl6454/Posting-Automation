@@ -555,7 +555,7 @@ export default function ChannelsPage() {
                   <Checkbox
                     checked={allSelected}
                     onCheckedChange={toggleSelectAllInPlatform}
-                    className={`shrink-0 ${
+                    className={`h-4 w-4 shrink-0 self-center rounded-full ${
                       someSelected
                         ? "border-primary bg-primary/40 text-primary-foreground"
                         : ""
@@ -584,11 +584,11 @@ export default function ChannelsPage() {
                   >
                   <PlatformIcon platform={platform} size="lg" />
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                       <h3 className="text-base font-semibold">
                         {info?.name ?? platform}
                       </h3>
-                      <Badge variant="secondary" className="text-xs">
+                      <Badge variant="secondary" className="shrink-0 text-xs">
                         <Users className="mr-1 h-3 w-3" />
                         {platformChannels.length}{" "}
                         {platformChannels.length === 1
@@ -597,7 +597,7 @@ export default function ChannelsPage() {
                       </Badge>
                       <Badge
                         variant="outline"
-                        className="text-[10px] text-green-600"
+                        className="shrink-0 text-[10px] text-green-600"
                       >
                         {activeCount} active
                       </Badge>
@@ -641,7 +641,7 @@ export default function ChannelsPage() {
                         <Checkbox
                           checked={selectedIds.has(channel.id)}
                           onCheckedChange={() => toggleSelected(channel.id)}
-                          className="shrink-0"
+                          className="h-4 w-4 shrink-0 self-center rounded-full"
                           aria-label={`Select ${channel.name}`}
                         />
 

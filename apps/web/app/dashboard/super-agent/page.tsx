@@ -387,6 +387,9 @@ export default function SuperAgentPage() {
     setActiveThreadId(null);
     setMessages([]);
     setStreamingContent("");
+    // On mobile the sidebar is an overlay drawer — close it so it doesn't sit on
+    // top of the fresh chat (no-op on lg+, where the rail is always shown).
+    setSidebarOpen(false);
     textareaRef.current?.focus();
   };
 
@@ -425,7 +428,9 @@ export default function SuperAgentPage() {
           lg+: static in-flow rail, always visible regardless of drawer state. */}
       <div
         className={cn(
-          "flex flex-col border-r bg-muted/20 transition-transform duration-200",
+          // Solid background as a mobile overlay (chat sits behind it — must not
+          // bleed through); subtle tint only on the lg+ in-flow rail.
+          "flex flex-col border-r bg-background lg:bg-muted/20 transition-transform duration-200",
           "absolute inset-y-0 left-0 z-40 w-72 lg:static lg:z-auto lg:w-72 lg:translate-x-0",
           sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
         )}

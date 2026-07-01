@@ -143,7 +143,7 @@ export function DevToIcon({ className, size = 20 }: IconProps) {
 
 // Map platform names to icon components and colors
 const platformIconMap: Record<string, { icon: React.FC<IconProps>; color: string; bgColor: string }> = {
-  TWITTER:   { icon: TwitterIcon,   color: "text-black dark:text-white", bgColor: "bg-black dark:bg-white/10" },
+  TWITTER:   { icon: TwitterIcon,   color: "text-white", bgColor: "bg-black dark:bg-white/10" },
   LINKEDIN:  { icon: LinkedInIcon,  color: "text-[#0A66C2]", bgColor: "bg-[#0A66C2]/10" },
   FACEBOOK:  { icon: FacebookIcon,  color: "text-[#1877F2]", bgColor: "bg-[#1877F2]/10" },
   INSTAGRAM: { icon: InstagramIcon, color: "text-[#E4405F]", bgColor: "bg-gradient-to-br from-[#F58529]/10 via-[#DD2A7B]/10 to-[#8134AF]/10" },
