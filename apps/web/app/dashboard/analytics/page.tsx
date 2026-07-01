@@ -231,7 +231,9 @@ export default function AnalyticsPage() {
                 <XAxis
                   dataKey="label"
                   tick={{ fontSize: 11 }}
-                  interval={Math.ceil(chartData.length / 10) - 1}
+                  interval="preserveStartEnd"
+                  minTickGap={24}
+                  tickMargin={8}
                   className="text-muted-foreground"
                 />
                 <YAxis tick={{ fontSize: 11 }} allowDecimals={false} className="text-muted-foreground" />
