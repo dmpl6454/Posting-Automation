@@ -574,6 +574,8 @@ export async function renderStaticCreative(args: {
   handle?: string;
   logoUrl?: string | null;
   logoPosition: "top-left" | "top-right";
+  /** Explicit logo size (percent of canvas width, 4–40). Undefined → per-style default. */
+  logoSize?: number;
   brandColor?: string | null;
   referenceImages?: Array<{ base64: string; mimeType?: string }>;
   hookLine?: string;
@@ -665,6 +667,12 @@ export async function renderStaticCreative(args: {
     handle: args.handle,
     logoUrl: args.logoUrl || null,
     logoPosition: args.logoPosition,
+    // Round 17: forward the explicit logo size (percent of canvas width) so the
+    // TEMPLATE path resizes the logo too. Absent → per-style pixel default (the
+    // golden-render gate stays byte-identical). Fixes logo-resize on the regen /
+    // mimicry-fallthrough template paths, which previously dropped logoSize while
+    // the mimicry engine honored it (→ "resize works on generate, not regen").
+    ...(args.logoSize != null ? { logoSize: args.logoSize } : {}),
     theme: args.theme,
     // No logo provided → render NO logo mark (never a fabricated monogram of the
     // brand/display name — that was the phantom "m" circle). Repurpose always
@@ -1502,10 +1510,17 @@ export const repurposeRouter = createRouter({
           category,
           creativeStyle: effectiveStyle,
           theme: effectiveTheme,
-          channelName: displayName,
+          // Round 12 parity with the mimicry path: prefer the user's saved/selected
+          // brand name (input.brandName, e.g. "Moviefied") for the on-card label over
+          // `displayName` (which falls back to the SCRAPED publisher siteName, e.g.
+          // "madaboutmarketingg"). The template renderer reads `channelName` for the
+          // brand label, so without this the saved brand name never appeared on the
+          // template (non-mimicry) path.
+          channelName: input.brandName?.trim() || displayName,
           handle,
           logoUrl: resolvedLogoUrl || null,
           logoPosition: input.logoPosition,
+          ...(input.logoSize != null ? { logoSize: input.logoSize } : {}),
           brandColor: effectiveBrandColor,
           referenceImages: brandReferenceImages,
           ...(hookLine ? { hookLine } : {}),
@@ -3378,10 +3393,17 @@ Return ONLY the JSON array, no other text.`;
               category: "news",
               creativeStyle: input.creativeStyle,
               theme: input.theme,
-              channelName,
+              // Prefer the saved/selected brand name for the on-card label (parity
+              // with the mimicry eyebrow above), else the channel name.
+              channelName: input.brandName?.trim() || channelName,
               handle: input.channelHandle || channelName,
               logoUrl: safeLogoUrl || null,
               logoPosition: input.logoPosition,
+              // Round 17: forward the explicit logo size so a regenerate that FELL
+              // THROUGH from mimicry to the template still honors the resize (the
+              // mimicry call above passes logoSize; this fallthrough previously did not,
+              // so the resize silently no-op'd on regen while it worked on generate).
+              ...(input.logoSize != null ? { logoSize: input.logoSize } : {}),
               brandColor,
               referenceImages,
               // BUGFIX 2026-06-27: honor the AI-off toggle on the mimicry FALLTHROUGH.
@@ -3412,10 +3434,14 @@ Return ONLY the JSON array, no other text.`;
             category: "news",
             creativeStyle: input.creativeStyle,
             theme: input.theme,
-            channelName,
+            // Prefer the saved/selected brand name for the on-card label, else channel.
+            channelName: input.brandName?.trim() || channelName,
             handle: input.channelHandle || channelName,
             logoUrl: safeLogoUrl || null,
             logoPosition: input.logoPosition,
+            // Round 17: forward the explicit logo size on the plain-template regen too,
+            // so the logo resize takes effect on a non-mimicry static regenerate.
+            ...(input.logoSize != null ? { logoSize: input.logoSize } : {}),
             brandColor,
             referenceImages,
             // BUGFIX 2026-06-27: honor the AI-off toggle on the non-mimicry template

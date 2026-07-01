@@ -484,3 +484,38 @@ describe("hook_bars no-photo fallback", () => {
     expect(html).toContain("linear-gradient(");
   });
 });
+
+// Round 17 — explicit logoSize (percent of the 1080px canvas width). Fixes the
+// "logo resize works on generate but not regen" bug: the template renderer used
+// to ignore logoSize entirely, so the regen/template path never resized the logo
+// while the mimicry engine did. The renderer default (opts.logoSize unset) MUST
+// stay byte-identical (asserted by the golden gate); these lock the OPT-IN effect.
+describe("logoSize (explicit logo sizing on the template path)", () => {
+  const LOGO = "data:image/png;base64,AAAA";
+
+  it("with a logo + explicit logoSize, the logo <img> uses the derived pixel width", () => {
+    // 20% of 1080 = 216px.
+    const html = buildStaticCreative({ ...base, logoUrl: LOGO, logoSize: 20 });
+    expect(html).toContain(`src="${LOGO}"`);
+    expect(html).toContain("width:216px;height:216px");
+  });
+
+  it("a larger logoSize renders a larger logo (monotonic)", () => {
+    const small = buildStaticCreative({ ...base, logoUrl: LOGO, logoSize: 6 }); // 65px
+    const large = buildStaticCreative({ ...base, logoUrl: LOGO, logoSize: 30 }); // 324px
+    expect(small).toContain("width:65px;height:65px");
+    expect(large).toContain("width:324px;height:324px");
+  });
+
+  it("clamps out-of-range logoSize into [4,40] percent", () => {
+    const tooBig = buildStaticCreative({ ...base, logoUrl: LOGO, logoSize: 999 }); // → 40% = 432px
+    const tooSmall = buildStaticCreative({ ...base, logoUrl: LOGO, logoSize: -5 }); // → 4% = 43px
+    expect(tooBig).toContain("width:432px;height:432px");
+    expect(tooSmall).toContain("width:43px;height:43px");
+  });
+
+  it("omitting logoSize keeps the per-style default (64px for premium_editorial)", () => {
+    const html = buildStaticCreative({ ...base, logoUrl: LOGO });
+    expect(html).toContain("width:64px;height:64px");
+  });
+});

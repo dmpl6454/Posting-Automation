@@ -46,6 +46,13 @@ export interface StaticCreativeOptions {
    */
   suppressLogoFallback?: boolean;
   logoPosition: "top-left" | "top-right";
+  /**
+   * Explicit logo size as a PERCENT of the 1080px canvas width (clamped 4–40 to
+   * match the mimicry/layout-extract engine's `size` unit). Undefined → each
+   * style's built-in pixel default (byte-identical to the pre-Round-17 render, so
+   * the golden gate stays green). Only meaningful when a logo actually resolves.
+   */
+  logoSize?: number;
   /** Brand accent color (hex). Defaults applied per style if absent. */
   brandColor?: string;
   channelName: string;
@@ -171,6 +178,13 @@ const FONT_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Inter
 function logoHtml(opts: StaticCreativeOptions, size: number): string {
   const accent = safeColor(opts.brandColor);
   const safeLogo = safeImageUrl(opts.logoUrl);
+  // Round 17: an explicit logoSize (percent of the 1080px canvas width, clamped
+  // 4–40 to mirror the mimicry engine) overrides the per-style pixel default.
+  // Absent → keep the passed-in `size` literal → byte-identical default render.
+  if (typeof opts.logoSize === "number" && Number.isFinite(opts.logoSize)) {
+    const pct = Math.max(4, Math.min(40, opts.logoSize));
+    size = Math.round((CANVAS.width * pct) / 100);
+  }
   if (safeLogo) {
     return `<img src="${safeLogo}" style="width:${size}px;height:${size}px;border-radius:${Math.round(size * 0.22)}px;object-fit:contain;background:rgba(255,255,255,0.06);" />`;
   }
