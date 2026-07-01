@@ -445,7 +445,7 @@ export default function SettingsPage() {
                     </Label>
                     <div className="flex gap-2">
                       <Select value={countryCode} onValueChange={setCountryCode}>
-                        <SelectTrigger className="w-[120px] shrink-0">
+                        <SelectTrigger className="w-[120px] shrink-0" aria-label="Country code">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
