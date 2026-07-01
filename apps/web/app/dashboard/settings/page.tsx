@@ -19,6 +19,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "~/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "~/components/ui/select";
 import { useToast } from "~/hooks/use-toast";
 import { useState, useEffect, useRef } from "react";
 import { useSession } from "next-auth/react";
@@ -28,6 +35,19 @@ import {
   Sparkles, Video, ImageIcon, MessageSquare
 } from "lucide-react";
 import Link from "next/link";
+
+const COUNTRY_CODES = [
+  { code: "+91", label: "+91 India" },
+  { code: "+1", label: "+1 US/Canada" },
+  { code: "+44", label: "+44 UK" },
+  { code: "+61", label: "+61 Australia" },
+  { code: "+971", label: "+971 UAE" },
+  { code: "+65", label: "+65 Singapore" },
+  { code: "+49", label: "+49 Germany" },
+  { code: "+33", label: "+33 France" },
+  { code: "+880", label: "+880 Bangladesh" },
+  { code: "+92", label: "+92 Pakistan" },
+];
 
 export default function SettingsPage() {
   const { toast } = useToast();
@@ -117,7 +137,10 @@ export default function SettingsPage() {
   };
 
   // ── Phone Number ──────────────────────────────────────────────
-  const [newPhone, setNewPhone] = useState("");
+  const [countryCode, setCountryCode] = useState("+91");
+  const [localPhone, setLocalPhone] = useState("");
+  // Full number submitted to the backend (country code + digits only).
+  const newPhone = countryCode + localPhone.replace(/\D/g, "");
   const [phoneOtp, setPhoneOtp] = useState("");
   const [phoneStep, setPhoneStep] = useState<"idle" | "verify">("idle");
   // Fix #95: phone removal OTP re-challenge state
@@ -135,7 +158,7 @@ export default function SettingsPage() {
   const verifyPhone = trpc.user.verifyPhone.useMutation({
     onSuccess: () => {
       toast({ title: "Phone verified!", description: "You can now use it to log in." });
-      setPhoneStep("idle"); setNewPhone(""); setPhoneOtp("");
+      setPhoneStep("idle"); setLocalPhone(""); setPhoneOtp("");
       refetch();
     },
     onError: (err) => toast({ title: "Error", description: humanizeError(err), variant: "destructive" }),
@@ -420,22 +443,38 @@ export default function SettingsPage() {
                     <Label htmlFor="newPhone">
                       {userAny?.phone ? "Change Number" : "Mobile Number"}
                     </Label>
-                    <Input
-                      id="newPhone"
-                      type="tel"
-                      value={newPhone}
-                      onChange={(e) => setNewPhone(e.target.value)}
-                      placeholder="+91 98765 43210"
-                    />
+                    <div className="flex gap-2">
+                      <Select value={countryCode} onValueChange={setCountryCode}>
+                        <SelectTrigger className="w-[120px] shrink-0">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {COUNTRY_CODES.map((c) => (
+                            <SelectItem key={c.code} value={c.code}>
+                              {c.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Input
+                        id="newPhone"
+                        type="tel"
+                        inputMode="tel"
+                        className="min-w-0 flex-1"
+                        value={localPhone}
+                        onChange={(e) => setLocalPhone(e.target.value)}
+                        placeholder="98765 43210"
+                      />
+                    </div>
                     <p className="text-xs text-muted-foreground">
-                      Include country code (e.g. +91 for India, +1 for USA)
+                      Select your country code, then enter your number.
                     </p>
                   </div>
                   <div className="flex gap-2">
                     <Button
                       size="sm"
                       onClick={() => addPhone.mutate({ phone: newPhone })}
-                      disabled={addPhone.isPending || !newPhone}
+                      disabled={addPhone.isPending || !localPhone.trim()}
                     >
                       {addPhone.isPending ? "Sending..." : (
                         <>
