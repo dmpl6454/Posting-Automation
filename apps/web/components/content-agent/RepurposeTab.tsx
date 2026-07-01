@@ -1016,7 +1016,7 @@ export function RepurposeTab() {
         <CardContent className="space-y-5">
           {/* Source Mode Tabs */}
           <Tabs value={sourceMode} onValueChange={(v) => setSourceMode(v as "url" | "text")}>
-            <TabsList className="w-full">
+            <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="url" className="flex-1 gap-2">
                 <Link2 className="h-4 w-4" />
                 From URL
