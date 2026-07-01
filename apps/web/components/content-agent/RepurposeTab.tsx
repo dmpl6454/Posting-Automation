@@ -754,7 +754,20 @@ export function RepurposeTab() {
         // Round 17: alignment / brand-name color / logo size overrides.
         headlineAlign: (snap?.headlineAlign ?? headlineAlign) || undefined,
         labelColor: (snap?.labelColor ?? labelColor) || undefined,
-        logoSize: typeof (snap?.logoSize ?? logoSize) === "number" ? (snap?.logoSize ?? logoSize) as number : undefined,
+        // Logo size lives in the RESULTS panel and is meant to be tweaked AFTER
+        // generate, THEN Regenerate. So the LIVE slider value must win over the
+        // generate-time snapshot (Bug-B froze it: the snapshot captured the empty
+        // "" default, and `snap ?? live` kept "" → sent null → the resize silently
+        // no-op'd on regen). Prefer the live number; fall back to the snapshot only
+        // when the slider is on "Auto" (empty). This is the client half of the
+        // logo-resize-on-regen fix; the server half forwards logoSize to the
+        // template renderer.
+        logoSize:
+          typeof logoSize === "number"
+            ? logoSize
+            : typeof snap?.logoSize === "number"
+              ? snap.logoSize
+              : undefined,
         // REP-2: pass slide role + body text for body-slide regeneration.
         slideRole: slideForTarget?.role as "cover" | "body" | "cta" | undefined,
         slideBody: slideForTarget?.role === "body" ? (slideEdit?.body ?? slideForTarget?.body) : undefined,
@@ -1237,9 +1250,14 @@ export function RepurposeTab() {
               )}
 
               {/* Creative style + brand reference (static + carousel cover).
-                  Hidden when the user attached their own static image (no AI
-                  image is generated, so the styling controls are irrelevant). */}
-              {format !== "postcard" && ((format === "static" && !useOwnImage) || format === "carousel") && (
+                  Shown for static & carousel REGARDLESS of a user-attached photo:
+                  the creative style, brand logo/name, brand color and logo size are
+                  all still baked onto the user's own image (the template overlays
+                  the branding), so hiding them when `useOwnImage` was true wrongly
+                  removed the brand-name / logo / style pickers. Only the AI-specific
+                  behaviour changes with a user photo — that is handled server-side
+                  (aiEnabled:false), not by hiding the controls. */}
+              {format !== "postcard" && (format === "static" || format === "carousel") && (
                 <div className="space-y-2">
                   {/* ── Creative Style ── ALWAYS visible (T2b). This picker DECIDES
                        the rendered layout; a style reference only pre-selects the
