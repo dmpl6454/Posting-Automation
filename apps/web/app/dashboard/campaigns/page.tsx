@@ -10,6 +10,7 @@ import {
   CardTitle,
 } from "~/components/ui/card";
 import { Badge } from "~/components/ui/badge";
+import { Switch } from "~/components/ui/switch";
 import { Skeleton } from "~/components/ui/skeleton";
 import { ScrollableTabRow } from "~/components/ui/scrollable-tab-row";
 import { Input } from "~/components/ui/input";
@@ -36,7 +37,6 @@ import {
   Trash2,
   Pause,
   Play,
-  Archive,
   Search,
   Globe,
   Twitter,
@@ -52,14 +52,6 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
-
-const statusColors: Record<string, string> = {
-  DRAFT: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
-  ACTIVE: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300",
-  PAUSED: "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300",
-  COMPLETED: "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300",
-  ARCHIVED: "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-500",
-};
 
 const influencerStatusColors: Record<string, string> = {
   discovered: "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300",
@@ -126,7 +118,7 @@ export default function CampaignsPage() {
     },
   });
 
-  const updateCampaign = trpc.campaign.update.useMutation({
+  const setMonitoring = trpc.campaign.setMonitoring.useMutation({
     onSuccess: () => utils.campaign.list.invalidate(),
   });
 
@@ -176,7 +168,9 @@ export default function CampaignsPage() {
   });
 
   const totalCampaigns = campaigns?.length ?? 0;
-  const activeCampaigns = campaigns?.filter((c) => c.status === "ACTIVE").length ?? 0;
+  // "monitoring on" = at least one of the campaign's brand trackers is active
+  // (derived server-side from tracker isActive — the real gate the sync cron reads).
+  const monitoringCampaigns = campaigns?.filter((c) => c.monitoring).length ?? 0;
   const totalBrands = brands?.length ?? 0;
   const totalInfluencers = infStats?.total ?? 0;
 
@@ -192,9 +186,9 @@ export default function CampaignsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Campaign Tracking</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Campaigns</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Monitor <strong>other brands&apos;</strong> public posts and discover influencers — this watches external accounts, it does not publish your own content.
+            Monitor brands and competitors for new content, and discover influencers. Monitoring fetches their recent posts every ~6 hours. Campaigns don&apos;t schedule your own posts.
           </p>
         </div>
         <div className="flex gap-2">
@@ -358,7 +352,7 @@ export default function CampaignsPage() {
       {/* Overview Stats */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {[
-          { title: "Campaigns", value: totalCampaigns, sub: `${activeCampaigns} active`, icon: Target, color: "text-violet-500" },
+          { title: "Campaigns", value: totalCampaigns, sub: `${monitoringCampaigns} monitoring on`, icon: Target, color: "text-violet-500" },
           { title: "Brands Tracked", value: totalBrands, sub: "monitoring content", icon: Search, color: "text-blue-500" },
           { title: "Content Found", value: content?.length ?? 0, sub: "from all brands", icon: Globe, color: "text-emerald-500" },
           { title: "Influencers", value: totalInfluencers, sub: `${infStats?.shortlisted ?? 0} shortlisted`, icon: Users, color: "text-amber-500" },
@@ -416,7 +410,13 @@ export default function CampaignsPage() {
                       <Link href={`/dashboard/campaigns/${campaign.id}`} className="text-base font-semibold hover:underline">
                         {campaign.name}
                       </Link>
-                      <Badge className={`text-[10px] ${statusColors[campaign.status] ?? ""}`}>{campaign.status}</Badge>
+                      {campaign.totalTrackers > 0 && (
+                        <Badge
+                          className={`text-[10px] ${campaign.monitoring ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300" : "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400"}`}
+                        >
+                          {campaign.monitoring ? `Monitoring ${campaign.activeTrackers}/${campaign.totalTrackers}` : "Monitoring off"}
+                        </Badge>
+                      )}
                     </div>
                     {campaign.description && (
                       <p className="mt-1 text-sm text-muted-foreground line-clamp-1">{campaign.description}</p>
@@ -439,28 +439,28 @@ export default function CampaignsPage() {
                       </span>
                     </div>
                   </div>
-                  <div className="ml-4 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <div className="ml-4 flex items-center gap-3">
+                    {/* Monitoring toggle — flips isActive on ALL this campaign's brand
+                        trackers, which is exactly what the brand-content-sync cron reads.
+                        Disabled (with explanation) when there are no brands to monitor. */}
+                    <div
+                      className="flex items-center gap-2"
+                      title={campaign.totalTrackers === 0 ? "Add a brand to monitor" : campaign.monitoring ? "Monitoring on — fetching new content ~6h" : "Monitoring off"}
+                    >
+                      <span className="text-xs text-muted-foreground hidden sm:inline">Monitoring</span>
+                      <Switch
+                        checked={campaign.monitoring}
+                        disabled={campaign.totalTrackers === 0 || setMonitoring.isPending}
+                        onCheckedChange={(enabled) => setMonitoring.mutate({ id: campaign.id, enabled })}
+                        aria-label="Toggle monitoring for this campaign"
+                      />
+                    </div>
                     {(() => {
-                      const busy = updateCampaign.isPending && updateCampaign.variables?.id === campaign.id;
                       const deleting = deleteCampaign.isPending && deleteCampaign.variables?.id === campaign.id;
                       return (
-                        <>
-                          {campaign.status === "ACTIVE" ? (
-                            <Button size="icon" variant="ghost" className="h-8 w-8" disabled={busy} onClick={() => updateCampaign.mutate({ id: campaign.id, status: "PAUSED" })}>
-                              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Pause className="h-3.5 w-3.5" />}
-                            </Button>
-                          ) : campaign.status === "PAUSED" || campaign.status === "DRAFT" ? (
-                            <Button size="icon" variant="ghost" className="h-8 w-8" disabled={busy} onClick={() => updateCampaign.mutate({ id: campaign.id, status: "ACTIVE" })}>
-                              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
-                            </Button>
-                          ) : null}
-                          <Button size="icon" variant="ghost" className="h-8 w-8" disabled={busy} onClick={() => updateCampaign.mutate({ id: campaign.id, status: "ARCHIVED" })}>
-                            <Archive className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" disabled={deleting} onClick={() => { if (confirm("Delete this campaign?")) deleteCampaign.mutate({ id: campaign.id }); }}>
-                            {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-                          </Button>
-                        </>
+                        <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive opacity-0 group-hover:opacity-100 transition-opacity" disabled={deleting} onClick={() => { if (confirm("Delete this campaign?")) deleteCampaign.mutate({ id: campaign.id }); }}>
+                          {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                        </Button>
                       );
                     })()}
                   </div>
@@ -473,7 +473,7 @@ export default function CampaignsPage() {
                 <Target className="h-12 w-12 text-muted-foreground/30 mb-4" />
                 <h3 className="text-lg font-semibold">No campaigns yet</h3>
                 <p className="mt-1 text-sm text-muted-foreground max-w-sm">
-                  Create a campaign to group and organize your brand tracking efforts.
+                  Create a campaign to group the brands and influencers you want to monitor.
                 </p>
               </CardContent>
             </Card>

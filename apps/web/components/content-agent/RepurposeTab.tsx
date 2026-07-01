@@ -1730,9 +1730,9 @@ export function RepurposeTab() {
                           className="mt-0.5"
                         />
                         <span className="text-xs">
-                          <span className="font-semibold">Recreate this reference&apos;s layout</span>
+                          <span className="font-semibold">Recreate this reference&apos;s layout (AI)</span>
                           <span className="block text-[10px] text-muted-foreground mt-0.5">
-                            Matches your reference&apos;s layout — its colors, logo position, alignment and headline treatment — using your real photo and your exact text.
+                            Uses AI image-to-image to rebuild the reference&apos;s structure — headline placement, logo position and alignment — with your real photo and exact text. If the AI can&apos;t recreate it (e.g. it refuses celebrity images), it falls back to matching colors &amp; theme only. Off = colors, theme &amp; accent only.
                           </span>
                         </span>
                       </label>
