@@ -95,13 +95,13 @@ function ContentStudioInner() {
             <TabsContent value="create" className="mt-4">
               {/* ?subTab=image (from /dashboard/image-studio) opens the Image generator */}
               <Tabs defaultValue={searchParams.get("subTab") === "image" ? "image" : "content"} className="w-full">
-                <TabsList className="grid w-full grid-cols-2 mb-4">
-                  <TabsTrigger value="content" className="gap-1.5 text-xs">
-                    <Sparkles className="h-3.5 w-3.5" />
+                <TabsList className="grid h-auto w-full grid-cols-2 mb-4">
+                  <TabsTrigger value="content" className="gap-1.5 py-1.5 text-xs">
+                    <Sparkles className="h-3.5 w-3.5 shrink-0" />
                     Content
                   </TabsTrigger>
-                  <TabsTrigger value="image" className="gap-1.5 text-xs">
-                    <ImagePlus className="h-3.5 w-3.5" />
+                  <TabsTrigger value="image" className="gap-1.5 py-1.5 text-xs">
+                    <ImagePlus className="h-3.5 w-3.5 shrink-0" />
                     Image
                   </TabsTrigger>
                 </TabsList>
