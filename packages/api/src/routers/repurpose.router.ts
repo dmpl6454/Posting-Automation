@@ -1828,7 +1828,15 @@ KEYWORDS: ${(brief.keywords || []).join(", ")}`;
 
       // 4. Generate media based on format
       const displayName = channelName || extracted.siteName || "Channel";
-      const handle = channelHandle || displayName;
+      // Bottom-left card handle: ALWAYS omitted (user decision 2026-07-03). There is no
+      // "type a handle" field in the Repurpose UI, and auto-filling it produced a second
+      // brand string beneath the headline that the user never chose — the SCRAPED
+      // publisher ("madaboutmarketingg") when no channel was in play, or the connected
+      // channel's @username ("postautomation") when one was selected. The card's brand
+      // identity is the `channelName` eyebrow (which prefers input.brandName); the handle
+      // line stays empty so nothing competes with it. NOTE: this is the RENDER handle
+      // only — `channelHandle` above still flows to resolveLogoForOrg for logo lookup.
+      const handle = undefined;
 
       // Headlines are capped via the module-level `capHeadline` (hoisted so the
       // regenerateImage mutation reuses the same logic — ≤12 words / ≤80 chars).
@@ -3359,7 +3367,10 @@ Return ONLY the JSON array, no other text.`;
               ...(regenLogoRef ? { logoImage: regenLogoRef } : {}),
               headline,
               brandName: regenMimicryBrandName,
-              handle: input.channelHandle || regenMimicryBrandName,
+              // Handle = the small @handle UNDER the brand name. Always omitted
+              // (user decision 2026-07-03): no typed-handle UI exists, and the
+              // connected channel's username is NOT the card's brand identity.
+              handle: undefined,
               brandColor,
               textMode: input.mimicryTextMode,
               styleOverride: input.creativeStyle,
@@ -3396,7 +3407,10 @@ Return ONLY the JSON array, no other text.`;
               // Prefer the saved/selected brand name for the on-card label (parity
               // with the mimicry eyebrow above), else the channel name.
               channelName: input.brandName?.trim() || channelName,
-              handle: input.channelHandle || channelName,
+              // Bottom-left handle: always omitted (user decision 2026-07-03) — no
+              // typed-handle UI, and the connected channel username is not the brand.
+              // input.channelHandle still feeds resolveLogoForOrg (logo lookup) above.
+              handle: undefined,
               logoUrl: safeLogoUrl || null,
               logoPosition: input.logoPosition,
               // Round 17: forward the explicit logo size so a regenerate that FELL
@@ -3436,7 +3450,8 @@ Return ONLY the JSON array, no other text.`;
             theme: input.theme,
             // Prefer the saved/selected brand name for the on-card label, else channel.
             channelName: input.brandName?.trim() || channelName,
-            handle: input.channelHandle || channelName,
+            // Bottom-left handle: always omitted (user decision 2026-07-03).
+            handle: undefined,
             logoUrl: safeLogoUrl || null,
             logoPosition: input.logoPosition,
             // Round 17: forward the explicit logo size on the plain-template regen too,
