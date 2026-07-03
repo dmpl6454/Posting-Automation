@@ -419,7 +419,7 @@ export function ImageTab({ onImageGenerated }: ImageTabProps = {}) {
         {/* Left Column - Controls */}
         <div className="space-y-6">
           <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabsList className="grid w-full grid-cols-2">
+            <TabsList className="grid h-auto w-full grid-cols-2">
               <TabsTrigger value="generate" className="gap-2"><Wand2 className="h-4 w-4" />Generate</TabsTrigger>
               <TabsTrigger value="edit" className="gap-2"><Pencil className="h-4 w-4" />Edit</TabsTrigger>
             </TabsList>

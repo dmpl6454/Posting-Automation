@@ -196,7 +196,7 @@ export default function VersionsPage() {
                 </div>
               </div>
               {current?.commitMsg && (
-                <div className="sm:col-span-2 lg:col-span-4">
+                <div className="min-w-0 sm:col-span-2 lg:col-span-4">
                   <p className="text-xs text-muted-foreground">Last Commit</p>
                   <p className="text-sm mt-0.5 truncate">{current.commitMsg}</p>
                 </div>
