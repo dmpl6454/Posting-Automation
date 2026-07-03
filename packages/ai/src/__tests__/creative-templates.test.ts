@@ -519,3 +519,46 @@ describe("logoSize (explicit logo sizing on the template path)", () => {
     expect(html).toContain("width:64px;height:64px");
   });
 });
+
+// 2026-07-03 — bottom-left handle. The router now passes `handle` ONLY when a real
+// channel handle exists (never the scraped publisher / "Channel"); this locks the
+// renderer contract the fix relies on: no handle → NO bottom-left brand string.
+describe("handle omission (bottom-left card label)", () => {
+  it("premium_editorial: NO handle element when handle is absent (no publisher/Channel leak)", () => {
+    const html = buildStaticCreative({
+      style: "premium_editorial",
+      headline: "Army vs police in Kishtwar",
+      channelName: "Moviefied",
+      logoPosition: "top-right",
+    });
+    // The eyebrow LABEL still shows the brand…
+    expect(html).toContain(">Moviefied</div>");
+    // …but there is NO standalone `.handle` element (bottom-left) — the guard
+    // `opts.handle ? … : ""` collapses it, so nothing leaks under the headline.
+    expect(html).not.toContain('class="handle"');
+  });
+
+  it("premium_editorial: renders the handle when one IS explicitly provided", () => {
+    const html = buildStaticCreative({
+      style: "premium_editorial",
+      headline: "Army vs police in Kishtwar",
+      channelName: "Moviefied",
+      handle: "@moviefied",
+      logoPosition: "top-right",
+    });
+    expect(html).toContain('class="handle"');
+    expect(html).toContain("@moviefied");
+  });
+
+  it("cta slide still names the brand when no handle (Follow <brand> for more)", () => {
+    const html = buildStaticCreative({
+      style: "premium_editorial",
+      slideRole: "cta",
+      headline: "x",
+      channelName: "Moviefied",
+      logoPosition: "top-right",
+    });
+    // Fallback path: `opts.handle ? handle : channelName` → never blank.
+    expect(html).toContain("Follow Moviefied for more");
+  });
+});
