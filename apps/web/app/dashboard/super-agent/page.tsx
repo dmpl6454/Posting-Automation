@@ -527,62 +527,71 @@ export default function SuperAgentPage() {
         {/* Messages or Welcome */}
         <div className="flex-1 overflow-y-auto">
           {!hasMessages ? (
-            /* ── Welcome Screen ── */
-            <div className="flex h-full flex-col items-center justify-center gap-6 p-6">
-              <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-500 to-purple-600 shadow-lg">
-                <Zap className="h-8 w-8 text-white" />
-              </div>
-              <div className="text-center">
-                <h2 className="text-xl font-bold">What can I help you with?</h2>
-                <p className="mt-1 max-w-md text-sm text-muted-foreground">
-                  Tell me what you want in plain English. I can <strong>generate captions &amp; images</strong>,{" "}
-                  <strong>attach your own photos or videos</strong> (use the paperclip below), and{" "}
-                  <strong>schedule or publish posts</strong> to your channels.
-                </p>
-              </div>
+            /* ── Welcome Screen ──
+               `m-auto` on the inner wrapper (not `justify-center` on this
+               outer flex column) so that when the content is taller than the
+               viewport it stays scrollable from the top. `justify-center` on
+               an overflowing flex column clips the top content unreachably
+               in mobile Safari — Chrome DevTools device emulation still uses
+               the desktop Chrome engine and doesn't reproduce that bug, which
+               is why this only showed up on real phones. */
+            <div className="flex h-full flex-col items-center p-6">
+              <div className="m-auto flex flex-col items-center gap-6">
+                <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-500 to-purple-600 shadow-lg">
+                  <Zap className="h-8 w-8 text-white" />
+                </div>
+                <div className="text-center">
+                  <h2 className="text-xl font-bold">What can I help you with?</h2>
+                  <p className="mt-1 max-w-md text-sm text-muted-foreground">
+                    Tell me what you want in plain English. I can <strong>generate captions &amp; images</strong>,{" "}
+                    <strong>attach your own photos or videos</strong> (use the paperclip below), and{" "}
+                    <strong>schedule or publish posts</strong> to your channels.
+                  </p>
+                </div>
 
-              {/* Connected channels — make it obvious where posts can go (audit clarity 2026-06-06) */}
-              <div className="flex max-w-md flex-wrap items-center justify-center gap-1.5">
-                {(channels ?? []).length === 0 ? (
-                  <a href="/dashboard/channels" className="text-xs font-medium text-violet-600 underline">
-                    Connect a channel to start posting →
-                  </a>
-                ) : (
-                  <>
-                    <span className="text-[11px] text-muted-foreground">Available channels:</span>
-                    {(channels ?? []).map((c) => (
-                      <Badge key={c.id} variant="secondary" className="text-[10px]">
-                        {c.name || c.username || c.platform}
-                      </Badge>
-                    ))}
-                  </>
-                )}
-              </div>
+                {/* Connected channels — make it obvious where posts can go (audit clarity 2026-06-06) */}
+                <div className="flex max-w-md flex-wrap items-center justify-center gap-1.5">
+                  {(channels ?? []).length === 0 ? (
+                    <a href="/dashboard/channels" className="text-xs font-medium text-violet-600 underline">
+                      Connect a channel to start posting →
+                    </a>
+                  ) : (
+                    <>
+                      <span className="text-[11px] text-muted-foreground">Available channels:</span>
+                      {(channels ?? []).map((c) => (
+                        <Badge key={c.id} variant="secondary" className="text-[10px]">
+                          {c.name || c.username || c.platform}
+                        </Badge>
+                      ))}
+                    </>
+                  )}
+                </div>
 
-              {/* Capabilities — Fix #33: derived from backend SUPPORTED_ACTIONS */}
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                {(capabilitiesData ?? []).map(({ action, label, color }) => {
-                  const Icon = CAPABILITY_ICONS[action] ?? Sparkles;
-                  return (
-                    <div key={action} className="flex items-center gap-1.5 rounded-lg border bg-background px-3 py-2">
-                      <Icon className={cn("h-3.5 w-3.5", color)} />
-                      <span className="text-[11px] text-muted-foreground">{label}</span>
-                    </div>
-                  );
-                })}
-              </div>
+                {/* Capabilities — Fix #33: derived from backend SUPPORTED_ACTIONS */}
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  {(capabilitiesData ?? []).map(({ action, label, color }) => {
+                    const Icon = CAPABILITY_ICONS[action] ?? Sparkles;
+                    return (
+                      <div key={action} className="flex items-center gap-1.5 rounded-lg border bg-background px-3 py-2">
+                        <Icon className={cn("h-3.5 w-3.5", color)} />
+                        <span className="text-[11px] text-muted-foreground">{label}</span>
+                      </div>
+                    );
+                  })}
+                </div>
 
-              {/* Quick actions */}
-              <div className="grid w-full max-w-2xl gap-2 sm:grid-cols-2">
-                {quickActions.map((action) => (
-                  <button
-                    key={action}
-                    onClick={() => handleSend(action)}
-                    className="rounded-xl border bg-muted/30 p-3 text-left text-sm transition-all hover:border-violet-300 hover:bg-muted/60"
-                  >
-                    {action}
-                  </button>
-                ))}
+                {/* Quick actions */}
+                <div className="grid w-full max-w-2xl gap-2 sm:grid-cols-2">
+                  {quickActions.map((action) => (
+                    <button
+                      key={action}
+                      onClick={() => handleSend(action)}
+                      className="rounded-xl border bg-muted/30 p-3 text-left text-sm transition-all hover:border-violet-300 hover:bg-muted/60"
+                    >
+                      {action}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           ) : (

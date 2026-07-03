@@ -50,109 +50,107 @@ function ContentStudioInner() {
   const [pendingMedia, setPendingMedia] = useState<{ dataUrl: string } | null>(null);
 
   return (
-    <div className="h-[calc(100dvh-4rem)] overflow-y-auto">
-      <div className="mx-auto max-w-4xl space-y-4 p-4">
-          {/* Header */}
-          <div>
-            <h1 className="text-xl font-bold tracking-tight">Content Studio</h1>
-            <p className="text-xs text-muted-foreground">
-              Create, schedule, and manage all your social media content
-            </p>
-          </div>
+    <div className="mx-auto max-w-4xl space-y-4 p-4">
+        {/* Header */}
+        <div>
+          <h1 className="text-xl font-bold tracking-tight">Content Studio</h1>
+          <p className="text-xs text-muted-foreground">
+            Create, schedule, and manage all your social media content
+          </p>
+        </div>
 
-          {/* ── Unified Tabs ── */}
-          <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabsList className="grid h-auto w-full grid-cols-2 gap-1 sm:h-9 sm:grid-cols-4 sm:gap-0">
-              {tabs.map(({ id, label, icon: Icon }) => (
-                <TabsTrigger key={id} value={id} className="w-full gap-1.5 py-1.5 text-xs">
-                  <Icon className="h-3.5 w-3.5 shrink-0" />
-                  <span>{label}</span>
-                </TabsTrigger>
-              ))}
-            </TabsList>
+        {/* ── Unified Tabs ── */}
+        <Tabs value={activeTab} onValueChange={setActiveTab}>
+          <TabsList className="grid h-auto w-full grid-cols-2 gap-1 sm:h-9 sm:grid-cols-4 sm:gap-0">
+            {tabs.map(({ id, label, icon: Icon }) => (
+              <TabsTrigger key={id} value={id} className="w-full gap-1.5 py-1.5 text-xs">
+                <Icon className="h-3.5 w-3.5 shrink-0" />
+                <span>{label}</span>
+              </TabsTrigger>
+            ))}
+          </TabsList>
 
-            {/* Layman helper — what the active tab does (audit clarity 2026-06-06) */}
-            <p className="mt-2 text-xs text-muted-foreground">
-              {activeTab === "compose" && "Write a post, attach media, pick channels, and schedule or publish."}
-              {activeTab === "create" && "Let AI draft captions or generate an image for your post."}
-              {activeTab === "repurpose" && "Paste a URL — AI turns it into captions and media you can post."}
-              {activeTab === "bulk" && "Create or import many posts at once (CSV) and schedule them."}
-            </p>
+          {/* Layman helper — what the active tab does (audit clarity 2026-06-06) */}
+          <p className="mt-2 text-xs text-muted-foreground">
+            {activeTab === "compose" && "Write a post, attach media, pick channels, and schedule or publish."}
+            {activeTab === "create" && "Let AI draft captions or generate an image for your post."}
+            {activeTab === "repurpose" && "Paste a URL — AI turns it into captions and media you can post."}
+            {activeTab === "bulk" && "Create or import many posts at once (CSV) and schedule them."}
+          </p>
 
-            <TabsContent value="compose" className="mt-4">
-              <ComposeTab
-                initialContent={composeContent}
-                initialImage={composeImage}
-                initialImageMediaId={composeMediaId}
-                initialMediaIds={composeMediaIds.length > 0 ? composeMediaIds : undefined}
-                initialMediaUrls={composeMediaUrls.length > 0 ? composeMediaUrls : undefined}
-                onPostCreated={() => setPostCreated((n) => n + 1)}
-                externalMediaToAdd={pendingMedia}
-                onExternalMediaConsumed={() => setPendingMedia(null)}
-              />
-            </TabsContent>
-
-            <TabsContent value="create" className="mt-4">
-              {/* ?subTab=image (from /dashboard/image-studio) opens the Image generator */}
-              <Tabs defaultValue={searchParams.get("subTab") === "image" ? "image" : "content"} className="w-full">
-                <TabsList className="grid w-full grid-cols-2 mb-4">
-                  <TabsTrigger value="content" className="gap-1.5 text-xs">
-                    <Sparkles className="h-3.5 w-3.5" />
-                    Content
-                  </TabsTrigger>
-                  <TabsTrigger value="image" className="gap-1.5 text-xs">
-                    <ImagePlus className="h-3.5 w-3.5" />
-                    Image
-                  </TabsTrigger>
-                </TabsList>
-                <TabsContent value="content">
-                  <GenerateTab />
-                </TabsContent>
-                <TabsContent value="image">
-                  <ImageTab onImageGenerated={(dataUrl) => setPendingMedia({ dataUrl })} />
-                </TabsContent>
-              </Tabs>
-            </TabsContent>
-
-            <TabsContent value="repurpose" className="mt-4">
-              <RepurposeTab />
-            </TabsContent>
-
-            <TabsContent value="bulk" className="mt-4">
-              <BulkTab />
-            </TabsContent>
-          </Tabs>
-
-          {/* ── Posts & Calendar toggle ── */}
-          <div className="flex items-center gap-2">
-            <Button
-              variant={!showCalendar ? "default" : "outline"}
-              size="sm"
-              onClick={() => setShowCalendar(false)}
-            >
-              Recent Posts
-            </Button>
-            <Button
-              variant={showCalendar ? "default" : "outline"}
-              size="sm"
-              onClick={() => setShowCalendar(true)}
-            >
-              Calendar
-            </Button>
-          </div>
-
-          {!showCalendar ? (
-            <PostsTab
-              key={postCreated}
-              onSwitchTab={(tab) => {
-                if (tab === "calendar") setShowCalendar(true);
-                else setActiveTab(tab);
-              }}
+          <TabsContent value="compose" className="mt-4">
+            <ComposeTab
+              initialContent={composeContent}
+              initialImage={composeImage}
+              initialImageMediaId={composeMediaId}
+              initialMediaIds={composeMediaIds.length > 0 ? composeMediaIds : undefined}
+              initialMediaUrls={composeMediaUrls.length > 0 ? composeMediaUrls : undefined}
+              onPostCreated={() => setPostCreated((n) => n + 1)}
+              externalMediaToAdd={pendingMedia}
+              onExternalMediaConsumed={() => setPendingMedia(null)}
             />
-          ) : (
-            <CalendarTab />
-          )}
-      </div>
+          </TabsContent>
+
+          <TabsContent value="create" className="mt-4">
+            {/* ?subTab=image (from /dashboard/image-studio) opens the Image generator */}
+            <Tabs defaultValue={searchParams.get("subTab") === "image" ? "image" : "content"} className="w-full">
+              <TabsList className="grid h-auto w-full grid-cols-2 mb-4">
+                <TabsTrigger value="content" className="gap-1.5 text-xs">
+                  <Sparkles className="h-3.5 w-3.5" />
+                  Content
+                </TabsTrigger>
+                <TabsTrigger value="image" className="gap-1.5 text-xs">
+                  <ImagePlus className="h-3.5 w-3.5" />
+                  Image
+                </TabsTrigger>
+              </TabsList>
+              <TabsContent value="content">
+                <GenerateTab />
+              </TabsContent>
+              <TabsContent value="image">
+                <ImageTab onImageGenerated={(dataUrl) => setPendingMedia({ dataUrl })} />
+              </TabsContent>
+            </Tabs>
+          </TabsContent>
+
+          <TabsContent value="repurpose" className="mt-4">
+            <RepurposeTab />
+          </TabsContent>
+
+          <TabsContent value="bulk" className="mt-4">
+            <BulkTab />
+          </TabsContent>
+        </Tabs>
+
+        {/* ── Posts & Calendar toggle ── */}
+        <div className="flex items-center gap-2">
+          <Button
+            variant={!showCalendar ? "default" : "outline"}
+            size="sm"
+            onClick={() => setShowCalendar(false)}
+          >
+            Recent Posts
+          </Button>
+          <Button
+            variant={showCalendar ? "default" : "outline"}
+            size="sm"
+            onClick={() => setShowCalendar(true)}
+          >
+            Calendar
+          </Button>
+        </div>
+
+        {!showCalendar ? (
+          <PostsTab
+            key={postCreated}
+            onSwitchTab={(tab) => {
+              if (tab === "calendar") setShowCalendar(true);
+              else setActiveTab(tab);
+            }}
+          />
+        ) : (
+          <CalendarTab />
+        )}
     </div>
   );
 }

@@ -888,7 +888,7 @@ export default function ApiDocsPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-start justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
             <Code2 className="h-6 w-6" />
@@ -898,7 +898,7 @@ export default function ApiDocsPage() {
             {routers.length} routers, {totalProcedures} procedures
           </p>
         </div>
-        <Button variant="outline" onClick={handleDownloadSpec}>
+        <Button variant="outline" onClick={handleDownloadSpec} className="w-full sm:w-auto">
           <FileJson className="mr-2 h-4 w-4" />
           Download OpenAPI JSON
         </Button>
