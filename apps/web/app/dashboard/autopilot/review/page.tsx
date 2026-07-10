@@ -12,6 +12,7 @@ import {
   FileText,
   Loader2,
   ImageIcon,
+  AlertTriangle,
 } from "lucide-react";
 
 function sensitivityBadge(level: string | null | undefined) {
@@ -32,6 +33,7 @@ export default function ReviewQueuePage() {
   const utils = trpc.useUtils();
 
   const { data, isLoading } = trpc.autopilot.reviewQueue.useQuery({});
+  const { data: failedPosts } = trpc.autopilot.failedPosts.useQuery({});
 
   const approveMutation = trpc.autopilot.approvePost.useMutation({
     onSuccess: () => {
@@ -84,6 +86,31 @@ export default function ReviewQueuePage() {
 
   return (
     <div className="space-y-4">
+      {/* Generation failures */}
+      {failedPosts && failedPosts.length > 0 && (
+        <div className="space-y-2">
+          <h3 className="flex items-center gap-1.5 text-sm font-semibold text-destructive">
+            <AlertTriangle className="h-4 w-4" />
+            Generation failures ({failedPosts.length})
+          </h3>
+          {failedPosts.map((p: any) => (
+            <Card key={p.id} className="border-destructive/40 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-medium">
+                  {p.agent?.name ?? "Agent"} · {p.trendingItem?.title ?? "Untitled"}
+                </span>
+                <Badge variant="destructive">Failed</Badge>
+              </div>
+              {p.errorMessage && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {p.errorMessage}
+                </p>
+              )}
+            </Card>
+          ))}
+        </div>
+      )}
+
       {/* Bulk action bar */}
       {selected.size > 0 && (
         <div className="flex items-center gap-3 rounded-lg border bg-muted/50 px-4 py-3">

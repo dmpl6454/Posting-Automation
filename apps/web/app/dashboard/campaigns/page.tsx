@@ -431,7 +431,7 @@ export default function CampaignsPage() {
                       )}
                       <span className="flex items-center gap-1">
                         <Search className="h-3 w-3" />
-                        {campaign._count.brandTrackers} brands tracked
+                        {campaign._count.brandTrackers} {campaign._count.brandTrackers === 1 ? "brand" : "brands"} tracked
                       </span>
                       <span className="flex items-center gap-1">
                         <Calendar className="h-3 w-3" />
@@ -496,7 +496,7 @@ export default function CampaignsPage() {
                         {brand.isActive ? "Active" : "Paused"}
                       </Badge>
                       <span className="text-xs text-muted-foreground">
-                        {brand._count.contentItems} content items
+                        {brand._count.contentItems} {brand._count.contentItems === 1 ? "content item" : "content items"}
                       </span>
                     </div>
                     {brand.description && (

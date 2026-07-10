@@ -13,6 +13,7 @@ import {
   classifySensitivity,
 } from "@postautomation/ai";
 import IORedis from "ioredis";
+import { deriveRunStatus } from "./lib/run-status";
 
 export function createTrendScoreWorker() {
   const redis = new IORedis(process.env.REDIS_URL ?? "redis://localhost:6379", {
@@ -201,12 +202,13 @@ export function createTrendScoreWorker() {
       if (run.itemsScored >= run.itemsDiscovered && run.status === "RUNNING") {
         const done = run.postsGenerated + run.postsFailed;
         if (run.totalItems === 0 || done >= run.totalItems) {
+          const settledStatus = deriveRunStatus(run);
           await prisma.pipelineRun.update({
             where: { id: pipelineRunId },
-            data: { status: "COMPLETED", completedAt: new Date() },
+            data: { status: settledStatus, completedAt: new Date() },
           });
           console.log(
-            `[TrendScore] Scoring complete; pipeline ${pipelineRunId} COMPLETED (${done}/${run.totalItems} posts)`,
+            `[TrendScore] Scoring complete; pipeline ${pipelineRunId} ${settledStatus} (${done}/${run.totalItems} posts)`,
           );
         }
       }

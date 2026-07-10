@@ -266,6 +266,7 @@ function LeadCard({ lead, onApprove, onReject, onView, isApproving, isRejecting 
                   size="sm"
                   variant="ghost"
                   className="h-7 px-2 text-xs text-muted-foreground"
+                  aria-label="Reject lead"
                   onClick={onReject}
                   disabled={isRejecting}
                 >
@@ -280,10 +281,11 @@ function LeadCard({ lead, onApprove, onReject, onView, isApproving, isRejecting 
   );
 }
 
-function MessagePreviewDialog({ lead, open, onClose }: {
+function MessagePreviewDialog({ lead, open, onClose, onStatusChange }: {
   lead: Lead | null;
   open: boolean;
   onClose: () => void;
+  onStatusChange?: (status: string) => void;
 }) {
   const utils = trpc.useUtils();
   const { data: messages, isLoading } = trpc.brandLeads.messages.useQuery(
@@ -291,12 +293,27 @@ function MessagePreviewDialog({ lead, open, onClose }: {
     { enabled: open && !!lead }
   );
 
+  // BO-03/BO-04 lockout fix: gate manual-outcome logging on whether a message
+  // EVER reached SENT (an append-only historical fact, mirrors the server's
+  // outreachMessage.count check), NOT on the lead's CURRENT `status`. BO-03
+  // patches `lead.status` to the just-logged outcome (e.g. "REPLIED") on every
+  // successful setStatus call — gating on `lead.status !== "SENT"` after that
+  // would read true forever and permanently disable the buttons after the
+  // very first outcome was logged. `messages` is already loaded above, so this
+  // stays correct (and keeps being true) once at least one message was sent.
+  const hasEverSent = messages?.some((m) => m.status === "SENT") ?? false;
+
   // Gap #3: log a manual reply/outcome on the lead (no inbox automation exists —
   // the operator records what happened after they sent the outreach by hand).
   const setStatus = trpc.brandLeads.setStatus.useMutation({
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       utils.brandLeads.list.invalidate();
       utils.brandLeads.stats.invalidate();
+      // BO-03: the `lead` prop is a frozen snapshot captured when the dialog
+      // was opened — invalidating the list query doesn't touch it. Patch the
+      // parent's copy directly with the status we just set (from `variables`,
+      // not a closed-over value) so the chip updates without a reopen.
+      onStatusChange?.(variables.status);
     },
   });
 
@@ -366,7 +383,7 @@ function MessagePreviewDialog({ lead, open, onClose }: {
                 key={outcome}
                 size="sm"
                 variant={lead.status === outcome ? "default" : "outline"}
-                disabled={setStatus.isPending}
+                disabled={setStatus.isPending || !hasEverSent}
                 className="h-7 text-[11px]"
                 onClick={() => setStatus.mutate({ leadId: lead.id, status: outcome })}
               >
@@ -374,6 +391,15 @@ function MessagePreviewDialog({ lead, open, onClose }: {
               </Button>
             ))}
           </div>
+          {/* BO-04: these are post-send outcomes — gate them until outreach has
+              actually gone out, so we don't log e.g. "Replied" on a PENDING lead.
+              Gated on hasEverSent (not lead.status), so it never re-locks once a
+              real send has happened, no matter how many times the outcome changes. */}
+          {!hasEverSent && (
+            <p className="text-[10px] text-amber-600 dark:text-amber-400">
+              Available after outreach is sent.
+            </p>
+          )}
           <p className="text-[10px] text-muted-foreground">
             Replies aren&apos;t tracked automatically — set the outcome here after you hear back.
           </p>
@@ -576,7 +602,7 @@ export default function BrandLeadsPage() {
           A detector scans Meta Ad Library, PR/news, and social signals every 6 hours for brands launching
           celebrity campaigns, then enriches each with contact info and lists it here as a lead.
           <strong> Approve</strong> a lead and we generate a personalised pitch and send it where we can:
-          email goes out automatically (if a brand email was found); LinkedIn/Instagram DMs are marked
+          email is sent automatically through the platform mailer (if a brand email was found); LinkedIn/Instagram DMs are marked
           <em> “Send manually”</em> with the copy ready to paste — we never mark those “Sent” unless they
           were actually delivered. Replies land in your own inbox; log the outcome on the lead.
           <span className="block mt-1.5">
@@ -711,6 +737,7 @@ export default function BrandLeadsPage() {
         lead={previewLead}
         open={!!previewLead}
         onClose={() => setPreviewLead(null)}
+        onStatusChange={(status) => setPreviewLead((prev) => prev ? { ...prev, status } : prev)}
       />
     </div>
   );

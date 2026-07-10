@@ -14,6 +14,12 @@ function runStatusBadge(status: string) {
           Completed
         </Badge>
       );
+    case "COMPLETED_WITH_ERRORS":
+      return (
+        <Badge variant="default" className="bg-amber-500">
+          Completed with errors
+        </Badge>
+      );
     case "RUNNING":
       return <Badge variant="secondary">Running</Badge>;
     case "FAILED":

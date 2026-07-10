@@ -17,7 +17,7 @@ export const autopilotRouter = createRouter({
     const now = new Date();
     const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
-    const [trendingCount, pendingReview, postsToday, latestRun] =
+    const [trendingCount, pendingReview, postsToday, failedCount, latestRun] =
       await Promise.all([
         ctx.prisma.trendingItem.count({
           where: {
@@ -38,13 +38,19 @@ export const autopilotRouter = createRouter({
             createdAt: { gte: todayMidnight },
           },
         }),
+        ctx.prisma.autopilotPost.count({
+          where: {
+            organizationId: ctx.organizationId,
+            status: "FAILED",
+          },
+        }),
         ctx.prisma.pipelineRun.findFirst({
           where: { organizationId: ctx.organizationId },
           orderBy: { startedAt: "desc" },
         }),
       ]);
 
-    return { trendingCount, pendingReview, postsToday, latestRun };
+    return { trendingCount, pendingReview, postsToday, failedCount, latestRun };
   }),
 
   // Paginated trending feed
@@ -114,6 +120,33 @@ export const autopilotRouter = createRouter({
         },
         orderBy: [{ sensitivity: "desc" }, { trendScore: "desc" }],
         take: input.limit,
+      });
+    }),
+
+  // Posts whose content generation FAILED (AP-01) — no Post row exists yet for
+  // these, so they're invisible to both reviewQueue (status:"REVIEWING" only)
+  // and posts (requires an existing Post). Surfaces errorMessage + context so
+  // a user whose autopilot silently stopped posting can see why.
+  failedPosts: orgProcedure
+    .input(
+      z
+        .object({
+          limit: z.number().min(1).max(100).default(30),
+        })
+        .optional()
+    )
+    .query(async ({ ctx, input }) => {
+      return ctx.prisma.autopilotPost.findMany({
+        where: {
+          organizationId: ctx.organizationId,
+          status: "FAILED",
+        },
+        include: {
+          agent: { select: { name: true } },
+          trendingItem: { select: { title: true } },
+        },
+        orderBy: { createdAt: "desc" },
+        take: input?.limit ?? 30,
       });
     }),
 

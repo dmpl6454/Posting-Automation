@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
 import { requirePlan } from "../middleware/plan-limit.middleware";
 
@@ -120,6 +121,26 @@ export const brandLeadsRouter = createRouter({
       const lead = await ctx.prisma.outreachLead.findFirstOrThrow({
         where: { id: input.leadId, signal: { organizationId: ctx.organizationId } },
       });
+      // BO-04: a manual outcome (reply/interested/etc.) is semantically a
+      // POST-SEND fact — you can't have a "reply" before anything was sent.
+      // ⚠️ Gate on whether a message EVER reached SENT (an append-only historical
+      // fact), NOT on the lead's CURRENT `status`. BO-03 legitimately overwrites
+      // `lead.status` to the just-logged outcome (e.g. "REPLIED") on every
+      // successful setStatus call — if this gate re-read `lead.status !== "SENT"`
+      // after that, it would read true FOREVER and permanently lock out every
+      // subsequent outcome change for that lead. `OutreachMessage.status` is the
+      // same authoritative signal the outreach-send worker uses
+      // (reconcileLeadStatus: at least one channel delivered) and is never
+      // un-set once SENT, so it stays true forever once true.
+      const hasEverSent = await ctx.prisma.outreachMessage.count({
+        where: { leadId: input.leadId, status: "SENT" },
+      });
+      if (hasEverSent === 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Cannot log an outcome before outreach has been sent.",
+        });
+      }
       return ctx.prisma.outreachLead.update({
         where: { id: lead.id },
         data: { status: input.status },

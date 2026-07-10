@@ -237,7 +237,7 @@ export const campaignRouter = createRouter({
       followers: z.number().default(0),
       avgEngagement: z.number().default(0),
       niche: z.string().optional(),
-      contactEmail: z.string().optional(),
+      contactEmail: z.string().email().optional().or(z.literal("")),
       notes: z.string().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
@@ -257,7 +257,7 @@ export const campaignRouter = createRouter({
       id: z.string(),
       status: z.string().optional(),
       notes: z.string().nullable().optional(),
-      contactEmail: z.string().nullable().optional(),
+      contactEmail: z.string().email().nullable().optional().or(z.literal("")),
       relevanceScore: z.number().optional(),
       lastContactedAt: z.string().datetime().optional(),
     }))

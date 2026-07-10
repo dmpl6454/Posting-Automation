@@ -64,7 +64,6 @@ const sentimentIcons = {
 
 const PLATFORMS = [
   { id: "twitter", label: "X / Twitter" },
-  { id: "facebook", label: "Facebook" },
   { id: "instagram", label: "Instagram" },
   { id: "linkedin", label: "LinkedIn" },
   { id: "reddit", label: "Reddit" },
@@ -94,19 +93,28 @@ export default function ListeningPage() {
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
   const [selectedQuery, setSelectedQuery] = useState<string | undefined>();
 
-  const { data: queries, isLoading: queriesLoading } = trpc.listening.listQueries.useQuery();
-  const { data: overview, isLoading: overviewLoading } = trpc.listening.sentimentOverview.useQuery({
-    queryId: selectedQuery,
-    days: 30,
-  });
+  const { data: queries, isLoading: queriesLoading } = trpc.listening.listQueries.useQuery(
+    undefined,
+    { refetchInterval: 15_000 }
+  );
+  const { data: overview, isLoading: overviewLoading } = trpc.listening.sentimentOverview.useQuery(
+    {
+      queryId: selectedQuery,
+      days: 30,
+    },
+    { refetchInterval: 15_000 }
+  );
   const { data: mentions, isLoading: mentionsLoading } = trpc.listening.mentions.useQuery({
     queryId: selectedQuery,
     limit: 20,
   });
-  const { data: alerts } = trpc.listening.alerts.useQuery({
-    queryId: selectedQuery,
-    unreadOnly: true,
-  });
+  const { data: alerts } = trpc.listening.alerts.useQuery(
+    {
+      queryId: selectedQuery,
+      unreadOnly: true,
+    },
+    { refetchInterval: 15_000 }
+  );
   const { data: sources } = trpc.listening.sourceBreakdown.useQuery({
     queryId: selectedQuery,
     days: 30,

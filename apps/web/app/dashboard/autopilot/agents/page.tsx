@@ -24,6 +24,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "~/components/ui/dialog";
+import { ConfirmDialog } from "~/components/ui/confirm-dialog";
 import { Plus, Trash2, Pencil, Bot, Loader2, Play, Info } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 
@@ -52,6 +53,7 @@ export default function AutopilotAgentsPage() {
 
   const utils = trpc.useUtils();
   const { data: agents, isLoading } = trpc.agent.list.useQuery();
+  const [pendingDelete, setPendingDelete] = useState<NonNullable<typeof agents>[number] | null>(null);
   const { data: channels } = trpc.channel.list.useQuery();
 
   const createMutation = trpc.agent.create.useMutation({
@@ -73,7 +75,13 @@ export default function AutopilotAgentsPage() {
   });
 
   const runNowMutation = trpc.agent.runNow.useMutation({
-    onSuccess: () => alert("Agent queued! It will generate drafts in a minute — review and approve them in Autopilot → Review Queue (they publish after approval, unless this agent's account group skips review)."),
+    onSuccess: () => {
+      alert("Agent queued! It will generate drafts in a minute — review and approve them in Autopilot → Review Queue (they publish after approval, unless this agent's account group skips review).");
+      utils.agent.list.invalidate();
+      // The AgentRun row is created asynchronously by the worker, so also
+      // refetch shortly after to catch the incremented count.
+      setTimeout(() => utils.agent.list.invalidate(), 3000);
+    },
     onError: (e) => alert(e.message),
   });
 
@@ -199,15 +207,16 @@ export default function AutopilotAgentsPage() {
                   >
                     <Play className="h-3.5 w-3.5" />
                   </Button>
-                  <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => openEdit(agent)}>
+                  <Button size="icon" variant="ghost" className="h-7 w-7" aria-label={`Edit ${agent.name}`} onClick={() => openEdit(agent)}>
                     <Pencil className="h-3.5 w-3.5" />
                   </Button>
                   <Button
                     size="icon"
                     variant="ghost"
                     className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                    aria-label={`Delete ${agent.name}`}
                     disabled={deleteMutation.isPending}
-                    onClick={() => { if (confirm(`Delete agent "${agent.name}"? This cannot be undone.`)) deleteMutation.mutate({ id: agent.id }); }}
+                    onClick={() => setPendingDelete(agent)}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
@@ -370,6 +379,21 @@ export default function AutopilotAgentsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={!!pendingDelete}
+        onOpenChange={(open) => { if (!open) setPendingDelete(null); }}
+        title="Delete agent"
+        description={`Delete agent "${pendingDelete?.name}"? This cannot be undone.`}
+        confirmLabel="Delete"
+        isPending={deleteMutation.isPending}
+        onConfirm={() => {
+          if (pendingDelete) {
+            deleteMutation.mutate({ id: pendingDelete.id });
+            setPendingDelete(null);
+          }
+        }}
+      />
     </div>
   );
 }
