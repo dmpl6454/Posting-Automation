@@ -73,7 +73,13 @@ export default function AutopilotAgentsPage() {
   });
 
   const runNowMutation = trpc.agent.runNow.useMutation({
-    onSuccess: () => alert("Agent queued! It will generate drafts in a minute — review and approve them in Autopilot → Review Queue (they publish after approval, unless this agent's account group skips review)."),
+    onSuccess: () => {
+      alert("Agent queued! It will generate drafts in a minute — review and approve them in Autopilot → Review Queue (they publish after approval, unless this agent's account group skips review).");
+      utils.agent.list.invalidate();
+      // The AgentRun row is created asynchronously by the worker, so also
+      // refetch shortly after to catch the incremented count.
+      setTimeout(() => utils.agent.list.invalidate(), 3000);
+    },
     onError: (e) => alert(e.message),
   });
 
