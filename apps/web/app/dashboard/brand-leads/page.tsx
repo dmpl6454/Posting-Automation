@@ -576,7 +576,7 @@ export default function BrandLeadsPage() {
           A detector scans Meta Ad Library, PR/news, and social signals every 6 hours for brands launching
           celebrity campaigns, then enriches each with contact info and lists it here as a lead.
           <strong> Approve</strong> a lead and we generate a personalised pitch and send it where we can:
-          email goes out automatically (if a brand email was found); LinkedIn/Instagram DMs are marked
+          email is sent automatically through the platform mailer (if a brand email was found); LinkedIn/Instagram DMs are marked
           <em> “Send manually”</em> with the copy ready to paste — we never mark those “Sent” unless they
           were actually delivered. Replies land in your own inbox; log the outcome on the lead.
           <span className="block mt-1.5">

@@ -11,15 +11,14 @@ import { QUEUE_NAMES, type OutreachSendJobData, createRedisConnection } from "@p
 //                      delivery (the gap this fix closes).
 type SendOutcome = "sent" | "pending_manual";
 
-async function sendEmail(messageId: string, subject: string | null, body: string, brandEmail: string): Promise<SendOutcome> {
+async function sendViaResend(subject: string | null, body: string, brandEmail: string): Promise<void> {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) throw new Error("RESEND_API_KEY not set");
-
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      from: process.env.OUTREACH_FROM_EMAIL ?? "outreach@youragency.com",
+      from: process.env.OUTREACH_FROM_EMAIL ?? process.env.SMTP_FROM ?? "outreach@postautomation.co.in",
       to: brandEmail,
       subject: subject ?? "Partnership Opportunity",
       text: body,
@@ -31,7 +30,65 @@ async function sendEmail(messageId: string, subject: string | null, body: string
     const text = await res.text();
     throw new Error(`Resend API error ${res.status}: ${text}`);
   }
-  return "sent";
+}
+
+function escapeHtmlText(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/**
+ * Sends outreach EMAIL. Resend is an optional PRIMARY when RESEND_API_KEY is
+ * set; otherwise falls back to the same SMTP config (Google Workspace) used
+ * for password-reset email (packages/api/src/lib/email.ts). We deliberately
+ * do NOT import that shared mailer — the worker avoids depending on
+ * @postautomation/api so it doesn't pull in the tRPC router graph (see the
+ * same call in apps/worker/src/lib/repurpose-video.ts and the inlined
+ * nodemailer sender in post-publish.worker.ts) — so this inlines an
+ * equivalent nodemailer transport directly.
+ *
+ * Contract: return "sent" ONLY on a real, confirmed delivery. THROW on any
+ * failure or missing configuration — never fabricate a "sent" outcome (the
+ * class of bug this worker's PENDING_MANUAL design already guards against
+ * for LinkedIn/Instagram).
+ */
+export async function dispatchOutreachEmail(
+  _messageId: string,
+  subject: string | null,
+  body: string,
+  brandEmail: string,
+): Promise<SendOutcome> {
+  if (process.env.RESEND_API_KEY) {
+    await sendViaResend(subject, body, brandEmail);
+    return "sent";
+  }
+
+  if (process.env.SMTP_HOST) {
+    const nodemailer = await import("nodemailer");
+    // New transport per send — fine for low-volume outreach; nodemailer closes the socket after sendMail.
+    const transport = nodemailer.default.createTransport({
+      host: process.env.SMTP_HOST,
+      port: parseInt(process.env.SMTP_PORT ?? "587"),
+      secure: process.env.SMTP_SECURE === "true",
+      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+    });
+    const from = process.env.SMTP_FROM ?? "PostAutomation <noreply@postautomation.co.in>";
+    const finalSubject = subject ?? "Partnership Opportunity";
+    try {
+      await transport.sendMail({
+        from,
+        to: brandEmail,
+        subject: finalSubject,
+        html: `<div style="white-space:pre-wrap;font-family:sans-serif">${escapeHtmlText(body)}</div>`,
+        text: body,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`SMTP delivery failed: ${msg}`);
+    }
+    return "sent";
+  }
+
+  throw new Error("No email provider configured (set RESEND_API_KEY or SMTP_HOST)");
 }
 
 async function sendLinkedInDM(messageId: string, body: string, linkedinUrl: string | null): Promise<SendOutcome> {
@@ -130,7 +187,7 @@ export function createOutreachSendWorker() {
         switch (message.channel) {
           case "EMAIL":
             if (!signal.brandEmail) throw new Error("No email for brand");
-            outcome = await sendEmail(messageId, message.subject, message.body, signal.brandEmail);
+            outcome = await dispatchOutreachEmail(messageId, message.subject, message.body, signal.brandEmail);
             break;
           case "LINKEDIN":
             outcome = await sendLinkedInDM(messageId, message.body, signal.brandLinkedin);
