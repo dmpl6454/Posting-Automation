@@ -281,10 +281,11 @@ function LeadCard({ lead, onApprove, onReject, onView, isApproving, isRejecting 
   );
 }
 
-function MessagePreviewDialog({ lead, open, onClose }: {
+function MessagePreviewDialog({ lead, open, onClose, onStatusChange }: {
   lead: Lead | null;
   open: boolean;
   onClose: () => void;
+  onStatusChange?: (status: string) => void;
 }) {
   const utils = trpc.useUtils();
   const { data: messages, isLoading } = trpc.brandLeads.messages.useQuery(
@@ -295,9 +296,14 @@ function MessagePreviewDialog({ lead, open, onClose }: {
   // Gap #3: log a manual reply/outcome on the lead (no inbox automation exists —
   // the operator records what happened after they sent the outreach by hand).
   const setStatus = trpc.brandLeads.setStatus.useMutation({
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       utils.brandLeads.list.invalidate();
       utils.brandLeads.stats.invalidate();
+      // BO-03: the `lead` prop is a frozen snapshot captured when the dialog
+      // was opened — invalidating the list query doesn't touch it. Patch the
+      // parent's copy directly with the status we just set (from `variables`,
+      // not a closed-over value) so the chip updates without a reopen.
+      onStatusChange?.(variables.status);
     },
   });
 
@@ -712,6 +718,7 @@ export default function BrandLeadsPage() {
         lead={previewLead}
         open={!!previewLead}
         onClose={() => setPreviewLead(null)}
+        onStatusChange={(status) => setPreviewLead((prev) => prev ? { ...prev, status } : prev)}
       />
     </div>
   );
