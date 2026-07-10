@@ -7,6 +7,7 @@ import {
   createRedisConnection,
 } from "@postautomation/queue";
 import { resolveOrgAuthor } from "../lib/system-user";
+import { deriveRunStatus } from "./lib/run-status";
 import {
   generateContent,
   suggestHashtags,
@@ -303,12 +304,13 @@ export function createContentGenerateWorker() {
               done >= updated.totalItems &&
               updated.status === "RUNNING"
             ) {
+              const settledStatus = deriveRunStatus(updated);
               await prisma.pipelineRun.update({
                 where: { id: pipelineRunId },
-                data: { status: "COMPLETED", completedAt: new Date() },
+                data: { status: settledStatus, completedAt: new Date() },
               });
               console.log(
-                `[ContentGenerate] Pipeline ${pipelineRunId} COMPLETED (${done}/${updated.totalItems} items)`,
+                `[ContentGenerate] Pipeline ${pipelineRunId} ${settledStatus} (${done}/${updated.totalItems} items)`,
               );
             }
           } catch {}
@@ -380,11 +382,12 @@ export function createContentGenerateWorker() {
             done >= updated.totalItems &&
             updated.status === "RUNNING"
           ) {
+            const settledStatus = deriveRunStatus(updated);
             await prisma.pipelineRun.update({
               where: { id: pipelineRunId },
-              data: { status: "COMPLETED", completedAt: new Date() },
+              data: { status: settledStatus, completedAt: new Date() },
             });
-            console.log(`[ContentGenerate] Pipeline ${pipelineRunId} COMPLETED (${done}/${updated.totalItems} items)`);
+            console.log(`[ContentGenerate] Pipeline ${pipelineRunId} ${settledStatus} (${done}/${updated.totalItems} items)`);
           }
         } catch {}
 
@@ -430,11 +433,12 @@ export function createContentGenerateWorker() {
               done >= updated.totalItems &&
               updated.status === "RUNNING"
             ) {
+              const settledStatus = deriveRunStatus(updated);
               await prisma.pipelineRun.update({
                 where: { id: pipelineRunId },
-                data: { status: "COMPLETED", completedAt: new Date() },
+                data: { status: settledStatus, completedAt: new Date() },
               });
-              console.log(`[ContentGenerate] Pipeline ${pipelineRunId} COMPLETED with errors (${done}/${updated.totalItems} items)`);
+              console.log(`[ContentGenerate] Pipeline ${pipelineRunId} ${settledStatus} (${done}/${updated.totalItems} items)`);
             }
           } catch {}
         } catch (updateErr) {
