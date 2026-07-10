@@ -64,7 +64,6 @@ const sentimentIcons = {
 
 const PLATFORMS = [
   { id: "twitter", label: "X / Twitter" },
-  { id: "facebook", label: "Facebook" },
   { id: "instagram", label: "Instagram" },
   { id: "linkedin", label: "LinkedIn" },
   { id: "reddit", label: "Reddit" },
