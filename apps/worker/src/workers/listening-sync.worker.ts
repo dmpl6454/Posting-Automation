@@ -7,6 +7,7 @@ import {
   type ListeningSyncJobData,
   createRedisConnection,
 } from "@postautomation/queue";
+import { hasSurgeBaseline } from "./lib/surge-guard";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -533,7 +534,7 @@ export function createListeningSyncWorker() {
       ]);
 
       // Volume surge alert: 2x increase
-      if (previousCount > 0 && recentCount >= previousCount * 2) {
+      if (hasSurgeBaseline(query.createdAt) && previousCount > 0 && recentCount >= previousCount * 2) {
         await prisma.sentimentAlert.create({
           data: {
             listeningQueryId,
@@ -554,7 +555,7 @@ export function createListeningSyncWorker() {
         },
       });
 
-      if (recentCount > 0 && recentNegative / recentCount > 0.5 && recentNegative >= 3) {
+      if (hasSurgeBaseline(query.createdAt) && recentCount > 0 && recentNegative / recentCount > 0.5 && recentNegative >= 3) {
         await prisma.sentimentAlert.create({
           data: {
             listeningQueryId,
