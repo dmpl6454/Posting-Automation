@@ -1,6 +1,7 @@
 import { Worker, type Job } from "bullmq";
 import { prisma } from "@postautomation/db";
 import { QUEUE_NAMES, type OutreachSendJobData, createRedisConnection } from "@postautomation/queue";
+import { reconcileLeadStatus } from "./lib/lead-status";
 
 // A send attempt has three honest outcomes (a thrown error is the fourth,
 // handled by the caller's try/catch → FAILED):
@@ -235,23 +236,37 @@ export function createOutreachSendWorker() {
         },
       });
 
-      if (error) throw new Error(error);
-
-      // Mark the lead SENT only when every message has reached a TERMINAL-SENT
-      // state. DRAFT/QUEUED are still in-flight; PENDING_MANUAL is awaiting a
-      // human action — both mean the lead is NOT done, so they keep it out of
-      // SENT. (Previously only DRAFT/QUEUED counted, so a LinkedIn-only lead
-      // flipped to SENT while nothing was actually delivered.)
-      const pendingMsgs = await prisma.outreachMessage.count({
-        where: { leadId, status: { in: ["DRAFT", "QUEUED", "PENDING_MANUAL"] } },
+      // Reconcile the lead's terminal status from ALL its message outcomes,
+      // BEFORE the throw below, so a failed send still updates the lead.
+      // DRAFT/QUEUED are still in-flight; PENDING_MANUAL is awaiting a human
+      // action — all three mean the lead is NOT done yet (pendingCount > 0).
+      // Once nothing is pending: any real SENT wins (a lead is "done" if at
+      // least one channel delivered, even if another channel failed); only
+      // if nothing sent AND something failed does the lead become FAILED —
+      // previously this branch only ever wrote SENT, so a lead whose sole
+      // send attempt failed silently kept its old status and the UI's FAILED
+      // chip never lit up.
+      const [pendingMsgs, sentMsgs, failedMsgs] = await Promise.all([
+        prisma.outreachMessage.count({
+          where: { leadId, status: { in: ["DRAFT", "QUEUED", "PENDING_MANUAL"] } },
+        }),
+        prisma.outreachMessage.count({ where: { leadId, status: "SENT" } }),
+        prisma.outreachMessage.count({ where: { leadId, status: "FAILED" } }),
+      ]);
+      const leadStatus = reconcileLeadStatus({
+        hasFailed: failedMsgs > 0,
+        pendingCount: pendingMsgs,
+        sentCount: sentMsgs,
       });
-      if (pendingMsgs === 0) {
+      if (leadStatus) {
         await prisma.outreachLead.update({
           where: { id: leadId },
-          data: { status: "SENT" },
+          data: { status: leadStatus },
         });
-        console.log(`[OutreachSend] Lead ${leadId} fully sent`);
+        console.log(`[OutreachSend] Lead ${leadId} → ${leadStatus}`);
       }
+
+      if (error) throw new Error(error);
     },
     {
       connection: createRedisConnection(),
