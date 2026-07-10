@@ -293,6 +293,16 @@ function MessagePreviewDialog({ lead, open, onClose, onStatusChange }: {
     { enabled: open && !!lead }
   );
 
+  // BO-03/BO-04 lockout fix: gate manual-outcome logging on whether a message
+  // EVER reached SENT (an append-only historical fact, mirrors the server's
+  // outreachMessage.count check), NOT on the lead's CURRENT `status`. BO-03
+  // patches `lead.status` to the just-logged outcome (e.g. "REPLIED") on every
+  // successful setStatus call — gating on `lead.status !== "SENT"` after that
+  // would read true forever and permanently disable the buttons after the
+  // very first outcome was logged. `messages` is already loaded above, so this
+  // stays correct (and keeps being true) once at least one message was sent.
+  const hasEverSent = messages?.some((m) => m.status === "SENT") ?? false;
+
   // Gap #3: log a manual reply/outcome on the lead (no inbox automation exists —
   // the operator records what happened after they sent the outreach by hand).
   const setStatus = trpc.brandLeads.setStatus.useMutation({
@@ -373,7 +383,7 @@ function MessagePreviewDialog({ lead, open, onClose, onStatusChange }: {
                 key={outcome}
                 size="sm"
                 variant={lead.status === outcome ? "default" : "outline"}
-                disabled={setStatus.isPending || lead.status !== "SENT"}
+                disabled={setStatus.isPending || !hasEverSent}
                 className="h-7 text-[11px]"
                 onClick={() => setStatus.mutate({ leadId: lead.id, status: outcome })}
               >
@@ -382,8 +392,10 @@ function MessagePreviewDialog({ lead, open, onClose, onStatusChange }: {
             ))}
           </div>
           {/* BO-04: these are post-send outcomes — gate them until outreach has
-              actually gone out, so we don't log e.g. "Replied" on a PENDING lead. */}
-          {lead.status !== "SENT" && (
+              actually gone out, so we don't log e.g. "Replied" on a PENDING lead.
+              Gated on hasEverSent (not lead.status), so it never re-locks once a
+              real send has happened, no matter how many times the outcome changes. */}
+          {!hasEverSent && (
             <p className="text-[10px] text-amber-600 dark:text-amber-400">
               Available after outreach is sent.
             </p>
