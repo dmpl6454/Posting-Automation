@@ -196,9 +196,14 @@ export default function AutopilotPostsPage() {
                     <span className="text-xs text-muted-foreground">
                       {formatDate(publishedAt)}
                     </span>
-                    <div className="ml-auto flex flex-wrap gap-1">
+                    <div className="ml-auto flex flex-wrap gap-2">
                       {targets.map((t: any) => (
-                        <StatusBadge key={t.id} status={t.status} />
+                        <span key={t.id} className="inline-flex items-center gap-1">
+                          <StatusBadge status={t.status} />
+                          <span className="text-[10px] text-muted-foreground">
+                            {t.channel?.name ?? t.channel?.platform ?? "Channel"}
+                          </span>
+                        </span>
                       ))}
                     </div>
                   </div>
