@@ -205,13 +205,14 @@ export default function AutopilotAgentsPage() {
                   >
                     <Play className="h-3.5 w-3.5" />
                   </Button>
-                  <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => openEdit(agent)}>
+                  <Button size="icon" variant="ghost" className="h-7 w-7" aria-label={`Edit ${agent.name}`} onClick={() => openEdit(agent)}>
                     <Pencil className="h-3.5 w-3.5" />
                   </Button>
                   <Button
                     size="icon"
                     variant="ghost"
                     className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                    aria-label={`Delete ${agent.name}`}
                     disabled={deleteMutation.isPending}
                     onClick={() => { if (confirm(`Delete agent "${agent.name}"? This cannot be undone.`)) deleteMutation.mutate({ id: agent.id }); }}
                   >

@@ -266,6 +266,7 @@ function LeadCard({ lead, onApprove, onReject, onView, isApproving, isRejecting 
                   size="sm"
                   variant="ghost"
                   className="h-7 px-2 text-xs text-muted-foreground"
+                  aria-label="Reject lead"
                   onClick={onReject}
                   disabled={isRejecting}
                 >
