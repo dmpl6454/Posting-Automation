@@ -24,6 +24,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "~/components/ui/dialog";
+import { ConfirmDialog } from "~/components/ui/confirm-dialog";
 import { Plus, Trash2, Pencil, Bot, Loader2, Play, Info } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 
@@ -52,6 +53,7 @@ export default function AutopilotAgentsPage() {
 
   const utils = trpc.useUtils();
   const { data: agents, isLoading } = trpc.agent.list.useQuery();
+  const [pendingDelete, setPendingDelete] = useState<NonNullable<typeof agents>[number] | null>(null);
   const { data: channels } = trpc.channel.list.useQuery();
 
   const createMutation = trpc.agent.create.useMutation({
@@ -214,7 +216,7 @@ export default function AutopilotAgentsPage() {
                     className="h-7 w-7 text-muted-foreground hover:text-destructive"
                     aria-label={`Delete ${agent.name}`}
                     disabled={deleteMutation.isPending}
-                    onClick={() => { if (confirm(`Delete agent "${agent.name}"? This cannot be undone.`)) deleteMutation.mutate({ id: agent.id }); }}
+                    onClick={() => setPendingDelete(agent)}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
@@ -377,6 +379,21 @@ export default function AutopilotAgentsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={!!pendingDelete}
+        onOpenChange={(open) => { if (!open) setPendingDelete(null); }}
+        title="Delete agent"
+        description={`Delete agent "${pendingDelete?.name}"? This cannot be undone.`}
+        confirmLabel="Delete"
+        isPending={deleteMutation.isPending}
+        onConfirm={() => {
+          if (pendingDelete) {
+            deleteMutation.mutate({ id: pendingDelete.id });
+            setPendingDelete(null);
+          }
+        }}
+      />
     </div>
   );
 }
