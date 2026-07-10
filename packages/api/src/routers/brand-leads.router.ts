@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
 import { requirePlan } from "../middleware/plan-limit.middleware";
 
@@ -120,6 +121,16 @@ export const brandLeadsRouter = createRouter({
       const lead = await ctx.prisma.outreachLead.findFirstOrThrow({
         where: { id: input.leadId, signal: { organizationId: ctx.organizationId } },
       });
+      // BO-04: a manual outcome (reply/interested/etc.) is semantically a
+      // POST-SEND state — you can't have a "reply" before anything was sent.
+      // "SENT" is the same authoritative signal the outreach-send worker uses
+      // (reconcileLeadStatus: at least one channel delivered), so gate on it here.
+      if (lead.status !== "SENT") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Cannot log an outcome before outreach has been sent.",
+        });
+      }
       return ctx.prisma.outreachLead.update({
         where: { id: lead.id },
         data: { status: input.status },

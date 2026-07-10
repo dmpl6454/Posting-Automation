@@ -373,7 +373,7 @@ function MessagePreviewDialog({ lead, open, onClose, onStatusChange }: {
                 key={outcome}
                 size="sm"
                 variant={lead.status === outcome ? "default" : "outline"}
-                disabled={setStatus.isPending}
+                disabled={setStatus.isPending || lead.status !== "SENT"}
                 className="h-7 text-[11px]"
                 onClick={() => setStatus.mutate({ leadId: lead.id, status: outcome })}
               >
@@ -381,6 +381,13 @@ function MessagePreviewDialog({ lead, open, onClose, onStatusChange }: {
               </Button>
             ))}
           </div>
+          {/* BO-04: these are post-send outcomes — gate them until outreach has
+              actually gone out, so we don't log e.g. "Replied" on a PENDING lead. */}
+          {lead.status !== "SENT" && (
+            <p className="text-[10px] text-amber-600 dark:text-amber-400">
+              Available after outreach is sent.
+            </p>
+          )}
           <p className="text-[10px] text-muted-foreground">
             Replies aren&apos;t tracked automatically — set the outcome here after you hear back.
           </p>
