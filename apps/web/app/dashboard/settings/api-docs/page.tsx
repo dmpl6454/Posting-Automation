@@ -669,7 +669,7 @@ function JsonBlock({ data }: { data: unknown }) {
 function AuthBadge({ auth }: { auth: string }) {
   if (auth === "public") {
     return (
-      <Badge variant="outline" className="text-xs gap-1">
+      <Badge variant="outline" className="text-xs gap-1 shrink-0">
         <Globe className="h-3 w-3" />
         Public
       </Badge>
@@ -677,14 +677,14 @@ function AuthBadge({ auth }: { auth: string }) {
   }
   if (auth === "session+org") {
     return (
-      <Badge variant="secondary" className="text-xs gap-1">
+      <Badge variant="secondary" className="text-xs gap-1 shrink-0">
         <Lock className="h-3 w-3" />
         Session + Org
       </Badge>
     );
   }
   return (
-    <Badge variant="secondary" className="text-xs gap-1">
+    <Badge variant="secondary" className="text-xs gap-1 shrink-0">
       <Lock className="h-3 w-3" />
       Session
     </Badge>
@@ -721,7 +721,7 @@ function ProcedureCard({
           >
             {procedure.type === "query" ? "GET" : "POST"}
           </Badge>
-          <code className="text-sm font-mono font-medium">
+          <code className="text-sm font-mono font-medium truncate">
             {routerName}.{procedure.name}
           </code>
         </div>

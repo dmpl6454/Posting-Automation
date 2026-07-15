@@ -95,14 +95,14 @@ export default function ReviewQueuePage() {
           </h3>
           {failedPosts.map((p: any) => (
             <Card key={p.id} className="border-destructive/40 p-3">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-sm font-medium">
+              <div className="flex items-start justify-between gap-2">
+                <span className="min-w-0 break-words text-sm font-medium">
                   {p.agent?.name ?? "Agent"} · {p.trendingItem?.title ?? "Untitled"}
                 </span>
-                <Badge variant="destructive">Failed</Badge>
+                <Badge variant="destructive" className="shrink-0">Failed</Badge>
               </div>
               {p.errorMessage && (
-                <p className="mt-1 text-xs text-muted-foreground">
+                <p className="mt-1 break-words text-xs text-muted-foreground">
                   {p.errorMessage}
                 </p>
               )}
@@ -268,7 +268,7 @@ export default function ReviewQueuePage() {
                   {/* Caption */}
                   {item.post?.content && (
                     <div className="rounded-md border bg-muted/30 p-4">
-                      <p className="line-clamp-3 text-sm">
+                      <p className="line-clamp-3 break-words text-sm">
                         {item.post.content}
                       </p>
                     </div>

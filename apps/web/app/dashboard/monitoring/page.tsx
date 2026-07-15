@@ -116,7 +116,7 @@ export default function MonitoringPage() {
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-4">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-xl font-bold flex items-center gap-2">
             <Monitor className="h-5 w-5 text-blue-500" />
@@ -125,11 +125,11 @@ export default function MonitoringPage() {
           <p className="text-xs text-muted-foreground">Track bugs and issues across frontend, API, and workers</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={handleRefresh} disabled={isRefreshing}>
+          <Button variant="outline" size="sm" onClick={handleRefresh} disabled={isRefreshing} className="flex-1 sm:flex-none">
             <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${isRefreshing ? "animate-spin" : ""}`} />
             {isRefreshing ? "Refreshing…" : "Refresh"}
           </Button>
-          <Button size="sm" onClick={handleCopyForClaude} disabled={claudeReport.isFetching}>
+          <Button size="sm" onClick={handleCopyForClaude} disabled={claudeReport.isFetching} className="flex-1 sm:flex-none">
             {claudeReport.isFetching ? (
               <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
             ) : copied ? (
@@ -137,7 +137,8 @@ export default function MonitoringPage() {
             ) : (
               <Copy className="h-3.5 w-3.5 mr-1.5" />
             )}
-            Copy Report for Claude
+            <span className="sm:hidden">Copy Report</span>
+            <span className="hidden sm:inline">Copy Report for Claude</span>
           </Button>
         </div>
       </div>
@@ -193,9 +194,9 @@ export default function MonitoringPage() {
       )}
 
       {/* Filters */}
-      <div className="flex items-center gap-3">
-        <Tabs value={source} onValueChange={setSource}>
-          <TabsList>
+      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
+        <Tabs value={source} onValueChange={setSource} className="w-full overflow-x-auto sm:w-auto">
+          <TabsList className="w-max">
             <TabsTrigger value="all">All</TabsTrigger>
             <TabsTrigger value="frontend">Frontend</TabsTrigger>
             <TabsTrigger value="api">API</TabsTrigger>
@@ -204,6 +205,7 @@ export default function MonitoringPage() {
             <TabsTrigger value="auto-healer">Auto-Heal</TabsTrigger>
           </TabsList>
         </Tabs>
+        <div className="flex flex-wrap items-center gap-2">
         <Button
           variant={resolved ? "default" : "outline"}
           size="sm"
@@ -246,6 +248,7 @@ export default function MonitoringPage() {
             Clear Resolved
           </Button>
         )}
+        </div>
       </div>
 
       {/* Error List */}

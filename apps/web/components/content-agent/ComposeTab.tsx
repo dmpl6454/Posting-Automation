@@ -701,12 +701,12 @@ ${content}`;
               <CardDescription>Describe what you want to post and AI will write it for you</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
-              <div className="flex gap-2">
+              <div className="flex items-center gap-2">
                 <Input
                   value={aiPrompt}
                   onChange={(e) => setAiPrompt(e.target.value)}
                   placeholder="e.g. Write a post about upcoming Marvel movies in 2026..."
-                  className="flex-1 bg-background"
+                  className="min-w-0 flex-1 bg-background"
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.shiftKey && aiPrompt.trim()) {
                       e.preventDefault();
@@ -718,7 +718,7 @@ ${content}`;
                 <Button
                   onClick={handleCreateWithAI}
                   disabled={!aiPrompt.trim() || isCreatingWithAI || !aiConfig?.anyConfigured}
-                  className="gap-1.5 bg-purple-600 hover:bg-purple-700"
+                  className="shrink-0 gap-1.5 bg-purple-600 hover:bg-purple-700"
                   title={!aiConfig?.anyConfigured ? "No AI provider configured — add an API key to enable" : undefined}
                 >
                   {isCreatingWithAI ? (
