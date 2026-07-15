@@ -558,7 +558,7 @@ export default function BrandLeadsPage() {
   const pendingTodayCount = filteredLeads.filter((l) => l.status === "PENDING" && new Date(l.createdAt) >= startOfToday).length;
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="space-y-6">
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div>

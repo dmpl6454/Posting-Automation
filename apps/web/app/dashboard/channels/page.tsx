@@ -759,6 +759,7 @@ export default function ChannelsPage() {
                 />
                 <Button
                   size="sm"
+                  className="h-9 shrink-0"
                   disabled={!newGroupName.trim() || createGroup.isPending}
                   onClick={() => createGroup.mutate({ name: newGroupName.trim(), color: newGroupColor })}
                 >
@@ -766,13 +767,14 @@ export default function ChannelsPage() {
                   Create
                 </Button>
               </div>
-              <div className="flex gap-1.5">
+              <div className="flex flex-wrap gap-1.5">
                 {GROUP_COLORS.map((color) => (
                   <button
                     key={color}
                     type="button"
+                    data-compact
                     onClick={() => setNewGroupColor(color)}
-                    className={`h-5 w-5 rounded-full transition-transform ${
+                    className={`h-5 w-5 shrink-0 rounded-full transition-transform ${
                       newGroupColor === color ? "scale-125 ring-2 ring-offset-1 ring-offset-background" : ""
                     }`}
                     style={{ background: color }}
@@ -790,7 +792,7 @@ export default function ChannelsPage() {
                   <CardContent className="pt-4">
                     {/* Group header */}
                     <div className="mb-3 flex items-center gap-2">
-                      <span className="h-3 w-3 rounded-full" style={{ background: group.color }} />
+                      <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: group.color }} />
                       {editingGroupId === group.id ? (
                         <div className="flex flex-1 items-center gap-2">
                           <Input

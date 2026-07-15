@@ -89,10 +89,14 @@
    * never mouse-driven desktops, so desktop toolbar density is untouched).
    * Guarantees interactive controls meet the ~44px iOS / 48dp Android minimum.
    * Opt out on a genuinely-dense control with `data-compact` (e.g. inline chip
-   * dismiss buttons) where 44px would distort layout.
+   * dismiss buttons, colour-swatch pickers) where 44px would distort layout.
+   * Fixed-size shape controls are excluded so the floor can't stretch them into
+   * an oval/circle: toggle switches (`role="switch"`, a w-9 pill) and checkboxes
+   * (`role="checkbox"`, a small square) — inflating only their height (width is
+   * fixed) would otherwise render them as tall ellipses.
    */
   @media (pointer: coarse) {
-    button:not([data-compact]),
+    button:not([data-compact]):not([role="switch"]):not([role="checkbox"]),
     [role="button"]:not([data-compact]),
     a[role="button"]:not([data-compact]),
     [role="menuitem"]:not([data-compact]),
@@ -100,9 +104,9 @@
       min-height: 44px;
     }
     /* Square/icon-only controls also need horizontal room to be tappable. */
-    button.aspect-square:not([data-compact]),
-    button[class*="w-9"]:not([data-compact]),
-    button[class*="w-10"]:not([data-compact]),
+    button.aspect-square:not([data-compact]):not([role="switch"]):not([role="checkbox"]),
+    button[class*="w-9"]:not([data-compact]):not([role="switch"]),
+    button[class*="w-10"]:not([data-compact]):not([role="switch"]),
     [role="button"][class*="w-9"]:not([data-compact]) {
       min-width: 44px;
     }

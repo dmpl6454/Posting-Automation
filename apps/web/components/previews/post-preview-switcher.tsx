@@ -94,15 +94,16 @@ export function PostPreviewSwitcher({
   return (
     <div className="space-y-3">
       <Tabs value={activePlatform} onValueChange={setActivePlatform}>
-        <div className="overflow-x-auto">
-          <TabsList className="inline-flex w-auto min-w-full">
-            {availablePlatforms.map((p) => (
-              <TabsTrigger key={p} value={p} className="shrink-0 text-xs">
-                {getPlatformLabel(p)}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </div>
+        {/* Full-width, wrapping tab bar — tabs flow onto a second line on narrow
+            screens instead of forcing a horizontal scroll, and the muted bar
+            never overflows its container. */}
+        <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1">
+          {availablePlatforms.map((p) => (
+            <TabsTrigger key={p} value={p} className="text-xs">
+              {getPlatformLabel(p)}
+            </TabsTrigger>
+          ))}
+        </TabsList>
 
         {availablePlatforms.map((p) => (
           <TabsContent key={p} value={p}>

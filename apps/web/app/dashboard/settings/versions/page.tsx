@@ -239,86 +239,90 @@ export default function VersionsPage() {
                 return (
                   <div
                     key={dep.id}
-                    className={`flex items-center gap-4 rounded-lg border p-3 transition-colors ${
+                    className={`flex flex-col gap-3 rounded-lg border p-3 transition-colors sm:flex-row sm:items-center sm:gap-4 ${
                       isActive ? "border-green-500/20 bg-green-500/[0.02]" : "hover:bg-muted/50"
                     }`}
                   >
-                    {/* Status icon */}
-                    <div className="shrink-0">
-                      <StatusIcon className={`h-5 w-5 ${
-                        isActive ? "text-green-600" : dep.status === "rolled_back" ? "text-red-500" : "text-muted-foreground"
-                      }`} />
+                    <div className="flex items-start gap-3 sm:contents">
+                      {/* Status icon */}
+                      <div className="shrink-0">
+                        <StatusIcon className={`h-5 w-5 ${
+                          isActive ? "text-green-600" : dep.status === "rolled_back" ? "text-red-500" : "text-muted-foreground"
+                        }`} />
+                      </div>
+
+                      {/* Version info */}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-mono font-semibold text-sm">v{dep.version}</span>
+                          <Badge variant="outline" className={`text-[10px] ${config.color}`}>
+                            {config.label}
+                          </Badge>
+                          <button
+                            onClick={() => copyHash(dep.commitHash, dep.id)}
+                            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground font-mono"
+                            title="Copy commit hash"
+                          >
+                            <GitCommit className="h-3 w-3" />
+                            {dep.commitHash}
+                            {copiedId === dep.id ? (
+                              <Check className="h-3 w-3 text-green-500" />
+                            ) : (
+                              <Copy className="h-3 w-3 opacity-0 group-hover:opacity-100" />
+                            )}
+                          </button>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5 truncate max-w-lg">
+                          {dep.commitMsg}
+                        </p>
+                        {dep.changelog && (
+                          <details className="mt-1">
+                            <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground">
+                              View changelog
+                            </summary>
+                            <pre className="mt-1 text-xs text-muted-foreground whitespace-pre-wrap bg-muted/50 rounded p-2">
+                              {dep.changelog}
+                            </pre>
+                          </details>
+                        )}
+                      </div>
                     </div>
 
-                    {/* Version info */}
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono font-semibold text-sm">v{dep.version}</span>
-                        <Badge variant="outline" className={`text-[10px] ${config.color}`}>
-                          {config.label}
-                        </Badge>
-                        <button
-                          onClick={() => copyHash(dep.commitHash, dep.id)}
-                          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground font-mono"
-                          title="Copy commit hash"
-                        >
-                          <GitCommit className="h-3 w-3" />
-                          {dep.commitHash}
-                          {copiedId === dep.id ? (
-                            <Check className="h-3 w-3 text-green-500" />
-                          ) : (
-                            <Copy className="h-3 w-3 opacity-0 group-hover:opacity-100" />
-                          )}
-                        </button>
+                    <div className="flex items-center justify-between gap-3 pl-8 sm:contents sm:pl-0">
+                      {/* Timestamp */}
+                      <div className="shrink-0 sm:text-right">
+                        <p className="text-xs text-muted-foreground">{timeAgo(dep.createdAt)}</p>
+                        <p className="text-[10px] text-muted-foreground/60">
+                          {new Date(dep.createdAt).toLocaleDateString()}
+                        </p>
                       </div>
-                      <p className="text-xs text-muted-foreground mt-0.5 truncate max-w-lg">
-                        {dep.commitMsg}
-                      </p>
-                      {dep.changelog && (
-                        <details className="mt-1">
-                          <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground">
-                            View changelog
-                          </summary>
-                          <pre className="mt-1 text-xs text-muted-foreground whitespace-pre-wrap bg-muted/50 rounded p-2">
-                            {dep.changelog}
-                          </pre>
-                        </details>
+
+                      {/* Rollback button — only on non-active, non-already-rolled-back rows */}
+                      {!isActive && dep.status !== "rolled_back" && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="shrink-0 gap-1.5"
+                          onClick={() => {
+                            if (
+                              confirm(
+                                `Request rollback to v${dep.version} (${dep.commitHash})?\n\nNote: you will need to run the deploy script on the server to complete the rollback.`
+                              )
+                            ) {
+                              rollback.mutate({ deploymentId: dep.id });
+                            }
+                          }}
+                          disabled={rollback.isPending}
+                        >
+                          {rollback.isPending ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <RotateCcw className="h-3.5 w-3.5" />
+                          )}
+                          Rollback
+                        </Button>
                       )}
                     </div>
-
-                    {/* Timestamp */}
-                    <div className="shrink-0 text-right">
-                      <p className="text-xs text-muted-foreground">{timeAgo(dep.createdAt)}</p>
-                      <p className="text-[10px] text-muted-foreground/60">
-                        {new Date(dep.createdAt).toLocaleDateString()}
-                      </p>
-                    </div>
-
-                    {/* Rollback button — only on non-active, non-already-rolled-back rows */}
-                    {!isActive && dep.status !== "rolled_back" && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="shrink-0 gap-1.5"
-                        onClick={() => {
-                          if (
-                            confirm(
-                              `Request rollback to v${dep.version} (${dep.commitHash})?\n\nNote: you will need to run the deploy script on the server to complete the rollback.`
-                            )
-                          ) {
-                            rollback.mutate({ deploymentId: dep.id });
-                          }
-                        }}
-                        disabled={rollback.isPending}
-                      >
-                        {rollback.isPending ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <RotateCcw className="h-3.5 w-3.5" />
-                        )}
-                        Rollback
-                      </Button>
-                    )}
                   </div>
                 );
               })}

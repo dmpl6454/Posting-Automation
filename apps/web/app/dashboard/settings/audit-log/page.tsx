@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { trpc } from "~/lib/trpc/client";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
@@ -343,8 +343,8 @@ export default function AuditLogPage() {
               </TableHeader>
               <TableBody>
                 {data.logs.map((log: any) => (
+                  <Fragment key={log.id}>
                   <TableRow
-                    key={log.id}
                     className="cursor-pointer"
                     onClick={() =>
                       setExpandedRow(
@@ -352,7 +352,7 @@ export default function AuditLogPage() {
                       )
                     }
                   >
-                    <TableCell className="text-xs text-muted-foreground">
+                    <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
                       {formatDate(log.createdAt)}
                     </TableCell>
                     <TableCell>
@@ -398,36 +398,29 @@ export default function AuditLogPage() {
                     </TableCell>
                     <TableCell>
                       {log.metadata ? (
-                        <div>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-6 px-2 text-xs"
-                            onClick={(e: any) => {
-                              e.stopPropagation();
-                              setExpandedRow(
-                                expandedRow === log.id ? null : log.id
-                              );
-                            }}
-                          >
-                            {expandedRow === log.id ? (
-                              <>
-                                <ChevronUp className="mr-1 h-3 w-3" />
-                                Hide
-                              </>
-                            ) : (
-                              <>
-                                <ChevronDown className="mr-1 h-3 w-3" />
-                                Show
-                              </>
-                            )}
-                          </Button>
-                          {expandedRow === log.id && (
-                            <pre className="mt-2 max-w-xs overflow-auto rounded bg-muted/50 p-2 font-mono text-[11px] text-muted-foreground">
-                              {JSON.stringify(log.metadata, null, 2)}
-                            </pre>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 px-2 text-xs whitespace-nowrap"
+                          onClick={(e: any) => {
+                            e.stopPropagation();
+                            setExpandedRow(
+                              expandedRow === log.id ? null : log.id
+                            );
+                          }}
+                        >
+                          {expandedRow === log.id ? (
+                            <>
+                              <ChevronUp className="mr-1 h-3 w-3" />
+                              Hide
+                            </>
+                          ) : (
+                            <>
+                              <ChevronDown className="mr-1 h-3 w-3" />
+                              Show
+                            </>
                           )}
-                        </div>
+                        </Button>
                       ) : (
                         <span className="text-xs text-muted-foreground/50">
                           --
@@ -435,6 +428,18 @@ export default function AuditLogPage() {
                       )}
                     </TableCell>
                   </TableRow>
+                  {/* Expanded metadata spans the full width below the row so it's
+                      never cropped by horizontal scroll on mobile. */}
+                  {expandedRow === log.id && log.metadata && (
+                    <TableRow>
+                      <TableCell colSpan={5} className="bg-muted/20">
+                        <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded bg-muted/50 p-2 font-mono text-[11px] text-muted-foreground">
+                          {JSON.stringify(log.metadata, null, 2)}
+                        </pre>
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  </Fragment>
                 ))}
               </TableBody>
             </Table>

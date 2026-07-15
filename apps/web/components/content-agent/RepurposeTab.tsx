@@ -1055,9 +1055,10 @@ export function RepurposeTab() {
                     variant="outline"
                     onClick={handleExtractPreview}
                     disabled={!url || extractMutation.isPending}
+                    className="shrink-0 gap-1.5"
                   >
                     {extractMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Globe className="h-4 w-4" />}
-                    <span className="ml-1.5 hidden sm:inline">Preview</span>
+                    <span>Preview</span>
                   </Button>
                 </div>
               </div>
