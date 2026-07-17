@@ -137,6 +137,36 @@ export const superAdminProcedure = protectedProcedure.use(({ ctx, next }) => {
   return next({ ctx });
 });
 
+/**
+ * App-level admin check (User.appRole). isSuperAdmin implies ADMIN — mirrors
+ * every existing gate's ctx.isSuperAdmin early-return, and protects an
+ * un-backfilled super admin from ever locking out. The claim is DB-fresh per
+ * request (the NextAuth jwt callback re-reads the User row on every auth()).
+ *
+ * RBAC_DISABLED=true is the emergency kill switch (mirrors BILLING_DISABLED:
+ * env-only rollback, no redeploy). Unset/other = enforced.
+ */
+export const isAppAdmin = (sessionUser: unknown): boolean => {
+  const u = sessionUser as { appRole?: string; isSuperAdmin?: boolean } | null | undefined;
+  return u?.appRole === "ADMIN" || u?.isSuperAdmin === true;
+};
+
+const requireAppAdmin = <C extends { session?: { user?: unknown } | null }>(ctx: C) => {
+  if (process.env.RBAC_DISABLED === "true") return;
+  if (!isAppAdmin(ctx.session?.user)) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "This area requires an admin role. Ask a workspace admin to upgrade your access.",
+    });
+  }
+};
+
+/** protectedProcedure + app-admin gate — for admin-only routers not built on orgProcedure. */
+export const adminProtectedProcedure = protectedProcedure.use(({ ctx, next }) => {
+  requireAppAdmin(ctx);
+  return next({ ctx });
+});
+
 // Require org membership — auto-resolves or creates a default org
 export const orgProcedure = protectedProcedure.use(async ({ ctx, next }) => {
   const userId = (ctx.session.user as any).id;
@@ -220,4 +250,12 @@ export const orgProcedure = protectedProcedure.use(async ({ ctx, next }) => {
       isSuperAdmin,
     },
   });
+});
+
+/** orgProcedure + app-admin gate — use for admin-only feature areas (RSS,
+ *  autopilot, listening, campaigns, outreach, team mgmt, webhooks, ...).
+ *  See isAppAdmin/requireAppAdmin above; RBAC_DISABLED=true bypasses. */
+export const adminOrgProcedure = orgProcedure.use(({ ctx, next }) => {
+  requireAppAdmin(ctx);
+  return next({ ctx });
 });

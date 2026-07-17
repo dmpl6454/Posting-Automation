@@ -1,4 +1,5 @@
 "use client";
+import { RequireAppAdmin } from "~/components/auth/require-app-admin";
 
 import { humanizeError } from "~/lib/errors";
 
@@ -110,7 +111,7 @@ function SearchableChannelSelect({
   );
 }
 
-export default function LogoLibraryPage() {
+function LogoLibraryPageInner() {
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -279,5 +280,16 @@ export default function LogoLibraryPage() {
         </div>
       )}
     </div>
+  );
+}
+
+// App-level RBAC (2026-07-17): this page is an admin-only area. Server-side
+// enforcement lives in tRPC (adminOrgProcedure); this wrapper only provides a
+// clear "Admin access required" screen for USER-role deep links.
+export default function LogoLibraryPage() {
+  return (
+    <RequireAppAdmin>
+      <LogoLibraryPageInner />
+    </RequireAppAdmin>
   );
 }

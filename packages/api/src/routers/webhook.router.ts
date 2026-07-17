@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import crypto from "crypto";
-import { createRouter, orgProcedure } from "../trpc";
+import { createRouter, adminOrgProcedure } from "../trpc";
 import { requirePlan } from "../middleware/plan-limit.middleware";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 import { webhookUrlSchema } from "../lib/url-safety";
@@ -13,7 +13,7 @@ function requireOwnerOrAdmin(role: string | undefined) {
 }
 
 export const webhookRouter = createRouter({
-  list: orgProcedure.query(async ({ ctx }) => {
+  list: adminOrgProcedure.query(async ({ ctx }) => {
     requireOwnerOrAdmin(ctx.membership.role);
     return ctx.prisma.webhook.findMany({
       where: { organizationId: ctx.organizationId },
@@ -21,7 +21,7 @@ export const webhookRouter = createRouter({
     });
   }),
 
-  create: orgProcedure
+  create: adminOrgProcedure
     .input(
       z.object({
         // Fix #88/#90/#91: SSRF guard — must be HTTPS, no private/loopback addresses
@@ -58,7 +58,7 @@ export const webhookRouter = createRouter({
       return webhook;
     }),
 
-  delete: orgProcedure
+  delete: adminOrgProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       requireOwnerOrAdmin(ctx.membership.role);

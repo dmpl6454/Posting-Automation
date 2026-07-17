@@ -1,4 +1,5 @@
 "use client";
+import { RequireAppAdmin } from "~/components/auth/require-app-admin";
 
 import { useState } from "react";
 import { trpc } from "~/lib/trpc/client";
@@ -46,7 +47,7 @@ const defaultForm = {
   customPrompt: "",
 };
 
-export default function AutopilotAgentsPage() {
+function AutopilotAgentsPageInner() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState(defaultForm);
@@ -395,5 +396,16 @@ export default function AutopilotAgentsPage() {
         }}
       />
     </div>
+  );
+}
+
+// App-level RBAC (2026-07-17): this page is an admin-only area. Server-side
+// enforcement lives in tRPC (adminOrgProcedure); this wrapper only provides a
+// clear "Admin access required" screen for USER-role deep links.
+export default function AutopilotAgentsPage() {
+  return (
+    <RequireAppAdmin>
+      <AutopilotAgentsPageInner />
+    </RequireAppAdmin>
   );
 }

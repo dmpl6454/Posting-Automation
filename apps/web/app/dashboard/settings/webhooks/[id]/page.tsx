@@ -1,4 +1,5 @@
 "use client";
+import { RequireAppAdmin } from "~/components/auth/require-app-admin";
 
 import { humanizeError } from "~/lib/errors";
 
@@ -30,7 +31,7 @@ import {
 
 type FilterStatus = "all" | "success" | "failure";
 
-export default function WebhookDeliveryPage() {
+function WebhookDeliveryPageInner() {
   const params = useParams();
   const webhookId = params.id as string;
   const { toast } = useToast();
@@ -349,5 +350,16 @@ export default function WebhookDeliveryPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+// App-level RBAC (2026-07-17): this page is an admin-only area. Server-side
+// enforcement lives in tRPC (adminOrgProcedure); this wrapper only provides a
+// clear "Admin access required" screen for USER-role deep links.
+export default function WebhookDeliveryPage() {
+  return (
+    <RequireAppAdmin>
+      <WebhookDeliveryPageInner />
+    </RequireAppAdmin>
   );
 }

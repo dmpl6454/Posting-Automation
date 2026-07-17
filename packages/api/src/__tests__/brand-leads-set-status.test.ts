@@ -20,7 +20,7 @@ const setStatusProc = src.slice(src.indexOf("setStatus:"), src.length);
 
 describe("brandLeads.setStatus (gap #3)", () => {
   it("the setStatus mutation exists", () => {
-    expect(src).toMatch(/setStatus: orgProcedure/);
+    expect(src).toMatch(/setStatus: adminOrgProcedure/); // RBAC 2026-07-17: brand-leads is admin-only
   });
 
   it("accepts ONLY the manual post-send outcomes (not pipeline states)", () => {

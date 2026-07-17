@@ -34,6 +34,7 @@ export const adminUsersRouter = createRouter({
           email: true,
           image: true,
           isSuperAdmin: true,
+          appRole: true,
           isBanned: true,
           createdAt: true,
           _count: { select: { memberships: true } },
@@ -102,6 +103,36 @@ export const adminUsersRouter = createRouter({
         entityType: "User",
         entityId: input.userId,
         metadata: { newValue: updated.isSuperAdmin },
+      }).catch(() => {});
+
+      return updated;
+    }),
+
+  /**
+   * App-level RBAC (2026-07-17): flip a user between USER (limited: Dashboard,
+   * Content Studio, Super Agent, Media, Insights, Channels) and ADMIN (all
+   * feature areas). Orthogonal to isSuperAdmin — a super admin passes every
+   * appRole gate regardless of this value, so demoting a super admin's appRole
+   * has no effect until their super-admin flag is also removed.
+   * Enforcement is DB-fresh per request (jwt callback re-reads the User row),
+   * so changes take effect immediately server-side; the target user's cached
+   * nav updates on their next page reload.
+   */
+  setAppRole: superAdminProcedure
+    .input(z.object({ userId: z.string(), appRole: z.enum(["USER", "ADMIN"]) }))
+    .mutation(async ({ ctx, input }) => {
+      const updated = await ctx.prisma.user.update({
+        where: { id: input.userId },
+        data: { appRole: input.appRole },
+        select: { id: true, email: true, appRole: true },
+      });
+
+      createAuditLog({
+        userId: (ctx.session.user as any).id,
+        action: AUDIT_ACTIONS.ADMIN_USER_APPROLE_CHANGED,
+        entityType: "User",
+        entityId: input.userId,
+        metadata: { newValue: updated.appRole },
       }).catch(() => {});
 
       return updated;

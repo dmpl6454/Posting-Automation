@@ -1,10 +1,10 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { createRouter, orgProcedure } from "../trpc";
+import { createRouter, adminOrgProcedure } from "../trpc";
 import { webhookDeliveryQueue } from "@postautomation/queue";
 
 export const webhookDeliveryRouter = createRouter({
-  list: orgProcedure
+  list: adminOrgProcedure
     .input(
       z.object({
         webhookId: z.string(),
@@ -59,7 +59,7 @@ export const webhookDeliveryRouter = createRouter({
       };
     }),
 
-  get: orgProcedure
+  get: adminOrgProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
       const delivery = await ctx.prisma.webhookDelivery.findUnique({
@@ -89,7 +89,7 @@ export const webhookDeliveryRouter = createRouter({
       return delivery;
     }),
 
-  retry: orgProcedure
+  retry: adminOrgProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const delivery = await ctx.prisma.webhookDelivery.findUnique({

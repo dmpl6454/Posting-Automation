@@ -1,4 +1,5 @@
 "use client";
+import { RequireAppAdmin } from "~/components/auth/require-app-admin";
 
 import { useState } from "react";
 import { trpc } from "~/lib/trpc/client";
@@ -72,7 +73,7 @@ const platformIcons: Record<string, React.ReactNode> = {
 
 type Tab = "campaigns" | "brands" | "content" | "influencers";
 
-export default function CampaignsPage() {
+function CampaignsPageInner() {
   const [activeTab, setActiveTab] = useState<Tab>("campaigns");
   const [campaignDialogOpen, setCampaignDialogOpen] = useState(false);
   const [brandDialogOpen, setBrandDialogOpen] = useState(false);
@@ -737,5 +738,16 @@ export default function CampaignsPage() {
         </div>
       )}
     </div>
+  );
+}
+
+// App-level RBAC (2026-07-17): this page is an admin-only area. Server-side
+// enforcement lives in tRPC (adminOrgProcedure); this wrapper only provides a
+// clear "Admin access required" screen for USER-role deep links.
+export default function CampaignsPage() {
+  return (
+    <RequireAppAdmin>
+      <CampaignsPageInner />
+    </RequireAppAdmin>
   );
 }

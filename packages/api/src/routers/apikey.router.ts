@@ -1,13 +1,13 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import crypto from "crypto";
-import { createRouter, orgProcedure } from "../trpc";
+import { createRouter, adminOrgProcedure } from "../trpc";
 import { apiRateLimiter } from "../middleware/rate-limit";
 import { createRateLimitMiddleware } from "../middleware/rate-limit.middleware";
 import { requirePlan } from "../middleware/plan-limit.middleware";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 
-const apiRateLimited = orgProcedure.use(createRateLimitMiddleware(apiRateLimiter));
+const apiRateLimited = adminOrgProcedure.use(createRateLimitMiddleware(apiRateLimiter));
 
 function requireOwnerOrAdmin(role: string | undefined) {
   if (role !== "OWNER" && role !== "ADMIN") {
@@ -16,7 +16,7 @@ function requireOwnerOrAdmin(role: string | undefined) {
 }
 
 export const apikeyRouter = createRouter({
-  list: orgProcedure.query(async ({ ctx }) => {
+  list: adminOrgProcedure.query(async ({ ctx }) => {
     requireOwnerOrAdmin(ctx.membership.role);
     const keys = await ctx.prisma.apiKey.findMany({
       where: { organizationId: ctx.organizationId },
@@ -80,7 +80,7 @@ export const apikeyRouter = createRouter({
       };
     }),
 
-  delete: orgProcedure
+  delete: adminOrgProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       requireOwnerOrAdmin(ctx.membership.role);

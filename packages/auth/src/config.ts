@@ -146,17 +146,23 @@ export const authConfig: NextAuthConfig = {
         token.id = user.id;
         token.isSuperAdmin = (user as any).isSuperAdmin ?? false;
         token.isBanned = (user as any).isBanned ?? false;
+        // App-level access tier (USER|ADMIN) — NOT the org MemberRole below.
+        token.appRole = (user as any).appRole ?? "USER";
       }
 
       // Re-check from DB on every token refresh
       if (token.id) {
         const dbUser = await prisma.user.findUnique({
           where: { id: token.id as string },
-          select: { isBanned: true, isSuperAdmin: true, passwordChangedAt: true },
+          select: { isBanned: true, isSuperAdmin: true, passwordChangedAt: true, appRole: true },
         });
         if (dbUser) {
           token.isSuperAdmin = dbUser.isSuperAdmin;
           token.isBanned = dbUser.isBanned;
+          // Fresh per-request: role changes made in /admin take effect on the
+          // very next request server-side (no re-login needed for enforcement;
+          // only the client-cached useSession() nav may lag until a reload).
+          token.appRole = dbUser.appRole;
 
           // If the password was changed AFTER this JWT was issued, invalidate it.
           // This forces re-login after a password reset — equivalent to the
@@ -193,6 +199,9 @@ export const authConfig: NextAuthConfig = {
         // Fix #1 RBAC: expose role + organizationId to client components
         (session.user as any).role = token.role ?? "MEMBER";
         (session.user as any).organizationId = token.organizationId ?? null;
+        // App-level access tier — deliberately a SEPARATE key from `role`
+        // (which is the org MemberRole; renaming it would break sidebar gating).
+        (session.user as any).appRole = token.appRole ?? "USER";
       }
       return session;
     },

@@ -1,10 +1,10 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { createRouter, orgProcedure, superAdminProcedure } from "../trpc";
+import { createRouter, superAdminProcedure, adminOrgProcedure } from "../trpc";
 
 export const deploymentRouter = createRouter({
   /** Get current version info */
-  current: orgProcedure.query(async ({ ctx }) => {
+  current: adminOrgProcedure.query(async ({ ctx }) => {
     let latest = await ctx.prisma.deployment.findFirst({
       where: { status: "active" },
       orderBy: { createdAt: "desc" },
@@ -55,7 +55,7 @@ export const deploymentRouter = createRouter({
   }),
 
   /** List all deployments */
-  list: orgProcedure
+  list: adminOrgProcedure
     .input(
       z.object({
         limit: z.number().min(1).max(50).default(20),
@@ -79,7 +79,7 @@ export const deploymentRouter = createRouter({
     }),
 
   /** Register a new deployment (called by CI/CD or deploy script) */
-  register: orgProcedure
+  register: adminOrgProcedure
     .input(
       z.object({
         version: z.string(),

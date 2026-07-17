@@ -1,4 +1,5 @@
 "use client";
+import { RequireAppAdmin } from "~/components/auth/require-app-admin";
 
 import { humanizeError } from "~/lib/errors";
 
@@ -22,7 +23,7 @@ const EVENTS = [
   "channel.disconnected",
 ];
 
-export default function WebhooksPage() {
+function WebhooksPageInner() {
   const { toast } = useToast();
   const [url, setUrl] = useState("");
   const [selectedEvents, setSelectedEvents] = useState<string[]>([]);
@@ -162,5 +163,16 @@ export default function WebhooksPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+// App-level RBAC (2026-07-17): this page is an admin-only area. Server-side
+// enforcement lives in tRPC (adminOrgProcedure); this wrapper only provides a
+// clear "Admin access required" screen for USER-role deep links.
+export default function WebhooksPage() {
+  return (
+    <RequireAppAdmin>
+      <WebhooksPageInner />
+    </RequireAppAdmin>
   );
 }

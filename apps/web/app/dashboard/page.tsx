@@ -42,6 +42,8 @@ const featureCards: {
   accentTo: string;
   glowColor: string;
   minPlan?: PlanType;
+  /** App-level RBAC (User.appRole): card hidden unless ADMIN role (or super admin). */
+  appAdminOnly?: boolean;
 }[] = [
   {
     href: "/dashboard/super-agent",
@@ -92,6 +94,7 @@ const featureCards: {
     accentTo: "to-yellow-400",
     glowColor: "amber",
     minPlan: "STARTER",
+    appAdminOnly: true,
   },
   {
     href: "/dashboard/listening",
@@ -102,6 +105,7 @@ const featureCards: {
     accentTo: "to-emerald-400",
     glowColor: "teal",
     minPlan: "STARTER",
+    appAdminOnly: true,
   },
   {
     href: "/dashboard/campaigns",
@@ -112,6 +116,7 @@ const featureCards: {
     accentTo: "to-sky-400",
     glowColor: "indigo",
     minPlan: "PROFESSIONAL",
+    appAdminOnly: true,
   },
   {
     href: "/dashboard/brand-leads",
@@ -122,6 +127,7 @@ const featureCards: {
     accentTo: "to-orange-400",
     glowColor: "yellow",
     minPlan: "PROFESSIONAL",
+    appAdminOnly: true,
   },
 ];
 
@@ -129,6 +135,9 @@ export default function DashboardPage() {
   const router = useRouter();
   const { data: session } = useSession();
   const isSuperAdmin = (session?.user as any)?.isSuperAdmin === true;
+  // App-level RBAC tier (User.appRole). Super admin implies admin.
+  const appRole = (session?.user as any)?.appRole as "USER" | "ADMIN" | undefined;
+  const isAppAdminUser = appRole === "ADMIN" || isSuperAdmin;
   const { data: user, isLoading: userLoading } = trpc.user.me.useQuery();
   const { data: stats, isLoading: statsLoading } = trpc.analytics.dashboardStats.useQuery();
   const { data: activity, isLoading: activityLoading } = trpc.analytics.recentActivity.useQuery({ limit: 5 });
@@ -242,7 +251,7 @@ export default function DashboardPage() {
           AI Tools
         </h2>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {featureCards.map((card) => {
+          {featureCards.filter((card) => !card.appAdminOnly || isAppAdminUser).map((card) => {
             const locked = !planAllowed(card.minPlan);
             const CardWrapper = locked ? "button" : Link;
             const wrapperProps = locked

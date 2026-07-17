@@ -1,4 +1,5 @@
 "use client";
+import { RequireAppAdmin } from "~/components/auth/require-app-admin";
 
 import { humanizeError } from "~/lib/errors";
 
@@ -45,7 +46,7 @@ function isHttpUrl(u: string) {
   try { const p = new URL(u).protocol; return p === "http:" || p === "https:"; } catch { return false; }
 }
 
-export default function LinksPage() {
+function LinksPageInner() {
   const { toast } = useToast();
 
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -411,5 +412,16 @@ function LinkStats({ linkId }: { linkId: string }) {
         </div>
       )}
     </div>
+  );
+}
+
+// App-level RBAC (2026-07-17): this page is an admin-only area. Server-side
+// enforcement lives in tRPC (adminOrgProcedure); this wrapper only provides a
+// clear "Admin access required" screen for USER-role deep links.
+export default function LinksPage() {
+  return (
+    <RequireAppAdmin>
+      <LinksPageInner />
+    </RequireAppAdmin>
   );
 }

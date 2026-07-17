@@ -1,4 +1,5 @@
 "use client";
+import { RequireAppAdmin } from "~/components/auth/require-app-admin";
 
 import { useState, useCallback } from "react";
 import { trpc } from "~/lib/trpc/client";
@@ -84,7 +85,7 @@ function getStatusBadge(status: string) {
   }
 }
 
-export default function ApprovalsPage() {
+function ApprovalsPageInner() {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [reviewDialog, setReviewDialog] = useState<{
     open: boolean;
@@ -372,5 +373,16 @@ export default function ApprovalsPage() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+// App-level RBAC (2026-07-17): this page is an admin-only area. Server-side
+// enforcement lives in tRPC (adminOrgProcedure); this wrapper only provides a
+// clear "Admin access required" screen for USER-role deep links.
+export default function ApprovalsPage() {
+  return (
+    <RequireAppAdmin>
+      <ApprovalsPageInner />
+    </RequireAppAdmin>
   );
 }

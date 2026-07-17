@@ -99,6 +99,7 @@ export const AUDIT_ACTIONS = {
 
   // Admin
   ADMIN_USER_SUPERADMIN_TOGGLED: "admin.user.superadmin_toggled",
+  ADMIN_USER_APPROLE_CHANGED: "admin.user.approle_changed",
   ADMIN_USER_BANNED: "admin.user.banned",
   ADMIN_USER_UNBANNED: "admin.user.unbanned",
   ADMIN_USER_DELETED: "admin.user.deleted",

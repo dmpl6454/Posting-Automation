@@ -1,4 +1,5 @@
 "use client";
+import { RequireAppAdmin } from "~/components/auth/require-app-admin";
 
 import { humanizeError } from "~/lib/errors";
 
@@ -14,7 +15,7 @@ import { Skeleton } from "~/components/ui/skeleton";
 import { useToast } from "~/hooks/use-toast";
 import { Key, Plus, Trash2, Copy, AlertTriangle } from "lucide-react";
 
-export default function ApiKeysPage() {
+function ApiKeysPageInner() {
   const { toast } = useToast();
   const [name, setName] = useState("");
   const [expiresAt, setExpiresAt] = useState("");
@@ -180,5 +181,16 @@ export default function ApiKeysPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+// App-level RBAC (2026-07-17): this page is an admin-only area. Server-side
+// enforcement lives in tRPC (adminOrgProcedure); this wrapper only provides a
+// clear "Admin access required" screen for USER-role deep links.
+export default function ApiKeysPage() {
+  return (
+    <RequireAppAdmin>
+      <ApiKeysPageInner />
+    </RequireAppAdmin>
   );
 }

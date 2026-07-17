@@ -1,4 +1,5 @@
 "use client";
+import { RequireAppAdmin } from "~/components/auth/require-app-admin";
 
 import { trpc } from "~/lib/trpc/client";
 import { humanizeError } from "~/lib/errors";
@@ -23,7 +24,7 @@ import {
   Info,
 } from "lucide-react";
 
-export default function AutopilotOverviewPage() {
+function AutopilotOverviewPageInner() {
   const { toast } = useToast();
   const { data, isLoading } = trpc.autopilot.overview.useQuery();
   const utils = trpc.useUtils();
@@ -162,5 +163,16 @@ export default function AutopilotOverviewPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+// App-level RBAC (2026-07-17): this page is an admin-only area. Server-side
+// enforcement lives in tRPC (adminOrgProcedure); this wrapper only provides a
+// clear "Admin access required" screen for USER-role deep links.
+export default function AutopilotOverviewPage() {
+  return (
+    <RequireAppAdmin>
+      <AutopilotOverviewPageInner />
+    </RequireAppAdmin>
   );
 }

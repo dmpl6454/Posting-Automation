@@ -1,4 +1,5 @@
 "use client";
+import { RequireAppAdmin } from "~/components/auth/require-app-admin";
 
 import { Fragment, useState } from "react";
 import { trpc } from "~/lib/trpc/client";
@@ -120,7 +121,7 @@ const ALL_ENTITY_TYPES = [
   { value: "Organization", label: "Organization" },
 ];
 
-export default function AuditLogPage() {
+function AuditLogPageInner() {
   const [page, setPage] = useState(1);
   const [action, setAction] = useState<string>("");
   const [entityType, setEntityType] = useState<string>("");
@@ -479,5 +480,16 @@ export default function AuditLogPage() {
         </div>
       )}
     </div>
+  );
+}
+
+// App-level RBAC (2026-07-17): this page is an admin-only area. Server-side
+// enforcement lives in tRPC (adminOrgProcedure); this wrapper only provides a
+// clear "Admin access required" screen for USER-role deep links.
+export default function AuditLogPage() {
+  return (
+    <RequireAppAdmin>
+      <AuditLogPageInner />
+    </RequireAppAdmin>
   );
 }

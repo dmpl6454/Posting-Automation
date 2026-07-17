@@ -1,4 +1,5 @@
 "use client";
+import { RequireAppAdmin } from "~/components/auth/require-app-admin";
 
 import { humanizeError } from "~/lib/errors";
 
@@ -43,7 +44,7 @@ const roleConfig: Record<string, { variant: "default" | "secondary" | "outline" 
   MEMBER: { variant: "outline", icon: Users },
 };
 
-export default function TeamPage() {
+function TeamPageInner() {
   const { toast } = useToast();
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<string>("MEMBER");
@@ -307,5 +308,16 @@ export default function TeamPage() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+// App-level RBAC (2026-07-17): this page is an admin-only area. Server-side
+// enforcement lives in tRPC (adminOrgProcedure); this wrapper only provides a
+// clear "Admin access required" screen for USER-role deep links.
+export default function TeamPage() {
+  return (
+    <RequireAppAdmin>
+      <TeamPageInner />
+    </RequireAppAdmin>
   );
 }

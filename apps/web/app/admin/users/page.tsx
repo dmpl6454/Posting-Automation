@@ -23,6 +23,7 @@ type UserRow = {
   name: string | null;
   email: string | null;
   isSuperAdmin: boolean;
+  appRole: "USER" | "ADMIN";
   isBanned: boolean;
   createdAt: Date;
   _count: { memberships: number };
@@ -73,6 +74,17 @@ export default function AdminUsersPage() {
     onError: (err) => toast({ title: "Error", description: humanizeError(err), variant: "destructive" }),
   });
 
+  // App-level RBAC (2026-07-17): USER = limited feature set, ADMIN = everything.
+  // Server enforcement is immediate (DB-fresh claim); the target's nav updates
+  // on their next page reload.
+  const setAppRole = trpc.admin.users.setAppRole.useMutation({
+    onSuccess: (u) => {
+      refetch();
+      toast({ title: `Access role set to ${u.appRole}` });
+    },
+    onError: (err) => toast({ title: "Error", description: humanizeError(err), variant: "destructive" }),
+  });
+
   const columns: Column<UserRow>[] = [
     {
       header: "Name",
@@ -93,7 +105,7 @@ export default function AdminUsersPage() {
         <div className="flex gap-1">
           {row.isSuperAdmin && (
             <Badge variant="outline" className="border-red-200 bg-red-100 text-red-700">
-              admin
+              super admin
             </Badge>
           )}
           {row.isBanned && (
@@ -102,10 +114,34 @@ export default function AdminUsersPage() {
             </Badge>
           )}
           {!row.isSuperAdmin && !row.isBanned && (
-            <Badge variant="outline">user</Badge>
+            <Badge variant="outline">{row.appRole === "ADMIN" ? "admin" : "user"}</Badge>
           )}
         </div>
       ),
+    },
+    {
+      header: "Access",
+      cell: (row) => {
+        const pending = setAppRole.isPending && setAppRole.variables?.userId === row.id;
+        return (
+          <select
+            className="h-8 rounded-md border bg-background px-2 text-sm disabled:opacity-50"
+            value={row.appRole}
+            disabled={pending || row.isSuperAdmin}
+            title={
+              row.isSuperAdmin
+                ? "Super admins pass every gate regardless of access role"
+                : "App-level access: USER = Dashboard, Content Studio, Super Agent, Media, Insights, Channels. ADMIN = everything."
+            }
+            onChange={(e) =>
+              setAppRole.mutate({ userId: row.id, appRole: e.target.value as "USER" | "ADMIN" })
+            }
+          >
+            <option value="USER">User</option>
+            <option value="ADMIN">Admin</option>
+          </select>
+        );
+      },
     },
     {
       header: "Joined",

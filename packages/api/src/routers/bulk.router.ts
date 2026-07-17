@@ -1,3 +1,6 @@
+// TODO(security): these procedures are protectedProcedure and take the org id from
+// input WITHOUT an OrganizationMember check (pre-existing gap, noted during the
+// 2026-07-17 RBAC sweep). Fix separately: resolve org via orgProcedure ctx instead.
 import { z } from "zod";
 import { createRouter, protectedProcedure } from "../trpc";
 import { prisma } from "@postautomation/db";
