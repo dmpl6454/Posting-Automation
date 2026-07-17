@@ -7,8 +7,8 @@ export function createAnalyticsSyncWorker() {
   const worker = new Worker<AnalyticsSyncJobData>(
     QUEUE_NAMES.ANALYTICS_SYNC,
     async (job: Job<AnalyticsSyncJobData>) => {
-      const { postTargetId, channelId, platform, platformPostId } = job.data;
-      console.log(`[AnalyticsSync] Processing job ${job.id} for target ${postTargetId}`);
+      const { postTargetId, channelId, platform, platformPostId, windowTag } = job.data;
+      console.log(`[AnalyticsSync] Processing job ${job.id} for target ${postTargetId}${windowTag ? ` (at-age checkpoint ${windowTag})` : ""}`);
 
       // 1. Get channel tokens
       const channel = await prisma.channel.findUniqueOrThrow({
@@ -35,7 +35,9 @@ export function createAnalyticsSyncWorker() {
         return null;
       }
 
-      // 3. Save analytics snapshot
+      // 3. Save analytics snapshot. At-age checkpoint jobs (delayed, enqueued at
+      // publish) stamp metadata.windowTag so Reports "at publish-age" mode can
+      // pin the metrics as they stood exactly 24h/7d/15d/30d after publish.
       const snapshot = await prisma.analyticsSnapshot.create({
         data: {
           postTargetId,
@@ -48,6 +50,7 @@ export function createAnalyticsSyncWorker() {
           reach: analytics.reach ?? 0,
           engagementRate: analytics.engagementRate ?? 0,
           snapshotAt: new Date(),
+          ...(windowTag ? { metadata: { windowTag } } : {}),
         },
       });
 

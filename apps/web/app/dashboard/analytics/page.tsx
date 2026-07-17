@@ -1,7 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { ReportsTab } from "~/components/analytics/ReportsTab";
 import { trpc } from "~/lib/trpc/client";
 import { useToast } from "~/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "~/components/ui/card";
@@ -102,7 +104,7 @@ function DateRangePicker({
   );
 }
 
-export default function AnalyticsPage() {
+function InsightsAnalyticsView() {
   const [from, setFrom] = useState(() => subDays(new Date(), 30).toISOString());
   const [to, setTo] = useState(() => new Date().toISOString());
   const [syncing, setSyncing] = useState(false);
@@ -171,7 +173,7 @@ export default function AnalyticsPage() {
       {/* Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Analytics</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Insights</h1>
           <p className="text-muted-foreground">See how your posts perform — reach, likes, comments &amp; shares across your channels</p>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
@@ -467,6 +469,59 @@ export default function AnalyticsPage() {
           )}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+/**
+ * ?tab= deep-link reader (routing contract: emit ?tab=insights|reports).
+ * Lives in its own Suspense-wrapped child so useSearchParams() doesn't opt the
+ * whole page out of static generation (same pattern as OAuthCallbackToaster).
+ */
+function InsightsTabDeepLink({ onTab }: { onTab: (t: "insights" | "reports") => void }) {
+  const searchParams = useSearchParams();
+  useEffect(() => {
+    const t = searchParams.get("tab");
+    if (t === "reports" || t === "insights") onTab(t);
+  }, [searchParams, onTab]);
+  return null;
+}
+
+/**
+ * Insights page (2026-07-17): two tabs —
+ *  1. Insights (analytical): the existing analytics view, unchanged.
+ *  2. Reports: structured, extractable per-post table over 24h/7d/15d/30d
+ *     windows with CSV export (see components/analytics/ReportsTab).
+ */
+export default function InsightsPage() {
+  const [tab, setTab] = useState<"insights" | "reports">("insights");
+
+  return (
+    <div className="space-y-6">
+      <Suspense fallback={null}>
+        <InsightsTabDeepLink onTab={setTab} />
+      </Suspense>
+
+      <div className="flex w-fit rounded-lg border p-0.5">
+        <button
+          onClick={() => setTab("insights")}
+          className={`rounded-md px-4 py-1.5 text-sm font-medium transition-colors ${
+            tab === "insights" ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          Insights
+        </button>
+        <button
+          onClick={() => setTab("reports")}
+          className={`rounded-md px-4 py-1.5 text-sm font-medium transition-colors ${
+            tab === "reports" ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          Reports
+        </button>
+      </div>
+
+      {tab === "insights" ? <InsightsAnalyticsView /> : <ReportsTab />}
     </div>
   );
 }

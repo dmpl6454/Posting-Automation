@@ -16,6 +16,13 @@ export interface AnalyticsSyncJobData {
   platform: string;
   channelId: string;
   platformPostId: string;
+  /**
+   * At-age metric checkpoint tag ("24h" | "7d" | "15d" | "30d"). Set only by the
+   * delayed jobs enqueued at publish time (post-publish.worker.ts) — the
+   * resulting AnalyticsSnapshot gets metadata.windowTag so Insights → Reports
+   * "at publish-age" mode can pin metrics as they stood exactly N after publish.
+   */
+  windowTag?: string;
 }
 
 export interface MediaProcessJobData {
