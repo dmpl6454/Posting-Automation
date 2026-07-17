@@ -5,6 +5,7 @@ import { humanizeError } from "~/lib/errors";
 
 import { useState } from "react";
 import Link from "next/link";
+import { useSession } from "next-auth/react";
 import { trpc } from "~/lib/trpc/client";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
@@ -54,6 +55,10 @@ function TeamPageInner() {
 
   const { data: me } = trpc.user.me.useQuery();
   const { data: members, isLoading, refetch } = trpc.team.members.useQuery();
+  // Super admins manage APP access roles (User/Admin) in the /admin console —
+  // surface that here, since Team is where people naturally look for "roles".
+  const { data: session } = useSession();
+  const isSuperAdmin = (session?.user as any)?.isSuperAdmin === true;
   const { data: usage } = trpc.billing.usage.useQuery();
   const invite = trpc.team.invite.useMutation({
     onSuccess: (data: any) => {
@@ -113,6 +118,25 @@ function TeamPageInner() {
         <h1 className="text-2xl font-bold tracking-tight">Team</h1>
         <p className="text-muted-foreground">Manage your team members and roles</p>
       </div>
+
+      {/* Where APP access roles (User/Admin) are managed — workspace roles below
+          are org membership; the app-wide access tier lives in the Admin console. */}
+      {isSuperAdmin && (
+        <Alert>
+          <AlertDescription className="flex flex-wrap items-center justify-between gap-2 text-sm">
+            <span>
+              Looking for <strong>app access roles</strong> (User / Admin — which pages someone can
+              use)? Those are managed per user in the Admin console.
+            </span>
+            <Link
+              href="/admin/users"
+              className="shrink-0 rounded-md border px-3 py-1 text-xs font-medium hover:bg-muted"
+            >
+              Open Admin → Users
+            </Link>
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* Plan limit warning */}
       {usage && !usage.teamMembers.allowed && (

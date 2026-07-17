@@ -10,7 +10,7 @@ import {
 } from "~/components/ui/dropdown-menu";
 import { Button } from "~/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar";
-import { LogOut, User, Settings, Menu } from "lucide-react";
+import { LogOut, User, Settings, Menu, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { NotificationBell } from "~/components/notifications/notification-bell";
 import { ThemeToggle } from "~/components/layout/theme-toggle";
@@ -114,6 +114,14 @@ export function Header({ onMenuClick }: HeaderProps) {
                 Settings
               </Link>
             </DropdownMenuItem>
+            {isSuperAdmin && (
+              <DropdownMenuItem asChild className="rounded-lg">
+                <Link href="/admin/users" className="cursor-pointer">
+                  <ShieldCheck className="mr-2 h-3.5 w-3.5" />
+                  Manage access roles
+                </Link>
+              </DropdownMenuItem>
+            )}
             <DropdownMenuSeparator className="bg-border/40" />
             <DropdownMenuItem
               className="cursor-pointer rounded-lg text-destructive focus:text-destructive"
