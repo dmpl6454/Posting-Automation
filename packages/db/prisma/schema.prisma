@@ -18,6 +18,12 @@ model User {
   password           String?
   passwordChangedAt  DateTime?
   isSuperAdmin  Boolean   @default(false)
+  /// App-level access tier — ORTHOGONAL to org MemberRole (workspace membership)
+  /// and to isSuperAdmin (which implies ADMIN at every appRole gate). USER =
+  /// Dashboard, Content Studio, Super Agent, Media, Insights, Channels.
+  /// ADMIN = everything. Managed from /admin by super admins. Existing users
+  /// were grandfathered to ADMIN via scripts/backfill-app-roles.ts (2026-07-17).
+  appRole       AppRole   @default(USER)
   isBanned      Boolean   @default(false)
   phone         String?   @unique
   phoneVerified DateTime?
@@ -183,6 +189,14 @@ enum MemberRole {
   OWNER
   ADMIN
   MEMBER
+}
+
+/// App-level access tier (see User.appRole). NOT the org-membership MemberRole
+/// above — the session exposes this as `appRole` (session.user.role stays the
+/// org MemberRole; renaming that would silently break the sidebar nav gating).
+enum AppRole {
+  USER
+  ADMIN
 }
 
 enum PlanType {
