@@ -147,6 +147,13 @@ export class FacebookProvider extends SocialProvider {
       scope: config.scopes.join(","),
       state,
       response_type: "code",
+      // Force Facebook to RE-PRESENT the permission + Page-selection wizard
+      // instead of the "Continue as … / use previous settings" returning-user
+      // shortcut. Without this, a user who connected before (or who tapped
+      // "Continue" on a prior grant that selected 0 Pages) silently re-uses that
+      // empty grant → me/accounts returns [] → the confusing fb_no_pages toast
+      // even though they DO admin a Page. `rerequest` makes them re-pick a Page.
+      auth_type: "rerequest",
     });
     return `https://www.facebook.com/${this.apiVersion}/dialog/oauth?${params.toString()}`;
   }
