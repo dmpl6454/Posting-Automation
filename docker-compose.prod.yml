@@ -18,9 +18,12 @@ services:
     networks:
       - internal
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost/api/health"]
+      # Hits the dedicated port-80 endpoint (docker/nginx/nginx.conf /nginx-health).
+      # The old probe (/api/health) followed the 301 to https://localhost and died
+      # on the TLS handshake -> perpetually (unhealthy) while serving fine.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/nginx-health"]
       interval: 30s
-      timeout: 10s
+      timeout: 5s
       retries: 3
 
   # SSL certificate auto-renewal (runs every 12 hours)
