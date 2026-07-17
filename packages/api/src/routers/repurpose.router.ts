@@ -2454,7 +2454,12 @@ Return ONLY the JSON array, no other text.`;
               let bgMusicBase64: string | undefined;
               if (input.bgMusic) {
                 try {
-                  const { execSync } = await import("node:child_process");
+                  // Async, argv-form exec (no shell): the old execSync froze the web
+                  // process's event loop for the whole encode (part of the prod 504
+                  // incident 2026-07-17). argv form also removes the shell entirely.
+                  const { execFile } = await import("node:child_process");
+                  const { promisify } = await import("node:util");
+                  const execFileAsync = promisify(execFile);
                   const { readFileSync, mkdirSync, rmSync } = await import("node:fs");
                   const { join } = await import("node:path");
                   const { tmpdir } = await import("node:os");
@@ -2462,7 +2467,20 @@ Return ONLY the JSON array, no other text.`;
                   mkdirSync(musicDir, { recursive: true });
                   const musicPath = join(musicDir, "bg.mp3");
                   const duration = slideImages.length * 3 + 2;
-                  execSync(`ffmpeg -y -f lavfi -i "sine=frequency=110:duration=${duration}" -f lavfi -i "sine=frequency=165:duration=${duration}" -filter_complex "[0:a][1:a]amix=inputs=2,volume=0.3,afade=t=in:d=1,afade=t=out:st=${duration - 1}:d=1[out]" -map "[out]" -c:a libmp3lame -b:a 128k "${musicPath}"`, { timeout: 30_000, stdio: "pipe" });
+                  await execFileAsync(
+                    "ffmpeg",
+                    [
+                      "-y",
+                      "-f", "lavfi", "-i", `sine=frequency=110:duration=${duration}`,
+                      "-f", "lavfi", "-i", `sine=frequency=165:duration=${duration}`,
+                      "-filter_complex",
+                      `[0:a][1:a]amix=inputs=2,volume=0.3,afade=t=in:d=1,afade=t=out:st=${duration - 1}:d=1[out]`,
+                      "-map", "[out]",
+                      "-c:a", "libmp3lame", "-b:a", "128k",
+                      musicPath,
+                    ],
+                    { timeout: 30_000 }
+                  );
                   bgMusicBase64 = readFileSync(musicPath).toString("base64");
                   rmSync(musicDir, { recursive: true, force: true });
                 } catch {}

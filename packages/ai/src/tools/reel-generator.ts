@@ -4,8 +4,16 @@
  * Supports voice-over narration and background music.
  */
 
-import { execSync } from "node:child_process";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { writeFileSync, readFileSync, mkdirSync, rmSync, existsSync } from "node:fs";
+
+// Async, argv-form exec (no shell): a 1-3 minute encode must never freeze the
+// web process's event loop — the old execSync here blocked EVERY request while
+// a reel stitched, which surfaced as intermittent nginx 504s in prod
+// (incident 2026-07-17). argv form also removes the shell entirely, keeping the
+// repo's injection-safe exec convention.
+const execFileAsync = promisify(execFile);
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import crypto from "node:crypto";
@@ -105,24 +113,27 @@ export async function generateReelVideo(options: ReelOptions): Promise<ReelResul
 
     const outputPath = join(workDir, "reel.mp4");
 
-    // Build FFmpeg command based on audio availability
-    let ffmpegCmd: string;
+    // Build FFmpeg argv based on audio availability. Each token is its own array
+    // element — execFile passes them verbatim (no shell), so filter/scale args
+    // need NO quote-wrapping (the old string form wrapped them in '...' for sh).
+    const vfArg = `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,fps=30`;
+    let ffmpegArgs: string[];
 
     if (hasVoice && hasBgMusic) {
       // Video + voice-over + background music
       // Mix voice and music, then combine with video
-      ffmpegCmd = [
-        "ffmpeg", "-y",
+      ffmpegArgs = [
+        "-y",
         "-f", "concat", "-safe", "0", "-i", concatFile,
         "-i", voicePath,
         "-i", bgMusicPath,
         "-filter_complex",
-        `'[1:a]volume=${voiceVolume}[voice];` +
+        `[1:a]volume=${voiceVolume}[voice];` +
         `[2:a]volume=${bgMusicVolume},aloop=loop=-1:size=2e+09[music];` +
-        `[voice][music]amix=inputs=2:duration=first:dropout_transition=2[aout]'`,
+        `[voice][music]amix=inputs=2:duration=first:dropout_transition=2[aout]`,
         "-map", "0:v",
         "-map", "[aout]",
-        "-vf", `'scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,fps=30'`,
+        "-vf", vfArg,
         "-c:v", "libx264",
         "-preset", "fast",
         "-crf", "23",
@@ -133,16 +144,16 @@ export async function generateReelVideo(options: ReelOptions): Promise<ReelResul
         "-movflags", "+faststart",
         "-shortest",
         outputPath,
-      ].join(" ");
+      ];
     } else if (hasVoice) {
       // Video + voice-over only
-      ffmpegCmd = [
-        "ffmpeg", "-y",
+      ffmpegArgs = [
+        "-y",
         "-f", "concat", "-safe", "0", "-i", concatFile,
         "-i", voicePath,
         "-map", "0:v",
         "-map", "1:a",
-        "-vf", `'scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,fps=30'`,
+        "-vf", vfArg,
         "-c:v", "libx264",
         "-preset", "fast",
         "-crf", "23",
@@ -154,16 +165,16 @@ export async function generateReelVideo(options: ReelOptions): Promise<ReelResul
         "-movflags", "+faststart",
         "-shortest",
         outputPath,
-      ].join(" ");
+      ];
     } else if (hasBgMusic) {
       // Video + background music only
-      ffmpegCmd = [
-        "ffmpeg", "-y",
+      ffmpegArgs = [
+        "-y",
         "-f", "concat", "-safe", "0", "-i", concatFile,
         "-i", bgMusicPath,
         "-map", "0:v",
         "-map", "1:a",
-        "-vf", `'scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,fps=30'`,
+        "-vf", vfArg,
         "-c:v", "libx264",
         "-preset", "fast",
         "-crf", "23",
@@ -175,13 +186,13 @@ export async function generateReelVideo(options: ReelOptions): Promise<ReelResul
         "-movflags", "+faststart",
         "-shortest",
         outputPath,
-      ].join(" ");
+      ];
     } else {
       // Video only (no audio)
-      ffmpegCmd = [
-        "ffmpeg", "-y",
+      ffmpegArgs = [
+        "-y",
         "-f", "concat", "-safe", "0", "-i", concatFile,
-        "-vf", `'scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,fps=30'`,
+        "-vf", vfArg,
         "-c:v", "libx264",
         "-preset", "fast",
         "-crf", "23",
@@ -189,10 +200,11 @@ export async function generateReelVideo(options: ReelOptions): Promise<ReelResul
         "-t", String(totalDuration),
         "-movflags", "+faststart",
         outputPath,
-      ].join(" ");
+      ];
     }
 
-    execSync(ffmpegCmd, { timeout: 180_000, stdio: "pipe" });
+    // maxBuffer covers ffmpeg's verbose stderr on long encodes (default 1MB overflows).
+    await execFileAsync("ffmpeg", ffmpegArgs, { timeout: 180_000, maxBuffer: 32 * 1024 * 1024 });
 
     if (!existsSync(outputPath)) {
       throw new Error("FFmpeg failed to produce output video");
