@@ -206,7 +206,9 @@
       "Bash(grep -E \"^\\\\s{2}[a-z].*:$\" docker-compose.prod.yml)",
       "Bash(perl -pi -e 's/const re = \\\\/\\\\^ \\\\{2\\\\}\\\\\\(\\\\\\\\w\\\\+\\\\\\): orgProcedure\\\\/gm;/const re = \\\\/^ {2}\\(\\\\\\\\w+\\): \\(?:admin\\)?orgProcedure\\\\/gmi;/' router-plan-gating.test.ts)",
       "Bash(perl -pi -e 's/expect\\\\\\(src\\\\\\)\\\\.toMatch\\\\\\(\\\\/setStatus: orgProcedure\\\\/\\\\\\);/expect\\(src\\).toMatch\\(\\\\/setStatus: adminOrgProcedure\\\\/\\); \\\\/\\\\/ RBAC 2026-07-17: brand-leads is admin-only/' brand-leads-set-status.test.ts)",
-      "Bash(perl -pi -e 's/const re = .*$/const re = \\\\/^ {2}\\(\\\\\\\\w+\\): \\(?:adminOrgProcedure|orgProcedure\\)\\\\/gm; \\\\/\\\\/ RBAC 2026-07-17: campaign router is admin-gated; plan gate assertions unchanged/ if /const re =/' router-plan-gating.test.ts)"
+      "Bash(perl -pi -e 's/const re = .*$/const re = \\\\/^ {2}\\(\\\\\\\\w+\\): \\(?:adminOrgProcedure|orgProcedure\\)\\\\/gm; \\\\/\\\\/ RBAC 2026-07-17: campaign router is admin-gated; plan gate assertions unchanged/ if /const re =/' router-plan-gating.test.ts)",
+      "Bash(perl -pi -e 's/include: \\\\{ channel: \\\\{ select: \\\\{ platform: true \\\\} \\\\} \\\\}/include: { channel: { select: { platform: true, name: true, username: true } } }/g' post-publish.worker.ts)",
+      "Bash(perl -pi -e 's/^import \\\\{ markTargetFailed/import { buildPublishEmail } from \"..\\\\/lib\\\\/publish-email\";\\\\nimport { markTargetFailed/' post-publish.worker.ts)"
     ],
     "additionalDirectories": [
       "/Users/tabish/Desktop/Dashmani-PostAutomation/apps/web/app/invite"
