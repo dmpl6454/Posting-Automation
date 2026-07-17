@@ -1,7 +1,7 @@
 import { Worker, type Job, UnrecoverableError } from "bullmq";
 import { prisma } from "@postautomation/db";
 import { getSocialProvider } from "@postautomation/social";
-import { QUEUE_NAMES, postPublishQueue, type PostPublishJobData, createRedisConnection } from "@postautomation/queue";
+import { QUEUE_NAMES, postPublishQueue, analyticsSyncQueue, type PostPublishJobData, createRedisConnection } from "@postautomation/queue";
 import IORedis from "ioredis";
 import { markTargetFailed, buildPublishNotifications, mediaRequiredReason, terminalizeStuckClaim, isSeedNoise } from "../lib/publish-recovery";
 
@@ -663,6 +663,39 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
           }
         } catch (analyticsErr: any) {
           console.warn(`[Analytics] Snapshot failed for ${postTargetId}:`, analyticsErr.message);
+        }
+      }
+
+      // 4c. Enqueue at-age metric checkpoints (Insights → Reports "at publish-age"
+      // mode): four DELAYED analytics-sync jobs snapshot this target's metrics as
+      // they stand exactly 24h/7d/15d/30d after publish (metadata.windowTag).
+      // Exact-at-window vs the ±6h cron; also covers FACEBOOK (excluded from the
+      // 6-hourly cron for quota reasons — 4 one-shot calls per post are negligible).
+      // jobId dedupes BullMQ retries of this publish job. Best-effort: a Redis
+      // hiccup must never fail an already-published post.
+      if (result.platformPostId) {
+        const AT_AGE_WINDOWS: Record<string, number> = {
+          "24h": 86_400_000,
+          "7d": 604_800_000,
+          "15d": 1_296_000_000,
+          "30d": 2_592_000_000,
+        };
+        for (const [windowTag, delay] of Object.entries(AT_AGE_WINDOWS)) {
+          try {
+            await analyticsSyncQueue.add(
+              "at-age-snapshot",
+              {
+                postTargetId: updatedTarget.id,
+                channelId: updatedTarget.channelId,
+                platform,
+                platformPostId: result.platformPostId,
+                windowTag,
+              },
+              { delay, jobId: `atage:${updatedTarget.id}:${windowTag}`, removeOnComplete: true, removeOnFail: true }
+            );
+          } catch (queueErr: any) {
+            console.warn(`[Analytics] at-age checkpoint enqueue failed (${windowTag}) for ${postTargetId}:`, queueErr.message);
+          }
         }
       }
 

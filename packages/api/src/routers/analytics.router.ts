@@ -398,4 +398,107 @@ export const analyticsRouter = createRouter({
 
     return { queued };
   }),
+
+  /**
+   * Insights → Reports: per-post × per-channel rows over a time window, in a
+   * structured, extractable (CSV) shape. USER-role accessible (read-only).
+   *
+   * Window semantics (owner decision 2026-07-17 — BOTH modes):
+   *  - mode "current": every target PUBLISHED within the window, with its
+   *    LATEST snapshot (the proven MAX(snapshotAt) pattern from perChannelStats).
+   *  - mode "at_age": same rows, but metrics pinned to the at-age checkpoint
+   *    snapshot (metadata.windowTag written by the delayed jobs enqueued at
+   *    publish — post-publish.worker.ts 4c). Accrues for posts published after
+   *    this feature shipped; older posts show NULL metrics (UI renders "—").
+   *
+   * Metric caveats (platform APIs, not bugs): "views" ride on impressions
+   * (YouTube/Threads map views→impressions); Twitter metrics are 0 on the free
+   * API tier; Instagram never exposes clicks/shares.
+   */
+  postReports: orgProcedure
+    .input(
+      z.object({
+        window: z.enum(["24h", "7d", "15d", "30d"]),
+        mode: z.enum(["current", "at_age"]).default("current"),
+        limit: z.number().min(1).max(1000).default(500),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const hours = { "24h": 24, "7d": 168, "15d": 360, "30d": 720 }[input.window];
+      const since = new Date(Date.now() - hours * 3_600_000);
+
+      // Snapshot selector: latest overall vs latest tagged at-age checkpoint.
+      const snapshotFilter =
+        input.mode === "current"
+          ? ""
+          : `AND s2.metadata->>'windowTag' = $3`;
+
+      const params: any[] = [ctx.organizationId, since];
+      if (input.mode === "at_age") params.push(input.window);
+      params.push(input.limit);
+      const limitIdx = params.length;
+
+      const rows: Array<{
+        targetId: string;
+        postId: string;
+        contentPreview: string;
+        channelName: string;
+        channelUsername: string | null;
+        platform: string;
+        publishedAt: Date | null;
+        publishedUrl: string | null;
+        impressions: number | null;
+        clicks: number | null;
+        likes: number | null;
+        comments: number | null;
+        shares: number | null;
+        reach: number | null;
+        engagementRate: number | null;
+        snapshotAt: Date | null;
+      }> = await (ctx.prisma.$queryRawUnsafe as any)(
+        `SELECT pt.id              AS "targetId",
+                p.id               AS "postId",
+                LEFT(p.content, 140) AS "contentPreview",
+                c.name             AS "channelName",
+                c.username         AS "channelUsername",
+                c.platform::text   AS "platform",
+                pt."publishedAt",
+                pt."publishedUrl",
+                s.impressions, s.clicks, s.likes, s.comments, s.shares, s.reach,
+                s."engagementRate", s."snapshotAt"
+         FROM "PostTarget" pt
+         INNER JOIN "Post" p    ON p.id = pt."postId"
+         INNER JOIN "Channel" c ON c.id = pt."channelId"
+         LEFT JOIN LATERAL (
+           SELECT s2.* FROM "AnalyticsSnapshot" s2
+           WHERE s2."postTargetId" = pt.id ${snapshotFilter}
+           ORDER BY s2."snapshotAt" DESC
+           LIMIT 1
+         ) s ON TRUE
+         WHERE p."organizationId" = $1
+           AND pt.status::text = 'PUBLISHED'
+           AND pt."publishedAt" IS NOT NULL
+           AND pt."publishedAt" >= $2
+         ORDER BY pt."publishedAt" DESC
+         LIMIT $${limitIdx}`,
+        ...params
+      );
+
+      return {
+        // Numeric SQL aggregates can surface as bigints — normalize for superjson/UI.
+        rows: rows.map((r) => ({
+          ...r,
+          impressions: r.impressions === null ? null : Number(r.impressions),
+          clicks: r.clicks === null ? null : Number(r.clicks),
+          likes: r.likes === null ? null : Number(r.likes),
+          comments: r.comments === null ? null : Number(r.comments),
+          shares: r.shares === null ? null : Number(r.shares),
+          reach: r.reach === null ? null : Number(r.reach),
+          engagementRate: r.engagementRate === null ? null : Number(r.engagementRate),
+        })),
+        window: input.window,
+        mode: input.mode,
+        generatedAt: new Date().toISOString(),
+      };
+    }),
 });
