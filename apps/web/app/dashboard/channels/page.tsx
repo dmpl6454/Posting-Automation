@@ -104,9 +104,9 @@ const OAUTH_ERROR_MESSAGES: Record<string, string> = {
   twitter_request_token_failed:
     "Twitter rejected the initial request. Check that your TWITTER_CLIENT_ID / TWITTER_CLIENT_SECRET are valid.",
   fb_no_pages:
-    "No Facebook Page found on your account. PostAutomation posts to Pages, not personal profiles — create or get admin access to a Facebook Page, then reconnect.",
+    "No Facebook Page was selected. PostAutomation posts to Pages, not personal profiles. When reconnecting, click “Edit settings” (or “Edit access”) in the Facebook dialog and tick a Page you manage. If you don’t have one yet, create a Facebook Page first, then reconnect.",
   ig_no_business_account:
-    "No Instagram Business account found. Convert your Instagram account to Professional/Business and link it to a Facebook Page you manage, then reconnect.",
+    "No Instagram Business account found. Convert your Instagram account to Professional/Business and link it to a Facebook Page you manage, then reconnect (click “Edit settings” in the Facebook dialog and tick the Page).",
 };
 
 /**
@@ -199,6 +199,10 @@ export default function ChannelsPage() {
   // Bulk-select + delete state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  // Drives the in-flight state across the WHOLE chunked delete loop, not just
+  // the single tRPC call currently in flight (bulkDisconnect.isPending only
+  // reflects the latter — it flickers false between batches).
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
 
   const toggleSelected = (channelId: string) => {
     setSelectedIds((prev) => {
@@ -211,16 +215,45 @@ export default function ChannelsPage() {
 
   const clearSelection = () => setSelectedIds(new Set());
 
-  const bulkDisconnect = trpc.channel.bulkDisconnect.useMutation({
-    onSuccess: (r) => {
-      toast({ title: `Deleted ${r.deleted} channel${r.deleted === 1 ? "" : "(s)"}` });
+  // NOTE: bulkDisconnect caps channelIds at 100 server-side
+  // (channel.router.ts: z.array(z.string()).min(1).max(100)). Callers MUST
+  // chunk into <=100 batches — do NOT call .mutate with the raw selection.
+  const BULK_DELETE_BATCH = 100;
+  const bulkDisconnect = trpc.channel.bulkDisconnect.useMutation();
+
+  // Delete the current selection, chunked into <=100-id batches so a large
+  // selection (this account has 100+ channels) doesn't trip the server cap.
+  const runBulkDelete = async () => {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+    setIsBulkDeleting(true);
+    let deleted = 0;
+    try {
+      for (let i = 0; i < ids.length; i += BULK_DELETE_BATCH) {
+        const batch = ids.slice(i, i + BULK_DELETE_BATCH);
+        const r = await bulkDisconnect.mutateAsync({ channelIds: batch });
+        deleted += r.deleted;
+      }
+      toast({ title: `Deleted ${deleted} channel${deleted === 1 ? "" : "(s)"}` });
       setSelectedIds(new Set());
       setBulkDeleteOpen(false);
       refetch();
-    },
-    onError: (e) =>
-      toast({ variant: "destructive", title: humanizeError(e) }),
-  });
+    } catch (e) {
+      // Partial progress is possible (earlier batches committed); surface the
+      // count so the user knows some were removed, and refresh the list.
+      toast({
+        variant: "destructive",
+        title: humanizeError(e),
+        description:
+          deleted > 0
+            ? `${deleted} channel${deleted === 1 ? "" : "(s)"} were deleted before the error.`
+            : undefined,
+      });
+      refetch();
+    } finally {
+      setIsBulkDeleting(false);
+    }
+  };
 
   const createGroup = trpc.channelGroup.create.useMutation({
     onSuccess: () => {
@@ -445,7 +478,7 @@ export default function ChannelsPage() {
               variant="ghost"
               size="sm"
               onClick={clearSelection}
-              disabled={bulkDisconnect.isPending}
+              disabled={isBulkDeleting}
             >
               Clear
             </Button>
@@ -453,7 +486,7 @@ export default function ChannelsPage() {
               variant="destructive"
               size="sm"
               onClick={() => setBulkDeleteOpen(true)}
-              disabled={bulkDisconnect.isPending}
+              disabled={isBulkDeleting}
             >
               <Trash2 className="mr-1.5 h-3.5 w-3.5" />
               Delete Selected
@@ -1174,7 +1207,7 @@ export default function ChannelsPage() {
       <Dialog
         open={bulkDeleteOpen}
         onOpenChange={(open) => {
-          if (!bulkDisconnect.isPending) setBulkDeleteOpen(open);
+          if (!isBulkDeleting) setBulkDeleteOpen(open);
         }}
       >
         <DialogContent className="max-w-md">
@@ -1193,18 +1226,16 @@ export default function ChannelsPage() {
             <Button
               variant="outline"
               onClick={() => setBulkDeleteOpen(false)}
-              disabled={bulkDisconnect.isPending}
+              disabled={isBulkDeleting}
             >
               Cancel
             </Button>
             <Button
               variant="destructive"
-              onClick={() =>
-                bulkDisconnect.mutate({ channelIds: [...selectedIds] })
-              }
-              disabled={bulkDisconnect.isPending}
+              onClick={() => void runBulkDelete()}
+              disabled={isBulkDeleting}
             >
-              {bulkDisconnect.isPending ? (
+              {isBulkDeleting ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : (
                 <Trash2 className="mr-2 h-4 w-4" />

@@ -163,6 +163,16 @@ describe("OAuth Flow - Facebook", () => {
       expect(url).toContain("state=fb-state");
       expect(url).toContain("client_id=test-client-id");
     });
+
+    // Regression (2026-07-17): returning users saw the "Continue as … / use
+    // previous settings" shortcut, which silently reused a prior grant that may
+    // have selected 0 Pages → me/accounts=[] → confusing fb_no_pages toast even
+    // for users who DO admin a Page. auth_type=rerequest forces Facebook to
+    // re-present the permission + Page-selection wizard. Do NOT remove.
+    it("should include auth_type=rerequest to force the Page-selection wizard", () => {
+      const url = facebook.getOAuthUrl(baseConfig, "s");
+      expect(url).toContain("auth_type=rerequest");
+    });
   });
 
   describe("exchangeCodeForTokens()", () => {

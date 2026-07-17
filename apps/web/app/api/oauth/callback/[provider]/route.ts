@@ -183,8 +183,22 @@ export async function GET(
 
     const tokens = await provider.exchangeCodeForTokens(code, config, codeVerifier);
 
-    // Get profile info
-    const profile = await provider.getProfile(tokens);
+    // Get profile info.
+    // INSTAGRAM is deliberately skipped here: the IG branch below builds its
+    // channels from getAllInstagramAccounts() (which returns [] gracefully when
+    // no IG Business account is linked) and never reads `profile`. Calling
+    // InstagramProvider.getProfile() here would call getInstagramBusinessAccountId(),
+    // which THROWS "No Instagram Business Account found…" for personal-IG users —
+    // that throw was being caught by the outer catch and mislabelled as the
+    // generic `oauth_failed` toast, making the clean `ig_no_business_account`
+    // guard below unreachable (dead code). Skipping it lets the specific,
+    // actionable message surface. (FACEBOOK keeps getProfile — its profile read
+    // succeeds even for a user with no Pages, so it does not pre-empt the
+    // fb_no_pages branch.)
+    const profile =
+      platform === "INSTAGRAM"
+        ? ({ id: "", name: "" } as Awaited<ReturnType<typeof provider.getProfile>>)
+        : await provider.getProfile(tokens);
 
     // For Facebook, fetch and save managed Pages instead of the user account
     if (platform === "FACEBOOK" && provider instanceof FacebookProvider) {
@@ -437,11 +451,18 @@ export async function GET(
     );
   } catch (err: any) {
     console.error(`OAuth callback error for ${params.provider}:`, err);
-    // Map known state-verification errors to a slightly more useful code.
-    const code = /State expired/i.test(err?.message)
+    // Map known errors to a more useful, actionable code.
+    const msg = err?.message ?? "";
+    const code = /State expired/i.test(msg)
       ? "state_expired"
-      : /Invalid state/i.test(err?.message)
+      : /Invalid state/i.test(msg)
       ? "invalid_state"
+      : // Defense-in-depth: any "no IG Business account" throw that reaches here
+        // (e.g. from a deeper Instagram Graph path) gets the specific, actionable
+        // toast instead of the generic "Sign-in failed". Primary fix is skipping
+        // the front-loaded getProfile for INSTAGRAM above.
+        /No Instagram Business Account|Instagram Professional account/i.test(msg)
+      ? "ig_no_business_account"
       : "oauth_failed";
     return genericErrorRedirect(code);
   }
