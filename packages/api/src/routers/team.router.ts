@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { randomUUID } from "crypto";
-import { createRouter, orgProcedure, publicProcedure } from "../trpc";
+import { createRouter, orgProcedure, publicProcedure, adminOrgProcedure } from "../trpc";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 import { enforcePlanLimit } from "../middleware/plan-limit.middleware";
 import { sendEmail } from "../lib/email";
@@ -21,7 +21,7 @@ export const teamRouter = createRouter({
    * - Existing user AND not a member → add directly + send "you've been added" email
    * - No user with that email → create OrganizationInvite + send invite email
    */
-  invite: orgProcedure
+  invite: adminOrgProcedure
     .input(z.object({ email: z.string().email(), role: z.enum(["ADMIN", "MEMBER"]).default("MEMBER") }))
     .mutation(async ({ ctx, input }) => {
       if (ctx.membership.role !== "OWNER" && ctx.membership.role !== "ADMIN") {
@@ -182,7 +182,7 @@ export const teamRouter = createRouter({
       return { organizationId: invite.organizationId };
     }),
 
-  updateRole: orgProcedure
+  updateRole: adminOrgProcedure
     .input(z.object({ memberId: z.string(), role: z.enum(["ADMIN", "MEMBER"]) }))
     .mutation(async ({ ctx, input }) => {
       if (ctx.membership.role !== "OWNER") {
@@ -215,7 +215,7 @@ export const teamRouter = createRouter({
    * Fix #72: Transfer ownership to another member.
    * The current owner is demoted to ADMIN and the target is promoted to OWNER.
    */
-  transferOwnership: orgProcedure
+  transferOwnership: adminOrgProcedure
     .input(z.object({ newOwnerMemberId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       if (ctx.membership.role !== "OWNER") {
@@ -257,7 +257,7 @@ export const teamRouter = createRouter({
       return { success: true };
     }),
 
-  removeMember: orgProcedure
+  removeMember: adminOrgProcedure
     .input(z.object({ memberId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       if (ctx.membership.role !== "OWNER" && ctx.membership.role !== "ADMIN") {

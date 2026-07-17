@@ -1,10 +1,10 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { createRouter, orgProcedure } from "../trpc";
+import { createRouter, adminOrgProcedure } from "../trpc";
 import { requirePlan } from "../middleware/plan-limit.middleware";
 
 export const brandLeadsRouter = createRouter({
-  stats: orgProcedure.query(async ({ ctx }) => {
+  stats: adminOrgProcedure.query(async ({ ctx }) => {
     // Brand Outreach is a PROFESSIONAL+ feature
     await requirePlan(ctx.organizationId, "PROFESSIONAL", "Brand Outreach", ctx.isSuperAdmin);
     const today = new Date();
@@ -22,7 +22,7 @@ export const brandLeadsRouter = createRouter({
     return { total, pending, approved, sent, failed, todayCount };
   }),
 
-  list: orgProcedure
+  list: adminOrgProcedure
     .input(z.object({
       status: z.enum(["PENDING", "APPROVED", "REJECTED", "SENT", "FAILED", "REPLIED", "INTERESTED", "NOT_INTERESTED", "CLOSED"]).optional(),
       signalType: z.enum(["AD_LIBRARY", "SOCIAL_MEDIA", "PR_NEWS", "JOB_POSTING"]).optional(),
@@ -53,7 +53,7 @@ export const brandLeadsRouter = createRouter({
       });
     }),
 
-  messages: orgProcedure
+  messages: adminOrgProcedure
     .input(z.object({ leadId: z.string() }))
     .query(async ({ ctx, input }) => {
       return ctx.prisma.outreachMessage.findMany({
@@ -66,7 +66,7 @@ export const brandLeadsRouter = createRouter({
       });
     }),
 
-  approve: orgProcedure
+  approve: adminOrgProcedure
     .input(z.object({ leadId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const lead = await ctx.prisma.outreachLead.findFirstOrThrow({
@@ -78,7 +78,7 @@ export const brandLeadsRouter = createRouter({
       });
     }),
 
-  reject: orgProcedure
+  reject: adminOrgProcedure
     .input(z.object({ leadId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const lead = await ctx.prisma.outreachLead.findFirstOrThrow({
@@ -90,7 +90,7 @@ export const brandLeadsRouter = createRouter({
       });
     }),
 
-  approveAll: orgProcedure
+  approveAll: adminOrgProcedure
     .mutation(async ({ ctx }) => {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
@@ -109,7 +109,7 @@ export const brandLeadsRouter = createRouter({
   // the outcome here by hand. Restricted to the post-send MANUAL states so this
   // control can't shove a lead back into the auto-pipeline states
   // (PENDING/APPROVED/SENT/FAILED are owned by the workers).
-  setStatus: orgProcedure
+  setStatus: adminOrgProcedure
     .input(z.object({
       leadId: z.string(),
       status: z.enum(["REPLIED", "INTERESTED", "NOT_INTERESTED", "CLOSED"]),

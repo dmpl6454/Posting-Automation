@@ -2,9 +2,9 @@ import crypto from "crypto";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { Prisma } from "@postautomation/db";
-import { createRouter, orgProcedure } from "../trpc";
+import { createRouter, adminOrgProcedure } from "../trpc";
 
-// SECURITY: every endpoint is org-scoped via `orgProcedure` and looks up
+// SECURITY: every endpoint is org-scoped via `adminOrgProcedure` and looks up
 // short links with `organizationId: ctx.organizationId`. Previously
 // `findUnique({ where: { id } })` allowed any logged-in user to read
 // click analytics or delete other tenants' short links.
@@ -51,7 +51,7 @@ function parseUA(ua: string | null | undefined): {
 }
 
 export const shortlinkRouter = createRouter({
-  create: orgProcedure
+  create: adminOrgProcedure
     .input(
       z.object({
         originalUrl: z.string().url().refine(
@@ -92,7 +92,7 @@ export const shortlinkRouter = createRouter({
       return shortLink;
     }),
 
-  list: orgProcedure
+  list: adminOrgProcedure
     .input(
       z.object({
         limit: z.number().min(1).max(100).default(20),
@@ -116,7 +116,7 @@ export const shortlinkRouter = createRouter({
       return { links, nextCursor };
     }),
 
-  getStats: orgProcedure
+  getStats: adminOrgProcedure
     .input(
       z.object({
         id: z.string(),
@@ -217,7 +217,7 @@ export const shortlinkRouter = createRouter({
       };
     }),
 
-  delete: orgProcedure
+  delete: adminOrgProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const shortLink = await ctx.prisma.shortLink.findFirst({

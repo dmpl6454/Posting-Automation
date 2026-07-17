@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { createRouter, orgProcedure } from "../trpc";
+import { createRouter, orgProcedure, isAppAdmin } from "../trpc";
 import { agentRunQueue, postPublishQueue } from "@postautomation/queue";
 import { requirePlan, enforcePlanLimit } from "../middleware/plan-limit.middleware";
 import type { PrismaClient } from "@postautomation/db";
@@ -388,6 +388,15 @@ export const chatRouter = createRouter({
 
       switch (input.actionType) {
         case "create_agent": {
+          // RBAC: autopilot is an admin-only feature area — the Super Agent chat
+          // must not be a side door into it for USER-role accounts. All other
+          // action types (schedule/publish/analytics/news-image) stay USER.
+          if (process.env.RBAC_DISABLED !== "true" && !isAppAdmin(ctx.session?.user)) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "Creating autopilot agents requires an admin role.",
+            });
+          }
           await requirePlan(ctx.organizationId, "STARTER", "Autopilot agents", ctx.isSuperAdmin);
           const p = input.payload as any;
           await assertChannelsOwned(ctx.prisma, ctx.organizationId, p.channelIds || []);

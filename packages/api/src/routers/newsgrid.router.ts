@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { createRouter, orgProcedure } from "../trpc";
+import { createRouter, adminOrgProcedure } from "../trpc";
 import { TRPCError } from "@trpc/server";
 import { postPublishQueue } from "@postautomation/queue";
 import { requirePlan, enforcePlanLimit } from "../middleware/plan-limit.middleware";
@@ -116,7 +116,7 @@ const tonePromptMap: Record<string, string> = {
 
 export const newsgridRouter = createRouter({
   // ── Generate payloads for all selected channels ──────────────────────────
-  generate: orgProcedure
+  generate: adminOrgProcedure
     .input(
       z.object({
         headline:    z.string().min(3),
@@ -357,7 +357,7 @@ Requirements:
     }),
 
   // ── Update brand profile for a channel ──────────────────────────────────
-  updateChannelProfile: orgProcedure
+  updateChannelProfile: adminOrgProcedure
     .input(
       z.object({
         channelId:        z.string(),
@@ -392,7 +392,7 @@ Requirements:
     }),
 
   // ── Bulk publish approved payloads ────────────────────────────────────────
-  bulkPublish: orgProcedure
+  bulkPublish: adminOrgProcedure
     .input(
       z.object({
         headline: z.string(),
@@ -569,7 +569,7 @@ Requirements:
     }),
 
   // ── Auto-fill form from headline (called on headline change) ─────────────
-  prefillFromHeadline: orgProcedure
+  prefillFromHeadline: adminOrgProcedure
     .input(z.object({ headline: z.string().min(3) }))
     .mutation(async ({ input }) => {
       const { generateContent } = await import("@postautomation/ai");
@@ -617,7 +617,7 @@ Requirements:
     }),
 
   // ── Logo Library ─────────────────────────────────────────────────────────
-  getLogos: orgProcedure.query(async ({ ctx }) => {
+  getLogos: adminOrgProcedure.query(async ({ ctx }) => {
     return ctx.prisma.media.findMany({
       where: { organizationId: ctx.organizationId, category: "logo" },
       orderBy: { createdAt: "desc" },
@@ -625,7 +625,7 @@ Requirements:
     });
   }),
 
-  assignLogoToChannel: orgProcedure
+  assignLogoToChannel: adminOrgProcedure
     .input(z.object({ mediaId: z.string(), channelId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       // Verify the logo media belongs to the caller's org
@@ -663,7 +663,7 @@ Requirements:
       return { success: true };
     }),
 
-  deleteLogo: orgProcedure
+  deleteLogo: adminOrgProcedure
     .input(z.object({ mediaId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       // Fix #54: null out channel.metadata.logo_path before deleting the media
@@ -710,7 +710,7 @@ Requirements:
     }),
 
   // ── List channels with their brand profiles ──────────────────────────────
-  channelsWithProfiles: orgProcedure.query(async ({ ctx }) => {
+  channelsWithProfiles: adminOrgProcedure.query(async ({ ctx }) => {
     const channels = await ctx.prisma.channel.findMany({
       where:   { organizationId: ctx.organizationId, isActive: true },
       orderBy: { name: "asc" },

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import bcrypt from "bcryptjs";
-import { createRouter, protectedProcedure } from "../trpc";
+import { createRouter, protectedProcedure, adminProtectedProcedure } from "../trpc";
 import { sendSms } from "../lib/sms";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 
@@ -255,7 +255,7 @@ export const userRouter = createRouter({
       return { success: true };
     }),
 
-  createOrganization: protectedProcedure
+  createOrganization: adminProtectedProcedure
     .input(
       z.object({ name: z.string().min(1), slug: z.string().optional() })
     )

@@ -1,4 +1,5 @@
 "use client";
+import { RequireAppAdmin } from "~/components/auth/require-app-admin";
 
 import { useState } from "react";
 import { trpc } from "~/lib/trpc/client";
@@ -85,7 +86,7 @@ const sourceColors: Record<string, string> = {
   OTHER: "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400",
 };
 
-export default function ListeningPage() {
+function ListeningPageInner() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [name, setName] = useState("");
   const [keywords, setKeywords] = useState("");
@@ -580,5 +581,16 @@ export default function ListeningPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+// App-level RBAC (2026-07-17): this page is an admin-only area. Server-side
+// enforcement lives in tRPC (adminOrgProcedure); this wrapper only provides a
+// clear "Admin access required" screen for USER-role deep links.
+export default function ListeningPage() {
+  return (
+    <RequireAppAdmin>
+      <ListeningPageInner />
+    </RequireAppAdmin>
   );
 }

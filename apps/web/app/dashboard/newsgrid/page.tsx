@@ -1,4 +1,5 @@
 "use client";
+import { RequireAppAdmin } from "~/components/auth/require-app-admin";
 
 import { humanizeError } from "~/lib/errors";
 
@@ -464,7 +465,7 @@ function ChannelProfileModal({ channel, onClose, onSave }: {
 // ─────────────────────────────────────────────────────────────────────────────
 // Main Page
 // ─────────────────────────────────────────────────────────────────────────────
-export default function NewsGridPage() {
+function NewsGridPageInner() {
   const { toast } = useToast();
 
   const [headline, setHeadline]             = useState("");
@@ -1093,5 +1094,16 @@ export default function NewsGridPage() {
         />
       )}
     </div>
+  );
+}
+
+// App-level RBAC (2026-07-17): this page is an admin-only area. Server-side
+// enforcement lives in tRPC (adminOrgProcedure); this wrapper only provides a
+// clear "Admin access required" screen for USER-role deep links.
+export default function NewsGridPage() {
+  return (
+    <RequireAppAdmin>
+      <NewsGridPageInner />
+    </RequireAppAdmin>
   );
 }

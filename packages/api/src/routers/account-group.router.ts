@@ -1,10 +1,10 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { createRouter, orgProcedure } from "../trpc";
+import { createRouter, adminOrgProcedure } from "../trpc";
 
 export const accountGroupRouter = createRouter({
   // List all account groups with their agents
-  list: orgProcedure.query(async ({ ctx }) => {
+  list: adminOrgProcedure.query(async ({ ctx }) => {
     return ctx.prisma.accountGroup.findMany({
       where: { organizationId: ctx.organizationId },
       include: {
@@ -17,7 +17,7 @@ export const accountGroupRouter = createRouter({
   }),
 
   // Create a new account group
-  create: orgProcedure
+  create: adminOrgProcedure
     .input(
       z.object({
         name: z.string().min(1).max(255),
@@ -43,7 +43,7 @@ export const accountGroupRouter = createRouter({
     }),
 
   // Update an account group
-  update: orgProcedure
+  update: adminOrgProcedure
     .input(
       z.object({
         id: z.string(),
@@ -73,7 +73,7 @@ export const accountGroupRouter = createRouter({
     }),
 
   // Delete an account group (unlink agents first)
-  delete: orgProcedure
+  delete: adminOrgProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const existing = await ctx.prisma.accountGroup.findFirst({
@@ -97,7 +97,7 @@ export const accountGroupRouter = createRouter({
     }),
 
   // Add agents to a group
-  addAgents: orgProcedure
+  addAgents: adminOrgProcedure
     .input(
       z.object({
         groupId: z.string(),
@@ -127,7 +127,7 @@ export const accountGroupRouter = createRouter({
     }),
 
   // Remove an agent from its group
-  removeAgent: orgProcedure
+  removeAgent: adminOrgProcedure
     .input(z.object({ agentId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const agent = await ctx.prisma.agent.findFirst({

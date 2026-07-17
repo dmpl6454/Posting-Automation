@@ -24,7 +24,7 @@ const campaignSrc = readFileSync(join(ROUTERS, "campaign.router.ts"), "utf8");
 function procedureBodies(src: string): Record<string, string> {
   const out: Record<string, string> = {};
   // Match "  name: orgProcedure" at 2-space indent (router member).
-  const re = /^ {2}(\w+): orgProcedure/gm;
+  const re = /^ {2}(\w+): (?:adminOrgProcedure|orgProcedure)/gm; // RBAC 2026-07-17: campaign router is admin-gated; plan gate assertions unchanged
   const starts: Array<{ name: string; idx: number }> = [];
   let m: RegExpExecArray | null;
   while ((m = re.exec(src)) !== null) starts.push({ name: m[1]!, idx: m.index });

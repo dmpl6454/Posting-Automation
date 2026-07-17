@@ -1,12 +1,12 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { createRouter, orgProcedure } from "../trpc";
+import { createRouter, adminOrgProcedure } from "../trpc";
 import { listeningSyncQueue } from "@postautomation/queue";
 import { requirePlan } from "../middleware/plan-limit.middleware";
 
 export const listeningRouter = createRouter({
   // ---- Listening Queries CRUD ----
-  listQueries: orgProcedure.query(async ({ ctx }) => {
+  listQueries: adminOrgProcedure.query(async ({ ctx }) => {
     // Listening is a STARTER+ feature
     await requirePlan(ctx.organizationId, "STARTER", "Listening", ctx.isSuperAdmin);
     return ctx.prisma.listeningQuery.findMany({
@@ -18,7 +18,7 @@ export const listeningRouter = createRouter({
     });
   }),
 
-  getQuery: orgProcedure
+  getQuery: adminOrgProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
       return ctx.prisma.listeningQuery.findFirstOrThrow({
@@ -29,7 +29,7 @@ export const listeningRouter = createRouter({
       });
     }),
 
-  createQuery: orgProcedure
+  createQuery: adminOrgProcedure
     .input(
       z.object({
         name: z.string().min(1).max(200),
@@ -57,7 +57,7 @@ export const listeningRouter = createRouter({
       return query;
     }),
 
-  updateQuery: orgProcedure
+  updateQuery: adminOrgProcedure
     .input(
       z.object({
         id: z.string(),
@@ -77,7 +77,7 @@ export const listeningRouter = createRouter({
       });
     }),
 
-  deleteQuery: orgProcedure
+  deleteQuery: adminOrgProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       await ctx.prisma.listeningQuery.delete({
@@ -87,7 +87,7 @@ export const listeningRouter = createRouter({
     }),
 
   // ---- Mentions ----
-  mentions: orgProcedure
+  mentions: adminOrgProcedure
     .input(
       z.object({
         queryId: z.string().optional(),
@@ -124,7 +124,7 @@ export const listeningRouter = createRouter({
     }),
 
   // ---- Sentiment Overview ----
-  sentimentOverview: orgProcedure
+  sentimentOverview: adminOrgProcedure
     .input(
       z.object({
         queryId: z.string().optional(),
@@ -181,7 +181,7 @@ export const listeningRouter = createRouter({
     }),
 
   // ---- Mention Volume Over Time ----
-  volumeOverTime: orgProcedure
+  volumeOverTime: adminOrgProcedure
     .input(
       z.object({
         queryId: z.string().optional(),
@@ -225,7 +225,7 @@ export const listeningRouter = createRouter({
     }),
 
   // ---- Alerts ----
-  alerts: orgProcedure
+  alerts: adminOrgProcedure
     .input(
       z.object({
         queryId: z.string().optional(),
@@ -250,7 +250,7 @@ export const listeningRouter = createRouter({
       });
     }),
 
-  markAlertRead: orgProcedure
+  markAlertRead: adminOrgProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const result = await ctx.prisma.sentimentAlert.updateMany({
@@ -262,7 +262,7 @@ export const listeningRouter = createRouter({
     }),
 
   // ---- Source Breakdown ----
-  sourceBreakdown: orgProcedure
+  sourceBreakdown: adminOrgProcedure
     .input(
       z.object({
         queryId: z.string().optional(),
@@ -292,7 +292,7 @@ export const listeningRouter = createRouter({
     }),
 
   // ---- Trigger Manual Sync ----
-  triggerSync: orgProcedure
+  triggerSync: adminOrgProcedure
     .input(z.object({ queryId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       await ctx.prisma.listeningQuery.findFirstOrThrow({

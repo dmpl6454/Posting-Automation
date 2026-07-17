@@ -43,10 +43,14 @@ interface NavItem {
   name: string;
   href: string;
   icon: React.ElementType;
-  /** If set, only users with one of these roles see this item. Omit = everyone. */
+  /** If set, only users with one of these ORG roles see this item. Omit = everyone. */
   roles?: MemberRole[];
   /** If set, show a lock badge unless org plan meets this minimum. */
   minPlan?: PlanType;
+  /** App-level RBAC (User.appRole): only ADMIN-role (or super admin) users see this. */
+  appAdminOnly?: boolean;
+  /** Only isSuperAdmin users see this (e.g. Monitoring — its data is superAdminProcedure-only). */
+  superAdminOnly?: boolean;
 }
 
 const navigation: NavItem[] = [
@@ -55,33 +59,35 @@ const navigation: NavItem[] = [
   { name: "Content Studio", href: "/dashboard/content-agent", icon: Sparkles },
   { name: "Channels", href: "/dashboard/channels", icon: Share2 },
   { name: "Media", href: "/dashboard/media", icon: Image },
-  { name: "Analytics", href: "/dashboard/analytics", icon: BarChart3 },
-  { name: "RSS Feeds", href: "/dashboard/rss", icon: Rss },
-  { name: "Short Links", href: "/dashboard/links", icon: Link2 },
+  { name: "Insights", href: "/dashboard/analytics", icon: BarChart3 },
+  { name: "RSS Feeds", href: "/dashboard/rss", icon: Rss, appAdminOnly: true },
+  { name: "Short Links", href: "/dashboard/links", icon: Link2, appAdminOnly: true },
   // NewsGrid Bot hidden from UI 2026-06-23 — redundant with Repurpose (same render stack).
   // Route + newsgrid.router.ts kept intact; re-add this nav entry to restore.
   // { name: "NewsGrid Bot", href: "/dashboard/newsgrid", icon: Newspaper, minPlan: "STARTER" },
-  { name: "Autopilot", href: "/dashboard/autopilot", icon: Zap, minPlan: "STARTER" },
-  { name: "Social Listening", href: "/dashboard/listening", icon: Ear, minPlan: "STARTER" },
-  { name: "Campaigns", href: "/dashboard/campaigns", icon: Target, minPlan: "PROFESSIONAL" },
+  { name: "Autopilot", href: "/dashboard/autopilot", icon: Zap, minPlan: "STARTER", appAdminOnly: true },
+  { name: "Social Listening", href: "/dashboard/listening", icon: Ear, minPlan: "STARTER", appAdminOnly: true },
+  { name: "Campaigns", href: "/dashboard/campaigns", icon: Target, minPlan: "PROFESSIONAL", appAdminOnly: true },
   // Fix #62: sidebar label aligned with page header ("Brand Outreach")
-  { name: "Brand Outreach", href: "/dashboard/brand-leads", icon: Star, minPlan: "PROFESSIONAL" },
-  { name: "Approvals", href: "/dashboard/approvals", icon: CheckCircle },
+  { name: "Brand Outreach", href: "/dashboard/brand-leads", icon: Star, minPlan: "PROFESSIONAL", appAdminOnly: true },
+  { name: "Approvals", href: "/dashboard/approvals", icon: CheckCircle, appAdminOnly: true },
   // Fix #1: Team visible to OWNER + ADMIN only
-  { name: "Team", href: "/dashboard/team", icon: Users, roles: ["OWNER", "ADMIN"] },
+  { name: "Team", href: "/dashboard/team", icon: Users, roles: ["OWNER", "ADMIN"], appAdminOnly: true },
   // Fix #1: Billing moved to main nav (was in settingsNav — caused double-highlight)
-  { name: "Billing", href: "/dashboard/settings/billing", icon: CreditCard, roles: ["OWNER", "ADMIN"] },
+  { name: "Billing", href: "/dashboard/settings/billing", icon: CreditCard, roles: ["OWNER", "ADMIN"], appAdminOnly: true },
 ];
 
 const settingsNav: NavItem[] = [
-  { name: "Monitoring", href: "/dashboard/monitoring", icon: Monitor },
+  // RBAC 2026-07-17: Monitoring's data is superAdminProcedure-only — it used to
+  // be visible to EVERYONE (non-super-admins saw a shell of FORBIDDEN errors).
+  { name: "Monitoring", href: "/dashboard/monitoring", icon: Monitor, superAdminOnly: true },
   { name: "Settings", href: "/dashboard/settings", icon: Settings },
   // Fix #4: Billing removed from settingsNav (now lives in main nav above)
-  { name: "Webhooks", href: "/dashboard/settings/webhooks", icon: Webhook, roles: ["OWNER", "ADMIN"] },
-  { name: "API Keys", href: "/dashboard/settings/api-keys", icon: Key, roles: ["OWNER", "ADMIN"] },
-  { name: "API Docs", href: "/dashboard/settings/api-docs", icon: BookOpen, roles: ["OWNER", "ADMIN"] },
-  { name: "Audit Log", href: "/dashboard/settings/audit-log", icon: FileText, roles: ["OWNER", "ADMIN"] },
-  { name: "Versions", href: "/dashboard/settings/versions", icon: GitBranch, roles: ["OWNER", "ADMIN"] },
+  { name: "Webhooks", href: "/dashboard/settings/webhooks", icon: Webhook, roles: ["OWNER", "ADMIN"], appAdminOnly: true },
+  { name: "API Keys", href: "/dashboard/settings/api-keys", icon: Key, roles: ["OWNER", "ADMIN"], appAdminOnly: true },
+  { name: "API Docs", href: "/dashboard/settings/api-docs", icon: BookOpen, roles: ["OWNER", "ADMIN"], appAdminOnly: true },
+  { name: "Audit Log", href: "/dashboard/settings/audit-log", icon: FileText, roles: ["OWNER", "ADMIN"], appAdminOnly: true },
+  { name: "Versions", href: "/dashboard/settings/versions", icon: GitBranch, roles: ["OWNER", "ADMIN"], appAdminOnly: true },
 ];
 
 interface SidebarProps {
@@ -94,6 +100,9 @@ export function Sidebar({ open, onClose }: SidebarProps) {
   const { data: session } = useSession();
   const role = (session?.user as any)?.role as MemberRole | undefined;
   const isSuperAdmin = (session?.user as any)?.isSuperAdmin === true;
+  // App-level RBAC tier (separate from the org `role` above). Super admin implies admin.
+  const appRole = (session?.user as any)?.appRole as "USER" | "ADMIN" | undefined;
+  const isAppAdminUser = appRole === "ADMIN" || isSuperAdmin;
   const { data: planData } = trpc.billing.currentPlan.useQuery(undefined, {
     // Refresh every 5 minutes — plan changes are low-frequency
     staleTime: 5 * 60 * 1000,
@@ -116,9 +125,13 @@ export function Sidebar({ open, onClose }: SidebarProps) {
     if (onClose) onClose();
   };
 
-  /** Filter items by role gate */
+  /** Filter items by org-role, app-role (RBAC), and super-admin gates */
   const visible = (items: NavItem[]) =>
-    items.filter((n) => !n.roles || (role && n.roles.includes(role)));
+    items.filter((n) => {
+      if (n.superAdminOnly && !isSuperAdmin) return false;
+      if (n.appAdminOnly && !isAppAdminUser) return false;
+      return !n.roles || (role && n.roles.includes(role));
+    });
 
   const sidebarContent = (
     <>

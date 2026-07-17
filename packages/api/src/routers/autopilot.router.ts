@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { createRouter, orgProcedure } from "../trpc";
+import { createRouter, adminOrgProcedure } from "../trpc";
 import {
   autopilotScheduleQueue,
   trendDiscoverQueue,
@@ -11,7 +11,7 @@ import { requirePlan } from "../middleware/plan-limit.middleware";
 
 export const autopilotRouter = createRouter({
   // Dashboard stats
-  overview: orgProcedure.query(async ({ ctx }) => {
+  overview: adminOrgProcedure.query(async ({ ctx }) => {
     // Autopilot is a STARTER+ feature
     await requirePlan(ctx.organizationId, "STARTER", "Autopilot", ctx.isSuperAdmin);
     const now = new Date();
@@ -54,7 +54,7 @@ export const autopilotRouter = createRouter({
   }),
 
   // Paginated trending feed
-  trendingItems: orgProcedure
+  trendingItems: adminOrgProcedure
     .input(
       z.object({
         status: z
@@ -95,7 +95,7 @@ export const autopilotRouter = createRouter({
     }),
 
   // Posts pending human review
-  reviewQueue: orgProcedure
+  reviewQueue: adminOrgProcedure
     .input(
       z.object({
         sensitivity: z.enum(["LOW", "MEDIUM", "HIGH"]).optional(),
@@ -127,7 +127,7 @@ export const autopilotRouter = createRouter({
   // these, so they're invisible to both reviewQueue (status:"REVIEWING" only)
   // and posts (requires an existing Post). Surfaces errorMessage + context so
   // a user whose autopilot silently stopped posting can see why.
-  failedPosts: orgProcedure
+  failedPosts: adminOrgProcedure
     .input(
       z
         .object({
@@ -151,7 +151,7 @@ export const autopilotRouter = createRouter({
     }),
 
   // Approve a single post
-  approvePost: orgProcedure
+  approvePost: adminOrgProcedure
     .input(z.object({ autopilotPostId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const post = await ctx.prisma.autopilotPost.findFirst({
@@ -191,7 +191,7 @@ export const autopilotRouter = createRouter({
     }),
 
   // Reject a post with quota decrement
-  rejectPost: orgProcedure
+  rejectPost: adminOrgProcedure
     .input(z.object({ autopilotPostId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const post = await ctx.prisma.autopilotPost.findFirst({
@@ -222,7 +222,7 @@ export const autopilotRouter = createRouter({
     }),
 
   // Bulk approve
-  bulkApprove: orgProcedure
+  bulkApprove: adminOrgProcedure
     .input(z.object({ autopilotPostIds: z.array(z.string()) }))
     .mutation(async ({ ctx, input }) => {
       let approvedCount = 0;
@@ -258,7 +258,7 @@ export const autopilotRouter = createRouter({
     }),
 
   // Bulk reject
-  bulkReject: orgProcedure
+  bulkReject: adminOrgProcedure
     .input(z.object({ autopilotPostIds: z.array(z.string()) }))
     .mutation(async ({ ctx, input }) => {
       const result = await ctx.prisma.autopilotPost.updateMany({
@@ -273,7 +273,7 @@ export const autopilotRouter = createRouter({
     }),
 
   // Recent pipeline runs
-  pipelineRuns: orgProcedure
+  pipelineRuns: adminOrgProcedure
     .input(
       z.object({
         limit: z.number().min(1).max(100).default(20),
@@ -288,7 +288,7 @@ export const autopilotRouter = createRouter({
     }),
 
   // Autopilot-generated posts with performance stats
-  posts: orgProcedure
+  posts: adminOrgProcedure
     .input(
       z.object({
         status: z.string().optional(),
@@ -324,7 +324,7 @@ export const autopilotRouter = createRouter({
     }),
 
   // Manual trigger
-  triggerPipeline: orgProcedure.mutation(async ({ ctx }) => {
+  triggerPipeline: adminOrgProcedure.mutation(async ({ ctx }) => {
     const agentCount = await ctx.prisma.agent.count({
       where: { organizationId: ctx.organizationId, isActive: true },
     });

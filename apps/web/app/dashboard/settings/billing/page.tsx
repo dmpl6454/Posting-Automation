@@ -1,4 +1,5 @@
 "use client";
+import { RequireAppAdmin } from "~/components/auth/require-app-admin";
 
 import { trpc } from "~/lib/trpc/client";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "~/components/ui/card";
@@ -9,7 +10,7 @@ import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { useToast } from "~/hooks/use-toast";
 import { CreditCard, CheckCircle, Zap, Info } from "lucide-react";
 
-export default function BillingPage() {
+function BillingPageInner() {
   const { toast } = useToast();
   const { data: currentPlan, isLoading } = trpc.billing.currentPlan.useQuery();
   const { data: plans } = trpc.billing.plans.useQuery();
@@ -163,5 +164,16 @@ export default function BillingPage() {
         })}
       </div>
     </div>
+  );
+}
+
+// App-level RBAC (2026-07-17): this page is an admin-only area. Server-side
+// enforcement lives in tRPC (adminOrgProcedure); this wrapper only provides a
+// clear "Admin access required" screen for USER-role deep links.
+export default function BillingPage() {
+  return (
+    <RequireAppAdmin>
+      <BillingPageInner />
+    </RequireAppAdmin>
   );
 }

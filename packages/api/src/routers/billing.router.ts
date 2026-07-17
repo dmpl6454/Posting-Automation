@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { createRouter, orgProcedure } from "../trpc";
+import { createRouter, orgProcedure, adminOrgProcedure } from "../trpc";
 import {
   PLANS,
   createCheckoutSession,
@@ -25,7 +25,7 @@ export const billingRouter = createRouter({
     return { ...org, planConfig: PLANS[org.plan] || PLANS.FREE, billingDisabled: isBillingDisabled() };
   }),
 
-  createCheckout: orgProcedure
+  createCheckout: adminOrgProcedure
     .input(z.object({ planType: z.enum(["STARTER", "PROFESSIONAL", "ENTERPRISE"]) }))
     .mutation(async ({ ctx, input }) => {
       if (ctx.membership.role !== "OWNER") {
@@ -50,7 +50,7 @@ export const billingRouter = createRouter({
       return { url: session.url };
     }),
 
-  createPortalSession: orgProcedure.mutation(async ({ ctx }) => {
+  createPortalSession: adminOrgProcedure.mutation(async ({ ctx }) => {
     const org = await ctx.prisma.organization.findUniqueOrThrow({
       where: { id: ctx.organizationId },
     });

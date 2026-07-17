@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { createRouter, orgProcedure } from "../trpc";
+import { createRouter, orgProcedure, adminOrgProcedure } from "../trpc";
 
 export const approvalRouter = createRouter({
   submit: orgProcedure
@@ -76,7 +76,7 @@ export const approvalRouter = createRouter({
       return approvalRequest;
     }),
 
-  review: orgProcedure
+  review: adminOrgProcedure
     .input(
       z.object({
         approvalRequestId: z.string(),

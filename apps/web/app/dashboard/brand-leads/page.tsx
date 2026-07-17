@@ -1,4 +1,5 @@
 "use client";
+import { RequireAppAdmin } from "~/components/auth/require-app-admin";
 
 import { useState } from "react";
 import { trpc } from "~/lib/trpc/client";
@@ -475,7 +476,7 @@ function MessagePreviewDialog({ lead, open, onClose, onStatusChange }: {
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
-export default function BrandLeadsPage() {
+function BrandLeadsPageInner() {
   const [activeTab, setActiveTab] = useState<"pending" | "all" | "sent">("pending");
   const [signalFilter, setSignalFilter] = useState<string>("all");
   const [previewLead, setPreviewLead] = useState<Lead | null>(null);
@@ -740,5 +741,16 @@ export default function BrandLeadsPage() {
         onStatusChange={(status) => setPreviewLead((prev) => prev ? { ...prev, status } : prev)}
       />
     </div>
+  );
+}
+
+// App-level RBAC (2026-07-17): this page is an admin-only area. Server-side
+// enforcement lives in tRPC (adminOrgProcedure); this wrapper only provides a
+// clear "Admin access required" screen for USER-role deep links.
+export default function BrandLeadsPage() {
+  return (
+    <RequireAppAdmin>
+      <BrandLeadsPageInner />
+    </RequireAppAdmin>
   );
 }

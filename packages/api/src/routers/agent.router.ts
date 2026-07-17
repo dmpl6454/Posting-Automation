@@ -1,11 +1,11 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { createRouter, orgProcedure } from "../trpc";
+import { createRouter, adminOrgProcedure } from "../trpc";
 import { agentRunQueue } from "@postautomation/queue";
 import { requirePlan } from "../middleware/plan-limit.middleware";
 
 export const agentRouter = createRouter({
-  list: orgProcedure.query(async ({ ctx }) => {
+  list: adminOrgProcedure.query(async ({ ctx }) => {
     // Super Agent / AI Agents are a STARTER+ feature
     await requirePlan(ctx.organizationId, "STARTER", "AI Agents", ctx.isSuperAdmin);
     return ctx.prisma.agent.findMany({
@@ -17,7 +17,7 @@ export const agentRouter = createRouter({
     });
   }),
 
-  getById: orgProcedure
+  getById: adminOrgProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
       const agent = await ctx.prisma.agent.findFirst({
@@ -44,7 +44,7 @@ export const agentRouter = createRouter({
       return { ...agent, channels };
     }),
 
-  create: orgProcedure
+  create: adminOrgProcedure
     .input(
       z.object({
         name: z.string().min(1).max(255),
@@ -96,7 +96,7 @@ export const agentRouter = createRouter({
       return agent;
     }),
 
-  update: orgProcedure
+  update: adminOrgProcedure
     .input(
       z.object({
         id: z.string(),
@@ -145,7 +145,7 @@ export const agentRouter = createRouter({
       });
     }),
 
-  delete: orgProcedure
+  delete: adminOrgProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const existing = await ctx.prisma.agent.findFirst({
@@ -158,7 +158,7 @@ export const agentRouter = createRouter({
       return { success: true };
     }),
 
-  toggle: orgProcedure
+  toggle: adminOrgProcedure
     .input(z.object({ id: z.string(), isActive: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
       const agent = await ctx.prisma.agent.findFirst({
@@ -173,7 +173,7 @@ export const agentRouter = createRouter({
       });
     }),
 
-  runNow: orgProcedure
+  runNow: adminOrgProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const agent = await ctx.prisma.agent.findFirst({
@@ -189,7 +189,7 @@ export const agentRouter = createRouter({
       return { queued: true };
     }),
 
-  runs: orgProcedure
+  runs: adminOrgProcedure
     .input(
       z.object({
         agentId: z.string(),

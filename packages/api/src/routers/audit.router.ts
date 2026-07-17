@@ -1,9 +1,9 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { createRouter, orgProcedure } from "../trpc";
+import { createRouter, adminOrgProcedure } from "../trpc";
 
 export const auditRouter = createRouter({
-  list: orgProcedure
+  list: adminOrgProcedure
     .input(
       z.object({
         page: z.number().min(1).default(1),
@@ -76,7 +76,7 @@ export const auditRouter = createRouter({
       };
     }),
 
-  entityHistory: orgProcedure
+  entityHistory: adminOrgProcedure
     .input(
       z.object({
         entityType: z.string(),

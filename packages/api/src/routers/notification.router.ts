@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { createRouter, protectedProcedure } from "../trpc";
+import { createRouter, protectedProcedure, adminProtectedProcedure } from "../trpc";
 
 export const notificationRouter = createRouter({
   list: protectedProcedure
@@ -79,7 +79,7 @@ export const notificationRouter = createRouter({
     return { success: true };
   }),
 
-  create: protectedProcedure
+  create: adminProtectedProcedure
     .input(
       z.object({
         userId: z.string(),

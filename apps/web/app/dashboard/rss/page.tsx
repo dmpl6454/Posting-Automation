@@ -1,4 +1,5 @@
 "use client";
+import { RequireAppAdmin } from "~/components/auth/require-app-admin";
 
 import { humanizeError } from "~/lib/errors";
 
@@ -36,7 +37,7 @@ import {
 
 // Fix #44: removed getOrgId() localStorage helper — backend scopes by session
 
-export default function RssPage() {
+function RssPageInner() {
   const { toast } = useToast();
 
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -445,5 +446,16 @@ function FeedEntries({ feedId }: { feedId: string }) {
         </div>
       ))}
     </div>
+  );
+}
+
+// App-level RBAC (2026-07-17): this page is an admin-only area. Server-side
+// enforcement lives in tRPC (adminOrgProcedure); this wrapper only provides a
+// clear "Admin access required" screen for USER-role deep links.
+export default function RssPage() {
+  return (
+    <RequireAppAdmin>
+      <RssPageInner />
+    </RequireAppAdmin>
   );
 }

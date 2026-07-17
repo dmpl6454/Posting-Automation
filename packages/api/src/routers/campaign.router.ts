@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { createRouter, orgProcedure } from "../trpc";
+import { createRouter, adminOrgProcedure } from "../trpc";
 import { requirePlan } from "../middleware/plan-limit.middleware";
 
 // Campaigns (incl. brand trackers + influencer discovery) are a PROFESSIONAL+
@@ -14,7 +14,7 @@ function gateCampaigns(ctx: { organizationId: string; isSuperAdmin: boolean }) {
 
 export const campaignRouter = createRouter({
   // ==================== CAMPAIGNS ====================
-  list: orgProcedure
+  list: adminOrgProcedure
     .input(z.object({ status: z.enum(["DRAFT", "ACTIVE", "PAUSED", "COMPLETED", "ARCHIVED"]).optional() }).optional())
     .query(async ({ ctx, input }) => {
       await gateCampaigns(ctx);
@@ -40,7 +40,7 @@ export const campaignRouter = createRouter({
       });
     }),
 
-  byId: orgProcedure.input(z.object({ id: z.string() })).query(async ({ ctx, input }) => {
+  byId: adminOrgProcedure.input(z.object({ id: z.string() })).query(async ({ ctx, input }) => {
     await gateCampaigns(ctx);
     return ctx.prisma.campaign.findFirstOrThrow({
       where: { id: input.id, organizationId: ctx.organizationId },
@@ -54,7 +54,7 @@ export const campaignRouter = createRouter({
     });
   }),
 
-  create: orgProcedure
+  create: adminOrgProcedure
     .input(z.object({
       name: z.string().min(1).max(200),
       description: z.string().optional(),
@@ -68,7 +68,7 @@ export const campaignRouter = createRouter({
       });
     }),
 
-  update: orgProcedure
+  update: adminOrgProcedure
     .input(z.object({
       id: z.string(),
       name: z.string().min(1).max(200).optional(),
@@ -88,7 +88,7 @@ export const campaignRouter = createRouter({
   // (`brandTracker.findMany({ where: { isActive: true } })`). ON = the campaign's
   // brands are fetched for new content every ~6h; OFF = paused. Org-scoped via
   // the campaignId+organizationId filter on updateMany (IDOR-safe).
-  setMonitoring: orgProcedure
+  setMonitoring: adminOrgProcedure
     .input(z.object({ id: z.string(), enabled: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
       await gateCampaigns(ctx);
@@ -104,14 +104,14 @@ export const campaignRouter = createRouter({
       return { count: result.count, enabled: input.enabled };
     }),
 
-  delete: orgProcedure.input(z.object({ id: z.string() })).mutation(async ({ ctx, input }) => {
+  delete: adminOrgProcedure.input(z.object({ id: z.string() })).mutation(async ({ ctx, input }) => {
     await gateCampaigns(ctx);
     await ctx.prisma.campaign.delete({ where: { id: input.id, organizationId: ctx.organizationId } });
     return { success: true };
   }),
 
   // ==================== BRAND TRACKERS ====================
-  listBrands: orgProcedure
+  listBrands: adminOrgProcedure
     .input(z.object({ campaignId: z.string().optional() }).optional())
     .query(async ({ ctx, input }) => {
       await gateCampaigns(ctx);
@@ -125,7 +125,7 @@ export const campaignRouter = createRouter({
       });
     }),
 
-  createBrand: orgProcedure
+  createBrand: adminOrgProcedure
     .input(z.object({
       brandName: z.string().min(1).max(200),
       description: z.string().optional(),
@@ -145,7 +145,7 @@ export const campaignRouter = createRouter({
       });
     }),
 
-  updateBrand: orgProcedure
+  updateBrand: adminOrgProcedure
     .input(z.object({
       id: z.string(),
       brandName: z.string().optional(),
@@ -169,14 +169,14 @@ export const campaignRouter = createRouter({
       });
     }),
 
-  deleteBrand: orgProcedure.input(z.object({ id: z.string() })).mutation(async ({ ctx, input }) => {
+  deleteBrand: adminOrgProcedure.input(z.object({ id: z.string() })).mutation(async ({ ctx, input }) => {
     await gateCampaigns(ctx);
     await ctx.prisma.brandTracker.delete({ where: { id: input.id, organizationId: ctx.organizationId } });
     return { success: true };
   }),
 
   // Brand content feed
-  brandContent: orgProcedure
+  brandContent: adminOrgProcedure
     .input(z.object({
       brandTrackerId: z.string().optional(),
       campaignId: z.string().optional(),
@@ -205,7 +205,7 @@ export const campaignRouter = createRouter({
     }),
 
   // ==================== INFLUENCER DISCOVERY ====================
-  listInfluencers: orgProcedure
+  listInfluencers: adminOrgProcedure
     .input(z.object({
       status: z.string().optional(),
       platform: z.string().optional(),
@@ -226,7 +226,7 @@ export const campaignRouter = createRouter({
       });
     }),
 
-  createInfluencer: orgProcedure
+  createInfluencer: adminOrgProcedure
     .input(z.object({
       name: z.string().min(1),
       platform: z.string(),
@@ -252,7 +252,7 @@ export const campaignRouter = createRouter({
       });
     }),
 
-  updateInfluencer: orgProcedure
+  updateInfluencer: adminOrgProcedure
     .input(z.object({
       id: z.string(),
       status: z.string().optional(),
@@ -275,7 +275,7 @@ export const campaignRouter = createRouter({
       return ctx.prisma.influencer.findFirstOrThrow({ where: { id, organizationId: ctx.organizationId } });
     }),
 
-  deleteInfluencer: orgProcedure.input(z.object({ id: z.string() })).mutation(async ({ ctx, input }) => {
+  deleteInfluencer: adminOrgProcedure.input(z.object({ id: z.string() })).mutation(async ({ ctx, input }) => {
     await gateCampaigns(ctx);
     const result = await ctx.prisma.influencer.deleteMany({ where: { id: input.id, organizationId: ctx.organizationId } });
     if (result.count === 0) throw new TRPCError({ code: "NOT_FOUND" });
@@ -283,7 +283,7 @@ export const campaignRouter = createRouter({
   }),
 
   // Influencer stats summary
-  influencerStats: orgProcedure.query(async ({ ctx }) => {
+  influencerStats: adminOrgProcedure.query(async ({ ctx }) => {
     await gateCampaigns(ctx);
     const [total, shortlisted, contacted, responded] = await Promise.all([
       ctx.prisma.influencer.count({ where: { organizationId: ctx.organizationId } }),

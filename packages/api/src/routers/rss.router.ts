@@ -1,17 +1,17 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { createRouter, orgProcedure } from "../trpc";
+import { createRouter, adminOrgProcedure } from "../trpc";
 import { rssSyncQueue } from "@postautomation/queue";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 import { isPublicPageUrl } from "@postautomation/ai";
 
-// SECURITY: every mutation/query is org-scoped via `orgProcedure`. Each
+// SECURITY: every mutation/query is org-scoped via `adminOrgProcedure`. Each
 // lookup adds `organizationId: ctx.organizationId` so a user from org A
 // cannot read/modify org B's RSS feeds (previously this was vulnerable —
 // `findUnique({ where: { id } })` without org scope = IDOR).
 
 export const rssRouter = createRouter({
-  list: orgProcedure.query(async ({ ctx }) => {
+  list: adminOrgProcedure.query(async ({ ctx }) => {
     const feeds = await ctx.prisma.rssFeed.findMany({
       where: { organizationId: ctx.organizationId },
       include: {
@@ -22,7 +22,7 @@ export const rssRouter = createRouter({
     return feeds;
   }),
 
-  create: orgProcedure
+  create: adminOrgProcedure
     .input(
       z.object({
         name: z.string().min(1).max(255),
@@ -113,7 +113,7 @@ export const rssRouter = createRouter({
       return feed;
     }),
 
-  update: orgProcedure
+  update: adminOrgProcedure
     .input(
       z.object({
         id: z.string(),
@@ -167,7 +167,7 @@ export const rssRouter = createRouter({
       return feed;
     }),
 
-  delete: orgProcedure
+  delete: adminOrgProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const existing = await ctx.prisma.rssFeed.findFirst({
@@ -191,7 +191,7 @@ export const rssRouter = createRouter({
       return { success: true };
     }),
 
-  getEntries: orgProcedure
+  getEntries: adminOrgProcedure
     .input(
       z.object({
         feedId: z.string(),
@@ -224,7 +224,7 @@ export const rssRouter = createRouter({
       return { entries, nextCursor };
     }),
 
-  checkNow: orgProcedure
+  checkNow: adminOrgProcedure
     .input(
       z.object({
         feedId: z.string(),
