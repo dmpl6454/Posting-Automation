@@ -51,6 +51,14 @@ export interface CaptionFanoutDeps {
       update: (args: unknown) => Promise<any>;
       updateMany: (args: unknown) => Promise<any>;
     };
+    /** Optional (present on the real client): used only for the degraded-fallback notification. */
+    organizationMember?: {
+      findMany: (args: unknown) => Promise<any[]>;
+    };
+    /** Optional (present on the real client): used only for the degraded-fallback notification. */
+    notification?: {
+      create: (args: unknown) => Promise<any>;
+    };
   };
   /** Provider-chain-wrapped text generation: JSON-array prompt in, raw model text out. */
   generateText: (prompt: string) => Promise<string>;
@@ -111,11 +119,62 @@ export function parseCaptionArray(raw: string): Array<{ index: number; caption: 
     .filter((item) => Number.isInteger(item.index) && item.index >= 0 && item.caption.length > 0);
 }
 
+/** Reason stamped into post.metadata.captionFanout when generation fell back. */
+export const DEGRADED_REASON = "caption generation unavailable";
+
+/**
+ * In-app notification for a degraded fanout: the post's unique captions could
+ * not be generated, so it publishes with the shared caption. Recipient = the
+ * post CREATOR; falls back to org OWNERs for creatorless system posts (same
+ * policy as sendPublishReportEmail). MUST never throw — a notification failure
+ * can never be allowed to block the DRAFT→SCHEDULED flip.
+ */
+async function notifyDegradedFanout(
+  deps: Pick<CaptionFanoutDeps, "prisma">,
+  postId: string,
+  organizationId: string,
+  createdById: string | null | undefined
+): Promise<void> {
+  try {
+    if (!deps.prisma.notification?.create) return; // injected mock without notifications — skip
+    let recipientIds: string[] = createdById ? [createdById] : [];
+    if (recipientIds.length === 0 && deps.prisma.organizationMember?.findMany) {
+      const owners = await deps.prisma.organizationMember.findMany({
+        where: { organizationId, role: "OWNER" },
+        select: { userId: true },
+      });
+      recipientIds = owners.map((m: any) => m.userId).filter(Boolean);
+    }
+    for (const userId of recipientIds) {
+      await deps.prisma.notification.create({
+        data: {
+          userId,
+          organizationId,
+          type: "post.captions_degraded",
+          title: "Unique captions unavailable",
+          body: "Unique captions couldn't be generated (AI provider unavailable) — the post will publish with your shared caption.",
+          link: `/dashboard/posts/${postId}`,
+          metadata: { postId, reason: DEGRADED_REASON },
+        },
+      });
+    }
+  } catch (notifyErr: any) {
+    console.warn(
+      `[caption-fanout] Degraded-fallback notification failed for post ${postId}:`,
+      notifyErr?.message ?? notifyErr
+    );
+  }
+}
+
 /**
  * Flip a pending-fanout post DRAFT→SCHEDULED (targets first, then the post)
  * exactly once. No-op unless the post is still DRAFT with
  * metadata.captionFanout.pendingSchedule === true — safe to call from both
  * the processor and the final-failure handler.
+ *
+ * On a DEGRADED flip (some/all captions fell back to the shared caption) the
+ * metadata is stamped `{ degraded, degradedAt, reason }` and the post creator
+ * (or org owners) gets an in-app notification — best-effort, never throws.
  */
 export async function flipPendingFanoutPost(
   deps: Pick<CaptionFanoutDeps, "prisma">,
@@ -125,7 +184,7 @@ export async function flipPendingFanoutPost(
 ): Promise<boolean> {
   const post = await deps.prisma.post.findFirst({
     where: { id: postId, organizationId },
-    select: { id: true, status: true, metadata: true },
+    select: { id: true, status: true, metadata: true, createdById: true },
   });
   if (!post) return false;
   const meta = (post.metadata ?? {}) as Record<string, any>;
@@ -146,11 +205,16 @@ export async function flipPendingFanoutPost(
           ...fanoutMeta,
           pendingSchedule: false,
           completedAt: new Date().toISOString(),
-          ...(opts?.degraded ? { degraded: true } : {}),
+          ...(opts?.degraded
+            ? { degraded: true, degradedAt: new Date().toISOString(), reason: DEGRADED_REASON }
+            : {}),
         },
       },
     },
   });
+  if (opts?.degraded) {
+    await notifyDegradedFanout(deps, postId, organizationId, post.createdById);
+  }
   return true;
 }
 

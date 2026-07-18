@@ -14,6 +14,11 @@
  *    metadata.captionFanout.pendingSchedule);
  *  - SAFETY VALVE: when generation fails, overrides stay NULL but the flip
  *    still happens (shared caption publishes — degraded, never lost);
+ *  - PROVIDER EXHAUSTION surfacing: a degraded flip stamps
+ *    metadata.captionFanout {degraded, degradedAt, reason} and writes ONE
+ *    in-app Notification for the post creator (org-OWNER fallback for
+ *    creatorless posts) — best-effort, a notification failure never blocks
+ *    the flip;
  *  - captions are clamped to the platform char limit;
  *  - chunking: >chunkSize pending targets → multiple LLM calls;
  *  - the post-publish worker's content precedence one-liner stays
@@ -47,9 +52,22 @@ function statefulPrisma(post: {
   content: string;
   metadata: Record<string, unknown> | null;
   targets: MockTarget[];
+  createdById?: string | null;
 }) {
-  const state = { post: { ...post, targets: post.targets.map((t) => ({ ...t })) } };
+  const state = {
+    post: { createdById: "creator-1", ...post, targets: post.targets.map((t) => ({ ...t })) },
+    notifications: [] as any[],
+  };
   const prisma = {
+    organizationMember: {
+      findMany: vi.fn(async (_args: any) => [{ userId: "owner-1" }]),
+    },
+    notification: {
+      create: vi.fn(async (args: any) => {
+        state.notifications.push(args.data);
+        return args.data;
+      }),
+    },
     post: {
       findFirst: vi.fn(async (args: any) => {
         if (args?.where?.id !== state.post.id) return null;
@@ -187,6 +205,124 @@ describe("runCaptionFanout", () => {
     expect(state.post.targets.every((t) => t.contentOverride === null)).toBe(true);
     expect((state.post.metadata as any).captionFanout.degraded).toBe(true);
     expect(prisma.postTarget.update).not.toHaveBeenCalled();
+  });
+
+  it("PROVIDER EXHAUSTION end-to-end: every chunk throws → flip still happens, degraded metadata stamped, creator notified, never throws unhandled", async () => {
+    // 3 targets with chunkSize 2 → 2 chunks, BOTH exhaust every provider.
+    const { prisma, state } = statefulPrisma(
+      pendingFanoutPost([target("t1", "BLUESKY"), target("t2", "TWITTER"), target("t3", "INSTAGRAM")])
+    );
+    const generateText = vi.fn(async () => {
+      throw new Error("All AI providers failed. Last error (anthropic): overloaded");
+    });
+
+    // (e) the worker core never throws unhandled on total provider exhaustion.
+    await expect(
+      runCaptionFanout(
+        { postId: "post-1", organizationId: "org-1" },
+        { prisma: prisma as any, generateText, charLimitFor, chunkSize: 2 }
+      )
+    ).resolves.toEqual({ generated: 0, skippedExisting: 0, flipped: true, degraded: true });
+
+    expect(generateText).toHaveBeenCalledTimes(2); // both chunks attempted
+    // (a) post still flips to SCHEDULED — degraded, never lost.
+    expect(state.post.status).toBe("SCHEDULED");
+    expect(state.post.targets.every((t) => t.status === "SCHEDULED")).toBe(true);
+    // (b) all overrides remain null → publish worker falls back to shared caption.
+    expect(state.post.targets.every((t) => t.contentOverride === null)).toBe(true);
+    // (c) degraded metadata is persisted with timestamp + reason.
+    const fanoutMeta = (state.post.metadata as any).captionFanout;
+    expect(fanoutMeta.degraded).toBe(true);
+    expect(typeof fanoutMeta.degradedAt).toBe("string");
+    expect(fanoutMeta.reason).toBe("caption generation unavailable");
+    expect(fanoutMeta.pendingSchedule).toBe(false);
+    // (d) one notification row for the post CREATOR (not org owners — creator resolvable).
+    expect(state.notifications).toHaveLength(1);
+    expect(state.notifications[0]).toMatchObject({
+      userId: "creator-1",
+      organizationId: "org-1",
+      type: "post.captions_degraded",
+      link: "/dashboard/posts/post-1",
+    });
+    expect(state.notifications[0].body).toMatch(/shared caption/);
+    expect(prisma.organizationMember.findMany).not.toHaveBeenCalled();
+  });
+
+  it("partial failure: successful chunk's overrides are KEPT, failed chunk falls back, degraded=true + notification", async () => {
+    // chunkSize 2, 4 targets → chunk 1 (t0,t1) succeeds, chunk 2 (t2,t3) throws.
+    const targets = Array.from({ length: 4 }, (_, i) => target(`t${i}`, "INSTAGRAM"));
+    const { prisma, state } = statefulPrisma(pendingFanoutPost(targets));
+    const generateText = vi
+      .fn()
+      .mockResolvedValueOnce('[{"index":0,"caption":"unique A"},{"index":1,"caption":"unique B"}]')
+      .mockRejectedValueOnce(new Error("every provider is down"));
+
+    const result = await runCaptionFanout(
+      { postId: "post-1", organizationId: "org-1" },
+      { prisma: prisma as any, generateText, charLimitFor, chunkSize: 2 }
+    );
+
+    expect(result).toEqual({ generated: 2, skippedExisting: 0, flipped: true, degraded: true });
+    // Successful chunk's captions kept; failed chunk's targets stay null (shared caption).
+    expect(state.post.targets.find((t) => t.id === "t0")!.contentOverride).toBe("unique A");
+    expect(state.post.targets.find((t) => t.id === "t1")!.contentOverride).toBe("unique B");
+    expect(state.post.targets.find((t) => t.id === "t2")!.contentOverride).toBeNull();
+    expect(state.post.targets.find((t) => t.id === "t3")!.contentOverride).toBeNull();
+    expect(state.post.status).toBe("SCHEDULED");
+    expect((state.post.metadata as any).captionFanout.degraded).toBe(true);
+    expect(state.notifications).toHaveLength(1);
+    expect(state.notifications[0].type).toBe("post.captions_degraded");
+  });
+
+  it("degraded notification falls back to org OWNERs when the post has no creator", async () => {
+    const { prisma, state } = statefulPrisma({
+      ...pendingFanoutPost([target("t1", "BLUESKY")]),
+      createdById: null,
+    });
+    const generateText = vi.fn(async () => {
+      throw new Error("all providers exhausted");
+    });
+
+    await runCaptionFanout(
+      { postId: "post-1", organizationId: "org-1" },
+      { prisma: prisma as any, generateText, charLimitFor }
+    );
+
+    expect(prisma.organizationMember.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ organizationId: "org-1", role: "OWNER" }) })
+    );
+    expect(state.notifications).toHaveLength(1);
+    expect(state.notifications[0].userId).toBe("owner-1");
+  });
+
+  it("a notification failure NEVER blocks the flip (best-effort, never throws)", async () => {
+    const { prisma, state } = statefulPrisma(pendingFanoutPost([target("t1", "BLUESKY")]));
+    prisma.notification.create.mockRejectedValue(new Error("db write failed"));
+    const generateText = vi.fn(async () => {
+      throw new Error("all providers exhausted");
+    });
+
+    const result = await runCaptionFanout(
+      { postId: "post-1", organizationId: "org-1" },
+      { prisma: prisma as any, generateText, charLimitFor }
+    );
+
+    expect(result).toMatchObject({ flipped: true, degraded: true });
+    expect(state.post.status).toBe("SCHEDULED");
+  });
+
+  it("a SUCCESSFUL fanout creates NO degraded notification", async () => {
+    const { prisma, state } = statefulPrisma(pendingFanoutPost([target("t1", "BLUESKY")]));
+    const generateText = vi.fn(async () => '[{"index":0,"caption":"clean"}]');
+
+    await runCaptionFanout(
+      { postId: "post-1", organizationId: "org-1" },
+      { prisma: prisma as any, generateText, charLimitFor }
+    );
+
+    expect(state.post.status).toBe("SCHEDULED");
+    expect(state.notifications).toHaveLength(0);
+    expect((state.post.metadata as any).captionFanout.degraded).toBeUndefined();
   });
 
   it("clamps captions to the platform char limit", async () => {
