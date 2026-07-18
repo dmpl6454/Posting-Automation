@@ -2,6 +2,8 @@ import { prisma } from "@postautomation/db";
 import { tokenRefreshQueue, analyticsSyncQueue, agentRunQueue, trendDiscoverQueue, listeningSyncQueue, campaignAnalyticsSyncQueue, brandContentSyncQueue, outreachPollQueue, postPublishQueue, rssSyncQueue, avatarCacheQueue } from "@postautomation/queue";
 import { runAutoHealerWithLogging } from "../workers/auto-healer.worker";
 import { runCelebrityDetectors } from "../workers/celebrity-detect.worker";
+import { computePublishDelays } from "../lib/publish-stagger";
+import { PRIORITY_BULK } from "../lib/publish-priority";
 
 /**
  * Check for channels with expiring tokens and queue refresh jobs.
@@ -555,67 +557,102 @@ export async function scheduleOutreachPoll() {
 
 /**
  * Publish scheduled posts whose scheduledAt time has passed.
- * Run every 2 minutes — catches posts from Super Agent, manual scheduling, etc.
+ * Runs every 30 seconds — the scan cadence is the worst-case lateness a
+ * scheduled post accrues before its jobs even enter the queue (was 2 min).
+ *
+ * Drains in batches until no due posts remain (bounded by MAX_SCAN_BATCHES as
+ * a runaway guard), so a burst of >50 simultaneously-due posts no longer waits
+ * a whole extra cycle. Safe to loop: each processed post is flipped
+ * SCHEDULED→PUBLISHING before the next batch is read. The module-level
+ * re-entrancy guard prevents overlapping scans at the faster cadence — the
+ * worker's atomic target claim would still prevent double-POSTING, but
+ * duplicate jobs would waste limiter slots.
  */
-export async function publishScheduledPosts() {
-  const now = new Date();
+const PUBLISH_SCAN_BATCH = 50;
+const MAX_SCAN_BATCHES = 10; // ≤500 posts per scan — the next scan is 30s away
+let publishScanRunning = false;
 
-  // Find posts that are SCHEDULED and their time has come
-  const duePosts = await prisma.post.findMany({
-    where: {
-      status: "SCHEDULED",
-      scheduledAt: { lte: now },
-    },
-    select: {
-      id: true,
-      organizationId: true,
-      targets: {
-        where: { status: "SCHEDULED" },
+export async function publishScheduledPosts() {
+  if (publishScanRunning) return;
+  publishScanRunning = true;
+  try {
+    let queued = 0;
+    let postCount = 0;
+
+    for (let batch = 0; batch < MAX_SCAN_BATCHES; batch++) {
+      // Find posts that are SCHEDULED and their time has come
+      const duePosts = await prisma.post.findMany({
+        where: {
+          status: "SCHEDULED",
+          scheduledAt: { lte: new Date() },
+        },
         select: {
           id: true,
-          channelId: true,
-          channel: { select: { platform: true } },
+          organizationId: true,
+          targets: {
+            where: { status: "SCHEDULED" },
+            select: {
+              id: true,
+              channelId: true,
+              channel: { select: { platform: true } },
+            },
+          },
         },
-      },
-    },
-    take: 50, // batch limit
-  });
+        take: PUBLISH_SCAN_BATCH,
+      });
+      if (duePosts.length === 0) break;
 
-  let queued = 0;
-  for (const post of duePosts) {
-    for (let i = 0; i < post.targets.length; i++) {
-      const target = post.targets[i]!;
-      const jobId = `scheduled-publish-${post.id}-${target.channelId}-${Date.now()}`;
+      for (const post of duePosts) {
+        // Stagger within each platform group only — the first target of every
+        // platform starts immediately; a 60-channel multi-platform post no
+        // longer tails out ~10 minutes behind a blind global index stagger.
+        const delays = computePublishDelays(
+          post.targets.map((t) => ({ platform: t.channel.platform }))
+        );
 
-      await postPublishQueue.add(
-        jobId,
-        {
-          postId: post.id,
-          postTargetId: target.id,
-          channelId: target.channelId,
-          platform: target.channel.platform,
-          organizationId: post.organizationId,
-        },
-        {
-          delay: i * 10_000, // stagger 10s per channel
-          attempts: 3,
-          backoff: { type: "exponential", delay: 60_000 },
-          removeOnComplete: true,
-          removeOnFail: 100,
+        for (let i = 0; i < post.targets.length; i++) {
+          const target = post.targets[i]!;
+          const jobId = `scheduled-publish-${post.id}-${target.channelId}-${Date.now()}`;
+
+          await postPublishQueue.add(
+            jobId,
+            {
+              postId: post.id,
+              postTargetId: target.id,
+              channelId: target.channelId,
+              platform: target.channel.platform,
+              organizationId: post.organizationId,
+            },
+            {
+              delay: delays[i]!,
+              // Bulk lane — interactive "Publish now" jobs carry NO priority
+              // and are drained first (see lib/publish-priority.ts).
+              priority: PRIORITY_BULK,
+              attempts: 3,
+              backoff: { type: "exponential", delay: 60_000 },
+              removeOnComplete: true,
+              removeOnFail: 100,
+            }
+          );
+          queued++;
         }
-      );
-      queued++;
+
+        // Mark post as PUBLISHING so we don't re-queue it next cycle
+        await prisma.post.update({
+          where: { id: post.id },
+          data: { status: "PUBLISHING" },
+        });
+        postCount++;
+      }
+
+      if (duePosts.length < PUBLISH_SCAN_BATCH) break;
     }
 
-    // Mark post as PUBLISHING so we don't re-queue it next cycle
-    await prisma.post.update({
-      where: { id: post.id },
-      data: { status: "PUBLISHING" },
-    });
-  }
-
-  if (queued > 0) {
-    console.log(`[Cron:Scheduler] Queued ${queued} publish jobs for ${duePosts.length} scheduled posts`);
+    if (queued > 0) {
+      console.log(`[Cron:Scheduler] Queued ${queued} publish jobs for ${postCount} scheduled posts`);
+    }
+  } finally {
+    publishScanRunning = false;
   }
 }
 
@@ -750,9 +787,10 @@ export function startCronJobs() {
   setInterval(scheduleOutreachPoll, 5 * 60 * 1000);
   setTimeout(scheduleOutreachPoll, 3 * 60 * 1000); // Start after 3 min warmup
 
-  // Scheduled post publisher every 2 minutes
-  setInterval(publishScheduledPosts, 2 * 60 * 1000);
-  setTimeout(publishScheduledPosts, 30 * 1000); // Start after 30s warmup
+  // Scheduled post publisher every 30 seconds (the scan cadence is the
+  // worst-case lateness before a due post's jobs enter the queue)
+  setInterval(publishScheduledPosts, 30 * 1000);
+  setTimeout(publishScheduledPosts, 15 * 1000); // Start after 15s warmup
 
   // Celebrity-brand detection every 6 hours
   setInterval(runCelebrityDetectors, 6 * 60 * 60 * 1000);
@@ -775,7 +813,7 @@ export function startCronJobs() {
   console.log("[Cron]   - Campaign analytics sync: every 4 hours");
   console.log("[Cron]   - Brand content sync: every 4 hours");
   console.log("[Cron]   - Outreach poll: every 5 min");
-  console.log("[Cron]   - Scheduled post publisher: every 2 min");
+  console.log("[Cron]   - Scheduled post publisher: every 30s");
   console.log("[Cron]   - Celebrity-brand detection: every 6 hours");
   console.log("[Cron]   - Avatar re-cache: every 24 hours");
 

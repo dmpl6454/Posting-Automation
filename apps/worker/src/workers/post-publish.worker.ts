@@ -5,6 +5,25 @@ import { QUEUE_NAMES, postPublishQueue, analyticsSyncQueue, type PostPublishJobD
 import IORedis from "ioredis";
 import { buildPublishEmail, buildPublishReportCsv } from "../lib/publish-email";
 import { markTargetFailed, buildPublishNotifications, mediaRequiredReason, terminalizeStuckClaim, isSeedNoise } from "../lib/publish-recovery";
+import { PRIORITY_RETRY } from "../lib/publish-priority";
+
+/** Integer env knob with a default and a sane clamp (bad values → default). */
+function envInt(name: string, def: number, min: number, max: number): number {
+  const parsed = parseInt(process.env[name] ?? "", 10);
+  if (Number.isNaN(parsed)) return def;
+  return Math.min(max, Math.max(min, parsed));
+}
+
+// Publishing is network-I/O-bound (platform API calls + media uploads), so a
+// single Node process handles well above 3 concurrent publishes. Per-platform
+// protection does NOT live here — it's the per-platform stagger
+// (lib/publish-stagger.ts) + the reactive rate_limit reclassification below +
+// the FB provider's own throttle backoff. This limiter is only a global safety
+// valve; at 3/5s it was the cross-tenant choke point (36 starts/min for the
+// whole platform, and three slow FB/YouTube jobs froze publishing for
+// every org).
+const PUBLISH_CONCURRENCY = envInt("PUBLISH_CONCURRENCY", 10, 1, 25);
+const PUBLISH_LIMITER_MAX = envInt("PUBLISH_LIMITER_MAX", 10, 1, 50);
 
 // Redis pub/sub publisher for upload progress SSE
 const progressPublisher = new IORedis(process.env.REDIS_URL || "redis://localhost:6379", {
@@ -525,7 +544,9 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
           await postPublishQueue.add(
             `retry-ratelimit-${postTargetId}-${Date.now()}`,
             job.data,
-            { delay: delayMs, attempts: 3, backoff: { type: "exponential", delay: 60_000 } }
+            // PRIORITY_RETRY: when the delay expires this re-queue yields to
+            // fresh interactive + bulk work (lib/publish-priority.ts).
+            { delay: delayMs, priority: PRIORITY_RETRY, attempts: 3, backoff: { type: "exponential", delay: 60_000 } }
           );
           // Mark as SCHEDULED (not FAILED) so the UI shows it's pending
           await prisma.postTarget.update({
@@ -721,8 +742,10 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
     },
     {
       connection: createRedisConnection(),
-      concurrency: 3,
-      limiter: { max: 3, duration: 5000 }, // max 3 publishes per 5 seconds to avoid rate limits
+      concurrency: PUBLISH_CONCURRENCY,
+      // Global safety valve only — per-platform pacing is the stagger + reactive
+      // backoff (see PUBLISH_CONCURRENCY comment above). Env-tunable.
+      limiter: { max: PUBLISH_LIMITER_MAX, duration: 5000 },
       stalledInterval: 30_000,  // check for stalled jobs every 30s
       maxStalledCount: 2,       // move to failed after 2 stall cycles (not infinite retry)
     }
