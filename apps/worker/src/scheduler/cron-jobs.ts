@@ -1,5 +1,5 @@
 import { prisma } from "@postautomation/db";
-import { tokenRefreshQueue, analyticsSyncQueue, agentRunQueue, trendDiscoverQueue, listeningSyncQueue, campaignAnalyticsSyncQueue, brandContentSyncQueue, outreachPollQueue, postPublishQueue, rssSyncQueue } from "@postautomation/queue";
+import { tokenRefreshQueue, analyticsSyncQueue, agentRunQueue, trendDiscoverQueue, listeningSyncQueue, campaignAnalyticsSyncQueue, brandContentSyncQueue, outreachPollQueue, postPublishQueue, rssSyncQueue, avatarCacheQueue } from "@postautomation/queue";
 import { runAutoHealerWithLogging } from "../workers/auto-healer.worker";
 import { runCelebrityDetectors } from "../workers/celebrity-detect.worker";
 
@@ -230,6 +230,35 @@ export async function triggerAutopilotPipeline() {
 
   if (queued > 0) {
     console.log(`[Cron:Pipeline] Triggered autopilot pipeline for ${queued} organizations`);
+  }
+}
+
+/**
+ * Re-cache channel avatars to durable S3 storage (platform CDN avatar URLs
+ * expire — IG/FB signed URLs die in days). Run daily; the per-day jobId
+ * dedupes re-enqueues within the same UTC day.
+ */
+export async function scheduleAvatarCache() {
+  const activeChannels = await prisma.channel.findMany({
+    where: { isActive: true },
+    select: { id: true },
+  });
+
+  const day = new Date().toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
+  let queued = 0;
+  for (const channel of activeChannels) {
+    // NOTE: BullMQ only allows ':' in custom jobIds when there are EXACTLY
+    // three colon-separated segments — keep this shape if you change the id.
+    await avatarCacheQueue.add(
+      `avatar-${channel.id}`,
+      { channelId: channel.id },
+      { jobId: `avatar:${channel.id}:${day}`, removeOnComplete: true, removeOnFail: 100 }
+    );
+    queued++;
+  }
+
+  if (queued > 0) {
+    console.log(`[Cron] Queued ${queued} avatar cache jobs`);
   }
 }
 
@@ -565,6 +594,10 @@ export function startCronJobs() {
   setInterval(runCelebrityDetectors, 6 * 60 * 60 * 1000);
   setTimeout(runCelebrityDetectors, 5 * 60 * 1000); // Start after 5 min warmup
 
+  // Avatar re-cache daily (per-day jobId dedupes within the same UTC day)
+  setInterval(scheduleAvatarCache, 24 * 60 * 60 * 1000);
+  setTimeout(scheduleAvatarCache, 4 * 60 * 1000); // Start after 4 min warmup
+
   console.log("[Cron] Cron jobs started");
   console.log("[Cron]   - Token refresh: every 30 min");
   console.log("[Cron]   - Analytics sync: every 6 hours");
@@ -578,6 +611,7 @@ export function startCronJobs() {
   console.log("[Cron]   - Outreach poll: every 5 min");
   console.log("[Cron]   - Scheduled post publisher: every 2 min");
   console.log("[Cron]   - Celebrity-brand detection: every 6 hours");
+  console.log("[Cron]   - Avatar re-cache: every 24 hours");
 
   // Auto-healer: scan for failed jobs, classify errors, retry transient failures
   setInterval(runAutoHealerWithLogging, 10 * 60 * 1000); // every 10 minutes

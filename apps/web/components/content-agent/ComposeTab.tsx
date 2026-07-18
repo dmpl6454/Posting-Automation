@@ -38,6 +38,7 @@ import dynamic from "next/dynamic";
 import { PostPreviewSwitcher } from "~/components/previews";
 import { MediaPickerDialog } from "~/components/media-picker-dialog";
 import { ImageGenerationPanel } from "~/components/content-agent/ImageGenerationPanel";
+import { ChannelAvatar } from "~/components/channel-avatar";
 
 const MediaEditor = dynamic(
   () => import("~/components/media-editor/MediaEditor").then((m) => ({ default: m.MediaEditor })),
@@ -193,6 +194,10 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
 
   const { data: channels, isLoading: channelsLoading } = trpc.channel.list.useQuery();
   const { data: recentlyUsedIds } = trpc.channel.recentlyUsed.useQuery();
+  // Channel Groups (org-scoped) power the "Groups" quick-select block below.
+  // Group selection state is always DERIVED from selectedChannels — never
+  // persisted (draft persistence saves the flat channel id list only).
+  const { data: channelGroups } = trpc.channelGroup.list.useQuery();
   const utils = trpc.useUtils();
 
   // Reconcile the selected channels against the live (org-scoped) channel list.
@@ -998,6 +1003,88 @@ ${content}`;
                 </div>
               ) : (
                 <>
+                  {/* Groups quick-select — pick a whole Channel Group as a unit.
+                      Selection state is DERIVED from selectedChannels vs the
+                      group's ACTIVE member ids (none / partial / all); it is
+                      never stored, so draft persistence keeps saving the flat
+                      channel id list. Inactive channels are excluded from the
+                      union — they can't be published to. */}
+                  {(() => {
+                    // Only ever union ids that STILL exist in the live channel
+                    // list — the channelGroup cache can lag a disconnect, and a
+                    // stale id in selectedChannels would make post.create reject
+                    // the whole request (foreign-channel FORBIDDEN).
+                    const liveIds = new Set<string>(
+                      ((channels as any[]) ?? []).map((c: any) => c.id as string)
+                    );
+                    const groupsWithActive = ((channelGroups as any[]) ?? [])
+                      .map((group: any) => ({
+                        ...group,
+                        activeIds: ((group.channels ?? []) as any[])
+                          .filter((c: any) => c.isActive && liveIds.has(c.id))
+                          .map((c: any) => c.id as string),
+                      }))
+                      .filter((group: any) => group.activeIds.length > 0);
+                    if (groupsWithActive.length === 0) return null;
+                    return (
+                      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                        <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                          Groups
+                        </span>
+                        {groupsWithActive.map((group: any) => {
+                          const selectedCount = group.activeIds.filter((id: string) =>
+                            selectedChannels.includes(id)
+                          ).length;
+                          const allSelected = selectedCount === group.activeIds.length;
+                          const partial = selectedCount > 0 && !allSelected;
+                          return (
+                            <button
+                              key={group.id}
+                              type="button"
+                              aria-pressed={allSelected}
+                              aria-label={
+                                allSelected
+                                  ? `Deselect all ${group.activeIds.length} active channels in group ${group.name}`
+                                  : `Select all ${group.activeIds.length} active channels in group ${group.name}`
+                              }
+                              onClick={() => {
+                                if (allSelected) {
+                                  // Remove the group's active member ids from the selection.
+                                  const memberIds = new Set<string>(group.activeIds);
+                                  setSelectedChannels((prev) => prev.filter((id) => !memberIds.has(id)));
+                                } else {
+                                  // Union the group's active member ids into the selection (deduped).
+                                  setSelectedChannels((prev) => [
+                                    ...new Set<string>([...prev, ...group.activeIds]),
+                                  ]);
+                                }
+                              }}
+                              className={`inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
+                                allSelected
+                                  ? "border-primary bg-primary/10"
+                                  : partial
+                                    ? "border-primary/50 bg-primary/5"
+                                    : "hover:bg-muted/50"
+                              }`}
+                            >
+                              <span
+                                className="h-2 w-2 shrink-0 rounded-full"
+                                style={{ background: group.color }}
+                              />
+                              <span className="truncate">{group.name}</span>
+                              <span className="shrink-0 text-[10px] text-muted-foreground">
+                                {partial
+                                  ? `${selectedCount}/${group.activeIds.length}`
+                                  : group.activeIds.length}
+                              </span>
+                              {allSelected && <Check className="h-3 w-3 shrink-0 text-primary" />}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
+
                   {/* Selected channels as chips */}
                   {selectedChannels.length > 0 && (
                     <div className="flex flex-wrap gap-1.5">
@@ -1009,13 +1096,12 @@ ${content}`;
                             key={id}
                             className="inline-flex items-center gap-1.5 rounded-full border bg-primary/5 px-2.5 py-1 text-xs font-medium"
                           >
-                            {ch.avatar ? (
-                              <img src={ch.avatar} alt="" className="h-4 w-4 rounded-full object-cover" />
-                            ) : (
-                              <span className="flex h-4 w-4 items-center justify-center rounded-full bg-muted text-[8px] font-bold uppercase">
-                                {ch.platform.slice(0, 2)}
-                              </span>
-                            )}
+                            <ChannelAvatar
+                              avatar={ch.avatar}
+                              name={ch.name}
+                              className="h-4 w-4"
+                              fallbackClassName="text-[8px]"
+                            />
                             {ch.name}
                             <button
                               type="button"
@@ -1100,13 +1186,12 @@ ${content}`;
                                 }`}>
                                   {isSelected && <Check className="h-3 w-3" />}
                                 </div>
-                                {channel.avatar ? (
-                                  <img src={channel.avatar} alt="" className="h-6 w-6 rounded-full object-cover" />
-                                ) : (
-                                  <div className="flex h-6 w-6 items-center justify-center rounded-full bg-muted text-[9px] font-bold uppercase">
-                                    {channel.platform.slice(0, 2)}
-                                  </div>
-                                )}
+                                <ChannelAvatar
+                                  avatar={channel.avatar}
+                                  name={channel.name}
+                                  className="h-6 w-6 shrink-0"
+                                  fallbackClassName="text-[9px]"
+                                />
                                 <div className="min-w-0 flex-1">
                                   <p className="truncate text-sm font-medium leading-tight">{channel.name}</p>
                                   {channel.username && (

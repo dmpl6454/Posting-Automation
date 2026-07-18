@@ -110,6 +110,16 @@ export interface OutreachPollJobData {
 }
 
 /**
+ * Re-cache a channel's profile picture to durable S3 storage. Platform CDN
+ * avatar URLs captured at connect expire (IG/FB signed URLs) — the worker
+ * resolves a fresh URL, downloads it, and rewrites Channel.avatar to a stable
+ * S3 public URL (avatars/{orgId}/{channelId}.{ext}).
+ */
+export interface AvatarCacheJobData {
+  channelId: string;
+}
+
+/**
  * Job data for offloading Content Studio video generation to the worker.
  *
  * The worker re-runs the heavy reel-stitch / Seedance generation, uploads the

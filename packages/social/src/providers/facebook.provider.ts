@@ -259,7 +259,7 @@ export class FacebookProvider extends SocialProvider {
     accessToken: string;
   }>> {
     const pages: Array<{ id: string; name: string; avatar?: string; accessToken: string }> = [];
-    let url: string | null = `${this.graphBaseUrl}/${this.apiVersion}/me/accounts?fields=id,name,access_token&limit=25&access_token=${tokens.accessToken}`;
+    let url: string | null = `${this.graphBaseUrl}/${this.apiVersion}/me/accounts?fields=id,name,access_token,picture{url}&limit=25&access_token=${tokens.accessToken}`;
 
     while (url) {
       const res = await this.graphFetch(url);
@@ -271,6 +271,7 @@ export class FacebookProvider extends SocialProvider {
           pages.push({
             id: page.id,
             name: page.name,
+            avatar: page.picture?.data?.url ?? undefined,
             accessToken: page.access_token,
           });
         }

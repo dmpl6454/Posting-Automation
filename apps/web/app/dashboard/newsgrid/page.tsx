@@ -17,6 +17,7 @@ import { Switch } from "~/components/ui/switch";
 import { Separator } from "~/components/ui/separator";
 import { useToast } from "~/hooks/use-toast";
 import { MediaPickerDialog } from "~/components/media-picker-dialog";
+import { ChannelAvatar } from "~/components/channel-avatar";
 import { Alert, AlertDescription } from "~/components/ui/alert";
 import Link from "next/link";
 import {
@@ -864,12 +865,8 @@ function NewsGridPageInner() {
                         {/* Logo or avatar */}
                         {logoUrl ? (
                           <img src={logoUrl} alt="" className="h-8 w-8 rounded-md object-contain border bg-muted" />
-                        ) : channel.avatar ? (
-                          <img src={channel.avatar} alt="" className="h-8 w-8 rounded-full object-cover" />
                         ) : (
-                          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-muted text-xs font-bold">
-                            {channel.name[0]}
-                          </div>
+                          <ChannelAvatar avatar={channel.avatar} name={channel.name} className="h-8 w-8" />
                         )}
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-1.5">
@@ -942,13 +939,12 @@ function NewsGridPageInner() {
                     className="flex cursor-pointer items-center gap-3 p-4"
                     onClick={() => toggleCard(r.channelId)}
                   >
-                    {r.avatar ? (
-                      <img src={r.avatar} alt="" className="h-10 w-10 rounded-full object-cover shrink-0" />
-                    ) : (
-                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-muted font-bold">
-                        {r.channelName[0]}
-                      </div>
-                    )}
+                    <ChannelAvatar
+                      avatar={r.avatar}
+                      name={r.channelName}
+                      className="h-10 w-10 shrink-0"
+                      fallbackClassName="text-sm"
+                    />
                     <div className="min-w-0 flex-1">
                       <p className="font-semibold">{r.channelName}</p>
                       <p className="truncate text-xs text-muted-foreground">

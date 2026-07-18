@@ -14,6 +14,38 @@ function getBaseUrl() {
 }
 
 /**
+ * fetch wrapper for the tRPC link: intercepts NON-JSON error responses
+ * (e.g. nginx's HTML 429 rate-limit page, gateway HTML error pages) BEFORE
+ * @trpc/client calls res.json() on them. Without this, the raw SyntaxError
+ * ("Unexpected token '<' ... is not valid JSON") lands verbatim in
+ * TRPCClientError.message with meta undefined — the 429 status is
+ * unrecoverable from the error object, so it must be handled here.
+ * Real tRPC error envelopes are 4xx/5xx WITH application/json and MUST
+ * pass through untouched.
+ */
+async function guardedFetch(
+  input: RequestInfo | URL | string,
+  init?: RequestInit
+): Promise<Response> {
+  const res = await fetch(input, init);
+  if (!res.ok) {
+    const contentType = res.headers.get("content-type") ?? "";
+    // Only intercept NON-JSON error bodies. A JSON body — even a 429 — is a real
+    // tRPC error envelope (e.g. the app's own TOO_MANY_REQUESTS with an
+    // actionable reset-time message) and MUST reach @trpc/client's parser so its
+    // code/data survive. Only nginx/gateway HTML pages (no application/json) are
+    // remapped here, since those would otherwise throw a raw JSON SyntaxError.
+    if (!contentType.includes("application/json")) {
+      if (res.status === 429) {
+        throw new Error("Too many requests - please wait a moment and try again.");
+      }
+      throw new Error("The server returned an unexpected response. Please try again.");
+    }
+  }
+  return res;
+}
+
+/**
  * Global fallback error handler for tRPC mutations.
  *
  * TanStack fires MutationCache.onError for EVERY failing mutation, so this acts
@@ -64,6 +96,7 @@ export function TRPCProvider({ children }: { children: React.ReactNode }) {
         httpBatchLink({
           url: `${getBaseUrl()}/api/trpc`,
           transformer: superjson,
+          fetch: guardedFetch,
           headers() {
             const orgId = typeof window !== "undefined"
               ? localStorage.getItem("currentOrgId") || ""

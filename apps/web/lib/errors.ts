@@ -13,6 +13,12 @@ const TECHNICAL_PATTERNS = [
   /Internal server error/i,
   /ECONNREFUSED/i,
   /ETIMEDOUT/i,
+  // JSON-parse failures from non-JSON responses (e.g. an HTML error page fed
+  // to res.json() by @trpc/client) — never show the raw SyntaxError text.
+  /unexpected token/i,
+  /is not valid JSON/i,
+  /^SyntaxError/i,
+  /unexpected end of JSON/i,
 ];
 
 /**

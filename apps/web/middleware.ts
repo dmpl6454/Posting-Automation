@@ -1,14 +1,5 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { jwtVerify } from "jose";
-
-// SECURITY: do NOT fall back to a hardcoded literal — that would allow
-// anyone to forge admin JWTs if the env var is unset. We accept either
-// ADMIN_JWT_SECRET or (the more commonly set) NEXTAUTH_SECRET, but if
-// neither is present we refuse to authenticate any admin tokens at all.
-const _adminSecret = process.env.ADMIN_JWT_SECRET || process.env.NEXTAUTH_SECRET;
-const ADMIN_JWT_SECRET = _adminSecret ? new TextEncoder().encode(_adminSecret) : null;
-const ADMIN_COOKIE = "admin-token";
 
 // Check for NextAuth session cookie (works with both v4 and v5)
 function hasSessionCookie(request: NextRequest): boolean {
@@ -18,23 +9,6 @@ function hasSessionCookie(request: NextRequest): boolean {
     request.cookies.get("authjs.session-token")?.value ||
     request.cookies.get("__Secure-authjs.session-token")?.value
   );
-}
-
-async function verifyAdminToken(request: NextRequest) {
-  if (!ADMIN_JWT_SECRET) {
-    // Refuse to verify any token if no secret is configured — this prevents
-    // accepting unsigned/forged tokens in misconfigured environments.
-    console.error("[middleware] ADMIN_JWT_SECRET / NEXTAUTH_SECRET unset — refusing all admin auth");
-    return null;
-  }
-  const token = request.cookies.get(ADMIN_COOKIE)?.value;
-  if (!token) return null;
-  try {
-    const { payload } = await jwtVerify(token, ADMIN_JWT_SECRET);
-    return payload.isSuperAdmin ? payload : null;
-  } catch {
-    return null;
-  }
 }
 
 export async function middleware(request: NextRequest) {
@@ -64,13 +38,19 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(loginUrl);
   }
 
-  // Admin route guard — uses custom admin JWT cookie (bypasses NextAuth)
-  if (pathname.startsWith("/admin") && pathname !== "/admin/login") {
-    const admin = await verifyAdminToken(request);
-    if (!admin) {
-      const loginUrl = new URL("/admin/login", request.url);
-      return NextResponse.redirect(loginUrl);
-    }
+  // The legacy /admin/login page (custom admin-token auth) was removed —
+  // /admin now rides the NextAuth session. Send old bookmarks to /admin.
+  if (pathname === "/admin/login") {
+    return NextResponse.redirect(new URL("/admin", request.url));
+  }
+
+  // Admin route guard — requires a NextAuth session. The cookie check here is
+  // presence-only (Edge middleware can't hit the DB); the isSuperAdmin check
+  // runs server-side in app/admin/layout.tsx and superAdminProcedure.
+  if (!isAuthenticated && pathname.startsWith("/admin")) {
+    const loginUrl = new URL("/login", request.url);
+    loginUrl.searchParams.set("callbackUrl", pathname + request.nextUrl.search);
+    return NextResponse.redirect(loginUrl);
   }
 
   const response = NextResponse.next();
@@ -107,6 +87,6 @@ export async function middleware(request: NextRequest) {
 export const config = {
   matcher: [
     // Apply to all routes except static files, auth API, and favicon
-    "/((?!_next/static|_next/image|favicon.ico|api/auth|api/admin).*)",
+    "/((?!_next/static|_next/image|favicon.ico|api/auth).*)",
   ],
 };

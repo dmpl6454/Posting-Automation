@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { trpc } from "~/lib/trpc/client";
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
@@ -39,6 +39,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { PlatformIcon } from "~/components/icons/platform-icons";
+import { ChannelAvatar } from "~/components/channel-avatar";
 
 type PlatformAuthInfo = {
   platform: string;
@@ -167,6 +168,10 @@ export default function ChannelsPage() {
   const [newGroupColor, setNewGroupColor] = useState(GROUP_COLORS[0]!);
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [editingGroupName, setEditingGroupName] = useState("");
+  // Just-created group: transient highlight ring + one-time scroll-into-view
+  // so the user immediately sees where to add channels after "Create".
+  const [highlightedGroupId, setHighlightedGroupId] = useState<string | null>(null);
+  const highlightScrolledRef = useRef(false);
 
   const { data: platformAuthInfo } = trpc.channel.platformAuthInfo.useQuery();
   const authInfoByPlatform = useMemo(() => {
@@ -195,6 +200,16 @@ export default function ChannelsPage() {
       toast({ title: "Channel updated" });
     },
   });
+  // Re-fetch stale platform profile pictures in the background (worker jobs).
+  // Errors intentionally fall through to the global toast (no hook-level onError).
+  const refreshAvatars = trpc.channel.refreshAvatars.useMutation({
+    onSuccess: (result: { queued: number }) => {
+      toast({
+        title: `Refreshing logos for ${result.queued} channel${result.queued === 1 ? "" : "s"}`,
+        description: "They update in the background over the next few minutes.",
+      });
+    },
+  });
 
   // Bulk-select + delete state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -219,7 +234,10 @@ export default function ChannelsPage() {
   // (channel.router.ts: z.array(z.string()).min(1).max(100)). Callers MUST
   // chunk into <=100 batches — do NOT call .mutate with the raw selection.
   const BULK_DELETE_BATCH = 100;
-  const bulkDisconnect = trpc.channel.bulkDisconnect.useMutation();
+  // No-op hook-level onError so the global mutationCacheOnError guard
+  // (lib/trpc/react.tsx) skips this mutation — runBulkDelete's catch already
+  // shows the single, more actionable toast (incl. partial-progress count).
+  const bulkDisconnect = trpc.channel.bulkDisconnect.useMutation({ onError: noopOnError });
 
   // Delete the current selection, chunked into <=100-id batches so a large
   // selection (this account has 100+ channels) doesn't trip the server cap.
@@ -256,12 +274,44 @@ export default function ChannelsPage() {
   };
 
   const createGroup = trpc.channelGroup.create.useMutation({
-    onSuccess: () => {
+    onSuccess: (group) => {
       refetchGroups();
       setNewGroupName("");
-      toast({ title: "Group created" });
+      toast({
+        title: "Group created",
+        description:
+          "Add channels to it below, then select the whole group in Content Studio → Compose.",
+      });
+      if (group?.id) {
+        highlightScrolledRef.current = false;
+        setHighlightedGroupId(group.id);
+      }
     },
   });
+
+  // Scroll the just-created group card into view once it appears in the
+  // refetched list (the card doesn't exist in the DOM until refetchGroups
+  // lands). Scrolls at most once per created group.
+  useEffect(() => {
+    if (!highlightedGroupId || highlightScrolledRef.current) return;
+    if (!(channelGroups ?? []).some((g: any) => g.id === highlightedGroupId)) return;
+    highlightScrolledRef.current = true;
+    document
+      .getElementById(`channel-group-${highlightedGroupId}`)
+      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [highlightedGroupId, channelGroups]);
+
+  // Clear the transient highlight ring ~2.5s AFTER the card actually renders.
+  // Gating on the group's presence in the refetched list (not merely on
+  // highlightedGroupId) means the countdown starts when the ring becomes
+  // visible — so a slow refetchGroups (>2.5s) can't consume the highlight
+  // window before the card ever mounts.
+  useEffect(() => {
+    if (!highlightedGroupId) return;
+    if (!(channelGroups ?? []).some((g: any) => g.id === highlightedGroupId)) return;
+    const t = setTimeout(() => setHighlightedGroupId(null), 2500);
+    return () => clearTimeout(t);
+  }, [highlightedGroupId, channelGroups]);
   const updateGroup = trpc.channelGroup.update.useMutation({
     onSuccess: () => {
       refetchGroups();
@@ -273,10 +323,16 @@ export default function ChannelsPage() {
     onSuccess: () => { refetchGroups(); toast({ title: "Group deleted" }); },
   });
   const addToGroup = trpc.channelGroup.addChannel.useMutation({
-    onSuccess: () => refetchGroups(),
+    onSuccess: (group) => {
+      refetchGroups();
+      toast({ title: `Added to ${group?.name ?? "group"}` });
+    },
   });
   const removeFromGroup = trpc.channelGroup.removeChannel.useMutation({
-    onSuccess: () => refetchGroups(),
+    onSuccess: (group) => {
+      refetchGroups();
+      toast({ title: `Removed from ${group?.name ?? "group"}` });
+    },
   });
 
   // Group channels by platform
@@ -504,7 +560,21 @@ export default function ChannelsPage() {
           </p>
         </div>
         {totalChannels > 0 && (
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => refreshAvatars.mutate()}
+              disabled={refreshAvatars.isPending}
+              title="Re-fetch profile pictures from each platform"
+            >
+              {refreshAvatars.isPending ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              Refresh logos
+            </Button>
             <div
               className="text-right"
               title="Counts reflect only the active workspace"
@@ -679,17 +749,11 @@ export default function ChannelsPage() {
                         />
 
                         {/* Avatar */}
-                        {channel.avatar ? (
-                          <img
-                            src={channel.avatar}
-                            alt={channel.name}
-                            className="h-9 w-9 rounded-full object-cover"
-                          />
-                        ) : (
-                          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-muted text-xs font-bold text-muted-foreground">
-                            {(channel.name || "?").charAt(0).toUpperCase()}
-                          </div>
-                        )}
+                        <ChannelAvatar
+                          avatar={channel.avatar}
+                          name={channel.name}
+                          className="h-9 w-9 shrink-0"
+                        />
 
                         {/* Name & Username */}
                         <div className="min-w-0 flex-1">
@@ -785,7 +849,9 @@ export default function ChannelsPage() {
                   placeholder="Group name (e.g. News, Marketing)"
                   className="flex-1"
                   onKeyDown={(e) => {
-                    if (e.key === "Enter" && newGroupName.trim()) {
+                    // isPending guard mirrors the Create button's disabled state —
+                    // without it, holding/re-pressing Enter double-creates the group.
+                    if (e.key === "Enter" && newGroupName.trim() && !createGroup.isPending) {
                       createGroup.mutate({ name: newGroupName.trim(), color: newGroupColor });
                     }
                   }}
@@ -821,7 +887,15 @@ export default function ChannelsPage() {
           {channelGroups && channelGroups.length > 0 && (
             <div className="space-y-3">
               {channelGroups.map((group: any) => (
-                <Card key={group.id}>
+                <Card
+                  key={group.id}
+                  id={`channel-group-${group.id}`}
+                  className={`transition-shadow ${
+                    highlightedGroupId === group.id
+                      ? "ring-2 ring-primary ring-offset-2 ring-offset-background"
+                      : ""
+                  }`}
+                >
                   <CardContent className="pt-4">
                     {/* Group header */}
                     <div className="mb-3 flex items-center gap-2">
@@ -900,13 +974,12 @@ export default function ChannelsPage() {
                               }}
                               className="h-3.5 w-3.5 rounded"
                             />
-                            {channel.avatar ? (
-                              <img src={channel.avatar} alt={channel.name} className="h-5 w-5 rounded-full object-cover" />
-                            ) : (
-                              <div className="flex h-5 w-5 items-center justify-center rounded-full bg-muted text-[9px] font-bold">
-                                {channel.platform.slice(0, 2)}
-                              </div>
-                            )}
+                            <ChannelAvatar
+                              avatar={channel.avatar}
+                              name={channel.name}
+                              className="h-5 w-5 shrink-0"
+                              fallbackClassName="text-[9px]"
+                            />
                             <span className="min-w-0 flex-1 truncate font-medium">{channel.name}</span>
                             <span className="shrink-0 text-muted-foreground">{channel.platform.slice(0, 2)}</span>
                           </label>
