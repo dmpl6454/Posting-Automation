@@ -83,6 +83,9 @@ export const AUDIT_ACTIONS = {
   LISTENING_QUERY_CREATED: "listening.query_created",
   LISTENING_QUERY_DELETED: "listening.query_deleted",
 
+  // Analytics
+  ANALYTICS_REPORT_EMAILED: "analytics.report_emailed",
+
   // User profile / settings
   USER_PROFILE_UPDATED: "user.profile_updated",
   USER_PASSWORD_CHANGED: "user.password_changed",

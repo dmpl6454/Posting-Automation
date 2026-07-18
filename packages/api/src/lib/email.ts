@@ -28,6 +28,11 @@ interface SendEmailOptions {
   subject: string;
   html: string;
   text?: string;
+  /**
+   * Optional file attachments, forwarded to nodemailer as-is (additive
+   * 2026-07-18 — used by analytics.emailReport for the CSV report).
+   */
+  attachments?: { filename: string; content: string | Buffer; contentType?: string }[];
 }
 
 export async function sendEmail(options: SendEmailOptions): Promise<boolean> {
@@ -51,6 +56,7 @@ export async function sendEmail(options: SendEmailOptions): Promise<boolean> {
       subject: options.subject,
       html: options.html,
       text: options.text,
+      attachments: options.attachments,
     });
     return true;
   } catch (error) {

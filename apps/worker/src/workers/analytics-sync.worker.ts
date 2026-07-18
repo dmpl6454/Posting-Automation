@@ -7,7 +7,7 @@ export function createAnalyticsSyncWorker() {
   const worker = new Worker<AnalyticsSyncJobData>(
     QUEUE_NAMES.ANALYTICS_SYNC,
     async (job: Job<AnalyticsSyncJobData>) => {
-      const { postTargetId, channelId, platform, platformPostId, windowTag } = job.data;
+      const { postTargetId, channelId, platform, platformPostId, windowTag, capturedLate } = job.data;
       console.log(`[AnalyticsSync] Processing job ${job.id} for target ${postTargetId}${windowTag ? ` (at-age checkpoint ${windowTag})` : ""}`);
 
       // 1. Get channel tokens
@@ -27,11 +27,21 @@ export function createAnalyticsSyncWorker() {
         analytics = await provider.getPostAnalytics(tokens, platformPostId);
       } catch (err: any) {
         console.warn(`[AnalyticsSync] getPostAnalytics threw for ${platform} post ${platformPostId}: ${err.message}`);
+        // At-age checkpoint jobs (windowTag) are ONE-SHOT — a swallowed error
+        // here permanently loses the checkpoint. Rethrow so BullMQ's default
+        // attempts:3 + exponential backoff engages. Untagged cron jobs keep
+        // the soft null return (the next periodic pass covers them).
+        if (windowTag) throw err;
         return null;
       }
 
       if (!analytics) {
         console.warn(`[AnalyticsSync] No analytics returned for ${platform} post ${platformPostId} (target: ${postTargetId})`);
+        // Same one-shot rule: null at a checkpoint counts as a failure so the
+        // job retries instead of completing with the checkpoint lost.
+        if (windowTag) {
+          throw new Error(`No analytics returned for ${platform} post ${platformPostId} at checkpoint ${windowTag}`);
+        }
         return null;
       }
 
@@ -50,7 +60,9 @@ export function createAnalyticsSyncWorker() {
           reach: analytics.reach ?? 0,
           engagementRate: analytics.engagementRate ?? 0,
           snapshotAt: new Date(),
-          ...(windowTag ? { metadata: { windowTag } } : {}),
+          ...(windowTag
+            ? { metadata: { windowTag, ...(capturedLate ? { capturedLate: true } : {}) } }
+            : {}),
         },
       });
 

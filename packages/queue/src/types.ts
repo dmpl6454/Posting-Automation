@@ -23,6 +23,12 @@ export interface AnalyticsSyncJobData {
    * "at publish-age" mode can pin metrics as they stood exactly N after publish.
    */
   windowTag?: string;
+  /**
+   * Set by the daily reconciliation sweep (cron-jobs.ts) when a checkpoint was
+   * missed and re-captured late — stamped into AnalyticsSnapshot.metadata so
+   * Reports consumers can tell an exact-at-age capture from a late one.
+   */
+  capturedLate?: boolean;
 }
 
 export interface MediaProcessJobData {
