@@ -267,6 +267,7 @@ enum SocialPlatform {
   MEDIUM
   DEVTO
   WORDPRESS
+  SNAPCHAT
 }
 
 // ==================== POSTS & SCHEDULING ====================
@@ -315,6 +316,9 @@ model PostTarget {
   retryCount     Int         @default(0)
   uploadProgress Int?        // 0-100, set during media upload phases
   metadata       Json?
+  /// Per-channel caption override (PR-5 unique captions). NULL → the shared
+  /// Post.content / contentVariants path — byte-identical to pre-PR-5 behavior.
+  contentOverride String? @db.Text
 
   post    Post    @relation(fields: [postId], references: [id], onDelete: Cascade)
   channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)

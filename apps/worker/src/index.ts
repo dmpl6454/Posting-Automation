@@ -21,6 +21,7 @@ import { createOutreachSendWorker } from "./workers/outreach-send.worker";
 import { createOutreachPollWorker } from "./workers/outreach-poll.worker";
 import { createRepurposeVideoWorker } from "./workers/repurpose-video.worker";
 import { createAvatarCacheWorker } from "./workers/avatar-cache.worker";
+import { createCaptionFanoutWorker } from "./workers/caption-fanout.worker";
 import { startCronJobs } from "./scheduler/cron-jobs";
 import { registerWorker, markWorkerStopped, startHealthServer } from "./lib/health";
 
@@ -46,6 +47,7 @@ registerWorker("outreach-send");
 registerWorker("outreach-poll");
 registerWorker("repurpose-video");
 registerWorker("avatar-cache");
+registerWorker("caption-fanout");
 
 // Start workers
 const postPublishWorker = createPostPublishWorker();
@@ -67,6 +69,7 @@ const outreachSendWorker = createOutreachSendWorker();
 const outreachPollWorker = createOutreachPollWorker();
 const repurposeVideoWorker = createRepurposeVideoWorker();
 const avatarCacheWorker = createAvatarCacheWorker();
+const captionFanoutWorker = createCaptionFanoutWorker();
 
 // Start cron jobs
 startCronJobs();
@@ -94,6 +97,7 @@ console.log("  - Outreach Send Worker");
 console.log("  - Outreach Poll Worker");
 console.log("  - Repurpose Video Worker");
 console.log("  - Avatar Cache Worker");
+console.log("  - Caption Fanout Worker");
 console.log("  - Cron Jobs (token refresh: 30min, analytics: 6hr, agent runs: 1min, cleanup: 1hr, pipeline: 15min)");
 
 // Graceful shutdown
@@ -120,6 +124,7 @@ async function shutdown() {
   markWorkerStopped("outreach-poll");
   markWorkerStopped("repurpose-video");
   markWorkerStopped("avatar-cache");
+  markWorkerStopped("caption-fanout");
 
   await Promise.all([
     postPublishWorker.close(),
@@ -141,6 +146,7 @@ async function shutdown() {
     outreachPollWorker.close(),
     repurposeVideoWorker.close(),
     avatarCacheWorker.close(),
+    captionFanoutWorker.close(),
   ]);
 
   healthServer.close();

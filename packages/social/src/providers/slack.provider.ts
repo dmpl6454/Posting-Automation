@@ -8,6 +8,7 @@ import type {
   SocialProfile,
   PlatformConstraints,
 } from "../abstract/social.types";
+import { fetchT } from "../utils/fetch-timeout";
 
 export class SlackProvider extends SocialProvider {
   readonly platform: SocialPlatform = "SLACK";
@@ -30,7 +31,7 @@ export class SlackProvider extends SocialProvider {
   }
 
   async exchangeCodeForTokens(code: string, config: OAuthConfig): Promise<OAuthTokens> {
-    const res = await fetch("https://slack.com/api/oauth.v2.access", {
+    const res = await fetchT("https://slack.com/api/oauth.v2.access", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -56,7 +57,7 @@ export class SlackProvider extends SocialProvider {
    * For user tokens with token rotation enabled, refresh is supported.
    */
   async refreshAccessToken(refreshToken: string, config: OAuthConfig): Promise<OAuthTokens> {
-    const res = await fetch("https://slack.com/api/oauth.v2.access", {
+    const res = await fetchT("https://slack.com/api/oauth.v2.access", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -137,7 +138,7 @@ export class SlackProvider extends SocialProvider {
 
   async getProfile(tokens: OAuthTokens): Promise<SocialProfile> {
     // Get bot/user identity
-    const res = await fetch("https://slack.com/api/auth.test", {
+    const res = await fetchT("https://slack.com/api/auth.test", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${tokens.accessToken}`,
@@ -151,7 +152,7 @@ export class SlackProvider extends SocialProvider {
     // Try to get more profile info
     let avatar: string | undefined;
     if (data.user_id) {
-      const userRes = await fetch(`https://slack.com/api/users.info?user=${data.user_id}`, {
+      const userRes = await fetchT(`https://slack.com/api/users.info?user=${data.user_id}`, {
         headers: { Authorization: `Bearer ${tokens.accessToken}` },
       });
       const userData: any = await userRes.json();

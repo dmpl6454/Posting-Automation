@@ -89,6 +89,162 @@ export async function scheduleAnalyticsSync() {
 }
 
 /**
+ * Once-daily long-tail analytics pass (Insights freshness, 2026-07-18).
+ *
+ * The 6-hourly pass above only refreshes posts published in the last 7 days,
+ * and the at-age checkpoints end at 30d — so a post's "current" metrics used
+ * to freeze permanently at 30 days. This pass refreshes the 7d–90d tail once
+ * a day. FACEBOOK stays excluded (same per-app Graph-quota decision as
+ * scheduleAnalyticsSync — FB refreshes at publish, at-age checkpoints, and
+ * manual Sync Now only).
+ */
+export async function scheduleLongTailAnalyticsSync() {
+  const now = Date.now();
+  const ninetyDaysAgo = new Date(now - 90 * 24 * 60 * 60 * 1000);
+  const sevenDaysAgo = new Date(now - 7 * 24 * 60 * 60 * 1000);
+
+  const publishedTargets = await prisma.postTarget.findMany({
+    where: {
+      status: "PUBLISHED",
+      publishedId: { not: null },
+      publishedAt: { gte: ninetyDaysAgo, lt: sevenDaysAgo },
+      channel: {
+        isActive: true,
+        platform: { not: "FACEBOOK" }, // FB excluded — restores quota
+      },
+    },
+    select: {
+      id: true,
+      publishedId: true,
+      channelId: true,
+      channel: { select: { platform: true } },
+    },
+  });
+
+  let queued = 0;
+  for (const target of publishedTargets) {
+    if (!target.publishedId) continue;
+
+    await analyticsSyncQueue.add(
+      `analytics-longtail-${target.id}`,
+      {
+        postTargetId: target.id,
+        platform: target.channel.platform,
+        channelId: target.channelId,
+        platformPostId: target.publishedId,
+      },
+      {
+        jobId: `analytics-longtail-${target.id}-${Date.now()}`,
+        removeOnComplete: true,
+        removeOnFail: 100,
+      }
+    );
+    queued++;
+  }
+
+  if (queued > 0) {
+    console.log(`[Cron] Queued ${queued} long-tail analytics sync jobs (7d–90d)`);
+  }
+}
+
+/**
+ * At-age checkpoint windows (must mirror AT_AGE_WINDOWS in
+ * post-publish.worker.ts step 4c — 24h/7d/15d/30d after publish).
+ */
+const AT_AGE_CHECKPOINTS: Record<string, number> = {
+  "24h": 86_400_000,
+  "7d": 604_800_000,
+  "15d": 1_296_000_000,
+  "30d": 2_592_000_000,
+};
+
+/** At-age checkpoints only accrue for posts published after this ship date. */
+const AT_AGE_ACCRUAL_START = new Date("2026-07-17T00:00:00.000Z");
+
+/** A checkpoint counts as "missed" once its window has passed by more than this. */
+const CHECKPOINT_GRACE_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * Daily reconciliation sweep for missed at-age checkpoints (2026-07-18).
+ *
+ * The delayed jobs enqueued at publish are one-shot; a Redis flush / worker
+ * outage / exhausted retries loses the checkpoint forever. This sweep finds
+ * PUBLISHED targets (published after the accrual start) whose age passed a
+ * checkpoint by >6h without a tagged AnalyticsSnapshot, and re-enqueues them
+ * as tagged syncs stamped metadata { windowTag, capturedLate: true }.
+ *
+ * Existing-tag lookup is ONE grouped query over all candidate targets (no N+1).
+ * Sweep floor is 45d (30d checkpoint + 15d late-capture grace) so a target
+ * whose provider permanently errors can't be re-enqueued daily forever.
+ */
+export async function reconcileAtAgeCheckpoints() {
+  const now = Date.now();
+  const floor = new Date(Math.max(AT_AGE_ACCRUAL_START.getTime(), now - 45 * 24 * 60 * 60 * 1000));
+  // Only targets whose FIRST checkpoint (24h) already passed by >grace can be missing one.
+  const ceiling = new Date(now - AT_AGE_CHECKPOINTS["24h"]! - CHECKPOINT_GRACE_MS);
+  if (ceiling <= floor) return;
+
+  const targets = await prisma.postTarget.findMany({
+    where: {
+      status: "PUBLISHED",
+      publishedId: { not: null },
+      publishedAt: { gte: floor, lte: ceiling },
+      channel: { isActive: true },
+    },
+    select: {
+      id: true,
+      publishedId: true,
+      channelId: true,
+      publishedAt: true,
+      channel: { select: { platform: true } },
+    },
+  });
+  if (targets.length === 0) return;
+
+  // ONE grouped query: which (target, windowTag) checkpoints already exist?
+  const tagged: Array<{ postTargetId: string; tag: string }> = await (prisma.$queryRawUnsafe as any)(
+    `SELECT "postTargetId", metadata->>'windowTag' AS tag
+     FROM "AnalyticsSnapshot"
+     WHERE "postTargetId" = ANY($1::text[])
+       AND metadata->>'windowTag' IS NOT NULL`,
+    targets.map((t) => t.id)
+  );
+  const have = new Set(tagged.map((r) => `${r.postTargetId}:${r.tag}`));
+
+  let queued = 0;
+  for (const target of targets) {
+    if (!target.publishedId || !target.publishedAt) continue;
+    const age = now - target.publishedAt.getTime();
+
+    for (const [windowTag, windowMs] of Object.entries(AT_AGE_CHECKPOINTS)) {
+      if (age <= windowMs + CHECKPOINT_GRACE_MS) continue; // checkpoint not yet due (by >grace)
+      if (have.has(`${target.id}:${windowTag}`)) continue; // already captured
+
+      // NOTE: BullMQ only allows ':' in custom jobIds with EXACTLY three
+      // colon-separated segments (see scheduleAvatarCache) — so the "late"
+      // marker lives in the first segment, NOT as a fourth segment.
+      await analyticsSyncQueue.add(
+        "at-age-snapshot-late",
+        {
+          postTargetId: target.id,
+          platform: target.channel.platform,
+          channelId: target.channelId,
+          platformPostId: target.publishedId,
+          windowTag,
+          capturedLate: true,
+        },
+        { jobId: `atage-late:${target.id}:${windowTag}`, removeOnComplete: true, removeOnFail: 100 }
+      );
+      queued++;
+    }
+  }
+
+  if (queued > 0) {
+    console.log(`[Cron] Reconciled ${queued} missed at-age checkpoints (capturedLate)`);
+  }
+}
+
+/**
  * Check active agents and queue runs when their cron schedule matches.
  * Run every minute.
  */
@@ -554,6 +710,14 @@ export function startCronJobs() {
   // Run analytics sync 5 minutes after startup (give tokens time to refresh)
   setTimeout(scheduleAnalyticsSync, 5 * 60 * 1000);
 
+  // Long-tail analytics refresh (7d–90d-old posts, non-FB) once daily
+  setInterval(scheduleLongTailAnalyticsSync, 24 * 60 * 60 * 1000);
+  setTimeout(scheduleLongTailAnalyticsSync, 8 * 60 * 1000); // Start after 8 min warmup
+
+  // At-age checkpoint reconciliation once daily (re-enqueue missed checkpoints)
+  setInterval(reconcileAtAgeCheckpoints, 24 * 60 * 60 * 1000);
+  setTimeout(reconcileAtAgeCheckpoints, 9 * 60 * 1000); // Start after 9 min warmup
+
   // Agent run check every minute
   setInterval(scheduleAgentRuns, 60 * 1000);
   scheduleAgentRuns(); // Run immediately on startup
@@ -601,6 +765,8 @@ export function startCronJobs() {
   console.log("[Cron] Cron jobs started");
   console.log("[Cron]   - Token refresh: every 30 min");
   console.log("[Cron]   - Analytics sync: every 6 hours");
+  console.log("[Cron]   - Long-tail analytics sync (7d–90d): every 24 hours");
+  console.log("[Cron]   - At-age checkpoint reconciliation: every 24 hours");
   console.log("[Cron]   - Agent runs: every 1 min");
   console.log("[Cron]   - Autopilot cleanup: every 1 hour");
   console.log("[Cron]   - Autopilot pipeline: every 15 min");

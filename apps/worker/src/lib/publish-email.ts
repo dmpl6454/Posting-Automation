@@ -92,7 +92,10 @@ export function buildPublishEmail(input: PublishEmailInput): {
         ${
           ok
             ? href
-              ? `<a href="${escapeHtml(href)}" style="color:#2563eb;text-decoration:none;">View post</a>`
+              ? // Anchor stays clickable; the raw URL is ALSO shown as copyable
+                // text below it (owner ask 2026-07-18 — recipients need to see
+                // and copy the actual link, not just "View post").
+                `<a href="${escapeHtml(href)}" style="color:#2563eb;text-decoration:none;">View post</a><div style="font-size:11px;color:#a1a1aa;word-break:break-all;">${escapeHtml(href)}</div>`
               : `<a href="${escapeHtml(dashboardUrl)}" style="color:#2563eb;text-decoration:none;">Open in dashboard</a>`
             : '<span style="color:#991b1b;">failed</span>'
         }
@@ -144,4 +147,76 @@ export function buildPublishEmail(input: PublishEmailInput): {
   ].join("\n");
 
   return { subject, html, text };
+}
+
+/**
+ * SECURITY — CSV/formula injection: channel names, platform strings and post
+ * content are user/provider-controlled; a cell starting with = + - @ (or
+ * tab/CR) executes as a formula when opened in Excel/Sheets (e.g. =HYPERLINK
+ * exfiltration). Neutralize with a leading apostrophe — the standard
+ * mitigation, identical to apps/web/lib/csv.ts (not importable from the
+ * worker workspace, so the guard is replicated here and locked by tests).
+ */
+const FORMULA_PREFIX = /^[=+\-@\t\r]/;
+
+function csvField(v: string | number | null | undefined): string {
+  let s = String(v ?? "");
+  if (typeof v === "string" && FORMULA_PREFIX.test(s)) s = "'" + s;
+  return `"${s.replace(/"/g, '""')}"`;
+}
+
+/** ISO UTC "2026-07-17 09:30" or "" for missing/invalid dates. */
+function csvUtc(d: Date | string | null): string {
+  if (!d) return "";
+  const date = new Date(d);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toISOString().slice(0, 16).replace("T", " ");
+}
+
+/** IST "15:00" or "" for missing/invalid dates. */
+function csvIst(d: Date | string | null): string {
+  if (!d) return "";
+  const date = new Date(d);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("en-GB", {
+    timeZone: "Asia/Kolkata",
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/**
+ * Spreadsheet-ready report of the same per-channel rows the email shows.
+ * Attached to the publish email as a .csv so recipients get the links with
+ * structure (platform, channel, url, …) in one click — Gmail opens it straight
+ * into Google Sheets, Outlook into Excel. PURE like buildPublishEmail.
+ * URL column mirrors the email's Link cell: live post URL when http(s), else
+ * the dashboard fallback (never a javascript:/data: value — safeHref-gated).
+ */
+export function buildPublishReportCsv(input: PublishEmailInput): string {
+  const { postId, appUrl, targets } = input;
+  const dashboardUrl = `${appUrl}/dashboard/posts/${postId}`;
+  const header = [
+    "platform",
+    "channel",
+    "handle",
+    "url",
+    "status",
+    "published_at_utc",
+    "published_at_ist",
+  ];
+  const rows = targets.map((t) => [
+    t.platform,
+    t.channelName,
+    t.channelUsername ?? "",
+    safeHref(t.publishedUrl) ?? dashboardUrl,
+    t.status,
+    csvUtc(t.publishedAt),
+    csvIst(t.publishedAt),
+  ]);
+  return [
+    header.map(csvField).join(","),
+    ...rows.map((r) => r.map(csvField).join(",")),
+  ].join("\n");
 }

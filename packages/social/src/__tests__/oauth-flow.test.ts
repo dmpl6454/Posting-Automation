@@ -300,6 +300,72 @@ describe("OAuth Flow - Discord", () => {
   });
 });
 
+// Regression (PR-2, 2026-07-18): every connect-path fetch must carry an
+// AbortSignal (fetchT / graphFetch timeoutMs) so a hung platform API fails
+// fast instead of holding the OAuth callback until nginx's 120s proxy budget
+// 504s and burns the one-shot consent code. Do NOT remove the timeout wiring.
+describe("Connect-path fetch timeouts (AbortSignal present)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function signalOfCall(index: number): unknown {
+    const init = mockFetch.mock.calls[index]?.[1] as RequestInit | undefined;
+    return init?.signal;
+  }
+
+  it("LinkedIn exchangeCodeForTokens passes an AbortSignal to fetch", async () => {
+    mockFetch.mockResolvedValueOnce(
+      mockResponse({ access_token: "a", refresh_token: "r", expires_in: 100 })
+    );
+    const linkedin = new LinkedInProvider();
+    await linkedin.exchangeCodeForTokens("code", baseConfig);
+    expect(signalOfCall(0)).toBeInstanceOf(AbortSignal);
+  });
+
+  it("LinkedIn refreshAccessToken passes an AbortSignal to fetch", async () => {
+    mockFetch.mockResolvedValueOnce(
+      mockResponse({ access_token: "a", refresh_token: "r", expires_in: 100 })
+    );
+    const linkedin = new LinkedInProvider();
+    await linkedin.refreshAccessToken("refresh", baseConfig);
+    expect(signalOfCall(0)).toBeInstanceOf(AbortSignal);
+  });
+
+  it("Discord exchangeCodeForTokens passes an AbortSignal to fetch", async () => {
+    mockFetch.mockResolvedValueOnce(
+      mockResponse({ access_token: "a", refresh_token: "r", expires_in: 100, scope: "identify" })
+    );
+    const discord = new DiscordProvider();
+    await discord.exchangeCodeForTokens("code", baseConfig);
+    expect(signalOfCall(0)).toBeInstanceOf(AbortSignal);
+  });
+
+  it("Facebook exchangeCodeForTokens passes an AbortSignal on BOTH graph calls (short + long-lived)", async () => {
+    mockFetch.mockResolvedValueOnce(
+      mockResponse({ access_token: "short", token_type: "bearer" })
+    );
+    mockFetch.mockResolvedValueOnce(
+      mockResponse({ access_token: "long", expires_in: 100, token_type: "bearer" })
+    );
+    const facebook = new FacebookProvider();
+    await facebook.exchangeCodeForTokens("code", baseConfig);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(signalOfCall(0)).toBeInstanceOf(AbortSignal);
+    expect(signalOfCall(1)).toBeInstanceOf(AbortSignal);
+  });
+
+  it("Facebook getPages passes an AbortSignal and stops on an unpaginated response", async () => {
+    mockFetch.mockResolvedValueOnce(
+      mockResponse({ data: [{ id: "p1", name: "Page 1", access_token: "pt" }] })
+    );
+    const facebook = new FacebookProvider();
+    const pages = await facebook.getPages({ accessToken: "tok" });
+    expect(pages).toEqual([{ id: "p1", name: "Page 1", avatar: undefined, accessToken: "pt" }]);
+    expect(signalOfCall(0)).toBeInstanceOf(AbortSignal);
+  });
+});
+
 describe("OAuth Flow - Cross-Provider Consistency", () => {
   // Twitter excluded: uses OAuth 1.0a — getOAuthUrl is async and requires live credentials.
   const providers = [

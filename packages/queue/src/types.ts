@@ -23,6 +23,12 @@ export interface AnalyticsSyncJobData {
    * "at publish-age" mode can pin metrics as they stood exactly N after publish.
    */
   windowTag?: string;
+  /**
+   * Set by the daily reconciliation sweep (cron-jobs.ts) when a checkpoint was
+   * missed and re-captured late — stamped into AnalyticsSnapshot.metadata so
+   * Reports consumers can tell an exact-at-age capture from a late one.
+   */
+  capturedLate?: boolean;
 }
 
 export interface MediaProcessJobData {
@@ -117,6 +123,17 @@ export interface OutreachPollJobData {
  */
 export interface AvatarCacheJobData {
   channelId: string;
+}
+
+/**
+ * PR-5 (per-channel unique captions): generate one DISTINCT AI caption per
+ * pending PostTarget (written to PostTarget.contentOverride), then flip the
+ * post DRAFT→SCHEDULED so the publish cron picks it up. ONE job per post —
+ * enqueued with jobId `caption-fanout:{postId}` so re-submits dedupe.
+ */
+export interface CaptionFanoutJobData {
+  postId: string;
+  organizationId: string;
 }
 
 /**

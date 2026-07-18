@@ -506,6 +506,11 @@ function getDefaultScopes(platform: string): string[] {
       "https://www.googleapis.com/auth/youtube.readonly",
     ],
     WORDPRESS: ["global"],
+    // Snapchat Public Profile API. `snapchat-profile-api` is the single scope that
+    // covers both reading the connected Public Profile (getProfile -> /my_profile)
+    // and — once our client ID is allowlisted — posting + insights. Space-joined in
+    // getOAuthUrl. See docs/SNAPCHAT-BUILD-PLAN.md.
+    SNAPCHAT: ["snapchat-profile-api"],
   };
   return scopeMap[platform] || [];
 }

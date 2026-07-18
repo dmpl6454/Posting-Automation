@@ -78,3 +78,9 @@ export const authRateLimiter = createRateLimiter({ windowMs: 60_000, max: 10 });
 
 /** 20 requests per minute */
 export const aiRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
+
+/**
+ * 5 per hour — emailed analytics reports go to an ARBITRARY recipient address,
+ * so keep the relay-abuse surface tightly bounded (also audit-logged).
+ */
+export const emailReportRateLimiter = createRateLimiter({ windowMs: 60 * 60_000, max: 5 });

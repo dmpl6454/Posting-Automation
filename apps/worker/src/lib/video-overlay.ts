@@ -1,14 +1,20 @@
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { writeFileSync, unlinkSync, existsSync, mkdirSync, readFileSync } from "fs";
 import { join } from "path";
 import crypto from "crypto";
+
+// Async ffmpeg (stability guard, 2026-07-18): the sync encode blocked the whole
+// worker event loop (every queue) for up to 180s. Same argv-array/no-shell
+// pattern, promisified (proven in packages/ai/src/tools/reel-generator.ts).
+const execFileAsync = promisify(execFile);
 
 const TMP_DIR = "/tmp/video-overlay";
 
 /**
  * Build the ffmpeg argument ARRAY for the overlay pass (pure — no I/O).
  *
- * SECURITY: every element is a discrete, UNQUOTED arg. With `execFileSync`
+ * SECURITY: every element is a discrete, UNQUOTED arg. With `execFile`
  * (no shell) each array element is passed verbatim, so shell metachars in
  * the (user-controlled) `text`/`channelName` baked into `filterComplex` are
  * inert. Do NOT wrap any element in shell quotes — quotes would become part
@@ -156,16 +162,17 @@ export async function processVideoOverlay(
       filters.push(`[vlogo]null[vout]`);
     }
 
-    // 4. Build FFmpeg args (ARRAY, not a shell string) and run with execFileSync
+    // 4. Build FFmpeg args (ARRAY, not a shell string) and run with async execFile
     // (NO shell) — closes command injection via user-controlled text/channelName
     // baked into filterComplex. The `escaped` drawtext escaping above stays:
     // it's correct for the ffmpeg FILTERGRAPH level; the no-shell exec handles
-    // the (now-irrelevant) shell level.
+    // the (now-irrelevant) shell level. Awaited so the encode doesn't freeze the
+    // worker's event loop (identical argv + timeout as the old sync call).
     const filterComplex = filters.join(";");
     const args = buildOverlayFfmpegArgs({ inputArgs, filterComplex, outputPath });
 
     console.log(`[VideoOverlay] Processing: logo=${hasLogo ? "yes" : channelName ? "text" : "none"}, text=${text ? "yes" : "no"}`);
-    execFileSync("ffmpeg", args, { timeout: 180000, stdio: "pipe" });
+    await execFileAsync("ffmpeg", args, { timeout: 180000, maxBuffer: 32 * 1024 * 1024 });
 
     // 5. Upload to S3
     const { S3Client, PutObjectCommand } = await import("@aws-sdk/client-s3");

@@ -14,7 +14,18 @@ function ActiveTaskProviderWithSession({ children }: { children: React.ReactNode
   return <ActiveTaskProvider userId={userId}>{children}</ActiveTaskProvider>;
 }
 
-export function Providers({ children }: { children: React.ReactNode }) {
+export function Providers({
+  children,
+  forcedTheme,
+}: {
+  children: React.ReactNode;
+  /**
+   * Pin the theme for this subtree (e.g. the /admin console is a light-only
+   * design — passing "light" keeps `--foreground` dark so table text/badges
+   * stay visible even when the OS is in dark mode). Omit to follow the OS.
+   */
+  forcedTheme?: string;
+}) {
   return (
     <SessionProvider>
       <ThemeProvider
@@ -22,6 +33,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
         defaultTheme="system"
         enableSystem
         disableTransitionOnChange
+        forcedTheme={forcedTheme}
       >
         <TRPCProvider>
           <ActiveTaskProviderWithSession>

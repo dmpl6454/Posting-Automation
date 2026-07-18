@@ -1,5 +1,6 @@
 import { Worker, type Job } from "bullmq";
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { writeFileSync, readFileSync, mkdirSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -25,6 +26,12 @@ import {
   escapeDrawText,
   buildCaptionDrawtextFilters,
 } from "../lib/repurpose-video";
+
+// Async ffmpeg (stability guard, 2026-07-18): execFileSync blocked this worker
+// process's event loop for the whole encode, starving every other queue that
+// shares it. Same argv-array/no-shell pattern, promisified (proven in
+// packages/ai/src/tools/reel-generator.ts).
+const execFileAsync = promisify(execFile);
 
 // ── S3 (identical config to media-process.worker.ts) ─────────────────────
 const s3 = new S3Client({
@@ -77,10 +84,10 @@ async function downloadToBase64(url: string): Promise<{ imageBase64: string; mim
  * scene rotates across equal windows of the clip), so at most two lines ever
  * show at once instead of the old permanently-stacked block.
  */
-function burnCaptionsOnVideo(
+async function burnCaptionsOnVideo(
   videoBuf: Buffer,
   opts: { title: string; scenes: string[]; durationSeconds: number }
-): Buffer {
+): Promise<Buffer> {
   // Build the ordered drawtext filters (pure, unit-tested in lib/repurpose-video).
   // escapeDrawText is applied to EVERY caption TEXT value inside the helper;
   // the time-slice between(...) windows are computed numbers (never user input).
@@ -101,11 +108,12 @@ function burnCaptionsOnVideo(
     // protected by that expression's own filtergraph-level single quotes.
     const drawtexts = filters.join(",");
 
-    // SECURITY: run ffmpeg with execFileSync (NO shell) so attacker-influenceable
+    // SECURITY: run ffmpeg with execFile (NO shell) so attacker-influenceable
     // caption text (from the user-supplied URL's article) can never reach /bin/sh.
     // Each flag/value is its own array element; the `-vf` filter is ONE unquoted
     // element (no shell quoting needed); paths are their own unquoted elements.
-    execFileSync(
+    // Async (await) so the encode doesn't block the worker's event loop.
+    await execFileAsync(
       "ffmpeg",
       [
         "-y",
@@ -125,7 +133,9 @@ function burnCaptionsOnVideo(
         "+faststart",
         outputPath,
       ],
-      { timeout: 180_000, stdio: "pipe" }
+      // Same 180s timeout as before; maxBuffer sized for ffmpeg's chatty stderr
+      // (mirrors reel-generator.ts). execFile pipes output by default (no stdio opt).
+      { timeout: 180_000, maxBuffer: 32 * 1024 * 1024 }
     );
 
     if (!existsSync(outputPath)) {
@@ -194,9 +204,10 @@ export function createRepurposeVideoWorker() {
               const musicDir = join(tmpdir(), `bgmusic-${crypto.randomBytes(4).toString("hex")}`);
               mkdirSync(musicDir, { recursive: true });
               const musicPath = join(musicDir, "bg.mp3");
-              // execFileSync (NO shell) — `dur` is a number, but keep the no-shell
-              // invariant consistent across every ffmpeg call in this worker.
-              execFileSync(
+              // execFile (NO shell, async) — `dur` is a number, but keep the
+              // no-shell invariant consistent across every ffmpeg call in this
+              // worker; await keeps the event loop free during the encode.
+              await execFileAsync(
                 "ffmpeg",
                 [
                   "-y",
@@ -218,7 +229,7 @@ export function createRepurposeVideoWorker() {
                   "128k",
                   musicPath,
                 ],
-                { timeout: 30_000, stdio: "pipe" }
+                { timeout: 30_000, maxBuffer: 32 * 1024 * 1024 }
               );
               bgMusicBase64 = readFileSync(musicPath).toString("base64");
               rmSync(musicDir, { recursive: true, force: true });
@@ -284,7 +295,7 @@ export function createRepurposeVideoWorker() {
           // (time-sliced) are overlaid here via ffmpeg drawtext.
           await pushProgress(scoped, "Adding captions", "running");
           const raw = seed.videoUrl ? await downloadToBuffer(seed.videoUrl) : Buffer.from(seed.videoBase64, "base64");
-          videoBuf = burnCaptionsOnVideo(raw, {
+          videoBuf = await burnCaptionsOnVideo(raw, {
             title: sd.title,
             scenes: sd.scenes.slice(0, 4),
             durationSeconds: sd.duration,

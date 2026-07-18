@@ -12,6 +12,7 @@ export { getDeepSeekModel } from "./providers/deepseek.provider";
 export { routeProvider, ROUTING_RULES } from "./routing/smart-router";
 export type { RouterContext } from "./routing/smart-router";
 export { buildTextProviderChain, withTextProviderFallback } from "./utils/provider-chain";
+export { PLATFORM_CHAR_LIMITS } from "./prompts/platform-specific.prompts";
 export type { AIProvider, AIImageProvider, ContentGenerationParams, HashtagParams, OptimizeParams, ImageGenerationParams, ImageEditParams } from "./types";
 export { generateImage, editImage, NANO_BANANA_ASPECT_RATIOS, NANO_BANANA_SIZES, NANO_BANANA_MODELS } from "./providers/nano-banana.provider";
 export { generateVideo, buildVideoPrompt, VEO_MODELS, VEO_ASPECT_RATIOS, VEO_DURATIONS } from "./providers/veo.provider";

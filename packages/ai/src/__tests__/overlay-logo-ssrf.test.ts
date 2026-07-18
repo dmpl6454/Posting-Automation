@@ -22,6 +22,9 @@ vi.mock("puppeteer", () => ({
         close: vi.fn(async () => {}),
       })),
       close: vi.fn(async () => {}),
+      // Render-concurrency semaphore (2026-07-18) registers a
+      // "disconnected" listener on every launched browser.
+      once: vi.fn(),
     })),
   },
 }));

@@ -7,8 +7,20 @@ import { Button } from "~/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card";
 import { Skeleton } from "~/components/ui/skeleton";
 import { Badge } from "~/components/ui/badge";
-import { Download, ExternalLink, Info } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "~/components/ui/dialog";
+import { Input } from "~/components/ui/input";
+import { Label } from "~/components/ui/label";
+import { Download, ExternalLink, Info, Loader2, Mail } from "lucide-react";
 import { toCsv, downloadCsv } from "~/lib/csv";
+import { useToast } from "~/hooks/use-toast";
+import { humanizeError } from "~/lib/errors";
 
 type ReportWindow = "24h" | "7d" | "15d" | "30d";
 type ReportMode = "current" | "at_age";
@@ -31,6 +43,31 @@ function num(v: number | null | undefined): string {
   return v === null || v === undefined ? "—" : String(v);
 }
 
+/** "current"-mode freshness hint: a latest snapshot older than 24h is stale. */
+function isStaleSnapshot(snapshotAt: Date | string | null): boolean {
+  if (!snapshotAt) return false;
+  return Date.now() - new Date(snapshotAt).getTime() > 24 * 60 * 60 * 1000;
+}
+
+const EXPORT_LIMIT = 1000;
+
+const CSV_HEADER = [
+  "Post",
+  "Channel",
+  "Handle",
+  "Platform",
+  "Published At (UTC)",
+  "Post URL",
+  "Views/Impressions",
+  "Clicks",
+  "Likes",
+  "Comments",
+  "Shares",
+  "Reach",
+  "Engagement %",
+  "Metric captured at (UTC)",
+];
+
 /**
  * Insights → Reports (2026-07-17): structured, extractable per-post table.
  * "Current" = every post × channel published WITHIN the selected window, with
@@ -42,6 +79,12 @@ function num(v: number | null | undefined): string {
 export function ReportsTab() {
   const [win, setWin] = useState<ReportWindow>("7d");
   const [mode, setMode] = useState<ReportMode>("current");
+  const [exporting, setExporting] = useState(false);
+  const [emailOpen, setEmailOpen] = useState(false);
+  const [recipient, setRecipient] = useState("");
+
+  const { toast } = useToast();
+  const utils = trpc.useUtils();
 
   const { data, isLoading } = trpc.analytics.postReports.useQuery(
     { window: win, mode },
@@ -50,48 +93,124 @@ export function ReportsTab() {
 
   const rows = data?.rows ?? [];
 
-  const onExport = () => {
-    if (!rows.length) return;
-    downloadCsv(
-      `postautomation-report-${win}-${mode}-${new Date().toISOString().slice(0, 10)}.csv`,
-      toCsv(
-        [
-          "Post",
-          "Channel",
-          "Handle",
-          "Platform",
-          "Published At (UTC)",
-          "Post URL",
-          "Views/Impressions",
-          "Clicks",
-          "Likes",
-          "Comments",
-          "Shares",
-          "Reach",
-          "Engagement %",
-          "Metric captured at (UTC)",
-        ],
-        rows.map((r) => [
-          r.contentPreview,
-          r.channelName,
-          r.channelUsername ?? "",
-          r.platform,
-          r.publishedAt ? new Date(r.publishedAt).toISOString() : "",
-          r.publishedUrl ?? "",
-          r.impressions,
-          r.clicks,
-          r.likes,
-          r.comments,
-          r.shares,
-          r.reach,
-          r.engagementRate,
-          r.snapshotAt ? new Date(r.snapshotAt).toISOString() : "",
-        ])
-      )
-    );
+  const emailReport = trpc.analytics.emailReport.useMutation({
+    onSuccess: (res) => {
+      toast({
+        title: "Report emailed",
+        description: `${res.rows} row${res.rows === 1 ? "" : "s"} sent as a CSV attachment.`,
+      });
+      setEmailOpen(false);
+      setRecipient("");
+    },
+    onError: (err) => {
+      toast({
+        title: "Could not email report",
+        description: humanizeError(err),
+        variant: "destructive",
+      });
+    },
+  });
+
+  const onSendEmail = () => {
+    const to = recipient.trim();
+    if (!to || emailReport.isPending) return;
+    emailReport.mutate({ to, window: win, mode });
+  };
+
+  const onExport = async () => {
+    if (!rows.length || exporting) return;
+    setExporting(true);
+    try {
+      // Refetch at the full export cap — the on-screen query is capped at 500.
+      const full = await utils.analytics.postReports.fetch({
+        window: win,
+        mode,
+        limit: EXPORT_LIMIT,
+      });
+      const exportRows = full?.rows ?? rows;
+      const truncated = exportRows.length === EXPORT_LIMIT ? "-truncated" : "";
+      downloadCsv(
+        `postautomation-report-${win}-${mode}-${new Date().toISOString().slice(0, 10)}${truncated}.csv`,
+        toCsv(
+          CSV_HEADER,
+          exportRows.map((r) => [
+            r.contentPreview,
+            r.channelName,
+            r.channelUsername ?? "",
+            r.platform,
+            r.publishedAt ? new Date(r.publishedAt).toISOString() : "",
+            r.publishedUrl ?? "",
+            r.impressions,
+            r.clicks,
+            r.likes,
+            r.comments,
+            r.shares,
+            r.reach,
+            r.engagementRate,
+            r.snapshotAt ? new Date(r.snapshotAt).toISOString() : "",
+          ])
+        )
+      );
+    } catch (err) {
+      toast({
+        title: "Export failed",
+        description: humanizeError(err),
+        variant: "destructive",
+      });
+    } finally {
+      setExporting(false);
+    }
   };
 
   return (
+    <>
+    <Dialog open={emailOpen} onOpenChange={(open) => { if (!emailReport.isPending) setEmailOpen(open); }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Email this report</DialogTitle>
+          <DialogDescription>
+            Sends the current view ({WINDOWS.find((w) => w.value === win)?.label},{" "}
+            {mode === "at_age" ? "at publish-age" : "current metrics"}) as a CSV attachment.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-2">
+          <Label htmlFor="report-recipient">Recipient email</Label>
+          <Input
+            id="report-recipient"
+            type="email"
+            placeholder="name@example.com"
+            value={recipient}
+            onChange={(e) => setRecipient(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") onSendEmail();
+            }}
+            disabled={emailReport.isPending}
+          />
+        </div>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={() => setEmailOpen(false)}
+            disabled={emailReport.isPending}
+          >
+            Cancel
+          </Button>
+          <Button onClick={onSendEmail} disabled={!recipient.trim() || emailReport.isPending}>
+            {emailReport.isPending ? (
+              <>
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                Sending…
+              </>
+            ) : (
+              <>
+                <Mail className="mr-1.5 h-3.5 w-3.5" />
+                Send report
+              </>
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
     <Card>
       <CardHeader className="space-y-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -103,10 +222,25 @@ export function ReportsTab() {
                 : "Every post published in the selected window, per channel — extractable end to end."}
             </CardDescription>
           </div>
-          <Button size="sm" variant="outline" onClick={onExport} disabled={!rows.length}>
-            <Download className="mr-1.5 h-3.5 w-3.5" />
-            Export CSV
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setEmailOpen(true)}
+              disabled={!rows.length}
+            >
+              <Mail className="mr-1.5 h-3.5 w-3.5" />
+              Email report
+            </Button>
+            <Button size="sm" variant="outline" onClick={onExport} disabled={!rows.length || exporting}>
+              {exporting ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Download className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              Export CSV
+            </Button>
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -147,7 +281,8 @@ export function ReportsTab() {
         <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
           <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           Views ride on Impressions (YouTube/Threads report views there). Twitter metrics need a paid
-          API tier; Instagram doesn&apos;t expose clicks/shares. All times UTC.
+          API tier; Instagram doesn&apos;t expose clicks/shares. Facebook refreshes at publish, at-age
+          checkpoints, and Sync Now only. All times UTC.
         </p>
       </CardHeader>
 
@@ -166,7 +301,7 @@ export function ReportsTab() {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[960px] text-sm">
+            <table className="w-full min-w-[1080px] text-sm">
               <thead>
                 <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
                   <th className="py-2 pr-3 font-medium">Post</th>
@@ -179,6 +314,7 @@ export function ReportsTab() {
                   <th className="py-2 pr-3 text-right font-medium">Shares</th>
                   <th className="py-2 pr-3 text-right font-medium">Reach</th>
                   <th className="py-2 pr-3 text-right font-medium">Eng. %</th>
+                  <th className="py-2 pr-3 font-medium">Captured (UTC)</th>
                   <th className="py-2 font-medium">Link</th>
                 </tr>
               </thead>
@@ -214,6 +350,17 @@ export function ReportsTab() {
                     <td className="py-2 pr-3 text-right tabular-nums">
                       {r.engagementRate === null ? "—" : `${r.engagementRate.toFixed(1)}%`}
                     </td>
+                    <td className="whitespace-nowrap py-2 pr-3 text-muted-foreground">
+                      {fmtUtc(r.snapshotAt)}
+                      {mode === "current" && isStaleSnapshot(r.snapshotAt) && (
+                        <span
+                          className="ml-1.5 text-[10px] uppercase tracking-wide text-muted-foreground/70"
+                          title="Latest metric capture is more than 24 hours old — use Sync Now to refresh."
+                        >
+                          stale
+                        </span>
+                      )}
+                    </td>
                     <td className="py-2">
                       {r.publishedUrl ? (
                         <a
@@ -242,5 +389,6 @@ export function ReportsTab() {
         )}
       </CardContent>
     </Card>
+    </>
   );
 }

@@ -9,6 +9,7 @@ import type {
   SocialProfile,
   PlatformConstraints,
 } from "../abstract/social.types";
+import { fetchT } from "../utils/fetch-timeout";
 
 export class PinterestProvider extends SocialProvider {
   readonly platform: SocialPlatform = "PINTEREST";
@@ -32,7 +33,7 @@ export class PinterestProvider extends SocialProvider {
   }
 
   async exchangeCodeForTokens(code: string, config: OAuthConfig): Promise<OAuthTokens> {
-    const res = await fetch("https://api.pinterest.com/v5/oauth/token", {
+    const res = await fetchT("https://api.pinterest.com/v5/oauth/token", {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
@@ -57,7 +58,7 @@ export class PinterestProvider extends SocialProvider {
   }
 
   async refreshAccessToken(refreshToken: string, config: OAuthConfig): Promise<OAuthTokens> {
-    const res = await fetch("https://api.pinterest.com/v5/oauth/token", {
+    const res = await fetchT("https://api.pinterest.com/v5/oauth/token", {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
@@ -135,7 +136,7 @@ export class PinterestProvider extends SocialProvider {
   }
 
   async getProfile(tokens: OAuthTokens): Promise<SocialProfile> {
-    const res = await fetch("https://api.pinterest.com/v5/user_account", {
+    const res = await fetchT("https://api.pinterest.com/v5/user_account", {
       headers: { Authorization: `Bearer ${tokens.accessToken}` },
     });
 

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
 import { analyticsSyncQueue } from "@postautomation/queue";
 import type { PrismaClient } from "@postautomation/db";
@@ -6,6 +7,20 @@ import {
   sumChannelRowsIntoGroups,
   type ChannelStatRow,
 } from "../lib/group-stats";
+import { createRateLimitMiddleware } from "../middleware/rate-limit.middleware";
+import { emailReportRateLimiter } from "../middleware/rate-limit";
+import { sendEmail } from "../lib/email";
+import { escapeHtml } from "../lib/sanitize";
+import { toCsv } from "../lib/report-csv";
+import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
+
+/**
+ * Emailed reports go to an ARBITRARY recipient — rate-limited (5/hour/user)
+ * and audit-logged so the SMTP account can't be turned into a relay.
+ */
+const emailReportRateLimited = orgProcedure.use(
+  createRateLimitMiddleware(emailReportRateLimiter)
+);
 
 /**
  * ONE org-scoped aggregate for per-channel metrics: latest snapshot per
@@ -69,6 +84,118 @@ async function fetchChannelStatRows(
     comments: Number(r.comments),
     shares: Number(r.shares),
     clicks: Number(r.clicks),
+  }));
+}
+
+type ReportWindow = "24h" | "7d" | "15d" | "30d";
+type ReportMode = "current" | "at_age";
+
+export interface PostReportRow {
+  targetId: string;
+  postId: string;
+  contentPreview: string;
+  channelName: string;
+  channelUsername: string | null;
+  platform: string;
+  publishedAt: Date | null;
+  publishedUrl: string | null;
+  impressions: number | null;
+  clicks: number | null;
+  likes: number | null;
+  comments: number | null;
+  shares: number | null;
+  reach: number | null;
+  engagementRate: number | null;
+  snapshotAt: Date | null;
+}
+
+/**
+ * Shared row-builder for Insights → Reports (postReports query + emailReport
+ * mutation). Extracted VERBATIM from postReports 2026-07-18 — the SQL, window
+ * semantics, and normalization are byte-identical to the pre-extraction query.
+ * organizationId is ALWAYS in the WHERE (IDOR history — keep it).
+ */
+async function fetchPostReportRows(
+  prisma: PrismaClient,
+  organizationId: string,
+  window: ReportWindow,
+  mode: ReportMode,
+  limit: number
+): Promise<PostReportRow[]> {
+  const hours = { "24h": 24, "7d": 168, "15d": 360, "30d": 720 }[window];
+  const boundary = new Date(Date.now() - hours * 3_600_000);
+
+  // Row selector: "current" = published WITHIN the window; "at_age" =
+  // published AT LEAST one window ago (old enough for the checkpoint to
+  // have fired). Same boundary date, opposite comparison.
+  const publishedAtFilter =
+    mode === "current"
+      ? `AND pt."publishedAt" >= $2`
+      : `AND pt."publishedAt" <= $2`;
+
+  // Snapshot selector: latest overall vs latest tagged at-age checkpoint.
+  const snapshotFilter =
+    mode === "current"
+      ? ""
+      : `AND s2.metadata->>'windowTag' = $3`;
+
+  const params: any[] = [organizationId, boundary];
+  if (mode === "at_age") params.push(window);
+  params.push(limit);
+  const limitIdx = params.length;
+
+  const rows: PostReportRow[] = await (prisma.$queryRawUnsafe as any)(
+    `SELECT pt.id              AS "targetId",
+            p.id               AS "postId",
+            LEFT(p.content, 140) AS "contentPreview",
+            c.name             AS "channelName",
+            c.username         AS "channelUsername",
+            c.platform::text   AS "platform",
+            pt."publishedAt",
+            pt."publishedUrl",
+            s.impressions, s.clicks, s.likes, s.comments, s.shares, s.reach,
+            -- Recompute Eng.% from the raw counts: stored engagementRate is
+            -- a 0–1 FRACTION for YT/IG/FB/Reddit but a PERCENT for
+            -- Threads/Pinterest/DevTo (mixed units in historical rows).
+            -- This matches how the Insights engagement procedure computes it.
+            -- NULL means "no snapshot captured yet" (UI renders "—"); a
+            -- captured snapshot with zero impressions is a real 0, NOT "—"
+            -- (s."snapshotAt" is non-null exactly when the LATERAL matched).
+            CASE
+              WHEN s.impressions > 0
+                THEN (s.likes + s.comments + s.shares)::float / s.impressions * 100
+              WHEN s."snapshotAt" IS NOT NULL THEN 0
+              ELSE NULL
+            END AS "engagementRate",
+            s."snapshotAt"
+     FROM "PostTarget" pt
+     INNER JOIN "Post" p    ON p.id = pt."postId"
+     INNER JOIN "Channel" c ON c.id = pt."channelId"
+     LEFT JOIN LATERAL (
+       SELECT s2.* FROM "AnalyticsSnapshot" s2
+       WHERE s2."postTargetId" = pt.id ${snapshotFilter}
+       ORDER BY s2."snapshotAt" DESC
+       LIMIT 1
+     ) s ON TRUE
+     WHERE p."organizationId" = $1
+       AND pt.status::text = 'PUBLISHED'
+       AND pt."publishedAt" IS NOT NULL
+       ${publishedAtFilter}
+     ORDER BY pt."publishedAt" DESC
+     LIMIT $${limitIdx}`,
+    ...params
+  );
+
+  // Numeric SQL aggregates can surface as bigints — normalize for superjson/UI.
+  return rows.map((r) => ({
+    ...r,
+    impressions: r.impressions === null ? null : Number(r.impressions),
+    clicks: r.clicks === null ? null : Number(r.clicks),
+    likes: r.likes === null ? null : Number(r.likes),
+    comments: r.comments === null ? null : Number(r.comments),
+    shares: r.shares === null ? null : Number(r.shares),
+    reach: r.reach === null ? null : Number(r.reach),
+    engagementRate: r.engagementRate === null ? null : Number(r.engagementRate),
   }));
 }
 
@@ -488,14 +615,26 @@ export const analyticsRouter = createRouter({
     }),
 
   /** On-demand: queue analytics sync for all published posts in this org */
-  triggerSync: orgProcedure.mutation(async ({ ctx }) => {
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  triggerSync: orgProcedure
+    .input(
+      z
+        .object({
+          // Sync horizon in days. Default 30 = the pre-2026-07-18 hardcoded
+          // bound (byte-identical default path); callers may pass up to 90 to
+          // refresh long-tail posts on demand.
+          days: z.number().int().min(1).max(90).default(30),
+        })
+        // Whole object optional: existing callers invoke mutate() with no input.
+        .optional()
+    )
+    .mutation(async ({ ctx, input }) => {
+    const since = new Date(Date.now() - (input?.days ?? 30) * 24 * 60 * 60 * 1000);
 
     const publishedTargets = await ctx.prisma.postTarget.findMany({
       where: {
         status: "PUBLISHED",
         publishedId: { not: null },
-        publishedAt: { gte: thirtyDaysAgo },
+        publishedAt: { gte: since },
         channel: {
           organizationId: ctx.organizationId,
           isActive: true,
@@ -563,102 +702,139 @@ export const analyticsRouter = createRouter({
       })
     )
     .query(async ({ ctx, input }) => {
-      const hours = { "24h": 24, "7d": 168, "15d": 360, "30d": 720 }[input.window];
-      const boundary = new Date(Date.now() - hours * 3_600_000);
-
-      // Row selector: "current" = published WITHIN the window; "at_age" =
-      // published AT LEAST one window ago (old enough for the checkpoint to
-      // have fired). Same boundary date, opposite comparison.
-      const publishedAtFilter =
-        input.mode === "current"
-          ? `AND pt."publishedAt" >= $2`
-          : `AND pt."publishedAt" <= $2`;
-
-      // Snapshot selector: latest overall vs latest tagged at-age checkpoint.
-      const snapshotFilter =
-        input.mode === "current"
-          ? ""
-          : `AND s2.metadata->>'windowTag' = $3`;
-
-      const params: any[] = [ctx.organizationId, boundary];
-      if (input.mode === "at_age") params.push(input.window);
-      params.push(input.limit);
-      const limitIdx = params.length;
-
-      const rows: Array<{
-        targetId: string;
-        postId: string;
-        contentPreview: string;
-        channelName: string;
-        channelUsername: string | null;
-        platform: string;
-        publishedAt: Date | null;
-        publishedUrl: string | null;
-        impressions: number | null;
-        clicks: number | null;
-        likes: number | null;
-        comments: number | null;
-        shares: number | null;
-        reach: number | null;
-        engagementRate: number | null;
-        snapshotAt: Date | null;
-      }> = await (ctx.prisma.$queryRawUnsafe as any)(
-        `SELECT pt.id              AS "targetId",
-                p.id               AS "postId",
-                LEFT(p.content, 140) AS "contentPreview",
-                c.name             AS "channelName",
-                c.username         AS "channelUsername",
-                c.platform::text   AS "platform",
-                pt."publishedAt",
-                pt."publishedUrl",
-                s.impressions, s.clicks, s.likes, s.comments, s.shares, s.reach,
-                -- Recompute Eng.% from the raw counts: stored engagementRate is
-                -- a 0–1 FRACTION for YT/IG/FB/Reddit but a PERCENT for
-                -- Threads/Pinterest/DevTo (mixed units in historical rows).
-                -- This matches how the Insights engagement procedure computes it.
-                -- NULL means "no snapshot captured yet" (UI renders "—"); a
-                -- captured snapshot with zero impressions is a real 0, NOT "—"
-                -- (s."snapshotAt" is non-null exactly when the LATERAL matched).
-                CASE
-                  WHEN s.impressions > 0
-                    THEN (s.likes + s.comments + s.shares)::float / s.impressions * 100
-                  WHEN s."snapshotAt" IS NOT NULL THEN 0
-                  ELSE NULL
-                END AS "engagementRate",
-                s."snapshotAt"
-         FROM "PostTarget" pt
-         INNER JOIN "Post" p    ON p.id = pt."postId"
-         INNER JOIN "Channel" c ON c.id = pt."channelId"
-         LEFT JOIN LATERAL (
-           SELECT s2.* FROM "AnalyticsSnapshot" s2
-           WHERE s2."postTargetId" = pt.id ${snapshotFilter}
-           ORDER BY s2."snapshotAt" DESC
-           LIMIT 1
-         ) s ON TRUE
-         WHERE p."organizationId" = $1
-           AND pt.status::text = 'PUBLISHED'
-           AND pt."publishedAt" IS NOT NULL
-           ${publishedAtFilter}
-         ORDER BY pt."publishedAt" DESC
-         LIMIT $${limitIdx}`,
-        ...params
+      const rows = await fetchPostReportRows(
+        ctx.prisma,
+        ctx.organizationId,
+        input.window,
+        input.mode,
+        input.limit
       );
 
       return {
-        // Numeric SQL aggregates can surface as bigints — normalize for superjson/UI.
-        rows: rows.map((r) => ({
-          ...r,
-          impressions: r.impressions === null ? null : Number(r.impressions),
-          clicks: r.clicks === null ? null : Number(r.clicks),
-          likes: r.likes === null ? null : Number(r.likes),
-          comments: r.comments === null ? null : Number(r.comments),
-          shares: r.shares === null ? null : Number(r.shares),
-          reach: r.reach === null ? null : Number(r.reach),
-          engagementRate: r.engagementRate === null ? null : Number(r.engagementRate),
-        })),
+        rows,
         window: input.window,
         mode: input.mode,
         generatedAt: new Date().toISOString(),
       };
+    }),
+
+  /**
+   * Email the current filtered report (same rows as postReports) as a CSV
+   * attachment to an arbitrary address. Recipient is UNTRUSTED input: the
+   * mutation is rate-limited (5/hour/user), audit-logged, and the address is
+   * never interpolated into HTML (it only feeds nodemailer's `to:` header —
+   * zod's .email() rejects header-injection newlines).
+   */
+  emailReport: emailReportRateLimited
+    .input(
+      z.object({
+        to: z.string().email(),
+        window: z.enum(["24h", "7d", "15d", "30d"]),
+        mode: z.enum(["current", "at_age"]).default("current"),
+        limit: z.number().min(1).max(1000).default(1000),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const rows = await fetchPostReportRows(
+        ctx.prisma,
+        ctx.organizationId,
+        input.window,
+        input.mode,
+        input.limit
+      );
+
+      if (rows.length === 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "No report rows for this window — nothing to email.",
+        });
+      }
+
+      // Same columns as the Reports page CSV export (ReportsTab.tsx).
+      const csv = toCsv(
+        [
+          "Post",
+          "Channel",
+          "Handle",
+          "Platform",
+          "Published At (UTC)",
+          "Post URL",
+          "Views/Impressions",
+          "Clicks",
+          "Likes",
+          "Comments",
+          "Shares",
+          "Reach",
+          "Engagement %",
+          "Metric captured at (UTC)",
+        ],
+        rows.map((r) => [
+          r.contentPreview,
+          r.channelName,
+          r.channelUsername ?? "",
+          r.platform,
+          r.publishedAt ? new Date(r.publishedAt).toISOString() : "",
+          r.publishedUrl ?? "",
+          r.impressions,
+          r.clicks,
+          r.likes,
+          r.comments,
+          r.shares,
+          r.reach,
+          r.engagementRate,
+          r.snapshotAt ? new Date(r.snapshotAt).toISOString() : "",
+        ])
+      );
+
+      const day = new Date().toISOString().slice(0, 10);
+      const truncated = rows.length >= input.limit;
+      const filename = `postautomation-report-${input.window}-${input.mode}-${day}${truncated ? "-truncated" : ""}.csv`;
+      const modeLabel = input.mode === "at_age" ? "At publish-age" : "Current metrics";
+
+      // All interpolations escaped (enum values today, but never interpolate raw).
+      const html = `
+        <div style="font-family:-apple-system,Segoe UI,sans-serif;font-size:14px;color:#18181b;line-height:1.6">
+          <h2 style="font-size:16px;margin:0 0 8px">PostAutomation — Insights report</h2>
+          <p style="margin:0 0 4px">Window: <strong>${escapeHtml(input.window)}</strong> · Mode: <strong>${escapeHtml(modeLabel)}</strong></p>
+          <p style="margin:0 0 4px">${rows.length} row${rows.length === 1 ? "" : "s"} attached as CSV${truncated ? " (truncated at the row cap — narrow the window for full coverage)" : ""}.</p>
+          <p style="margin:8px 0 0;color:#71717a;font-size:12px">Requested from the Insights &rarr; Reports page. All times UTC.</p>
+        </div>`;
+      const text = `PostAutomation Insights report\nWindow: ${input.window} · Mode: ${modeLabel}\n${rows.length} rows attached as CSV${truncated ? " (truncated at the row cap)" : ""}. All times UTC.`;
+
+      const sent = await sendEmail({
+        to: input.to,
+        subject: `PostAutomation report — ${input.window} ${modeLabel} (${day})`,
+        html,
+        text,
+        attachments: [
+          {
+            filename,
+            // BOM prefix makes Excel detect UTF-8 (same as the browser export).
+            content: "﻿" + csv,
+            contentType: "text/csv; charset=utf-8",
+          },
+        ],
+      });
+
+      if (!sent) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "The report email could not be sent. Please try again.",
+        });
+      }
+
+      // Arbitrary-recipient sends are always audit-logged (fire-and-forget —
+      // never blocks the send result; mirrors rss.router usage).
+      createAuditLog({
+        organizationId: ctx.organizationId,
+        userId: (ctx.session.user as any).id,
+        action: AUDIT_ACTIONS.ANALYTICS_REPORT_EMAILED,
+        entityType: "AnalyticsReport",
+        metadata: { to: input.to, window: input.window, mode: input.mode, rows: rows.length },
+      }).catch((err) => {
+        console.error("audit_log_write_failed", { err: err.message, action: AUDIT_ACTIONS.ANALYTICS_REPORT_EMAILED });
+      });
+
+      return { sent: true, rows: rows.length };
     }),
 });

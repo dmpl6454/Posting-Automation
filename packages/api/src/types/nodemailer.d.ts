@@ -11,6 +11,7 @@ declare module "nodemailer" {
     subject: string;
     html?: string;
     text?: string;
+    attachments?: { filename: string; content: string | Buffer; contentType?: string }[];
   }
   interface Transporter {
     sendMail(options: MailOptions): Promise<any>;

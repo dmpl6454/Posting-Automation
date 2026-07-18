@@ -12,6 +12,15 @@ import {
 } from "@postautomation/queue";
 import { toFriendlyAIError, isMissingAIKeyError, isProviderBillingError, friendlyAIMessage } from "../lib/ai-errors";
 import { requirePlan, enforcePlanLimit } from "../middleware/plan-limit.middleware";
+import { aiRateLimiter } from "../middleware/rate-limit";
+import { createRateLimitMiddleware } from "../middleware/rate-limit.middleware";
+
+// Stability guard (2026-07-18): the two heavy AI mutations below (repurposeFromUrl,
+// regenerateImage) each fan out LLM calls + Puppeteer renders. Attach the SAME
+// per-user rate limit the ai/image routers already use (20/min, shared
+// aiRateLimiter instance) so a burst can't spawn unbounded Chromium in the web
+// process. Purely additive .use() — inputs/outputs unchanged.
+const aiRateLimited = orgProcedure.use(createRateLimitMiddleware(aiRateLimiter));
 
 // S3 helpers
 function getS3Client(): S3Client {
@@ -959,7 +968,7 @@ export const repurposeRouter = createRouter({
     ),
 
   /** Repurpose from URL — generates caption + media (static/carousel/reel) */
-  repurposeFromUrl: orgProcedure
+  repurposeFromUrl: aiRateLimited
     .input(
       z.object({
         url: z.string().url(),
@@ -3116,7 +3125,7 @@ Return ONLY the JSON array, no other text.`;
    * isPublicImageUrl before any fetch). Reuses the shared `renderStaticCreative`
    * helper + the same `uploadAndCreateMedia` pattern as the main flow.
    */
-  regenerateImage: orgProcedure
+  regenerateImage: aiRateLimited
     .input(
       z.object({
         headline: z.string().min(1),
