@@ -267,6 +267,7 @@ enum SocialPlatform {
   MEDIUM
   DEVTO
   WORDPRESS
+  SNAPCHAT
 }
 
 // ==================== POSTS & SCHEDULING ====================

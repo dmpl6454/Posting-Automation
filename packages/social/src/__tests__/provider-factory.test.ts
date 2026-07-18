@@ -17,8 +17,9 @@ import { BlueskyProvider } from "../providers/bluesky.provider";
 import { MediumProvider } from "../providers/medium.provider";
 import { DevtoProvider } from "../providers/devto.provider";
 import { WordPressProvider } from "../providers/wordpress.provider";
+import { SnapchatProvider } from "../providers/snapchat.provider";
 
-// All 17 platforms with their expected class, displayName, and key constraint values
+// All 18 platforms with their expected class, displayName, and key constraint values
 const platformExpectations = [
   {
     platform: "TWITTER" as const,
@@ -139,6 +140,13 @@ const platformExpectations = [
     maxContentLength: 100000,
     maxMediaCount: 50,
   },
+  {
+    platform: "SNAPCHAT" as const,
+    ProviderClass: SnapchatProvider,
+    displayName: "Snapchat",
+    maxContentLength: 160,
+    maxMediaCount: 1,
+  },
 ];
 
 describe("getSocialProvider", () => {
@@ -206,9 +214,9 @@ describe("getSocialProvider", () => {
 });
 
 describe("getSupportedPlatforms", () => {
-  it("returns all 17 supported platforms", () => {
+  it("returns all 18 supported platforms", () => {
     const platforms = getSupportedPlatforms();
-    expect(platforms).toHaveLength(17);
+    expect(platforms).toHaveLength(18);
   });
 
   it("includes every expected platform", () => {

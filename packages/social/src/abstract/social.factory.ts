@@ -17,6 +17,7 @@ import { BlueskyProvider } from "../providers/bluesky.provider";
 import { MediumProvider } from "../providers/medium.provider";
 import { DevtoProvider } from "../providers/devto.provider";
 import { WordPressProvider } from "../providers/wordpress.provider";
+import { SnapchatProvider } from "../providers/snapchat.provider";
 
 const providerMap: Partial<Record<SocialPlatform, new () => SocialProvider>> = {
   TWITTER: TwitterProvider,
@@ -36,6 +37,7 @@ const providerMap: Partial<Record<SocialPlatform, new () => SocialProvider>> = {
   MEDIUM: MediumProvider,
   DEVTO: DevtoProvider,
   WORDPRESS: WordPressProvider,
+  SNAPCHAT: SnapchatProvider,
 };
 
 const instances = new Map<SocialPlatform, SocialProvider>();

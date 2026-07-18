@@ -2,8 +2,8 @@ import { describe, it, expect } from "vitest";
 import { MEDIA_REQUIRED_PLATFORMS, mediaRequiredBlock } from "../media-required";
 
 describe("MEDIA_REQUIRED_PLATFORMS", () => {
-  it("contains exactly INSTAGRAM and FACEBOOK", () => {
-    expect([...MEDIA_REQUIRED_PLATFORMS].sort()).toEqual(["FACEBOOK", "INSTAGRAM"]);
+  it("contains exactly FACEBOOK, INSTAGRAM and SNAPCHAT (all reject text-only posts)", () => {
+    expect([...MEDIA_REQUIRED_PLATFORMS].sort()).toEqual(["FACEBOOK", "INSTAGRAM", "SNAPCHAT"]);
   });
 });
 
@@ -18,6 +18,11 @@ describe("mediaRequiredBlock", () => {
   it("blocks a Facebook target with no media and AI off", () => {
     const reason = mediaRequiredBlock({ platforms: ["FACEBOOK"], hasMedia: false, aiEnabled: false });
     expect(reason).toContain("Facebook");
+  });
+
+  it("blocks a Snapchat target with no media and AI off (no text-only snaps)", () => {
+    const reason = mediaRequiredBlock({ platforms: ["SNAPCHAT"], hasMedia: false, aiEnabled: false });
+    expect(reason).toContain("Snapchat");
   });
 
   it("names every blocked platform when multiple media-required targets are media-less", () => {

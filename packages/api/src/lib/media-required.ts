@@ -8,11 +8,12 @@
  * attached — i.e. a post that can NEVER succeed. Pure + dependency-free so it is
  * callable from both tRPC routers and unit tests.
  */
-export const MEDIA_REQUIRED_PLATFORMS = new Set<string>(["INSTAGRAM", "FACEBOOK"]);
+export const MEDIA_REQUIRED_PLATFORMS = new Set<string>(["INSTAGRAM", "FACEBOOK", "SNAPCHAT"]);
 
 const PLATFORM_LABEL: Record<string, string> = {
   INSTAGRAM: "Instagram",
   FACEBOOK: "Facebook",
+  SNAPCHAT: "Snapchat",
 };
 
 /**
