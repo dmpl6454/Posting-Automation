@@ -727,6 +727,17 @@ export const chatRouter = createRouter({
         }
 
         case "create_campaign": {
+          // RBAC: campaigns are an admin-only feature area (the dedicated
+          // campaign router is fully adminOrgProcedure-gated) — the Super Agent
+          // chat must not be a side door into it for USER-role accounts.
+          if (process.env.RBAC_DISABLED !== "true" && !isAppAdmin(ctx.session?.user)) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "Creating campaigns requires an admin role.",
+            });
+          }
+          // Mirror gateCampaigns in campaign.router.ts (PROFESSIONAL plan gate).
+          await requirePlan(ctx.organizationId, "PROFESSIONAL", "Campaigns", ctx.isSuperAdmin);
           const p = input.payload as any;
           const campaign = await ctx.prisma.campaign.create({
             data: {
@@ -752,6 +763,14 @@ export const chatRouter = createRouter({
         }
 
         case "create_brand_tracker": {
+          // RBAC: brand trackers live in the admin-only campaign router — same
+          // side-door closure as create_campaign for USER-role accounts.
+          if (process.env.RBAC_DISABLED !== "true" && !isAppAdmin(ctx.session?.user)) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "Creating brand trackers requires an admin role.",
+            });
+          }
           const p = input.payload as any;
           // Verify an AI-supplied campaignId belongs to this org before
           // associating it (N8): otherwise a cross-org campaign could be linked
@@ -792,6 +811,14 @@ export const chatRouter = createRouter({
         }
 
         case "create_listening_query": {
+          // RBAC: social listening is admin-only (listening router is fully
+          // adminOrgProcedure-gated) — close the chat side door for USER role.
+          if (process.env.RBAC_DISABLED !== "true" && !isAppAdmin(ctx.session?.user)) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "Creating listening queries requires an admin role.",
+            });
+          }
           const p = input.payload as any;
           const queryText = p.query || p.keywords?.join(", ") || "";
           const keywords = p.keywords || (p.query ? p.query.split(",").map((k: string) => k.trim()) : []);

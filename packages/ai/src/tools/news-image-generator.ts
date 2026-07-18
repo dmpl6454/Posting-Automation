@@ -17,18 +17,101 @@ export interface NewsImageResult {
   style: "news_card" | "ai_generated";
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Render-concurrency semaphore (stability guard, 2026-07-18)
+//
+// Every self-launched Puppeteer browser in this module now passes through a
+// small async semaphore so N concurrent renders can never spawn N Chromiums
+// and OOM the web process. Excess renders WAIT for a slot (FIFO) — they never
+// fail. Tunable via CREATIVE_RENDER_CONCURRENCY (default 3). Callers that pass
+// a shared `browser` are unaffected (they hold the slot via launchCreativeBrowser).
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface Semaphore {
+  acquire(): Promise<void>;
+  release(): void;
+  /** Acquire → run fn → ALWAYS release (even when fn throws). */
+  run<T>(fn: () => Promise<T>): Promise<T>;
+}
+
+/**
+ * Minimal FIFO counting semaphore. Pure (no I/O) and exported so the
+ * release-on-throw invariant is unit-testable without launching Chrome.
+ */
+export function createSemaphore(max: number): Semaphore {
+  const capacity = Math.max(1, max);
+  let inUse = 0;
+  const waiters: Array<() => void> = [];
+
+  const acquire = (): Promise<void> => {
+    if (inUse < capacity) {
+      inUse++;
+      return Promise.resolve();
+    }
+    // Slot is handed over directly in release() — no inUse bump here.
+    return new Promise<void>((resolve) => waiters.push(resolve));
+  };
+
+  const release = (): void => {
+    const next = waiters.shift();
+    if (next) {
+      // Transfer the slot to the next waiter (inUse count unchanged).
+      next();
+    } else {
+      inUse = Math.max(0, inUse - 1);
+    }
+  };
+
+  const run = async <T>(fn: () => Promise<T>): Promise<T> => {
+    await acquire();
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  };
+
+  return { acquire, release, run };
+}
+
+const RENDER_CONCURRENCY = Math.max(
+  1,
+  parseInt(process.env.CREATIVE_RENDER_CONCURRENCY || "", 10) || 3
+);
+const renderSemaphore = createSemaphore(RENDER_CONCURRENCY);
+
+/**
+ * Acquire a render slot, then launch Chromium. The slot is released when the
+ * browser DISCONNECTS (i.e. on `browser.close()` in the caller's finally, or on
+ * a browser crash) — so the slot spans the browser's whole lifetime, including
+ * browsers handed out via launchCreativeBrowser whose close the caller owns.
+ * If the launch itself throws, the slot is released immediately.
+ */
+async function launchGatedBrowser(): Promise<import("puppeteer").Browser> {
+  await renderSemaphore.acquire();
+  try {
+    const browser = await puppeteer.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
+    browser.once("disconnected", () => renderSemaphore.release());
+    return browser;
+  } catch (e) {
+    renderSemaphore.release();
+    throw e;
+  }
+}
+
 /**
  * Launch a Puppeteer browser with the SAME options every creative generator in
  * this module uses (headless + sandbox-off args). Exported so a caller (e.g. the
  * carousel renderer) can launch ONE browser and reuse it across many slides via
  * the `browser` option on generateStyledCreativeImage / overlayLogoOnImage —
- * instead of cold-booting Chrome per slide. The caller MUST close it.
+ * instead of cold-booting Chrome per slide. The caller MUST close it (closing
+ * releases the render-concurrency slot the launch acquired).
  */
 export async function launchCreativeBrowser(): Promise<import("puppeteer").Browser> {
-  return puppeteer.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
+  return launchGatedBrowser();
 }
 
 export async function generateNewsCardImage(
@@ -42,10 +125,7 @@ export async function generateNewsCardImage(
     ? { width: 1080, height: 1080 }
     : { width: 1200, height: 675 };
 
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
+  const browser = await launchGatedBrowser();
 
   try {
     const page = await browser.newPage();
@@ -100,10 +180,7 @@ export async function generateStaticNewsCreativeImage(
   const safeLogoUrl = options.logoUrl && isPublicImageUrl(options.logoUrl) ? options.logoUrl : null;
   const html = generateStaticNewsCreativeHtml({ ...options, logoUrl: safeLogoUrl });
 
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
+  const browser = await launchGatedBrowser();
 
   try {
     const page = await browser.newPage();
@@ -162,10 +239,7 @@ export async function generateStyledCreativeImage(
 ): Promise<NewsImageResult> {
   const { browser: sharedBrowser, ...creativeOptions } = options;
   const html = buildStaticCreative(creativeOptions);
-  const browser = sharedBrowser ?? (await puppeteer.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  }));
+  const browser = sharedBrowser ?? (await launchGatedBrowser());
   const page = await browser.newPage();
   try {
     await page.setViewport({ width: 1080, height: 1350 });
@@ -216,10 +290,7 @@ export async function generateCardImage(
 ): Promise<NewsImageResult> {
   const html = buildCardHtmlForPuppeteer(spec);
   const sharedBrowser = opts?.browser;
-  const browser = sharedBrowser ?? (await puppeteer.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  }));
+  const browser = sharedBrowser ?? (await launchGatedBrowser());
   const page = await browser.newPage();
   try {
     await page.setViewport({ width: 1080, height: 1350 });
@@ -332,10 +403,7 @@ body{width:${width}px;height:${height}px;overflow:hidden;position:relative;font-
 </div>
 </body></html>`;
 
-  const browser = sharedBrowser ?? (await puppeteer.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  }));
+  const browser = sharedBrowser ?? (await launchGatedBrowser());
 
   const page = await browser.newPage();
   try {
@@ -412,10 +480,7 @@ export async function extractDominantColor(imageUrl: string): Promise<string | n
   // allowed, internal blocked) — not the strict S3 allowlist. Callers fall back
   // to a default accent color on null.
   if (!isPublicImageUrl(imageUrl)) return null;
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
+  const browser = await launchGatedBrowser();
 
   try {
     const page = await browser.newPage();
