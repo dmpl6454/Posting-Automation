@@ -23,7 +23,12 @@ export default async function AdminLayout({
   }
 
   return (
-    <Providers>
+    // The admin console is a light-only design (AdminShell/AdminHeader use
+    // hardcoded bg-white/bg-gray-50 with no dark: variants). Pin it to the
+    // light theme so theme-aware text (text-foreground, Badge variant="outline",
+    // bare table cells) stays visible even when the OS is in dark mode —
+    // otherwise near-white text renders on the light surfaces (invisible rows).
+    <Providers forcedTheme="light">
       <ImpersonationBanner />
       <AdminShell>{children}</AdminShell>
     </Providers>
