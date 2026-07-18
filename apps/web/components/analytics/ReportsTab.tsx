@@ -301,27 +301,37 @@ export function ReportsTab() {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1080px] text-sm">
+            <table className="w-full min-w-[1160px] text-sm">
               <thead>
-                <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
-                  <th className="py-2 pr-3 font-medium">Post</th>
-                  <th className="py-2 pr-3 font-medium">Channel</th>
-                  <th className="py-2 pr-3 font-medium">Published (UTC)</th>
-                  <th className="py-2 pr-3 text-right font-medium">Views/Impr.</th>
-                  <th className="py-2 pr-3 text-right font-medium">Clicks</th>
-                  <th className="py-2 pr-3 text-right font-medium">Likes</th>
-                  <th className="py-2 pr-3 text-right font-medium">Comments</th>
-                  <th className="py-2 pr-3 text-right font-medium">Shares</th>
-                  <th className="py-2 pr-3 text-right font-medium">Reach</th>
-                  <th className="py-2 pr-3 text-right font-medium">Eng. %</th>
-                  <th className="py-2 pr-3 font-medium">Captured (UTC)</th>
-                  <th className="py-2 font-medium">Link</th>
+                {/* whitespace-nowrap inherits to every th, so no header ever
+                    truncates ("ENG…"); the wider min-w gives the last columns
+                    real room inside the existing overflow-x-auto scroller. */}
+                <tr className="whitespace-nowrap border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
+                  <th className="py-2.5 pr-3 font-medium">Post</th>
+                  <th className="py-2.5 pr-3 font-medium">Channel</th>
+                  <th className="py-2.5 pr-3 font-medium">Published (UTC)</th>
+                  <th className="py-2.5 pr-3 text-right font-medium">Views/Impr.</th>
+                  <th className="py-2.5 pr-3 text-right font-medium">Clicks</th>
+                  <th className="py-2.5 pr-3 text-right font-medium">Likes</th>
+                  <th className="py-2.5 pr-3 text-right font-medium">Comments</th>
+                  <th className="py-2.5 pr-3 text-right font-medium">Shares</th>
+                  <th className="py-2.5 pr-3 text-right font-medium">Reach</th>
+                  <th className="py-2.5 pr-3 text-right font-medium" title="Engagement rate">
+                    Eng %
+                  </th>
+                  <th className="py-2.5 pr-3 font-medium">Captured (UTC)</th>
+                  <th className="py-2.5 font-medium">Link</th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => (
-                  <tr key={r.targetId} className="border-b last:border-0 hover:bg-muted/40">
-                    <td className="max-w-[280px] py-2 pr-3">
+                {rows.map((r, idx) => (
+                  <tr
+                    key={r.targetId}
+                    className={`border-b last:border-0 hover:bg-muted/40 transition-colors ${
+                      idx % 2 === 0 ? "" : "bg-muted/10"
+                    }`}
+                  >
+                    <td className="max-w-[280px] py-2.5 pr-3">
                       <Link
                         href={`/dashboard/posts/${r.postId}`}
                         className="line-clamp-2 hover:underline"
@@ -330,7 +340,7 @@ export function ReportsTab() {
                         {r.contentPreview || "(no text)"}
                       </Link>
                     </td>
-                    <td className="whitespace-nowrap py-2 pr-3">
+                    <td className="whitespace-nowrap py-2.5 pr-3">
                       <div className="flex items-center gap-1.5">
                         <Badge variant="outline" className="text-[10px]">
                           {r.platform}
@@ -338,19 +348,19 @@ export function ReportsTab() {
                         <span className="max-w-[140px] truncate">{r.channelName}</span>
                       </div>
                     </td>
-                    <td className="whitespace-nowrap py-2 pr-3 text-muted-foreground">
+                    <td className="whitespace-nowrap py-2.5 pr-3 text-muted-foreground">
                       {fmtUtc(r.publishedAt)}
                     </td>
-                    <td className="py-2 pr-3 text-right tabular-nums">{num(r.impressions)}</td>
-                    <td className="py-2 pr-3 text-right tabular-nums">{num(r.clicks)}</td>
-                    <td className="py-2 pr-3 text-right tabular-nums">{num(r.likes)}</td>
-                    <td className="py-2 pr-3 text-right tabular-nums">{num(r.comments)}</td>
-                    <td className="py-2 pr-3 text-right tabular-nums">{num(r.shares)}</td>
-                    <td className="py-2 pr-3 text-right tabular-nums">{num(r.reach)}</td>
-                    <td className="py-2 pr-3 text-right tabular-nums">
+                    <td className="py-2.5 pr-3 text-right tabular-nums">{num(r.impressions)}</td>
+                    <td className="py-2.5 pr-3 text-right tabular-nums">{num(r.clicks)}</td>
+                    <td className="py-2.5 pr-3 text-right tabular-nums">{num(r.likes)}</td>
+                    <td className="py-2.5 pr-3 text-right tabular-nums">{num(r.comments)}</td>
+                    <td className="py-2.5 pr-3 text-right tabular-nums">{num(r.shares)}</td>
+                    <td className="py-2.5 pr-3 text-right tabular-nums">{num(r.reach)}</td>
+                    <td className="whitespace-nowrap py-2.5 pr-3 text-right tabular-nums">
                       {r.engagementRate === null ? "—" : `${r.engagementRate.toFixed(1)}%`}
                     </td>
-                    <td className="whitespace-nowrap py-2 pr-3 text-muted-foreground">
+                    <td className="whitespace-nowrap py-2.5 pr-3 text-muted-foreground">
                       {fmtUtc(r.snapshotAt)}
                       {mode === "current" && isStaleSnapshot(r.snapshotAt) && (
                         <span
@@ -361,7 +371,7 @@ export function ReportsTab() {
                         </span>
                       )}
                     </td>
-                    <td className="py-2">
+                    <td className="py-2.5">
                       {r.publishedUrl ? (
                         <a
                           href={r.publishedUrl}
