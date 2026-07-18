@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { buildPublishEmail, escapeHtml, safeHref, fmtWhen } from "./publish-email";
+import {
+  buildPublishEmail,
+  buildPublishReportCsv,
+  escapeHtml,
+  safeHref,
+  fmtWhen,
+} from "./publish-email";
 
 const base = {
   postId: "post_1",
@@ -72,6 +78,70 @@ describe("buildPublishEmail", () => {
     });
     expect(html).not.toContain('href="javascript:');
     expect(html).toContain("https://postautomation.co.in/dashboard/posts/post_1");
+  });
+
+  it("shows the raw URL as VISIBLE text (not just an href attribute) for published rows", () => {
+    const { html } = buildPublishEmail({
+      ...base,
+      postContent: "x",
+      targets: [okTarget],
+    });
+    // The URL must appear as element TEXT content (>url<), not only inside
+    // href="..." — the old assertion passed via the attribute alone, which is
+    // exactly the regression this locks out (owner ask 2026-07-18).
+    expect(html).toContain(">https://facebook.com/123/posts/456</div>");
+  });
+});
+
+describe("buildPublishReportCsv", () => {
+  const input = {
+    ...base,
+    postContent: "Hello",
+    targets: [
+      okTarget,
+      { ...okTarget, platform: "TWITTER", channelName: "X Acct", channelUsername: null, status: "FAILED", publishedUrl: null, publishedAt: null },
+    ],
+  };
+
+  it("emits the exact header and one row per target, in order", () => {
+    const lines = buildPublishReportCsv(input).split("\n");
+    expect(lines[0]).toBe('"platform","channel","handle","url","status","published_at_utc","published_at_ist"');
+    expect(lines).toHaveLength(3);
+    expect(lines[1]).toContain('"FACEBOOK"');
+    expect(lines[1]).toContain('"https://facebook.com/123/posts/456"');
+    expect(lines[1]).toContain('"2026-07-17 09:30"');
+    expect(lines[1]).toContain('"15:00"');
+    expect(lines[2]).toContain('"TWITTER"');
+    expect(lines[2]).toContain('"FAILED"');
+  });
+
+  it("neutralizes formula injection in user-controlled fields (leading ' before = + - @)", () => {
+    const csv = buildPublishReportCsv({
+      ...input,
+      targets: [{ ...okTarget, channelName: '=HYPERLINK("http://evil","x")' }],
+    });
+    expect(csv).toContain(`"'=HYPERLINK(""http://evil"",""x"")"`);
+    expect(csv).not.toContain('"=HYPERLINK');
+  });
+
+  it("falls back to the dashboard URL and never emits javascript: values", () => {
+    const csv = buildPublishReportCsv({
+      ...input,
+      targets: [{ ...okTarget, publishedUrl: "javascript:alert(1)" }],
+    });
+    expect(csv).toContain('"https://postautomation.co.in/dashboard/posts/post_1"');
+    expect(csv).not.toContain("javascript:");
+  });
+
+  it("keeps commas/quotes/newlines inside one quoted cell", () => {
+    const csv = buildPublishReportCsv({
+      ...input,
+      targets: [{ ...okTarget, channelName: 'My, "Fancy"\nPage' }],
+    });
+    // The embedded newline lives INSIDE quotes; parsing rows by naive split is
+    // expected to see it — assert the quoted-escaped form is present instead.
+    expect(csv).toContain('"My, ""Fancy""\nPage"');
+    expect(csv.startsWith('"platform"')).toBe(true);
   });
 });
 

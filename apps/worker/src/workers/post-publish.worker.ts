@@ -3,7 +3,7 @@ import { prisma } from "@postautomation/db";
 import { getSocialProvider } from "@postautomation/social";
 import { QUEUE_NAMES, postPublishQueue, analyticsSyncQueue, type PostPublishJobData, createRedisConnection } from "@postautomation/queue";
 import IORedis from "ioredis";
-import { buildPublishEmail } from "../lib/publish-email";
+import { buildPublishEmail, buildPublishReportCsv } from "../lib/publish-email";
 import { markTargetFailed, buildPublishNotifications, mediaRequiredReason, terminalizeStuckClaim, isSeedNoise } from "../lib/publish-recovery";
 
 // Redis pub/sub publisher for upload progress SSE
@@ -69,7 +69,7 @@ async function sendPublishReportEmail(
     }
     if (recipients.length === 0) return;
 
-    const { subject, html, text } = buildPublishEmail({
+    const emailInput = {
       postId,
       postContent,
       appUrl: process.env.APP_URL || "http://localhost:3000",
@@ -81,7 +81,29 @@ async function sendPublishReportEmail(
         publishedUrl: t.publishedUrl,
         publishedAt: t.publishedAt,
       })),
-    });
+    };
+    const { subject, html, text } = buildPublishEmail(emailInput);
+
+    // Spreadsheet-ready CSV attachment (platform, channel, url, …) so the
+    // recipient gets the links into Sheets/Excel in one click. Built in its
+    // own try/catch: a CSV failure must never block the email itself, just
+    // as an email failure never blocks the publish.
+    let attachments:
+      | { filename: string; content: string; contentType: string }[]
+      | undefined;
+    try {
+      const csv = buildPublishReportCsv(emailInput);
+      attachments = [
+        {
+          filename: `publish-report-${postId}.csv`,
+          // BOM prefix so Excel detects UTF-8 (same as apps/web/lib/csv.ts).
+          content: "﻿" + csv,
+          contentType: "text/csv; charset=utf-8",
+        },
+      ];
+    } catch (csvErr: any) {
+      console.warn(`[PostPublish] publish-report CSV build failed (email sent without attachment):`, csvErr.message);
+    }
 
     // Send via nodemailer (same SMTP config as the API package)
     let transport: any = null;
@@ -102,7 +124,7 @@ async function sendPublishReportEmail(
     for (const r of recipients) {
       if (!r.email) continue;
       if (transport) {
-        await transport.sendMail({ from, to: r.email, subject, html, text });
+        await transport.sendMail({ from, to: r.email, subject, html, text, attachments });
         console.log(`[PostPublish] Publish email sent to ${r.email}`);
       } else {
         console.log(`[PostPublish] [Email Preview] To: ${r.email} | Subject: ${subject}`);
