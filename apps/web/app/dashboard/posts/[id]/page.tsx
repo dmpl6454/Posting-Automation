@@ -60,10 +60,21 @@ export default function PostDetailPage() {
   const isPublishing = (post: any) =>
     post?.status === "PUBLISHING" || post?.targets?.some((t: any) => t.status === "PUBLISHING");
 
+  // PR-5: a unique-captions post is parked as DRAFT while the caption-fanout
+  // worker writes per-channel captions, then flipped to SCHEDULED.
+  const isPendingCaptionFanout = (post: any) =>
+    post?.status === "DRAFT" && (post?.metadata as any)?.captionFanout?.pendingSchedule === true;
+
   const { data: post, isLoading, refetch } = trpc.post.getById.useQuery(
     { id: postId },
-    // Poll every 2s while any target is PUBLISHING so status changes appear quickly.
-    { refetchInterval: (query) => (isPublishing((query as any).state?.data) ? 2000 : false) }
+    // Poll every 2s while any target is PUBLISHING so status changes appear
+    // quickly; every 5s while unique captions are being generated (PR-5).
+    {
+      refetchInterval: (query) => {
+        const data = (query as any).state?.data;
+        return isPublishing(data) ? 2000 : isPendingCaptionFanout(data) ? 5000 : false;
+      },
+    }
   );
 
   // Subscribe to SSE progress events for each PUBLISHING target
@@ -160,6 +171,24 @@ export default function PostDetailPage() {
   });
 
   const [retryingTargetId, setRetryingTargetId] = useState<string | null>(null);
+
+  // ── PR-5: per-channel caption override (unique captions review surface) ────
+  const [editingCaptionTargetId, setEditingCaptionTargetId] = useState<string | null>(null);
+  const [captionDraft, setCaptionDraft] = useState("");
+  const updateTargetContent = trpc.post.updateTargetContent.useMutation({
+    onSuccess: (res: any) => {
+      toast(
+        res?.contentOverride
+          ? { title: "Caption updated", description: "This channel will publish with its own caption." }
+          : { title: "Caption reset", description: "This channel will use the shared post caption." }
+      );
+      setEditingCaptionTargetId(null);
+      refetch();
+    },
+    onError: (err) => {
+      toast({ title: "Couldn't update caption", description: humanizeError(err), variant: "destructive" });
+    },
+  });
 
   // ── Submit for review (APPR-1) ──────────────────────────────────────────────
   const [reviewerOpen, setReviewerOpen] = useState(false);
@@ -359,6 +388,12 @@ export default function PostDetailPage() {
           <CardDescription>
             {post.targets.length} channel{post.targets.length !== 1 ? "s" : ""} targeted
           </CardDescription>
+          {isPendingCaptionFanout(post) && (
+            <div className="mt-2 flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800 dark:border-blue-900/40 dark:bg-blue-950/30 dark:text-blue-300">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Generating a unique caption for each channel — the post will be scheduled automatically when they&apos;re ready.
+            </div>
+          )}
         </CardHeader>
         <CardContent>
           <div className="space-y-3">
@@ -428,6 +463,84 @@ export default function PostDetailPage() {
                     )}
                   </div>
                   </div>
+                  {/* PR-5: per-channel caption (contentOverride wins over the shared content) */}
+                  {editingCaptionTargetId === target.id ? (
+                    <div className="space-y-2">
+                      <Textarea
+                        value={captionDraft}
+                        onChange={(e) => setCaptionDraft(e.target.value)}
+                        rows={4}
+                        placeholder="Write this channel's caption…"
+                        className="text-sm"
+                      />
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button
+                          size="sm"
+                          className="h-7 px-2 text-xs"
+                          onClick={() =>
+                            updateTargetContent.mutate({ targetId: target.id, contentOverride: captionDraft })
+                          }
+                          disabled={updateTargetContent.isPending}
+                        >
+                          {updateTargetContent.isPending && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
+                          Save caption
+                        </Button>
+                        {target.contentOverride && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 px-2 text-xs"
+                            onClick={() => updateTargetContent.mutate({ targetId: target.id, contentOverride: null })}
+                            disabled={updateTargetContent.isPending}
+                          >
+                            Reset to shared caption
+                          </Button>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 px-2 text-xs"
+                          onClick={() => setEditingCaptionTargetId(null)}
+                          disabled={updateTargetContent.isPending}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  ) : target.contentOverride ? (
+                    <div className="space-y-1 rounded-md bg-muted/50 p-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                          Unique caption
+                        </span>
+                        {target.status !== "PUBLISHED" && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-6 px-2 text-xs"
+                            onClick={() => {
+                              setCaptionDraft(target.contentOverride ?? "");
+                              setEditingCaptionTargetId(target.id);
+                            }}
+                          >
+                            Edit
+                          </Button>
+                        )}
+                      </div>
+                      <p className="whitespace-pre-wrap text-xs text-muted-foreground">{target.contentOverride}</p>
+                    </div>
+                  ) : target.status !== "PUBLISHED" ? (
+                    <button
+                      type="button"
+                      className="text-left text-xs text-muted-foreground hover:text-primary hover:underline"
+                      onClick={() => {
+                        setCaptionDraft("");
+                        setEditingCaptionTargetId(target.id);
+                      }}
+                    >
+                      + Add a unique caption for this channel
+                    </button>
+                  ) : null}
                   {/* Upload progress bar — live via SSE; falls back to DB-polled value */}
                   {target.status === "PUBLISHING" && (() => {
                     const pct = liveProgress[target.id] ?? target.uploadProgress;

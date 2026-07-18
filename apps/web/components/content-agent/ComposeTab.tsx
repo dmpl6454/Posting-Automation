@@ -14,6 +14,7 @@ import { Label } from "~/components/ui/label";
 import { DateTimePicker } from "~/components/ui/datetime-picker";
 import { Badge } from "~/components/ui/badge";
 import { Separator } from "~/components/ui/separator";
+import { Switch } from "~/components/ui/switch";
 import { useToast } from "~/hooks/use-toast";
 import {
   Sparkles,
@@ -72,6 +73,8 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   const [content, setContent] = useState(initialContent || "");
   const [selectedChannels, setSelectedChannels] = useState<string[]>([]);
   const [scheduledAt, setScheduledAt] = useState("");
+  // PR-5: unique caption per channel (AI) — only meaningful with >1 channel.
+  const [uniqueCaptions, setUniqueCaptions] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [postMedia, setPostMedia] = useState<{ url: string; mediaId?: string; file?: File; uploading?: boolean; progress?: number }[]>([]);
   // Aspect ratio of the first attached video (width/height). Null until measured.
@@ -242,12 +245,20 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   }, [postMedia]);
   const createPost = trpc.post.create.useMutation({
     onSuccess: (post: any) => {
-      toast({ title: "Post created!", description: "Your post has been saved successfully." });
+      // PR-5: a unique-captions post is parked while the fanout worker writes
+      // one caption per channel — say so instead of the generic toast.
+      const fanoutCount = post?.metadata?.captionFanout?.requested ? (post?.targets?.length ?? 0) : 0;
+      toast(
+        fanoutCount > 0
+          ? { title: "Post created!", description: `Generating ${fanoutCount} unique captions — publishing when ready.` }
+          : { title: "Post created!", description: "Your post has been saved successfully." }
+      );
       // Invalidate recently used cache so it refreshes
       utils.channel.recentlyUsed.invalidate();
       setContent("");
       setSelectedChannels([]);
       setScheduledAt("");
+      setUniqueCaptions(false);
       setPostMedia([]);
       removeTask(TASK_ID);
       onPostCreated?.();
@@ -610,6 +621,8 @@ ${content}`;
         content,
         channelIds: selectedChannels,
         scheduledAt: publishNow ? new Date().toISOString() : scheduledAt || undefined,
+        // PR-5: only sent on the schedule/publish path (draft-save keeps it off).
+        ...(uniqueCaptions && selectedChannels.length > 1 && { uniqueCaptions: true }),
         ...(mediaIds.length > 0 && { mediaIds }),
         ...(Object.keys(formatByChannelId).length > 0 && { formatByChannelId }),
         ...(Object.keys(ytMetadata).length > 0 && { metadata: ytMetadata }),
@@ -1300,6 +1313,35 @@ ${content}`;
               </div>
             </CardContent>
           </Card>
+
+          {/* Unique captions (PR-5) — shown only when >1 channel is selected */}
+          {selectedChannels.length > 1 && (
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">Captions</CardTitle>
+                <CardDescription>
+                  Write one distinct AI caption for each of your {selectedChannels.length} selected channels
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <Label htmlFor="unique-captions" className="text-sm">
+                      Unique caption per channel (AI)
+                    </Label>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      Captions are generated in the background — the post publishes when they&apos;re ready. You can review and edit each one on the post page.
+                    </p>
+                  </div>
+                  <Switch
+                    id="unique-captions"
+                    checked={uniqueCaptions}
+                    onCheckedChange={setUniqueCaptions}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           {/* Actions */}
           <Separator />

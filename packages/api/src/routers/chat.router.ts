@@ -1,8 +1,9 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure, isAppAdmin } from "../trpc";
-import { agentRunQueue, postPublishQueue } from "@postautomation/queue";
+import { agentRunQueue, postPublishQueue, captionFanoutQueue } from "@postautomation/queue";
 import { requirePlan, enforcePlanLimit } from "../middleware/plan-limit.middleware";
+import { planCaptionFanout, captionFanoutJobId } from "../lib/caption-fanout";
 import type { PrismaClient } from "@postautomation/db";
 import crypto from "crypto";
 import { uploadBase64ToS3, isS3Configured } from "../lib/s3";
@@ -463,18 +464,32 @@ export const chatRouter = createRouter({
             aiEnabled: p.aiImages !== false,
           });
           const userId = (ctx.session.user as any).id;
+
+          // PR-5: unique captions — park the post as DRAFT while the caption-
+          // fanout worker writes one distinct caption per channel, then flips
+          // DRAFT→SCHEDULED for the publish cron. All guards above are
+          // unchanged and ran in their existing order.
+          const captionFanout = planCaptionFanout({
+            uniqueCaptions: p.uniqueCaptions === true,
+            channelCount: (p.channelIds || []).length,
+            scheduledAt: p.scheduledAt ? new Date(p.scheduledAt) : new Date(Date.now() + 3600000),
+          });
+
           const post = await ctx.prisma.post.create({
             data: {
               organizationId: ctx.organizationId,
               createdById: userId,
               content: p.content,
-              status: "SCHEDULED",
+              status: captionFanout.enabled ? "DRAFT" : "SCHEDULED",
               scheduledAt: p.scheduledAt ? new Date(p.scheduledAt) : new Date(Date.now() + 3600000),
               aiGenerated: true,
+              ...(captionFanout.enabled && {
+                metadata: { captionFanout: { requested: true, pendingSchedule: true } },
+              }),
               targets: {
                 create: (p.channelIds || []).map((channelId: string) => ({
                   channelId,
-                  status: "SCHEDULED",
+                  status: captionFanout.enabled ? "DRAFT" : "SCHEDULED",
                 })),
               },
               ...(mediaIds.length && {
@@ -485,16 +500,26 @@ export const chatRouter = createRouter({
             },
           });
 
+          if (captionFanout.enabled) {
+            await captionFanoutQueue.add(
+              captionFanoutJobId(post.id),
+              { postId: post.id, organizationId: ctx.organizationId },
+              { jobId: captionFanoutJobId(post.id) }
+            );
+          }
+
           await ctx.prisma.chatMessage.create({
             data: {
               threadId: input.threadId,
               role: "system",
-              content: `Post scheduled for ${post.scheduledAt?.toLocaleString() || "soon"}.`,
+              content: captionFanout.enabled
+                ? `Generating ${(p.channelIds || []).length} unique captions — the post will be scheduled for ${post.scheduledAt?.toLocaleString() || "soon"} automatically when they're ready.`
+                : `Post scheduled for ${post.scheduledAt?.toLocaleString() || "soon"}.`,
               metadata: { type: "post_scheduled", postId: post.id, executedActionId: input.clientActionId },
             },
           });
 
-          return { type: "post_scheduled", postId: post.id };
+          return { type: "post_scheduled", postId: post.id, ...(captionFanout.enabled && { captionFanout: true }) };
         }
 
         case "bulk_schedule": {
@@ -581,19 +606,34 @@ export const chatRouter = createRouter({
           });
           const userId = (ctx.session.user as any).id;
 
+          // PR-5: unique captions — park the post as DRAFT (scheduledAt=now);
+          // the caption-fanout worker writes one distinct caption per channel,
+          // then flips DRAFT→SCHEDULED and the publish cron (2 min) picks it
+          // up. On this path the direct per-target enqueue below is SKIPPED —
+          // the worker's flip + cron replaces it. All guards above are
+          // unchanged and ran in their existing order.
+          const captionFanout = planCaptionFanout({
+            uniqueCaptions: p.uniqueCaptions === true,
+            channelCount: (p.channelIds || []).length,
+            scheduledAt: new Date(),
+          });
+
           // Create post and immediately queue for publishing
           const post = await ctx.prisma.post.create({
             data: {
               organizationId: ctx.organizationId,
               createdById: userId,
               content: p.content,
-              status: "SCHEDULED",
+              status: captionFanout.enabled ? "DRAFT" : "SCHEDULED",
               scheduledAt: new Date(), // now
               aiGenerated: true,
+              ...(captionFanout.enabled && {
+                metadata: { captionFanout: { requested: true, pendingSchedule: true } },
+              }),
               targets: {
                 create: (p.channelIds || []).map((channelId: string) => ({
                   channelId,
-                  status: "SCHEDULED",
+                  status: captionFanout.enabled ? "DRAFT" : "SCHEDULED",
                 })),
               },
               ...(mediaIds.length && {
@@ -605,33 +645,43 @@ export const chatRouter = createRouter({
             include: { targets: { include: { channel: true } } },
           });
 
-          // Queue each target for immediate publishing
-          for (const target of post.targets) {
-            await postPublishQueue.add(
-              `chat-publish-${target.id}`,
-              {
-                postId: post.id,
-                postTargetId: target.id,
-                channelId: target.channelId,
-                platform: target.channel.platform,
-                organizationId: ctx.organizationId,
-              },
-              // B4: match compose (post.router.ts) — retry transient publish
-              // failures instead of failing on the first hiccup.
-              { delay: 0, attempts: 3, backoff: { type: "exponential", delay: 30000 } }
+          if (captionFanout.enabled) {
+            await captionFanoutQueue.add(
+              captionFanoutJobId(post.id),
+              { postId: post.id, organizationId: ctx.organizationId },
+              { jobId: captionFanoutJobId(post.id) }
             );
+          } else {
+            // Queue each target for immediate publishing
+            for (const target of post.targets) {
+              await postPublishQueue.add(
+                `chat-publish-${target.id}`,
+                {
+                  postId: post.id,
+                  postTargetId: target.id,
+                  channelId: target.channelId,
+                  platform: target.channel.platform,
+                  organizationId: ctx.organizationId,
+                },
+                // B4: match compose (post.router.ts) — retry transient publish
+                // failures instead of failing on the first hiccup.
+                { delay: 0, attempts: 3, backoff: { type: "exponential", delay: 30000 } }
+              );
+            }
           }
 
           await ctx.prisma.chatMessage.create({
             data: {
               threadId: input.threadId,
               role: "system",
-              content: `Post published to ${post.targets.map((t) => t.channel.name || t.channel.platform).join(", ")}.`,
+              content: captionFanout.enabled
+                ? `Generating ${post.targets.length} unique captions for ${post.targets.map((t) => t.channel.name || t.channel.platform).join(", ")} — the post will publish shortly (within a couple of minutes).`
+                : `Post published to ${post.targets.map((t) => t.channel.name || t.channel.platform).join(", ")}.`,
               metadata: { type: "post_published", postId: post.id, executedActionId: input.clientActionId },
             },
           });
 
-          return { type: "post_published", postId: post.id };
+          return { type: "post_published", postId: post.id, ...(captionFanout.enabled && { captionFanout: true }) };
         }
 
         case "update_agent": {

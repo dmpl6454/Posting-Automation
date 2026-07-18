@@ -1,12 +1,41 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
-import { postPublishQueue } from "@postautomation/queue";
+import { postPublishQueue, captionFanoutQueue } from "@postautomation/queue";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import crypto from "crypto";
 import { enforcePlanLimit } from "../middleware/plan-limit.middleware";
 import { assertMediaOwned, assertMediaForPlatforms } from "./chat.router";
+import { planCaptionFanout, captionFanoutJobId } from "../lib/caption-fanout";
+
+/**
+ * PR-5: load a PostTarget with its parent post's org and require it to belong
+ * to `organizationId` — IDOR guard for per-target caption edits (mirrors
+ * assertChannelsOwned in chat.router.ts). Throws NOT_FOUND for missing AND
+ * foreign targets alike (no cross-org existence leak); rejects edits to
+ * already-PUBLISHED targets. Exported for tests.
+ */
+export async function assertTargetEditable(
+  prisma: { postTarget: { findUnique: (args: any) => Promise<any> } },
+  organizationId: string,
+  targetId: string
+): Promise<{ id: string; status: string }> {
+  const target = await prisma.postTarget.findUnique({
+    where: { id: targetId },
+    select: { id: true, status: true, post: { select: { organizationId: true } } },
+  });
+  if (!target || target.post?.organizationId !== organizationId) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Post target not found" });
+  }
+  if (target.status === "PUBLISHED") {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "This channel's caption was already published and can no longer be edited.",
+    });
+  }
+  return { id: target.id, status: target.status };
+}
 
 export const postRouter = createRouter({
   list: orgProcedure
@@ -78,6 +107,11 @@ export const postRouter = createRouter({
         // no media + an IG/FB target, scheduling is blocked (the post can never
         // publish). Drafts are exempt (only enforced when scheduledAt is set).
         aiImages: z.boolean().default(true),
+        // PR-5: generate a DISTINCT AI caption per selected channel (async
+        // caption-fanout worker writes PostTarget.contentOverride, then flips
+        // the parked DRAFT to SCHEDULED). Only meaningful with >1 channel —
+        // false / single-channel keeps today's shared-caption path untouched.
+        uniqueCaptions: z.boolean().default(false),
         formatByChannelId: z.record(z.enum(["FEED", "REEL", "STORY", "SHORT", "VIDEO", "CAROUSEL"])).optional(),
         metadata: z.object({
           title: z.string().optional(),
@@ -142,7 +176,17 @@ export const postRouter = createRouter({
         });
       }
 
-      const status = input.scheduledAt ? "SCHEDULED" : "DRAFT";
+      // PR-5: unique-captions fanout — the post is parked as DRAFT (the publish
+      // cron only picks SCHEDULED) while the caption-fanout worker generates
+      // per-channel captions; the worker flips DRAFT→SCHEDULED when done (or
+      // degraded). Quota unchanged: 1 post = 1 unit regardless of caption count.
+      const captionFanout = planCaptionFanout({
+        uniqueCaptions: input.uniqueCaptions,
+        channelCount: input.channelIds.length,
+        scheduledAt: input.scheduledAt ?? null,
+      });
+
+      const status = captionFanout.enabled ? "DRAFT" : input.scheduledAt ? "SCHEDULED" : "DRAFT";
 
       const post = await ctx.prisma.post.create({
         data: {
@@ -155,7 +199,12 @@ export const postRouter = createRouter({
           aiGenerated: input.aiGenerated,
           aiProvider: input.aiProvider,
           aiPrompt: input.aiPrompt,
-          metadata: (input.metadata ?? undefined) as any,
+          metadata: (captionFanout.enabled
+            ? {
+                ...(input.metadata ?? {}),
+                captionFanout: { requested: true, pendingSchedule: captionFanout.pendingSchedule },
+              }
+            : (input.metadata ?? undefined)) as any,
           targets: {
             create: input.channelIds.map((channelId) => ({
               channelId,
@@ -188,6 +237,17 @@ export const postRouter = createRouter({
       // Do NOT enqueue here — doing so creates a second job with a different jobId that
       // BullMQ cannot dedupe against the cron's job, causing duplicate publishing.
 
+      // PR-5: ONE caption-fanout job per post (jobId dedupes re-submits). The
+      // worker writes the per-target captions, then flips DRAFT→SCHEDULED for
+      // the cron above to pick up.
+      if (captionFanout.enabled) {
+        await captionFanoutQueue.add(
+          captionFanoutJobId(post.id),
+          { postId: post.id, organizationId: ctx.organizationId },
+          { jobId: captionFanoutJobId(post.id) }
+        );
+      }
+
       // Fire-and-forget audit log
       createAuditLog({
         organizationId: ctx.organizationId,
@@ -198,6 +258,27 @@ export const postRouter = createRouter({
       }).catch(() => {});
 
       return post;
+    }),
+
+  // PR-5: edit one channel's caption override (review surface on the post
+  // detail page). Org-scoped via assertTargetEditable (IDOR guard); PUBLISHED
+  // targets are immutable. Passing null / blank clears the override so the
+  // target falls back to the shared caption.
+  updateTargetContent: orgProcedure
+    .input(
+      z.object({
+        targetId: z.string(),
+        contentOverride: z.string().max(100_000).nullable(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      await assertTargetEditable(ctx.prisma as any, ctx.organizationId, input.targetId);
+      const trimmed = input.contentOverride?.trim() ?? "";
+      const updated = await ctx.prisma.postTarget.update({
+        where: { id: input.targetId },
+        data: { contentOverride: trimmed.length > 0 ? input.contentOverride : null },
+      });
+      return { id: updated.id, contentOverride: updated.contentOverride };
     }),
 
   update: orgProcedure

@@ -338,9 +338,12 @@ export function createPostPublishWorker() {
         refreshToken: channel.refreshToken ?? undefined,
       };
 
-      // Use platform-specific content variant if available
+      // Use platform-specific content variant if available.
+      // PR-5: a per-target caption override (unique captions) wins over both the
+      // platform variant and the shared content. NULL contentOverride (every
+      // pre-PR-5 post) short-circuits to the exact pre-existing expression.
       const contentVariants = postTarget.post.contentVariants as Record<string, string> | null;
-      const content = contentVariants?.[platform] ?? postTarget.post.content;
+      const content = postTarget.contentOverride ?? contentVariants?.[platform] ?? postTarget.post.content;
       let mediaUrls = postTarget.post.mediaAttachments.map((m) => m.media.url);
       const mediaTypes = postTarget.post.mediaAttachments.map((m) => m.media.fileType);
 
