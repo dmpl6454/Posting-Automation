@@ -8,6 +8,7 @@ import type {
   SocialProfile,
   PlatformConstraints,
 } from "../abstract/social.types";
+import { fetchT } from "../utils/fetch-timeout";
 
 export class DiscordProvider extends SocialProvider {
   readonly platform: SocialPlatform = "DISCORD";
@@ -33,7 +34,7 @@ export class DiscordProvider extends SocialProvider {
   }
 
   async exchangeCodeForTokens(code: string, config: OAuthConfig): Promise<OAuthTokens> {
-    const res = await fetch(`${this.API_BASE}/oauth2/token`, {
+    const res = await fetchT(`${this.API_BASE}/oauth2/token`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -57,7 +58,7 @@ export class DiscordProvider extends SocialProvider {
   }
 
   async refreshAccessToken(refreshToken: string, config: OAuthConfig): Promise<OAuthTokens> {
-    const res = await fetch(`${this.API_BASE}/oauth2/token`, {
+    const res = await fetchT(`${this.API_BASE}/oauth2/token`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -199,7 +200,7 @@ export class DiscordProvider extends SocialProvider {
   }
 
   async getProfile(tokens: OAuthTokens): Promise<SocialProfile> {
-    const res = await fetch(`${this.API_BASE}/users/@me`, {
+    const res = await fetchT(`${this.API_BASE}/users/@me`, {
       headers: { Authorization: `Bearer ${tokens.accessToken}` },
     });
 

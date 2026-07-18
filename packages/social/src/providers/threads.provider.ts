@@ -9,6 +9,7 @@ import type {
   SocialProfile,
   PlatformConstraints,
 } from "../abstract/social.types";
+import { fetchT } from "../utils/fetch-timeout";
 
 export class ThreadsProvider extends SocialProvider {
   readonly platform: SocialPlatform = "THREADS";
@@ -34,7 +35,7 @@ export class ThreadsProvider extends SocialProvider {
 
   async exchangeCodeForTokens(code: string, config: OAuthConfig): Promise<OAuthTokens> {
     // Step 1: Get short-lived token
-    const res = await fetch("https://graph.threads.net/oauth/access_token", {
+    const res = await fetchT("https://graph.threads.net/oauth/access_token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -50,7 +51,7 @@ export class ThreadsProvider extends SocialProvider {
     if (!res.ok || data.error) throw new Error(`Threads token exchange failed: ${JSON.stringify(data)}`);
 
     // Step 2: Exchange for long-lived token
-    const longRes = await fetch(
+    const longRes = await fetchT(
       `https://graph.threads.net/access_token?` +
         new URLSearchParams({
           grant_type: "th_exchange_token",
@@ -76,7 +77,7 @@ export class ThreadsProvider extends SocialProvider {
 
   async refreshAccessToken(refreshToken: string, _config: OAuthConfig): Promise<OAuthTokens> {
     // Threads long-lived tokens can be refreshed
-    const res = await fetch(
+    const res = await fetchT(
       `https://graph.threads.net/refresh_access_token?` +
         new URLSearchParams({
           grant_type: "th_refresh_token",
@@ -263,7 +264,7 @@ export class ThreadsProvider extends SocialProvider {
   }
 
   async getProfile(tokens: OAuthTokens): Promise<SocialProfile> {
-    const res = await fetch(
+    const res = await fetchT(
       `https://graph.threads.net/v1.0/me?fields=id,username,name,threads_profile_picture_url&access_token=${tokens.accessToken}`
     );
 

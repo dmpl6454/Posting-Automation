@@ -9,6 +9,7 @@ import type {
   SocialProfile,
   PlatformConstraints,
 } from "../abstract/social.types";
+import { fetchT } from "../utils/fetch-timeout";
 
 // ── Facebook API Usage Tracking ────────────────────────────────────────
 // Facebook returns x-app-usage and x-page-usage headers as JSON:
@@ -34,6 +35,30 @@ const usageCache: {
 // Minimum ms between sequential Graph API requests (soft spacing)
 const MIN_REQUEST_GAP_MS = 300;
 
+/** Per-call knobs for graphFetch. Defaults preserve the worker/publish-path
+ *  behavior EXACTLY (unbounded sleeps, 3 retries, no fetch timeout). Only the
+ *  OAuth CONNECT path (running inside the web callback's 120s nginx budget)
+ *  passes clamped values — a hung/throttled Graph API must fail fast there
+ *  instead of burning the one-shot consent code. */
+interface GraphFetchOpts {
+  /** Cap on any single throttle/backoff sleep. Default: uncapped (60s pause, 30-120s backoff). */
+  maxSleepMs?: number;
+  /** Rate-limit retry budget. Default: 3. */
+  retries?: number;
+  /** Per-request fetch timeout (AbortSignal.timeout). Default: none (bare fetch). */
+  timeoutMs?: number;
+}
+
+/** Clamp used by connect-path callers (exchange/profile/pages). */
+const CONNECT_GRAPH_OPTS: GraphFetchOpts = {
+  maxSleepMs: 5_000,
+  retries: 1,
+  timeoutMs: 25_000,
+};
+
+/** Max pagination pages fetched during connect (~500 Pages at limit=25). */
+const MAX_CONNECT_PAGINATION_PAGES = 20;
+
 export class FacebookProvider extends SocialProvider {
   readonly platform: SocialPlatform = "FACEBOOK";
   readonly displayName = "Facebook";
@@ -54,8 +79,10 @@ export class FacebookProvider extends SocialProvider {
     url: string,
     init: RequestInit = {},
     pageId?: string,
-    retries = 3
+    opts: GraphFetchOpts = {}
   ): Promise<Response> {
+    const retries = opts.retries ?? 3;
+
     // Enforce minimum gap between requests
     const now = Date.now();
     const elapsed = now - usageCache.lastRequest;
@@ -64,10 +91,12 @@ export class FacebookProvider extends SocialProvider {
     }
 
     // Pre-flight: if usage is high, add a proportional delay
-    await this.throttleIfNeeded(pageId);
+    await this.throttleIfNeeded(pageId, opts.maxSleepMs);
 
     usageCache.lastRequest = Date.now();
-    const res = await fetch(url, init);
+    const res = opts.timeoutMs != null
+      ? await fetchT(url, init, opts.timeoutMs)
+      : await fetch(url, init);
 
     // Parse and cache usage headers
     this.parseUsageHeaders(res, pageId);
@@ -77,10 +106,10 @@ export class FacebookProvider extends SocialProvider {
       const body: any = await res.clone().json().catch(() => null);
       const errCode = body?.error?.code;
       if (res.status === 429 || errCode === 4 || errCode === 32 || errCode === 368) {
-        const backoff = this.calculateBackoff(retries);
+        const backoff = this.clampSleep(this.calculateBackoff(retries), opts.maxSleepMs);
         console.log(`[Facebook] Rate limited (code=${errCode || res.status}), backing off ${backoff}ms (${retries} retries left)`);
         await this.sleep(backoff);
-        return this.graphFetch(url, init, pageId, retries - 1);
+        return this.graphFetch(url, init, pageId, { ...opts, retries: retries - 1 });
       }
     }
 
@@ -108,24 +137,30 @@ export class FacebookProvider extends SocialProvider {
     return Math.max(appMax, pageMax);
   }
 
-  private async throttleIfNeeded(pageId?: string): Promise<void> {
+  private async throttleIfNeeded(pageId?: string, maxSleepMs?: number): Promise<void> {
     const usage = this.getMaxUsage(pageId);
 
     if (usage >= 95) {
-      // Critical — pause 60s to let the window reset
-      console.log(`[Facebook] Usage at ${usage}% — pausing 60s to avoid hard block`);
-      await this.sleep(60_000);
+      // Critical — pause 60s to let the window reset (clamped on connect path)
+      const delay = this.clampSleep(60_000, maxSleepMs);
+      console.log(`[Facebook] Usage at ${usage}% — pausing ${delay}ms to avoid hard block`);
+      await this.sleep(delay);
     } else if (usage >= 80) {
       // High — add proportional delay (2-10s)
-      const delay = Math.round(((usage - 80) / 15) * 8_000 + 2_000);
+      const delay = this.clampSleep(Math.round(((usage - 80) / 15) * 8_000 + 2_000), maxSleepMs);
       console.log(`[Facebook] Usage at ${usage}% — throttling ${delay}ms`);
       await this.sleep(delay);
     } else if (usage >= 60) {
       // Moderate — small delay (500-2000ms)
-      const delay = Math.round(((usage - 60) / 20) * 1_500 + 500);
+      const delay = this.clampSleep(Math.round(((usage - 60) / 20) * 1_500 + 500), maxSleepMs);
       await this.sleep(delay);
     }
     // Below 60% — no throttle, just the MIN_REQUEST_GAP_MS spacing
+  }
+
+  /** Clamp a sleep to maxSleepMs when provided; undefined = today's exact behavior. */
+  private clampSleep(ms: number, maxSleepMs?: number): number {
+    return maxSleepMs != null ? Math.min(ms, maxSleepMs) : ms;
   }
 
   private calculateBackoff(retriesLeft: number): number {
@@ -167,7 +202,10 @@ export class FacebookProvider extends SocialProvider {
     });
 
     const res = await this.graphFetch(
-      `${this.graphBaseUrl}/${this.apiVersion}/oauth/access_token?${params.toString()}`
+      `${this.graphBaseUrl}/${this.apiVersion}/oauth/access_token?${params.toString()}`,
+      {},
+      undefined,
+      CONNECT_GRAPH_OPTS
     );
 
     const data: any = await res.json();
@@ -239,7 +277,10 @@ export class FacebookProvider extends SocialProvider {
 
   async getProfile(tokens: OAuthTokens): Promise<SocialProfile> {
     const res = await this.graphFetch(
-      `${this.graphBaseUrl}/${this.apiVersion}/me?fields=id,name,picture&access_token=${tokens.accessToken}`
+      `${this.graphBaseUrl}/${this.apiVersion}/me?fields=id,name,picture&access_token=${tokens.accessToken}`,
+      {},
+      undefined,
+      CONNECT_GRAPH_OPTS
     );
 
     const data: any = await res.json();
@@ -260,9 +301,16 @@ export class FacebookProvider extends SocialProvider {
   }>> {
     const pages: Array<{ id: string; name: string; avatar?: string; accessToken: string }> = [];
     let url: string | null = `${this.graphBaseUrl}/${this.apiVersion}/me/accounts?fields=id,name,access_token,picture{url}&limit=25&access_token=${tokens.accessToken}`;
+    let pageCount = 0;
 
     while (url) {
-      const res = await this.graphFetch(url);
+      if (pageCount >= MAX_CONNECT_PAGINATION_PAGES) {
+        console.warn(`[Facebook] getPages: pagination capped at ${MAX_CONNECT_PAGINATION_PAGES} pages (${pages.length} Pages loaded) — truncating`);
+        break;
+      }
+      pageCount++;
+
+      const res = await this.graphFetch(url, {}, undefined, CONNECT_GRAPH_OPTS);
       const data: any = await res.json();
       if (!res.ok) throw new Error(`Facebook pages fetch failed: ${JSON.stringify(data)}`);
 
@@ -343,7 +391,10 @@ export class FacebookProvider extends SocialProvider {
     });
 
     const res = await this.graphFetch(
-      `${this.graphBaseUrl}/${this.apiVersion}/oauth/access_token?${params.toString()}`
+      `${this.graphBaseUrl}/${this.apiVersion}/oauth/access_token?${params.toString()}`,
+      {},
+      undefined,
+      CONNECT_GRAPH_OPTS
     );
 
     const data: any = await res.json();

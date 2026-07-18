@@ -8,6 +8,7 @@ import type {
   SocialProfile,
   PlatformConstraints,
 } from "../abstract/social.types";
+import { fetchT } from "../utils/fetch-timeout";
 
 export class TikTokProvider extends SocialProvider {
   readonly platform: SocialPlatform = "TIKTOK";
@@ -31,7 +32,7 @@ export class TikTokProvider extends SocialProvider {
   }
 
   async exchangeCodeForTokens(code: string, config: OAuthConfig): Promise<OAuthTokens> {
-    const res = await fetch("https://open.tiktokapis.com/v2/oauth/token/", {
+    const res = await fetchT("https://open.tiktokapis.com/v2/oauth/token/", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -57,7 +58,7 @@ export class TikTokProvider extends SocialProvider {
   }
 
   async refreshAccessToken(refreshToken: string, config: OAuthConfig): Promise<OAuthTokens> {
-    const res = await fetch("https://open.tiktokapis.com/v2/oauth/token/", {
+    const res = await fetchT("https://open.tiktokapis.com/v2/oauth/token/", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -152,7 +153,7 @@ export class TikTokProvider extends SocialProvider {
   }
 
   async getProfile(tokens: OAuthTokens): Promise<SocialProfile> {
-    const res = await fetch(
+    const res = await fetchT(
       "https://open.tiktokapis.com/v2/user/info/?fields=open_id,union_id,display_name,avatar_url",
       {
         headers: { Authorization: `Bearer ${tokens.accessToken}` },

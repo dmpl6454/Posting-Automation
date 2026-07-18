@@ -8,6 +8,7 @@ import type {
   SocialProfile,
   PlatformConstraints,
 } from "../abstract/social.types";
+import { fetchT } from "../utils/fetch-timeout";
 
 /**
  * Snapchat provider — CONNECT-ONLY as of 2026-07-18.
@@ -66,7 +67,7 @@ export class SnapchatProvider extends SocialProvider {
   }
 
   async exchangeCodeForTokens(code: string, config: OAuthConfig): Promise<OAuthTokens> {
-    const res = await fetch("https://accounts.snapchat.com/accounts/oauth2/token", {
+    const res = await fetchT("https://accounts.snapchat.com/accounts/oauth2/token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -90,7 +91,7 @@ export class SnapchatProvider extends SocialProvider {
   }
 
   async refreshAccessToken(refreshToken: string, config: OAuthConfig): Promise<OAuthTokens> {
-    const res = await fetch("https://accounts.snapchat.com/accounts/oauth2/token", {
+    const res = await fetchT("https://accounts.snapchat.com/accounts/oauth2/token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -121,7 +122,7 @@ export class SnapchatProvider extends SocialProvider {
     // `snapchat-profile-api` scope AND our client ID to be allowlisted — until
     // allowlisting lands this returns 403 AUTHORIZATION_PERMISSION_DENIED, which
     // surfaces as a clean connect error (never an unguarded throw of raw text).
-    const res = await fetch(
+    const res = await fetchT(
       "https://businessapi.snapchat.com/v1/public_profiles/my_profile",
       { headers: { Authorization: `Bearer ${tokens.accessToken}` } }
     );

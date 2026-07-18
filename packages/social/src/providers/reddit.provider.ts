@@ -9,6 +9,7 @@ import type {
   SocialProfile,
   PlatformConstraints,
 } from "../abstract/social.types";
+import { fetchT } from "../utils/fetch-timeout";
 
 export class RedditProvider extends SocialProvider {
   readonly platform: SocialPlatform = "REDDIT";
@@ -35,7 +36,7 @@ export class RedditProvider extends SocialProvider {
   }
 
   async exchangeCodeForTokens(code: string, config: OAuthConfig): Promise<OAuthTokens> {
-    const res = await fetch("https://www.reddit.com/api/v1/access_token", {
+    const res = await fetchT("https://www.reddit.com/api/v1/access_token", {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
@@ -61,7 +62,7 @@ export class RedditProvider extends SocialProvider {
   }
 
   async refreshAccessToken(refreshToken: string, config: OAuthConfig): Promise<OAuthTokens> {
-    const res = await fetch("https://www.reddit.com/api/v1/access_token", {
+    const res = await fetchT("https://www.reddit.com/api/v1/access_token", {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
@@ -162,7 +163,7 @@ export class RedditProvider extends SocialProvider {
   }
 
   async getProfile(tokens: OAuthTokens): Promise<SocialProfile> {
-    const res = await fetch("https://oauth.reddit.com/api/v1/me", {
+    const res = await fetchT("https://oauth.reddit.com/api/v1/me", {
       headers: {
         Authorization: `Bearer ${tokens.accessToken}`,
         "User-Agent": this.userAgent,

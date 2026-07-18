@@ -13,6 +13,7 @@ import type {
   SocialProfile,
   PlatformConstraints,
 } from "../abstract/social.types";
+import { fetchT } from "../utils/fetch-timeout";
 
 export interface ShortVideoProbe {
   width: number;
@@ -106,7 +107,7 @@ export class YouTubeProvider extends SocialProvider {
   }
 
   async exchangeCodeForTokens(code: string, config: OAuthConfig): Promise<OAuthTokens> {
-    const res = await fetch("https://oauth2.googleapis.com/token", {
+    const res = await fetchT("https://oauth2.googleapis.com/token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -130,7 +131,7 @@ export class YouTubeProvider extends SocialProvider {
   }
 
   async refreshAccessToken(refreshToken: string, config: OAuthConfig): Promise<OAuthTokens> {
-    const res = await fetch("https://oauth2.googleapis.com/token", {
+    const res = await fetchT("https://oauth2.googleapis.com/token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -198,7 +199,7 @@ export class YouTubeProvider extends SocialProvider {
 
   async getProfile(tokens: OAuthTokens): Promise<SocialProfile> {
     const params = new URLSearchParams({ part: "snippet", mine: "true" });
-    const res = await fetch(
+    const res = await fetchT(
       `https://youtube.googleapis.com/youtube/v3/channels?${params.toString()}`,
       { headers: { Authorization: `Bearer ${tokens.accessToken}` } }
     );

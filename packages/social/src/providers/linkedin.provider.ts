@@ -9,6 +9,7 @@ import type {
   SocialProfile,
   PlatformConstraints,
 } from "../abstract/social.types";
+import { fetchT } from "../utils/fetch-timeout";
 
 const API_VERSION = "202504";
 
@@ -43,7 +44,7 @@ export class LinkedInProvider extends SocialProvider {
   }
 
   async exchangeCodeForTokens(code: string, config: OAuthConfig): Promise<OAuthTokens> {
-    const res = await fetch("https://www.linkedin.com/oauth/v2/accessToken", {
+    const res = await fetchT("https://www.linkedin.com/oauth/v2/accessToken", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -67,7 +68,7 @@ export class LinkedInProvider extends SocialProvider {
   }
 
   async refreshAccessToken(refreshToken: string, config: OAuthConfig): Promise<OAuthTokens> {
-    const res = await fetch("https://www.linkedin.com/oauth/v2/accessToken", {
+    const res = await fetchT("https://www.linkedin.com/oauth/v2/accessToken", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -175,7 +176,7 @@ export class LinkedInProvider extends SocialProvider {
   }
 
   async getProfile(tokens: OAuthTokens): Promise<SocialProfile> {
-    const res = await fetch("https://api.linkedin.com/v2/userinfo", {
+    const res = await fetchT("https://api.linkedin.com/v2/userinfo", {
       headers: { Authorization: `Bearer ${tokens.accessToken}` },
     });
     const data: any = await res.json();
@@ -223,7 +224,7 @@ export class LinkedInProvider extends SocialProvider {
   async getPages(tokens: OAuthTokens): Promise<Array<{ id: string; name: string; avatar?: string; accessToken: string }>> {
     const pages: Array<{ id: string; name: string; avatar?: string; accessToken: string }> = [];
 
-    const res = await fetch(
+    const res = await fetchT(
       "https://api.linkedin.com/rest/organizationAcls?q=roleAssignee&role=ADMINISTRATOR",
       { headers: restHeaders(tokens.accessToken) }
     );
@@ -243,7 +244,7 @@ export class LinkedInProvider extends SocialProvider {
       if (!orgId) continue;
 
       // Fetch org details
-      const orgRes = await fetch(
+      const orgRes = await fetchT(
         `https://api.linkedin.com/rest/organizations/${orgId}`,
         { headers: restHeaders(tokens.accessToken) }
       );

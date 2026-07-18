@@ -9,7 +9,10 @@ import type {
   SocialProfile,
   PlatformConstraints,
 } from "../abstract/social.types";
+import { fetchT } from "../utils/fetch-timeout";
 
+/** Max pagination pages fetched during connect (~500 Pages at limit=25). */
+const MAX_CONNECT_PAGINATION_PAGES = 20;
 
 export class InstagramProvider extends SocialProvider {
   readonly platform: SocialPlatform = "INSTAGRAM";
@@ -45,7 +48,7 @@ export class InstagramProvider extends SocialProvider {
       code,
     });
 
-    const res = await fetch(
+    const res = await fetchT(
       `${this.graphBaseUrl}/${this.apiVersion}/oauth/access_token?${params.toString()}`
     );
 
@@ -187,7 +190,7 @@ export class InstagramProvider extends SocialProvider {
     // First get the Instagram Business Account ID via Facebook Pages
     const igUserId = await this.getInstagramBusinessAccountId(tokens);
 
-    const res = await fetch(
+    const res = await fetchT(
       `${this.graphBaseUrl}/${this.apiVersion}/${igUserId}?fields=id,username,profile_picture_url&access_token=${tokens.accessToken}`
     );
 
@@ -214,17 +217,29 @@ export class InstagramProvider extends SocialProvider {
   }>> {
     const accounts: Array<{ id: string; name: string; username?: string; avatar?: string }> = [];
     let url: string | null = `${this.graphBaseUrl}/${this.apiVersion}/me/accounts?fields=id,instagram_business_account&limit=25&access_token=${tokens.accessToken}`;
+    let pageCount = 0;
 
     while (url) {
-      const pagesRes = await fetch(url);
+      if (pageCount >= MAX_CONNECT_PAGINATION_PAGES) {
+        console.warn(`[Instagram] getAllInstagramAccounts: pagination capped at ${MAX_CONNECT_PAGINATION_PAGES} pages (${accounts.length} accounts loaded) — truncating`);
+        break;
+      }
+      pageCount++;
+
+      const pagesRes = await fetchT(url);
       const pagesData: any = await pagesRes.json();
-      if (!pagesRes.ok) break;
+      if (!pagesRes.ok) {
+        // Keep the break (return whatever was collected so far — same contract),
+        // but don't be silent about the partial result.
+        console.warn(`[Instagram] getAllInstagramAccounts: pagination response not ok (HTTP ${pagesRes.status}) — returning partial result (${accounts.length} accounts): ${JSON.stringify(pagesData?.error ?? pagesData)}`);
+        break;
+      }
 
       for (const page of pagesData.data || []) {
         if (page.instagram_business_account?.id) {
           // Fetch IG profile details
           try {
-            const igRes = await fetch(
+            const igRes = await fetchT(
               `${this.graphBaseUrl}/${this.apiVersion}/${page.instagram_business_account.id}?fields=id,username,profile_picture_url&access_token=${tokens.accessToken}`
             );
             const igData: any = await igRes.json();
@@ -309,7 +324,7 @@ export class InstagramProvider extends SocialProvider {
       fb_exchange_token: accessToken,
     });
 
-    const res = await fetch(
+    const res = await fetchT(
       `${this.graphBaseUrl}/${this.apiVersion}/oauth/access_token?${params.toString()}`
     );
 
@@ -333,9 +348,16 @@ export class InstagramProvider extends SocialProvider {
   private async getInstagramBusinessAccountId(tokens: OAuthTokens): Promise<string> {
     // Get the list of Facebook Pages the user manages, with pagination
     let url: string | null = `${this.graphBaseUrl}/${this.apiVersion}/me/accounts?fields=id,instagram_business_account&limit=25&access_token=${tokens.accessToken}`;
+    let pageCount = 0;
 
     while (url) {
-      const pagesRes = await fetch(url);
+      if (pageCount >= MAX_CONNECT_PAGINATION_PAGES) {
+        console.warn(`[Instagram] getInstagramBusinessAccountId: pagination capped at ${MAX_CONNECT_PAGINATION_PAGES} pages without finding an IG Business Account — truncating`);
+        break;
+      }
+      pageCount++;
+
+      const pagesRes = await fetchT(url);
       const pagesData: any = await pagesRes.json();
 
       if (!pagesRes.ok) {

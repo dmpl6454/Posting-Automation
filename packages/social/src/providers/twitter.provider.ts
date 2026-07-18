@@ -15,6 +15,7 @@ import {
   storeRequestTokenSecret,
   getAndDeleteRequestTokenSecret,
 } from "../utils/oauth1a-temp-store";
+import { fetchT } from "../utils/fetch-timeout";
 
 export class TwitterProvider extends SocialProvider {
   readonly platform: SocialPlatform = "TWITTER";
@@ -75,7 +76,7 @@ export class TwitterProvider extends SocialProvider {
     };
     const header = oauth.toHeader(oauth.authorize(requestData));
 
-    const res = await fetch("https://api.twitter.com/oauth/request_token", {
+    const res = await fetchT("https://api.twitter.com/oauth/request_token", {
       method: "POST",
       headers: { Authorization: header.Authorization },
     });
@@ -128,7 +129,7 @@ export class TwitterProvider extends SocialProvider {
     };
     const header = oauth.toHeader(oauth.authorize(requestData, token));
 
-    const res = await fetch("https://api.twitter.com/oauth/access_token", {
+    const res = await fetchT("https://api.twitter.com/oauth/access_token", {
       method: "POST",
       headers: { Authorization: header.Authorization },
     });
@@ -220,7 +221,7 @@ export class TwitterProvider extends SocialProvider {
       oauth.authorize({ url: profileUrl, method: "GET" }, token)
     );
 
-    const res = await fetch(profileUrl, { headers: { Authorization: header.Authorization } });
+    const res = await fetchT(profileUrl, { headers: { Authorization: header.Authorization } });
     const data: any = await res.json();
     if (!res.ok) throw new Error(`Twitter profile fetch failed: ${JSON.stringify(data)}`);
 
