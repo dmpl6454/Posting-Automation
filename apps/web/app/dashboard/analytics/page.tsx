@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
-  PieChart, Pie, Cell, Legend,
+  PieChart, Pie, Cell,
 } from "recharts";
 import { format, subDays } from "date-fns";
 
@@ -42,11 +42,23 @@ const PLATFORM_COLORS: Record<string, string> = {
   DEFAULT: "#8B5CF6",
 };
 
-const PIE_COLORS = ["#6366F1", "#EC4899", "#F59E0B", "#10B981", "#3B82F6", "#EF4444", "#8B5CF6"];
-
 function getPlatformColor(platform: string) {
   return PLATFORM_COLORS[platform] ?? PLATFORM_COLORS.DEFAULT;
 }
+
+// Recharts tooltips default to WHITE bg + series-colored text — unreadable in
+// dark mode and against the dataviz rule that text wears text tokens. These
+// styles pin tooltip chrome + text to theme tokens (identity comes from the
+// swatch recharts already renders beside each item).
+const TOOLTIP_CONTENT_STYLE = {
+  fontSize: 12,
+  borderRadius: 8,
+  backgroundColor: "hsl(var(--card))",
+  border: "1px solid hsl(var(--border))",
+  color: "hsl(var(--card-foreground))",
+} as const;
+const TOOLTIP_ITEM_STYLE = { color: "hsl(var(--card-foreground))" } as const;
+const TOOLTIP_LABEL_STYLE = { color: "hsl(var(--muted-foreground))" } as const;
 
 function DateRangePicker({
   from,
@@ -182,6 +194,15 @@ function InsightsAnalyticsView() {
       (ch) => (ch.impressions + ch.reach + ch.likes + ch.comments + ch.shares) === 0
     );
 
+  // Engagement Breakdown all-zeros hint (mirrors the Channel Performance
+  // empty-state convention) — display-only, tile data logic untouched.
+  const engagementAllZero =
+    !!engagement && engagementMetrics.every((m) => m.value === 0);
+
+  // Donut legend/center-stat inputs. The legend is contained HTML below the
+  // plot (never clipped outside labels); percent shares are derived here.
+  const platformTotal = (platformBreakdown ?? []).reduce((sum, e) => sum + e.count, 0);
+
   return (
     <div className="space-y-8">
       {/* Header */}
@@ -258,7 +279,9 @@ function InsightsAnalyticsView() {
                 <YAxis tick={{ fontSize: 11 }} allowDecimals={false} className="text-muted-foreground" />
                 {/* Fix #36: allowEscapeViewBox + wrapperStyle prevent clipping at narrow widths */}
                 <Tooltip
-                  contentStyle={{ fontSize: 12, borderRadius: 8 }}
+                  contentStyle={TOOLTIP_CONTENT_STYLE}
+                  itemStyle={TOOLTIP_ITEM_STYLE}
+                  labelStyle={TOOLTIP_LABEL_STYLE}
                   wrapperStyle={{ zIndex: 50 }}
                   allowEscapeViewBox={{ x: true, y: true }}
                   formatter={(v: number) => [v, "Posts"]}
@@ -310,6 +333,12 @@ function InsightsAnalyticsView() {
                     </div>
                   ))}
                 </div>
+                {engagementAllZero && (
+                  <p className="mt-3 text-xs text-muted-foreground">
+                    No engagement synced for this window yet — Twitter needs a paid API tier;
+                    Instagram/Facebook sync at publish + checkpoints.
+                  </p>
+                )}
                 <div className="mt-3 flex items-center gap-3 rounded-lg border border-primary/20 bg-primary/5 p-3">
                   <Percent className="h-5 w-5 text-primary" />
                   <div>
@@ -334,36 +363,67 @@ function InsightsAnalyticsView() {
             {breakdownLoading ? (
               <Skeleton className="h-56 w-full rounded-lg" />
             ) : platformBreakdown && platformBreakdown.length > 0 ? (
-              <ResponsiveContainer width="100%" height={220}>
-                <PieChart>
-                  <Pie
-                    data={platformBreakdown}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={55}
-                    outerRadius={85}
-                    paddingAngle={3}
-                    dataKey="count"
-                    nameKey="platform"
-                    label={({ platform, percent }) =>
-                      `${platform} ${(percent * 100).toFixed(0)}%`
-                    }
-                    labelLine={false}
-                  >
-                    {platformBreakdown.map((entry, index) => (
-                      <Cell
-                        key={entry.platform}
-                        fill={getPlatformColor(entry.platform) ?? PIE_COLORS[index % PIE_COLORS.length]}
+              <div>
+                {/* Plot area is legend-free (the legend lives below as HTML), so
+                    the 220px container is all donut — nothing overlaps or clips. */}
+                <div className="relative">
+                  <ResponsiveContainer width="100%" height={220}>
+                    <PieChart>
+                      <Pie
+                        data={platformBreakdown}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={55}
+                        outerRadius={85}
+                        paddingAngle={3}
+                        dataKey="count"
+                        nameKey="platform"
+                      >
+                        {platformBreakdown.map((entry) => (
+                          <Cell
+                            key={entry.platform}
+                            fill={getPlatformColor(entry.platform)}
+                          />
+                        ))}
+                      </Pie>
+                      <Tooltip
+                        formatter={(v: number, name) => [
+                          `${v} target${v === 1 ? "" : "s"}`,
+                          name,
+                        ]}
+                        contentStyle={TOOLTIP_CONTENT_STYLE}
+                        itemStyle={TOOLTIP_ITEM_STYLE}
+                        labelStyle={TOOLTIP_LABEL_STYLE}
                       />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    formatter={(v: number, name) => [v, name]}
-                    contentStyle={{ fontSize: 12, borderRadius: 8 }}
-                  />
-                  <Legend iconSize={10} wrapperStyle={{ fontSize: 11 }} />
-                </PieChart>
-              </ResponsiveContainer>
+                    </PieChart>
+                  </ResponsiveContainer>
+                  {/* Total published targets centered in the donut hole */}
+                  <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+                    <p className="text-2xl font-bold leading-none">{formatNumber(platformTotal)}</p>
+                    <p className="mt-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+                      Published
+                    </p>
+                  </div>
+                </div>
+                {/* Contained legend: identity dot carries the platform color;
+                    the text itself wears foreground/muted tokens (readable in
+                    both themes), never the series color. */}
+                <ul className="mt-4 flex flex-wrap justify-center gap-x-4 gap-y-1.5">
+                  {platformBreakdown.map((entry) => (
+                    <li key={entry.platform} className="flex items-center gap-1.5 text-xs">
+                      <span
+                        aria-hidden
+                        className="h-2.5 w-2.5 shrink-0 rounded-sm"
+                        style={{ backgroundColor: getPlatformColor(entry.platform) }}
+                      />
+                      <span className="font-medium text-foreground">{entry.platform}</span>
+                      <span className="text-muted-foreground">
+                        {platformTotal > 0 ? `${Math.round((entry.count / platformTotal) * 100)}%` : "0%"}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             ) : (
               <div className="flex h-56 items-center justify-center rounded-lg border border-dashed">
                 <div className="text-center">

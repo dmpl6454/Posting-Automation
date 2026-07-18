@@ -65,6 +65,16 @@ export default function PostDetailPage() {
   const isPendingCaptionFanout = (post: any) =>
     post?.status === "DRAFT" && (post?.metadata as any)?.captionFanout?.pendingSchedule === true;
 
+  // Degraded terminal state: the fanout completed but caption generation was
+  // unavailable for some/all channels — those targets keep a NULL override and
+  // publish with the shared caption. Driven by metadata.captionFanout.degraded
+  // (stamped by the worker) + the per-target null-override count.
+  const isDegradedCaptionFanout = (post: any) =>
+    (post?.metadata as any)?.captionFanout?.degraded === true &&
+    (post?.metadata as any)?.captionFanout?.pendingSchedule !== true;
+  const degradedTargetCount = (post: any) =>
+    (post?.targets ?? []).filter((t: any) => t.contentOverride == null).length;
+
   const { data: post, isLoading, refetch } = trpc.post.getById.useQuery(
     { id: postId },
     // Poll every 2s while any target is PUBLISHING so status changes appear
@@ -392,6 +402,13 @@ export default function PostDetailPage() {
             <div className="mt-2 flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800 dark:border-blue-900/40 dark:bg-blue-950/30 dark:text-blue-300">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
               Generating a unique caption for each channel — the post will be scheduled automatically when they&apos;re ready.
+            </div>
+          )}
+          {isDegradedCaptionFanout(post) && degradedTargetCount(post) > 0 && (
+            <div className="mt-2 flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-300">
+              <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+              Unique captions were unavailable for {degradedTargetCount(post)} channel
+              {degradedTargetCount(post) !== 1 ? "s" : ""} — they use the shared caption.
             </div>
           )}
         </CardHeader>
