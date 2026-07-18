@@ -176,7 +176,9 @@ export class RedditProvider extends SocialProvider {
       id: data.id,
       name: data.name,
       username: data.name,
-      avatar: data.icon_img?.split("?")[0], // Strip query params from avatar URL
+      // Reddit HTML-escapes the avatar URL (&amp;) — decode entities but KEEP the
+      // query params: they are the CDN signature, stripping them 403s the image.
+      avatar: data.icon_img?.replace(/&amp;/g, "&"),
     };
   }
 

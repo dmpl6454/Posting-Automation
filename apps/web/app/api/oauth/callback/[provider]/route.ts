@@ -1,7 +1,27 @@
 import { NextResponse } from "next/server";
 import { prisma, encryptToken, resolveChannelErrorsOnReconnect } from "@postautomation/db";
 import { getSocialProvider, FacebookProvider, InstagramProvider, LinkedInProvider, verifyState } from "@postautomation/social";
+// Deep import via @postautomation/api (a declared, transpiled web dependency):
+// apps/web has no direct dep on @postautomation/queue, so the api package
+// bridges the avatar-cache enqueue.
+import { enqueueAvatarCacheJobs } from "@postautomation/api/src/lib/avatar-cache";
 import { auth } from "~/lib/auth";
+
+/**
+ * Best-effort: queue avatar re-cache jobs for freshly connected channels so
+ * their platform CDN avatar URLs get pinned to durable S3 storage promptly
+ * (IG/FB signed URLs expire in days). Fire-and-forget — must NEVER break or
+ * delay the connect flow.
+ */
+function queueAvatarCache(channelIds: string[]): void {
+  try {
+    void enqueueAvatarCacheJobs(channelIds, "connect").catch((err: any) => {
+      console.warn(`[oauth] avatar-cache enqueue failed (non-fatal): ${err?.message ?? err}`);
+    });
+  } catch (err: any) {
+    console.warn(`[oauth] avatar-cache enqueue failed (non-fatal): ${err?.message ?? err}`);
+  }
+}
 
 // SECURITY: do not reflect raw provider error strings into the redirect URL.
 // They can include access tokens, internal URLs, or upstream debug info.
@@ -126,6 +146,7 @@ export async function GET(
 
       // Fresh token → clear this channel's open token/auth monitoring errors.
       await resolveChannelErrorsOnReconnect(prisma, twitterChannel.id);
+      queueAvatarCache([twitterChannel.id]);
 
       return NextResponse.redirect(
         `${process.env.APP_URL}/dashboard/channels?success=connected&platform=twitter`
@@ -216,6 +237,7 @@ export async function GET(
         );
       } else {
         // Save each Facebook Page as a separate channel
+        const fbChannelIds: string[] = [];
         for (const page of pages) {
           const fbChannel = await prisma.channel.upsert({
             where: {
@@ -258,7 +280,9 @@ export async function GET(
           });
           // Fresh token → clear this channel's open token/auth monitoring errors.
           await resolveChannelErrorsOnReconnect(prisma, fbChannel.id);
+          fbChannelIds.push(fbChannel.id);
         }
+        queueAvatarCache(fbChannelIds);
       }
 
       const count = pages.length || 1;
@@ -280,6 +304,7 @@ export async function GET(
         );
       }
 
+      const igChannelIds: string[] = [];
       for (const ig of igAccounts) {
         const igChannel = await prisma.channel.upsert({
           where: {
@@ -316,7 +341,9 @@ export async function GET(
         });
         // Fresh token → clear this channel's open token/auth monitoring errors.
         await resolveChannelErrorsOnReconnect(prisma, igChannel.id);
+        igChannelIds.push(igChannel.id);
       }
+      queueAvatarCache(igChannelIds);
 
       return NextResponse.redirect(
         `${process.env.APP_URL}/dashboard/channels?success=connected&platform=${params.provider}&pages=${igAccounts.length}`
@@ -357,6 +384,7 @@ export async function GET(
       });
       // Fresh token → clear this channel's open token/auth monitoring errors.
       await resolveChannelErrorsOnReconnect(prisma, liPersonal.id);
+      const liChannelIds: string[] = [liPersonal.id];
 
       // Fetch and save LinkedIn Pages (organizations)
       let pageCount = 0;
@@ -395,11 +423,13 @@ export async function GET(
             },
           });
           await resolveChannelErrorsOnReconnect(prisma, liPage.id);
+          liChannelIds.push(liPage.id);
           pageCount++;
         }
       } catch (e: any) {
         console.warn(`[LinkedIn] Failed to fetch pages: ${e.message}`);
       }
+      queueAvatarCache(liChannelIds);
 
       return NextResponse.redirect(
         `${process.env.APP_URL}/dashboard/channels?success=connected&platform=linkedin&pages=${1 + pageCount}`
@@ -445,6 +475,7 @@ export async function GET(
     });
     // Fresh token → clear this channel's open token/auth monitoring errors.
     await resolveChannelErrorsOnReconnect(prisma, genericChannel.id);
+    queueAvatarCache([genericChannel.id]);
 
     return NextResponse.redirect(
       `${process.env.APP_URL}/dashboard/channels?success=connected&platform=${params.provider}`

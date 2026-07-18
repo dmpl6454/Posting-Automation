@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useRouter } from "next/navigation";
+import { signOut } from "next-auth/react";
 import {
   LayoutDashboard,
   Users,
@@ -39,12 +39,6 @@ const navItems = [
 
 export function AdminSidebar({ open = false, onClose }: AdminSidebarProps) {
   const pathname = usePathname();
-  const router = useRouter();
-
-  async function handleLogout() {
-    await fetch("/api/admin/logout", { method: "POST" });
-    router.replace("/admin/login");
-  }
 
   return (
     <aside
@@ -109,7 +103,7 @@ export function AdminSidebar({ open = false, onClose }: AdminSidebarProps) {
           Back to Dashboard
         </Link>
         <button
-          onClick={handleLogout}
+          onClick={() => signOut({ callbackUrl: "/" })}
           className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-gray-400 hover:bg-gray-900 hover:text-gray-200"
         >
           <LogOut className="h-4 w-4" />

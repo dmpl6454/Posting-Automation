@@ -33,10 +33,11 @@ function num(v: number | null | undefined): string {
 
 /**
  * Insights → Reports (2026-07-17): structured, extractable per-post table.
- * Every post × channel published within the selected window with its metrics —
- * "Current" = latest synced metrics; "At publish-age" = metrics as they stood
- * exactly 24h/7d/15d/30d after publish (checkpoints accrue for posts published
- * after this feature shipped).
+ * "Current" = every post × channel published WITHIN the selected window, with
+ * its latest synced metrics. "At publish-age" = posts OLD ENOUGH to have
+ * reached that age (published at least one window ago), with metrics as they
+ * stood exactly 24h/7d/15d/30d after publish — at-age checkpoints accrue for
+ * posts published after 2026-07-17, so older posts show "—".
  */
 export function ReportsTab() {
   const [win, setWin] = useState<ReportWindow>("7d");
@@ -97,7 +98,9 @@ export function ReportsTab() {
           <div>
             <CardTitle>Post Reports</CardTitle>
             <CardDescription>
-              Every post published in the selected window, per channel — extractable end to end.
+              {mode === "at_age"
+                ? "Every post old enough to have reached this age, per channel — metrics captured at that age."
+                : "Every post published in the selected window, per channel — extractable end to end."}
             </CardDescription>
           </div>
           <Button size="sm" variant="outline" onClick={onExport} disabled={!rows.length}>
@@ -131,7 +134,7 @@ export function ReportsTab() {
             </button>
             <button
               onClick={() => setMode("at_age")}
-              title="Metrics as they stood exactly 24h/7d/15d/30d after each post was published. Checkpoints accrue for posts published after this feature shipped — older posts show —."
+              title="Shows posts old enough to have reached this age (published at least one window ago), with metrics as they stood exactly 24h/7d/15d/30d after publish. At-age data accrues for posts published after 2026-07-17 — older posts show —."
               className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
                 mode === "at_age" ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"
               }`}
@@ -158,7 +161,7 @@ export function ReportsTab() {
         ) : rows.length === 0 ? (
           <div className="py-10 text-center text-sm text-muted-foreground">
             {mode === "at_age"
-              ? "No at-age checkpoints in this window yet — they accrue for posts published after this feature shipped."
+              ? "No posts are old enough to have reached this age yet — at-age data accrues for posts published after 2026-07-17."
               : "No posts were published in this window."}
           </div>
         ) : (
@@ -170,6 +173,7 @@ export function ReportsTab() {
                   <th className="py-2 pr-3 font-medium">Channel</th>
                   <th className="py-2 pr-3 font-medium">Published (UTC)</th>
                   <th className="py-2 pr-3 text-right font-medium">Views/Impr.</th>
+                  <th className="py-2 pr-3 text-right font-medium">Clicks</th>
                   <th className="py-2 pr-3 text-right font-medium">Likes</th>
                   <th className="py-2 pr-3 text-right font-medium">Comments</th>
                   <th className="py-2 pr-3 text-right font-medium">Shares</th>
@@ -202,6 +206,7 @@ export function ReportsTab() {
                       {fmtUtc(r.publishedAt)}
                     </td>
                     <td className="py-2 pr-3 text-right tabular-nums">{num(r.impressions)}</td>
+                    <td className="py-2 pr-3 text-right tabular-nums">{num(r.clicks)}</td>
                     <td className="py-2 pr-3 text-right tabular-nums">{num(r.likes)}</td>
                     <td className="py-2 pr-3 text-right tabular-nums">{num(r.comments)}</td>
                     <td className="py-2 pr-3 text-right tabular-nums">{num(r.shares)}</td>

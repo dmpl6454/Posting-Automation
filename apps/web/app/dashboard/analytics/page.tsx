@@ -4,6 +4,7 @@ import { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { ReportsTab } from "~/components/analytics/ReportsTab";
+import { ChannelAvatar } from "~/components/channel-avatar";
 import { trpc } from "~/lib/trpc/client";
 import { useToast } from "~/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "~/components/ui/card";
@@ -133,13 +134,26 @@ function InsightsAnalyticsView() {
 
   const { data: overview, isLoading: overviewLoading } = trpc.analytics.overview.useQuery(dateInput);
   const { data: engagement, isLoading: engagementLoading } = trpc.analytics.engagement.useQuery(dateInput);
-  const { data: platformBreakdown, isLoading: breakdownLoading } = trpc.analytics.platformBreakdown.useQuery();
+  const { data: platformBreakdown, isLoading: breakdownLoading } = trpc.analytics.platformBreakdown.useQuery(dateInput);
   const { data: postsOverTime, isLoading: chartLoading } = trpc.analytics.postsOverTime.useQuery(dateInput);
   const { data: channelStats, isLoading: channelLoading } = trpc.analytics.perChannelStats.useQuery(dateInput);
+  // keepPreviousData so a date-range change doesn't unmount the Group
+  // Performance card mid-refetch (which would cause layout shift on every
+  // range change for group-having orgs).
+  const { data: groupStats, isLoading: groupLoading } = trpc.analytics.groupStats.useQuery(
+    dateInput,
+    { placeholderData: (prev) => prev }
+  );
 
-  const stats = [
+  const stats: Array<{ name: string; value: number; icon: any; color: string; format?: boolean; sub?: string }> = [
     { name: "Total Posts", value: overview?.totalPosts ?? 0, icon: BarChart3, color: "text-blue-600 bg-blue-100 dark:text-blue-400 dark:bg-blue-950" },
-    { name: "Published Targets", value: overview?.published ?? 0, icon: CheckCircle, color: "text-green-600 bg-green-100 dark:text-green-400 dark:bg-green-950" },
+    {
+      name: "Published Targets",
+      value: overview?.published ?? 0,
+      icon: CheckCircle,
+      color: "text-green-600 bg-green-100 dark:text-green-400 dark:bg-green-950",
+      sub: overview ? `across ${overview.totalTargets} target${overview.totalTargets === 1 ? "" : "s"}` : undefined,
+    },
     { name: "Failed", value: overview?.failed ?? 0, icon: XCircle, color: "text-red-600 bg-red-100 dark:text-red-400 dark:bg-red-950" },
     { name: "Total Reach", value: engagement?.reach ?? 0, icon: TrendingUp, color: "text-purple-600 bg-purple-100 dark:text-purple-400 dark:bg-purple-950", format: true },
   ];
@@ -209,6 +223,9 @@ function InsightsAnalyticsView() {
                       <p className="text-2xl font-bold">
                         {stat.format ? formatNumber(stat.value) : stat.value}
                       </p>
+                      {stat.sub && (
+                        <p className="text-xs text-muted-foreground">{stat.sub}</p>
+                      )}
                     </div>
                   </div>
                 </CardContent>
@@ -311,7 +328,7 @@ function InsightsAnalyticsView() {
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Platform Breakdown</CardTitle>
-            <CardDescription>Published posts per platform</CardDescription>
+            <CardDescription>Published targets per platform</CardDescription>
           </CardHeader>
           <CardContent>
             {breakdownLoading ? (
@@ -389,6 +406,7 @@ function InsightsAnalyticsView() {
                     <th className="px-4 py-3 text-right font-medium text-muted-foreground">Likes</th>
                     <th className="px-4 py-3 text-right font-medium text-muted-foreground">Comments</th>
                     <th className="px-4 py-3 text-right font-medium text-muted-foreground">Shares</th>
+                    <th className="px-4 py-3 text-right font-medium text-muted-foreground">Clicks</th>
                     <th className="px-4 py-3 text-right font-medium text-muted-foreground">Eng. Rate</th>
                   </tr>
                 </thead>
@@ -402,16 +420,7 @@ function InsightsAnalyticsView() {
                     >
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2.5">
-                          {ch.avatar ? (
-                            <img src={ch.avatar} alt={ch.name} className="h-7 w-7 rounded-full object-cover" />
-                          ) : (
-                            <div
-                              className="h-7 w-7 rounded-full flex items-center justify-center text-white text-xs font-bold"
-                              style={{ backgroundColor: getPlatformColor(ch.platform) }}
-                            >
-                              {ch.name.charAt(0).toUpperCase()}
-                            </div>
-                          )}
+                          <ChannelAvatar avatar={ch.avatar} name={ch.name} className="h-7 w-7 shrink-0" />
                           <div>
                             <p className="font-medium leading-none">{ch.name}</p>
                             {ch.username && (
@@ -433,6 +442,7 @@ function InsightsAnalyticsView() {
                       <td className="px-4 py-3 text-right">{formatNumber(ch.likes)}</td>
                       <td className="px-4 py-3 text-right">{formatNumber(ch.comments)}</td>
                       <td className="px-4 py-3 text-right">{formatNumber(ch.shares)}</td>
+                      <td className="px-4 py-3 text-right">{formatNumber(ch.clicks)}</td>
                       <td className="px-4 py-3 text-right">
                         <span
                           className={`font-medium ${
@@ -469,6 +479,95 @@ function InsightsAnalyticsView() {
           )}
         </CardContent>
       </Card>
+
+      {/* Group Performance — only when the org has channel groups. A channel
+          in multiple groups counts in each; the Ungrouped bucket collects
+          active channels that belong to no group. */}
+      {/* Mount ONLY when the org actually has groups — never show a skeleton to
+          zero-group orgs (which would then unmount, shifting layout on every
+          visit). placeholderData keeps groupStats defined across refetches, so a
+          group-having org's card never disappears mid-range-change. */}
+      {(groupStats?.groupCount ?? 0) > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Group Performance</CardTitle>
+            <CardDescription>Metrics summed per channel group</CardDescription>
+          </CardHeader>
+          <CardContent className="p-0">
+            {groupLoading ? (
+              <div className="space-y-2 p-6">
+                {[1, 2, 3].map((i) => <Skeleton key={i} className="h-12 rounded-lg" />)}
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b bg-muted/40">
+                      <th className="px-4 py-3 text-left font-medium text-muted-foreground">Group</th>
+                      <th className="px-4 py-3 text-right font-medium text-muted-foreground">Channels</th>
+                      <th className="px-4 py-3 text-right font-medium text-muted-foreground">Publishes</th>
+                      <th className="px-4 py-3 text-right font-medium text-muted-foreground">Impressions</th>
+                      <th className="px-4 py-3 text-right font-medium text-muted-foreground">Reach</th>
+                      <th className="px-4 py-3 text-right font-medium text-muted-foreground">Likes</th>
+                      <th className="px-4 py-3 text-right font-medium text-muted-foreground">Comments</th>
+                      <th className="px-4 py-3 text-right font-medium text-muted-foreground">Shares</th>
+                      <th className="px-4 py-3 text-right font-medium text-muted-foreground">Clicks</th>
+                      <th className="px-4 py-3 text-right font-medium text-muted-foreground">Eng. %</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(groupStats?.rows ?? []).map((g, idx) => (
+                      <tr
+                        key={g.id}
+                        className={`border-b last:border-0 hover:bg-muted/20 transition-colors ${
+                          idx % 2 === 0 ? "" : "bg-muted/10"
+                        }`}
+                      >
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            <span
+                              className="h-2.5 w-2.5 shrink-0 rounded-full"
+                              style={{ backgroundColor: g.color }}
+                            />
+                            <span className="font-medium">{g.name}</span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-right">{g.channelCount}</td>
+                        <td className="px-4 py-3 text-right font-medium">{g.posts}</td>
+                        <td className="px-4 py-3 text-right">{formatNumber(g.impressions)}</td>
+                        <td className="px-4 py-3 text-right">{formatNumber(g.reach)}</td>
+                        <td className="px-4 py-3 text-right">{formatNumber(g.likes)}</td>
+                        <td className="px-4 py-3 text-right">{formatNumber(g.comments)}</td>
+                        <td className="px-4 py-3 text-right">{formatNumber(g.shares)}</td>
+                        <td className="px-4 py-3 text-right">{formatNumber(g.clicks)}</td>
+                        <td className="px-4 py-3 text-right">
+                          <span
+                            className={`font-medium ${
+                              g.engagementRate > 3
+                                ? "text-green-600 dark:text-green-400"
+                                : g.engagementRate > 1
+                                ? "text-yellow-600 dark:text-yellow-400"
+                                : "text-muted-foreground"
+                            }`}
+                          >
+                            {g.engagementRate.toFixed(2)}%
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="px-4 py-3 text-xs text-muted-foreground">
+                  Channels in multiple groups are counted in each group.
+                  &ldquo;Publishes&rdquo; counts each post once per channel it
+                  was published to, so a single post to several channels in a
+                  group adds more than one.
+                </p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

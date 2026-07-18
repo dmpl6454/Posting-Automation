@@ -53,3 +53,35 @@ describe("humanizeError (RSS-1)", () => {
     ).toBe("Something went wrong. Please try again.");
   });
 });
+
+describe("humanizeError (JSON-parse errors from HTML error pages)", () => {
+  // When prod nginx serves its HTML 429/5xx page for /api/trpc, @trpc/client
+  // calls res.json() on it and the raw SyntaxError message lands verbatim in
+  // TRPCClientError.message — it must never reach a toast.
+  it("hides the exact production JSON-parse string behind the generic fallback", () => {
+    const raw = "Unexpected token '<', \"<html> <h\"... is not valid JSON";
+    const out = humanizeError(new Error(raw));
+    expect(out).toBe("Something went wrong. Please try again.");
+    expect(out).not.toContain("Unexpected token");
+    expect(out).not.toContain("not valid JSON");
+  });
+  it("hides other JSON-parse failure shapes (SyntaxError prefix, truncated JSON)", () => {
+    expect(
+      humanizeError(new Error("SyntaxError: Unexpected token < in JSON at position 0"))
+    ).toBe("Something went wrong. Please try again.");
+    expect(humanizeError(new Error("Unexpected end of JSON input"))).toBe(
+      "Something went wrong. Please try again."
+    );
+  });
+  it("still prefers the structured zodError message over a JSON-parse-looking message", () => {
+    expect(
+      humanizeError({
+        message: "Unexpected token '<' ... is not valid JSON",
+        data: { zodError: { fieldErrors: {}, formErrors: ["Name is required"] } },
+      })
+    ).toBe("Name is required");
+  });
+  it("passes short benign messages through unchanged", () => {
+    expect(humanizeError(new Error("Channel not found"))).toBe("Channel not found");
+  });
+});

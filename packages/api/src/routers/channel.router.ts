@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
+import { avatarCacheQueue } from "@postautomation/queue";
 import { getSocialProvider, getSupportedPlatforms, signState } from "@postautomation/social";
 import { resolveChannelErrorsOnReconnect } from "@postautomation/db";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
@@ -427,6 +428,53 @@ export const channelRouter = createRouter({
         data: { isActive: !channel.isActive },
       });
     }),
+
+  /**
+   * On-demand: queue an avatar re-cache job for every channel in this org
+   * (mirrors analytics.triggerSync). The worker resolves a fresh platform
+   * profile picture and pins it to durable S3 storage — fixes expired IG/FB
+   * signed CDN avatar URLs without a full reconnect.
+   */
+  refreshAvatars: orgProcedure.mutation(async ({ ctx }) => {
+    const channels = await ctx.prisma.channel.findMany({
+      where: { organizationId: ctx.organizationId, isActive: true },
+      select: { id: true },
+    });
+
+    // Hour-bucket dedupe (one manual refresh per channel per hour). NOTE:
+    // BullMQ only allows ':' in custom jobIds when there are EXACTLY three
+    // colon-separated segments — hence `manual-{yyyymmddhh}` as ONE segment.
+    // `removeOnComplete: { age: 3600 }` keeps a finished job's id alive for the
+    // hour so the jobId dedupe actually holds (a bare `true` frees the id the
+    // instant the job completes, defeating the throttle on FB/IG Graph reads).
+    const hourBucket = new Date().toISOString().slice(0, 13).replace(/[-T]/g, ""); // yyyymmddhh (UTC)
+
+    // Enqueue OFF the request path: the shared queue's Redis connection uses
+    // maxRetriesPerRequest:null, so awaiting an add against a degraded Redis
+    // would hang the mutation (and the HTTP response) indefinitely. Fire the
+    // loop and report the channel count optimistically — the worker log is the
+    // source of truth for what actually ran.
+    const queued = channels.length;
+    void (async () => {
+      for (const channel of channels) {
+        try {
+          await avatarCacheQueue.add(
+            `avatar-${channel.id}`,
+            { channelId: channel.id },
+            {
+              jobId: `avatar:${channel.id}:manual-${hourBucket}`,
+              removeOnComplete: { age: 3600 },
+              removeOnFail: 100,
+            }
+          );
+        } catch (err) {
+          console.error(`[refreshAvatars] enqueue failed for channel ${channel.id}:`, err);
+        }
+      }
+    })();
+
+    return { queued };
+  }),
 });
 
 function getDefaultScopes(platform: string): string[] {
