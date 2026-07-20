@@ -16,6 +16,7 @@ import {
   getAndDeleteRequestTokenSecret,
 } from "../utils/oauth1a-temp-store";
 import { fetchT } from "../utils/fetch-timeout";
+import { headRemoteMedia, fetchByteRange, computeByteRanges } from "../utils/ranged-media";
 
 export class TwitterProvider extends SocialProvider {
   readonly platform: SocialPlatform = "TWITTER";
@@ -163,7 +164,7 @@ export class TwitterProvider extends SocialProvider {
     let mediaIds: string[] = [];
     if (payload.mediaUrls?.length) {
       const results = await Promise.allSettled(
-        payload.mediaUrls.map((url) => this.uploadMedia(token, url))
+        payload.mediaUrls.map((url) => this.uploadMedia(token, url, payload.onProgress))
       );
       for (const r of results) {
         if (r.status === "fulfilled") {
@@ -271,14 +272,16 @@ export class TwitterProvider extends SocialProvider {
 
   private async uploadMedia(
     token: { key: string; secret: string },
-    mediaUrl: string
+    mediaUrl: string,
+    onProgress?: (percent: number) => void | Promise<void>
   ): Promise<string> {
-    const mediaRes = await fetch(mediaUrl);
-    if (!mediaRes.ok) throw new Error(`Failed to fetch media for Twitter: ${mediaRes.status}`);
-    const mediaBuffer = Buffer.from(await mediaRes.arrayBuffer());
+    // Probe type/size WITHOUT downloading (Phase 4 large-video streaming) —
+    // videos are chunk-fetched via Range requests inside uploadVideoChunked,
+    // so worker memory stays O(chunk) instead of O(file).
+    const remote = await headRemoteMedia(mediaUrl);
 
     // Detect MIME type — fall back to URL extension if server returns generic type
-    let mediaType = mediaRes.headers.get("content-type") ?? "";
+    let mediaType = remote.contentType;
     if (!mediaType || mediaType.startsWith("application/octet-stream")) {
       const [urlBase = ""] = mediaUrl.split("?");
       const urlExt = urlBase.split(".").pop()?.toLowerCase() ?? "";
@@ -293,10 +296,14 @@ export class TwitterProvider extends SocialProvider {
     const isVideo = mediaType.startsWith("video/");
 
     if (isVideo) {
-      return this.uploadVideoChunked(token, mediaBuffer, mediaType);
+      return this.uploadVideoChunked(token, mediaUrl, remote.size, mediaType, onProgress);
     }
 
-    // Simple multipart upload for images
+    // Simple multipart upload for images (small — buffering is fine)
+    const mediaRes = await fetch(mediaUrl);
+    if (!mediaRes.ok) throw new Error(`Failed to fetch media for Twitter: ${mediaRes.status}`);
+    const mediaBuffer = Buffer.from(await mediaRes.arrayBuffer());
+
     const uploadUrl = "https://upload.twitter.com/1.1/media/upload.json";
     const oauth = this.makeOAuth();
     const header = oauth.toHeader(oauth.authorize({ url: uploadUrl, method: "POST" }, token));
@@ -321,11 +328,18 @@ export class TwitterProvider extends SocialProvider {
     return data.media_id_string ?? data.data?.id;
   }
 
-  /** Chunked upload flow required for all video files */
+  /**
+   * Chunked upload flow required for all video files. STREAMING: each 5MB
+   * APPEND segment is range-fetched from the media host just before its POST
+   * (never the whole file at once). X rejects oversized videos at INIT via
+   * total_bytes, so a too-big file fails fast without transferring anything.
+   */
   private async uploadVideoChunked(
     token: { key: string; secret: string },
-    mediaBuffer: Buffer,
-    mediaType: string
+    mediaUrl: string,
+    totalBytes: number,
+    mediaType: string,
+    onProgress?: (percent: number) => void | Promise<void>
   ): Promise<string> {
     const uploadUrl = "https://upload.twitter.com/1.1/media/upload.json";
     const oauth = this.makeOAuth();
@@ -333,7 +347,7 @@ export class TwitterProvider extends SocialProvider {
     // --- INIT ---
     const initParams = {
       command: "INIT",
-      total_bytes: mediaBuffer.length.toString(),
+      total_bytes: totalBytes.toString(),
       media_type: mediaType,
       media_category: "tweet_video",
     };
@@ -350,11 +364,12 @@ export class TwitterProvider extends SocialProvider {
     const initData = JSON.parse(initText);
     const mediaId: string = initData.media_id_string;
 
-    // --- APPEND (5 MB chunks) ---
+    // --- APPEND (5 MB chunks, range-fetched one at a time) ---
     const chunkSize = 5 * 1024 * 1024;
-    const totalChunks = Math.ceil(mediaBuffer.length / chunkSize);
-    for (let i = 0; i < totalChunks; i++) {
-      const chunk = mediaBuffer.slice(i * chunkSize, (i + 1) * chunkSize);
+    const ranges = computeByteRanges(totalBytes, chunkSize);
+    for (let i = 0; i < ranges.length; i++) {
+      const [start, end] = ranges[i]!;
+      const chunk = await fetchByteRange(mediaUrl, start, end);
       const appendHeader = oauth.toHeader(
         oauth.authorize({ url: uploadUrl, method: "POST" }, token)
       );
@@ -362,7 +377,7 @@ export class TwitterProvider extends SocialProvider {
       form.append("command", "APPEND");
       form.append("media_id", mediaId);
       form.append("segment_index", i.toString());
-      form.append("media", new Blob([chunk], { type: mediaType }), "chunk");
+      form.append("media", new Blob([new Uint8Array(chunk)], { type: mediaType }), "chunk");
       const appendRes = await fetch(uploadUrl, {
         method: "POST",
         headers: { Authorization: appendHeader.Authorization },
@@ -372,6 +387,10 @@ export class TwitterProvider extends SocialProvider {
         const err = await appendRes.text();
         throw new Error(`Twitter video APPEND segment ${i} failed (${appendRes.status}): ${err}`);
       }
+      // Progress per segment (10→90%): user-visible upload progress AND the
+      // watchdog's active-upload signal (reportProgress touches the target's
+      // updatedAt) — long X uploads must never be falsely reaped.
+      await onProgress?.(10 + Math.round(((i + 1) / ranges.length) * 80));
     }
 
     // --- FINALIZE ---

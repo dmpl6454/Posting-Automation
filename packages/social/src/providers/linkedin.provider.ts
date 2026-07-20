@@ -10,6 +10,7 @@ import type {
   PlatformConstraints,
 } from "../abstract/social.types";
 import { fetchT } from "../utils/fetch-timeout";
+import { headRemoteMedia, fetchByteRange } from "../utils/ranged-media";
 
 const API_VERSION = "202504";
 
@@ -121,7 +122,7 @@ export class LinkedInProvider extends SocialProvider {
         (payload.mediaTypes?.[0] ?? "").startsWith("video/");
 
       if (isVideo) {
-        const videoUrn = await this.uploadVideo(tokens, author, firstUrl);
+        const videoUrn = await this.uploadVideo(tokens, author, firstUrl, payload.onProgress);
         body.content = { media: { id: videoUrn } };
       } else if (payload.mediaUrls.length === 1) {
         // Single image
@@ -314,12 +315,13 @@ export class LinkedInProvider extends SocialProvider {
   private async uploadVideo(
     tokens: OAuthTokens,
     owner: string,
-    mediaUrl: string
+    mediaUrl: string,
+    onProgress?: (percent: number) => void | Promise<void>
   ): Promise<string> {
-    // 1. Download video first to get size
-    const mediaRes = await fetch(mediaUrl);
-    if (!mediaRes.ok) throw new Error(`Failed to download video: ${mediaUrl}`);
-    const buffer = await mediaRes.arrayBuffer();
+    // 1. Probe size WITHOUT downloading (Phase 4 large-video streaming) —
+    // each LinkedIn upload instruction's byte range is fetched individually
+    // below, so worker memory stays O(chunk) instead of O(file).
+    const remote = await headRemoteMedia(mediaUrl);
 
     // 2. Initialize upload
     const initRes = await fetch("https://api.linkedin.com/rest/videos?action=initializeUpload", {
@@ -328,7 +330,7 @@ export class LinkedInProvider extends SocialProvider {
       body: JSON.stringify({
         initializeUploadRequest: {
           owner,
-          fileSizeBytes: buffer.byteLength,
+          fileSizeBytes: remote.size,
           uploadCaptions: false,
           uploadThumbnail: false,
         },
@@ -341,11 +343,12 @@ export class LinkedInProvider extends SocialProvider {
     const videoUrn = initData.value.video;
     const uploadInstructions = initData.value.uploadInstructions ?? [];
 
-    // 3. Upload each chunk
-    for (const instruction of uploadInstructions) {
+    // 3. Upload each chunk — range-fetched one instruction at a time
+    for (let i = 0; i < uploadInstructions.length; i++) {
+      const instruction = uploadInstructions[i]!;
       const start = instruction.firstByte ?? 0;
-      const end = (instruction.lastByte ?? buffer.byteLength - 1) + 1;
-      const chunk = buffer.slice(start, end);
+      const lastByte = instruction.lastByte ?? remote.size - 1;
+      const chunk = await fetchByteRange(mediaUrl, start, lastByte);
 
       const uploadRes = await fetch(instruction.uploadUrl, {
         method: "PUT",
@@ -359,6 +362,9 @@ export class LinkedInProvider extends SocialProvider {
       if (!uploadRes.ok) {
         throw new Error(`LinkedIn video chunk upload failed: ${uploadRes.status}`);
       }
+      // Progress per instruction (10→90%): user-visible AND the watchdog's
+      // active-upload signal (reportProgress touches target.updatedAt).
+      await onProgress?.(10 + Math.round(((i + 1) / uploadInstructions.length) * 80));
     }
 
     // 4. Finalize upload

@@ -362,7 +362,12 @@ model Media {
 
   fileName     String
   fileType     String
-  fileSize     Int
+  /// BigInt (Phase 4): Int/int4 capped at ~2.1GB — a 3–4GB video upload would
+  /// pass validation, land fully in S3, then crash media.create with an int4
+  /// overflow. Postgres widens int4→int8 in place (safe, no table rewrite
+  /// locks at this size). Prisma accepts plain JS numbers on WRITE; reads
+  /// return bigint — convert with Number() at arithmetic/display sites.
+  fileSize     BigInt
   url          String
   thumbnailUrl String?
   width        Int?

@@ -106,6 +106,69 @@ first wins. What shipped:
   gets client-side status filter chips (All/Done/Active/Errors; header
   badges keep counting the unfiltered feed).
 
+## Phase 4 (SHIPPED 2026-07-20, branch `feat/large-video-streaming-2026-07-20`) — large-video (3–4GB) support end to end
+
+Creators upload 3–4GB source files for Shorts/Reels. Before this phase the
+pipeline had two hard ceilings: the multipart-upload router capped videos at
+500MB, and the buffer-upload platforms (YouTube resumable, X chunked,
+LinkedIn instruction-chunked) downloaded the ENTIRE video into worker RAM
+before uploading — a 4GB video meant 4GB of RAM per concurrent job.
+
+- **`packages/social/src/utils/ranged-media.ts`** (pure-ish, tested):
+  `headRemoteMedia` (size/type without downloading — HEAD, falling back to a
+  1-byte ranged GET), `fetchByteRange` (**fail-closed**: a host that ignores
+  Range and streams the full body makes it THROW rather than silently buffer
+  gigabytes), `computeByteRanges`.
+- **YouTube**: files ≤64MB (`YT_STREAM_THRESHOLD_BYTES`) keep the classic
+  buffered path byte-for-byte (incl. buffer-based Shorts probe). Larger files
+  stream: each resumable chunk (16MB) is range-fetched just before its PUT.
+  Large Shorts are probed by `ffprobe <url>` directly (it range-seeks; only
+  metadata atoms transfer).
+- **X**: `uploadMedia` probes type/size first; videos stream 5MB APPEND
+  segments range-fetched one at a time (INIT declares total_bytes, so an
+  oversized file is rejected by X before any transfer). Images keep the
+  buffered path.
+- **LinkedIn**: init with probed size; each uploadInstruction's byte range is
+  fetched individually.
+- **Upload cap 500MB → 4GB** (`media.router.ts` presigned-multipart path
+  only — those bytes go browser→S3 directly in 8MB parts and never transit
+  the web container; the proxied small-file `/api/upload` route keeps its
+  old caps because it buffers in the web process).
+- **Watermark overlay gate**: IG/FB videos above `VIDEO_OVERLAY_MAX_MB`
+  (default 250) skip the ffmpeg re-encode and post the original (a multi-GB
+  re-encode would exhaust worker disk/CPU).
+- **Watchdog large-upload fix**: a PUBLISHING post whose non-terminal target
+  has a RECENT `updatedAt` (upload-progress writes touch it) is skipped, not
+  failed — a 40-minute 4GB YouTube upload no longer gets falsely FAILED at
+  the 30-minute mark. Idle-target semantics unchanged.
+- Platform-side realities (not ours to fix): X caps video ~512MB (rejected
+  at INIT, fast), IG rejects oversized Reels after ITS OWN url-pull (no
+  worker bandwidth spent), YouTube happily takes multi-GB.
+
+### Adversarial-review fixes folded in before merge (24-agent workflow, 15 findings → 5 real defects)
+
+- **`Media.fileSize` Int→BigInt** (the critical catch): int4 caps at
+  ~2.1GB — a 3GB upload would land fully in S3 then crash `media.create`
+  with an int4 overflow, orphaning the object. Column widened (int8, safe
+  in-place), Prisma still accepts plain numbers on write; reads return
+  bigint → `Number(...)` at every arithmetic/display site (tsc-enumerated).
+  `upload.complete` fileSize input also bounded (was unbounded).
+- **Fail-closed guard actually fails closed now**: the 200-response branches
+  in `fetchByteRange`/`headRemoteMedia` decide from the Content-Length /
+  Content-Range HEADERS and `body.cancel()` unread — previously they read
+  the body first, which would have materialized the full multi-GB file in
+  RAM on exactly the Range-ignoring hosts the guard exists for. Tests prove
+  it with never-ending mock streams (a body-read would hang the test).
+- **`probeVideoUrl` is async with a 30s timeout** — a network-bound
+  `execFileSync` would have blocked the whole worker event loop.
+- **X + LinkedIn streamed uploads now emit `onProgress` per chunk** — that
+  both surfaces upload progress AND feeds the watchdog's active-upload
+  signal (only YouTube emitted progress before, so long X/LinkedIn uploads
+  could still be falsely reaped).
+- **Watchdog 12h hard ceiling** over the active-upload skip — a tight
+  rate-limit retry loop also keeps targets fresh and would otherwise defer
+  reaping forever.
+
 ### Deferred from Phase 3 (deliberate)
 
 - **Per-platform token buckets**: the platform-aware stagger + reactive

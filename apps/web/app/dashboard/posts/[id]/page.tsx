@@ -697,7 +697,7 @@ export default function PostDetailPage() {
                         <> &middot; {attachment.media.width}x{attachment.media.height}</>
                       )}
                       {attachment.media.fileSize && (
-                        <> &middot; {(attachment.media.fileSize / 1024).toFixed(0)} KB</>
+                        <> &middot; {(Number(attachment.media.fileSize) / 1024).toFixed(0)} KB</>
                       )}
                     </p>
                   </div>

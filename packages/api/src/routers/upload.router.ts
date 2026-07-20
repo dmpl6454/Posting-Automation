@@ -124,7 +124,9 @@ export const uploadRouter = createRouter({
           .max(10_000),
         fileName: z.string().min(1).max(500),
         fileType: z.string().min(1).max(200),
-        fileSize: z.number().int().positive(),
+        // Bounded like initiate — an unbounded declared size would otherwise
+        // flow straight into the Media row (review finding, Phase 4).
+        fileSize: z.number().int().positive().max(MAX_VIDEO_SIZE),
         category: z.string().max(50).optional(),
       })
     )

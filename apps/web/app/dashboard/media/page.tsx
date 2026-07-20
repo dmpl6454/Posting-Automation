@@ -293,9 +293,9 @@ export default function MediaPage() {
                       {media.fileType.split("/")[1]?.toUpperCase()}
                     </Badge>
                     <span className="text-xs text-muted-foreground">
-                      {media.fileSize > 1024 * 1024
-                        ? `${(media.fileSize / (1024 * 1024)).toFixed(1)} MB`
-                        : `${(media.fileSize / 1024).toFixed(0)} KB`}
+                      {Number(media.fileSize) > 1024 * 1024
+                        ? `${(Number(media.fileSize) / (1024 * 1024)).toFixed(1)} MB`
+                        : `${(Number(media.fileSize) / 1024).toFixed(0)} KB`}
                     </span>
                   </div>
                 </CardContent>
