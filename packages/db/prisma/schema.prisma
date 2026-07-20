@@ -283,6 +283,10 @@ model Post {
   scheduledAt DateTime?
   publishedAt DateTime?
   status      PostStatus @default(DRAFT)
+  /// Soft archive for old posts (Phase 3 activity management). NULL = active.
+  /// Deliberately NOT a PostStatus value — the publish pipeline's status
+  /// machine (cron scan, atomic claim, watchdog) must never see a new state.
+  archivedAt DateTime?
 
   aiGenerated Boolean @default(false)
   aiProvider  String?

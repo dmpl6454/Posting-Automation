@@ -75,8 +75,18 @@ function timeAgo(date: Date): string {
   return `${days}d ago`;
 }
 
+/** Phase 3: client-side status filter over the already-loaded feed. */
+type FeedFilter = "all" | "success" | "pending" | "error";
+const FEED_FILTERS: { key: FeedFilter; label: string }[] = [
+  { key: "all", label: "All" },
+  { key: "success", label: "Done" },
+  { key: "pending", label: "Active" },
+  { key: "error", label: "Errors" },
+];
+
 export function ActivityPanel() {
   const [expanded, setExpanded] = useState(false);
+  const [feedFilter, setFeedFilter] = useState<FeedFilter>("all");
   const [, setTick] = useState(0);
   useEffect(() => {
     const id = setInterval(() => setTick((t) => t + 1), 30_000);
@@ -162,11 +172,15 @@ export function ActivityPanel() {
 
   // Sort by timestamp desc
   activities.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
-  const feed = activities.slice(0, 40);
+  const fullFeed = activities.slice(0, 40);
 
-  // Count active items
-  const pendingCount = feed.filter((a) => a.status === "pending").length;
-  const errorCount = feed.filter((a) => a.status === "error").length;
+  // Count active items on the UNFILTERED feed (the header badges + collapsed
+  // dot must reflect reality even while a filter narrows the list below).
+  const pendingCount = fullFeed.filter((a) => a.status === "pending").length;
+  const errorCount = fullFeed.filter((a) => a.status === "error").length;
+
+  const feed =
+    feedFilter === "all" ? fullFeed : fullFeed.filter((a) => a.status === feedFilter);
 
   return (
     <div
@@ -211,6 +225,24 @@ export function ActivityPanel() {
             </Button>
           </div>
 
+          {/* Status filter chips */}
+          <div className="flex gap-1 px-2 py-1.5 border-b border-border/40">
+            {FEED_FILTERS.map((f) => (
+              <button
+                key={f.key}
+                onClick={() => setFeedFilter(f.key)}
+                className={cn(
+                  "rounded-full px-2 py-0.5 text-[10px] transition-colors",
+                  feedFilter === f.key
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted/50 text-muted-foreground hover:bg-muted"
+                )}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+
           {/* Activity Feed */}
           <ScrollArea className="flex-1">
             <div className="p-2 space-y-1">
@@ -223,7 +255,9 @@ export function ActivityPanel() {
               {!isLoading && feed.length === 0 && (
                 <div className="py-8 text-center">
                   <Activity className="h-6 w-6 text-muted-foreground/50 mx-auto mb-2" />
-                  <p className="text-[10px] text-muted-foreground">No recent activity</p>
+                  <p className="text-[10px] text-muted-foreground">
+                    {feedFilter === "all" ? "No recent activity" : "Nothing matches this filter"}
+                  </p>
                 </div>
               )}
 

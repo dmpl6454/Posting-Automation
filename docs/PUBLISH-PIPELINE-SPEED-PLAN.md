@@ -87,21 +87,38 @@ first wins. What shipped:
 - caption-fanout flips and chat `schedule_post` stay on the cron path (≤30s
   late — both already promise "within a couple of minutes").
 
-## Phase 3 (LATER) — scale-out and per-platform pacing
+## Phase 3 (SHIPPED 2026-07-20, branch `feat/phase3-leader-activity-2026-07-20`) — scale-out prep + activity management
 
-- **Second worker container**: BullMQ handles multi-consumer natively; the
-  blocker is `startCronJobs` (setInterval crons would double-fire). Move
-  crons to BullMQ **repeatable jobs / Job Schedulers** with deterministic
-  keys, or gate `startCronJobs` behind a `CRON_LEADER=true` env on exactly
-  one container.
-- **True per-platform rate limiting**: replace the global limiter with
-  per-platform token buckets (BullMQ Pro "groups", or a Redis
-  `INCR`+`EXPIRE` bucket checked in the processor with `moveToDelayed`).
-  Then the stagger can shrink further.
-- **Autopilot stagger** (`agent-run.worker.ts` still uses a flat
-  `(i×channels+chIdx)×10s`) → reuse `computePublishDelays`.
-- Media pre-upload/pre-validation at schedule time (fail at scheduling, not
-  at publish; big media cached S3-side) — largest remaining per-job latency.
+- **Cron leader gate** (`CRON_LEADER`, default leader): `startCronJobs()` is
+  skipped when `CRON_LEADER=false`, so additional worker replicas can be
+  added later as pure queue processors without double-firing every cron.
+  Single-worker deploys are unchanged.
+- **Autopilot stagger** now reuses `computePublishDelays` for the channel
+  dimension (was a flat `(i×channels+chIdx)×10s`); cross-post spacing within
+  a run stays `i×10s`.
+- **Activity management** (owner request): `Post.archivedAt` soft archive
+  (view-level only — deliberately NOT a `PostStatus`; SCHEDULED/PUBLISHING
+  posts refuse archiving because their delayed jobs would still publish),
+  `post.archive`/`post.unarchive` mutations (org-scoped, audited),
+  `post.list` gains additive `sort` (newest/oldest/recently_updated) +
+  `archived` inputs (defaults byte-identical to before), PostsTab gets the
+  sort dropdown + Archived tab + per-card archive buttons, ActivityPanel
+  gets client-side status filter chips (All/Done/Active/Errors; header
+  badges keep counting the unfiltered feed).
+
+### Deferred from Phase 3 (deliberate)
+
+- **Per-platform token buckets**: the platform-aware stagger + reactive
+  rate-limit re-queue + FB provider backoff already pace platform calls;
+  a Redis token bucket in the processor adds real failure modes to the
+  publish path for no observed need at current volume. Revisit only if a
+  platform starts rejecting despite the stagger.
+- **Actually adding a second worker container**: pointless on ONE VPS (same
+  cores; publishing is I/O-bound and `PUBLISH_CONCURRENCY` already covers
+  it). The leader gate makes it a compose-file change when a second box
+  exists.
+- Media pre-upload/pre-validation at schedule time — largest remaining
+  per-job latency.
 
 ## Do-not-regress invariants
 

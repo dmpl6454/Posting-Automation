@@ -265,5 +265,7 @@ describe("repurpose.repurposeFromUrl — T3 no-photo guard", () => {
 
     expect(Array.isArray(res.mediaUrls)).toBe(true);
     expect(res.mediaUrls.length).toBeGreaterThan(0);
-  });
+    // This case renders a full carousel and runs ~4.9s — the 5s default made
+    // it flake under parallel suite load. Not a slow-code signal.
+  }, 15_000);
 });
