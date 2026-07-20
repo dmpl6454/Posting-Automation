@@ -54,8 +54,12 @@ const MAX_PARALLEL_PARTS = 4;
 // at least one transient network blip is near-certain in that window. Each part
 // retries independently (with a FRESH presigned URL per attempt, so URL expiry
 // can never fail a retry); only exhausting all attempts aborts the upload.
-const PART_ATTEMPTS = 4; // 1 initial + 3 retries
-const DEFAULT_RETRY_BASE_DELAY_MS = 1_000; // 1s → 3s → 9s (+ jitter)
+export const PART_ATTEMPTS = 6; // 1 initial + 5 retries
+const DEFAULT_RETRY_BASE_DELAY_MS = 1_000; // 1s → 3s → 9s → 27s → 30s (capped, + jitter)
+// Cap the exponential growth so the total tolerated outage stays ~70s of
+// fast-fail attempts — long enough for a typical Wi-Fi/router blip, short
+// enough that a genuinely dead link surfaces an error in about a minute.
+const MAX_RETRY_DELAY_MS = 30_000;
 // Generous per-part ceiling: 8 MiB at even ~150 kbit/s fits in 10 minutes.
 // Catches genuinely hung sockets without killing slow-but-alive links.
 const PART_TIMEOUT_MS = 10 * 60 * 1000;
@@ -65,6 +69,34 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 /** Errors that retrying can never fix — user aborts and hung-abort signals. */
 const isAbortError = (err: unknown) =>
   err instanceof Error && err.message === "Upload aborted";
+
+/**
+ * While the browser is provably offline, retry attempts fail instantly and
+ * burn the whole budget in seconds. Pause until connectivity returns (bounded
+ * by PART_TIMEOUT_MS; abort-aware) instead of failing a multi-GB upload over
+ * a longer blip. No-op wherever navigator.onLine is unavailable (tests/SSR).
+ */
+function waitForOnline(stop: AbortSignal): Promise<void> {
+  if (typeof navigator === "undefined" || navigator.onLine !== false) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      window.removeEventListener("online", onOnline);
+      stop.removeEventListener("abort", onAbort);
+      clearTimeout(timer);
+    };
+    const onOnline = () => {
+      cleanup();
+      resolve();
+    };
+    const onAbort = () => {
+      cleanup();
+      reject(new Error("Upload aborted"));
+    };
+    const timer = setTimeout(onOnline, PART_TIMEOUT_MS); // give up waiting, let the attempt fail
+    window.addEventListener("online", onOnline, { once: true });
+    stop.addEventListener("abort", onAbort, { once: true });
+  });
+}
 
 /**
  * PUT a single Blob to a presigned URL via XHR (so we get progress events).
@@ -110,6 +142,19 @@ export async function uploadFileMultipart(params: UploadParams): Promise<Complet
   const { file, category, onProgress, signal, api } = params;
   const retryBaseDelayMs = params.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS;
 
+  // Internal stop signal, aggregating the caller's. When ONE part exhausts its
+  // attempts, Promise.all rejects while up to 3 sibling workers are still
+  // mid-PUT or mid-backoff — without this they'd keep retrying (with fresh
+  // signPart URLs) against an uploadId the abort below already killed, burning
+  // up to ~8MB per pointless attempt. Firing this controller kills sibling
+  // XHRs immediately (xhr.abort → "Upload aborted" → non-retryable).
+  const internal = new AbortController();
+  const stop = internal.signal;
+  if (signal) {
+    if (signal.aborted) internal.abort();
+    else signal.addEventListener("abort", () => internal.abort(), { once: true });
+  }
+
   // 1. Initiate
   const initiate = await api.initiate({
     fileName: file.name,
@@ -143,7 +188,7 @@ export async function uploadFileMultipart(params: UploadParams): Promise<Complet
 
     let lastErr: unknown;
     for (let attempt = 1; attempt <= PART_ATTEMPTS; attempt++) {
-      if (signal?.aborted) throw new Error("Upload aborted");
+      if (stop.aborted) throw new Error("Upload aborted");
       try {
         // Fresh presigned URL every attempt — an expired/consumed URL from a
         // failed attempt is never reused.
@@ -160,20 +205,25 @@ export async function uploadFileMultipart(params: UploadParams): Promise<Complet
             loadedPerPart[partNumber - 1] = loaded;
             reportTotal();
           },
-          signal
+          stop
         );
 
         parts.push({ partNumber, etag });
         return;
       } catch (err) {
         lastErr = err;
-        if (signal?.aborted || isAbortError(err)) throw err;
+        if (stop.aborted || isAbortError(err)) throw err;
         // Roll this part's progress back so the bar doesn't lie during retry.
         loadedPerPart[partNumber - 1] = 0;
         reportTotal();
         if (attempt < PART_ATTEMPTS) {
-          // Exponential backoff (1s → 3s → 9s at the default base) + jitter.
-          await sleep(retryBaseDelayMs * 3 ** (attempt - 1) + Math.random() * (retryBaseDelayMs / 2));
+          // Don't burn attempts while provably offline — wait for connectivity.
+          await waitForOnline(stop);
+          // Capped exponential backoff (1s → 3s → 9s → 27s → 30s) + jitter.
+          await sleep(
+            Math.min(MAX_RETRY_DELAY_MS, retryBaseDelayMs * 3 ** (attempt - 1)) +
+              Math.random() * (retryBaseDelayMs / 2)
+          );
         }
       }
     }
@@ -197,23 +247,59 @@ export async function uploadFileMultipart(params: UploadParams): Promise<Complet
     }
     await Promise.all(workers);
   } catch (err) {
-    // Best-effort abort so S3 frees the in-progress parts
+    // Stop the sibling workers FIRST (kills their in-flight XHRs), then free
+    // the stored parts server-side. Promise.all has already subscribed to every
+    // worker, so the siblings' knock-on "Upload aborted" rejections are handled
+    // and the ORIGINAL error (the first rejection) is what we rethrow.
+    internal.abort();
     try {
       await api.abort({ key: initiate.key, uploadId: initiate.uploadId });
     } catch {}
     throw err;
   }
 
-  // 4. Complete
-  const result = await api.complete({
-    key: initiate.key,
-    uploadId: initiate.uploadId,
-    parts,
-    fileName: file.name,
-    fileType: file.type,
-    fileSize: file.size,
-    category,
-  });
+  // 4. Complete — retried like parts: this ONE call converts 30-90 minutes of
+  // transferred bytes into a Media row; a transient blip here must not discard
+  // the whole upload. On definitive failure, best-effort abort so S3 frees the
+  // parts (if a prior attempt DID complete server-side and only the response
+  // was lost, the retry surfaces the server's error and the abort is a
+  // harmless no-op — the server already swallows S3 abort errors).
+  let result: CompleteResult | undefined;
+  let completeErr: unknown;
+  for (let attempt = 1; attempt <= PART_ATTEMPTS; attempt++) {
+    if (stop.aborted) {
+      completeErr = new Error("Upload aborted");
+      break;
+    }
+    try {
+      result = await api.complete({
+        key: initiate.key,
+        uploadId: initiate.uploadId,
+        parts,
+        fileName: file.name,
+        fileType: file.type,
+        fileSize: file.size,
+        category,
+      });
+      break;
+    } catch (err) {
+      completeErr = err;
+      if (stop.aborted || isAbortError(err)) break;
+      if (attempt < PART_ATTEMPTS) {
+        await waitForOnline(stop);
+        await sleep(
+          Math.min(MAX_RETRY_DELAY_MS, retryBaseDelayMs * 3 ** (attempt - 1)) +
+            Math.random() * (retryBaseDelayMs / 2)
+        );
+      }
+    }
+  }
+  if (!result) {
+    try {
+      await api.abort({ key: initiate.key, uploadId: initiate.uploadId });
+    } catch {}
+    throw completeErr;
+  }
 
   onProgress?.(100);
   return result;

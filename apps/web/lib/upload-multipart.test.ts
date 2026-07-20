@@ -11,7 +11,7 @@
  *  - progress callbacks fire only on whole-percent changes.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { uploadFileMultipart } from "./upload-multipart";
+import { uploadFileMultipart, PART_ATTEMPTS } from "./upload-multipart";
 
 type Outcome =
   | { kind: "ok"; etag?: string }
@@ -98,7 +98,12 @@ function makeApi() {
       signPartCalls.push(partNumber);
       return { url: `part-${partNumber}` };
     }),
-    complete: vi.fn(async () => ({ id: "media-1", url: "https://cdn/x.mp4", fileName: "test.mp4", fileType: "video/mp4" })),
+    complete: vi.fn(async (_input: { parts: { partNumber: number }[] }) => ({
+      id: "media-1",
+      url: "https://cdn/x.mp4",
+      fileName: "test.mp4",
+      fileType: "video/mp4",
+    })),
     abort: vi.fn(async () => ({ success: true })),
   };
 }
@@ -120,7 +125,7 @@ describe("uploadFileMultipart retry contract", () => {
 
     expect(result.id).toBe("media-1");
     expect(api.complete).toHaveBeenCalledTimes(1);
-    const completed = api.complete.mock.calls[0]![0] as { parts: { partNumber: number }[] };
+    const completed = api.complete.mock.calls[0]![0];
     expect(completed.parts.map((p) => p.partNumber).sort()).toEqual([1, 2]);
     expect(api.abort).not.toHaveBeenCalled();
   });
@@ -149,15 +154,44 @@ describe("uploadFileMultipart retry contract", () => {
 
   it("aborts the multipart upload only after exhausting every attempt", async () => {
     const api = makeApi();
-    FakeXHR.plan["part-1"] = [{ kind: "error" }, { kind: "error" }, { kind: "error" }, { kind: "error" }];
+    FakeXHR.plan["part-1"] = Array.from({ length: PART_ATTEMPTS }, () => ({ kind: "error" as const }));
 
     await expect(
       uploadFileMultipart({ file: twoPartFile(), api, retryBaseDelayMs: 1 })
     ).rejects.toThrow();
 
-    expect(api.signPartCalls.filter((n) => n === 1)).toHaveLength(4); // 1 + 3 retries
+    expect(api.signPartCalls.filter((n) => n === 1)).toHaveLength(PART_ATTEMPTS);
     expect(api.abort).toHaveBeenCalledTimes(1);
     expect(api.complete).not.toHaveBeenCalled();
+  });
+
+  it("retries a transient complete() failure — the terminal call must not lose the upload", async () => {
+    const api = makeApi();
+    let calls = 0;
+    api.complete.mockImplementation(async (_input: { parts: { partNumber: number }[] }) => {
+      calls++;
+      if (calls <= 2) throw new Error("network blip");
+      return { id: "media-1", url: "https://cdn/x.mp4", fileName: "test.mp4", fileType: "video/mp4" };
+    });
+
+    const result = await uploadFileMultipart({ file: twoPartFile(), api, retryBaseDelayMs: 1 });
+    expect(result.id).toBe("media-1");
+    expect(api.complete).toHaveBeenCalledTimes(3);
+    expect(api.abort).not.toHaveBeenCalled();
+  });
+
+  it("aborts (frees the parts) when complete() definitively fails", async () => {
+    const api = makeApi();
+    api.complete.mockImplementation(async () => {
+      throw new Error("finalize down");
+    });
+
+    await expect(
+      uploadFileMultipart({ file: twoPartFile(), api, retryBaseDelayMs: 1 })
+    ).rejects.toThrow("finalize down");
+
+    expect(api.complete).toHaveBeenCalledTimes(PART_ATTEMPTS);
+    expect(api.abort).toHaveBeenCalledTimes(1);
   });
 
   it("does NOT retry a user abort", async () => {
