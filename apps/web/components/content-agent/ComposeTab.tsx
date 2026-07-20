@@ -620,7 +620,15 @@ ${content}`;
       createPost.mutate({
         content,
         channelIds: selectedChannels,
-        scheduledAt: publishNow ? new Date().toISOString() : scheduledAt || undefined,
+        // DateTimePicker emits a LOCAL "YYYY-MM-DDTHH:mm" string; the API's
+        // z.string().datetime() requires full ISO — convert at the submit
+        // boundary exactly like BulkTab and the post-detail page do. Sending
+        // the raw picker value 400s every Compose "Schedule" click.
+        scheduledAt: publishNow
+          ? new Date().toISOString()
+          : scheduledAt
+            ? new Date(scheduledAt).toISOString()
+            : undefined,
         // PR-5: only sent on the schedule/publish path (draft-save keeps it off).
         ...(uniqueCaptions && selectedChannels.length > 1 && { uniqueCaptions: true }),
         ...(mediaIds.length > 0 && { mediaIds }),
