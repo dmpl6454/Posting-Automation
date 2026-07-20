@@ -4,6 +4,15 @@ export interface PostPublishJobData {
   channelId: string;
   platform: string;
   organizationId: string;
+  /**
+   * Phase 2 exact-time scheduling: the post's scheduledAt (epoch ms) as it
+   * stood when this job was enqueued (schedule-publish.ts). Set ONLY on
+   * schedule-path jobs; the publish worker skips (WITHOUT claiming) when the
+   * post's current scheduledAt no longer matches — a rescheduled/unscheduled
+   * post must never publish at its OLD time. Interactive publishNow/chat/
+   * newsgrid jobs leave this unset and are never guarded.
+   */
+  enqueuedFor?: number;
 }
 
 export interface TokenRefreshJobData {

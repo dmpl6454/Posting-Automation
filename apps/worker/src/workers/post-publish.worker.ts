@@ -4,8 +4,8 @@ import { getSocialProvider } from "@postautomation/social";
 import { QUEUE_NAMES, postPublishQueue, analyticsSyncQueue, type PostPublishJobData, createRedisConnection } from "@postautomation/queue";
 import IORedis from "ioredis";
 import { buildPublishEmail, buildPublishReportCsv } from "../lib/publish-email";
-import { markTargetFailed, buildPublishNotifications, mediaRequiredReason, terminalizeStuckClaim, isSeedNoise } from "../lib/publish-recovery";
-import { PRIORITY_RETRY } from "../lib/publish-priority";
+import { markTargetFailed, buildPublishNotifications, mediaRequiredReason, terminalizeStuckClaim, isSeedNoise, isStaleScheduleJob } from "../lib/publish-recovery";
+import { PRIORITY_RETRY } from "@postautomation/queue";
 
 /** Integer env knob with a default and a sane clamp (bad values → default). */
 function envInt(name: string, def: number, min: number, max: number): number {
@@ -17,7 +17,7 @@ function envInt(name: string, def: number, min: number, max: number): number {
 // Publishing is network-I/O-bound (platform API calls + media uploads), so a
 // single Node process handles well above 3 concurrent publishes. Per-platform
 // protection does NOT live here — it's the per-platform stagger
-// (lib/publish-stagger.ts) + the reactive rate_limit reclassification below +
+// (@postautomation/queue publish-stagger) + the reactive rate_limit reclassification below +
 // the FB provider's own throttle backoff. This limiter is only a global safety
 // valve; at 3/5s it was the cross-tenant choke point (36 starts/min for the
 // whole platform, and three slow FB/YouTube jobs froze publishing for
@@ -229,6 +229,24 @@ export function createPostPublishWorker() {
     async (job: Job<PostPublishJobData>) => {
       const { postTargetId, channelId, platform } = job.data;
       console.log(`[PostPublish] Processing job ${job.id} for target ${postTargetId} (attempt ${job.attemptsMade + 1})`);
+
+      // Phase 2 exact-time guard — schedule-path jobs only (enqueuedFor set).
+      // A rescheduled/unscheduled post keeps its target ids, so this job may
+      // be an orphan of the OLD schedule; skip WITHOUT claiming when the
+      // post's current scheduledAt no longer matches the enqueue snapshot
+      // (the new schedule has its own sched:{targetId}:{epoch} jobs).
+      // Interactive publishNow/chat/newsgrid/agent jobs carry no enqueuedFor
+      // and are never guarded.
+      if (job.data.enqueuedFor != null) {
+        const schedPost = await prisma.post.findUnique({
+          where: { id: job.data.postId },
+          select: { scheduledAt: true },
+        });
+        if (isStaleScheduleJob(job.data.enqueuedFor, schedPost?.scheduledAt ?? null)) {
+          console.log(`[PostPublish] Skipping stale schedule job ${job.id} for ${postTargetId} (post rescheduled/unscheduled/deleted)`);
+          return;
+        }
+      }
 
       // 0. Atomic idempotency claim — only transitions SCHEDULED/FAILED/DRAFT → PUBLISHING.
       // If the target is already PUBLISHING/PUBLISHED or doesn't exist, skip silently.
@@ -545,7 +563,7 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
             `retry-ratelimit-${postTargetId}-${Date.now()}`,
             job.data,
             // PRIORITY_RETRY: when the delay expires this re-queue yields to
-            // fresh interactive + bulk work (lib/publish-priority.ts).
+            // fresh interactive + bulk work (@postautomation/queue publish-priority).
             { delay: delayMs, priority: PRIORITY_RETRY, attempts: 3, backoff: { type: "exponential", delay: 60_000 } }
           );
           // Mark as SCHEDULED (not FAILED) so the UI shows it's pending

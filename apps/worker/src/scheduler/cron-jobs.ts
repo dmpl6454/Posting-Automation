@@ -1,9 +1,8 @@
 import { prisma } from "@postautomation/db";
-import { tokenRefreshQueue, analyticsSyncQueue, agentRunQueue, trendDiscoverQueue, listeningSyncQueue, campaignAnalyticsSyncQueue, brandContentSyncQueue, outreachPollQueue, postPublishQueue, rssSyncQueue, avatarCacheQueue } from "@postautomation/queue";
+import { tokenRefreshQueue, analyticsSyncQueue, agentRunQueue, trendDiscoverQueue, listeningSyncQueue, campaignAnalyticsSyncQueue, brandContentSyncQueue, outreachPollQueue, rssSyncQueue, avatarCacheQueue } from "@postautomation/queue";
 import { runAutoHealerWithLogging } from "../workers/auto-healer.worker";
 import { runCelebrityDetectors } from "../workers/celebrity-detect.worker";
-import { computePublishDelays } from "../lib/publish-stagger";
-import { PRIORITY_BULK } from "../lib/publish-priority";
+import { enqueueScheduledPublishJobs } from "@postautomation/queue";
 
 /**
  * Check for channels with expiring tokens and queue refresh jobs.
@@ -589,6 +588,7 @@ export async function publishScheduledPosts() {
         select: {
           id: true,
           organizationId: true,
+          scheduledAt: true,
           targets: {
             where: { status: "SCHEDULED" },
             select: {
@@ -603,41 +603,28 @@ export async function publishScheduledPosts() {
       if (duePosts.length === 0) break;
 
       for (const post of duePosts) {
-        // Stagger within each platform group only — the first target of every
-        // platform starts immediately; a 60-channel multi-platform post no
-        // longer tails out ~10 minutes behind a blind global index stagger.
-        const delays = computePublishDelays(
-          post.targets.map((t) => ({ platform: t.channel.platform }))
-        );
+        // Reconciliation enqueue (Phase 2): SAME deterministic jobIds as the
+        // creation-time path (sched:{targetId}:{epoch}), so if post.create /
+        // post.update already enqueued these, every add here is a BullMQ
+        // dedupe no-op. For posts with NO creation-time jobs (Redis blip at
+        // save, caption-fanout flips, chat schedule_post, pre-Phase-2 posts)
+        // this IS the enqueue — at most ~30s late. Platform-group stagger and
+        // bulk priority live inside the helper.
+        queued += await enqueueScheduledPublishJobs({
+          postId: post.id,
+          organizationId: post.organizationId,
+          scheduledAt: post.scheduledAt ?? new Date(),
+          targets: post.targets.map((t) => ({
+            id: t.id,
+            channelId: t.channelId,
+            platform: t.channel.platform,
+          })),
+        });
 
-        for (let i = 0; i < post.targets.length; i++) {
-          const target = post.targets[i]!;
-          const jobId = `scheduled-publish-${post.id}-${target.channelId}-${Date.now()}`;
-
-          await postPublishQueue.add(
-            jobId,
-            {
-              postId: post.id,
-              postTargetId: target.id,
-              channelId: target.channelId,
-              platform: target.channel.platform,
-              organizationId: post.organizationId,
-            },
-            {
-              delay: delays[i]!,
-              // Bulk lane — interactive "Publish now" jobs carry NO priority
-              // and are drained first (see lib/publish-priority.ts).
-              priority: PRIORITY_BULK,
-              attempts: 3,
-              backoff: { type: "exponential", delay: 60_000 },
-              removeOnComplete: true,
-              removeOnFail: 100,
-            }
-          );
-          queued++;
-        }
-
-        // Mark post as PUBLISHING so we don't re-queue it next cycle
+        // Mark post as PUBLISHING so we don't re-queue it next cycle. Also
+        // load-bearing for the rate-limit retry path: a retried target flips
+        // back to SCHEDULED, and this post-level flip is what keeps the cron
+        // from re-enqueuing it ahead of its long backoff delay.
         await prisma.post.update({
           where: { id: post.id },
           data: { status: "PUBLISHING" },
