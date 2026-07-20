@@ -25,6 +25,15 @@ function envInt(name: string, def: number, min: number, max: number): number {
 const PUBLISH_CONCURRENCY = envInt("PUBLISH_CONCURRENCY", 10, 1, 25);
 const PUBLISH_LIMITER_MAX = envInt("PUBLISH_LIMITER_MAX", 10, 1, 50);
 
+// Above this, the IG/FB ffmpeg watermark pass (download → re-encode → re-upload
+// in /tmp) is skipped and the original video is posted as-is — a multi-GB
+// re-encode on the shared worker would exhaust disk/CPU and stall the queue.
+// Env-tunable; 250MB comfortably covers normal branded videos.
+const OVERLAY_MAX_BYTES = (() => {
+  const mb = parseInt(process.env.VIDEO_OVERLAY_MAX_MB ?? "", 10);
+  return (Number.isFinite(mb) && mb > 0 ? mb : 250) * 1024 * 1024;
+})();
+
 // Redis pub/sub publisher for upload progress SSE
 const progressPublisher = new IORedis(process.env.REDIS_URL || "redis://localhost:6379", {
   maxRetriesPerRequest: null,
@@ -383,6 +392,9 @@ export function createPostPublishWorker() {
       const content = postTarget.contentOverride ?? contentVariants?.[platform] ?? postTarget.post.content;
       let mediaUrls = postTarget.post.mediaAttachments.map((m) => m.media.url);
       const mediaTypes = postTarget.post.mediaAttachments.map((m) => m.media.fileType);
+      // Number(): fileSize is a Prisma BigInt (Phase 4) — safe up to 2^53,
+      // far beyond any real file; keeps the gate math plain-number.
+      const mediaSizes = postTarget.post.mediaAttachments.map((m) => Number(m.media.fileSize ?? 0));
 
       // Build merged provider metadata: post intent → target overrides → format → channel IDs (wins)
       const channelMetadata = (channel.metadata ?? {}) as Record<string, unknown>;
@@ -418,7 +430,12 @@ export function createPostPublishWorker() {
 
           const processed: string[] = [];
           for (let i = 0; i < mediaUrls.length; i++) {
-            if (mediaTypes[i]?.startsWith("video/")) {
+            // Skip the ffmpeg watermark pass on large videos: it downloads the
+            // whole file to /tmp, re-encodes it, and re-uploads — untenable for
+            // multi-GB Shorts/Reels (disk + CPU + wall-clock). Post the
+            // creator's original video as-is instead of failing or stalling.
+            const tooBigForOverlay = (mediaSizes[i] ?? 0) > OVERLAY_MAX_BYTES;
+            if (mediaTypes[i]?.startsWith("video/") && !tooBigForOverlay) {
               console.log(`[PostPublish] Processing video ${i + 1}: logo=${logoUrl ? "yes" : "name"}, text=${overlayText ? "yes" : "no"}`);
               const newUrl = await processVideoOverlay(mediaUrls[i]!, {
                 text: overlayText,
@@ -431,6 +448,9 @@ export function createPostPublishWorker() {
               });
               processed.push(newUrl);
             } else {
+              if (mediaTypes[i]?.startsWith("video/") && tooBigForOverlay) {
+                console.log(`[PostPublish] Skipping watermark on large video ${i + 1} (${Math.round((mediaSizes[i] ?? 0) / 1024 / 1024)}MB > ${OVERLAY_MAX_BYTES / 1024 / 1024}MB) — posting original`);
+              }
               processed.push(mediaUrls[i]!);
             }
           }

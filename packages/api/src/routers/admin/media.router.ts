@@ -40,7 +40,12 @@ export const adminMediaRouter = createRouter({
         nextCursor = next.id;
       }
 
-      return { items, nextCursor };
+      // fileSize is a Prisma BigInt (Phase 4) — hand the UI a plain number
+      // (exact up to 2^53, far beyond any real file).
+      return {
+        items: items.map((m) => ({ ...m, fileSize: Number(m.fileSize) })),
+        nextCursor,
+      };
     }),
 
   storageStats: superAdminProcedure.query(async ({ ctx }) => {
@@ -71,13 +76,13 @@ export const adminMediaRouter = createRouter({
       byMimeType: byMimeType.map((g) => ({
         mimeType: g.fileType,
         count: g._count.id,
-        totalSize: g._sum.fileSize ?? 0,
+        totalSize: Number(g._sum.fileSize ?? 0),
       })),
       byOrganization: byOrg.map((g) => ({
         organizationId: g.organizationId,
         organizationName: orgMap.get(g.organizationId) ?? "Unknown",
         count: g._count.id,
-        totalSize: g._sum.fileSize ?? 0,
+        totalSize: Number(g._sum.fileSize ?? 0),
       })),
     };
   }),

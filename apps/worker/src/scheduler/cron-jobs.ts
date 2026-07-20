@@ -645,23 +645,37 @@ export async function publishScheduledPosts() {
 
 /**
  * Fix #22/#30: Watchdog for stuck posts.
- * Any post that has been in PUBLISHING state for > 30 minutes without progress is
- * considered stuck. We inspect its targets:
- *   - All targets terminal (PUBLISHED or FAILED) → set post status to match
- *   - Otherwise → set post to FAILED so users know it needs attention
+ * A post PUBLISHING for > STUCK_THRESHOLD without progress is considered stuck.
+ *   - All targets terminal (PUBLISHED/FAILED/CANCELLED) → set post to match
+ *   - A target still ACTIVELY uploading (its own updatedAt moved recently —
+ *     the publish worker bumps PostTarget on every progress tick) → LEAVE the
+ *     post alone; a 3–4GB video upload legitimately outlasts the old 30-min
+ *     window (Phase 4). Only truly idle non-terminal posts are failed.
  * Runs every 5 minutes.
  */
+const WATCHDOG_STUCK_MS = 45 * 60 * 1000;   // post-level idle ceiling (was 30m)
+const WATCHDOG_TARGET_ACTIVE_MS = 10 * 60 * 1000; // a target touched within 10m is "live"
+// Hard ceiling on the active-upload skip (review finding): a target caught in
+// a tight rate-limit retry loop (claim flip → rate_limit → SCHEDULED flip,
+// every 2–10 min) also keeps its updatedAt fresh, which would otherwise defer
+// reaping FOREVER. 12h covers the longest legitimate work (multi-GB upload on
+// a slow uplink; the FB 368 backoff chain ≈ 8.5h) — past it, reap regardless.
+const WATCHDOG_HARD_REAP_MS = 12 * 60 * 60 * 1000;
+
 export async function watchdogPublishingPosts() {
-  const stuckThreshold = new Date(Date.now() - 30 * 60 * 1000); // 30 minutes ago
+  const now = Date.now();
+  const stuckThreshold = new Date(now - WATCHDOG_STUCK_MS);
+  const activeThreshold = new Date(now - WATCHDOG_TARGET_ACTIVE_MS);
+  const hardReapThreshold = new Date(now - WATCHDOG_HARD_REAP_MS);
 
   const stuckPosts = await prisma.post.findMany({
     where: { status: "PUBLISHING", updatedAt: { lt: stuckThreshold } },
-    include: { targets: { select: { status: true } } },
+    include: { targets: { select: { status: true, updatedAt: true } } },
   });
 
   if (stuckPosts.length === 0) return;
 
-  console.log(`[Watchdog] Found ${stuckPosts.length} stuck PUBLISHING post(s)`);
+  console.log(`[Watchdog] Found ${stuckPosts.length} candidate stuck PUBLISHING post(s)`);
 
   for (const post of stuckPosts) {
     const statuses = post.targets.map((t: any) => t.status as string);
@@ -675,11 +689,27 @@ export async function watchdogPublishingPosts() {
         data: { status: newStatus, publishedAt: anyPublished ? new Date() : undefined },
       });
       console.log(`[Watchdog] Post ${post.id}: set to ${newStatus} (all targets terminal)`);
-    } else {
-      // Targets not terminal but post is stuck → fail it so users can retry
-      await prisma.post.update({ where: { id: post.id }, data: { status: "FAILED" } });
-      console.log(`[Watchdog] Post ${post.id}: set to FAILED (stuck with non-terminal targets)`);
+      continue;
     }
+
+    // A non-terminal target whose own updatedAt moved recently is mid-upload
+    // (large video). Don't fail an in-flight publish — UNLESS the post has
+    // been PUBLISHING past the hard ceiling (perpetual retry loops also keep
+    // targets fresh; they must still be reaped eventually).
+    const hasActiveUpload = post.targets.some(
+      (t: any) =>
+        t.status !== "PUBLISHED" && t.status !== "FAILED" && t.status !== "CANCELLED" &&
+        new Date(t.updatedAt) >= activeThreshold
+    );
+    const pastHardCeiling = new Date(post.updatedAt) < hardReapThreshold;
+    if (hasActiveUpload && !pastHardCeiling) {
+      console.log(`[Watchdog] Post ${post.id}: skipped — a target is still actively uploading`);
+      continue;
+    }
+
+    // Idle + non-terminal → genuinely stuck; fail it so users can retry.
+    await prisma.post.update({ where: { id: post.id }, data: { status: "FAILED" } });
+    console.log(`[Watchdog] Post ${post.id}: set to FAILED (stuck with idle non-terminal targets)`);
   }
 }
 

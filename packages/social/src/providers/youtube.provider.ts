@@ -1,7 +1,10 @@
 import type { SocialPlatform } from "@postautomation/db";
-import { execFileSync } from "child_process";
+import { execFileSync, execFile } from "child_process";
+import { promisify } from "util";
 import { writeFileSync, unlinkSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
+
+const execFileAsync = promisify(execFile);
 import crypto from "crypto";
 import { SocialProvider } from "../abstract/social.abstract";
 import type {
@@ -14,6 +17,16 @@ import type {
   PlatformConstraints,
 } from "../abstract/social.types";
 import { fetchT } from "../utils/fetch-timeout";
+import { headRemoteMedia, fetchByteRange } from "../utils/ranged-media";
+
+/**
+ * Files at or below this stay on the classic buffered path (download once,
+ * probe from the buffer, upload from buffer slices) — zero behavior change.
+ * Larger files STREAM: each resumable chunk is fetched via an HTTP Range
+ * request just before upload, so worker memory stays O(chunk) — a 4GB video
+ * no longer needs 4GB of RAM.
+ */
+export const YT_STREAM_THRESHOLD_BYTES = 64 * 1024 * 1024;
 
 export interface ShortVideoProbe {
   width: number;
@@ -51,6 +64,25 @@ export function assertShortDimensions(probe: ShortVideoProbe): void {
   }
 }
 
+function parseProbeOutput(out: string): ShortVideoProbe {
+  const parsed = JSON.parse(out);
+  const stream = parsed.streams?.[0] ?? {};
+  const width = Number(stream.width) || 0;
+  const height = Number(stream.height) || 0;
+  const durationSec = Number(parsed.format?.duration) || 0;
+  if (!width || !height) {
+    throw new Error("Could not read video dimensions for Shorts validation.");
+  }
+  return { width, height, durationSec };
+}
+
+const FFPROBE_ARGS = [
+  "-v", "error",
+  "-select_streams", "v:0",
+  "-show_entries", "stream=width,height:format=duration",
+  "-of", "json",
+];
+
 async function probeVideo(buffer: Buffer, contentType: string): Promise<ShortVideoProbe> {
   const TMP_DIR = "/tmp/yt-probe";
   if (!existsSync(TMP_DIR)) mkdirSync(TMP_DIR, { recursive: true });
@@ -58,29 +90,31 @@ async function probeVideo(buffer: Buffer, contentType: string): Promise<ShortVid
   const tmpPath = join(TMP_DIR, `${crypto.randomBytes(8).toString("hex")}.${ext}`);
   try {
     writeFileSync(tmpPath, buffer);
-    const out = execFileSync(
-      "ffprobe",
-      [
-        "-v", "error",
-        "-select_streams", "v:0",
-        "-show_entries", "stream=width,height:format=duration",
-        "-of", "json",
-        tmpPath,
-      ],
-      { encoding: "utf8" }
-    );
-    const parsed = JSON.parse(out);
-    const stream = parsed.streams?.[0] ?? {};
-    const width = Number(stream.width) || 0;
-    const height = Number(stream.height) || 0;
-    const durationSec = Number(parsed.format?.duration) || 0;
-    if (!width || !height) {
-      throw new Error("Could not read video dimensions for Shorts validation.");
-    }
-    return { width, height, durationSec };
+    const out = execFileSync("ffprobe", [...FFPROBE_ARGS, tmpPath], { encoding: "utf8" });
+    return parseProbeOutput(out);
   } finally {
     try { unlinkSync(tmpPath); } catch { /* best-effort cleanup */ }
   }
+}
+
+/**
+ * Probe a video by URL without downloading it (Phase 4 large-Shorts path).
+ * ffprobe range-seeks over HTTP and reads only the metadata atoms, not the
+ * whole file. The URL is our own S3/MinIO media URL (worker-controlled), and
+ * execFile passes it as a discrete argv element — no shell interpolation.
+ *
+ * ASYNC + hard timeout (review finding): unlike the local-tmp-file probe
+ * above, this call is network-bound — a stalled connection or a
+ * non-faststart MP4 (moov atom at the tail forcing long seeks) must never
+ * block the worker's event loop or hang the job.
+ */
+async function probeVideoUrl(url: string): Promise<ShortVideoProbe> {
+  const { stdout } = await execFileAsync("ffprobe", [...FFPROBE_ARGS, url], {
+    encoding: "utf8",
+    timeout: 30_000,
+    maxBuffer: 4 * 1024 * 1024,
+  });
+  return parseProbeOutput(stdout);
 }
 
 export class YouTubeProvider extends SocialProvider {
@@ -262,19 +296,29 @@ export class YouTubeProvider extends SocialProvider {
     const categoryId = (payload.metadata?.categoryId as string) || "22"; // 22 = People & Blogs
     const onProgress = payload.onProgress;
 
-    // Download the video file (progress: 0→10%)
+    // Probe size/type WITHOUT downloading (progress: 0→10%). Files at or
+    // below YT_STREAM_THRESHOLD_BYTES keep the classic buffered path; larger
+    // files stream chunk-by-chunk via Range requests (memory stays O(chunk)).
     await onProgress?.(5);
-    const videoRes = await fetch(videoUrl);
-    if (!videoRes.ok) throw new Error(`Failed to download video from ${videoUrl}`);
-    const videoBuffer = Buffer.from(await videoRes.arrayBuffer());
-    const videoContentType = videoRes.headers.get("content-type") || "video/mp4";
-    const totalBytes = videoBuffer.length;
+    const remote = await headRemoteMedia(videoUrl);
+    const totalBytes = remote.size;
+    const videoContentType = remote.contentType.startsWith("video/") ? remote.contentType : "video/mp4";
+    const streamLarge = totalBytes > YT_STREAM_THRESHOLD_BYTES;
+
+    let videoBuffer: Buffer | null = null;
+    if (!streamLarge) {
+      const videoRes = await fetch(videoUrl);
+      if (!videoRes.ok) throw new Error(`Failed to download video from ${videoUrl}`);
+      videoBuffer = Buffer.from(await videoRes.arrayBuffer());
+    }
 
     // For Shorts, validate the file actually qualifies BEFORE uploading, so we
     // never silently publish a landscape/long video that YouTube treats as a
     // normal video. (No API flag forces "Short"; classification is by the file.)
     if (isShort) {
-      const probe = await probeVideo(videoBuffer, videoContentType);
+      const probe = videoBuffer
+        ? await probeVideo(videoBuffer, videoContentType)
+        : await probeVideoUrl(videoUrl); // large Short: ffprobe range-seeks the URL
       assertShortDimensions(probe);
     }
     await onProgress?.(10);
@@ -309,14 +353,19 @@ export class YouTubeProvider extends SocialProvider {
     const uploadUrl = initRes.headers.get("location");
     if (!uploadUrl) throw new Error("YouTube upload init failed: no upload URL returned");
 
-    // Step 2: Chunked upload — 4MB chunks with progress callbacks (10→95%)
-    const CHUNK_SIZE = 4 * 1024 * 1024; // 4MB per chunk (YouTube minimum is 256KB, recommend ≥1MB)
+    // Step 2: Chunked upload with progress callbacks (10→95%). Chunk sizes
+    // must be multiples of 256KB (YouTube requirement, except the last chunk).
+    // Streaming mode uses bigger chunks to cut roundtrips; each chunk is
+    // range-fetched just before its PUT and garbage-collected right after.
+    const CHUNK_SIZE = streamLarge ? 16 * 1024 * 1024 : 4 * 1024 * 1024;
     let bytesSent = 0;
     let finalData: any = null;
 
     while (bytesSent < totalBytes) {
       const chunkEnd = Math.min(bytesSent + CHUNK_SIZE, totalBytes);
-      const chunk = videoBuffer.slice(bytesSent, chunkEnd);
+      const chunk = videoBuffer
+        ? videoBuffer.slice(bytesSent, chunkEnd)
+        : await fetchByteRange(videoUrl, bytesSent, chunkEnd - 1);
       const chunkSize = chunk.length;
 
       const chunkRes = await fetch(uploadUrl, {
@@ -326,7 +375,7 @@ export class YouTubeProvider extends SocialProvider {
           "Content-Length": chunkSize.toString(),
           "Content-Range": `bytes ${bytesSent}-${chunkEnd - 1}/${totalBytes}`,
         },
-        body: chunk,
+        body: new Uint8Array(chunk),
       });
 
       bytesSent = chunkEnd;

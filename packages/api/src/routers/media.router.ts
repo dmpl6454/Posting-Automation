@@ -5,8 +5,13 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { createRouter, orgProcedure } from "../trpc";
 import { getS3Client, BUCKET, getPublicUrl } from "../lib/s3";
 
-const MAX_IMAGE_SIZE = 50 * 1024 * 1024;  // 50MB for images
-const MAX_VIDEO_SIZE = 500 * 1024 * 1024; // 500MB for videos
+const MAX_IMAGE_SIZE = 50 * 1024 * 1024;         // 50MB for images
+// Phase 4: creators post 3–4GB Shorts/Reels source files. These go direct to
+// S3 via presigned multipart (this router) — they NEVER pass through the web
+// container or nginx (which cap the proxied small-file route at 512MB), and
+// the publish worker streams them to platforms chunk-by-chunk (ranged-media),
+// so raising this ceiling doesn't add any per-request memory anywhere.
+const MAX_VIDEO_SIZE = 4 * 1024 * 1024 * 1024;   // 4GB for videos
 const MAX_FILE_SIZE = MAX_VIDEO_SIZE;
 const ALLOWED_TYPES = [
   "image/jpeg",
@@ -104,7 +109,7 @@ export const mediaRouter = createRouter({
       if (input.fileSize > sizeLimit) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: `File too large. ${isVideo ? "Videos" : "Images"} must be under ${isVideo ? "500MB" : "50MB"}.`,
+          message: `File too large. ${isVideo ? "Videos" : "Images"} must be under ${isVideo ? "4GB" : "50MB"}.`,
         });
       }
 
