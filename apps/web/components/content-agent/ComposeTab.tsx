@@ -243,6 +243,24 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
       el.src = "";
     };
   }, [postMedia]);
+
+  // Warn before leaving while media is still uploading. Closing/refreshing the
+  // tab mid-multipart-upload is unrecoverable: the in-flight parts are orphaned
+  // on S3 (no abort fires) and no Media row exists yet. This guards accidental
+  // navigation — it cannot (and shouldn't) block a real crash.
+  // `isUploading` covers the submit-time path (resolvePostMediaIds re-uploads
+  // items whose auto-upload failed) which never sets item-level flags.
+  const anyUploading = isUploading || postMedia.some((m) => m.uploading);
+  useEffect(() => {
+    if (!anyUploading) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [anyUploading]);
+
   const createPost = trpc.post.create.useMutation({
     onSuccess: (post: any) => {
       // PR-5: a unique-captions post is parked while the fanout worker writes
@@ -423,17 +441,26 @@ ${content}`;
   };
 
   const startAutoUpload = (file: File, objectUrl: string) => {
-    uploadFileToS3(file, objectUrl)
+    // One AbortController per in-flight tile, keyed by its preview objectUrl —
+    // removing the tile aborts the transfer (frees the S3 multipart parts)
+    // instead of leaving a ghost multi-GB upload running.
+    const controller = new AbortController();
+    uploadAbortsRef.current.set(objectUrl, controller);
+    uploadFileToS3(file, objectUrl, controller.signal)
       .then((mediaId) => {
         setPostMedia((prev) =>
           prev.map((item) => (item.url === objectUrl ? { ...item, mediaId, uploading: false, progress: 100 } : item))
         );
       })
       .catch((err) => {
+        if (controller.signal.aborted) return; // user removed the tile — silent
         toast({ title: "Upload failed", description: humanizeError(err), variant: "destructive" });
         setPostMedia((prev) =>
           prev.map((item) => (item.url === objectUrl ? { ...item, uploading: false } : item))
         );
+      })
+      .finally(() => {
+        uploadAbortsRef.current.delete(objectUrl);
       });
   };
 
@@ -474,7 +501,10 @@ ${content}`;
     setShowMediaPicker(false);
   };
 
-  const uploadFileToS3 = async (file: File, objectUrl?: string): Promise<string> => {
+  // Abort controllers for in-flight tile uploads, keyed by preview objectUrl.
+  const uploadAbortsRef = useRef(new Map<string, AbortController>());
+
+  const uploadFileToS3 = async (file: File, objectUrl?: string, signal?: AbortSignal): Promise<string> => {
     // Small files (≤8MB) use the legacy single-shot endpoint — faster and no CORS prerequisite.
     // Larger files use direct-to-S3 multipart uploads (browser → S3) so we don't buffer
     // multi-GB videos in the Next.js process memory.
@@ -483,7 +513,7 @@ ${content}`;
     if (file.size <= MULTIPART_THRESHOLD) {
       const form = new FormData();
       form.append("file", file);
-      const res = await fetch("/api/upload", { method: "POST", body: form });
+      const res = await fetch("/api/upload", { method: "POST", body: form, signal });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error((err as any).error || "Upload failed");
@@ -495,6 +525,7 @@ ${content}`;
     const { uploadFileMultipart } = await import("~/lib/upload-multipart");
     const result = await uploadFileMultipart({
       file,
+      signal,
       onProgress: (percent) => {
         if (!objectUrl) return;
         setPostMedia((prev) =>
@@ -976,7 +1007,11 @@ ${content}`;
                         )}
                         <button
                           type="button"
-                          onClick={() => setPostMedia((prev) => prev.filter((_, i) => i !== idx))}
+                          onClick={() => {
+                            // Cancel any in-flight upload for this tile first.
+                            uploadAbortsRef.current.get(item.url)?.abort();
+                            setPostMedia((prev) => prev.filter((_, i) => i !== idx));
+                          }}
                           className="absolute -right-1 -top-1 rounded-full bg-destructive p-0.5 text-destructive-foreground opacity-0 transition-opacity group-hover:opacity-100"
                         >
                           <X className="h-3 w-3" />

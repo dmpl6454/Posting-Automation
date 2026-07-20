@@ -26,7 +26,10 @@ export async function GET() {
             userId,
             isRead: false,
           },
-          orderBy: { createdAt: "desc" },
+          // id tiebreaker: equal-timestamp rows must serialize in a stable
+          // order or the clients' string-equality SSE dedup is spuriously
+          // defeated (they'd refetch on every 5s frame).
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
           take: 50,
         });
 

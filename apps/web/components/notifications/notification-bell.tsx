@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useCallback } from "react";
+import { useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Bell, Check, CheckCheck } from "lucide-react";
 import { trpc } from "~/lib/trpc/client";
@@ -62,6 +62,7 @@ export function NotificationBell() {
   const notifications = listData?.notifications ?? [];
 
   // SSE connection for real-time updates
+  const lastSsePayloadRef = useRef<string | null>(null);
   useEffect(() => {
     let eventSource: EventSource | null = null;
     let isMounted = true;
@@ -69,10 +70,13 @@ export function NotificationBell() {
     const connect = () => {
       eventSource = new EventSource("/api/notifications/sse");
 
-      eventSource.onmessage = () => {
-        if (isMounted) {
-          utils.notification.invalidate();
-        }
+      eventSource.onmessage = (e) => {
+        if (!isMounted) return;
+        // The server re-sends the unread list every 5s whether or not it
+        // changed — skip identical payloads so idle tabs don't refetch.
+        if (typeof e.data === "string" && e.data === lastSsePayloadRef.current) return;
+        lastSsePayloadRef.current = typeof e.data === "string" ? e.data : null;
+        utils.notification.invalidate();
       };
 
       eventSource.onerror = () => {
