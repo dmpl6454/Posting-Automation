@@ -24,7 +24,7 @@ export function createAnalyticsSyncWorker() {
         // precedent): LinkedIn Page channels carry { orgId } here, which
         // getPostAnalytics needs for organizationalEntityShareStatistics
         // (impressions/clicks/shares — member posts have no analytics API).
-        metadata: (channel.metadata as Record<string, unknown> | null) ?? undefined,
+        metadata: (channel.metadata ?? undefined) as Record<string, unknown> | undefined,
       };
 
       let analytics;

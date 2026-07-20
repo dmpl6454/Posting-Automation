@@ -204,14 +204,51 @@ export class LinkedInProvider extends SocialProvider {
       const data: any = await res.json();
       const likes = data.likesSummary?.totalLikes ?? 0;
       const comments = data.commentsSummary?.totalFirstLevelComments ?? 0;
+
+      // Best-effort org-post share statistics: LinkedIn exposes
+      // impressions/clicks/shares ONLY for organization (Page) posts, via
+      // organizationalEntityShareStatistics. Member posts have no analytics
+      // API — their zeros are a documented platform limitation. NEVER throw
+      // here: at-age checkpoint jobs rethrow analytics errors, and a stats
+      // hiccup must not fail an otherwise-good likes/comments snapshot.
+      let impressions = 0;
+      let clicks = 0;
+      let shares = 0;
+      let reach = 0;
+      const orgId = tokens.metadata?.orgId as string | undefined;
+      if (orgId) {
+        try {
+          const orgUrn = encodeURIComponent(`urn:li:organization:${orgId}`);
+          const statsRes = await fetch(
+            `https://api.linkedin.com/rest/organizationalEntityShareStatistics?q=organizationalEntity&organizationalEntity=${orgUrn}&shares=List(${encodeURIComponent(platformPostId)})`,
+            { headers: restHeaders(tokens.accessToken) }
+          );
+          if (statsRes.ok) {
+            const statsData: any = await statsRes.json();
+            const stats = statsData.elements?.[0]?.totalShareStatistics;
+            if (stats) {
+              impressions = stats.impressionCount ?? 0;
+              clicks = stats.clickCount ?? 0;
+              shares = stats.shareCount ?? 0;
+              reach = stats.uniqueImpressionsCount ?? 0;
+            }
+          } else {
+            console.warn(`[LinkedIn] share statistics failed ${statsRes.status}: ${await statsRes.text().catch(() => "")}`);
+          }
+        } catch (err: any) {
+          console.warn(`[LinkedIn] share statistics fetch errored (keeping zeros): ${err?.message}`);
+        }
+      }
+
       return {
-        impressions: 0,
-        clicks: 0,
+        impressions,
+        clicks,
         likes,
-        shares: 0,
+        shares,
         comments,
-        reach: 0,
-        engagementRate: 0,
+        reach,
+        // 0–1 fraction, consistent with YT/IG/FB storage (Reports recomputes in SQL)
+        engagementRate: impressions > 0 ? (likes + comments + shares) / impressions : 0,
       };
     } catch {
       return null;
@@ -381,7 +418,12 @@ export class LinkedInProvider extends SocialProvider {
     });
 
     if (!finalizeRes.ok) {
-      console.warn(`[LinkedIn] Video finalize response: ${finalizeRes.status}`);
+      // Throw (mirrors the init/chunk handling) — creating a post against an
+      // unfinalized video URN either fails opaquely at /rest/posts or "succeeds"
+      // with broken media. The worker's classify machinery turns this into a
+      // visible FAILED target with the actionable finalize message.
+      const errText = await finalizeRes.text().catch(() => "");
+      throw new Error(`LinkedIn video finalize failed (${finalizeRes.status}): ${errText}`);
     }
 
     return videoUrn;
