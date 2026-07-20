@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { trpc } from "~/lib/trpc/client";
 import { Button } from "~/components/ui/button";
 import { Badge } from "~/components/ui/badge";
@@ -109,6 +109,9 @@ export function ActivityPanel() {
     { refetchInterval: 10_000 }
   );
 
+  // Stable across renders — safe to use as the SSE effect's only dependency.
+  const utils = trpc.useUtils();
+
   const [isRefreshing, setIsRefreshing] = useState(false);
   const handleRefresh = async () => {
     if (isRefreshing) return;
@@ -120,16 +123,48 @@ export function ActivityPanel() {
     }
   };
 
-  // Listen for SSE events to trigger refetch
+  // Listen for SSE events to trigger refetch.
+  //
+  // ⚠️ THE DEPS MUST BE REFERENTIALLY STABLE — `utils` is tRPC's stable proxy.
+  // The original deps were `[refetch, postActivity]`; `postActivity` is the
+  // whole useQuery RESULT object, which has a NEW identity on every render, so
+  // every render tore down and recreated the EventSource. Each new connection
+  // receives the server's first frame immediately → refetch → re-render →
+  // reconnect: a self-sustaining ~20-25/s connect+refetch storm in EVERY
+  // dashboard tab (~700k SSE requests/day platform-wide, ~40 DB queries/s per
+  // tab) that eventually crashed the tab outright during multi-GB uploads
+  // (root-caused 2026-07-20 — the "page flashes and my upload vanished" bug).
+  // Do NOT put query results or refetch closures back in this dep array.
+  const lastSsePayloadRef = useRef<string | null>(null);
   useEffect(() => {
-    const es = new EventSource("/api/notifications/sse");
-    es.onmessage = () => {
-      refetch();
-      postActivity.refetch();
+    let es: EventSource | null = null;
+    let disposed = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    const connect = () => {
+      if (disposed) return;
+      es = new EventSource("/api/notifications/sse");
+      es.onmessage = (e) => {
+        // The server re-sends the unread list every 5s whether or not it
+        // changed — skip identical payloads so idle tabs don't refetch.
+        if (typeof e.data === "string" && e.data === lastSsePayloadRef.current) return;
+        lastSsePayloadRef.current = typeof e.data === "string" ? e.data : null;
+        utils.notification.list.invalidate();
+        utils.post.recentActivity.invalidate();
+      };
+      es.onerror = () => {
+        es?.close();
+        // Reconnect with a real delay (mirrors NotificationBell) — the 60s/10s
+        // polling on the queries above covers the gap.
+        if (!disposed) reconnectTimer = setTimeout(connect, 10_000);
+      };
     };
-    es.onerror = () => es.close();
-    return () => es.close();
-  }, [refetch, postActivity]);
+    connect();
+    return () => {
+      disposed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      es?.close();
+    };
+  }, [utils]);
 
   // Merge notifications + post activity into unified feed
   const activities: ActivityItem[] = [];

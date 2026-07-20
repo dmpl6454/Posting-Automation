@@ -243,6 +243,22 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
       el.src = "";
     };
   }, [postMedia]);
+
+  // Warn before leaving while media is still uploading. Closing/refreshing the
+  // tab mid-multipart-upload is unrecoverable: the in-flight parts are orphaned
+  // on S3 (no abort fires) and no Media row exists yet. This guards accidental
+  // navigation — it cannot (and shouldn't) block a real crash.
+  const anyUploading = postMedia.some((m) => m.uploading);
+  useEffect(() => {
+    if (!anyUploading) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [anyUploading]);
+
   const createPost = trpc.post.create.useMutation({
     onSuccess: (post: any) => {
       // PR-5: a unique-captions post is parked while the fanout worker writes
