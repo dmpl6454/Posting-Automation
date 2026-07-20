@@ -24,6 +24,7 @@ vi.mock("@postautomation/queue", () => ({
   scopedProgressId: (_u: string, p: string) => `scoped:${p}`,
   agentRunQueue: { add: vi.fn(async () => {}) },
   postPublishQueue: { add: vi.fn(async () => {}) },
+  enqueueScheduledPublishJobs: vi.fn(async () => 0),
   repurposeVideoQueue: { add: vi.fn(async () => {}) },
 }));
 

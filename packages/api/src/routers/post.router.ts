@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
-import { postPublishQueue, captionFanoutQueue } from "@postautomation/queue";
+import { postPublishQueue, captionFanoutQueue, enqueueScheduledPublishJobs } from "@postautomation/queue";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import crypto from "crypto";
@@ -233,9 +233,32 @@ export const postRouter = createRouter({
         },
       });
 
-      // Scheduled posts are picked up by the publishScheduledPosts cron (runs every 2 min).
-      // Do NOT enqueue here — doing so creates a second job with a different jobId that
-      // BullMQ cannot dedupe against the cron's job, causing duplicate publishing.
+      // Phase 2 exact-time scheduling: enqueue per-target DELAYED publish jobs
+      // now, with DETERMINISTIC jobIds (sched:{targetId}:{scheduledAtEpoch}) —
+      // the 30s reconciliation cron re-adds the SAME ids at due time, so BullMQ
+      // dedupes and the two producers can overlap freely. (The old "do NOT
+      // enqueue here" rule existed because the cron's jobIds were
+      // non-deterministic; deterministic ids are what make this safe.)
+      // Best-effort: a Redis blip here must never fail post creation — the
+      // cron reconciles, costing only exactness (≤30s), never the post.
+      // Caption-fanout posts are parked DRAFT and enqueue after the flip via
+      // the cron path instead.
+      if (post.status === "SCHEDULED" && post.scheduledAt && post.targets.length > 0) {
+        try {
+          await enqueueScheduledPublishJobs({
+            postId: post.id,
+            organizationId: ctx.organizationId,
+            scheduledAt: post.scheduledAt,
+            targets: post.targets.map((t) => ({
+              id: t.id,
+              channelId: t.channelId,
+              platform: t.channel.platform,
+            })),
+          });
+        } catch (queueErr: any) {
+          console.warn(`[post.create] exact-time enqueue failed for ${post.id} (cron will reconcile): ${queueErr?.message}`);
+        }
+      }
 
       // PR-5: ONE caption-fanout job per post (jobId dedupes re-submits). The
       // worker writes the per-target captions, then flips DRAFT→SCHEDULED for
@@ -374,6 +397,31 @@ export const postRouter = createRouter({
           tags: true,
         },
       });
+
+      // Phase 2 exact-time scheduling: (re-)enqueue the delayed publish jobs
+      // for the post's CURRENT schedule + targets. Idempotent — deterministic
+      // jobIds (sched:{targetId}:{epoch}) dedupe against jobs the create path
+      // or a previous update already added. A reschedule mints NEW ids (the
+      // epoch changed) and the orphaned old-time jobs are neutralized by the
+      // worker's isStaleScheduleJob guard; a channel swap recreates targets
+      // (new ids), and the old targets' jobs die on the atomic claim.
+      // Best-effort: the 30s cron reconciles on a Redis blip.
+      if (updatedPost.status === "SCHEDULED" && updatedPost.scheduledAt && updatedPost.targets.length > 0) {
+        try {
+          await enqueueScheduledPublishJobs({
+            postId: updatedPost.id,
+            organizationId: ctx.organizationId,
+            scheduledAt: updatedPost.scheduledAt,
+            targets: updatedPost.targets.map((t) => ({
+              id: t.id,
+              channelId: t.channelId,
+              platform: t.channel.platform,
+            })),
+          });
+        } catch (queueErr: any) {
+          console.warn(`[post.update] exact-time enqueue failed for ${updatedPost.id} (cron will reconcile): ${queueErr?.message}`);
+        }
+      }
 
       // Fire-and-forget audit log
       createAuditLog({

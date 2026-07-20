@@ -58,26 +58,34 @@ correctness is protected by the atomic `SCHEDULED→PUBLISHING` claim + the
    `priority: 10`. **Invariant: do NOT add a priority to the interactive
    producers** — unprioritized IS the fast lane.
 
-## Phase 2 (NEXT) — exact-time scheduling (±2s instead of ≤30s)
+## Phase 2 (SHIPPED 2026-07-20, branch `feat/exact-time-publish-2026-07-20`) — exact-time scheduling (±2s instead of ≤30s)
 
-Enqueue a **delayed job per target at post-creation time**
-(`delay = scheduledAt − now`, plus platform stagger) with **deterministic
-jobIds** (`sched:{targetId}:{scheduledAtEpoch}` — exactly 3 colon segments,
-BullMQ constraint) so re-submits and the cron dedupe naturally. Required
-pieces, all or nothing:
+A delayed job per target is enqueued **at post-creation/update time**
+(`delay = scheduledAt − now` + platform stagger) with **deterministic jobIds**
+`sched:{targetId}:{scheduledAtEpoch}` (exactly 3 colon segments — BullMQ
+constraint). The 30s cron still runs, now as a **reconciliation sweep** using
+the SAME helper → the SAME ids → BullMQ dedupes; whichever producer runs
+first wins. What shipped:
 
-- `post.update` reschedule/cancel must `queue.remove(oldJobId)` and re-add
-  (today the cron comment in post.router explains why creation-time enqueue
-  was removed: the cron's `Date.now()` jobIds defeat dedupe — deterministic
-  ids fix exactly that).
-- Worker-side guard: before claiming, skip (without claiming) when the post's
-  `scheduledAt` is still in the future — a stale delayed job for a
-  rescheduled post must never publish early.
-- Demote the cron to a **reconciliation sweep** (every 2–5 min, same
-  deterministic jobIds → duplicate adds are no-ops) for posts whose creation
-  enqueue failed (Redis blip) or that were flipped by caption-fanout.
-- Keep the DRAFT→SCHEDULED caption-fanout flip on the cron path (it already
-  relies on cron pickup — or enqueue directly in the flip with the same id).
+- `packages/queue/src/schedule-publish.ts` — `buildScheduledPublishJobs`
+  (pure, tested) + `enqueueScheduledPublishJobs`. The stagger + priority libs
+  moved from `apps/worker/src/lib/` into `packages/queue/src/` so the API can
+  import them.
+- `post.create` and `post.update` call the helper **best-effort**
+  (try/catch): a Redis blip at save time never fails the mutation — the cron
+  reconciles, costing ≤30s of exactness, never the post.
+- **Stale-job guard instead of `queue.remove`**: rescheduling keeps target
+  ids, so old-time jobs survive — the worker checks
+  `isStaleScheduleJob(job.data.enqueuedFor, post.scheduledAt)` BEFORE the
+  atomic claim and skips orphans (reschedule/unschedule/publishNow/delete all
+  change or null `scheduledAt`). Simpler and race-free vs. chasing job
+  removal.
+- Cron keeps the post-level SCHEDULED→PUBLISHING flip — it is **load-bearing
+  for the rate-limit retry path** (a retried target flips back to SCHEDULED;
+  the post-level flip is what keeps reconciliation from re-enqueuing it ahead
+  of its long FB backoff).
+- caption-fanout flips and chat `schedule_post` stay on the cron path (≤30s
+  late — both already promise "within a couple of minutes").
 
 ## Phase 3 (LATER) — scale-out and per-platform pacing
 

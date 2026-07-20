@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const addMock = vi.fn();
+const enqueueMock = vi.fn();
 const findManyMock = vi.fn();
 const updateMock = vi.fn();
 
@@ -13,20 +13,22 @@ vi.mock("@postautomation/db", () => ({
   },
 }));
 vi.mock("@postautomation/queue", () => ({
-  postPublishQueue: { add: (...a: any[]) => addMock(...a) },
-  rssSyncQueue: {}, tokenRefreshQueue: {}, analyticsSyncQueue: {}, agentRunQueue: {},
-  trendDiscoverQueue: {}, listeningSyncQueue: {}, campaignAnalyticsSyncQueue: {},
-  brandContentSyncQueue: {}, outreachPollQueue: {}, avatarCacheQueue: {},
+  enqueueScheduledPublishJobs: (...a: any[]) => enqueueMock(...a),
+  postPublishQueue: {}, rssSyncQueue: {}, tokenRefreshQueue: {}, analyticsSyncQueue: {},
+  agentRunQueue: {}, trendDiscoverQueue: {}, listeningSyncQueue: {},
+  campaignAnalyticsSyncQueue: {}, brandContentSyncQueue: {}, outreachPollQueue: {},
+  avatarCacheQueue: {},
 }));
 vi.mock("../../workers/auto-healer.worker", () => ({ runAutoHealerWithLogging: vi.fn() }));
 vi.mock("../../workers/celebrity-detect.worker", () => ({ runCelebrityDetectors: vi.fn() }));
 
 import { publishScheduledPosts } from "../cron-jobs";
 
-function duePost(id: string, platforms: string[]) {
+function duePost(id: string, platforms: string[], scheduledAt = new Date("2026-07-20T05:00:00Z")) {
   return {
     id,
     organizationId: "org1",
+    scheduledAt,
     targets: platforms.map((platform, i) => ({
       id: `${id}-t${i}`,
       channelId: `${id}-c${i}`,
@@ -36,34 +38,32 @@ function duePost(id: string, platforms: string[]) {
 }
 
 beforeEach(() => {
-  addMock.mockReset();
+  enqueueMock.mockReset();
+  enqueueMock.mockImplementation(async (args: any) => args.targets.length);
   findManyMock.mockReset();
   updateMock.mockReset();
   updateMock.mockResolvedValue({});
 });
 
 describe("publishScheduledPosts", () => {
-  it("enqueues one bulk-priority job per target with platform-grouped stagger, then flips the post to PUBLISHING", async () => {
-    findManyMock.mockResolvedValueOnce([
-      duePost("p1", ["FACEBOOK", "TELEGRAM", "FACEBOOK"]),
-    ]);
+  it("reconciliation-enqueues each due post via the shared helper (deterministic ids), then flips it to PUBLISHING", async () => {
+    const scheduledAt = new Date("2026-07-20T04:59:40Z");
+    findManyMock.mockResolvedValueOnce([duePost("p1", ["FACEBOOK", "TELEGRAM"], scheduledAt)]);
     findManyMock.mockResolvedValue([]);
 
     await publishScheduledPosts();
 
-    expect(addMock).toHaveBeenCalledTimes(3);
-    const opts = addMock.mock.calls.map((c) => c[2]);
-    // First target of EVERY platform starts immediately; only the second
-    // FACEBOOK target waits its same-platform stagger.
-    expect(opts.map((o) => o.delay)).toEqual([0, 0, 10_000]);
-    // Bulk lane — must yield to unprioritized interactive publishNow jobs.
-    for (const o of opts) expect(o.priority).toBe(5);
-    expect(addMock.mock.calls[0]![1]).toMatchObject({
+    expect(enqueueMock).toHaveBeenCalledTimes(1);
+    // Same args shape the create-path uses — that arg parity (postId +
+    // scheduledAt + target ids) is what makes the jobIds collide and dedupe.
+    expect(enqueueMock.mock.calls[0]![0]).toEqual({
       postId: "p1",
-      postTargetId: "p1-t0",
-      channelId: "p1-c0",
-      platform: "FACEBOOK",
       organizationId: "org1",
+      scheduledAt,
+      targets: [
+        { id: "p1-t0", channelId: "p1-c0", platform: "FACEBOOK" },
+        { id: "p1-t1", channelId: "p1-c1", platform: "TELEGRAM" },
+      ],
     });
     expect(updateMock).toHaveBeenCalledWith({
       where: { id: "p1" },
@@ -79,7 +79,7 @@ describe("publishScheduledPosts", () => {
     await publishScheduledPosts();
 
     expect(findManyMock).toHaveBeenCalledTimes(2); // second batch < 50 → stop
-    expect(addMock).toHaveBeenCalledTimes(51);
+    expect(enqueueMock).toHaveBeenCalledTimes(51);
   });
 
   it("stops after one query when the first batch is not full", async () => {

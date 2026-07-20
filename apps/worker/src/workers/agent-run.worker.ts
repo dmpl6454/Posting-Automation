@@ -5,7 +5,7 @@ import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import crypto from "crypto";
 import { resolveOrgAuthor } from "../lib/system-user";
 import { resolveAgentRunReview } from "./agent-run-review";
-import { PRIORITY_BULK } from "../lib/publish-priority";
+import { PRIORITY_BULK } from "@postautomation/queue";
 
 const SCHEDULE_HOURS = [9, 12, 15, 18]; // 9am, 12pm, 3pm, 6pm
 
@@ -293,7 +293,7 @@ export function createAgentRunWorker() {
                 {
                   delay: Math.max(baseDelay, 0) + staggerMs,
                   // Background lane — autopilot yields to interactive
-                  // "Publish now" jobs (lib/publish-priority.ts).
+                  // "Publish now" jobs (@postautomation/queue publish-priority).
                   priority: PRIORITY_BULK,
                   attempts: 3,
                   backoff: { type: "exponential", delay: 60_000 },

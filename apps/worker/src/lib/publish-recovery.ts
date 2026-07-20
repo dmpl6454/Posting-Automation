@@ -154,3 +154,29 @@ export function terminalizeStuckClaim(opts: {
 export function isSeedNoise(jobData: { postId?: string }): boolean {
   return typeof jobData.postId === "string" && jobData.postId.startsWith("seed-post-");
 }
+
+/**
+ * Phase 2 exact-time guard: is this schedule-path job STALE?
+ *
+ * Creation-time delayed jobs carry `enqueuedFor` = the post's scheduledAt
+ * (epoch ms) as of enqueue. A SCHEDULED post can be rescheduled WITHOUT its
+ * targets being recreated (post.update keeps target ids when only the date
+ * changes), so the old-time job still exists and would otherwise publish at
+ * the OLD time. The publish worker calls this BEFORE the atomic claim and
+ * skips silently when it returns true — the reschedule minted fresh jobs
+ * under the new epoch, and unschedule/publishNow paths reset scheduledAt so
+ * the mismatch catches those too.
+ *
+ * `scheduledAt` is the post's CURRENT value (null when the post is gone or
+ * unscheduled → always stale). Tolerance covers ms-truncation only — the
+ * enqueue snapshot and the stored column come from the same Date value, so
+ * exact equality is the expected match.
+ */
+export function isStaleScheduleJob(
+  enqueuedFor: number,
+  scheduledAt: Date | null | undefined,
+  toleranceMs = 1_000
+): boolean {
+  if (!scheduledAt) return true;
+  return Math.abs(scheduledAt.getTime() - enqueuedFor) > toleranceMs;
+}

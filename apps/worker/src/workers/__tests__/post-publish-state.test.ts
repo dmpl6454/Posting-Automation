@@ -3,6 +3,7 @@ import {
   markTargetFailed,
   mediaRequiredReason,
   terminalizeStuckClaim,
+  isStaleScheduleJob,
 } from "../../lib/publish-recovery";
 
 /** Mirror of the worker's classifyError media_required branch (worker line 199). */
@@ -58,5 +59,33 @@ describe("final-attempt orphan terminalization", () => {
 
   it("does NOT force FAILED when the claim succeeded", () => {
     expect(terminalizeStuckClaim({ claimCount: 1, isFinalAttempt: true })).toBe(false);
+  });
+});
+
+describe("isStaleScheduleJob (Phase 2 exact-time guard)", () => {
+  const T0 = 1_800_000_000_000;
+
+  it("matches when the post's scheduledAt equals the enqueue snapshot", () => {
+    expect(isStaleScheduleJob(T0, new Date(T0))).toBe(false);
+  });
+
+  it("tolerates sub-second storage truncation", () => {
+    expect(isStaleScheduleJob(T0, new Date(T0 + 999))).toBe(false);
+  });
+
+  it("is stale after a reschedule (scheduledAt moved)", () => {
+    expect(isStaleScheduleJob(T0, new Date(T0 + 30_000))).toBe(true);
+    expect(isStaleScheduleJob(T0, new Date(T0 - 30_000))).toBe(true);
+  });
+
+  it("is stale when the post was unscheduled or deleted (null scheduledAt)", () => {
+    expect(isStaleScheduleJob(T0, null)).toBe(true);
+    expect(isStaleScheduleJob(T0, undefined)).toBe(true);
+  });
+
+  it("is stale after publishNow reset scheduledAt to the click time", () => {
+    // publishNow sets scheduledAt = now; the orphaned creation-time job for
+    // the original (future) schedule must not fire at the old time.
+    expect(isStaleScheduleJob(T0 + 3_600_000, new Date(T0))).toBe(true);
   });
 });
