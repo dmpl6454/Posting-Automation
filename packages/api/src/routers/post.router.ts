@@ -44,20 +44,34 @@ export const postRouter = createRouter({
         status: z.enum(["DRAFT", "SCHEDULED", "PUBLISHING", "PUBLISHED", "FAILED", "CANCELLED"]).optional(),
         limit: z.number().min(1).max(100).default(20),
         cursor: z.string().optional(),
+        // Phase 3 activity management (both additive — defaults reproduce the
+        // pre-Phase-3 list exactly, since no post has archivedAt set until a
+        // user archives one):
+        // archived=false (default) hides archived posts; true shows ONLY them.
+        archived: z.boolean().default(false),
+        sort: z.enum(["newest", "oldest", "recently_updated"]).default("newest"),
       })
     )
     .query(async ({ ctx, input }) => {
+      const orderBy =
+        input.sort === "oldest"
+          ? ({ createdAt: "asc" } as const)
+          : input.sort === "recently_updated"
+            ? ({ updatedAt: "desc" } as const)
+            : ({ createdAt: "desc" } as const);
+
       const posts = await ctx.prisma.post.findMany({
         where: {
           organizationId: ctx.organizationId,
           ...(input.status && { status: input.status }),
+          archivedAt: input.archived ? { not: null } : null,
         },
         include: {
           targets: { include: { channel: true } },
           mediaAttachments: { include: { media: true } },
           tags: true,
         },
-        orderBy: { createdAt: "desc" },
+        orderBy,
         take: input.limit + 1,
         ...(input.cursor && { cursor: { id: input.cursor }, skip: 1 }),
       });
@@ -451,6 +465,73 @@ export const postRouter = createRouter({
         action: AUDIT_ACTIONS.POST_DELETED,
         entityType: "Post",
         entityId: input.id,
+      }).catch(() => {});
+
+      return { success: true };
+    }),
+
+  /**
+   * Phase 3 activity management — soft-archive an old post out of the default
+   * list. Archiving is a VIEW concern only (archivedAt column), never a
+   * status change: SCHEDULED/PUBLISHING posts are blocked because they have
+   * live pipeline work in flight (delayed jobs would still publish them,
+   * which would look like a bug against an "archived" post).
+   */
+  archive: orgProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const post = await ctx.prisma.post.findFirst({
+        where: { id: input.id, organizationId: ctx.organizationId },
+        select: { id: true, status: true, archivedAt: true },
+      });
+      if (!post) throw new TRPCError({ code: "NOT_FOUND" });
+      if (post.status === "SCHEDULED" || post.status === "PUBLISHING") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "This post is still scheduled to publish. Cancel or let it publish before archiving.",
+        });
+      }
+      if (post.archivedAt) return { success: true }; // already archived — idempotent
+
+      await ctx.prisma.post.update({
+        where: { id: input.id },
+        data: { archivedAt: new Date() },
+      });
+
+      createAuditLog({
+        organizationId: ctx.organizationId,
+        userId: (ctx.session.user as any).id,
+        action: AUDIT_ACTIONS.POST_UPDATED,
+        entityType: "Post",
+        entityId: input.id,
+        metadata: { archived: true },
+      }).catch(() => {});
+
+      return { success: true };
+    }),
+
+  /** Undo archive — restores the post to the default list. */
+  unarchive: orgProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const post = await ctx.prisma.post.findFirst({
+        where: { id: input.id, organizationId: ctx.organizationId },
+        select: { id: true },
+      });
+      if (!post) throw new TRPCError({ code: "NOT_FOUND" });
+
+      await ctx.prisma.post.update({
+        where: { id: input.id },
+        data: { archivedAt: null },
+      });
+
+      createAuditLog({
+        organizationId: ctx.organizationId,
+        userId: (ctx.session.user as any).id,
+        action: AUDIT_ACTIONS.POST_UPDATED,
+        entityType: "Post",
+        entityId: input.id,
+        metadata: { archived: false },
       }).catch(() => {});
 
       return { success: true };

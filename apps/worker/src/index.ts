@@ -71,8 +71,17 @@ const repurposeVideoWorker = createRepurposeVideoWorker();
 const avatarCacheWorker = createAvatarCacheWorker();
 const captionFanoutWorker = createCaptionFanoutWorker();
 
-// Start cron jobs
-startCronJobs();
+// Start cron jobs — leader-gated for future multi-worker scale-out: the
+// setInterval crons must run in EXACTLY ONE container or every scheduled
+// scan/sync double-fires (the publish path would survive via the atomic
+// claim, but analytics/RSS/outreach syncs would all duplicate). Default ON —
+// today's single-worker deploy is unchanged; set CRON_LEADER=false ONLY on
+// additional worker replicas (they then do pure queue processing).
+if (process.env.CRON_LEADER !== "false") {
+  startCronJobs();
+} else {
+  console.log("[Cron] CRON_LEADER=false — crons disabled on this instance (queue processing only)");
+}
 
 // Start health check HTTP server
 const healthServer = startHealthServer();

@@ -5,7 +5,7 @@ import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import crypto from "crypto";
 import { resolveOrgAuthor } from "../lib/system-user";
 import { resolveAgentRunReview } from "./agent-run-review";
-import { PRIORITY_BULK } from "@postautomation/queue";
+import { PRIORITY_BULK, computePublishDelays } from "@postautomation/queue";
 
 const SCHEDULE_HOURS = [9, 12, 15, 18]; // 9am, 12pm, 3pm, 6pm
 
@@ -251,6 +251,13 @@ export function createAgentRunWorker() {
           // Create PostTarget — ONE per unique platform (not all channels)
           const mediaRequiredPlatforms = ["INSTAGRAM", "FACEBOOK"];
           let targetsCreated = 0;
+          // Phase 3: platform-aware channel stagger (same shape as the
+          // scheduled-post path) — unrelated platforms start together, only
+          // same-platform channels space out. Cross-post spacing within a run
+          // stays i × 10s (below).
+          const channelDelays = computePublishDelays(
+            uniqueChannels.map((c) => ({ platform: c.platform }))
+          );
           for (let chIdx = 0; chIdx < uniqueChannels.length; chIdx++) {
             const channel = uniqueChannels[chIdx]!;
             // Autopilot only generates still images, never video. YouTube requires
@@ -280,7 +287,7 @@ export function createAgentRunWorker() {
             // approve flow (approvePost → autopilot-schedule → publish cron).
             if (review.publishNow) {
               const baseDelay = scheduledAt.getTime() - Date.now();
-              const staggerMs = (i * uniqueChannels.length + chIdx) * 10_000;
+              const staggerMs = i * 10_000 + channelDelays[chIdx]!;
               await postPublishQueue.add(
                 `agent-publish-${post.id}-${channel.id}`,
                 {
