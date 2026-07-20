@@ -12,7 +12,10 @@ export interface ActiveTask {
   draft?: {
     content?: string;
     channels?: string[];
+    /** @deprecated kept for back-compat with persisted payloads — use `media` */
     mediaUrls?: string[];
+    /** Restorable attachments: items with a Media row id or a non-blob URL. */
+    media?: { url: string; mediaId?: string }[];
   };
   createdAt: number;
 }

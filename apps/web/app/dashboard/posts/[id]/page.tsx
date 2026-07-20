@@ -106,7 +106,18 @@ export default function PostDetailPage() {
           }
         } catch {}
       };
-      es.onerror = () => es.close();
+      es.onerror = () => {
+        // Drop this target's live value BEFORE closing: the render falls back
+        // to the DB-polled target.uploadProgress (refetched every 2s), instead
+        // of a stale SSE percent shadowing it forever — an SSE blip at 42% of
+        // a 4GB upload used to freeze the bar at 42% for the remaining hour.
+        setLiveProgress((prev) => {
+          const next = { ...prev };
+          delete next[target.id];
+          return next;
+        });
+        es.close();
+      };
       sources.push(es);
     }
     return () => sources.forEach((es) => es.close());
@@ -422,30 +433,33 @@ export default function PostDetailPage() {
                   key={target.id}
                   className="rounded-lg border p-3 space-y-2"
                 >
-                  <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-muted">
+                  {/* min-w-0 + truncate + shrink-0: long channel names must
+                      truncate instead of pushing status/actions off a phone
+                      viewport (360-414px). */}
+                  <div className="flex items-center justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted">
                       <TargetStatusIcon
                         className={`h-4 w-4 text-muted-foreground ${
                           target.status === "PUBLISHING" ? "animate-spin" : ""
                         }`}
                       />
                     </div>
-                    <div>
-                      <p className="text-sm font-medium">{target.channel.name}</p>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium">{target.channel.name}</p>
                       <div className="flex items-center gap-2">
                         <Badge variant="outline" className="text-[10px]">
                           {target.channel.platform}
                         </Badge>
                         {target.channel.username && (
-                          <span className="text-xs text-muted-foreground">
+                          <span className="truncate text-xs text-muted-foreground">
                             @{target.channel.username}
                           </span>
                         )}
                       </div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex shrink-0 items-center gap-2">
                     <Badge variant={targetConfig.variant} className="text-xs">
                       {target.status.charAt(0) + target.status.slice(1).toLowerCase()}
                     </Badge>
@@ -810,7 +824,9 @@ export default function PostDetailPage() {
           )}
         </div>
 
-        <div className="flex items-center gap-3">
+        {/* flex-wrap: at 360-414px the Save/Schedule/Publish cluster must wrap
+            instead of overflowing the viewport. */}
+        <div className="flex flex-wrap items-center gap-3">
           {/* Save — only for editable posts */}
           {isEditable && (
             <Button

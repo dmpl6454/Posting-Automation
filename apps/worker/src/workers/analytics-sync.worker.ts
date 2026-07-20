@@ -20,6 +20,11 @@ export function createAnalyticsSyncWorker() {
       const tokens = {
         accessToken: channel.accessToken,
         refreshToken: channel.refreshToken ?? undefined,
+        // Thread channel metadata into tokens (mirrors the avatar-cache
+        // precedent): LinkedIn Page channels carry { orgId } here, which
+        // getPostAnalytics needs for organizationalEntityShareStatistics
+        // (impressions/clicks/shares — member posts have no analytics API).
+        metadata: (channel.metadata as Record<string, unknown> | null) ?? undefined,
       };
 
       let analytics;

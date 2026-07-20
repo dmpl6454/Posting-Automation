@@ -11,13 +11,14 @@
  *  - progress callbacks fire only on whole-percent changes.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { uploadFileMultipart, PART_ATTEMPTS } from "./upload-multipart";
+import { uploadFileMultipart, PART_ATTEMPTS, COMPLETE_ATTEMPTS } from "./upload-multipart";
 
 type Outcome =
   | { kind: "ok"; etag?: string }
   | { kind: "error" }
   | { kind: "timeout" }
-  | { kind: "abort" };
+  | { kind: "abort" }
+  | { kind: "status"; status: number };
 
 /**
  * Minimal XMLHttpRequest fake. Outcomes are planned per URL (the mocked
@@ -68,6 +69,11 @@ class FakeXHR {
           break;
         case "abort":
           this.onabort?.();
+          break;
+        case "status":
+          this.status = outcome.status;
+          this.responseText = "<?xml version=\"1.0\"?><Error><Code>XMinioStorageFull</Code></Error>";
+          this.onload?.();
           break;
         case "ok": {
           this.status = 200;
@@ -190,7 +196,20 @@ describe("uploadFileMultipart retry contract", () => {
       uploadFileMultipart({ file: twoPartFile(), api, retryBaseDelayMs: 1 })
     ).rejects.toThrow("finalize down");
 
-    expect(api.complete).toHaveBeenCalledTimes(PART_ATTEMPTS);
+    expect(api.complete).toHaveBeenCalledTimes(COMPLETE_ATTEMPTS);
+    expect(api.abort).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a 507 storage-full part response terminally (1 attempt, friendly message)", async () => {
+    const api = makeApi();
+    FakeXHR.plan["part-1"] = [{ kind: "status", status: 507 }];
+
+    await expect(
+      uploadFileMultipart({ file: twoPartFile(), api, retryBaseDelayMs: 1 })
+    ).rejects.toThrow(/storage is full/i);
+
+    // Terminal: exactly ONE attempt for that part — no retry ladder.
+    expect(api.signPartCalls.filter((n) => n === 1)).toHaveLength(1);
     expect(api.abort).toHaveBeenCalledTimes(1);
   });
 

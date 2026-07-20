@@ -249,7 +249,7 @@ export function ReportsTab() {
               <button
                 key={w.value}
                 onClick={() => setWin(w.value)}
-                className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                className={`rounded-md px-3 py-2 [@media(hover:hover)]:py-1 text-xs font-medium transition-colors ${
                   win === w.value ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"
                 }`}
               >
@@ -260,7 +260,7 @@ export function ReportsTab() {
           <div className="flex rounded-lg border p-0.5">
             <button
               onClick={() => setMode("current")}
-              className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+              className={`rounded-md px-3 py-2 [@media(hover:hover)]:py-1 text-xs font-medium transition-colors ${
                 mode === "current" ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"
               }`}
             >
@@ -269,7 +269,7 @@ export function ReportsTab() {
             <button
               onClick={() => setMode("at_age")}
               title="Shows posts old enough to have reached this age (published at least one window ago), with metrics as they stood exactly 24h/7d/15d/30d after publish. At-age data accrues for posts published after 2026-07-17 — older posts show —."
-              className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+              className={`rounded-md px-3 py-2 [@media(hover:hover)]:py-1 text-xs font-medium transition-colors ${
                 mode === "at_age" ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"
               }`}
             >
@@ -280,9 +280,11 @@ export function ReportsTab() {
 
         <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
           <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          Views ride on Impressions (YouTube/Threads report views there). Twitter metrics need a paid
-          API tier; Instagram doesn&apos;t expose clicks/shares. Facebook refreshes at publish, at-age
-          checkpoints, and Sync Now only. All times UTC.
+          Views ride on Impressions (YouTube/Threads report views there; IG Reels and FB videos report
+          plays/views there). Twitter metrics need a paid API tier; Instagram doesn&apos;t expose clicks
+          (shares only on Reels). LinkedIn exposes likes/comments only for member posts — views/clicks
+          populate for Page posts when available. Facebook refreshes at publish, at-age checkpoints, and
+          Sync Now only. All times UTC.
         </p>
       </CardHeader>
 

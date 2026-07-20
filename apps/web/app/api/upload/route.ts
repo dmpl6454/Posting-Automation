@@ -8,7 +8,12 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300; // 5 min timeout for large uploads
 
 const MAX_IMAGE_SIZE = 50 * 1024 * 1024;   // 50MB
-const MAX_VIDEO_SIZE = 500 * 1024 * 1024;  // 500MB
+// This route BUFFERS the whole file in web-process memory (~2x file size per
+// in-flight request: formData Blob + Buffer copy). Large videos must use the
+// browser→S3 multipart path (useSmartUpload routes >8MB there automatically) —
+// with a 500MB cap here, a few concurrent phone-video uploads could OOM the
+// web container. Do NOT raise this; raise the multipart caps instead.
+const MAX_VIDEO_SIZE = 64 * 1024 * 1024;   // 64MB (was 500MB pre-2026-07-20)
 const MAX_FILE_SIZE = MAX_VIDEO_SIZE;
 const ALLOWED_TYPES = [
   "image/jpeg",
@@ -68,7 +73,7 @@ export async function POST(req: Request) {
   const sizeLimit = isVideo ? MAX_VIDEO_SIZE : MAX_IMAGE_SIZE;
   if (file.size > sizeLimit) {
     return NextResponse.json(
-      { error: `File too large. ${isVideo ? "Videos" : "Images"} must be under ${isVideo ? "500" : "50"}MB.` },
+      { error: `File too large. ${isVideo ? "Videos over 64MB upload via the Media page or Compose (direct-to-storage). Images" : "Images"} must be under ${isVideo ? "64" : "50"}MB here.` },
       { status: 400 }
     );
   }

@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { trpc } from "~/lib/trpc/client";
+import { useSmartUpload } from "~/lib/use-smart-upload";
 import { Button } from "~/components/ui/button";
 import { Badge } from "~/components/ui/badge";
 import { Textarea } from "~/components/ui/textarea";
@@ -108,6 +109,7 @@ export default function SuperAgentPage() {
   const sendMessageMutation = trpc.chat.sendMessage.useMutation();
   const executeActionMutation = trpc.chat.executeAction.useMutation();
   const utils = trpc.useUtils();
+  const { uploadFile } = useSmartUpload();
 
   // Fix #33: load capability list from backend
   const { data: capabilitiesData } = trpc.chat.capabilities.useQuery();
@@ -236,18 +238,10 @@ export default function SuperAgentPage() {
   /* ── Send message ── */
   // Upload an image/video and attach it to the next message (audit fix 2026-06-06)
   const handleFileUpload = useCallback(async (file: File) => {
-    const form = new FormData();
-    form.append("file", file);
     try {
-      const res = await fetch("/api/upload", { method: "POST", body: form });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        // When the server returns a non-JSON error (500 HTML page, gateway
-        // timeout, etc.) body.error is empty — fall back to the HTTP status so
-        // the message isn't the useless "Upload failed: Upload failed" (Bug #1).
-        throw new Error(body.error || `Upload failed (HTTP ${res.status} ${res.statusText || ""})`.trim());
-      }
-      const { id, url, fileType } = await res.json();
+      // ≤8MB → proxied /api/upload; larger → browser→S3 multipart (never
+      // buffers in the web process — the old path OOM'd on big videos).
+      const { id, url, fileType } = await uploadFile(file);
       setAttachments((prev) => [...prev, { mediaId: id, url, fileType: fileType || file.type }]);
     } catch (e: any) {
       setMessages((prev) => [
@@ -255,7 +249,7 @@ export default function SuperAgentPage() {
         { id: `err-${Date.now()}`, role: "system", content: `Upload failed: ${e?.message || "network error — please try again"}` },
       ]);
     }
-  }, []);
+  }, [uploadFile]);
 
   const handleSend = async (content?: string) => {
     const text = (content || input).trim();

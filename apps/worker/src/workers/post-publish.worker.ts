@@ -34,6 +34,22 @@ const OVERLAY_MAX_BYTES = (() => {
   return (Number.isFinite(mb) && mb > 0 ? mb : 250) * 1024 * 1024;
 })();
 
+// Heavy-media publish cap: a streamed multi-GB upload (YouTube resumable, X
+// chunked APPENDs, LinkedIn instruction PUTs) holds its concurrency slot for
+// the ENTIRE serial chunk loop — minutes to an hour. Unbounded, ten such jobs
+// occupy every slot and a one-line interactive tweet waits tens of minutes
+// behind them (fast-lane ordering only governs which WAITING job starts next;
+// it cannot preempt running jobs). Excess heavy jobs are DEFERRED via the
+// rate-limit re-queue pattern, never blocked in-process (a blocking wait would
+// hold the slot anyway and trip the 45-min watchdog). IG/FB/TikTok/Threads are
+// URL-pull (the platform fetches media itself) and deliberately exempt.
+// Per-process counter — single worker container today; if extra replicas ever
+// ship (CRON_LEADER=false processors), each gets its own cap: still bounded.
+const HEAVY_MEDIA_CONCURRENCY = envInt("HEAVY_MEDIA_CONCURRENCY", 3, 1, Math.max(1, PUBLISH_CONCURRENCY - 1));
+const HEAVY_MEDIA_THRESHOLD_BYTES = envInt("HEAVY_MEDIA_THRESHOLD_MB", 300, 1, 4096) * 1024 * 1024;
+const HEAVY_STREAM_PLATFORMS = new Set(["YOUTUBE", "TWITTER", "LINKEDIN"]);
+let heavyActive = 0;
+
 // Redis pub/sub publisher for upload progress SSE
 const progressPublisher = new IORedis(process.env.REDIS_URL || "redis://localhost:6379", {
   maxRetriesPerRequest: null,
@@ -396,6 +412,38 @@ export function createPostPublishWorker() {
       // far beyond any real file; keeps the gate math plain-number.
       const mediaSizes = postTarget.post.mediaAttachments.map((m) => Number(m.media.fileSize ?? 0));
 
+      // Heavy-upload slot gate (see HEAVY_MEDIA_CONCURRENCY above). Runs after
+      // the atomic claim + publishedId short-circuit (a published target never
+      // reaches here) and BEFORE the overlay pass so a deferred job never
+      // wastes an ffmpeg re-encode. The SCHEDULED flip releases the claim
+      // exactly like the rate-limit path; the atomic claim + publishedId
+      // short-circuit keep the delayed re-add idempotent, and job.data carries
+      // enqueuedFor so a mid-defer reschedule is still killed by the
+      // stale-schedule guard on the next run.
+      const totalMediaBytes = mediaSizes.reduce((a, b) => a + b, 0);
+      const isHeavy = HEAVY_STREAM_PLATFORMS.has(platform) && totalMediaBytes > HEAVY_MEDIA_THRESHOLD_BYTES;
+      if (isHeavy && heavyActive >= HEAVY_MEDIA_CONCURRENCY) {
+        // Jittered 45-90s: N deferred jobs must not thunder back in lockstep.
+        const delayMs = 45_000 + Math.floor(Math.random() * 45_000);
+        console.log(
+          `[PostPublish] Heavy-upload slots busy (${heavyActive}/${HEAVY_MEDIA_CONCURRENCY}) — deferring ${postTargetId} ${Math.round(delayMs / 1000)}s`
+        );
+        await postPublishQueue.add(`retry-heavyslot-${postTargetId}-${Date.now()}`, job.data, {
+          delay: delayMs,
+          priority: PRIORITY_RETRY,
+          attempts: 3,
+          backoff: { type: "exponential", delay: 60_000 },
+        });
+        await prisma.postTarget.update({
+          where: { id: postTargetId },
+          data: { status: "SCHEDULED", errorMessage: "Waiting for a large-upload slot" },
+        });
+        return;
+      }
+      // NOTE: the counter increments immediately before the publish try block
+      // below (whose finally releases it) — incrementing here would leak the
+      // slot if anything between the gate and that try throws.
+
       // Build merged provider metadata: post intent → target overrides → format → channel IDs (wins)
       const channelMetadata = (channel.metadata ?? {}) as Record<string, unknown>;
       const providerMetadata: Record<string, unknown> = {
@@ -445,6 +493,9 @@ export function createPostPublishWorker() {
                 channelName: channel.name, // fallback watermark if no logo
                 logoPosition: "bottom_right",
                 logoSize: 120,
+                // Defense-in-depth vs forged/NULL DB fileSize — the overlay
+                // re-checks the REAL Content-Length and skips if oversized.
+                maxBytes: OVERLAY_MAX_BYTES,
               });
               processed.push(newUrl);
             } else {
@@ -528,6 +579,7 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
       }
 
       let result;
+      if (isHeavy) heavyActive++;
       try {
         console.log(`[PostPublish] Publishing to ${platform} via ${provider.displayName} (mediaUrls: ${mediaUrls.length})`);
 
@@ -666,6 +718,11 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
           }).catch((e: any) => console.error(`[PostPublish] failed to mark target FAILED:`, e?.message));
           throw publishErr; // rethrow so BullMQ records the job failure + error log
         }
+      } finally {
+        // Release the heavy-upload slot on EVERY exit from the publish section
+        // — success, rate-limit defer return, token-refresh/truncation retry
+        // paths, and throws all pass through here.
+        if (isHeavy) heavyActive = Math.max(0, heavyActive - 1);
       }
 
       if (!result) {
