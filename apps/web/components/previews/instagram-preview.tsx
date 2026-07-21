@@ -1,6 +1,7 @@
 "use client";
 
 import { Card, CardContent } from "~/components/ui/card";
+import { PreviewMedia, type MediaKind } from "./preview-media";
 import { Avatar, AvatarImage, AvatarFallback } from "~/components/ui/avatar";
 import {
   Heart,
@@ -13,6 +14,7 @@ import {
 export interface PostPreviewProps {
   content: string;
   mediaUrls?: string[];
+  mediaKinds?: MediaKind[];
   authorName?: string;
   authorHandle?: string;
   authorAvatar?: string;
@@ -48,6 +50,7 @@ function getInitials(name: string): string {
 export function InstagramPreview({
   content,
   mediaUrls,
+  mediaKinds,
   authorName = "yourname",
   authorHandle = "yourname",
   authorAvatar,
@@ -84,10 +87,9 @@ export function InstagramPreview({
         <div className="relative aspect-[4/5] w-full bg-zinc-100 dark:bg-zinc-800">
           {mediaUrls && mediaUrls.length > 0 ? (
             <>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={mediaUrls[0]}
-                alt="Post media"
+              <PreviewMedia
+                url={mediaUrls[0]}
+                kind={mediaKinds?.[0]}
                 className="h-full w-full object-cover"
               />
               {mediaUrls.length > 1 && (
