@@ -468,7 +468,14 @@ export function createPostPublishWorker() {
         });
         return;
       }
-      let mediaUrls = postTarget.post.mediaAttachments.map((m) => choosePublishUrl(platform, m.media as { url: string; fileType: string; metadata?: unknown }));
+      let mediaUrls = postTarget.post.mediaAttachments.map((m) =>
+        choosePublishUrl(platform, {
+          url: m.media.url,
+          fileType: m.media.fileType,
+          fileSize: Number(m.media.fileSize ?? 0),
+          metadata: (m.media as { metadata?: unknown }).metadata,
+        })
+      );
       const mediaTypes = postTarget.post.mediaAttachments.map((m) => m.media.fileType);
       // Number(): fileSize is a Prisma BigInt (Phase 4) — safe up to 2^53,
       // far beyond any real file; keeps the gate math plain-number.
