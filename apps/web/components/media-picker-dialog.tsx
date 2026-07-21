@@ -2,6 +2,7 @@
 
 import { useState, useDeferredValue } from "react";
 import { trpc } from "~/lib/trpc/client";
+import { withPosterHint } from "~/lib/video-poster";
 import {
   Dialog,
   DialogContent,
@@ -161,7 +162,7 @@ export function MediaPickerDialog({
                   {isVideo ? (
                     <div className="absolute inset-0 bg-black">
                       <video
-                        src={item.url}
+                        src={withPosterHint(item.url)}
                         className="h-full w-full object-cover"
                         preload="metadata"
                         muted

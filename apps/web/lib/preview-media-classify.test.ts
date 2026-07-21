@@ -1,5 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { classifyMediaUrl } from "../components/previews/preview-media";
+import { withPosterHint } from "./video-poster";
+
+describe("withPosterHint", () => {
+  it("appends the Safari poster-frame fragment exactly once", () => {
+    expect(withPosterHint("https://cdn/v.mp4")).toBe("https://cdn/v.mp4#t=0.001");
+    expect(withPosterHint("https://cdn/v.mp4?sig=1")).toBe("https://cdn/v.mp4?sig=1#t=0.001");
+    expect(withPosterHint("https://cdn/v.mp4#t=5")).toBe("https://cdn/v.mp4#t=5");
+  });
+});
 
 /**
  * Guards the video/image split that keeps video URLs out of <img>.

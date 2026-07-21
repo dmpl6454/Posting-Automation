@@ -2,6 +2,7 @@
 
 import { humanizeError } from "~/lib/errors";
 import { withNormalizedVideoMime } from "~/lib/video-mime";
+import { withPosterHint } from "~/lib/video-poster";
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
@@ -656,10 +657,22 @@ ${content}`;
         releaseUploadSlot();
       }
     })()
-      .then((mediaId) => {
+      .then(({ id, url }) => {
+        // Swap the tile/preview to the durable S3 URL once the Media row
+        // exists: the blob: URL only lives as long as this page, previews
+        // render local blobs as a placeholder (WebKit ingest guard), and a
+        // restored draft can't resurrect a blob — the remote URL fixes all
+        // three at once.
         setPostMedia((prev) =>
-          prev.map((item) => (item.url === objectUrl ? { ...item, mediaId, uploading: false, progress: 100 } : item))
+          prev.map((item) =>
+            item.url === objectUrl ? { ...item, mediaId: id, url: url || item.url, uploading: false, progress: 100 } : item
+          )
         );
+        if (url && objectUrl.startsWith("blob:")) {
+          // Deferred so the re-rendered <video> has committed its new src
+          // before the blob backing the old src is released.
+          setTimeout(() => URL.revokeObjectURL(objectUrl), 5_000);
+        }
       })
       .catch((err) => {
         if (controller.signal.aborted) return; // user removed the tile — silent
@@ -746,7 +759,11 @@ ${content}`;
     };
   }, []);
 
-  const uploadFileToS3 = async (file: File, objectUrl?: string, signal?: AbortSignal): Promise<string> => {
+  const uploadFileToS3 = async (
+    file: File,
+    objectUrl?: string,
+    signal?: AbortSignal
+  ): Promise<{ id: string; url?: string }> => {
     // Small files (≤8MB) use the legacy single-shot endpoint — faster and no CORS prerequisite.
     // Larger files use direct-to-S3 multipart uploads (browser → S3) so we don't buffer
     // multi-GB videos in the Next.js process memory.
@@ -761,7 +778,7 @@ ${content}`;
         throw new Error((err as any).error || "Upload failed");
       }
       const data = await res.json();
-      return data.id;
+      return { id: data.id, url: data.url };
     }
 
     const { uploadFileMultipart } = await import("~/lib/upload-multipart");
@@ -789,7 +806,7 @@ ${content}`;
         abort: (input) => uploadAbort.mutateAsync(input),
       },
     });
-    return result.id;
+    return { id: result.id, url: result.url };
   };
 
   /**
@@ -836,7 +853,7 @@ ${content}`;
       if (item.mediaId) {
         mediaIds.push(item.mediaId);
       } else if (item.file) {
-        const id = await uploadFileToS3(item.file, item.url);
+        const { id } = await uploadFileToS3(item.file, item.url);
         // Persist the id so a later failure in this loop (or a createPost
         // error) doesn't force a full re-upload on retry — the retry then
         // takes the item.mediaId fast path above.
@@ -857,7 +874,7 @@ ${content}`;
           const blob = await resp.blob();
           const ext = item.url.match(/\.(png|jpg|jpeg|webp|gif|mp4|webm|mov)(?:\?|$)/i)?.[1] || "jpg";
           const file = new File([blob], `compose-${Date.now()}.${ext}`, { type: blob.type || "image/jpeg" });
-          mediaIds.push(await uploadFileToS3(file));
+          mediaIds.push((await uploadFileToS3(file)).id);
         } catch {
           unresolved.push(item.url);
         }
@@ -1239,7 +1256,7 @@ ${content}`;
                           <div className="relative h-16 w-24 overflow-hidden rounded-md border bg-muted">
                             {!skipInlineVideo && (
                             <video
-                              src={item.url}
+                              src={withPosterHint(item.url)}
                               className="h-full w-full object-cover"
                               muted
                               preload="metadata"
