@@ -10,6 +10,17 @@ import type {
   PlatformConstraints,
 } from "../abstract/social.types";
 import { fetchT } from "../utils/fetch-timeout";
+import { headRemoteMedia } from "../utils/ranged-media";
+
+/**
+ * Videos larger than this are published via Graph's `file_url` remote-pull
+ * (Facebook fetches the file from our public S3 URL itself — same public-URL
+ * prerequisite as Instagram's `video_url` container), so the worker never
+ * buffers a multi-GB file in RAM. Files at or below the threshold (and files
+ * whose size can't be probed) keep the classic buffered multipart path
+ * byte-identical. Mirrors the YouTube 64MB buffered/streamed split.
+ */
+export const FB_URL_PULL_MIN_BYTES = 64 * 1024 * 1024;
 
 // ── Facebook API Usage Tracking ────────────────────────────────────────
 // Facebook returns x-app-usage and x-page-usage headers as JSON:
@@ -332,6 +343,15 @@ export class FacebookProvider extends SocialProvider {
   }
 
   async getPostAnalytics(tokens: OAuthTokens, platformPostId: string): Promise<SocialAnalytics | null> {
+    // Video posts store a BARE Video node id (the {page}/videos edge returns
+    // only {id} — no post_id), while every other path stores "{page}_{post}".
+    // Post-node insights/fields are invalid on a Video node (the calls error
+    // and this function returned null forever), so route bare ids to the
+    // Video-node analytics endpoints instead.
+    if (!platformPostId.includes("_")) {
+      return this.getVideoAnalytics(tokens, platformPostId);
+    }
+
     const res = await this.graphFetch(
       `${this.graphBaseUrl}/${this.apiVersion}/${platformPostId}/insights?metric=post_impressions,post_clicks,post_reactions_like_total,post_engaged_users&access_token=${tokens.accessToken}`
     );
@@ -372,6 +392,57 @@ export class FacebookProvider extends SocialProvider {
       shares,
       comments,
       reach: metrics.post_engaged_users || 0,
+      engagementRate,
+    };
+  }
+
+  /**
+   * Analytics for a bare Video node id (video posts). Only Video-node-valid
+   * metrics/fields are requested — `shares`/`reactions` are NOT Video-node
+   * fields and would fail the whole Graph call (error #100). Video views map
+   * onto `impressions`, matching the documented "views ride on impressions"
+   * convention (YouTube/Threads) that Reports relies on.
+   */
+  private async getVideoAnalytics(tokens: OAuthTokens, videoId: string): Promise<SocialAnalytics | null> {
+    const insightsRes = await this.graphFetch(
+      `${this.graphBaseUrl}/${this.apiVersion}/${videoId}/video_insights?metric=total_video_impressions,total_video_views&access_token=${tokens.accessToken}`
+    );
+
+    const insightsData: any = await insightsRes.json();
+    if (!insightsRes.ok) {
+      console.warn(`[Facebook] video_insights failed for ${videoId}: ${JSON.stringify(insightsData)}`);
+    }
+
+    const metrics: Record<string, number> = {};
+    if (insightsData.data) {
+      for (const metric of insightsData.data) {
+        metrics[metric.name] = metric.values?.[0]?.value || 0;
+      }
+    }
+
+    const videoRes = await this.graphFetch(
+      `${this.graphBaseUrl}/${this.apiVersion}/${videoId}?fields=likes.summary(true),comments.summary(true)&access_token=${tokens.accessToken}`
+    );
+
+    const videoData: any = await videoRes.json();
+    if (!videoRes.ok) {
+      console.warn(`[Facebook] video fields fetch failed for ${videoId}: ${JSON.stringify(videoData)}`);
+      return null;
+    }
+
+    const likes = videoData.likes?.summary?.total_count || 0;
+    const comments = videoData.comments?.summary?.total_count || 0;
+
+    const impressions = metrics.total_video_impressions || metrics.total_video_views || 0;
+    const engagementRate = impressions > 0 ? (likes + comments) / impressions : 0;
+
+    return {
+      impressions,
+      clicks: 0,
+      likes,
+      shares: 0,
+      comments,
+      reach: 0,
       engagementRate,
     };
   }
@@ -506,6 +577,40 @@ export class FacebookProvider extends SocialProvider {
     mediaUrl: string,
     message?: string
   ): Promise<{ id: string; post_id?: string }> {
+    // Probe the size WITHOUT downloading. Large files are published via
+    // `file_url` remote-pull so the worker never buffers a multi-GB video
+    // (the buffered path holds ~3× the file size in RAM and hits Node's
+    // 4GiB Buffer ceiling). Unknown size (probe failed) or small files keep
+    // the classic buffered multipart path byte-identical.
+    let remoteSize: number | null = null;
+    try {
+      remoteSize = (await headRemoteMedia(mediaUrl)).size;
+    } catch {
+      // Size unknown — fall through to the buffered path.
+    }
+
+    if (remoteSize != null && remoteSize > FB_URL_PULL_MIN_BYTES) {
+      const params = new URLSearchParams({
+        access_token: tokens.accessToken,
+        file_url: mediaUrl,
+      });
+      if (message) params.set("description", message);
+
+      const pullRes = await this.graphFetch(
+        `${this.graphBaseUrl}/${this.apiVersion}/${pageId}/videos`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: params.toString(),
+        },
+        pageId
+      );
+
+      const pullData: any = await pullRes.json();
+      if (!pullRes.ok) throw new Error(`Facebook video post failed: ${JSON.stringify(pullData)}`);
+      return pullData;
+    }
+
     const { buffer, contentType, fileName } = await this.fetchMediaAsBuffer(mediaUrl);
 
     const fields: Record<string, string> = {
@@ -549,9 +654,17 @@ export class FacebookProvider extends SocialProvider {
     if (isVideo) {
       const data = await this.uploadVideoToFacebook(tokens, pageId, firstUrl, payload.content);
       const postId = data.post_id || data.id;
+      // The {page}/videos edge returns only a bare Video node id (no post_id),
+      // so the "{page}_{post}" → /posts/ permalink rewrite is a no-op for
+      // videos — facebook.com/{videoId} is a dead link. Use the canonical
+      // /{page}/videos/{id} form instead; if Graph ever DOES return post_id,
+      // the existing permalink form still wins.
+      const url = data.post_id
+        ? `https://www.facebook.com/${data.post_id.replace("_", "/posts/")}`
+        : `https://www.facebook.com/${pageId}/videos/${data.id}`;
       return {
         platformPostId: postId,
-        url: `https://www.facebook.com/${postId.replace("_", "/posts/")}`,
+        url,
         metadata: data,
       };
     }

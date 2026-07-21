@@ -180,3 +180,38 @@ export function isStaleScheduleJob(
   if (!scheduledAt) return true;
   return Math.abs(scheduledAt.getTime() - enqueuedFor) > toleranceMs;
 }
+
+/**
+ * Heavy-upload lane (scenario batch 2026-07-20). Streamed publishes
+ * (YouTube/X/LinkedIn) hold a worker slot for their entire chunk loop, so
+ * only HEAVY_MEDIA_CONCURRENCY may run at once; the excess is DEFERRED via
+ * the rate-limit re-queue pattern. This message is written to the deferred
+ * target's errorMessage AND matched by the watchdog's keep-alive check —
+ * shared constant so the two sites can never drift.
+ */
+export const HEAVY_SLOT_WAIT_MESSAGE = "Waiting for a large-upload slot";
+
+/** Is this publish "heavy" — a streamed platform with media above the threshold? */
+export function isHeavyPublish(
+  platform: string,
+  totalMediaBytes: number,
+  thresholdBytes: number,
+  heavyPlatforms: ReadonlySet<string>
+): boolean {
+  return heavyPlatforms.has(platform) && totalMediaBytes > thresholdBytes;
+}
+
+/**
+ * Gate decision (pure): null → proceed; otherwise the jittered defer delay.
+ * 45–90s jitter so N deferred jobs never thunder back in lockstep.
+ */
+export function planHeavyDefer(opts: {
+  isHeavy: boolean;
+  active: number;
+  cap: number;
+  rand?: () => number;
+}): { delayMs: number } | null {
+  if (!opts.isHeavy || opts.active < opts.cap) return null;
+  const rand = opts.rand ?? Math.random;
+  return { delayMs: 45_000 + Math.floor(rand() * 45_000) };
+}

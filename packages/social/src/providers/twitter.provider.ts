@@ -161,16 +161,38 @@ export class TwitterProvider extends SocialProvider {
   async publishPost(tokens: OAuthTokens, payload: SocialPostPayload): Promise<SocialPostResult> {
     const token = { key: tokens.accessToken, secret: tokens.refreshToken ?? "" };
 
-    let mediaIds: string[] = [];
+    const mediaIds: string[] = [];
     if (payload.mediaUrls?.length) {
       const results = await Promise.allSettled(
         payload.mediaUrls.map((url) => this.uploadMedia(token, url, payload.onProgress))
       );
-      for (const r of results) {
-        if (r.status === "fulfilled") {
-          mediaIds.push(r.value);
-        } else {
-          console.warn(`[Twitter] Media upload skipped (text-only): ${(r as PromiseRejectedResult).reason?.message}`);
+      const rejections: Array<{ index: number; reason: any }> = [];
+      results.forEach((r, i) => {
+        if (r.status === "fulfilled") mediaIds.push(r.value);
+        else rejections.push({ index: i, reason: r.reason });
+      });
+      if (rejections.length > 0) {
+        const videoFailed = rejections.some((rej) => {
+          const declared = payload.mediaTypes?.[rej.index];
+          if (declared?.startsWith("video/")) return true;
+          // Fallback when mediaTypes is absent: URL extension sniff (same map uploadMedia uses)
+          const [base = ""] = (payload.mediaUrls![rej.index] ?? "").split("?");
+          return /\.(mp4|mov|webm)$/i.test(base);
+        });
+        // Hard-fail when (a) ALL intended media failed, or (b) any VIDEO failed —
+        // a media post must never silently publish as a bare caption, and a video
+        // post must never silently degrade to text/image-only. Throwing routes
+        // into the worker's classify → FAILED-with-retry machinery (no tweet
+        // exists yet, so retries are safe). Partial IMAGE failures keep the
+        // historical lenient path.
+        if (mediaIds.length === 0 || videoFailed) {
+          const first = rejections[0]!.reason;
+          throw new Error(
+            `Twitter media upload failed (${rejections.length}/${payload.mediaUrls.length}): ${first?.message ?? String(first)}`
+          );
+        }
+        for (const rej of rejections) {
+          console.warn(`[Twitter] Image upload skipped: ${rej.reason?.message}`);
         }
       }
     }
@@ -409,38 +431,83 @@ export class TwitterProvider extends SocialProvider {
 
     // --- STATUS poll (if processing required) ---
     if (finalizeData.processing_info) {
-      await this.pollVideoStatus(token, mediaId);
+      await this.pollVideoStatus(
+        token,
+        mediaId,
+        totalBytes,
+        finalizeData.processing_info?.check_after_secs,
+        onProgress
+      );
     }
 
     return mediaId;
   }
 
-  /** Poll media/upload STATUS until video processing completes */
+  /**
+   * Poll media/upload STATUS until video processing completes. Respects X's
+   * `check_after_secs` pacing hint (clamped 3–30s) and scales the overall
+   * deadline with the file size — large videos routinely take minutes to
+   * process after a fully-successful upload, so a fixed 90s cap threw away
+   * complete uploads.
+   */
   private async pollVideoStatus(
     token: { key: string; secret: string },
-    mediaId: string
+    mediaId: string,
+    totalBytes: number,
+    initialCheckAfterSecs?: number,
+    onProgress?: (percent: number) => void | Promise<void>
   ): Promise<void> {
     const uploadUrl = "https://upload.twitter.com/1.1/media/upload.json";
     const oauth = this.makeOAuth();
-    const maxAttempts = 30; // 90 seconds max
+    const clampWait = (secs: number) => Math.min(30, Math.max(3, secs));
 
-    for (let i = 0; i < maxAttempts; i++) {
-      await new Promise((r) => setTimeout(r, 3000));
+    // 60s base + 0.5s per MB, 15min ceiling — a 512MB near-cap video ≈ 5.3min.
+    const startedAt = Date.now();
+    const deadline =
+      startedAt + Math.min(15 * 60_000, 60_000 + Math.ceil(totalBytes / (1024 * 1024)) * 500);
+    let waitSecs = clampWait(initialCheckAfterSecs ?? 3);
+    let ticks = 0;
 
-      const statusUrl = `${uploadUrl}?command=STATUS&media_id=${mediaId}`;
-      const header = oauth.toHeader(oauth.authorize({ url: statusUrl, method: "GET" }, token));
-      const res = await fetch(statusUrl, { headers: { Authorization: header.Authorization } });
-      const data: any = await res.json();
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, waitSecs * 1000));
+      ticks++;
 
-      const state = data.processing_info?.state;
-      console.log(`[Twitter] Video processing state: ${state} (attempt ${i + 1})`);
+      // One transient STATUS hiccup must not abort an otherwise-healthy poll:
+      // only the explicit "failed" state (or the deadline) is terminal.
+      let data: any = null;
+      try {
+        const statusUrl = `${uploadUrl}?command=STATUS&media_id=${mediaId}`;
+        const header = oauth.toHeader(oauth.authorize({ url: statusUrl, method: "GET" }, token));
+        const res = await fetch(statusUrl, { headers: { Authorization: header.Authorization } });
+        data = await res.json();
+      } catch (err: any) {
+        console.warn(`[Twitter] STATUS poll error (transient, continuing): ${err?.message}`);
+      }
 
-      if (state === "succeeded") return;
-      if (state === "failed") {
-        throw new Error(`Twitter video processing failed: ${JSON.stringify(data.processing_info)}`);
+      if (data) {
+        const info = data.processing_info;
+        const state = info?.state;
+        console.log(`[Twitter] Video processing state: ${state} (poll ${ticks})`);
+
+        if (state === "succeeded") return;
+        if (state === "failed") {
+          throw new Error(`Twitter video processing failed: ${JSON.stringify(info)}`);
+        }
+        // Respect X's pacing hint for the next poll.
+        waitSecs = clampWait(info?.check_after_secs ?? 3);
+      }
+
+      // Best-effort progress tick (90→99): keeps the target's updatedAt fresh
+      // so the watchdog's active-upload skip applies during multi-minute
+      // processing. APPEND caps at 90; PUBLISHED clears uploadProgress.
+      try {
+        await onProgress?.(Math.min(99, 90 + ticks));
+      } catch {
+        // progress reporting must never fail the poll
       }
     }
 
-    throw new Error("Twitter video processing timed out after 90 seconds");
+    const elapsed = Math.round((Date.now() - startedAt) / 1000);
+    throw new Error(`Twitter video processing timed out after ${elapsed}s (media_id ${mediaId})`);
   }
 }

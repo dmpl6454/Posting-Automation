@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useCallback } from "react";
 import { trpc } from "~/lib/trpc/client";
+import { useSmartUpload } from "~/lib/use-smart-upload";
 import { useChatStream } from "~/hooks/use-chat-stream";
 import { actionKey } from "~/lib/chat-action-key";
 import { MessageBubble } from "./MessageBubble";
@@ -29,6 +30,7 @@ export function ChatView({ threadId, onThreadCreated }: ChatViewProps) {
   } = useChatStream(threadId);
 
   const createThread = trpc.chat.createThread.useMutation();
+  const { uploadFile } = useSmartUpload();
 
   // Load thread messages
   const { data: threadData } = trpc.chat.getThread.useQuery(
@@ -70,29 +72,26 @@ export function ChatView({ threadId, onThreadCreated }: ChatViewProps) {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, streamingContent]);
 
-  const handleUploadFile = useCallback(async (file: File) => {
-    const formData = new FormData();
-    formData.append("file", file);
-    try {
-      const res = await fetch("/api/upload", { method: "POST", body: formData });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: "Upload failed" }));
-        console.error("Upload failed:", err);
+  const handleUploadFile = useCallback(
+    async (file: File) => {
+      try {
+        // ≤8MB → proxied /api/upload; larger → browser→S3 multipart (never
+        // buffers in the web process — the old path OOM'd on big videos).
+        const data = await uploadFile(file);
+        return {
+          id: data.id,
+          url: data.url,
+          thumbnailUrl: data.url,
+          fileName: data.fileName,
+          fileType: data.fileType,
+        };
+      } catch (err) {
+        console.error("Upload error:", err);
         return null;
       }
-      const data = await res.json();
-      return {
-        id: data.id,
-        url: data.url,
-        thumbnailUrl: data.url,
-        fileName: data.fileName,
-        fileType: data.fileType,
-      };
-    } catch (err) {
-      console.error("Upload error:", err);
-      return null;
-    }
-  }, []);
+    },
+    [uploadFile]
+  );
 
   const handleSend = async (content: string, attachmentMediaIds?: string[]) => {
     if (!threadId) {

@@ -78,8 +78,15 @@ function ContentStudioInner() {
             {activeTab === "bulk" && "Create or import many posts at once (CSV) and schedule them."}
           </p>
 
-          <TabsContent value="compose" className="mt-4">
+          {/* forceMount keeps ComposeTab ALIVE across tab switches so an
+              in-flight multi-GB upload (and all compose state) survives —
+              Radix unmounts inactive tabs by default, which killed uploads
+              headless. data-[state=inactive]:hidden is REQUIRED with
+              forceMount or this pane paints under every other tab.
+              ONLY compose gets this — do not forceMount the other tabs. */}
+          <TabsContent value="compose" forceMount className="mt-4 data-[state=inactive]:hidden">
             <ComposeTab
+              isActive={activeTab === "compose"}
               initialContent={composeContent}
               initialImage={composeImage}
               initialImageMediaId={composeMediaId}

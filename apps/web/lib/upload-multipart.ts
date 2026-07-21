@@ -55,6 +55,12 @@ const MAX_PARALLEL_PARTS = 4;
 // retries independently (with a FRESH presigned URL per attempt, so URL expiry
 // can never fail a retry); only exhausting all attempts aborts the upload.
 export const PART_ATTEMPTS = 6; // 1 initial + 5 retries
+// Finalize converts 30-90 minutes of transferred bytes into a Media row — its
+// budget must outlast an incident-class outage (deploy window, container
+// crash-loop), not just a Wi-Fi blip. A lost part costs 8MB; a lost complete()
+// costs the entire file — the asymmetry is why these differ from PART_*.
+export const COMPLETE_ATTEMPTS = 10;
+const COMPLETE_MAX_RETRY_DELAY_MS = 60_000;
 const DEFAULT_RETRY_BASE_DELAY_MS = 1_000; // 1s → 3s → 9s → 27s → 30s (capped, + jitter)
 // Cap the exponential growth so the total tolerated outage stays ~70s of
 // fast-fail attempts — long enough for a typical Wi-Fi/router blip, short
@@ -69,6 +75,14 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 /** Errors that retrying can never fix — user aborts and hung-abort signals. */
 const isAbortError = (err: unknown) =>
   err instanceof Error && err.message === "Upload aborted";
+
+/**
+ * Terminal upload errors: retrying is provably futile (e.g. storage full).
+ * The message doubles as user-facing copy — humanizeError passes short
+ * human-readable messages through untouched at every toast site.
+ */
+const isTerminalUploadError = (err: unknown) =>
+  err instanceof Error && err.name === "TerminalUploadError";
 
 /**
  * While the browser is provably offline, retry attempts fail instantly and
@@ -123,6 +137,12 @@ function putPart(
           return;
         }
         resolve(etag.replace(/"/g, ""));
+      } else if (xhr.status === 507) {
+        // MinIO disk-full (XMinioStorageFull). Unambiguously terminal —
+        // burning the retry ladder just hammers an already-stressed box.
+        const err = new Error("Upload storage is full. Please try again later or contact support.");
+        err.name = "TerminalUploadError";
+        reject(err);
       } else {
         reject(new Error(`Part upload failed with status ${xhr.status}: ${xhr.responseText.slice(0, 200)}`));
       }
@@ -212,7 +232,7 @@ export async function uploadFileMultipart(params: UploadParams): Promise<Complet
         return;
       } catch (err) {
         lastErr = err;
-        if (stop.aborted || isAbortError(err)) throw err;
+        if (stop.aborted || isAbortError(err) || isTerminalUploadError(err)) throw err;
         // Roll this part's progress back so the bar doesn't lie during retry.
         loadedPerPart[partNumber - 1] = 0;
         reportTotal();
@@ -266,7 +286,7 @@ export async function uploadFileMultipart(params: UploadParams): Promise<Complet
   // harmless no-op — the server already swallows S3 abort errors).
   let result: CompleteResult | undefined;
   let completeErr: unknown;
-  for (let attempt = 1; attempt <= PART_ATTEMPTS; attempt++) {
+  for (let attempt = 1; attempt <= COMPLETE_ATTEMPTS; attempt++) {
     if (stop.aborted) {
       completeErr = new Error("Upload aborted");
       break;
@@ -285,10 +305,15 @@ export async function uploadFileMultipart(params: UploadParams): Promise<Complet
     } catch (err) {
       completeErr = err;
       if (stop.aborted || isAbortError(err)) break;
-      if (attempt < PART_ATTEMPTS) {
+      // Deterministic tRPC rejections (oversize BAD_REQUEST, org-scope
+      // FORBIDDEN) can't succeed on retry — don't burn ~5.7 min re-asking.
+      const trpcCode = (err as { data?: { code?: string } })?.data?.code;
+      if (trpcCode === "BAD_REQUEST" || trpcCode === "FORBIDDEN") break;
+      if (attempt < COMPLETE_ATTEMPTS) {
         await waitForOnline(stop);
+        // ~5.7 min total window (1+3+9+27+60×5) — rides out a deploy.
         await sleep(
-          Math.min(MAX_RETRY_DELAY_MS, retryBaseDelayMs * 3 ** (attempt - 1)) +
+          Math.min(COMPLETE_MAX_RETRY_DELAY_MS * (retryBaseDelayMs / DEFAULT_RETRY_BASE_DELAY_MS), retryBaseDelayMs * 3 ** (attempt - 1)) +
             Math.random() * (retryBaseDelayMs / 2)
         );
       }

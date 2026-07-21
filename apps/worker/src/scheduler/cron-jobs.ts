@@ -3,6 +3,7 @@ import { tokenRefreshQueue, analyticsSyncQueue, agentRunQueue, trendDiscoverQueu
 import { runAutoHealerWithLogging } from "../workers/auto-healer.worker";
 import { runCelebrityDetectors } from "../workers/celebrity-detect.worker";
 import { enqueueScheduledPublishJobs } from "@postautomation/queue";
+import { HEAVY_SLOT_WAIT_MESSAGE } from "../lib/publish-recovery";
 
 /**
  * Check for channels with expiring tokens and queue refresh jobs.
@@ -670,7 +671,7 @@ export async function watchdogPublishingPosts() {
 
   const stuckPosts = await prisma.post.findMany({
     where: { status: "PUBLISHING", updatedAt: { lt: stuckThreshold } },
-    include: { targets: { select: { status: true, updatedAt: true } } },
+    include: { targets: { select: { status: true, updatedAt: true, errorMessage: true } } },
   });
 
   if (stuckPosts.length === 0) return;
@@ -696,10 +697,16 @@ export async function watchdogPublishingPosts() {
     // (large video). Don't fail an in-flight publish — UNLESS the post has
     // been PUBLISHING past the hard ceiling (perpetual retry loops also keep
     // targets fresh; they must still be reaped eventually).
+    // Defer-parked heavy targets (errorMessage === HEAVY_SLOT_WAIT_MESSAGE)
+    // count as live REGARDLESS of updatedAt: their PRIORITY_RETRY re-queue
+    // can legitimately starve >10min behind the unprioritized fast lane under
+    // exactly the saturation that caused the deferral. The 12h hard ceiling
+    // (post.updatedAt stays static through defer cycles) remains the backstop.
     const hasActiveUpload = post.targets.some(
       (t: any) =>
         t.status !== "PUBLISHED" && t.status !== "FAILED" && t.status !== "CANCELLED" &&
-        new Date(t.updatedAt) >= activeThreshold
+        (new Date(t.updatedAt) >= activeThreshold ||
+          (t.status === "SCHEDULED" && t.errorMessage === HEAVY_SLOT_WAIT_MESSAGE))
     );
     const pastHardCeiling = new Date(post.updatedAt) < hardReapThreshold;
     if (hasActiveUpload && !pastHardCeiling) {

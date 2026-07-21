@@ -1,8 +1,11 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { writeFileSync, unlinkSync, existsSync, mkdirSync, readFileSync } from "fs";
+import { writeFileSync, unlinkSync, existsSync, mkdirSync, createWriteStream, createReadStream, statSync } from "node:fs";
+import { pipeline } from "node:stream/promises";
+import { Readable } from "node:stream";
 import { join } from "path";
 import crypto from "crypto";
+import { createSemaphore } from "@postautomation/ai";
 
 // Async ffmpeg (stability guard, 2026-07-18): the sync encode blocked the whole
 // worker event loop (every queue) for up to 180s. Same argv-array/no-shell
@@ -10,6 +13,18 @@ import crypto from "crypto";
 const execFileAsync = promisify(execFile);
 
 const TMP_DIR = "/tmp/video-overlay";
+
+// Bound concurrent ffmpeg overlay runs. Each run costs a full re-encode (CPU)
+// plus up to ~2× the video size in /tmp scratch on the 25GB disk MinIO shares
+// — at PUBLISH_CONCURRENCY=10, unbounded overlays meant up to 10 simultaneous
+// re-encodes. FIFO semaphore INSIDE processVideoOverlay so every caller is
+// covered and the nothing-to-do early-return never consumes a slot.
+// ⚠️ Coupling: raising PUBLISH_CONCURRENCY well past 10 without raising
+// VIDEO_OVERLAY_CONCURRENCY can queue a job here long enough for the
+// watchdog's 30-min idle-target reap — keep the ratio sane.
+const overlaySemaphore = createSemaphore(
+  Math.max(1, parseInt(process.env.VIDEO_OVERLAY_CONCURRENCY || "", 10) || 2)
+);
 
 /**
  * Build the ffmpeg argument ARRAY for the overlay pass (pure — no I/O).
@@ -55,6 +70,13 @@ interface VideoOverlayOptions {
   channelName?: string;       // fallback watermark text if no logo
   logoPosition?: "top_left" | "top_right" | "bottom_left" | "bottom_right";
   logoSize?: number;          // logo width in pixels (default 120)
+  /**
+   * Defense-in-depth size cap: if the remote video's Content-Length exceeds
+   * this, skip the overlay and return the ORIGINAL url (same degraded path as
+   * the caller's fileSize gate). Covers forged/NULL/stale DB sizes. Fail-open
+   * when the header is absent (non-S3 hosts) to avoid regressing behavior.
+   */
+  maxBytes?: number;
 }
 
 /**
@@ -73,10 +95,12 @@ export async function processVideoOverlay(
     channelName,
     logoPosition = "bottom_right",
     logoSize = 120,
+    maxBytes,
   } = options;
 
   if (!text && !logoUrl && !channelName) return videoUrl; // nothing to do
 
+  return overlaySemaphore.run(async () => {
   if (!existsSync(TMP_DIR)) mkdirSync(TMP_DIR, { recursive: true });
 
   const id = crypto.randomBytes(8).toString("hex");
@@ -86,10 +110,19 @@ export async function processVideoOverlay(
   let hasLogo = false;
 
   try {
-    // 1. Download video
+    // 1. Download video — STREAMED to disk, never materialized in heap (the
+    // old Buffer.from(arrayBuffer()) held up to the full video in RAM).
     const res = await fetch(videoUrl);
-    if (!res.ok) throw new Error(`Failed to download video: ${res.status}`);
-    writeFileSync(inputPath, Buffer.from(await res.arrayBuffer()));
+    if (!res.ok || !res.body) throw new Error(`Failed to download video: ${res.status}`);
+    const len = parseInt(res.headers.get("content-length") ?? "", 10);
+    if (maxBytes && Number.isFinite(len) && len > maxBytes) {
+      await res.body.cancel().catch(() => undefined);
+      console.warn(
+        `[VideoOverlay] Remote video ${Math.round(len / 1024 / 1024)}MB exceeds overlay cap — posting original`
+      );
+      return videoUrl;
+    }
+    await pipeline(Readable.fromWeb(res.body as any), createWriteStream(inputPath));
 
     // 2. Download logo if available
     if (logoUrl) {
@@ -189,10 +222,14 @@ export async function processVideoOverlay(
     const bucket = process.env.S3_BUCKET || "postautomation-media";
     const key = `videos/overlay_${id}.mp4`;
 
+    // Streamed upload (ContentLength required for a stream Body with MinIO
+    // forcePathStyle) — the old readFileSync held the re-encoded output in
+    // heap a second time.
     await s3.send(new PutObjectCommand({
       Bucket: bucket,
       Key: key,
-      Body: readFileSync(outputPath),
+      Body: createReadStream(outputPath),
+      ContentLength: statSync(outputPath).size,
       ContentType: "video/mp4",
     }));
 
@@ -210,4 +247,5 @@ export async function processVideoOverlay(
     try { if (existsSync(outputPath)) unlinkSync(outputPath); } catch {}
     try { if (existsSync(logoPath)) unlinkSync(logoPath); } catch {}
   }
+  }); // overlaySemaphore.run
 }

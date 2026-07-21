@@ -62,12 +62,44 @@ interface ComposeTabProps {
   onPostCreated?: () => void;
   externalMediaToAdd?: { dataUrl: string } | null;
   onExternalMediaConsumed?: () => void;
+  /**
+   * Whether the compose tab is the ACTIVE tab. Under forceMount the component
+   * stays mounted across tab switches, so the sessionStorage "Use in Post"
+   * pickup keys off this instead of mount. Leave undefined where ComposeTab
+   * is always visible — undefined behaves as active.
+   */
+  isActive?: boolean;
 }
 
 // Fix #24: sessionStorage key for carrying draft content from GenerateTab / ImageTab
 const COMPOSE_DRAFT_KEY = "compose:draftContent";
 
-export function ComposeTab({ initialContent, initialImage, initialImageMediaId, initialMediaIds, initialMediaUrls, onPostCreated, externalMediaToAdd, onExternalMediaConsumed }: ComposeTabProps) {
+// Module-scope FIFO semaphore bounding CONCURRENT FILE uploads (spans the
+// image + video pickers and survives re-renders). Each multipart upload
+// already runs 4 parallel part-PUTs; without this, selecting 8 files starts
+// 32 competing pipelines on one uplink and queued parts burn their 10-min
+// timers on congestion. Cap 2: a stalled multi-GB video never fully blocks a
+// quick image upload.
+const MAX_CONCURRENT_FILE_UPLOADS = 2;
+let activeFileUploads = 0;
+const fileUploadWaiters: (() => void)[] = [];
+async function acquireUploadSlot(signal?: AbortSignal): Promise<void> {
+  while (activeFileUploads >= MAX_CONCURRENT_FILE_UPLOADS) {
+    await new Promise<void>((resolve) => fileUploadWaiters.push(resolve));
+    if (signal?.aborted) {
+      // We consumed a wakeup meant to admit one waiter — pass it on.
+      fileUploadWaiters.shift()?.();
+      throw new Error("Upload aborted");
+    }
+  }
+  activeFileUploads++;
+}
+function releaseUploadSlot(): void {
+  activeFileUploads = Math.max(0, activeFileUploads - 1);
+  fileUploadWaiters.shift()?.();
+}
+
+export function ComposeTab({ initialContent, initialImage, initialImageMediaId, initialMediaIds, initialMediaUrls, onPostCreated, externalMediaToAdd, onExternalMediaConsumed, isActive }: ComposeTabProps) {
   const router = useRouter();
   const { toast } = useToast();
   const [content, setContent] = useState(initialContent || "");
@@ -97,9 +129,14 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   const { addTask, removeTask, getTask } = useActiveTask();
   const TASK_ID = "compose-draft";
 
-  // Fix #24: on mount, read draft content/image from sessionStorage (set by GenerateTab / ImageTab)
+  // Fix #24: read draft content/image from sessionStorage (set by GenerateTab /
+  // ImageTab "Use in Post"). Re-fires whenever the compose tab becomes ACTIVE —
+  // with forceMount the component never remounts on tab switch, so a mount-only
+  // effect would run once at page load (key absent) and the handoff would die.
+  // The keys only exist right after a "Use in Post" click, so re-firing on
+  // every activation is harmless; removeItem keeps a key from firing later.
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    if (typeof window === "undefined" || isActive === false) return;
     if (!initialContent) {
       const draft = sessionStorage.getItem(COMPOSE_DRAFT_KEY);
       if (draft) {
@@ -118,7 +155,7 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isActive]);
 
   // Close channel dropdown on click outside
   useEffect(() => {
@@ -131,14 +168,56 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // Restore draft from active task on mount
+  // Restore draft from active task. Hydration-aware: on a hard reload the
+  // ActiveTaskProvider loads localStorage in a parent effect AFTER this child
+  // mounts, so getTask() is empty on first run — getTask's identity changes
+  // when the provider hydrates (useCallback on [tasks]), re-firing this effect.
+  // restoredRef + empty-state guards prevent clobbering anything typed since.
+  const restoredRef = useRef(false);
   useEffect(() => {
+    if (restoredRef.current || initialContent) return;
     const saved = getTask(TASK_ID);
-    if (saved?.draft && !initialContent) {
-      if (saved.draft.content) setContent(saved.draft.content);
-      if (saved.draft.channels?.length) setSelectedChannels(saved.draft.channels);
+    if (!saved?.draft) return;
+    restoredRef.current = true;
+    if (saved.draft.content && !content.trim()) setContent(saved.draft.content);
+    if (saved.draft.channels?.length && selectedChannels.length === 0) {
+      setSelectedChannels(saved.draft.channels);
     }
-  }, []);
+    // Restore attachments that are losslessly restorable (Media-row id or a
+    // non-blob URL). Never resurrect blob: tiles (their File died with the old
+    // page) and never pre-empt deep-link media (carousel/initialImage flow).
+    const hasDeepLinkMedia = (initialMediaIds && initialMediaIds.length > 0) || !!initialImage;
+    const media = (saved.draft.media ?? []).filter(
+      (m) => m.mediaId || (m.url && !m.url.startsWith("blob:"))
+    );
+    if (!hasDeepLinkMedia && media.length > 0) {
+      setPostMedia((prev) =>
+        prev.length === 0 ? media.map(({ url, mediaId }) => ({ url, mediaId })) : prev
+      );
+      // Reconcile restored ids against the live library (best-effort, mirrors
+      // the channel-id reconciliation above): a Media row deleted since the
+      // draft was saved would otherwise fail the ENTIRE post.create at submit.
+      // Stripping the id keeps the tile — resolvePostMediaIds re-resolves the
+      // URL losslessly if the object still exists, else surfaces a clear
+      // per-item error instead of an opaque whole-post rejection.
+      const ids = media.map((m) => m.mediaId).filter((x): x is string => !!x);
+      if (ids.length > 0) {
+        void utils.media.verifyIds
+          .fetch({ ids })
+          .then(({ ownedIds }) => {
+            const owned = new Set(ownedIds);
+            if (ids.every((id) => owned.has(id))) return;
+            setPostMedia((prev) =>
+              prev.map((m) => (m.mediaId && !owned.has(m.mediaId) ? { ...m, mediaId: undefined } : m))
+            );
+          })
+          .catch(() => {
+            // Transient verify failure — keep the restored tiles untouched.
+          });
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [getTask]);
 
   // Track compose as active task when content is being written
   useEffect(() => {
@@ -153,6 +232,11 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
           content,
           channels: selectedChannels,
           mediaUrls: postMedia.map((m) => m.url),
+          // Only losslessly-restorable items (library picks, AI images,
+          // completed uploads) — blob-only tiles can't survive a remount.
+          media: postMedia
+            .filter((m) => m.mediaId || (m.url && !m.url.startsWith("blob:")))
+            .map(({ url, mediaId }) => ({ url, mediaId })),
         },
         createdAt: getTask(TASK_ID)?.createdAt || Date.now(),
       });
@@ -259,6 +343,73 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
     };
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
+  }, [anyUploading]);
+
+  // iOS Safari never fires beforeunload and suspends the page on backgrounding
+  // (XHRs stall; WebKit may jettison the tab). We can't prevent that — but on
+  // return we can tell the user their upload may have been interrupted instead
+  // of leaving a silently frozen tile. Coarse-pointer gate keeps desktop
+  // tab-switching (where background XHRs continue fine) noise-free; the toast
+  // renders on RETURN only (rendering is paused while hidden).
+  const isTouchDevice =
+    typeof window !== "undefined" && !!window.matchMedia?.("(pointer: coarse)").matches;
+  const hiddenAtRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!anyUploading || !isTouchDevice) return;
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        hiddenAtRef.current = Date.now();
+      } else if (hiddenAtRef.current && Date.now() - hiddenAtRef.current > 10_000) {
+        hiddenAtRef.current = null;
+        toast({
+          title: "Upload may have been interrupted",
+          description:
+            "The app was in the background for a while. Keep this screen open and awake until the upload finishes.",
+          variant: "destructive",
+        });
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [anyUploading, isTouchDevice]);
+
+  // Keep the screen awake while media uploads run — mobile auto-lock suspends
+  // the page exactly like backgrounding (XHRs stall; iOS may jettison the tab,
+  // orphaning multipart parts). Best-effort + additive: no-op where
+  // unsupported, no permission prompt, and the OS auto-releases the sentinel
+  // whenever the page hides — so re-acquire on return to visibility.
+  useEffect(() => {
+    if (!anyUploading || typeof navigator === "undefined" || !("wakeLock" in navigator)) return;
+    let sentinel: { release(): Promise<void> } | null = null;
+    let disposed = false;
+    const acquire = async () => {
+      try {
+        const s = await (
+          navigator as unknown as {
+            wakeLock: { request(t: "screen"): Promise<{ release(): Promise<void> }> };
+          }
+        ).wakeLock.request("screen");
+        if (disposed) {
+          // Effect cleaned up while the request was pending — don't leak it.
+          s.release().catch(() => {});
+          return;
+        }
+        sentinel = s;
+      } catch {
+        // Page hidden / battery saver / unsupported — ignore.
+      }
+    };
+    void acquire();
+    const onVis = () => {
+      if (!disposed && document.visibilityState === "visible") void acquire();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      disposed = true;
+      document.removeEventListener("visibilitychange", onVis);
+      sentinel?.release().catch(() => {});
+      sentinel = null;
+    };
   }, [anyUploading]);
 
   const createPost = trpc.post.create.useMutation({
@@ -424,6 +575,11 @@ ${content}`;
     const blob = await resp.blob();
     const file = new File([blob], `design-${Date.now()}.png`, { type: "image/png" });
     if (editingImageIndex !== null) {
+      // The tile being replaced may still be auto-uploading — abort the OLD
+      // transfer first (mirrors the X-button) or it completes headless into an
+      // orphan Media row while its abort handle desyncs from the new url.
+      const old = postMedia[editingImageIndex];
+      if (old) uploadAbortsRef.current.get(old.url)?.abort();
       setPostMedia((prev) => prev.map((item, i) => (i === editingImageIndex ? { url: blobUrl, file, uploading: true } : item)));
     } else {
       setPostMedia((prev) => [...prev, { url: blobUrl, file, uploading: true }]);
@@ -446,7 +602,14 @@ ${content}`;
     // instead of leaving a ghost multi-GB upload running.
     const controller = new AbortController();
     uploadAbortsRef.current.set(objectUrl, controller);
-    uploadFileToS3(file, objectUrl, controller.signal)
+    (async () => {
+      await acquireUploadSlot(controller.signal);
+      try {
+        return await uploadFileToS3(file, objectUrl, controller.signal);
+      } finally {
+        releaseUploadSlot();
+      }
+    })()
       .then((mediaId) => {
         setPostMedia((prev) =>
           prev.map((item) => (item.url === objectUrl ? { ...item, mediaId, uploading: false, progress: 100 } : item))
@@ -468,7 +631,16 @@ ${content}`;
     const files = e.target.files;
     if (!files) return;
     Array.from(files).forEach((file) => {
-      if (!file.type.startsWith("image/")) return;
+      if (!file.type.startsWith("image/")) {
+        // Windows/mobile pickers occasionally report an EMPTY type for odd
+        // extensions — say so instead of silently dropping the file.
+        toast({
+          title: "File skipped",
+          description: `"${file.name}" isn't a recognized image${file.type ? ` (${file.type})` : ""}. Use JPG, PNG, GIF, WebP or AVIF.`,
+          variant: "destructive",
+        });
+        return;
+      }
       if (file.size > 50 * 1024 * 1024) {
         toast({ title: "Image too large", description: "Images must be under 50MB.", variant: "destructive" });
         return;
@@ -484,9 +656,16 @@ ${content}`;
     const files = e.target.files;
     if (!files) return;
     Array.from(files).forEach((file) => {
-      if (!file.type.startsWith("video/")) return;
-      if (file.size > 5 * 1024 * 1024 * 1024) {
-        toast({ title: "Video too large", description: "Videos must be under 5GB.", variant: "destructive" });
+      if (!file.type.startsWith("video/")) {
+        toast({
+          title: "File skipped",
+          description: `"${file.name}" isn't a recognized video${file.type ? ` (${file.type})` : ""}. Use MP4, MOV or WebM.`,
+          variant: "destructive",
+        });
+        return;
+      }
+      if (file.size > 4 * 1024 * 1024 * 1024) {
+        toast({ title: "Video too large", description: "Videos must be under 4GB.", variant: "destructive" });
         return;
       }
       const url = URL.createObjectURL(file);
@@ -503,6 +682,19 @@ ${content}`;
 
   // Abort controllers for in-flight tile uploads, keyed by preview objectUrl.
   const uploadAbortsRef = useRef(new Map<string, AbortController>());
+
+  // On TRUE unmount (route navigation away — tab switches keep this mounted
+  // via forceMount), abort every in-flight upload: the component state that
+  // could ever attach the result is gone, so letting the transfer run headless
+  // just wastes bandwidth and orphans parts. Drives the same abort path as the
+  // tile X-button; aborts are toast-silent. StrictMode-safe: map is empty at
+  // mount, so the dev double-invoke aborts nothing.
+  useEffect(() => {
+    const aborts = uploadAbortsRef.current;
+    return () => {
+      aborts.forEach((c) => c.abort());
+    };
+  }, []);
 
   const uploadFileToS3 = async (file: File, objectUrl?: string, signal?: AbortSignal): Promise<string> => {
     // Small files (≤8MB) use the legacy single-shot endpoint — faster and no CORS prerequisite.
@@ -586,7 +778,12 @@ ${content}`;
       if (item.mediaId) {
         mediaIds.push(item.mediaId);
       } else if (item.file) {
-        mediaIds.push(await uploadFileToS3(item.file, item.url));
+        const id = await uploadFileToS3(item.file, item.url);
+        // Persist the id so a later failure in this loop (or a createPost
+        // error) doesn't force a full re-upload on retry — the retry then
+        // takes the item.mediaId fast path above.
+        setPostMedia((prev) => prev.map((m) => (m.url === item.url ? { ...m, mediaId: id } : m)));
+        mediaIds.push(id);
       } else if (item.url && !item.url.startsWith("blob:")) {
         // Prefer the lossless resolve (existing org Media row for this URL)…
         const resolved = urlToId[item.url];
@@ -964,6 +1161,11 @@ ${content}`;
                 </select>
               </div>
               )}
+              {anyUploading && isTouchDevice && (
+                <p className="text-[11px] text-muted-foreground">
+                  Keep this tab open — switching apps or locking the screen can interrupt the upload.
+                </p>
+              )}
               {postMedia.length > 0 && (
                 <div className="flex gap-2 overflow-x-auto pb-1">
                   {postMedia.map((item, idx) => {
@@ -1012,7 +1214,7 @@ ${content}`;
                             uploadAbortsRef.current.get(item.url)?.abort();
                             setPostMedia((prev) => prev.filter((_, i) => i !== idx));
                           }}
-                          className="absolute -right-1 -top-1 rounded-full bg-destructive p-0.5 text-destructive-foreground opacity-0 transition-opacity group-hover:opacity-100"
+                          className="absolute -right-1 -top-1 rounded-full bg-destructive p-1.5 [@media(hover:hover)]:p-0.5 text-destructive-foreground opacity-100 [@media(hover:hover)]:opacity-0 transition-opacity [@media(hover:hover)]:group-hover:opacity-100"
                         >
                           <X className="h-3 w-3" />
                         </button>
@@ -1020,7 +1222,7 @@ ${content}`;
                           <button
                             type="button"
                             onClick={() => handleOpenEditor(idx)}
-                            className="absolute bottom-0 left-0 right-0 bg-black/50 py-0.5 text-center text-[10px] text-white opacity-0 transition-opacity group-hover:opacity-100"
+                            className="absolute bottom-0 left-0 right-0 bg-black/50 py-0.5 text-center text-[10px] text-white opacity-100 [@media(hover:hover)]:opacity-0 transition-opacity [@media(hover:hover)]:group-hover:opacity-100"
                           >
                             Edit
                           </button>

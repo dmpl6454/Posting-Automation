@@ -264,26 +264,13 @@ export class InstagramProvider extends SocialProvider {
   }
 
   async getPostAnalytics(tokens: OAuthTokens, platformPostId: string): Promise<SocialAnalytics | null> {
-    const res = await fetch(
-      `${this.graphBaseUrl}/${this.apiVersion}/${platformPostId}/insights?metric=impressions,reach,engagement&access_token=${tokens.accessToken}`
-    );
-
-    const data: any = await res.json();
-    if (!res.ok) {
-      console.warn(`[Instagram] insights failed for ${platformPostId}: ${JSON.stringify(data)}`);
-      // Fall through — try fetching basic like/comment counts directly
-    }
-
-    const metrics: Record<string, number> = {};
-    if (data.data) {
-      for (const metric of data.data) {
-        metrics[metric.name] = metric.values?.[0]?.value || metric.value || 0;
-      }
-    }
-
-    // Also fetch basic engagement fields from the media object itself
+    // Fetch the media object FIRST — media_product_type decides which insights
+    // metric set is valid. Every IG video publishes as REELS (or STORIES), and
+    // Meta's insights endpoint is all-or-nothing: requesting a FEED metric
+    // (impressions/engagement) on a Reel fails the WHOLE call with error #100,
+    // zeroing even valid metrics like reach.
     const mediaRes = await fetch(
-      `${this.graphBaseUrl}/${this.apiVersion}/${platformPostId}?fields=like_count,comments_count&access_token=${tokens.accessToken}`
+      `${this.graphBaseUrl}/${this.apiVersion}/${platformPostId}?fields=like_count,comments_count,media_product_type&access_token=${tokens.accessToken}`
     );
 
     const mediaData: any = await mediaRes.json();
@@ -293,18 +280,57 @@ export class InstagramProvider extends SocialProvider {
     }
     const likes = mediaData.like_count || 0;
     const comments = mediaData.comments_count || 0;
+    const productType = String(mediaData.media_product_type ?? "").toUpperCase();
 
-    const impressions = metrics.impressions || 0;
-    const totalEngagement = metrics.engagement || likes + comments;
+    // REELS: plays/reach/saved/shares/total_interactions (no impressions/engagement).
+    // STORY: impressions/reach/replies. Anything else (FEED/CAROUSEL_ALBUM/absent)
+    // keeps the historical metric string byte-identical so images cannot regress.
+    const metricSet =
+      productType === "REELS"
+        ? "plays,reach,saved,shares,total_interactions"
+        : productType === "STORY"
+          ? "impressions,reach,replies"
+          : "impressions,reach,engagement";
+
+    const metrics: Record<string, number> = {};
+    const readInsights = async (metricParam: string): Promise<boolean> => {
+      const res = await fetch(
+        `${this.graphBaseUrl}/${this.apiVersion}/${platformPostId}/insights?metric=${metricParam}&access_token=${tokens.accessToken}`
+      );
+      const data: any = await res.json();
+      if (!res.ok) {
+        console.warn(`[Instagram] insights (${metricParam}) failed for ${platformPostId}: ${JSON.stringify(data)}`);
+        return false;
+      }
+      if (data.data) {
+        for (const metric of data.data) {
+          metrics[metric.name] = metric.values?.[0]?.value || metric.value || 0;
+        }
+      }
+      return true;
+    };
+
+    // If the product-type set fails unexpectedly, retry ONCE with `reach`
+    // alone (valid for every media product type) so a metric-set mismatch can
+    // never zero reach again. Deliberately NOT per-metric fetches — that would
+    // blow up call counts under the analytics sync limiter.
+    if (!(await readInsights(metricSet))) {
+      await readInsights("reach");
+    }
+
+    // Reel plays ride on impressions — same "views ride on impressions"
+    // convention as YouTube/Threads, which Reports depends on.
+    const impressions = metrics.impressions ?? metrics.plays ?? 0;
+    const totalEngagement = metrics.engagement ?? metrics.total_interactions ?? likes + comments;
     const engagementRate = impressions > 0 ? totalEngagement / impressions : 0;
 
     return {
       impressions,
       clicks: 0, // Instagram does not expose click counts via the API
       likes,
-      shares: 0, // Instagram does not expose share counts via the API
+      shares: metrics.shares ?? 0, // Reels expose shares; other types do not
       comments,
-      reach: metrics.reach || 0,
+      reach: metrics.reach ?? 0,
       engagementRate,
     };
   }

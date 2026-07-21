@@ -26,8 +26,8 @@ export { generateImageMeta } from "./providers/meta.provider";
 export type { MetaGenerateParams, MetaImageResult } from "./providers/meta.provider";
 export { fetchTrendingNews, detectTrendingIntent } from "./tools/trending-news";
 export type { TrendingHeadline } from "./tools/trending-news";
-export { generateNewsCardImage, generateNewsAiImage, generateNewsImage, generateStaticNewsCreativeImage, generateStyledCreativeImage, generateRelevantBackground, overlayLogoOnImage, extractDominantColor, launchCreativeBrowser, buildCardHtmlForPuppeteer, generateCardImage } from "./tools/news-image-generator";
-export type { NewsImageResult, LogoOverlayOptions } from "./tools/news-image-generator";
+export { generateNewsCardImage, generateNewsAiImage, generateNewsImage, generateStaticNewsCreativeImage, generateStyledCreativeImage, generateRelevantBackground, overlayLogoOnImage, extractDominantColor, launchCreativeBrowser, buildCardHtmlForPuppeteer, generateCardImage, createSemaphore } from "./tools/news-image-generator";
+export type { NewsImageResult, LogoOverlayOptions, Semaphore } from "./tools/news-image-generator";
 export { buildStaticCreative } from "./tools/creative-templates";
 export type { CreativeStyle, StaticCreativeOptions } from "./tools/creative-templates";
 export {

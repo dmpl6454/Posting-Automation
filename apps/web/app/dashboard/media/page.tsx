@@ -9,6 +9,7 @@ import { Input } from "~/components/ui/input";
 import { Skeleton } from "~/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { useToast } from "~/hooks/use-toast";
+import { useSmartUpload } from "~/lib/use-smart-upload";
 import { Info } from "lucide-react";
 import {
   Upload,
@@ -32,8 +33,22 @@ const PAGE_SIZE = 40;
 
 export default function MediaPage() {
   const { toast } = useToast();
+  const { uploadFile } = useSmartUpload();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ name: string; percent: number } | null>(null);
+
+  // Leaving mid-multipart-upload is unrecoverable (parts orphaned, no Media
+  // row) — same guard ComposeTab carries.
+  useEffect(() => {
+    if (!isUploading) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [isUploading]);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   // Fix #37-39: lightbox state
@@ -97,18 +112,32 @@ export default function MediaPage() {
     if (!files) return;
     setIsUploading(true);
     for (const file of Array.from(files)) {
-      const formData = new FormData();
-      formData.append("file", file);
+      // Client-side gates matching the server caps — reject BEFORE any bytes
+      // move so a 4GB+ video doesn't die opaquely at the proxy limit.
+      const isVideo = file.type.startsWith("video/");
+      if (isVideo && file.size > 4 * 1024 * 1024 * 1024) {
+        toast({ title: "Video too large", description: `"${file.name}" exceeds the 4GB limit.`, variant: "destructive" });
+        continue;
+      }
+      if (!isVideo && file.size > 50 * 1024 * 1024) {
+        toast({ title: "File too large", description: `"${file.name}" exceeds the 50MB limit for images.`, variant: "destructive" });
+        continue;
+      }
       try {
-        const res = await fetch("/api/upload", { method: "POST", body: formData });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({ error: "Upload failed" }));
-          toast({ title: "Upload failed", description: err.error, variant: "destructive" });
-        } else {
-          toast({ title: `Uploaded ${file.name}` });
-        }
-      } catch {
-        toast({ title: "Upload failed", variant: "destructive" });
+        // ≤8MB goes through /api/upload; larger files stream browser→S3 via
+        // multipart (progress + retry) and never buffer in the web process.
+        await uploadFile(file, {
+          onProgress: (percent) => setUploadProgress({ name: file.name, percent }),
+        });
+        toast({ title: `Uploaded ${file.name}` });
+      } catch (err) {
+        toast({
+          title: "Upload failed",
+          description: err instanceof Error ? err.message : `Could not upload "${file.name}".`,
+          variant: "destructive",
+        });
+      } finally {
+        setUploadProgress(null);
       }
     }
     setIsUploading(false);
@@ -137,10 +166,17 @@ export default function MediaPage() {
           multiple
           onChange={handleUpload}
         />
-        <Button onClick={() => fileInputRef.current?.click()} disabled={isUploading}>
-          {isUploading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
-          {isUploading ? "Uploading..." : "Upload"}
-        </Button>
+        <div className="flex items-center gap-3">
+          {uploadProgress && (
+            <span className="max-w-[180px] truncate text-xs text-muted-foreground">
+              {uploadProgress.name} — {uploadProgress.percent}%
+            </span>
+          )}
+          <Button onClick={() => fileInputRef.current?.click()} disabled={isUploading}>
+            {isUploading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
+            {isUploading ? "Uploading..." : "Upload"}
+          </Button>
+        </div>
       </div>
 
       <Alert>

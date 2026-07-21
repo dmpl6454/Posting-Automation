@@ -361,28 +361,109 @@ export class YouTubeProvider extends SocialProvider {
     let bytesSent = 0;
     let finalData: any = null;
 
-    while (bytesSent < totalBytes) {
+    // Streamed (>64MB) uploads get a bounded per-chunk retry with
+    // resume-at-offset via Google's resumable protocol — one transient blip
+    // at 95% of a 4GB upload must not discard 3.8GB of accepted bytes. The
+    // ≤64MB buffered path keeps exactly one attempt per chunk (byte-identical
+    // legacy behavior: any chunk failure throws immediately).
+    const maxChunkAttempts = streamLarge ? 4 : 1;
+    const RETRY_BACKOFF_MS = [2_000, 5_000, 15_000];
+    let chunkAttempt = 0;
+
+    const isTransientChunkError = (e: any): boolean => {
+      const msg = String(e?.message ?? e ?? "");
+      return (
+        msg === "fetch failed" ||
+        /ETIMEDOUT|ECONNRESET|EPIPE/i.test(msg) ||
+        /Ranged fetch failed \(HTTP 5\d\d\)/.test(msg)
+      );
+    };
+
+    // Shared 2xx parse (chunk PUT and offset query both use it).
+    const parseFinal = async (res: Response): Promise<any> => {
+      try {
+        return await res.json();
+      } catch {
+        // Empty/truncated 2xx body — try to recover the video id from the
+        // Location header (?v=<id>) before giving up with a clear error.
+        const loc = res.headers.get("location") || "";
+        const vidMatch = loc.match(/[?&]v=([^&]+)/);
+        if (vidMatch?.[1]) return { id: vidMatch[1] };
+        throw new Error("YouTube upload completed but returned no parseable body");
+      }
+    };
+
+    // Resumable-protocol offset query: an empty PUT with
+    // "Content-Range: bytes */<total>" returns 308 + a Range header holding
+    // the bytes Google already accepted (resume there), or 200/201 when the
+    // upload actually completed server-side (closes the final-chunk
+    // double-publish window).
+    const backoffAndResync = async (attempt: number): Promise<void> => {
+      await new Promise((r) =>
+        setTimeout(r, RETRY_BACKOFF_MS[Math.min(attempt - 1, RETRY_BACKOFF_MS.length - 1)])
+      );
+      try {
+        const statusRes = await fetch(uploadUrl, {
+          method: "PUT",
+          headers: { "Content-Range": `bytes */${totalBytes}`, "Content-Length": "0" },
+        });
+        if (statusRes.status === 308) {
+          // Range: bytes=0-N → next byte is N+1. No Range header = nothing
+          // accepted yet → restart from 0. Resume from Google's offset
+          // EXACTLY (a 256KB multiple, valid as a chunk start) — never
+          // realign to CHUNK_SIZE boundaries (skipping ahead corrupts).
+          const m = statusRes.headers.get("range")?.match(/bytes=0-(\d+)/);
+          bytesSent = m?.[1] ? parseInt(m[1], 10) + 1 : 0;
+          return;
+        }
+        if (statusRes.status === 200 || statusRes.status === 201) {
+          finalData = await parseFinal(statusRes);
+          return;
+        }
+        // Unexpected status — resend the current chunk as-is next attempt.
+      } catch {
+        // Offset query itself failed — counts as this attempt's backoff cost.
+      }
+    };
+
+    while (bytesSent < totalBytes && !finalData) {
       const chunkEnd = Math.min(bytesSent + CHUNK_SIZE, totalBytes);
-      const chunk = videoBuffer
-        ? videoBuffer.slice(bytesSent, chunkEnd)
-        : await fetchByteRange(videoUrl, bytesSent, chunkEnd - 1);
-      const chunkSize = chunk.length;
 
-      const chunkRes = await fetch(uploadUrl, {
-        method: "PUT",
-        headers: {
-          "Content-Type": videoContentType,
-          "Content-Length": chunkSize.toString(),
-          "Content-Range": `bytes ${bytesSent}-${chunkEnd - 1}/${totalBytes}`,
-        },
-        body: new Uint8Array(chunk),
-      });
+      let chunkRes: Response;
+      try {
+        const chunk = videoBuffer
+          ? videoBuffer.slice(bytesSent, chunkEnd)
+          : await fetchByteRange(videoUrl, bytesSent, chunkEnd - 1);
 
-      bytesSent = chunkEnd;
+        chunkRes = await fetch(uploadUrl, {
+          method: "PUT",
+          headers: {
+            "Content-Type": videoContentType,
+            "Content-Length": chunk.length.toString(),
+            "Content-Range": `bytes ${bytesSent}-${chunkEnd - 1}/${totalBytes}`,
+          },
+          body: new Uint8Array(chunk),
+        });
+      } catch (err) {
+        // Thrown network/ranged-fetch error on this chunk. Non-transient
+        // errors (incl. the fail-closed "Media host ignored Range") and the
+        // buffered path throw immediately — classifyError upstream unchanged.
+        if (chunkAttempt >= maxChunkAttempts - 1 || !isTransientChunkError(err)) throw err;
+        chunkAttempt++;
+        console.warn(
+          `[YouTube] transient chunk error at bytes ${bytesSent} (retry ${chunkAttempt}/${maxChunkAttempts - 1}): ${(err as Error)?.message}`
+        );
+        await backoffAndResync(chunkAttempt);
+        continue;
+      }
 
       // 308 Resume Incomplete = chunk accepted, more to send
       // 200/201 = upload complete
+      // The cursor advances ONLY on an accepted chunk — a failed attempt
+      // resends from the same offset (or the offset Google reports).
       if (chunkRes.status === 308) {
+        bytesSent = chunkEnd;
+        chunkAttempt = 0;
         // Report progress: 10% base + up to 85% for upload phase
         const uploadPct = Math.round((bytesSent / totalBytes) * 85);
         await onProgress?.(10 + uploadPct);
@@ -390,20 +471,19 @@ export class YouTubeProvider extends SocialProvider {
       }
 
       if (chunkRes.status === 200 || chunkRes.status === 201) {
-        try {
-          finalData = await chunkRes.json();
-        } catch {
-          // Empty/truncated 2xx body — try to recover the video id from the
-          // Location header (?v=<id>) before giving up with a clear error.
-          const loc = chunkRes.headers.get("location") || "";
-          const vidMatch = loc.match(/[?&]v=([^&]+)/);
-          if (vidMatch?.[1]) {
-            finalData = { id: vidMatch[1] };
-          } else {
-            throw new Error("YouTube upload completed but returned no parseable body");
-          }
-        }
+        finalData = await parseFinal(chunkRes);
         break;
+      }
+
+      // Retryable HTTP status (5xx / 429) — streamed uploads only
+      // (maxChunkAttempts is 1 on the buffered path, so this never fires there).
+      if ((chunkRes.status >= 500 || chunkRes.status === 429) && chunkAttempt < maxChunkAttempts - 1) {
+        chunkAttempt++;
+        console.warn(
+          `[YouTube] chunk PUT HTTP ${chunkRes.status} at bytes ${bytesSent} — retry ${chunkAttempt}/${maxChunkAttempts - 1}`
+        );
+        await backoffAndResync(chunkAttempt);
+        continue;
       }
 
       // Error on this chunk

@@ -5,13 +5,15 @@ import {
   CompleteMultipartUploadCommand,
   AbortMultipartUploadCommand,
   UploadPartCommand,
+  HeadObjectCommand,
+  DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { createRouter, orgProcedure } from "../trpc";
 import { getS3Client, getS3PresignClient, BUCKET, getPublicUrl } from "../lib/s3";
 
 const MAX_IMAGE_SIZE = 50 * 1024 * 1024;          // 50MB
-const MAX_VIDEO_SIZE = 5 * 1024 * 1024 * 1024;    // 5GB (was 500MB single-part; multipart can go much larger)
+const MAX_VIDEO_SIZE = 4 * 1024 * 1024 * 1024;    // 4GB — the documented Phase-4 cap (matches media.router.ts)
 const ALLOWED_TYPES = new Set([
   "image/jpeg",
   "image/png",
@@ -48,10 +50,10 @@ export const uploadRouter = createRouter({
       const isVideo = input.fileType.startsWith("video/");
       const sizeLimit = isVideo ? MAX_VIDEO_SIZE : MAX_IMAGE_SIZE;
       if (input.fileSize > sizeLimit) {
-        const limitMB = isVideo ? "5,120" : "50";
+        const limitLabel = isVideo ? "4GB" : "50 MB";
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: `File too large. ${isVideo ? "Videos" : "Images"} must be under ${limitMB} MB.`,
+          message: `File too large. ${isVideo ? "Videos" : "Images"} must be under ${limitLabel}.`,
         });
       }
 
@@ -162,6 +164,32 @@ export const uploadRouter = createRouter({
         });
       }
 
+      // The client-declared fileSize is advisory: presigned part PUTs don't
+      // bind Content-Length, so actual uploaded bytes are otherwise unbounded
+      // and an understated size would bypass the worker's VIDEO_OVERLAY_MAX_MB
+      // gate. HEAD the finalized object for the authoritative size + the
+      // ContentType fixed at initiate (complete's fileType input is free text).
+      let actualSize = input.fileSize;
+      let authoritativeType = input.fileType;
+      try {
+        const head = await s3.send(new HeadObjectCommand({ Bucket: BUCKET, Key: input.key }));
+        if (typeof head.ContentLength === "number") actualSize = head.ContentLength;
+        if (head.ContentType) authoritativeType = head.ContentType;
+      } catch {
+        // Transient HEAD failure: degrade to the declared size — never fail a
+        // finished upload on a metadata read.
+      }
+      const isVideoObject = authoritativeType.startsWith("video/");
+      if (actualSize > (isVideoObject ? MAX_VIDEO_SIZE : MAX_IMAGE_SIZE)) {
+        await s3
+          .send(new DeleteObjectCommand({ Bucket: BUCKET, Key: input.key }))
+          .catch(() => {});
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Uploaded file exceeds the size limit for its type.",
+        });
+      }
+
       const publicUrl = getPublicUrl(input.key);
 
       const media = await ctx.prisma.media.create({
@@ -170,7 +198,7 @@ export const uploadRouter = createRouter({
           uploadedById: (ctx.session.user as any).id,
           fileName: input.fileName,
           fileType: input.fileType,
-          fileSize: input.fileSize,
+          fileSize: actualSize,
           url: publicUrl,
           ...(input.category && input.category !== "general" ? { category: input.category } : {}),
         },
