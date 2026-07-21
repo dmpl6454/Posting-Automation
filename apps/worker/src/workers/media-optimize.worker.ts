@@ -46,6 +46,16 @@ const PROBE_TIMEOUT_MS = 60_000;
 // A 15-min 1GB source at veryfast/1080p is well inside an hour on 3 threads.
 const TRANSCODE_TIMEOUT_MS = Number(process.env.MEDIA_OPTIMIZE_TIMEOUT_MS || 60 * 60 * 1000);
 
+/** Stream a (public S3) URL to a local file at full disk speed. */
+async function downloadToFile(url: string, destPath: string): Promise<void> {
+  const res = await fetch(url);
+  if (!res.ok || !res.body) throw new Error(`source download failed: HTTP ${res.status}`);
+  const { Readable } = await import("stream");
+  const { pipeline } = await import("stream/promises");
+  const { createWriteStream } = await import("fs");
+  await pipeline(Readable.fromWeb(res.body as never), createWriteStream(destPath));
+}
+
 async function probeMedia(url: string): Promise<ProbeSummary> {
   const { stdout } = await execFileAsync(
     "ffprobe",
@@ -102,11 +112,29 @@ async function handleJob(job: Job<MediaOptimizeJobData>) {
 
     await writeOptimizeState(media.id, media.metadata, { status: "processing", probe, reasons: verdict.reasons, enqueuedAt }, columns);
     const outPath = path.join(os.tmpdir(), `optimize-${media.id}.mp4`);
+    const srcPath = path.join(os.tmpdir(), `optimize-src-${media.id}`);
     try {
-      await execFileAsync("ffmpeg", buildTranscodeArgs(media.url, outPath), {
+      // Download the source to disk FIRST. ffmpeg reading the HTTP URL
+      // directly gets silently TRUNCATED: the encode runs slower than
+      // realtime, the input read stalls past nginx's send timeout, the
+      // connection closes, and ffmpeg treats EOF as end-of-movie and exits 0
+      // (live-caught 2026-07-21: 63s master → 40s rendition). A plain fetch
+      // reads at disk speed with no encoder stalls.
+      await downloadToFile(media.url, srcPath);
+      await execFileAsync("ffmpeg", buildTranscodeArgs(srcPath, outPath), {
         timeout: TRANSCODE_TIMEOUT_MS,
         maxBuffer: 16 * 1024 * 1024,
       });
+      // Truncation guard: ffmpeg exit 0 does NOT prove the whole source was
+      // consumed. A short output must never be published as "optimized".
+      if (probe.durationSec && probe.durationSec > 1) {
+        const out = await probeMedia(outPath);
+        if (!out.durationSec || out.durationSec < probe.durationSec - Math.max(1, probe.durationSec * 0.02)) {
+          throw new Error(
+            `transcode truncated: output ${out.durationSec ?? 0}s vs source ${probe.durationSec}s`
+          );
+        }
+      }
       const stat = await fsp.stat(outPath);
       const key = `optimized/${media.organizationId}/${media.id}.mp4`;
       await s3.send(
@@ -138,6 +166,7 @@ async function handleJob(job: Job<MediaOptimizeJobData>) {
       );
     } finally {
       await fsp.unlink(outPath).catch(() => {});
+      await fsp.unlink(srcPath).catch(() => {});
     }
   } catch (err) {
     const message = (err instanceof Error ? err.message : String(err)).slice(0, 400);
