@@ -24,6 +24,7 @@ const ALLOWED_TYPES = [
   "video/mp4",
   "video/quicktime",
   "video/webm",
+  "video/x-m4v", // Apple alias for the MP4 container (.m4v) — keep in sync with upload.router.ts
 ];
 
 export async function POST(req: Request) {

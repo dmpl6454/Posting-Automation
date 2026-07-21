@@ -5,11 +5,28 @@ import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
  * Uses env vars: S3_REGION, S3_ENDPOINT, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_BUCKET, S3_PUBLIC_URL
  */
 
+/**
+ * ⚠️ requestChecksumCalculation MUST stay "WHEN_REQUIRED" on both clients.
+ * AWS SDK ≥3.729 defaults to "WHEN_SUPPORTED", which computes a CRC32 for
+ * every command — including presigned UploadPart/PutObject commands that have
+ * NO body server-side. The checksum of that empty body (x-amz-checksum-crc32=
+ * AAAAAA==) gets PINNED into the signed query string, so every browser part
+ * PUT claims its 8MB body has an empty-payload checksum. MinIO currently
+ * ignores the query-pinned value (observed live 2026-07-21), but AWS S3 —
+ * and future MinIO versions — validate it and would reject EVERY part with
+ * BadDigest, silently breaking all multipart (video) uploads.
+ */
+const CHECKSUM_COMPAT = {
+  requestChecksumCalculation: "WHEN_REQUIRED" as const,
+  responseChecksumValidation: "WHEN_REQUIRED" as const,
+};
+
 export function getS3Client(): S3Client {
   return new S3Client({
     region: process.env.S3_REGION || "us-east-1",
     endpoint: process.env.S3_ENDPOINT || undefined,
     forcePathStyle: true, // Required for MinIO
+    ...CHECKSUM_COMPAT,
     credentials: {
       accessKeyId: process.env.S3_ACCESS_KEY_ID || process.env.S3_ACCESS_KEY || "",
       secretAccessKey: process.env.S3_SECRET_ACCESS_KEY || process.env.S3_SECRET_KEY || "",
@@ -32,6 +49,7 @@ export function getS3PresignClient(): S3Client {
     region: process.env.S3_REGION || "us-east-1",
     endpoint: presignEndpoint,
     forcePathStyle: true,
+    ...CHECKSUM_COMPAT,
     credentials: {
       accessKeyId: process.env.S3_ACCESS_KEY_ID || process.env.S3_ACCESS_KEY || "",
       secretAccessKey: process.env.S3_SECRET_ACCESS_KEY || process.env.S3_SECRET_KEY || "",

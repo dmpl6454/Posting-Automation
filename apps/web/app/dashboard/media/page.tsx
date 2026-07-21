@@ -10,6 +10,7 @@ import { Skeleton } from "~/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { useToast } from "~/hooks/use-toast";
 import { useSmartUpload } from "~/lib/use-smart-upload";
+import { withNormalizedVideoMime } from "~/lib/video-mime";
 import { Info } from "lucide-react";
 import {
   Upload,
@@ -111,7 +112,10 @@ export default function MediaPage() {
     const files = e.target.files;
     if (!files) return;
     setIsUploading(true);
-    for (const file of Array.from(files)) {
+    for (const rawFile of Array.from(files)) {
+      // Normalize patchy OS MIME reporting (empty type for .mov/.mp4 on
+      // Windows, Apple's video/x-m4v alias) — the server allowlist keys on it.
+      const file = withNormalizedVideoMime(rawFile) ?? rawFile;
       // Client-side gates matching the server caps — reject BEFORE any bytes
       // move so a 4GB+ video doesn't die opaquely at the proxy limit.
       const isVideo = file.type.startsWith("video/");

@@ -23,6 +23,7 @@ const ALLOWED_TYPES = new Set([
   "video/mp4",
   "video/quicktime",
   "video/webm",
+  "video/x-m4v", // Apple alias for the MP4 container (.m4v) — platforms treat it as mp4
 ]);
 
 // Part URLs expire after 1h — plenty for even very large uploads at typical speeds
@@ -45,7 +46,10 @@ export const uploadRouter = createRouter({
     )
     .mutation(async ({ ctx, input }) => {
       if (!ALLOWED_TYPES.has(input.fileType)) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: `File type '${input.fileType}' is not allowed` });
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `File type '${input.fileType}' is not supported. Videos must be MP4, MOV or WebM — convert the file (e.g. with HandBrake) and retry.`,
+        });
       }
       const isVideo = input.fileType.startsWith("video/");
       const sizeLimit = isVideo ? MAX_VIDEO_SIZE : MAX_IMAGE_SIZE;

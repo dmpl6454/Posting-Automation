@@ -1,8 +1,9 @@
 "use client";
 
 import { humanizeError } from "~/lib/errors";
+import { withNormalizedVideoMime } from "~/lib/video-mime";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useActiveTask } from "~/lib/active-task";
 import { trpc } from "~/lib/trpc/client";
@@ -219,7 +220,16 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [getTask]);
 
-  // Track compose as active task when content is being written
+  // Track compose as active task when content is being written.
+  // Keyed on a signature of the PERSISTED fields (url + mediaId) — not the
+  // postMedia array identity, which changes on every upload-progress tick.
+  // The old [postMedia] dep made every tick do a synchronous localStorage
+  // JSON write plus an ActiveTaskProvider re-render of the whole subtree,
+  // several times per second for the duration of a video upload.
+  const draftMediaSignature = useMemo(
+    () => JSON.stringify(postMedia.map((m) => [m.url, m.mediaId ?? null])),
+    [postMedia]
+  );
   useEffect(() => {
     if (content.trim().length > 0 || selectedChannels.length > 0 || postMedia.length > 0) {
       addTask({
@@ -243,7 +253,10 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
     } else {
       removeTask(TASK_ID);
     }
-  }, [content, selectedChannels, postMedia]);
+    // postMedia is read in the body but deliberately keyed via its persisted
+    // signature — see the comment above draftMediaSignature.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [content, selectedChannels, draftMediaSignature]);
 
   useEffect(() => {
     if (initialContent) setContent(initialContent);
@@ -305,12 +318,25 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
 
   // Measure the first attached video's aspect ratio so we can warn about
   // non-vertical Shorts before publishing.
-  useEffect(() => {
+  //
+  // ⚠️ MUST stay keyed on the first video's URL STRING — never on the postMedia
+  // array. Every whole-percent upload-progress tick rewrites postMedia with a
+  // new identity; a [postMedia] dep re-ran this effect per tick, creating a
+  // fresh detached <video> (a whole media player + metadata demux of the file)
+  // several times per second for the entire upload. WebKit caps live media
+  // players and frees them lazily, so a fast uplink exhausted the pool within
+  // seconds and ballooned the tab until the OS killed it (confirmed on prod
+  // nginx logs 2026-07-21: parts 200 OK, then all in-flight parts cut at the
+  // moment the tab died). Same class of bug as the ActivityPanel SSE storm.
+  const firstVideoUrl = useMemo(() => {
     const videoItem = postMedia.find((m) => {
       const t = m.file?.type ?? "";
       return t.startsWith("video/") || /\.(mp4|webm|mov|m4v|ogv)(\?|$)/i.test(m.url);
     });
-    if (!videoItem) {
+    return videoItem?.url ?? null;
+  }, [postMedia]);
+  useEffect(() => {
+    if (!firstVideoUrl) {
       setVideoAspect(null);
       return;
     }
@@ -321,12 +347,15 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
         setVideoAspect(el.videoWidth / el.videoHeight);
       }
     };
-    el.src = videoItem.url;
+    el.src = firstVideoUrl;
     return () => {
+      // Full WebKit teardown: clearing the handler alone leaves the media
+      // player alive until GC — removeAttribute + load() releases it now.
       el.onloadedmetadata = null;
-      el.src = "";
+      el.removeAttribute("src");
+      el.load();
     };
-  }, [postMedia]);
+  }, [firstVideoUrl]);
 
   // Warn before leaving while media is still uploading. Closing/refreshing the
   // tab mid-multipart-upload is unrecoverable: the in-flight parts are orphaned
@@ -655,7 +684,11 @@ ${content}`;
   const handleVideoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files) return;
-    Array.from(files).forEach((file) => {
+    Array.from(files).forEach((rawFile) => {
+      // Normalize patchy OS MIME reporting (empty type for .mov/.mp4 on
+      // Windows, Apple's video/x-m4v alias) before the type gates — the
+      // server allowlist keys on this type.
+      const file = withNormalizedVideoMime(rawFile) ?? rawFile;
       if (!file.type.startsWith("video/")) {
         toast({
           title: "File skipped",
@@ -715,11 +748,19 @@ ${content}`;
     }
 
     const { uploadFileMultipart } = await import("~/lib/upload-multipart");
+    // Cap progress re-paints at ~4/s. The multipart engine already reports
+    // whole-percent changes only, but on a fast uplink a mid-size video
+    // crosses 10+ percent boundaries per second — and every setPostMedia
+    // re-renders the entire compose tree. 100% always paints (completion).
+    let lastProgressPaintAt = 0;
     const result = await uploadFileMultipart({
       file,
       signal,
       onProgress: (percent) => {
         if (!objectUrl) return;
+        const now = Date.now();
+        if (percent < 100 && now - lastProgressPaintAt < 250) return;
+        lastProgressPaintAt = now;
         setPostMedia((prev) =>
           prev.map((item) => (item.url === objectUrl ? { ...item, progress: percent } : item))
         );
