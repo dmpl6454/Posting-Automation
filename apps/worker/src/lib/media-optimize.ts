@@ -98,8 +98,26 @@ export function buildTranscodeArgs(inputUrl: string, outPath: string): string[] 
   ];
 }
 
-/** URL-pull platforms where the optimized rendition must be preferred. */
-const OPTIMIZED_PLATFORMS = new Set(["INSTAGRAM", "FACEBOOK"]);
+/** Platforms whose publishes may substitute the optimized rendition. */
+const OPTIMIZED_PLATFORMS = new Set(["INSTAGRAM", "FACEBOOK", "TWITTER"]);
+
+/**
+ * Per-platform hard caps for publishing the ORIGINAL file. IG/FB URL-pull
+ * rejects >1GB (2207076); X chunked upload INIT 400s above 512MB
+ * (maxFileSizeBytes: 536870912 — live-seen 2026-07-21). Above the cap the
+ * rendition is mandatory.
+ */
+const PLATFORM_ORIGINAL_CAPS: Record<string, number> = {
+  INSTAGRAM: OPTIMIZE_SIZE_BYTES,
+  FACEBOOK: OPTIMIZE_SIZE_BYTES,
+  TWITTER: 512 * 1024 * 1024,
+};
+
+const PLATFORM_LABELS: Record<string, string> = {
+  INSTAGRAM: "Instagram",
+  FACEBOOK: "Facebook",
+  TWITTER: "X (Twitter)",
+};
 
 /**
  * Pick the URL the publish worker should hand a platform for one media row.
@@ -123,11 +141,15 @@ export function choosePublishUrl(
   // resolution when the destination can take it) unless the original is
   // genuinely unpublishable: unsupported codec, or over the safe size cap.
   if (platform === "INSTAGRAM") return rendition;
+  // FACEBOOK (4K-capable) and TWITTER keep the FULL-RESOLUTION original
+  // (owner constraint: never downgrade when the destination can take it)
+  // unless it's genuinely unpublishable there: unsupported codec, or over
+  // that platform's hard cap.
   const probe = opt?.probe;
   const badCodec =
     (probe?.audioCodec && !SAFE_AUDIO.has(probe.audioCodec)) ||
     (probe?.videoCodec && !SAFE_VIDEO.has(probe.videoCodec));
-  const tooBig = (media.fileSize ?? 0) > OPTIMIZE_SIZE_BYTES;
+  const tooBig = (media.fileSize ?? 0) > (PLATFORM_ORIGINAL_CAPS[platform] ?? Infinity);
   return badCodec || tooBig ? rendition : media.url;
 }
 
@@ -149,17 +171,18 @@ export function planOptimizeGate(params: {
   now: number;
 }): OptimizeGateAction {
   const { platform, media, now } = params;
-  if (!OPTIMIZED_PLATFORMS.has(platform)) return { action: "proceed" };
+  const cap = PLATFORM_ORIGINAL_CAPS[platform];
+  if (!OPTIMIZED_PLATFORMS.has(platform) || !cap) return { action: "proceed" };
   for (const m of media) {
     if (!m.fileType.startsWith("video/")) continue;
-    if (m.fileSize <= OPTIMIZE_SIZE_BYTES) continue; // small enough — original is publishable
+    if (m.fileSize <= cap) continue; // small enough — original is publishable
     const opt = (m.metadata as { optimize?: OptimizeState } | null)?.optimize;
     if (opt?.status === "done" && opt.url) continue; // rendition ready
     if (opt?.status === "failed") {
       return {
         action: "fail",
         message:
-          `Video could not be optimized for ${platform === "INSTAGRAM" ? "Instagram" : "Facebook"} ` +
+          `Video could not be optimized for ${PLATFORM_LABELS[platform] ?? platform} ` +
           `(${opt.reasons?.join("; ") || opt.error || "unknown reason"}). ` +
           `Export it as MP4 (H.264 + AAC audio, under 1GB) and re-upload.`,
       };

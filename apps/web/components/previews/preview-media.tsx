@@ -64,5 +64,8 @@ export function PreviewMedia({
       </div>
     );
   }
-  return <video src={withPosterHint(url)} className={className} muted playsInline preload="metadata" />;
+  // controls: owner request 2026-07-21 — a static frame read as "preview
+  // doesn't work"; native play/pause makes it obviously alive. No autoplay,
+  // so no muted requirement.
+  return <video src={withPosterHint(url)} className={className} controls playsInline preload="metadata" />;
 }
