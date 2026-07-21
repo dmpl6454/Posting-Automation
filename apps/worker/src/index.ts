@@ -22,6 +22,7 @@ import { createOutreachPollWorker } from "./workers/outreach-poll.worker";
 import { createRepurposeVideoWorker } from "./workers/repurpose-video.worker";
 import { createAvatarCacheWorker } from "./workers/avatar-cache.worker";
 import { createCaptionFanoutWorker } from "./workers/caption-fanout.worker";
+import { createMediaOptimizeWorker } from "./workers/media-optimize.worker";
 import { startCronJobs } from "./scheduler/cron-jobs";
 import { registerWorker, markWorkerStopped, startHealthServer } from "./lib/health";
 
@@ -70,6 +71,7 @@ const outreachPollWorker = createOutreachPollWorker();
 const repurposeVideoWorker = createRepurposeVideoWorker();
 const avatarCacheWorker = createAvatarCacheWorker();
 const captionFanoutWorker = createCaptionFanoutWorker();
+const mediaOptimizeWorker = createMediaOptimizeWorker();
 
 // Start cron jobs — leader-gated for future multi-worker scale-out: the
 // setInterval crons must run in EXACTLY ONE container or every scheduled
@@ -156,6 +158,7 @@ async function shutdown() {
     repurposeVideoWorker.close(),
     avatarCacheWorker.close(),
     captionFanoutWorker.close(),
+    mediaOptimizeWorker.close(),
   ]);
 
   healthServer.close();

@@ -4,8 +4,9 @@ import { getSocialProvider } from "@postautomation/social";
 import { QUEUE_NAMES, postPublishQueue, analyticsSyncQueue, type PostPublishJobData, createRedisConnection } from "@postautomation/queue";
 import IORedis from "ioredis";
 import { buildPublishEmail, buildPublishReportCsv } from "../lib/publish-email";
-import { markTargetFailed, buildPublishNotifications, mediaRequiredReason, terminalizeStuckClaim, isSeedNoise, isStaleScheduleJob, isHeavyPublish, planHeavyDefer, HEAVY_SLOT_WAIT_MESSAGE } from "../lib/publish-recovery";
-import { PRIORITY_RETRY } from "@postautomation/queue";
+import { markTargetFailed, buildPublishNotifications, mediaRequiredReason, terminalizeStuckClaim, isSeedNoise, isStaleScheduleJob, isHeavyPublish, planHeavyDefer, HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE } from "../lib/publish-recovery";
+import { PRIORITY_RETRY, mediaOptimizeQueue } from "@postautomation/queue";
+import { planOptimizeGate, choosePublishUrl } from "../lib/media-optimize";
 
 /** Integer env knob with a default and a sane clamp (bad values → default). */
 function envInt(name: string, def: number, min: number, max: number): number {
@@ -411,7 +412,63 @@ export function createPostPublishWorker() {
       // pre-PR-5 post) short-circuits to the exact pre-existing expression.
       const contentVariants = postTarget.post.contentVariants as Record<string, string> | null;
       const content = postTarget.contentOverride ?? contentVariants?.[platform] ?? postTarget.post.content;
-      let mediaUrls = postTarget.post.mediaAttachments.map((m) => m.media.url);
+      // Platform-spec gate + rendition preference (IG/FB URL-pull): a >1GB
+      // video is GUARANTEED to fail Instagram's server-side pull (hard 1GB
+      // cap — live-verified error 2207076, 6/6 attempts). Wait for the
+      // media-optimize rendition instead of burning minutes on a doomed
+      // publish. Videos ≤950MB pass straight through (zero regression) and
+      // merely PREFER the rendition when one exists.
+      const gateMedia = postTarget.post.mediaAttachments.map((m) => ({
+        id: m.media.id,
+        url: m.media.url,
+        fileType: m.media.fileType,
+        fileSize: Number(m.media.fileSize ?? 0),
+        metadata: (m.media as { metadata?: unknown }).metadata,
+      }));
+      const optimizeGate = planOptimizeGate({ platform, media: gateMedia, now: Date.now() });
+      if (optimizeGate.action === "fail") {
+        throw new Error(optimizeGate.message);
+      }
+      if (optimizeGate.action === "wait") {
+        // Self-heal: (re)enqueue the rendition job (jobId dedupes with the
+        // upload-time producer) and stamp the wait-ceiling clock for rows
+        // that predate the pipeline.
+        try {
+          const waiting = gateMedia.find((m) => m.id === optimizeGate.mediaId);
+          const meta = (waiting?.metadata ?? {}) as Record<string, unknown>;
+          if (waiting && !meta.optimize) {
+            await prisma.media.update({
+              where: { id: waiting.id },
+              data: { metadata: { ...meta, optimize: { status: "pending", enqueuedAt: new Date().toISOString() } } as any },
+            });
+          }
+          await mediaOptimizeQueue.add(
+            "optimize",
+            { mediaId: optimizeGate.mediaId },
+            { jobId: `optimize:${optimizeGate.mediaId}:v1`, attempts: 2, backoff: { type: "exponential", delay: 60_000 }, removeOnComplete: { age: 3600 }, removeOnFail: { age: 24 * 3600 } }
+          );
+        } catch (e) {
+          console.warn(`[PostPublish] optimize enqueue failed for ${optimizeGate.mediaId}`, e);
+        }
+        const optimizeDelayMs = 90_000 + Math.floor(Math.random() * 60_000);
+        console.log(
+          `[PostPublish] Waiting for media optimization (${optimizeGate.mediaId}) — deferring ${postTargetId} ${Math.round(optimizeDelayMs / 1000)}s`
+        );
+        await postPublishQueue.add(`retry-optimize-${postTargetId}-${Date.now()}`, job.data, {
+          delay: optimizeDelayMs,
+          priority: PRIORITY_RETRY,
+          attempts: 3,
+          backoff: { type: "exponential", delay: 60_000 },
+        });
+        await prisma.postTarget.update({
+          where: { id: postTargetId },
+          // OPTIMIZE_WAIT_MESSAGE is a watchdog keep-alive marker like
+          // HEAVY_SLOT_WAIT_MESSAGE — defer-parked targets stay live.
+          data: { status: "SCHEDULED", errorMessage: OPTIMIZE_WAIT_MESSAGE },
+        });
+        return;
+      }
+      let mediaUrls = postTarget.post.mediaAttachments.map((m) => choosePublishUrl(platform, m.media as { url: string; fileType: string; metadata?: unknown }));
       const mediaTypes = postTarget.post.mediaAttachments.map((m) => m.media.fileType);
       // Number(): fileSize is a Prisma BigInt (Phase 4) — safe up to 2^53,
       // far beyond any real file; keeps the gate math plain-number.
