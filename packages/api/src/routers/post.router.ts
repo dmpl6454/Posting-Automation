@@ -156,7 +156,7 @@ export const postRouter = createRouter({
       // Validate every channelId belongs to this organization before persisting
       const ownedChannels = await ctx.prisma.channel.findMany({
         where: { id: { in: input.channelIds }, organizationId: ctx.organizationId },
-        select: { id: true },
+        select: { id: true, platform: true },
       });
       if (ownedChannels.length !== new Set(input.channelIds).size) {
         // Identify which requested IDs are invalid (deleted, or belong to another
@@ -178,6 +178,24 @@ export const postRouter = createRouter({
       // attaching another org's Media row to their post (cross-org IDOR).
       if (input.mediaIds?.length) {
         await assertMediaOwned(ctx.prisma as any, ctx.organizationId, input.mediaIds);
+        // Early platform-constraint validation (owner-approved 2026-07-21):
+        // refuse KNOWN-unpublishable video/platform combos at creation with a
+        // plain message instead of an opaque platform code minutes later.
+        // The publish worker stays authoritative for everything else.
+        if (input.channelIds.length) {
+          const { validateVideoAgainstPlatforms } = await import("../lib/media-constraints");
+          const mediaRows = await ctx.prisma.media.findMany({
+            where: { id: { in: input.mediaIds } },
+            select: { fileName: true, fileType: true, fileSize: true, metadata: true },
+          });
+          const constraintError = validateVideoAgainstPlatforms(
+            mediaRows.map((r) => ({ ...r, fileSize: Number(r.fileSize) })),
+            [...new Set(ownedChannels.map((c) => c.platform as string))]
+          );
+          if (constraintError) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: constraintError });
+          }
+        }
       }
 
       // Block a media-less IG/FB SCHEDULE when AI is off (it can never publish).

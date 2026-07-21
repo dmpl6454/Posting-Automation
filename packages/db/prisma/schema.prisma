@@ -375,6 +375,11 @@ model Media {
   duration     Int?
   category     String  @default("general") // "general" | "logo" | "template"
   channelId    String? // links logo to a specific channel
+  /// Optimization pipeline state (media-optimize.worker): { optimize: { status:
+  /// "processing"|"done"|"skipped"|"failed", url?, key?, size?, reasons?,
+  /// probe?: { videoCodec, audioCodec, width, height, durationSec, bitrate },
+  /// enqueuedAt?, error? } }. Additive Json — no reader assumes presence.
+  metadata     Json?
 
   organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   postMedia       PostMedia[]

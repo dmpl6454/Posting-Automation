@@ -351,9 +351,12 @@ export default function MediaPage() {
                 <>
                   <div className="flex max-h-[70vh] items-center justify-center overflow-hidden rounded-lg bg-black">
                     {selectedMedia.fileType.startsWith("video/") ? (
-                      // Fix #38: video with controls in lightbox
+                      // Fix #38: video with controls in lightbox. Prefer the
+                      // web-optimized rendition (media-optimize.worker): raw
+                      // camera masters stutter (200Mbps+) and play SILENT
+                      // (PCM audio) — the rendition streams + sounds right.
                       <video
-                        src={selectedMedia.url}
+                        src={(selectedMedia as any).metadata?.optimize?.url ?? selectedMedia.url}
                         controls
                         autoPlay
                         className="max-h-[70vh] w-full object-contain"

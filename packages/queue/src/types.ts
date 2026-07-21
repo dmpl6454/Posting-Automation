@@ -130,6 +130,10 @@ export interface OutreachPollJobData {
  * resolves a fresh URL, downloads it, and rewrites Channel.avatar to a stable
  * S3 public URL (avatars/{orgId}/{channelId}.{ext}).
  */
+export interface MediaOptimizeJobData {
+  mediaId: string;
+}
+
 export interface AvatarCacheJobData {
   channelId: string;
 }

@@ -10,6 +10,7 @@ import {
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { createRouter, orgProcedure } from "../trpc";
+import { mediaOptimizeQueue } from "@postautomation/queue";
 import { getS3Client, getS3PresignClient, BUCKET, getPublicUrl } from "../lib/s3";
 
 const MAX_IMAGE_SIZE = 50 * 1024 * 1024;          // 50MB
@@ -196,6 +197,7 @@ export const uploadRouter = createRouter({
 
       const publicUrl = getPublicUrl(input.key);
 
+      const isVideoMedia = authoritativeType.startsWith("video/");
       const media = await ctx.prisma.media.create({
         data: {
           organizationId: ctx.organizationId,
@@ -205,8 +207,25 @@ export const uploadRouter = createRouter({
           fileSize: actualSize,
           url: publicUrl,
           ...(input.category && input.category !== "general" ? { category: input.category } : {}),
+          // Videos enter the optimize pipeline (media-optimize.worker): probe
+          // + web rendition when out of platform/browser spec. The pending
+          // stamp starts the publish gate's wait-ceiling clock.
+          ...(isVideoMedia
+            ? { metadata: { optimize: { status: "pending", enqueuedAt: new Date().toISOString() } } }
+            : {}),
         },
       });
+      if (isVideoMedia) {
+        // Fire-and-forget: a queue blip must never fail a finished upload —
+        // the publish worker self-heals by re-enqueueing on demand.
+        void mediaOptimizeQueue
+          .add(
+            "optimize",
+            { mediaId: media.id },
+            { jobId: `optimize:${media.id}:v1`, attempts: 2, backoff: { type: "exponential", delay: 60_000 }, removeOnComplete: { age: 3600 }, removeOnFail: { age: 24 * 3600 } }
+          )
+          .catch((e) => console.warn("[upload] media-optimize enqueue failed:", e));
+      }
 
       return {
         id: media.id,

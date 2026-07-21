@@ -190,6 +190,8 @@ export function isStaleScheduleJob(
  * shared constant so the two sites can never drift.
  */
 export const HEAVY_SLOT_WAIT_MESSAGE = "Waiting for a large-upload slot";
+// Parked while media-optimize produces the platform rendition (IG/FB >1GB).
+export const OPTIMIZE_WAIT_MESSAGE = "Optimizing video for this platform";
 
 /** Is this publish "heavy" — a streamed platform with media above the threshold? */
 export function isHeavyPublish(

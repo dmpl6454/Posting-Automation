@@ -3,7 +3,7 @@ import { tokenRefreshQueue, analyticsSyncQueue, agentRunQueue, trendDiscoverQueu
 import { runAutoHealerWithLogging } from "../workers/auto-healer.worker";
 import { runCelebrityDetectors } from "../workers/celebrity-detect.worker";
 import { enqueueScheduledPublishJobs } from "@postautomation/queue";
-import { HEAVY_SLOT_WAIT_MESSAGE } from "../lib/publish-recovery";
+import { HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE } from "../lib/publish-recovery";
 
 /**
  * Check for channels with expiring tokens and queue refresh jobs.
@@ -706,7 +706,8 @@ export async function watchdogPublishingPosts() {
       (t: any) =>
         t.status !== "PUBLISHED" && t.status !== "FAILED" && t.status !== "CANCELLED" &&
         (new Date(t.updatedAt) >= activeThreshold ||
-          (t.status === "SCHEDULED" && t.errorMessage === HEAVY_SLOT_WAIT_MESSAGE))
+          (t.status === "SCHEDULED" &&
+            (t.errorMessage === HEAVY_SLOT_WAIT_MESSAGE || t.errorMessage === OPTIMIZE_WAIT_MESSAGE)))
     );
     const pastHardCeiling = new Date(post.updatedAt) < hardReapThreshold;
     if (hasActiveUpload && !pastHardCeiling) {

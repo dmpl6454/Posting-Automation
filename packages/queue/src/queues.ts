@@ -1,6 +1,6 @@
 import { Queue, type DefaultJobOptions } from "bullmq";
 import { redisConnection } from "./connection";
-import type { PostPublishJobData, TokenRefreshJobData, AnalyticsSyncJobData, MediaProcessJobData, WebhookDeliveryJobData, RssSyncJobData, NotificationSendJobData, AgentRunJobData, TrendDiscoverJobData, TrendScoreJobData, ContentGenerateJobData, AutopilotScheduleJobData, ListeningSyncJobData, SentimentAnalysisJobData, CampaignAnalyticsSyncJobData, BrandContentSyncJobData, OutreachSendJobData, OutreachPollJobData, RepurposeVideoJobData, AvatarCacheJobData, CaptionFanoutJobData } from "./types";
+import type { PostPublishJobData, TokenRefreshJobData, AnalyticsSyncJobData, MediaProcessJobData, WebhookDeliveryJobData, RssSyncJobData, NotificationSendJobData, AgentRunJobData, TrendDiscoverJobData, TrendScoreJobData, ContentGenerateJobData, AutopilotScheduleJobData, ListeningSyncJobData, SentimentAnalysisJobData, CampaignAnalyticsSyncJobData, BrandContentSyncJobData, OutreachSendJobData, OutreachPollJobData, RepurposeVideoJobData, AvatarCacheJobData, CaptionFanoutJobData, MediaOptimizeJobData } from "./types";
 
 /** Default retry config: 3 attempts with exponential backoff (30s base) */
 const DEFAULT_JOB_OPTS: DefaultJobOptions = {
@@ -39,6 +39,7 @@ export const QUEUE_NAMES = {
   REPURPOSE_VIDEO: "repurpose-video",
   AVATAR_CACHE: "avatar-cache",
   CAPTION_FANOUT: "caption-fanout",
+  MEDIA_OPTIMIZE: "media-optimize",
 } as const;
 
 export const postPublishQueue = createQueue<PostPublishJobData>(QUEUE_NAMES.POST_PUBLISH);
@@ -62,3 +63,4 @@ export const brandContentSyncQueue = createQueue<BrandContentSyncJobData>(QUEUE_
 export const repurposeVideoQueue = createQueue<RepurposeVideoJobData>(QUEUE_NAMES.REPURPOSE_VIDEO);
 export const avatarCacheQueue = createQueue<AvatarCacheJobData>(QUEUE_NAMES.AVATAR_CACHE);
 export const captionFanoutQueue = createQueue<CaptionFanoutJobData>(QUEUE_NAMES.CAPTION_FANOUT);
+export const mediaOptimizeQueue = createQueue<MediaOptimizeJobData>(QUEUE_NAMES.MEDIA_OPTIMIZE);
