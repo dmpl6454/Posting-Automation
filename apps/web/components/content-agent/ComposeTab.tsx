@@ -75,6 +75,16 @@ interface ComposeTabProps {
 // Fix #24: sessionStorage key for carrying draft content from GenerateTab / ImageTab
 const COMPOSE_DRAFT_KEY = "compose:draftContent";
 
+// Shared video classifier for postMedia items — the media tile and the Post
+// Preview `mediaKinds` MUST agree on what's a video: a video URL fed into an
+// <img> makes WebKit ingest the ENTIRE blob into memory (+1.57GB measured for
+// a 1.6GB camera file — see components/previews/preview-media.tsx).
+const isVideoMediaItem = (m: { url: string; file?: File }) =>
+  !!(m.file?.type.startsWith("video/") || m.url.includes("video") || /\.(mp4|webm|mov)/.test(m.url));
+// Tiles for local videos above this size skip the inline metadata <video> —
+// WebKit does GB-scale opportunistic read bursts on high-bitrate blobs.
+const TILE_VIDEO_PREVIEW_MAX_BYTES = 256 * 1024 * 1024;
+
 // Module-scope FIFO semaphore bounding CONCURRENT FILE uploads (spans the
 // image + video pickers and survives re-renders). Each multipart upload
 // already runs 4 parallel part-PUTs; without this, selecting 8 files starts
@@ -342,19 +352,26 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
     }
     const el = document.createElement("video");
     el.preload = "metadata";
+    // Full WebKit teardown: clearing the handler alone leaves the media
+    // player alive until GC — removeAttribute + load() releases it now.
+    // Released the moment metadata arrives (not just on unmount): an idle
+    // media element bound to a high-bitrate blob triggers GB-scale
+    // opportunistic read bursts in WebKit (measured 2026-07-21).
+    const release = () => {
+      el.onloadedmetadata = null;
+      el.onerror = null;
+      el.removeAttribute("src");
+      el.load();
+    };
     el.onloadedmetadata = () => {
       if (el.videoWidth > 0 && el.videoHeight > 0) {
         setVideoAspect(el.videoWidth / el.videoHeight);
       }
+      release();
     };
+    el.onerror = release;
     el.src = firstVideoUrl;
-    return () => {
-      // Full WebKit teardown: clearing the handler alone leaves the media
-      // player alive until GC — removeAttribute + load() releases it now.
-      el.onloadedmetadata = null;
-      el.removeAttribute("src");
-      el.load();
-    };
+    return release;
   }, [firstVideoUrl]);
 
   // Warn before leaving while media is still uploading. Closing/refreshing the
@@ -1210,17 +1227,24 @@ ${content}`;
               {postMedia.length > 0 && (
                 <div className="flex gap-2 overflow-x-auto pb-1">
                   {postMedia.map((item, idx) => {
-                    const isVideo = item.file?.type.startsWith("video/") || item.url.includes("video") || /\.(mp4|webm|mov)/.test(item.url);
+                    const isVideo = isVideoMediaItem(item);
+                    // No inline <video> for very large local files: even a
+                    // metadata-only media element on a high-bitrate blob
+                    // triggers GB-scale read bursts in WebKit. The Film-icon
+                    // overlay below still marks the tile as a video.
+                    const skipInlineVideo = !!item.file && item.file.size > TILE_VIDEO_PREVIEW_MAX_BYTES;
                     return (
                       <div key={idx} className="group relative flex-shrink-0">
                         {isVideo ? (
                           <div className="relative h-16 w-24 overflow-hidden rounded-md border bg-muted">
+                            {!skipInlineVideo && (
                             <video
                               src={item.url}
                               className="h-full w-full object-cover"
                               muted
                               preload="metadata"
                             />
+                            )}
                             <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-black/40">
                               {item.uploading ? (
                                 <>
@@ -1710,6 +1734,7 @@ ${content}`;
           <PostPreviewSwitcher
             content={content}
             mediaUrls={editorOpen && editorPreview ? [editorPreview] : postMedia.length > 0 ? postMedia.map(m => m.url) : undefined}
+            mediaKinds={editorOpen && editorPreview ? ["image"] : postMedia.length > 0 ? postMedia.map((m) => (isVideoMediaItem(m) ? "video" : "image")) : undefined}
             platforms={selectedPlatforms.length > 0 ? selectedPlatforms : undefined}
             timestamp={scheduledAt ? new Date(scheduledAt) : new Date()}
           />

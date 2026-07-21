@@ -1,6 +1,7 @@
 "use client";
 
 import { Card, CardContent } from "~/components/ui/card";
+import { PreviewMedia, type MediaKind } from "./preview-media";
 import { Avatar, AvatarImage, AvatarFallback } from "~/components/ui/avatar";
 import {
   ThumbsUp,
@@ -13,6 +14,7 @@ import {
 export interface PostPreviewProps {
   content: string;
   mediaUrls?: string[];
+  mediaKinds?: MediaKind[];
   authorName?: string;
   authorHandle?: string;
   authorAvatar?: string;
@@ -48,6 +50,7 @@ function getInitials(name: string): string {
 export function FacebookPreview({
   content,
   mediaUrls,
+  mediaKinds,
   authorName = "Your Name",
   authorAvatar,
   timestamp,
@@ -96,10 +99,9 @@ export function FacebookPreview({
           <div className="mt-1">
             {mediaUrls.length === 1 ? (
               <div className="relative aspect-video w-full bg-zinc-100 dark:bg-zinc-800">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={mediaUrls[0]}
-                  alt="Post media"
+                <PreviewMedia
+                  url={mediaUrls[0]}
+                  kind={mediaKinds?.[0]}
                   className="h-full w-full object-cover"
                 />
               </div>
@@ -110,9 +112,9 @@ export function FacebookPreview({
                     key={i}
                     className="relative aspect-square bg-zinc-100 dark:bg-zinc-800"
                   >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={url}
+                    <PreviewMedia
+                      url={url}
+                      kind={mediaKinds?.[i]}
                       alt={`Media ${i + 1}`}
                       className="h-full w-full object-cover"
                     />
@@ -130,9 +132,9 @@ export function FacebookPreview({
                         : "aspect-square"
                     }`}
                   >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={url}
+                    <PreviewMedia
+                      url={url}
+                      kind={mediaKinds?.[i]}
                       alt={`Media ${i + 1}`}
                       className="h-full w-full object-cover"
                     />

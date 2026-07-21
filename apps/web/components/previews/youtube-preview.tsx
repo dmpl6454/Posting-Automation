@@ -4,6 +4,7 @@ import { Card, CardContent } from "~/components/ui/card";
 import { Avatar, AvatarImage, AvatarFallback } from "~/components/ui/avatar";
 import { Play, ThumbsUp, ThumbsDown, Share2, Bookmark, MoreHorizontal, AlertCircle } from "lucide-react";
 import type { PostPreviewProps } from "./twitter-preview";
+import { PreviewMedia } from "./preview-media";
 
 function getInitials(name: string): string {
   return name.split(" ").map((n) => n[0]).join("").toUpperCase().slice(0, 2);
@@ -16,6 +17,7 @@ function isVideoUrl(url: string): boolean {
 export function YouTubePreview({
   content,
   mediaUrls,
+  mediaKinds,
   authorName = "Your Channel",
   authorHandle,
   authorAvatar,
@@ -23,7 +25,8 @@ export function YouTubePreview({
 }: PostPreviewProps) {
   const hasMedia = mediaUrls && mediaUrls.length > 0;
   const firstMedia = hasMedia ? mediaUrls[0] : null;
-  const isVideo = firstMedia ? isVideoUrl(firstMedia) : false;
+  const firstKind = mediaKinds?.[0];
+  const isVideo = firstMedia ? (firstKind ? firstKind === "video" : isVideoUrl(firstMedia)) : false;
 
   // First line of content is treated as the title (matches the worker which uses
   // payload.metadata?.title || payload.content.slice(0, 100) when publishing)
@@ -37,12 +40,18 @@ export function YouTubePreview({
         {/* Video player frame */}
         <div className="relative aspect-video w-full overflow-hidden bg-black">
           {firstMedia && isVideo ? (
-            <video
-              src={firstMedia}
-              className="h-full w-full object-contain"
-              controls
-              preload="metadata"
-            />
+            firstMedia.startsWith("blob:") ? (
+              // Local blob videos: static placeholder — a real <video> on a
+              // multi-GB blob triggers GB-scale read bursts in WebKit.
+              <PreviewMedia url={firstMedia} kind="video" className="h-full w-full object-contain" />
+            ) : (
+              <video
+                src={firstMedia}
+                className="h-full w-full object-contain"
+                controls
+                preload="metadata"
+              />
+            )
           ) : firstMedia ? (
             <div className="relative h-full w-full">
               {/* eslint-disable-next-line @next/next/no-img-element */}

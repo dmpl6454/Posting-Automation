@@ -57,6 +57,7 @@ export function PostPreviewSwitcher({
   platforms,
   content,
   mediaUrls,
+  mediaKinds,
   authorName,
   authorHandle,
   authorAvatar,
@@ -65,6 +66,7 @@ export function PostPreviewSwitcher({
   const previewProps: PostPreviewProps = {
     content,
     mediaUrls,
+    mediaKinds,
     authorName,
     authorHandle,
     authorAvatar,

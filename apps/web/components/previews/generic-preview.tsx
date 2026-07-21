@@ -1,6 +1,7 @@
 "use client";
 
 import { Card, CardContent } from "~/components/ui/card";
+import { PreviewMedia, type MediaKind } from "./preview-media";
 import { Avatar, AvatarImage, AvatarFallback } from "~/components/ui/avatar";
 import { Badge } from "~/components/ui/badge";
 import { Globe, Image as ImageIcon } from "lucide-react";
@@ -8,6 +9,7 @@ import { Globe, Image as ImageIcon } from "lucide-react";
 export interface PostPreviewProps {
   content: string;
   mediaUrls?: string[];
+  mediaKinds?: MediaKind[];
   authorName?: string;
   authorHandle?: string;
   authorAvatar?: string;
@@ -40,6 +42,7 @@ function getInitials(name: string): string {
 export function GenericPreview({
   content,
   mediaUrls,
+  mediaKinds,
   authorName = "Your Name",
   authorHandle,
   authorAvatar,
@@ -97,10 +100,9 @@ export function GenericPreview({
             {mediaUrls.length === 1 ? (
               <div className="relative overflow-hidden rounded-lg border border-zinc-200 bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800">
                 <div className="aspect-video">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={mediaUrls[0]}
-                    alt="Post media"
+                  <PreviewMedia
+                    url={mediaUrls[0]}
+                    kind={mediaKinds?.[0]}
                     className="h-full w-full object-cover"
                   />
                 </div>
@@ -113,9 +115,9 @@ export function GenericPreview({
                     className="relative overflow-hidden rounded-lg border border-zinc-200 bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800"
                   >
                     <div className="aspect-square">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={url}
+                      <PreviewMedia
+                        url={url}
+                        kind={mediaKinds?.[i]}
                         alt={`Media ${i + 1}`}
                         className="h-full w-full object-cover"
                       />
