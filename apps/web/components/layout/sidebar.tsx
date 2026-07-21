@@ -7,7 +7,8 @@ import { useSession } from "next-auth/react";
 import { cn } from "~/lib/utils";
 import { OrgSwitcher } from "~/components/layout/org-switcher";
 import { trpc } from "~/lib/trpc/client";
-import { X, Lock } from "lucide-react";
+import { X, Lock, RefreshCw } from "lucide-react";
+import { useEffect, useState } from "react";
 import { Button } from "~/components/ui/button";
 import {
   LayoutDashboard,
@@ -93,6 +94,61 @@ const settingsNav: NavItem[] = [
 interface SidebarProps {
   open?: boolean;
   onClose?: () => void;
+}
+
+
+/**
+ * Stale-bundle detector. An SPA tab keeps executing the JavaScript it loaded
+ * until a REAL reload — which has repeatedly meant users reproducing bugs that
+ * were already fixed on the server (2026-07-21: three video-upload crash
+ * reports, each from a tab still running the previous bundle). Polls the
+ * running server's /api/version and offers a one-click reload when it differs
+ * from the version this bundle was built with. Reload is user-initiated only:
+ * an auto-reload could kill an in-flight upload (the beforeunload guard would
+ * prompt, but we never want to trigger that ourselves).
+ */
+function UpdateAvailableNotice() {
+  const builtVersion = process.env.NEXT_PUBLIC_APP_VERSION || "";
+  const [liveVersion, setLiveVersion] = useState<string | null>(null);
+  useEffect(() => {
+    if (!builtVersion) return;
+    let stopped = false;
+    const check = async () => {
+      try {
+        const res = await fetch("/api/version", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = (await res.json()) as { version?: string };
+        if (!stopped && data.version && data.version !== builtVersion) {
+          setLiveVersion(data.version);
+        }
+      } catch {
+        // network blip — the next poll retries
+      }
+    };
+    void check();
+    const id = setInterval(check, 10 * 60_000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void check();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      stopped = true;
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [builtVersion]);
+
+  if (!liveVersion) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => window.location.reload()}
+      className="mx-4 mb-2 flex items-center gap-1.5 rounded-md border border-amber-300/60 bg-amber-50 px-2.5 py-1.5 text-left text-[11px] font-medium text-amber-800 transition-colors hover:bg-amber-100 dark:border-amber-700/50 dark:bg-amber-950/40 dark:text-amber-300 dark:hover:bg-amber-950/70"
+    >
+      <RefreshCw className="h-3 w-3 flex-shrink-0" />
+      Update available (v{liveVersion}) — click to refresh
+    </button>
+  );
 }
 
 export function Sidebar({ open, onClose }: SidebarProps) {
@@ -241,6 +297,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         })}
       </nav>
 
+      <UpdateAvailableNotice />
       {/* Version footer */}
       <div className="border-t border-border/40 px-4 py-2">
         <Link
