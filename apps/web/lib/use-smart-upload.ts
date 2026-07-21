@@ -38,7 +38,11 @@ export function useSmartUpload() {
         const res = await fetch("/api/upload", { method: "POST", body: form, signal: opts?.signal });
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
-          throw new Error((err as { error?: string }).error || "Upload failed");
+          // Non-JSON failures (HTML 413/502 pages) have no .error — surface the
+          // HTTP status instead of a bare "Upload failed".
+          throw new Error(
+            (err as { error?: string }).error || `Upload failed (HTTP ${res.status} ${res.statusText || ""})`.trim()
+          );
         }
         const data = (await res.json()) as Partial<SmartUploadResult>;
         return {

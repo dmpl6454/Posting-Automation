@@ -305,6 +305,10 @@ export async function uploadFileMultipart(params: UploadParams): Promise<Complet
     } catch (err) {
       completeErr = err;
       if (stop.aborted || isAbortError(err)) break;
+      // Deterministic tRPC rejections (oversize BAD_REQUEST, org-scope
+      // FORBIDDEN) can't succeed on retry — don't burn ~5.7 min re-asking.
+      const trpcCode = (err as { data?: { code?: string } })?.data?.code;
+      if (trpcCode === "BAD_REQUEST" || trpcCode === "FORBIDDEN") break;
       if (attempt < COMPLETE_ATTEMPTS) {
         await waitForOnline(stop);
         // ~5.7 min total window (1+3+9+27+60×5) — rides out a deploy.

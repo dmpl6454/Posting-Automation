@@ -4,7 +4,7 @@ import { prisma } from "@postautomation/db";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 
 export const dynamic = "force-dynamic";
-// Allow large video uploads (up to 500MB)
+// Small-file upload route (videos ≤64MB — larger ones go browser→S3 multipart)
 export const maxDuration = 300; // 5 min timeout for large uploads
 
 const MAX_IMAGE_SIZE = 50 * 1024 * 1024;   // 50MB
