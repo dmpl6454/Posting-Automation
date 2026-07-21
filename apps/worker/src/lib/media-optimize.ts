@@ -109,12 +109,26 @@ const OPTIMIZED_PLATFORMS = new Set(["INSTAGRAM", "FACEBOOK"]);
  */
 export function choosePublishUrl(
   platform: string,
-  media: { url: string; fileType: string; metadata?: unknown }
+  media: { url: string; fileType: string; fileSize?: number; metadata?: unknown }
 ): string {
   if (!OPTIMIZED_PLATFORMS.has(platform)) return media.url;
   if (!media.fileType.startsWith("video/")) return media.url;
   const opt = (media.metadata as { optimize?: OptimizeState } | null)?.optimize;
-  return opt?.status === "done" && opt.url ? opt.url : media.url;
+  const rendition = opt?.status === "done" && opt.url ? opt.url : null;
+  if (!rendition) return media.url;
+  // Instagram caps served video at ~1080 wide and transcodes EVERY upload —
+  // the 1080x1920 rendition IS Instagram's own maximum, so nothing real is
+  // lost. Facebook supports 4K and large URL-pulls, so it keeps the
+  // FULL-RESOLUTION original (owner constraint 2026-07-21: never downgrade
+  // resolution when the destination can take it) unless the original is
+  // genuinely unpublishable: unsupported codec, or over the safe size cap.
+  if (platform === "INSTAGRAM") return rendition;
+  const probe = opt?.probe;
+  const badCodec =
+    (probe?.audioCodec && !SAFE_AUDIO.has(probe.audioCodec)) ||
+    (probe?.videoCodec && !SAFE_VIDEO.has(probe.videoCodec));
+  const tooBig = (media.fileSize ?? 0) > OPTIMIZE_SIZE_BYTES;
+  return badCodec || tooBig ? rendition : media.url;
 }
 
 export type OptimizeGateAction =

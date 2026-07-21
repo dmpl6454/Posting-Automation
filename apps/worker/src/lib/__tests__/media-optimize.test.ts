@@ -49,15 +49,23 @@ describe("buildTranscodeArgs", () => {
 
 describe("choosePublishUrl", () => {
   const done = { optimize: { status: "done", url: "https://s3/opt.mp4" } };
-  it("prefers the rendition for IG/FB video, keeps originals elsewhere", () => {
+  const doneBadCodec = { optimize: { status: "done", url: "https://s3/opt.mp4", probe: { audioCodec: "pcm_s16be", videoCodec: "h264" } } };
+  it("IG always prefers the rendition (IG's own ceiling is 1080 wide)", () => {
     expect(choosePublishUrl("INSTAGRAM", { url: "o", fileType: "video/mp4", metadata: done })).toBe("https://s3/opt.mp4");
-    expect(choosePublishUrl("FACEBOOK", { url: "o", fileType: "video/mp4", metadata: done })).toBe("https://s3/opt.mp4");
-    // YouTube deliberately gets the master
-    expect(choosePublishUrl("YOUTUBE", { url: "o", fileType: "video/mp4", metadata: done })).toBe("o");
-    // images never touched
+    // images never touched; no rendition yet → original
     expect(choosePublishUrl("INSTAGRAM", { url: "o", fileType: "image/png", metadata: done })).toBe("o");
-    // no rendition yet → original
     expect(choosePublishUrl("INSTAGRAM", { url: "o", fileType: "video/mp4" })).toBe("o");
+  });
+  it("FB keeps the FULL-RESOLUTION original unless codec-broken or over the size cap", () => {
+    // clean 4K export optimized only for bitrate/resolution → FB gets the original
+    expect(choosePublishUrl("FACEBOOK", { url: "o", fileType: "video/mp4", fileSize: 800_000_000, metadata: done })).toBe("o");
+    // PCM audio master → rendition (original is unpublishable)
+    expect(choosePublishUrl("FACEBOOK", { url: "o", fileType: "video/mp4", fileSize: 800_000_000, metadata: doneBadCodec })).toBe("https://s3/opt.mp4");
+    // over the safe cap → rendition
+    expect(choosePublishUrl("FACEBOOK", { url: "o", fileType: "video/mp4", fileSize: 1_700_000_000, metadata: done })).toBe("https://s3/opt.mp4");
+  });
+  it("YouTube deliberately always gets the master", () => {
+    expect(choosePublishUrl("YOUTUBE", { url: "o", fileType: "video/mp4", metadata: done })).toBe("o");
   });
 });
 
