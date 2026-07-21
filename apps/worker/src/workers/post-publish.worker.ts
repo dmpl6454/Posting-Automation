@@ -892,6 +892,7 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
           include: { channel: { select: { platform: true, name: true, username: true } } },
         });
         const allPublished = allTargets.every((t) => t.status === "PUBLISHED");
+        const allTerminal = allTargets.every((t) => t.status === "PUBLISHED" || t.status === "FAILED");
         if (allPublished) {
           await prisma.post.update({
             where: { id: postTarget.postId },
@@ -899,6 +900,17 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
           });
 
           // Send email report with all published links
+          await sendPublishReportEmail(postTarget.post.organizationId, postTarget.postId, postTarget.post.content, allTargets);
+        } else if (allTerminal) {
+          // Mixed outcome where the LAST terminal event is a SUCCESS (a
+          // sibling already failed terminally): mirror the failed-handler's
+          // finalize — without this the post sits at PUBLISHING (spinning
+          // header) until an unrelated later event rescues it (live-seen
+          // 2026-07-21: IG published after Twitter had failed).
+          await prisma.post.update({
+            where: { id: postTarget.postId },
+            data: { status: "PUBLISHED", publishedAt: new Date() },
+          });
           await sendPublishReportEmail(postTarget.post.organizationId, postTarget.postId, postTarget.post.content, allTargets);
         }
       } catch (aggregateErr: any) {

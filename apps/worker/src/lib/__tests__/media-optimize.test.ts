@@ -67,6 +67,11 @@ describe("choosePublishUrl", () => {
   it("YouTube deliberately always gets the master", () => {
     expect(choosePublishUrl("YOUTUBE", { url: "o", fileType: "video/mp4", metadata: done })).toBe("o");
   });
+  it("X keeps originals up to its 512MB INIT cap, rendition above (live-seen maxFileSizeExceeded)", () => {
+    expect(choosePublishUrl("TWITTER", { url: "o", fileType: "video/mp4", fileSize: 400_000_000, metadata: done })).toBe("o");
+    expect(choosePublishUrl("TWITTER", { url: "o", fileType: "video/mp4", fileSize: 600_000_000, metadata: done })).toBe("https://s3/opt.mp4");
+    expect(choosePublishUrl("TWITTER", { url: "o", fileType: "video/mp4", fileSize: 100_000_000, metadata: doneBadCodec })).toBe("https://s3/opt.mp4");
+  });
 });
 
 describe("planOptimizeGate", () => {
@@ -79,9 +84,18 @@ describe("planOptimizeGate", () => {
     ).toEqual({ action: "proceed" });
   });
 
-  it("non-IG/FB platforms are never gated", () => {
+  it("non-capped platforms are never gated", () => {
     expect(
       planOptimizeGate({ platform: "YOUTUBE", media: [{ ...base, fileSize: 3 * GB }], now })
+    ).toEqual({ action: "proceed" });
+  });
+
+  it("X gates above 512MB, proceeds below", () => {
+    expect(
+      planOptimizeGate({ platform: "TWITTER", media: [{ ...base, fileSize: 600_000_000 }], now })
+    ).toEqual({ action: "wait", mediaId: "m1" });
+    expect(
+      planOptimizeGate({ platform: "TWITTER", media: [{ ...base, fileSize: 400_000_000 }], now })
     ).toEqual({ action: "proceed" });
   });
 
