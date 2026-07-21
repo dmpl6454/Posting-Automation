@@ -1,6 +1,9 @@
 "use client";
 
 import { Play } from "lucide-react";
+// Relative import (not "~/"): this module is imported by vitest suites and
+// the root vitest config has no "~" alias for apps/web.
+import { withPosterHint } from "../../lib/video-poster";
 
 export type MediaKind = "image" | "video";
 
@@ -61,5 +64,5 @@ export function PreviewMedia({
       </div>
     );
   }
-  return <video src={url} className={className} muted playsInline preload="metadata" />;
+  return <video src={withPosterHint(url)} className={className} muted playsInline preload="metadata" />;
 }

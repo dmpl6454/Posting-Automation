@@ -11,6 +11,7 @@ import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { useToast } from "~/hooks/use-toast";
 import { useSmartUpload } from "~/lib/use-smart-upload";
 import { withNormalizedVideoMime } from "~/lib/video-mime";
+import { withPosterHint } from "~/lib/video-poster";
 import { Info } from "lucide-react";
 import {
   Upload,
@@ -265,7 +266,7 @@ export default function MediaPage() {
                   {media.fileType.startsWith("video/") ? (
                     <div className="absolute inset-0 bg-black">
                       <video
-                        src={media.url}
+                        src={withPosterHint(media.url)}
                         className="h-full w-full object-cover"
                         preload="metadata"
                         muted
