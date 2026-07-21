@@ -8,7 +8,8 @@ import { getS3Client, BUCKET, getPublicUrl } from "../lib/s3";
 const MAX_IMAGE_SIZE = 50 * 1024 * 1024;         // 50MB for images
 // Phase 4: creators post 3–4GB Shorts/Reels source files. These go direct to
 // S3 via presigned multipart (this router) — they NEVER pass through the web
-// container or nginx (which cap the proxied small-file route at 512MB), and
+// container or nginx (the proxied /api/upload route caps videos at 64MB
+// app-side / 100M at nginx; useSmartUpload routes >8MB files here), and
 // the publish worker streams them to platforms chunk-by-chunk (ranged-media),
 // so raising this ceiling doesn't add any per-request memory anywhere.
 const MAX_VIDEO_SIZE = 4 * 1024 * 1024 * 1024;   // 4GB for videos
@@ -84,6 +85,22 @@ export const mediaRouter = createRouter({
       const map: Record<string, string> = {};
       for (const r of rows) map[r.url] = r.id;
       return { map };
+    }),
+
+  /**
+   * Org-scoped existence check for a set of Media ids. Used by ComposeTab's
+   * draft restore to reconcile up-to-24h-old drafts against the live library —
+   * a since-deleted id would otherwise fail the ENTIRE post.create at submit
+   * (assertMediaOwned rejects on any unknown id).
+   */
+  verifyIds: orgProcedure
+    .input(z.object({ ids: z.array(z.string()).min(1).max(50) }))
+    .query(async ({ ctx, input }) => {
+      const rows = await ctx.prisma.media.findMany({
+        where: { id: { in: input.ids }, organizationId: ctx.organizationId },
+        select: { id: true },
+      });
+      return { ownedIds: rows.map((r) => r.id) };
     }),
 
   getUploadUrl: orgProcedure

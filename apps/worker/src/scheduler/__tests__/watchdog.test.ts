@@ -21,6 +21,7 @@ vi.mock("../../workers/auto-healer.worker", () => ({ runAutoHealerWithLogging: v
 vi.mock("../../workers/celebrity-detect.worker", () => ({ runCelebrityDetectors: vi.fn() }));
 
 import { watchdogPublishingPosts } from "../cron-jobs";
+import { HEAVY_SLOT_WAIT_MESSAGE } from "../../lib/publish-recovery";
 
 const NOW = Date.now();
 const recent = new Date(NOW - 2 * 60 * 1000);   // 2 min ago — "live"
@@ -47,6 +48,30 @@ describe("watchdogPublishingPosts", () => {
     ]);
     await watchdogPublishingPosts();
     expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("SKIPS a post whose target is defer-parked for a heavy-upload slot, even with stale updatedAt", async () => {
+    findManyMock.mockResolvedValue([
+      {
+        id: "p-heavy-defer",
+        updatedAt: postAge,
+        targets: [{ status: "SCHEDULED", updatedAt: old, errorMessage: HEAVY_SLOT_WAIT_MESSAGE }],
+      },
+    ]);
+    await watchdogPublishingPosts();
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("still reaps a defer-parked post past the 12h hard ceiling", async () => {
+    findManyMock.mockResolvedValue([
+      {
+        id: "p-heavy-ancient",
+        updatedAt: ancient,
+        targets: [{ status: "SCHEDULED", updatedAt: old, errorMessage: HEAVY_SLOT_WAIT_MESSAGE }],
+      },
+    ]);
+    await watchdogPublishingPosts();
+    expect(updateMock).toHaveBeenCalledWith({ where: { id: "p-heavy-ancient" }, data: { status: "FAILED" } });
   });
 
   it("FAILS a post whose non-terminal targets are all idle (genuinely stuck)", async () => {

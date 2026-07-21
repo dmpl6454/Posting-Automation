@@ -219,8 +219,13 @@ export class LinkedInProvider extends SocialProvider {
       if (orgId) {
         try {
           const orgUrn = encodeURIComponent(`urn:li:organization:${orgId}`);
+          // VIDEO posts come back from /rest/posts as urn:li:ugcPost:* and the
+          // finder takes those in the separate `ugcPosts` List param — the
+          // `shares` param only accepts urn:li:share:* (text/image). Wrong
+          // param = 400/empty = zeros for exactly the video case.
+          const statParam = platformPostId.startsWith("urn:li:ugcPost:") ? "ugcPosts" : "shares";
           const statsRes = await fetch(
-            `https://api.linkedin.com/rest/organizationalEntityShareStatistics?q=organizationalEntity&organizationalEntity=${orgUrn}&shares=List(${encodeURIComponent(platformPostId)})`,
+            `https://api.linkedin.com/rest/organizationalEntityShareStatistics?q=organizationalEntity&organizationalEntity=${orgUrn}&${statParam}=List(${encodeURIComponent(platformPostId)})`,
             { headers: restHeaders(tokens.accessToken) }
           );
           if (statsRes.ok) {

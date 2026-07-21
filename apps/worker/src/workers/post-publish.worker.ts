@@ -4,7 +4,7 @@ import { getSocialProvider } from "@postautomation/social";
 import { QUEUE_NAMES, postPublishQueue, analyticsSyncQueue, type PostPublishJobData, createRedisConnection } from "@postautomation/queue";
 import IORedis from "ioredis";
 import { buildPublishEmail, buildPublishReportCsv } from "../lib/publish-email";
-import { markTargetFailed, buildPublishNotifications, mediaRequiredReason, terminalizeStuckClaim, isSeedNoise, isStaleScheduleJob } from "../lib/publish-recovery";
+import { markTargetFailed, buildPublishNotifications, mediaRequiredReason, terminalizeStuckClaim, isSeedNoise, isStaleScheduleJob, isHeavyPublish, planHeavyDefer, HEAVY_SLOT_WAIT_MESSAGE } from "../lib/publish-recovery";
 import { PRIORITY_RETRY } from "@postautomation/queue";
 
 /** Integer env knob with a default and a sane clamp (bad values → default). */
@@ -45,7 +45,12 @@ const OVERLAY_MAX_BYTES = (() => {
 // URL-pull (the platform fetches media itself) and deliberately exempt.
 // Per-process counter — single worker container today; if extra replicas ever
 // ship (CRON_LEADER=false processors), each gets its own cap: still bounded.
-const HEAVY_MEDIA_CONCURRENCY = envInt("HEAVY_MEDIA_CONCURRENCY", 3, 1, Math.max(1, PUBLISH_CONCURRENCY - 1));
+// Outer Math.min: envInt returns the DEFAULT unclamped when the env var is
+// unset, so clamp again — the cap must stay < PUBLISH_CONCURRENCY.
+const HEAVY_MEDIA_CONCURRENCY = Math.min(
+  envInt("HEAVY_MEDIA_CONCURRENCY", 3, 1, 24),
+  Math.max(1, PUBLISH_CONCURRENCY - 1)
+);
 const HEAVY_MEDIA_THRESHOLD_BYTES = envInt("HEAVY_MEDIA_THRESHOLD_MB", 300, 1, 4096) * 1024 * 1024;
 const HEAVY_STREAM_PLATFORMS = new Set(["YOUTUBE", "TWITTER", "LINKEDIN"]);
 let heavyActive = 0;
@@ -421,10 +426,10 @@ export function createPostPublishWorker() {
       // enqueuedFor so a mid-defer reschedule is still killed by the
       // stale-schedule guard on the next run.
       const totalMediaBytes = mediaSizes.reduce((a, b) => a + b, 0);
-      const isHeavy = HEAVY_STREAM_PLATFORMS.has(platform) && totalMediaBytes > HEAVY_MEDIA_THRESHOLD_BYTES;
-      if (isHeavy && heavyActive >= HEAVY_MEDIA_CONCURRENCY) {
-        // Jittered 45-90s: N deferred jobs must not thunder back in lockstep.
-        const delayMs = 45_000 + Math.floor(Math.random() * 45_000);
+      const isHeavy = isHeavyPublish(platform, totalMediaBytes, HEAVY_MEDIA_THRESHOLD_BYTES, HEAVY_STREAM_PLATFORMS);
+      const deferPlan = planHeavyDefer({ isHeavy, active: heavyActive, cap: HEAVY_MEDIA_CONCURRENCY });
+      if (deferPlan) {
+        const { delayMs } = deferPlan; // jittered 45-90s — no lockstep thundering herd
         console.log(
           `[PostPublish] Heavy-upload slots busy (${heavyActive}/${HEAVY_MEDIA_CONCURRENCY}) — deferring ${postTargetId} ${Math.round(delayMs / 1000)}s`
         );
@@ -436,7 +441,11 @@ export function createPostPublishWorker() {
         });
         await prisma.postTarget.update({
           where: { id: postTargetId },
-          data: { status: "SCHEDULED", errorMessage: "Waiting for a large-upload slot" },
+          // HEAVY_SLOT_WAIT_MESSAGE is ALSO the watchdog's keep-alive marker —
+          // a defer-parked target is exempt from the 10-min freshness check
+          // (its PRIORITY_RETRY re-queue can legitimately starve behind the
+          // fast lane); the 12h hard ceiling stays the terminal backstop.
+          data: { status: "SCHEDULED", errorMessage: HEAVY_SLOT_WAIT_MESSAGE },
         });
         return;
       }

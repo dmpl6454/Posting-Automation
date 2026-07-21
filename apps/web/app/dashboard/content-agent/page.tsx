@@ -86,6 +86,7 @@ function ContentStudioInner() {
               ONLY compose gets this — do not forceMount the other tabs. */}
           <TabsContent value="compose" forceMount className="mt-4 data-[state=inactive]:hidden">
             <ComposeTab
+              isActive={activeTab === "compose"}
               initialContent={composeContent}
               initialImage={composeImage}
               initialImageMediaId={composeMediaId}

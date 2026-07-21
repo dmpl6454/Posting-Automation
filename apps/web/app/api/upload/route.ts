@@ -20,6 +20,7 @@ const ALLOWED_TYPES = [
   "image/png",
   "image/gif",
   "image/webp",
+  "image/avif", // modern phone exports / CDN downloads — keep in sync with upload.router.ts
   "video/mp4",
   "video/quicktime",
   "video/webm",

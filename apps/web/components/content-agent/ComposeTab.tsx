@@ -62,6 +62,13 @@ interface ComposeTabProps {
   onPostCreated?: () => void;
   externalMediaToAdd?: { dataUrl: string } | null;
   onExternalMediaConsumed?: () => void;
+  /**
+   * Whether the compose tab is the ACTIVE tab. Under forceMount the component
+   * stays mounted across tab switches, so the sessionStorage "Use in Post"
+   * pickup keys off this instead of mount. Leave undefined where ComposeTab
+   * is always visible — undefined behaves as active.
+   */
+  isActive?: boolean;
 }
 
 // Fix #24: sessionStorage key for carrying draft content from GenerateTab / ImageTab
@@ -92,7 +99,7 @@ function releaseUploadSlot(): void {
   fileUploadWaiters.shift()?.();
 }
 
-export function ComposeTab({ initialContent, initialImage, initialImageMediaId, initialMediaIds, initialMediaUrls, onPostCreated, externalMediaToAdd, onExternalMediaConsumed }: ComposeTabProps) {
+export function ComposeTab({ initialContent, initialImage, initialImageMediaId, initialMediaIds, initialMediaUrls, onPostCreated, externalMediaToAdd, onExternalMediaConsumed, isActive }: ComposeTabProps) {
   const router = useRouter();
   const { toast } = useToast();
   const [content, setContent] = useState(initialContent || "");
@@ -122,9 +129,14 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   const { addTask, removeTask, getTask } = useActiveTask();
   const TASK_ID = "compose-draft";
 
-  // Fix #24: on mount, read draft content/image from sessionStorage (set by GenerateTab / ImageTab)
+  // Fix #24: read draft content/image from sessionStorage (set by GenerateTab /
+  // ImageTab "Use in Post"). Re-fires whenever the compose tab becomes ACTIVE —
+  // with forceMount the component never remounts on tab switch, so a mount-only
+  // effect would run once at page load (key absent) and the handoff would die.
+  // The keys only exist right after a "Use in Post" click, so re-firing on
+  // every activation is harmless; removeItem keeps a key from firing later.
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    if (typeof window === "undefined" || isActive === false) return;
     if (!initialContent) {
       const draft = sessionStorage.getItem(COMPOSE_DRAFT_KEY);
       if (draft) {
@@ -143,7 +155,7 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isActive]);
 
   // Close channel dropdown on click outside
   useEffect(() => {
@@ -182,6 +194,27 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
       setPostMedia((prev) =>
         prev.length === 0 ? media.map(({ url, mediaId }) => ({ url, mediaId })) : prev
       );
+      // Reconcile restored ids against the live library (best-effort, mirrors
+      // the channel-id reconciliation above): a Media row deleted since the
+      // draft was saved would otherwise fail the ENTIRE post.create at submit.
+      // Stripping the id keeps the tile — resolvePostMediaIds re-resolves the
+      // URL losslessly if the object still exists, else surfaces a clear
+      // per-item error instead of an opaque whole-post rejection.
+      const ids = media.map((m) => m.mediaId).filter((x): x is string => !!x);
+      if (ids.length > 0) {
+        void utils.media.verifyIds
+          .fetch({ ids })
+          .then(({ ownedIds }) => {
+            const owned = new Set(ownedIds);
+            if (ids.every((id) => owned.has(id))) return;
+            setPostMedia((prev) =>
+              prev.map((m) => (m.mediaId && !owned.has(m.mediaId) ? { ...m, mediaId: undefined } : m))
+            );
+          })
+          .catch(() => {
+            // Transient verify failure — keep the restored tiles untouched.
+          });
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [getTask]);

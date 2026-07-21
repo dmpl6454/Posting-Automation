@@ -139,6 +139,51 @@ describe("LinkedInProvider.getPostAnalytics — org share statistics", () => {
     });
   });
 
+  it("VIDEO posts (urn:li:ugcPost:*) use the ugcPosts finder param — the shares param only accepts share URNs", async () => {
+    const videoPostId = "urn:li:ugcPost:12345";
+    const urls: string[] = [];
+    global.fetch = vi.fn(async (url: any) => {
+      const u = String(url);
+      urls.push(u);
+      if (u.includes("/rest/socialActions/")) {
+        return jsonResponse({
+          likesSummary: { totalLikes: 7 },
+          commentsSummary: { totalFirstLevelComments: 2 },
+        });
+      }
+      if (u.includes("/rest/organizationalEntityShareStatistics")) {
+        return jsonResponse({
+          elements: [
+            {
+              totalShareStatistics: {
+                impressionCount: 500,
+                clickCount: 11,
+                shareCount: 3,
+                uniqueImpressionsCount: 320,
+              },
+            },
+          ],
+        });
+      }
+      throw new Error(`Unexpected request: ${u}`);
+    }) as any;
+
+    const provider = new LinkedInProvider();
+    const result = await provider.getPostAnalytics(
+      { accessToken: "tk", metadata: { orgId: "555" } },
+      videoPostId
+    );
+
+    const statsUrl = urls.find((u) => u.includes("organizationalEntityShareStatistics"))!;
+    expect(statsUrl).toContain(`ugcPosts=List(${encodeURIComponent(videoPostId)})`);
+    expect(statsUrl).not.toContain("shares=List");
+
+    expect(result?.impressions).toBe(500);
+    expect(result?.clicks).toBe(11);
+    expect(result?.shares).toBe(3);
+    expect(result?.reach).toBe(320);
+  });
+
   it("member posts (no orgId in tokens.metadata) keep the likes/comments-only shape and make NO stats call", async () => {
     const urls: string[] = [];
     global.fetch = vi.fn(async (url: any) => {
