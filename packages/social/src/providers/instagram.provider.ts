@@ -282,15 +282,18 @@ export class InstagramProvider extends SocialProvider {
     const comments = mediaData.comments_count || 0;
     const productType = String(mediaData.media_product_type ?? "").toUpperCase();
 
-    // REELS: plays/reach/saved/shares/total_interactions (no impressions/engagement).
-    // STORY: impressions/reach/replies. Anything else (FEED/CAROUSEL_ALBUM/absent)
-    // keeps the historical metric string byte-identical so images cannot regress.
+    // Metric sets per media_product_type. NOTE: Meta deprecated the `impressions`
+    // metric on media insights (Graph API v22, 2025-01-21): requests after
+    // 2025-04-21 for media created on/after 2024-07-02 ERROR. `views` is the
+    // documented replacement, valid for FEED/CAROUSEL/STORY. REELS use `plays`.
+    // REELS: plays/reach/saved/shares/total_interactions.
+    // STORY: views/reach/replies. FEED/CAROUSEL/absent: views/reach/engagement.
     const metricSet =
       productType === "REELS"
         ? "plays,reach,saved,shares,total_interactions"
         : productType === "STORY"
-          ? "impressions,reach,replies"
-          : "impressions,reach,engagement";
+          ? "views,reach,replies"
+          : "views,reach,engagement";
 
     const metrics: Record<string, number> = {};
     const readInsights = async (metricParam: string): Promise<boolean> => {
@@ -318,11 +321,12 @@ export class InstagramProvider extends SocialProvider {
       await readInsights("reach");
     }
 
-    // Reel plays ride on impressions — same "views ride on impressions"
-    // convention as YouTube/Threads, which Reports depends on.
-    const impressions = metrics.impressions ?? metrics.plays ?? 0;
+    // views (FEED/STORY) / plays (REELS) ride on the impressions slot — same
+    // "views ride on impressions" convention as YouTube/Threads.
+    const impressions = metrics.views ?? metrics.impressions ?? metrics.plays ?? 0;
     const totalEngagement = metrics.engagement ?? metrics.total_interactions ?? likes + comments;
     const engagementRate = impressions > 0 ? totalEngagement / impressions : 0;
+    const hasInsights = metrics.reach != null || impressions > 0;
 
     return {
       impressions,
@@ -332,6 +336,20 @@ export class InstagramProvider extends SocialProvider {
       comments,
       reach: metrics.reach ?? 0,
       engagementRate,
+      saved: metrics.saved, // surfaced (Reels) — a distinct action; undefined elsewhere
+      likeKind: "likes",
+      reachIsDistinct: true, // IG reach is a genuine unique-reach metric
+      source: "api",
+      // Clicks never exist on IG; impressions/reach/shares depend on the
+      // insights call (needs instagram_manage_insights). When that call fails
+      // (permission-gated), impressions stays 0 and we mark them unavailable so
+      // the UI renders "—" instead of a fake zero.
+      metricsAvailable: {
+        clicks: false,
+        impressions: hasInsights,
+        reach: metrics.reach != null,
+        shares: hasInsights,
+      },
     };
   }
 

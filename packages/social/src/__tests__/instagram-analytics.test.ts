@@ -48,7 +48,7 @@ describe("InstagramProvider.getPostAnalytics — media_product_type metric selec
     expect(insightsUrl).not.toContain("impressions");
     expect(insightsUrl).not.toContain("engagement");
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       impressions: 1000, // plays ride on impressions
       clicks: 0,
       likes: 7,
@@ -56,6 +56,9 @@ describe("InstagramProvider.getPostAnalytics — media_product_type metric selec
       comments: 2,
       reach: 800,
       engagementRate: 14 / 1000, // total_interactions / plays
+      saved: 4, // now surfaced from the Reels metric set (was discarded before)
+      likeKind: "likes",
+      source: "api",
     });
   });
 
@@ -69,7 +72,7 @@ describe("InstagramProvider.getPostAnalytics — media_product_type metric selec
       }
       return jsonResponse({
         data: [
-          { name: "impressions", values: [{ value: 50 }] },
+          { name: "views", values: [{ value: 50 }] },
           { name: "reach", values: [{ value: 40 }] },
         ],
       });
@@ -77,12 +80,13 @@ describe("InstagramProvider.getPostAnalytics — media_product_type metric selec
 
     const provider = new InstagramProvider();
     const result = await provider.getPostAnalytics(tokens, "IG_STORY_1");
-    expect(urls.find((u) => u.includes("/insights?"))).toContain("metric=impressions,reach,replies");
+    // `impressions` deprecated (v22) → STORY requests `views`.
+    expect(urls.find((u) => u.includes("/insights?"))).toContain("metric=views,reach,replies");
     expect(result?.impressions).toBe(50);
     expect(result?.reach).toBe(40);
   });
 
-  it("FEED: the insights request string stays byte-identical to the historical one (image path regress-proof)", async () => {
+  it("FEED: requests views (not the deprecated impressions) + reach + engagement", async () => {
     const urls: string[] = [];
     global.fetch = vi.fn(async (url: any) => {
       const u = String(url);
@@ -92,7 +96,7 @@ describe("InstagramProvider.getPostAnalytics — media_product_type metric selec
       }
       return jsonResponse({
         data: [
-          { name: "impressions", values: [{ value: 100 }] },
+          { name: "views", values: [{ value: 100 }] },
           { name: "reach", values: [{ value: 90 }] },
           { name: "engagement", values: [{ value: 10 }] },
         ],
@@ -102,8 +106,10 @@ describe("InstagramProvider.getPostAnalytics — media_product_type metric selec
     const provider = new InstagramProvider();
     const result = await provider.getPostAnalytics(tokens, "IG_FEED_1");
     const insightsUrl = urls.find((u) => u.includes("/insights?"))!;
-    expect(insightsUrl).toContain("/IG_FEED_1/insights?metric=impressions,reach,engagement&access_token=tk");
-    expect(result).toEqual({
+    // `impressions` is deprecated on media insights → request `views`.
+    expect(insightsUrl).toContain("/IG_FEED_1/insights?metric=views,reach,engagement&access_token=tk");
+    expect(insightsUrl).not.toContain("impressions");
+    expect(result).toMatchObject({
       impressions: 100,
       clicks: 0,
       likes: 3,
@@ -111,6 +117,8 @@ describe("InstagramProvider.getPostAnalytics — media_product_type metric selec
       comments: 1,
       reach: 90,
       engagementRate: 10 / 100,
+      likeKind: "likes",
+      source: "api",
     });
   });
 
@@ -127,7 +135,7 @@ describe("InstagramProvider.getPostAnalytics — media_product_type metric selec
 
     const provider = new InstagramProvider();
     await provider.getPostAnalytics(tokens, "IG_X");
-    expect(urls.find((u) => u.includes("/insights?"))).toContain("metric=impressions,reach,engagement");
+    expect(urls.find((u) => u.includes("/insights?"))).toContain("metric=views,reach,engagement");
   });
 
   it("retries ONCE with metric=reach when the product-type set fails — reach can never be zeroed by a metric mismatch again", async () => {
