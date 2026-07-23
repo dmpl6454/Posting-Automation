@@ -50,7 +50,7 @@ describe("FacebookProvider.getPostAnalytics — VIDEO ids (bare node id, no unde
     expect(urls.some((u) => u.includes("post_impressions"))).toBe(false);
     expect(urls.some((u) => u.includes("fields=shares"))).toBe(false);
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       impressions: 500,
       clicks: 0,
       likes: 10,
@@ -59,6 +59,8 @@ describe("FacebookProvider.getPostAnalytics — VIDEO ids (bare node id, no unde
       reach: 0,
       engagementRate: (10 + 3) / 500,
     });
+    // video-node can't report reach/shares/clicks → marked unavailable (UI "—")
+    expect(result?.metricsAvailable).toMatchObject({ reach: false, shares: false, clicks: false });
   });
 
   it("falls back to total_video_views for impressions when total_video_impressions is absent", async () => {

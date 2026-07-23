@@ -283,6 +283,10 @@ export class YouTubeProvider extends SocialProvider {
       comments,
       reach: views,
       engagementRate: views > 0 ? (likes + comments) / views : 0,
+      likeKind: "likes",
+      reachIsDistinct: false, // reach is aliased from views — not a distinct metric
+      source: "api",
+      metricsAvailable: { clicks: false, shares: false, reach: false }, // YT favorites are effectively dead
     };
   }
 

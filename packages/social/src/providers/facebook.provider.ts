@@ -451,6 +451,12 @@ export class FacebookProvider extends SocialProvider {
       comments,
       reach: 0,
       engagementRate,
+      likeKind: "likes",
+      reachIsDistinct: false,
+      source: "api",
+      // Video-node insights don't expose reach/shares/clicks — mark unavailable
+      // so the UI renders "—", not a fake 0.
+      metricsAvailable: { reach: false, shares: false, clicks: false },
     };
   }
 

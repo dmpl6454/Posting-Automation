@@ -173,6 +173,11 @@ export class PinterestProvider extends SocialProvider {
       comments: 0,
       reach: impressions,
       engagementRate: impressions > 0 ? ((clicks + saves) / impressions) * 100 : 0,
+      saved: saves,
+      likeKind: "saves", // the "likes" column actually holds Pin saves
+      reachIsDistinct: false, // reach aliased from impressions
+      source: "api",
+      metricsAvailable: { comments: false, shares: false, reach: false },
     };
   }
 

@@ -128,7 +128,7 @@ describe("LinkedInProvider.getPostAnalytics — org share statistics", () => {
     expect(statsUrl).toContain(encodeURIComponent("urn:li:organization:555"));
     expect(statsUrl).toContain(`shares=List(${encodeURIComponent(postId)})`);
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       impressions: 100,
       clicks: 9,
       likes: 4,
@@ -197,7 +197,7 @@ describe("LinkedInProvider.getPostAnalytics — org share statistics", () => {
     const provider = new LinkedInProvider();
     const result = await provider.getPostAnalytics({ accessToken: "tk" }, postId);
     expect(urls).toHaveLength(1);
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       impressions: 0,
       clicks: 0,
       likes: 3,
@@ -225,7 +225,7 @@ describe("LinkedInProvider.getPostAnalytics — org share statistics", () => {
       { accessToken: "tk", metadata: { orgId: "555" } },
       postId
     );
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       impressions: 0,
       clicks: 0,
       likes: 5,
