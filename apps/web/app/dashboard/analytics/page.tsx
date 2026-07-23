@@ -19,11 +19,18 @@ import {
   PieChart, Pie, Cell,
 } from "recharts";
 import { format, subDays } from "date-fns";
+import { metricCellValue, likeColumnLabel, type MetricKey, type MetricRowMeta } from "~/lib/metric-cell";
 
 function formatNumber(num: number): string {
   if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1)}M`;
   if (num >= 1_000) return `${(num / 1_000).toFixed(1)}K`;
   return String(num);
+}
+
+/** Formats a metric cell honestly: "—" when the metric isn't real, else the number. */
+function metricCell(key: MetricKey, value: number, meta: MetricRowMeta): string {
+  const v = metricCellValue(key, value, meta);
+  return v === null ? "—" : formatNumber(v);
 }
 
 const PLATFORM_COLORS: Record<string, string> = {
@@ -497,29 +504,38 @@ function InsightsAnalyticsView() {
                         </div>
                       </td>
                       <td className="px-4 py-3 text-right font-medium">{ch.postCount}</td>
-                      <td className="px-4 py-3 text-right">{formatNumber(ch.impressions)}</td>
-                      <td className="px-4 py-3 text-right">{formatNumber(ch.reach)}</td>
-                      <td className="px-4 py-3 text-right">{formatNumber(ch.likes)}</td>
-                      <td className="px-4 py-3 text-right">{formatNumber(ch.comments)}</td>
-                      <td className="px-4 py-3 text-right">{formatNumber(ch.shares)}</td>
-                      <td className="px-4 py-3 text-right">{formatNumber(ch.clicks)}</td>
+                      <td className="px-4 py-3 text-right">{metricCell("impressions", ch.impressions, ch)}</td>
+                      <td className="px-4 py-3 text-right">{metricCell("reach", ch.reach, ch)}</td>
+                      <td className="px-4 py-3 text-right">{metricCell("likes", ch.likes, ch)}</td>
+                      <td className="px-4 py-3 text-right">{metricCell("comments", ch.comments, ch)}</td>
+                      <td className="px-4 py-3 text-right">{metricCell("shares", ch.shares, ch)}</td>
+                      <td className="px-4 py-3 text-right">{metricCell("clicks", ch.clicks, ch)}</td>
                       <td className="px-4 py-3 text-right">
-                        <span
-                          className={`font-medium ${
-                            ch.engagementRate > 3
-                              ? "text-green-600 dark:text-green-400"
-                              : ch.engagementRate > 1
-                              ? "text-yellow-600 dark:text-yellow-400"
-                              : "text-muted-foreground"
-                          }`}
-                        >
-                          {ch.engagementRate.toFixed(2)}%
-                        </span>
+                        {ch.hasSnapshot === false ? (
+                          <span className="text-muted-foreground">—</span>
+                        ) : (
+                          <span
+                            className={`font-medium ${
+                              ch.engagementRate > 3
+                                ? "text-green-600 dark:text-green-400"
+                                : ch.engagementRate > 1
+                                ? "text-yellow-600 dark:text-yellow-400"
+                                : "text-muted-foreground"
+                            }`}
+                          >
+                            {ch.engagementRate.toFixed(2)}%
+                          </span>
+                        )}
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+              <p className="px-4 py-3 text-xs text-muted-foreground/70 border-t">
+                &ldquo;—&rdquo; means the platform doesn&rsquo;t report that metric (or it hasn&rsquo;t synced yet), not zero.
+                &ldquo;Likes&rdquo; counts reactions on Facebook, saves on Pinterest, and upvotes on Reddit. Reach is shown only
+                where the platform reports it separately from impressions.
+              </p>
             </div>
           ) : (
             // Fix #34: empty state includes a CTA to connect channels
