@@ -65,7 +65,20 @@ describe("planCaptionFanout matrix", () => {
   });
 
   it("captionFanoutJobId is the per-post dedupe key", () => {
-    expect(captionFanoutJobId("post-1")).toBe("caption-fanout:post-1");
+    expect(captionFanoutJobId("post-1")).toBe("caption-fanout-post-1");
+  });
+
+  it("captionFanoutJobId is a BullMQ-5.70-safe custom id (no colon, or exactly 3 segments)", () => {
+    // BullMQ >=5.70 throws "Custom Id cannot contain :" for a jobId that
+    // contains a colon but does NOT split into exactly 3 segments. A
+    // colon-free id is always safe. This locks the regression that broke
+    // unique-caption publish ("Custom Id cannot contain :").
+    const id = captionFanoutJobId("some-post-cuid");
+    if (id.includes(":")) {
+      expect(id.split(":").length).toBe(3);
+    } else {
+      expect(id.includes(":")).toBe(false);
+    }
   });
 });
 
