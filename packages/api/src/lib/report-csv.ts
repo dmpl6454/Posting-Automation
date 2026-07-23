@@ -13,8 +13,16 @@
  * opened in Excel/Sheets (e.g. =HYPERLINK exfiltration). Neutralize by
  * prefixing a single quote — the standard mitigation; spreadsheets render the
  * value as text. Numbers (e.g. -7) are unaffected — only string cells guarded.
+ * Leading whitespace is stripped before the test (Excel trims some leading
+ * whitespace/nbsp before evaluating), so " =CMD" is still neutralized. Keep in
+ * sync with apps/web/lib/csv.ts.
  */
-const FORMULA_PREFIX = /^[=+\-@\t\r]/;
+const FORMULA_PREFIX = /^[=+\-@]/;
+
+function needsFormulaGuard(s: string): boolean {
+  const trimmed = s.replace(/^[\s \t\r]+/, "");
+  return FORMULA_PREFIX.test(trimmed) || /^[\t\r]/.test(s);
+}
 
 export function toCsv(
   header: string[],
@@ -22,7 +30,7 @@ export function toCsv(
 ): string {
   const esc = (v: string | number | null | undefined) => {
     let s = String(v ?? "");
-    if (typeof v === "string" && FORMULA_PREFIX.test(s)) s = "'" + s;
+    if (typeof v === "string" && needsFormulaGuard(s)) s = "'" + s;
     return `"${s.replace(/"/g, '""')}"`;
   };
   return [header.map(esc).join(","), ...rows.map((r) => r.map(esc).join(","))].join("\n");

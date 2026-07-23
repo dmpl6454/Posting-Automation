@@ -713,7 +713,9 @@ export const analyticsRouter = createRouter({
       z.object({
         window: z.enum(["24h", "7d", "15d", "30d"]),
         mode: z.enum(["current", "at_age"]).default("current"),
-        limit: z.number().min(1).max(1000).default(500),
+        // 1001 so the export can fetch EXPORT_LIMIT(1000)+1 to detect truncation
+        // (distinguish "exactly 1000, complete" from ">1000, truncated").
+        limit: z.number().min(1).max(1001).default(500),
       })
     )
     .query(async ({ ctx, input }) => {

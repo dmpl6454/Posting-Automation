@@ -122,13 +122,18 @@ export function ReportsTab() {
     setExporting(true);
     try {
       // Refetch at the full export cap — the on-screen query is capped at 500.
+      // Fetch ONE extra row so we can distinguish "exactly EXPORT_LIMIT rows
+      // (complete)" from "more than EXPORT_LIMIT (truncated)" — the old
+      // `=== EXPORT_LIMIT` check falsely labeled a complete 1000-row dataset
+      // as truncated.
       const full = await utils.analytics.postReports.fetch({
         window: win,
         mode,
-        limit: EXPORT_LIMIT,
+        limit: EXPORT_LIMIT + 1,
       });
-      const exportRows = full?.rows ?? rows;
-      const truncated = exportRows.length === EXPORT_LIMIT ? "-truncated" : "";
+      const fetched = full?.rows ?? rows;
+      const truncated = fetched.length > EXPORT_LIMIT ? "-truncated" : "";
+      const exportRows = fetched.slice(0, EXPORT_LIMIT);
       downloadCsv(
         `postautomation-report-${win}-${mode}-${new Date().toISOString().slice(0, 10)}${truncated}.csv`,
         toCsv(

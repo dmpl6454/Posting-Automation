@@ -8,9 +8,17 @@
  * starting with = + - @ (or tab/CR) executes as a formula when the CSV is
  * opened in Excel/Sheets (e.g. =HYPERLINK exfiltration). Neutralize by
  * prefixing a single quote — the standard mitigation; spreadsheets render the
- * value as text.
+ * value as text. The test strips leading whitespace first, because Excel trims
+ * some leading whitespace/nbsp before evaluating a cell, so " =CMD" is still a
+ * formula.
  */
-const FORMULA_PREFIX = /^[=+\-@\t\r]/;
+const FORMULA_PREFIX = /^[=+\-@]/;
+
+function needsFormulaGuard(s: string): boolean {
+  // Strip leading ASCII whitespace, tab, CR and non-breaking space, then test.
+  const trimmed = s.replace(/^[\s \t\r]+/, "");
+  return FORMULA_PREFIX.test(trimmed) || /^[\t\r]/.test(s);
+}
 
 export function toCsv(
   header: string[],
@@ -18,7 +26,7 @@ export function toCsv(
 ): string {
   const esc = (v: string | number | null | undefined) => {
     let s = String(v ?? "");
-    if (typeof v === "string" && FORMULA_PREFIX.test(s)) s = "'" + s;
+    if (typeof v === "string" && needsFormulaGuard(s)) s = "'" + s;
     return `"${s.replace(/"/g, '""')}"`;
   };
   return [header.map(esc).join(","), ...rows.map((r) => r.map(esc).join(","))].join("\n");

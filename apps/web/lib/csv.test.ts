@@ -29,4 +29,17 @@ describe("toCsv", () => {
     // normal strings untouched
     expect(toCsv(["p"], [["hello = world"]])).toBe('"p"\n"hello = world"');
   });
+
+  // SECURITY: a formula hidden behind LEADING WHITESPACE (Excel trims some
+  // leading whitespace/nbsp before evaluating) must still be neutralized.
+  it("neutralizes a formula that starts with leading whitespace", () => {
+    const csv = toCsv(["p"], [[" =HYPERLINK(\"http://evil\")"]]);
+    // guard applied: the cell is prefixed with ' (before the whitespace)
+    expect(csv).toBe('"p"\n"\' =HYPERLINK(""http://evil"")"');
+  });
+
+  it("neutralizes a tab-then-formula and nbsp-prefixed formula", () => {
+    expect(toCsv(["p"], [["\t=cmd"]])).toBe('"p"\n"\'\t=cmd"');
+    expect(toCsv(["p"], [[" =cmd"]])).toBe('"p"\n"\' =cmd"');
+  });
 });
