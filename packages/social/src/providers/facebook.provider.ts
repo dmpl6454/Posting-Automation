@@ -353,7 +353,10 @@ export class FacebookProvider extends SocialProvider {
     }
 
     const res = await this.graphFetch(
-      `${this.graphBaseUrl}/${this.apiVersion}/${platformPostId}/insights?metric=post_impressions,post_clicks,post_reactions_like_total,post_engaged_users&access_token=${tokens.accessToken}`
+      // post_impressions_unique = TRUE unique reach (people the post reached).
+      // The previous code mapped reach = post_engaged_users, which is people who
+      // CLICKED anywhere in the post — an engagement count, always ≤ reach.
+      `${this.graphBaseUrl}/${this.apiVersion}/${platformPostId}/insights?metric=post_impressions,post_impressions_unique,post_clicks,post_engaged_users&access_token=${tokens.accessToken}`
     );
 
     const data: any = await res.json();
@@ -391,8 +394,12 @@ export class FacebookProvider extends SocialProvider {
       likes: reactions,
       shares,
       comments,
-      reach: metrics.post_engaged_users || 0,
+      reach: metrics.post_impressions_unique || 0,
       engagementRate,
+      // Honesty metadata (consumed by the UI + aggregation):
+      likeKind: "reactions", // FB "likes" are all reaction types, not just Like
+      reachIsDistinct: true, // FB reach (unique impressions) ≠ impressions
+      source: "api",
     };
   }
 
