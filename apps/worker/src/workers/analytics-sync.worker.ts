@@ -2,6 +2,7 @@ import { Worker, type Job } from "bullmq";
 import { prisma } from "@postautomation/db";
 import { getSocialProvider } from "@postautomation/social";
 import { QUEUE_NAMES, type AnalyticsSyncJobData, createRedisConnection } from "@postautomation/queue";
+import { buildSnapshotMetadata } from "../lib/snapshot-metadata";
 
 export function createAnalyticsSyncWorker() {
   const worker = new Worker<AnalyticsSyncJobData>(
@@ -65,9 +66,10 @@ export function createAnalyticsSyncWorker() {
           reach: analytics.reach ?? 0,
           engagementRate: analytics.engagementRate ?? 0,
           snapshotAt: new Date(),
-          ...(windowTag
-            ? { metadata: { windowTag, ...(capturedLate ? { capturedLate: true } : {}) } }
-            : {}),
+          ...(() => {
+            const md = buildSnapshotMetadata(analytics as any, windowTag, !!capturedLate);
+            return md ? { metadata: md as any } : {};
+          })(),
         },
       });
 
