@@ -1,0 +1,19 @@
+{
+  "name": "@postautomation/social-scrapers",
+  "version": "1.0.0",
+  "description": "Vendored, dependency-free social-platform scrapers for follower counts and per-post engagement (fail-open). Used as a resilient fallback for the analytics pipeline.",
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "module",
+  "//main": "Consumed as BUILT dist (not raw src) so its looser tsconfig (no noUncheckedIndexedAccess, DOM lib) doesn't leak into consumer type-checks. Build before consuming.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "type-check": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0"
+  }
+}

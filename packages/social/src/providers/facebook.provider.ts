@@ -11,6 +11,7 @@ import type {
 } from "../abstract/social.types";
 import { fetchT } from "../utils/fetch-timeout";
 import { headRemoteMedia } from "../utils/ranged-media";
+import { scrapeFacebookReelEngagement } from "@postautomation/social-scrapers";
 
 /**
  * Videos larger than this are published via Graph's `file_url` remote-pull
@@ -441,6 +442,34 @@ export class FacebookProvider extends SocialProvider {
     const comments = videoData.comments?.summary?.total_count || 0;
 
     const impressions = metrics.total_video_impressions || metrics.total_video_views || 0;
+
+    // Fallback: when the API insights come back 0 (the permission-failure
+    // signature — /video_insights needs read_insights, which is pending App
+    // Review), try the public reel scraper so views/likes/comments still show.
+    // Fail-open: on any miss we keep the API result. ⚠️ Scraper-backed — verify
+    // from the deploy IP.
+    if (impressions === 0) {
+      const scraped = await scrapeFacebookReelEngagement(videoId).catch(() => null);
+      if (scraped && scraped.views != null && scraped.views > 0) {
+        return {
+          impressions: scraped.views,
+          clicks: 0,
+          likes: scraped.likes ?? likes,
+          shares: scraped.shares ?? 0,
+          comments: scraped.comments ?? comments,
+          reach: 0,
+          engagementRate:
+            scraped.views > 0
+              ? ((scraped.likes ?? 0) + (scraped.comments ?? 0)) / scraped.views
+              : 0,
+          source: "scrape",
+          likeKind: "likes",
+          reachIsDistinct: false,
+          metricsAvailable: { reach: false, clicks: false },
+        };
+      }
+    }
+
     const engagementRate = impressions > 0 ? (likes + comments) / impressions : 0;
 
     return {
