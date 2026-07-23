@@ -283,6 +283,11 @@ export class TwitterProvider extends SocialProvider {
       comments: metrics.reply_count || 0,
       reach: metrics.impression_count || 0,
       engagementRate: 0,
+      likeKind: "likes",
+      reachIsDistinct: false, // reach aliased from impression_count
+      source: "api",
+      // Free tier zeroes most metrics; clicks/reach are not real distinct values.
+      metricsAvailable: { clicks: false, reach: false },
     };
   }
 

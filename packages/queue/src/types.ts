@@ -142,7 +142,7 @@ export interface AvatarCacheJobData {
  * PR-5 (per-channel unique captions): generate one DISTINCT AI caption per
  * pending PostTarget (written to PostTarget.contentOverride), then flip the
  * post DRAFT→SCHEDULED so the publish cron picks it up. ONE job per post —
- * enqueued with jobId `caption-fanout:{postId}` so re-submits dedupe.
+ * enqueued with jobId `caption-fanout-{postId}` so re-submits dedupe.
  */
 export interface CaptionFanoutJobData {
   postId: string;

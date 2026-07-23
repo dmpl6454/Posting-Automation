@@ -254,6 +254,17 @@ export class LinkedInProvider extends SocialProvider {
         reach,
         // 0–1 fraction, consistent with YT/IG/FB storage (Reports recomputes in SQL)
         engagementRate: impressions > 0 ? (likes + comments + shares) / impressions : 0,
+        likeKind: "likes",
+        // Org posts report a genuine uniqueImpressionsCount reach; member posts
+        // have no analytics API (impressions/reach 0). Mark reach available only
+        // when we actually got a distinct value.
+        reachIsDistinct: reach > 0,
+        source: "api",
+        metricsAvailable: {
+          impressions: impressions > 0,
+          reach: reach > 0,
+          clicks: impressions > 0, // clicks come from the same org-stats call
+        },
       };
     } catch {
       return null;

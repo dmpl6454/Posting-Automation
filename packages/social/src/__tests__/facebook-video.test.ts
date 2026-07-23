@@ -50,7 +50,7 @@ describe("FacebookProvider.getPostAnalytics — VIDEO ids (bare node id, no unde
     expect(urls.some((u) => u.includes("post_impressions"))).toBe(false);
     expect(urls.some((u) => u.includes("fields=shares"))).toBe(false);
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       impressions: 500,
       clicks: 0,
       likes: 10,
@@ -59,6 +59,8 @@ describe("FacebookProvider.getPostAnalytics — VIDEO ids (bare node id, no unde
       reach: 0,
       engagementRate: (10 + 3) / 500,
     });
+    // video-node can't report reach/shares/clicks → marked unavailable (UI "—")
+    expect(result?.metricsAvailable).toMatchObject({ reach: false, shares: false, clicks: false });
   });
 
   it("falls back to total_video_views for impressions when total_video_impressions is absent", async () => {
@@ -100,6 +102,7 @@ describe("FacebookProvider.getPostAnalytics — VIDEO ids (bare node id, no unde
         return jsonResponse({
           data: [
             { name: "post_impressions", values: [{ value: 200 }] },
+            { name: "post_impressions_unique", values: [{ value: 160 }] },
             { name: "post_clicks", values: [{ value: 20 }] },
             { name: "post_engaged_users", values: [{ value: 150 }] },
           ],
@@ -115,18 +118,24 @@ describe("FacebookProvider.getPostAnalytics — VIDEO ids (bare node id, no unde
     const provider = new FacebookProvider();
     const result = await provider.getPostAnalytics(tokens, "111_222");
 
+    // Requests post_impressions_unique (true reach), no longer the unused
+    // post_reactions_like_total.
     expect(urls[0]).toContain(
-      "/111_222/insights?metric=post_impressions,post_clicks,post_reactions_like_total,post_engaged_users"
+      "/111_222/insights?metric=post_impressions,post_impressions_unique,post_clicks,post_engaged_users"
     );
     expect(urls[1]).toContain("/111_222?fields=shares,comments.summary(true),reactions.summary(true)");
-    expect(result).toEqual({
+    // reach = post_impressions_unique (160), NOT post_engaged_users (150).
+    expect(result).toMatchObject({
       impressions: 200,
       clicks: 20,
       likes: 8,
       shares: 2,
       comments: 4,
-      reach: 150,
+      reach: 160,
       engagementRate: (8 + 2 + 4) / 200,
+      likeKind: "reactions",
+      reachIsDistinct: true,
+      source: "api",
     });
   });
 });

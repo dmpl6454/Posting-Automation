@@ -212,6 +212,10 @@ export class RedditProvider extends SocialProvider {
       engagementRate: totalVotes > 0
         ? ((post.ups || 0) + (post.num_comments || 0)) / totalVotes
         : 0,
+      likeKind: "upvotes", // Reddit has no "like"; the likes column holds upvotes
+      reachIsDistinct: false, // reach aliased from view_count
+      source: "api",
+      metricsAvailable: { clicks: false, reach: false },
     };
   }
 }

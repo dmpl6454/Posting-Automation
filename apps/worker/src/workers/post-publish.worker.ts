@@ -7,6 +7,7 @@ import { buildPublishEmail, buildPublishReportCsv } from "../lib/publish-email";
 import { markTargetFailed, buildPublishNotifications, mediaRequiredReason, terminalizeStuckClaim, isSeedNoise, isStaleScheduleJob, isHeavyPublish, planHeavyDefer, HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE } from "../lib/publish-recovery";
 import { PRIORITY_RETRY, mediaOptimizeQueue } from "@postautomation/queue";
 import { planOptimizeGate, choosePublishUrl } from "../lib/media-optimize";
+import { buildSnapshotMetadata } from "../lib/snapshot-metadata";
 
 /** Integer env knob with a default and a sane clamp (bad values → default). */
 function envInt(name: string, def: number, min: number, max: number): number {
@@ -842,7 +843,13 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
                 comments: analytics.comments ?? 0,
                 reach: analytics.reach ?? 0,
                 engagementRate: analytics.engagementRate ?? 0,
-                metadata: analytics as any,
+                // Only the honesty metadata (likeKind/reachIsDistinct/saved/
+                // metricsAvailable/source) — NOT the whole analytics object
+                // (whose numeric fields are already columns).
+                ...(() => {
+                  const md = buildSnapshotMetadata(analytics as any, undefined, false);
+                  return md ? { metadata: md as any } : {};
+                })(),
               },
             });
             console.log(`[Analytics] Snapshot saved for ${postTargetId}`);

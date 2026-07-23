@@ -34,6 +34,8 @@ export interface ChannelStatRow {
   comments: number;
   shares: number;
   clicks: number;
+  /** true when ≥1 of the channel's targets has a captured snapshot (UI: — vs 0). */
+  hasSnapshot?: boolean;
 }
 
 /** Group shape as selected from prisma.channelGroup.findMany. */
@@ -78,10 +80,23 @@ function addRow(sums: ReturnType<typeof emptySums>, row: ChannelStatRow) {
   sums.clicks += row.clicks;
 }
 
-function rateFromSums(sums: ReturnType<typeof emptySums>): number {
-  return sums.impressions > 0
-    ? ((sums.likes + sums.comments + sums.shares) / sums.impressions) * 100
-    : 0;
+/**
+ * Engagement rate pooled ONLY over channels that have impressions, so a
+ * zero-impression channel (e.g. a LinkedIn member-only channel with likes but
+ * no impressions API) can't inflate the group rate over a denominator it never
+ * contributed to. Mirrors packages/api/src/lib/engagement-rate.ts at the
+ * channel-row granularity. Returns a 0–100 percent.
+ */
+function rateFromRows(rows: ChannelStatRow[]): number {
+  let num = 0;
+  let den = 0;
+  for (const r of rows) {
+    if (r.impressions > 0) {
+      num += r.likes + r.comments + r.shares;
+      den += r.impressions;
+    }
+  }
+  return den > 0 ? (num / den) * 100 : 0;
 }
 
 export function sumChannelRowsIntoGroups(
@@ -100,10 +115,14 @@ export function sumChannelRowsIntoGroups(
 
   const result: GroupStatsRow[] = groups.map((group) => {
     const sums = emptySums();
+    const groupRows: ChannelStatRow[] = [];
     for (const channel of group.channels) {
       groupedChannelIds.add(channel.id);
       const row = rowByChannel.get(channel.id);
-      if (row) addRow(sums, row);
+      if (row) {
+        addRow(sums, row);
+        groupRows.push(row);
+      }
     }
     return {
       id: group.id,
@@ -111,7 +130,7 @@ export function sumChannelRowsIntoGroups(
       color: group.color,
       channelCount: group.channels.length,
       ...sums,
-      engagementRate: rateFromSums(sums),
+      engagementRate: rateFromRows(groupRows),
     };
   });
 
@@ -129,7 +148,7 @@ export function sumChannelRowsIntoGroups(
       color: UNGROUPED_COLOR,
       channelCount: ungroupedCount,
       ...sums,
-      engagementRate: rateFromSums(sums),
+      engagementRate: rateFromRows(ungrouped),
     });
   }
 

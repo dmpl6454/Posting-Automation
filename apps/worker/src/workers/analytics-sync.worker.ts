@@ -2,6 +2,8 @@ import { Worker, type Job } from "bullmq";
 import { prisma } from "@postautomation/db";
 import { getSocialProvider } from "@postautomation/social";
 import { QUEUE_NAMES, type AnalyticsSyncJobData, createRedisConnection } from "@postautomation/queue";
+import { buildSnapshotMetadata } from "../lib/snapshot-metadata";
+import { shouldWriteSnapshot } from "../lib/snapshot-dedup";
 
 export function createAnalyticsSyncWorker() {
   const worker = new Worker<AnalyticsSyncJobData>(
@@ -50,7 +52,23 @@ export function createAnalyticsSyncWorker() {
         return null;
       }
 
-      // 3. Save analytics snapshot. At-age checkpoint jobs (delayed, enqueued at
+      // 3a. Dedup: skip writing a duplicate snapshot when nothing changed since
+      // the latest one (non-checkpoint cron jobs only). Prod had ~47 snapshots
+      // per FB target, almost all identical zeros — this stops the bloat.
+      // Checkpoint (windowTag) jobs always write (at-age pinning).
+      if (!windowTag) {
+        const latest = await prisma.analyticsSnapshot.findFirst({
+          where: { postTargetId },
+          orderBy: { snapshotAt: "desc" },
+          select: { impressions: true, clicks: true, likes: true, shares: true, comments: true, reach: true },
+        });
+        if (!shouldWriteSnapshot(analytics as any, latest, false)) {
+          console.log(`[AnalyticsSync] No change for target ${postTargetId} — skipping duplicate snapshot`);
+          return null;
+        }
+      }
+
+      // 3b. Save analytics snapshot. At-age checkpoint jobs (delayed, enqueued at
       // publish) stamp metadata.windowTag so Reports "at publish-age" mode can
       // pin the metrics as they stood exactly 24h/7d/15d/30d after publish.
       const snapshot = await prisma.analyticsSnapshot.create({
@@ -65,9 +83,10 @@ export function createAnalyticsSyncWorker() {
           reach: analytics.reach ?? 0,
           engagementRate: analytics.engagementRate ?? 0,
           snapshotAt: new Date(),
-          ...(windowTag
-            ? { metadata: { windowTag, ...(capturedLate ? { capturedLate: true } : {}) } }
-            : {}),
+          ...(() => {
+            const md = buildSnapshotMetadata(analytics as any, windowTag, !!capturedLate);
+            return md ? { metadata: md as any } : {};
+          })(),
         },
       });
 

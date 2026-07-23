@@ -146,6 +146,10 @@ export class DevtoProvider extends SocialProvider {
       comments,
       reach: views,
       engagementRate: views > 0 ? ((likes + comments) / views) * 100 : 0,
+      likeKind: "likes",
+      reachIsDistinct: false, // reach aliased from page views
+      source: "api",
+      metricsAvailable: { clicks: false, shares: false, reach: false },
     };
   }
 }

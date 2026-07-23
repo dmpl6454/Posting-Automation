@@ -308,6 +308,10 @@ export class ThreadsProvider extends SocialProvider {
       comments: replies,
       reach: views,
       engagementRate: views > 0 ? ((likes + replies + reposts + quotes) / views) * 100 : 0,
+      likeKind: "likes",
+      reachIsDistinct: false, // reach aliased from views
+      source: "api",
+      metricsAvailable: { clicks: false, reach: false },
     };
   }
 }

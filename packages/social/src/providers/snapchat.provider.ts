@@ -6,9 +6,11 @@ import type {
   OAuthTokens,
   OAuthConfig,
   SocialProfile,
+  SocialAnalytics,
   PlatformConstraints,
 } from "../abstract/social.types";
 import { fetchT } from "../utils/fetch-timeout";
+import { scrapeSnapchatSpotlightEngagement } from "@postautomation/social-scrapers";
 
 /**
  * Snapchat provider — CONNECT-ONLY as of 2026-07-18.
@@ -156,5 +158,37 @@ export class SnapchatProvider extends SocialProvider {
 
   async deletePost(_tokens: OAuthTokens, _platformPostId: string): Promise<void> {
     throw new Error("Snapchat does not support programmatic post deletion.");
+  }
+
+  /**
+   * Spotlight analytics via the public scraper (the Public Profile API insights
+   * are allowlist-gated and unavailable). Fail-open: returns null on any miss,
+   * never a fabricated number. Snapchat exposes no public like metric, so likes
+   * are always "—" (metricsAvailable.likes=false).
+   *
+   * ⚠️ Scraper-backed: depends on live Snapchat spotlight HTML. Verify from the
+   * deploy IP — a datacenter IP may hit different walls than a residential one.
+   */
+  async getPostAnalytics(_tokens: OAuthTokens, platformPostId: string): Promise<SocialAnalytics | null> {
+    if (!platformPostId) return null;
+    const e = await scrapeSnapchatSpotlightEngagement(platformPostId);
+    if (!e || e.views == null) return null;
+    const impressions = e.views;
+    const comments = e.comments ?? 0;
+    const shares = e.shares ?? 0;
+    return {
+      impressions,
+      clicks: 0,
+      likes: 0,
+      shares,
+      comments,
+      reach: impressions,
+      engagementRate: impressions > 0 ? (comments + shares) / impressions : 0,
+      source: "scrape",
+      likeKind: "likes",
+      reachIsDistinct: false,
+      // Snapchat exposes no like metric; no reach/click metric either.
+      metricsAvailable: { likes: false, clicks: false, reach: false },
+    };
   }
 }
