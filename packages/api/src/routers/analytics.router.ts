@@ -11,6 +11,7 @@ import { createRateLimitMiddleware } from "../middleware/rate-limit.middleware";
 import { emailReportRateLimiter } from "../middleware/rate-limit";
 import { sendEmail } from "../lib/email";
 import { escapeHtml } from "../lib/sanitize";
+import { platformMetricCapabilities } from "../lib/platform-metrics";
 import { toCsv } from "../lib/report-csv";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 
@@ -47,6 +48,7 @@ async function fetchChannelStatRows(
     comments: bigint;
     shares: bigint;
     clicks: bigint;
+    hasSnapshot: boolean;
   }> = await (prisma.$queryRawUnsafe as any)(
     `SELECT pt."channelId"                  AS "channelId",
             COUNT(DISTINCT p.id)            AS posts,
@@ -55,7 +57,10 @@ async function fetchChannelStatRows(
             COALESCE(SUM(s.likes), 0)       AS likes,
             COALESCE(SUM(s.comments), 0)    AS comments,
             COALESCE(SUM(s.shares), 0)      AS shares,
-            COALESCE(SUM(s.clicks), 0)      AS clicks
+            COALESCE(SUM(s.clicks), 0)      AS clicks,
+            -- true when at least one of this channel's targets has a captured
+            -- snapshot; drives the UI's "—" (no data yet) vs "0" (real zero).
+            BOOL_OR(s.id IS NOT NULL)       AS "hasSnapshot"
      FROM "PostTarget" pt
      INNER JOIN "Post" p ON p.id = pt."postId"
      INNER JOIN "Channel" c ON c.id = pt."channelId" AND c."isActive" = true
@@ -84,6 +89,7 @@ async function fetchChannelStatRows(
     comments: Number(r.comments),
     shares: Number(r.shares),
     clicks: Number(r.clicks),
+    hasSnapshot: Boolean(r.hasSnapshot),
   }));
 }
 
@@ -561,6 +567,7 @@ export const analyticsRouter = createRouter({
         const shares = m?.shares ?? 0;
         const engagementRate =
           impressions > 0 ? ((likes + comments + shares) / impressions) * 100 : 0;
+        const caps = platformMetricCapabilities(channel.platform);
 
         return {
           id: channel.id,
@@ -576,6 +583,11 @@ export const analyticsRouter = createRouter({
           comments,
           reach: m?.reach ?? 0,
           engagementRate,
+          // Honesty metadata for the UI (— vs 0, honest labels, hide dup reach):
+          hasSnapshot: m?.hasSnapshot ?? false,
+          likeKind: caps.likeKind,
+          reachIsDistinct: caps.reachIsDistinct,
+          unavailable: caps.unavailable,
         };
       });
 

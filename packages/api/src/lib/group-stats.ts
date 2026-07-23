@@ -34,6 +34,8 @@ export interface ChannelStatRow {
   comments: number;
   shares: number;
   clicks: number;
+  /** true when ≥1 of the channel's targets has a captured snapshot (UI: — vs 0). */
+  hasSnapshot?: boolean;
 }
 
 /** Group shape as selected from prisma.channelGroup.findMany. */
