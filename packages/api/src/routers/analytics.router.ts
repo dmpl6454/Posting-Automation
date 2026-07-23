@@ -211,30 +211,33 @@ export const analyticsRouter = createRouter({
       const from = input.from ? new Date(input.from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
       const to = input.to ? new Date(input.to) : new Date();
 
-      const posts = await ctx.prisma.post.findMany({
+      const totalPosts = await ctx.prisma.post.count({
         where: {
           organizationId: ctx.organizationId,
           status: "PUBLISHED",
           publishedAt: { gte: from, lte: to },
         },
-        include: { targets: true },
       });
 
-      const totalPosts = posts.length;
-      const totalTargets = posts.reduce((sum: number, p: any) => sum + p.targets.length, 0);
-      // PUBLISHED targets counted org-wide at the target level (same population
-      // convention as platformBreakdown, so the two cards on the page agree).
-      // Date predicate: parent publishedAt in range, or (null publishedAt) the
-      // target's own updatedAt — matching the `failed` predicate below.
+      // The window predicate shared by totalTargets/published/failed so all
+      // three are the SAME target-level population. Using it for BOTH the
+      // denominator (totalTargets, all statuses) and the numerator (published,
+      // status=PUBLISHED) guarantees published <= totalTargets — the old
+      // totalTargets counted only targets of publishedAt-in-range posts and
+      // EXCLUDED the null-publishedAt OR-branch that `published` includes, so a
+      // mixed-outcome publish (Post.publishedAt still null while some targets
+      // are already PUBLISHED) could render "published > totalTargets".
+      const windowTargetWhere = {
+        post: { organizationId: ctx.organizationId },
+        OR: [
+          { post: { publishedAt: { gte: from, lte: to } } },
+          { post: { publishedAt: null }, updatedAt: { gte: from, lte: to } },
+        ],
+      };
+
+      const totalTargets = await ctx.prisma.postTarget.count({ where: windowTargetWhere });
       const published = await ctx.prisma.postTarget.count({
-        where: {
-          status: "PUBLISHED",
-          post: { organizationId: ctx.organizationId },
-          OR: [
-            { post: { publishedAt: { gte: from, lte: to } } },
-            { post: { publishedAt: null }, updatedAt: { gte: from, lte: to } },
-          ],
-        },
+        where: { ...windowTargetWhere, status: "PUBLISHED" },
       });
       // FAILED targets are counted org-wide regardless of parent Post.status —
       // a post whose EVERY target failed never reaches Post.status=PUBLISHED,
@@ -269,7 +272,11 @@ export const analyticsRouter = createRouter({
       const from = input.from ? new Date(input.from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
       const to = input.to ? new Date(input.to) : new Date();
 
-      // Get all published targets in the org for this period
+      // Get all published targets in the org for this period. isActive: true
+      // matches perChannelStats/groupStats (which INNER JOIN Channel isActive),
+      // so the headline rate reconciles with the Channel Performance table — a
+      // disconnected channel's snapshots no longer count toward the org rate
+      // while vanishing from the per-channel breakdown.
       const targets = await ctx.prisma.postTarget.findMany({
         where: {
           post: {
@@ -277,6 +284,7 @@ export const analyticsRouter = createRouter({
             publishedAt: { gte: from, lte: to },
           },
           status: "PUBLISHED",
+          channel: { isActive: true },
         },
         select: { id: true },
       });
@@ -312,17 +320,24 @@ export const analyticsRouter = createRouter({
           COALESCE(SUM(a.shares), 0) as shares,
           COALESCE(SUM(a.comments), 0) as comments,
           COALESCE(SUM(a.reach), 0) as reach,
-          CASE WHEN SUM(a.impressions) > 0
-            THEN CAST(SUM(a.likes + a.comments + a.shares) AS FLOAT) / SUM(a.impressions) * 100
+          -- Only impressioned targets contribute to BOTH numerator and
+          -- denominator, so a zero-impression target (LinkedIn member post,
+          -- Reddit view_count 0) with engagement can't inflate the pooled rate.
+          CASE WHEN SUM(a.impressions) FILTER (WHERE a.impressions > 0) > 0
+            THEN CAST(SUM(a.likes + a.comments + a.shares) FILTER (WHERE a.impressions > 0) AS FLOAT)
+                 / SUM(a.impressions) FILTER (WHERE a.impressions > 0) * 100
             ELSE 0
           END as "engagementRate"
-        FROM "AnalyticsSnapshot" a
-        INNER JOIN (
-          SELECT "postTargetId", MAX("snapshotAt") as max_snapshot
-          FROM "AnalyticsSnapshot"
-          WHERE "postTargetId" = ANY($1::text[])
-          GROUP BY "postTargetId"
-        ) latest ON a."postTargetId" = latest."postTargetId" AND a."snapshotAt" = latest.max_snapshot`,
+        FROM (
+          -- Exactly ONE row per target (the latest). DISTINCT ON picks a single
+          -- row even when two snapshots share the max snapshotAt (id DESC breaks
+          -- the tie deterministically) — the old MAX(snapshotAt) INNER JOIN
+          -- summed BOTH tied rows, double-counting that target's metrics.
+          SELECT DISTINCT ON (s."postTargetId") s.*
+          FROM "AnalyticsSnapshot" s
+          WHERE s."postTargetId" = ANY($1::text[])
+          ORDER BY s."postTargetId", s."snapshotAt" DESC, s.id DESC
+        ) a`,
         targetIds
       );
 
