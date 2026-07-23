@@ -40,6 +40,7 @@ import {
 } from "lucide-react";
 import { PlatformIcon } from "~/components/icons/platform-icons";
 import { ChannelAvatar } from "~/components/channel-avatar";
+import { windowChannels } from "~/lib/channel-list-window";
 
 type PlatformAuthInfo = {
   platform: string;
@@ -353,12 +354,29 @@ export default function ChannelsPage() {
   const [expandedPlatforms, setExpandedPlatforms] = useState<Set<string>>(
     new Set()
   );
-  // Auto-expand first platform on initial load
+  // Auto-expand first platform once, in an effect (NOT during render — setting
+  // state in the render body forces an extra render pass, which compounded the
+  // large-list paint cost).
   const [initialized, setInitialized] = useState(false);
-  if (!initialized && connectedPlatforms.length > 0) {
-    setExpandedPlatforms(new Set([connectedPlatforms[0]!]));
-    setInitialized(true);
-  }
+  useEffect(() => {
+    if (!initialized && connectedPlatforms.length > 0) {
+      setExpandedPlatforms(new Set([connectedPlatforms[0]!]));
+      setInitialized(true);
+    }
+  }, [initialized, connectedPlatforms]);
+
+  // Per-platform "show all channels" opt-in — a platform with hundreds of
+  // channels (Meta orgs have 300+ Pages) renders only the first window on
+  // expand so the page paints instantly; the user reveals the rest on demand.
+  const [showAllPlatforms, setShowAllPlatforms] = useState<Set<string>>(new Set());
+  const toggleShowAll = (platform: string) => {
+    setShowAllPlatforms((prev) => {
+      const next = new Set(prev);
+      if (next.has(platform)) next.delete(platform);
+      else next.add(platform);
+      return next;
+    });
+  };
 
   const toggleExpanded = (platform: string) => {
     setExpandedPlatforms((prev) => {
@@ -730,14 +748,24 @@ export default function ChannelsPage() {
                   </Button>
                 </div>
 
-                {/* Accordion Content — Channel List */}
-                {isExpanded && (
+                {/* Accordion Content — Channel List.
+                    Only the first window renders on expand; a platform can hold
+                    hundreds of channels (Meta orgs have 300+ Pages) and painting
+                    them all at once blocked Safari's main thread for minutes
+                    (the "blank screen after reconnect" bug). */}
+                {isExpanded && (() => {
+                  const { visible: visibleChannels, hiddenCount } = windowChannels(
+                    platformChannels,
+                    showAllPlatforms.has(platform),
+                    selectedIds
+                  );
+                  return (
                   <div className="border-t">
-                    {platformChannels.map((channel: any, idx: number) => (
+                    {visibleChannels.map((channel: any, idx: number) => (
                       <div
                         key={channel.id}
                         className={`flex items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/30 ${
-                          idx < platformChannels.length - 1 ? "border-b" : ""
+                          idx < visibleChannels.length - 1 ? "border-b" : ""
                         }`}
                       >
                         {/* Select checkbox */}
@@ -813,8 +841,27 @@ export default function ChannelsPage() {
                         </div>
                       </div>
                     ))}
+                    {hiddenCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => toggleShowAll(platform)}
+                        className="w-full border-t px-4 py-3 text-sm font-medium text-primary hover:bg-muted/30"
+                      >
+                        Show all {platformChannels.length} channels ({hiddenCount} more)
+                      </button>
+                    )}
+                    {showAllPlatforms.has(platform) && platformChannels.length > 30 && (
+                      <button
+                        type="button"
+                        onClick={() => toggleShowAll(platform)}
+                        className="w-full border-t px-4 py-3 text-sm font-medium text-muted-foreground hover:bg-muted/30"
+                      >
+                        Show fewer
+                      </button>
+                    )}
                   </div>
-                )}
+                  );
+                })()}
               </Card>
             );
           })}
