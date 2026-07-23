@@ -93,17 +93,13 @@ describe("FacebookProvider.getPostAnalytics — VIDEO ids (bare node id, no unde
     await expect(provider.getPostAnalytics(tokens, "9876543210")).resolves.toBeNull();
   });
 
-  it("photos/text: requests ONLY the live-valid metrics (Meta deleted post_impressions*) and marks impressions/reach unavailable", async () => {
+  it("admin/full-perm: fields API works → reactions+comments from fields, impressions/reach unavailable", async () => {
     const urls: string[] = [];
     global.fetch = vi.fn(async (url: any) => {
       const u = String(url);
       urls.push(u);
       if (u.includes("/insights?")) {
-        return jsonResponse({
-          data: [
-            { name: "post_clicks", values: [{ value: 20 }] },
-          ],
-        });
+        return jsonResponse({ data: [{ name: "post_clicks", values: [{ value: 20 }] }] });
       }
       return jsonResponse({
         shares: { count: 2 },
@@ -115,23 +111,51 @@ describe("FacebookProvider.getPostAnalytics — VIDEO ids (bare node id, no unde
     const provider = new FacebookProvider();
     const result = await provider.getPostAnalytics(tokens, "111_222");
 
-    // Live-verified 2026-07-23: every post_impressions* metric is #100 invalid
-    // on the current Graph API — requesting one 400s the WHOLE call. Only the
-    // valid metrics are requested.
-    expect(urls[0]).toContain("/111_222/insights?metric=post_clicks,post_video_views");
+    // Live-verified 2026-07-23: no post_impressions* (deleted); reactions also
+    // come from the insights edge (post_reactions_by_type_total) — external-safe.
+    expect(urls[0]).toContain(
+      "/111_222/insights?metric=post_clicks,post_video_views,post_reactions_by_type_total"
+    );
     expect(urls[0]).not.toContain("post_impressions");
-    expect(urls[1]).toContain("/111_222?fields=shares,comments.summary(true),reactions.summary(true)");
     expect(result).toMatchObject({
-      impressions: 0, // Meta removed the metric → unavailable
+      impressions: 0,
       clicks: 20,
-      likes: 8,
+      likes: 8, // fields reactions preferred when available
       shares: 2,
       comments: 4,
-      reach: 0, // Meta removed the metric → unavailable
+      reach: 0,
       likeKind: "reactions",
       source: "api",
     });
-    expect(result?.metricsAvailable).toMatchObject({ impressions: false, reach: false });
+    expect(result?.metricsAvailable).toMatchObject({ impressions: false, reach: false, comments: true });
+  });
+
+  it("EXTERNAL user (no pages_read_user_content): fields 400s → reactions from insights, comments '—', shares fetched, NEVER null", async () => {
+    global.fetch = vi.fn(async (url: any) => {
+      const u = String(url);
+      if (u.includes("/insights?")) {
+        return jsonResponse({
+          data: [
+            { name: "post_clicks", values: [{ value: 5 }] },
+            { name: "post_reactions_by_type_total", values: [{ value: { like: 10, love: 2 } }] },
+          ],
+        });
+      }
+      if (u.includes("comments.summary")) {
+        return jsonResponse({ error: { code: 10, message: "requires the 'pages_read_user_content' permission" } }, 400);
+      }
+      return jsonResponse({ shares: { count: 3 } }); // shares-only fallback succeeds
+    }) as any;
+
+    const provider = new FacebookProvider();
+    const result = await provider.getPostAnalytics(tokens, "111_333");
+
+    expect(result).not.toBeNull(); // degrades, never null
+    expect(result?.clicks).toBe(5);
+    expect(result?.likes).toBe(12); // reactions summed from insights (like 10 + love 2)
+    expect(result?.shares).toBe(3);
+    expect(result?.comments).toBe(0);
+    expect(result?.metricsAvailable).toMatchObject({ comments: false }); // → UI "—"
   });
 });
 

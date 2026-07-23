@@ -353,62 +353,77 @@ export class FacebookProvider extends SocialProvider {
       return this.getVideoAnalytics(tokens, platformPostId);
     }
 
-    // ⚠️ Meta DELETED all post_impressions* + post_engaged_users metrics from
-    // the Page-post /insights edge (live-verified 2026-07-23: every
-    // post_impressions variant returns #100 "must be a valid insights metric").
-    // Requesting a deprecated metric 400s the WHOLE call, zeroing even the valid
-    // ones. So request ONLY the currently-valid Page-post insight metrics.
-    // Impressions + reach are simply NOT obtainable via post insights anymore —
-    // they render "—" (unavailable), honestly and permanently.
+    // Metric-source strategy verified live 2026-07-23 (admin + EXTERNAL tokens):
+    //  - Meta DELETED all post_impressions*/post_engaged_users metrics (#100
+    //    invalid; requesting one 400s the WHOLE call) → impressions/reach = "—".
+    //  - clicks + REACTIONS come from the INSIGHTS edge — these work for EXTERNAL
+    //    users on our current perms (post_clicks, post_reactions_by_type_total).
+    //  - comments have NO insights equivalent; the fields API (comments.summary)
+    //    needs `pages_read_user_content`, which EXTERNAL users DON'T have → their
+    //    comments read 400. So the fields fetch is BEST-EFFORT (never fatal), and
+    //    comments render "—" when it fails.
     const res = await this.graphFetch(
-      `${this.graphBaseUrl}/${this.apiVersion}/${platformPostId}/insights?metric=post_clicks,post_video_views&access_token=${tokens.accessToken}`
+      `${this.graphBaseUrl}/${this.apiVersion}/${platformPostId}/insights?metric=post_clicks,post_video_views,post_reactions_by_type_total&access_token=${tokens.accessToken}`
     );
 
     const data: any = await res.json();
     if (!res.ok) {
-      console.warn(`[Facebook] getPostAnalytics failed for ${platformPostId}: ${JSON.stringify(data)}`);
+      console.warn(`[Facebook] getPostAnalytics insights failed for ${platformPostId}: ${JSON.stringify(data)}`);
     }
 
     const metrics: Record<string, number> = {};
     if (data.data) {
       for (const metric of data.data) {
-        metrics[metric.name] = metric.values?.[0]?.value || 0;
+        // post_reactions_by_type_total is an OBJECT {like:N,love:N,...}; sum it.
+        const v = metric.values?.[0]?.value;
+        metrics[metric.name] =
+          v && typeof v === "object"
+            ? Object.values(v).reduce((s: number, n: any) => s + (Number(n) || 0), 0)
+            : v || 0;
       }
     }
+    const reactionsFromInsights = metrics.post_reactions_by_type_total || 0;
 
+    // Best-effort post FIELDS (shares always work; reactions/comments need
+    // pages_read_user_content — 400 for external users). NEVER fatal.
+    let fieldsReactions: number | null = null;
+    let comments: number | null = null;
+    let shares = 0;
     const postRes = await this.graphFetch(
       `${this.graphBaseUrl}/${this.apiVersion}/${platformPostId}?fields=shares,comments.summary(true),reactions.summary(true)&access_token=${tokens.accessToken}`
     );
-
     const postData: any = await postRes.json();
-    if (!postRes.ok) {
-      console.warn(`[Facebook] post fields fetch failed for ${platformPostId}: ${JSON.stringify(postData)}`);
-      return null;
+    if (postRes.ok) {
+      shares = postData.shares?.count || 0;
+      comments = postData.comments?.summary?.total_count ?? null;
+      fieldsReactions = postData.reactions?.summary?.total_count ?? null;
+    } else {
+      console.warn(`[Facebook] post fields fetch failed (likely missing pages_read_user_content) for ${platformPostId}: ${JSON.stringify(postData)}`);
+      // shares alone often still resolves — try it in isolation (basic page token).
+      const sRes = await this.graphFetch(
+        `${this.graphBaseUrl}/${this.apiVersion}/${platformPostId}?fields=shares&access_token=${tokens.accessToken}`
+      );
+      if (sRes.ok) shares = ((await sRes.json()) as any)?.shares?.count || 0;
     }
-    const shares = postData.shares?.count || 0;
-    const comments = postData.comments?.summary?.total_count || 0;
-    const reactions = postData.reactions?.summary?.total_count || 0;
 
-    // Meta no longer exposes post impressions/reach — engagement rate can't use
-    // an impressions denominator. Report the raw counts; rate stays 0 (the UI
-    // renders "—" for impressions/reach so no misleading denominator is implied).
-    const impressions = 0;
-    const engagementRate = 0;
+    // Prefer the fields reaction count (all reaction types) when available; else
+    // fall back to the insights reaction total (works for external users).
+    const reactions = fieldsReactions ?? reactionsFromInsights;
+    const commentsAvailable = comments !== null;
 
     return {
-      impressions,
+      impressions: 0,
       clicks: metrics.post_clicks || 0,
       likes: reactions,
       shares,
-      comments,
+      comments: comments ?? 0,
       reach: 0,
-      engagementRate,
-      // impressions + reach are DELETED from Meta's post-insights edge — mark
-      // unavailable so the UI shows "—", never a fake 0.
-      metricsAvailable: { impressions: false, reach: false },
-      // Honesty metadata (consumed by the UI + aggregation):
-      likeKind: "reactions", // FB "likes" are all reaction types, not just Like
-      reachIsDistinct: false, // reach unavailable (Meta removed the metric)
+      engagementRate: 0,
+      // impressions/reach: deleted by Meta. comments: unavailable when the fields
+      // API 400s (external users lacking pages_read_user_content) → UI "—".
+      metricsAvailable: { impressions: false, reach: false, comments: commentsAvailable },
+      likeKind: "reactions", // FB "likes" are all reaction types
+      reachIsDistinct: false,
       source: "api",
     };
   }

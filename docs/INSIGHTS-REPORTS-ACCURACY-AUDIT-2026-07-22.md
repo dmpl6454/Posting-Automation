@@ -1,5 +1,30 @@
 # Insights + Reports Data-Accuracy Audit — 2026-07-22
 
+## ✅ DEFINITIVE ADMIN-vs-EXTERNAL TEST — 2026-07-23 (the authoritative answer; supersedes all earlier claims)
+
+Tested the SAME FB API calls with BOTH an admin token (`tabish@dashmani.com` / Page "ENT News") and a **genuinely external** token (`karankumar1166dt@gmail.com` / Page "Bollywood", reconnected 11:29) — the natural experiment that removes the app-role bias.
+
+**RESULT — external FB user, per-call (live):**
+| FB read (what our code uses) | Admin | External | Permission needed for external |
+|---|---|---|---|
+| `reactions.summary` (→ our "likes") | 200 | **🔴 400** | **`pages_read_user_content`** — NOT requested, NOT held |
+| `comments.summary` (→ our "comments") | 200 | **🔴 400** | **`pages_read_user_content`** — NOT requested, NOT held |
+| `shares` | 200 | ✅ 200 | (page token) |
+| `likes.summary` | 200 | 🔴 400 | `pages_read_engagement` (held) — but code uses `reactions.summary`, not this |
+| insights `post_clicks` / `post_reactions_by_type_total` / `post_reactions_like_total` / `post_engagements` / `post_video_views` | 200 | ✅ **200** | works on current perms |
+| `/comments` + `/likes` EDGES | 200 | 🔴 400 | `pages_read_user_content` |
+| page `fan_count`/`followers_count` | 200 | ✅ 200 | (page token) |
+
+**THE KEY FINDING (my prior "reactions/comments work on pages_read_engagement" was WRONG):** our code reads reactions+comments via the **post-FIELDS API** (`reactions.summary`, `comments.summary`), which requires **`pages_read_user_content`** — a permission we NEVER requested and don't hold. **So for EVERY external FB user, reactions ("likes") and comments return 400 → those columns are EMPTY.** Only `shares` + the insights metrics work. The admin sees data only because app-role bypasses App Review.
+
+**Why tabish's Insights show 0 in the screenshot:** the tested admin posts genuinely have 0 engagement (reactions=0, comments=0), AND FB impressions/reach are deleted-by-Meta. So 0 is partly real-zero, partly unavailable — not a permission failure for the ADMIN. For EXTERNAL users it would additionally 400.
+
+**Two fix paths for FB engagement on external users:**
+- **(A) No new permission:** switch reactions from the fields API to the **INSIGHTS edge** (`post_reactions_by_type_total` / `post_reactions_like_total`, both 200 on external tokens). But **comments have no insights equivalent** → comments would stay empty without `pages_read_user_content`.
+- **(B) Request `pages_read_user_content` (App Review):** keeps the fields API, restores reactions+comments+likes for external users. This is the real gap.
+
+---
+
 ## ⚠️ LIVE API VERIFICATION UPDATE — 2026-07-23 (corrects earlier claims)
 
 After the admin-privileged reconnect, I tested the **real Graph API with the decrypted prod Page token** (via `prisma.channel.findFirstOrThrow` — the same read path the worker uses; note a `postTarget→channel` RELATION read returns still-ENCRYPTED tokens, only direct `channel.find*` decrypts). Findings that **revise the plan**:

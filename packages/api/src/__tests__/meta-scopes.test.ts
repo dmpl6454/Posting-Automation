@@ -14,6 +14,12 @@ describe("Meta insights scopes", () => {
     expect(getDefaultScopes("FACEBOOK")).toContain("read_insights");
   });
 
+  it("FACEBOOK includes pages_read_user_content (required for reactions/comments on external tokens)", () => {
+    // Live-verified 2026-07-23: external users 400 (#10) reading reactions.summary/
+    // comments.summary without this scope.
+    expect(getDefaultScopes("FACEBOOK")).toContain("pages_read_user_content");
+  });
+
   it("keeps the existing publishing scopes intact", () => {
     const fb = getDefaultScopes("FACEBOOK");
     expect(fb).toEqual(expect.arrayContaining(["pages_manage_posts", "pages_read_engagement"]));

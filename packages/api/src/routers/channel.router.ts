@@ -484,13 +484,18 @@ function getDefaultScopes(platform: string): string[] {
     // `email` intentionally omitted: sign-in is via Google, and the FB/IG
     // providers never read the FB-provided email. Dropping it slims the Meta
     // App Review surface (one fewer permission to get Advanced Access for).
-    // `read_insights` is required (with pages_read_engagement) to read
-    // /{post}/insights (post_impressions, post_impressions_unique, post_clicks).
-    // Without it those metrics 403 and get stored as 0 (see the analytics audit
-    // docs/INSIGHTS-REPORTS-ACCURACY-AUDIT-2026-07-22.md). Needs Advanced Access
-    // via App Review. `instagram_manage_comments` intentionally omitted (Meta
-    // rejected it 2026-06 — the app never moderates comment threads).
-    FACEBOOK: ["public_profile", "pages_show_list", "pages_manage_posts", "pages_read_engagement", "read_insights"],
+    // Analytics-read scopes (all need Advanced Access via App Review; requesting
+    // an unapproved scope does NOT block connect — verified: external users still
+    // connect, Meta just doesn't grant the unapproved ones):
+    //  - `pages_read_user_content`: REQUIRED to read a post's reactions.summary /
+    //    comments.summary via the fields API — live-verified 2026-07-23 that
+    //    EXTERNAL users 400 (#10) without it. Reactions have an insights fallback
+    //    (post_reactions_by_type_total, external-safe); COMMENTS do NOT → comments
+    //    stay "—" for external users until this is approved.
+    //  - `read_insights`: helps the post_clicks/post_video_views insight VALUES.
+    //    Does NOT restore impressions/reach (Meta deleted those metrics).
+    // `instagram_manage_comments` intentionally omitted (Meta rejected it 2026-06).
+    FACEBOOK: ["public_profile", "pages_show_list", "pages_manage_posts", "pages_read_engagement", "pages_read_user_content", "read_insights"],
     // `instagram_manage_insights` is REQUIRED (with instagram_basic +
     // pages_read_engagement) to read /{ig-media}/insights on the Facebook-Login
     // path (Meta Media Insights Requirements table). Without it the insights
