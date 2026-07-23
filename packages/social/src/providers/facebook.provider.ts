@@ -353,11 +353,15 @@ export class FacebookProvider extends SocialProvider {
       return this.getVideoAnalytics(tokens, platformPostId);
     }
 
+    // ⚠️ Meta DELETED all post_impressions* + post_engaged_users metrics from
+    // the Page-post /insights edge (live-verified 2026-07-23: every
+    // post_impressions variant returns #100 "must be a valid insights metric").
+    // Requesting a deprecated metric 400s the WHOLE call, zeroing even the valid
+    // ones. So request ONLY the currently-valid Page-post insight metrics.
+    // Impressions + reach are simply NOT obtainable via post insights anymore —
+    // they render "—" (unavailable), honestly and permanently.
     const res = await this.graphFetch(
-      // post_impressions_unique = TRUE unique reach (people the post reached).
-      // The previous code mapped reach = post_engaged_users, which is people who
-      // CLICKED anywhere in the post — an engagement count, always ≤ reach.
-      `${this.graphBaseUrl}/${this.apiVersion}/${platformPostId}/insights?metric=post_impressions,post_impressions_unique,post_clicks,post_engaged_users&access_token=${tokens.accessToken}`
+      `${this.graphBaseUrl}/${this.apiVersion}/${platformPostId}/insights?metric=post_clicks,post_video_views&access_token=${tokens.accessToken}`
     );
 
     const data: any = await res.json();
@@ -385,9 +389,11 @@ export class FacebookProvider extends SocialProvider {
     const comments = postData.comments?.summary?.total_count || 0;
     const reactions = postData.reactions?.summary?.total_count || 0;
 
-    const impressions = metrics.post_impressions || 0;
-    const totalEngagement = reactions + shares + comments;
-    const engagementRate = impressions > 0 ? totalEngagement / impressions : 0;
+    // Meta no longer exposes post impressions/reach — engagement rate can't use
+    // an impressions denominator. Report the raw counts; rate stays 0 (the UI
+    // renders "—" for impressions/reach so no misleading denominator is implied).
+    const impressions = 0;
+    const engagementRate = 0;
 
     return {
       impressions,
@@ -395,11 +401,14 @@ export class FacebookProvider extends SocialProvider {
       likes: reactions,
       shares,
       comments,
-      reach: metrics.post_impressions_unique || 0,
+      reach: 0,
       engagementRate,
+      // impressions + reach are DELETED from Meta's post-insights edge — mark
+      // unavailable so the UI shows "—", never a fake 0.
+      metricsAvailable: { impressions: false, reach: false },
       // Honesty metadata (consumed by the UI + aggregation):
       likeKind: "reactions", // FB "likes" are all reaction types, not just Like
-      reachIsDistinct: true, // FB reach (unique impressions) ≠ impressions
+      reachIsDistinct: false, // reach unavailable (Meta removed the metric)
       source: "api",
     };
   }

@@ -93,7 +93,7 @@ describe("FacebookProvider.getPostAnalytics — VIDEO ids (bare node id, no unde
     await expect(provider.getPostAnalytics(tokens, "9876543210")).resolves.toBeNull();
   });
 
-  it("keeps the existing Post-node endpoints byte-identical for underscore ids (photos/text)", async () => {
+  it("photos/text: requests ONLY the live-valid metrics (Meta deleted post_impressions*) and marks impressions/reach unavailable", async () => {
     const urls: string[] = [];
     global.fetch = vi.fn(async (url: any) => {
       const u = String(url);
@@ -101,10 +101,7 @@ describe("FacebookProvider.getPostAnalytics — VIDEO ids (bare node id, no unde
       if (u.includes("/insights?")) {
         return jsonResponse({
           data: [
-            { name: "post_impressions", values: [{ value: 200 }] },
-            { name: "post_impressions_unique", values: [{ value: 160 }] },
             { name: "post_clicks", values: [{ value: 20 }] },
-            { name: "post_engaged_users", values: [{ value: 150 }] },
           ],
         });
       }
@@ -118,25 +115,23 @@ describe("FacebookProvider.getPostAnalytics — VIDEO ids (bare node id, no unde
     const provider = new FacebookProvider();
     const result = await provider.getPostAnalytics(tokens, "111_222");
 
-    // Requests post_impressions_unique (true reach), no longer the unused
-    // post_reactions_like_total.
-    expect(urls[0]).toContain(
-      "/111_222/insights?metric=post_impressions,post_impressions_unique,post_clicks,post_engaged_users"
-    );
+    // Live-verified 2026-07-23: every post_impressions* metric is #100 invalid
+    // on the current Graph API — requesting one 400s the WHOLE call. Only the
+    // valid metrics are requested.
+    expect(urls[0]).toContain("/111_222/insights?metric=post_clicks,post_video_views");
+    expect(urls[0]).not.toContain("post_impressions");
     expect(urls[1]).toContain("/111_222?fields=shares,comments.summary(true),reactions.summary(true)");
-    // reach = post_impressions_unique (160), NOT post_engaged_users (150).
     expect(result).toMatchObject({
-      impressions: 200,
+      impressions: 0, // Meta removed the metric → unavailable
       clicks: 20,
       likes: 8,
       shares: 2,
       comments: 4,
-      reach: 160,
-      engagementRate: (8 + 2 + 4) / 200,
+      reach: 0, // Meta removed the metric → unavailable
       likeKind: "reactions",
-      reachIsDistinct: true,
       source: "api",
     });
+    expect(result?.metricsAvailable).toMatchObject({ impressions: false, reach: false });
   });
 });
 
