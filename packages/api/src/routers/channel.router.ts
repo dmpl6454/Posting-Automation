@@ -484,14 +484,20 @@ function getDefaultScopes(platform: string): string[] {
     // `email` intentionally omitted: sign-in is via Google, and the FB/IG
     // providers never read the FB-provided email. Dropping it slims the Meta
     // App Review surface (one fewer permission to get Advanced Access for).
-    FACEBOOK: ["public_profile", "pages_show_list", "pages_manage_posts", "pages_read_engagement"],
-    // `instagram_manage_comments` intentionally omitted: Meta rejected it as a
-    // "disallowed use case" (Dev Policy 1.6) in the 2026-06 App Review because the
-    // app never reads/creates/hides/deletes comment threads — getPostAnalytics
-    // (instagram.provider.ts) only reads the `comments_count` integer, which rides
-    // on `instagram_basic`. Re-adding it requires building an actual comment-
-    // moderation feature first, or it will be rejected again.
-    INSTAGRAM: ["public_profile", "pages_show_list", "pages_read_engagement", "instagram_basic", "instagram_content_publish", "business_management"],
+    // `read_insights` is required (with pages_read_engagement) to read
+    // /{post}/insights (post_impressions, post_impressions_unique, post_clicks).
+    // Without it those metrics 403 and get stored as 0 (see the analytics audit
+    // docs/INSIGHTS-REPORTS-ACCURACY-AUDIT-2026-07-22.md). Needs Advanced Access
+    // via App Review. `instagram_manage_comments` intentionally omitted (Meta
+    // rejected it 2026-06 — the app never moderates comment threads).
+    FACEBOOK: ["public_profile", "pages_show_list", "pages_manage_posts", "pages_read_engagement", "read_insights"],
+    // `instagram_manage_insights` is REQUIRED (with instagram_basic +
+    // pages_read_engagement) to read /{ig-media}/insights on the Facebook-Login
+    // path (Meta Media Insights Requirements table). Without it the insights
+    // call 403s and IG reach/impressions/shares are stored as 0 while only
+    // like_count/comments_count (which ride on instagram_basic) are real —
+    // confirmed against prod. Needs Advanced Access via App Review.
+    INSTAGRAM: ["public_profile", "pages_show_list", "pages_read_engagement", "instagram_basic", "instagram_content_publish", "business_management", "instagram_manage_insights"],
     REDDIT: ["submit", "identity", "read"],
     // TikTok Content Posting API. `video.publish` = Direct Post (what publishPost
     // uses via PULL_FROM_URL); `video.upload` = upload-to-drafts; `user.info.basic`
@@ -514,3 +520,6 @@ function getDefaultScopes(platform: string): string[] {
   };
   return scopeMap[platform] || [];
 }
+
+/** Test-only export so the scope matrix can be asserted without a tRPC caller. */
+export const getDefaultScopesForTest = getDefaultScopes;
