@@ -5,9 +5,9 @@
   "license": "UNLICENSED",
   "private": true,
   "type": "module",
-  "//main": "Consumed as BUILT dist (not raw src) so its looser tsconfig (no noUncheckedIndexedAccess, DOM lib) doesn't leak into consumer type-checks. Build before consuming.",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "//resolution": "main → SOURCE so the SWC bundler / tsx always resolves it (dist is gitignored + not built in the web Docker image, matching every other workspace pkg). types → COMMITTED .d.ts so consumers' strict tsc reads the declarations (which pass) instead of following into the vendored source (which isn't written for noUncheckedIndexedAccess). Regenerate types with: npx tsc -p tsconfig.json --emitDeclarationOnly --outDir types",
+  "main": "./src/index.ts",
+  "types": "./types/index.d.ts",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "type-check": "tsc -p tsconfig.json --noEmit"
