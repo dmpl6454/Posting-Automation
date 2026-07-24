@@ -25,7 +25,12 @@ const DEFAULT_CAPS: PlatformMetricCapabilities = {
 };
 
 const CAPS: Record<string, PlatformMetricCapabilities> = {
-  FACEBOOK: { likeKind: "reactions", reachIsDistinct: true, unavailable: [] },
+  // FB: Meta DELETED every post_impressions*/reach metric from the Page-post
+  // insights edge (live-verified 2026-07-24: both 400 #100 for admin AND external
+  // tokens — no permission restores them). The provider hardcodes impressions:0,
+  // reach:0 and declares metricsAvailable:{impressions:false,reach:false}; mark
+  // them unavailable HERE too so the UI renders "—" (honest) instead of a fake 0.
+  FACEBOOK: { likeKind: "reactions", reachIsDistinct: true, unavailable: ["impressions", "reach"] },
   INSTAGRAM: { likeKind: "likes", reachIsDistinct: true, unavailable: ["clicks"] },
   YOUTUBE: { likeKind: "likes", reachIsDistinct: false, unavailable: ["reach", "clicks", "shares"] },
   LINKEDIN: { likeKind: "likes", reachIsDistinct: true, unavailable: [] },

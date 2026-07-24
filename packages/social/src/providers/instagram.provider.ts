@@ -282,18 +282,26 @@ export class InstagramProvider extends SocialProvider {
     const comments = mediaData.comments_count || 0;
     const productType = String(mediaData.media_product_type ?? "").toUpperCase();
 
-    // Metric sets per media_product_type. NOTE: Meta deprecated the `impressions`
-    // metric on media insights (Graph API v22, 2025-01-21): requests after
-    // 2025-04-21 for media created on/after 2024-07-02 ERROR. `views` is the
-    // documented replacement, valid for FEED/CAROUSEL/STORY. REELS use `plays`.
-    // REELS: plays/reach/saved/shares/total_interactions.
-    // STORY: views/reach/replies. FEED/CAROUSEL/absent: views/reach/engagement.
+    // Metric sets per media_product_type — LIVE-VERIFIED against the v18 media
+    // insights endpoint on 2026-07-24 (probing each metric name individually on
+    // real REELS/FEED/STORY media). Meta's /insights?metric= is ALL-OR-NOTHING:
+    // a single invalid name fails the WHOLE call with #100 and zeroes every
+    // metric in the set. The old sets each carried an invalid name that silently
+    // broke the whole call — `plays` (REELS) and `engagement` (FEED) both 400
+    // in v18 — so only the reach-only fallback survived and views/saved/shares/
+    // total_interactions were dropped for every post. Corrected, verified-valid:
+    //   REELS / FEED / CAROUSEL_ALBUM / unknown:
+    //     reach,saved,shares,views,likes,comments,total_interactions
+    //   STORY (no saved/likes/comments; adds replies):
+    //     reach,shares,views,total_interactions,replies
+    // Do NOT re-add `plays`, `impressions`, or `engagement` — all invalid in v18.
+    // `views` carries the impressions slot; `total_interactions` the engagement
+    // slot (see the ?? chains below). Verified sample (a real Reel):
+    //   reach=7046, views=11239, shares=3, saved=0, total_interactions=24.
     const metricSet =
-      productType === "REELS"
-        ? "plays,reach,saved,shares,total_interactions"
-        : productType === "STORY"
-          ? "views,reach,replies"
-          : "views,reach,engagement";
+      productType === "STORY"
+        ? "reach,shares,views,total_interactions,replies"
+        : "reach,saved,shares,views,likes,comments,total_interactions";
 
     const metrics: Record<string, number> = {};
     const readInsights = async (metricParam: string): Promise<boolean> => {
@@ -321,8 +329,11 @@ export class InstagramProvider extends SocialProvider {
       await readInsights("reach");
     }
 
-    // views (FEED/STORY) / plays (REELS) ride on the impressions slot — same
-    // "views ride on impressions" convention as YouTube/Threads.
+    // `views` rides on the impressions slot for EVERY product type in v18
+    // (`plays`/`impressions` are invalid names — see the metric-set note above) —
+    // same "views ride on impressions" convention as YouTube/Threads. The
+    // `metrics.impressions ?? metrics.plays` fallbacks are dead in v18 but kept
+    // harmless in case a future API version restores those names.
     const impressions = metrics.views ?? metrics.impressions ?? metrics.plays ?? 0;
     const totalEngagement = metrics.engagement ?? metrics.total_interactions ?? likes + comments;
     const engagementRate = impressions > 0 ? totalEngagement / impressions : 0;
