@@ -153,8 +153,8 @@ export default function MediaPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold tracking-tight">Media Library</h1>
           <p className="text-muted-foreground">
             Upload images &amp; videos, then attach them to any post
@@ -171,7 +171,7 @@ export default function MediaPage() {
           multiple
           onChange={handleUpload}
         />
-        <div className="flex items-center gap-3">
+        <div className="flex shrink-0 items-center gap-3">
           {uploadProgress && (
             <span className="max-w-[180px] truncate text-xs text-muted-foreground">
               {uploadProgress.name} — {uploadProgress.percent}%

@@ -1016,13 +1016,13 @@ ${content}`;
           {/* Create with AI */}
           <Card className="border-purple-200 bg-gradient-to-r from-purple-50/50 to-blue-50/50 dark:border-purple-900 dark:from-purple-950/20 dark:to-blue-950/20">
             <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Sparkles className="h-4 w-4 text-purple-500" />
+              <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+                <div className="flex min-w-0 items-center gap-2">
+                  <Sparkles className="h-4 w-4 shrink-0 text-purple-500" />
                   <CardTitle className="text-base">Create with AI</CardTitle>
                 </div>
                 {aiConfig?.anyConfigured && (
-                  <span className="text-[11px] text-muted-foreground">
+                  <span className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground">
                     via {aiConfig.anthropic ? "Claude" : aiConfig.openai ? "GPT-4" : "Gemini"}
                   </span>
                 )}
@@ -1064,11 +1064,11 @@ ${content}`;
           {/* Content Editor */}
           <Card>
             <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2">
                 <CardTitle className="text-base">Content</CardTitle>
                 <div className="flex items-center gap-2">
                   {aiConfig?.anyConfigured && (
-                    <span className="text-[11px] text-muted-foreground">
+                    <span className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground">
                       via {aiConfig.anthropic ? "Claude" : aiConfig.openai ? "GPT-4" : "Gemini"}
                     </span>
                   )}
@@ -1077,7 +1077,7 @@ ${content}`;
                     size="sm"
                     onClick={handleAIGenerate}
                     disabled={isGenerating || !content || !aiConfig?.anyConfigured}
-                    className="gap-1.5"
+                    className="shrink-0 gap-1.5"
                     title={!aiConfig?.anyConfigured ? "No AI provider configured — add an API key to enable" : undefined}
                   >
                     {isGenerating ? (

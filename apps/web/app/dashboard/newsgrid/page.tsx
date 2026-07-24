@@ -629,17 +629,17 @@ function NewsGridPageInner() {
   return (
     <div className="mx-auto max-w-5xl space-y-6 pb-16">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
           <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight">
-            <Zap className="h-6 w-6 text-yellow-500" />
+            <Zap className="h-6 w-6 shrink-0 text-yellow-500" />
             NewsGrid Bot
           </h1>
           <p className="text-sm text-muted-foreground">
             One headline → unique branded posts for all your channels
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           <Link href="/dashboard/newsgrid/logos">
             <Button variant="outline" size="sm">
               <ImageIcon className="mr-1.5 h-3.5 w-3.5" />

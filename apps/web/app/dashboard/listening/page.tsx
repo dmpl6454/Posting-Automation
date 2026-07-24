@@ -182,8 +182,8 @@ function ListeningPageInner() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
           <h1 className="text-2xl font-semibold tracking-tight">Social Listening</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Monitor brand mentions, sentiment, and competitor activity
@@ -191,7 +191,7 @@ function ListeningPageInner() {
         </div>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
-            <Button>
+            <Button className="shrink-0">
               <Plus className="mr-2 h-4 w-4" />
               New Query
             </Button>
@@ -530,12 +530,12 @@ function ListeningPageInner() {
                   >
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium truncate">{q.name}</p>
-                      <p className="text-[10px] text-muted-foreground">
+                      <p className="truncate text-[10px] text-muted-foreground">
                         {q.keywords.slice(0, 3).join(", ")}
                         {q._count.mentions > 0 && ` · ${q._count.mentions} mentions`}
                       </p>
                     </div>
-                    <div className="flex items-center gap-1">
+                    <div className="flex shrink-0 items-center gap-1">
                       <Button
                         size="icon"
                         variant="ghost"

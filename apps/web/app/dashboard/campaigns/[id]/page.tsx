@@ -142,8 +142,8 @@ export default function CampaignDetailPage() {
           <ArrowLeft className="h-3.5 w-3.5" />
           Back to Campaigns
         </Link>
-        <div className="flex items-center justify-between gap-3">
-          <h1 className="text-2xl font-semibold tracking-tight">{campaign.name}</h1>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h1 className="min-w-0 truncate text-2xl font-semibold tracking-tight">{campaign.name}</h1>
           <div
             className="flex items-center gap-2 shrink-0"
             title={totalTrackers === 0 ? "Add a brand below to enable monitoring" : monitoring ? "Monitoring on — fetching new content ~6h" : "Monitoring off"}
@@ -259,13 +259,13 @@ export default function CampaignDetailPage() {
           {campaign.brandTrackers.length > 0 ? (
             <div className="space-y-3">
               {campaign.brandTrackers.map((brand) => (
-                <div key={brand.id} className="group flex items-center justify-between rounded-xl border border-border/30 bg-background/40 p-3">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h4 className="text-sm font-semibold">{brand.brandName}</h4>
-                      <span className="text-xs text-muted-foreground">{brand._count.contentItems} items</span>
+                <div key={brand.id} className="group flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-xl border border-border/30 bg-background/40 p-3">
+                  <div className="min-w-0 flex-1 basis-40">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <h4 className="truncate text-sm font-semibold">{brand.brandName}</h4>
+                      <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">{brand._count.contentItems} items</span>
                       <Badge
-                        className={`text-[10px] ${brand.isActive ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300" : "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400"}`}
+                        className={`shrink-0 text-[10px] ${brand.isActive ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300" : "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400"}`}
                       >
                         {brand.isActive ? "Monitoring" : "Paused"}
                       </Badge>
@@ -278,7 +278,7 @@ export default function CampaignDetailPage() {
                       {brand.tiktokHandle && <Badge variant="outline" className="text-[10px] gap-1"><Globe className="h-2.5 w-2.5" />{brand.tiktokHandle}</Badge>}
                     </div>
                   </div>
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <div className="flex shrink-0 items-center gap-1 opacity-100 transition-opacity [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100">
                     {brand.isActive ? (
                       <Button size="icon" variant="ghost" className="h-7 w-7" title="Pause syncing" onClick={() => updateBrand.mutate({ id: brand.id, isActive: false })}>
                         <Pause className="h-3 w-3" />
@@ -361,25 +361,25 @@ export default function CampaignDetailPage() {
           <CardContent>
             <div className="space-y-3">
               {relatedInfluencers.map((inf) => (
-                <div key={inf.id} className="group flex items-center gap-3 rounded-xl border border-border/30 bg-background/40 p-3">
+                <div key={inf.id} className="group flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-border/30 bg-background/40 p-3">
                   <div className="h-9 w-9 rounded-full bg-gradient-to-br from-violet-500 to-pink-500 flex items-center justify-center text-white text-xs font-bold shrink-0">
                     {inf.name.charAt(0).toUpperCase()}
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold">{inf.name}</span>
-                      <Badge className={`text-[10px] ${influencerStatusColors[inf.status] ?? ""}`}>{inf.status}</Badge>
-                      {platformIcons[inf.platform] || <Globe className="h-3 w-3" />}
+                  <div className="flex-1 min-w-0 basis-40">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <span className="truncate text-sm font-semibold">{inf.name}</span>
+                      <Badge className={`shrink-0 text-[10px] ${influencerStatusColors[inf.status] ?? ""}`}>{inf.status}</Badge>
+                      <span className="shrink-0">{platformIcons[inf.platform] || <Globe className="h-3 w-3" />}</span>
                     </div>
-                    <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                      <span>@{inf.handle}</span>
-                      <span>{inf.followers.toLocaleString()} followers</span>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+                      <span className="truncate max-w-full">@{inf.handle}</span>
+                      <span className="whitespace-nowrap">{inf.followers.toLocaleString()} followers</span>
                       {inf.relevanceScore > 0 && (
-                        <span className="flex items-center gap-0.5"><Star className="h-3 w-3 text-amber-500" />{inf.relevanceScore.toFixed(0)}</span>
+                        <span className="flex shrink-0 items-center gap-0.5"><Star className="h-3 w-3 text-amber-500" />{inf.relevanceScore.toFixed(0)}</span>
                       )}
                     </div>
                   </div>
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <div className="flex shrink-0 items-center gap-1 opacity-100 transition-opacity [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100">
                     {inf.status === "discovered" && (
                       <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => updateInfluencer.mutate({ id: inf.id, status: "shortlisted" })}>
                         Shortlist

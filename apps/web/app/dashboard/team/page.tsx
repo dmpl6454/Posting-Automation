@@ -142,8 +142,8 @@ function TeamPageInner() {
       {usage && !usage.teamMembers.allowed && (
         <Alert className="border-amber-500/50 bg-amber-50 dark:bg-amber-950/20">
           <Zap className="h-4 w-4 text-amber-600" />
-          <AlertDescription className="flex items-center justify-between gap-4">
-            <span className="text-amber-800 dark:text-amber-200 text-sm">
+          <AlertDescription className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+            <span className="min-w-0 text-amber-800 dark:text-amber-200 text-sm">
               You&apos;ve reached the <strong>{usage.teamMembers.planName}</strong> plan limit of{" "}
               <strong>{usage.teamMembers.limit} team member{usage.teamMembers.limit !== 1 ? "s" : ""}</strong>.
               Upgrade to invite more.
@@ -218,8 +218,8 @@ function TeamPageInner() {
                 const isCurrentUser = member.user.id === me?.id;
 
                 return (
-                  <div key={member.id} className="flex items-center gap-4 px-6 py-4">
-                    <Avatar className="h-10 w-10">
+                  <div key={member.id} className="flex items-center gap-3 px-4 py-4 sm:gap-4 sm:px-6">
+                    <Avatar className="h-10 w-10 shrink-0">
                       <AvatarFallback className="text-xs">{initials}</AvatarFallback>
                     </Avatar>
                     <div className="flex-1 min-w-0">
@@ -229,7 +229,7 @@ function TeamPageInner() {
                           <span className="ml-2 text-xs text-muted-foreground font-normal">(you)</span>
                         )}
                       </p>
-                      <p className="text-xs text-muted-foreground">{member.user.email}</p>
+                      <p className="truncate text-xs text-muted-foreground">{member.user.email}</p>
                     </div>
 
                     {/* Role selector (owner can change non-owner roles) */}
@@ -240,7 +240,7 @@ function TeamPageInner() {
                           updateRole.mutate({ memberId: member.id, role: newRole })
                         }
                       >
-                        <SelectTrigger className="w-full sm:w-28 h-8 text-xs">
+                        <SelectTrigger className="h-8 w-24 shrink-0 text-xs sm:w-28">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -249,7 +249,7 @@ function TeamPageInner() {
                         </SelectContent>
                       </Select>
                     ) : (
-                      <Badge variant={config.variant}>{member.role}</Badge>
+                      <Badge variant={config.variant} className="shrink-0">{member.role}</Badge>
                     )}
 
                     {/* Actions dropdown — shown for non-owner members when viewer is current owner */}
