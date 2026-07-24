@@ -239,7 +239,7 @@ function LeadCard({ lead, onApprove, onReject, onView, isApproving, isRejecting 
         <div className="flex items-center justify-between mt-2.5 gap-2 flex-wrap">
           <ChannelDots lead={lead} />
 
-          <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          <div className="flex items-center gap-1.5 opacity-100 transition-opacity [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100">
             <Button size="sm" variant="ghost" className="h-7 px-2 text-xs gap-1" onClick={onView}>
               <Eye className="h-3 w-3" /> Preview
             </Button>

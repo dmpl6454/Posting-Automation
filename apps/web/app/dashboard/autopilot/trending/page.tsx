@@ -66,14 +66,14 @@ export default function TrendingPage() {
       {/* Fix #50: show last-discovered timestamp and workflow hint */}
       <Alert>
         <Info className="h-4 w-4" />
-        <AlertDescription className="flex items-center justify-between gap-4">
-          <span>
+        <AlertDescription className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5">
+          <span className="min-w-0">
             Trending items are discovered by the Autopilot pipeline. Go to{" "}
             <a href="/dashboard/autopilot" className="underline underline-offset-2">Autopilot</a>{" "}
             and click <em>Run Pipeline Now</em> to refresh.
           </span>
           {lastUpdatedAt && (
-            <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+            <span className="flex shrink-0 items-center gap-1 whitespace-nowrap text-xs text-muted-foreground">
               <Clock className="h-3 w-3" />
               Last discovered {formatDistanceToNow(new Date(lastUpdatedAt), { addSuffix: true })}
             </span>

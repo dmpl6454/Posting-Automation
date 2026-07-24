@@ -570,15 +570,15 @@ export default function ChannelsPage() {
       )}
 
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold tracking-tight">Channels</h1>
           <p className="text-muted-foreground">
             Connect and manage the social media accounts in this workspace
           </p>
         </div>
         {totalChannels > 0 && (
-          <div className="flex flex-wrap items-center justify-end gap-3">
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-3">
             <Button
               variant="outline"
               size="sm"
@@ -669,7 +669,7 @@ export default function ChannelsPage() {
                     button-in-button HTML. The icon/title region carries the
                     expand/collapse click + keyboard handlers. */}
                 <div
-                  className="flex w-full items-center gap-4 p-4 text-left transition-colors hover:bg-muted/50"
+                  className="flex w-full items-center gap-2.5 p-3 text-left transition-colors hover:bg-muted/50 sm:gap-4 sm:p-4"
                 >
                   {/* Select-all-in-platform checkbox — sibling of the toggle
                       region, never a descendant of a button */}
@@ -701,7 +701,7 @@ export default function ChannelsPage() {
                         toggleExpanded(platform);
                       }
                     }}
-                    className="flex min-w-0 flex-1 items-center gap-4 text-left"
+                    className="flex min-w-0 flex-1 items-center gap-2.5 text-left sm:gap-4"
                   >
                   <PlatformIcon platform={platform} size="lg" />
                   <div className="min-w-0 flex-1">

@@ -195,21 +195,21 @@ export function PostsTab({ onSwitchTab }: PostsTabProps) {
                 className="cursor-pointer"
               >
                 <Card className="transition-colors hover:bg-muted/50">
-                  <CardContent className="flex items-center gap-4 p-4">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted">
+                  <CardContent className="flex items-center gap-3 p-4 sm:gap-4">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted">
                       <StatusIcon className="h-5 w-5 text-muted-foreground" />
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="truncate font-medium">
                         {post.content.slice(0, 100)}
                       </p>
-                      <div className="mt-1 flex items-center gap-3 text-xs text-muted-foreground">
-                        <span>
+                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+                        <span className="whitespace-nowrap">
                           {post.targets.length} channel
                           {post.targets.length !== 1 ? "s" : ""}
                         </span>
                         {post.scheduledAt && (
-                          <span>
+                          <span className="whitespace-nowrap">
                             Scheduled:{" "}
                             {format(
                               new Date(post.scheduledAt),
@@ -219,13 +219,14 @@ export function PostsTab({ onSwitchTab }: PostsTabProps) {
                         )}
                       </div>
                     </div>
-                    <Badge variant={config.variant}>
+                    <Badge variant={config.variant} className="shrink-0 whitespace-nowrap">
                       {post.status.charAt(0) + post.status.slice(1).toLowerCase()}
                     </Badge>
                     {showArchived ? (
                       <Button
                         variant="ghost"
                         size="sm"
+                        className="shrink-0"
                         title="Restore from archive"
                         disabled={unarchiveMut.isPending}
                         onClick={(e) => {
@@ -239,6 +240,7 @@ export function PostsTab({ onSwitchTab }: PostsTabProps) {
                       <Button
                         variant="ghost"
                         size="sm"
+                        className="shrink-0"
                         title="Archive post"
                         disabled={archiveMut.isPending}
                         onClick={(e) => {

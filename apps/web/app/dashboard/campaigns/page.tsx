@@ -185,14 +185,14 @@ function CampaignsPageInner() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
           <h1 className="text-2xl font-semibold tracking-tight">Campaigns</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Monitor brands and competitors for new content, and discover influencers. Monitoring fetches their recent posts every ~6 hours. Campaigns don&apos;t schedule your own posts.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex shrink-0 gap-2">
           {activeTab === "campaigns" && (
             <Dialog open={campaignDialogOpen} onOpenChange={setCampaignDialogOpen}>
               <DialogTrigger asChild>
@@ -664,35 +664,35 @@ function CampaignsPageInner() {
             ) : influencers && influencers.length > 0 ? (
               influencers.map((inf) => (
                 <div key={inf.id} className="group rounded-2xl border border-border/40 bg-card/50 p-4 transition-all hover:border-border/60 hover:shadow-sm">
-                  <div className="flex items-center gap-4">
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
                     <div className="h-10 w-10 rounded-full bg-gradient-to-br from-violet-500 to-pink-500 flex items-center justify-center text-white text-sm font-bold shrink-0">
                       {inf.name.charAt(0).toUpperCase()}
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <h4 className="text-sm font-semibold">{inf.name}</h4>
-                        <Badge className={`text-[10px] ${influencerStatusColors[inf.status] ?? ""}`}>
+                    <div className="flex-1 min-w-0 basis-40">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                        <h4 className="truncate text-sm font-semibold">{inf.name}</h4>
+                        <Badge className={`shrink-0 text-[10px] ${influencerStatusColors[inf.status] ?? ""}`}>
                           {inf.status}
                         </Badge>
-                        <Badge variant="outline" className="text-[10px] gap-1">
+                        <Badge variant="outline" className="shrink-0 text-[10px] gap-1">
                           {platformIcons[inf.platform] || <Globe className="h-3 w-3" />}
                           {inf.platform}
                         </Badge>
                       </div>
-                      <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
-                        <span>@{inf.handle}</span>
-                        <span>{inf.followers.toLocaleString()} followers</span>
-                        <span>{inf.avgEngagement.toFixed(0)} avg engagement</span>
-                        {inf.niche && <span className="text-blue-600">{inf.niche}</span>}
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1 text-xs text-muted-foreground">
+                        <span className="truncate max-w-full">@{inf.handle}</span>
+                        <span className="whitespace-nowrap">{inf.followers.toLocaleString()} followers</span>
+                        <span className="whitespace-nowrap">{inf.avgEngagement.toFixed(0)} avg engagement</span>
+                        {inf.niche && <span className="truncate text-blue-600">{inf.niche}</span>}
                         {inf.relevanceScore > 0 && (
-                          <span className="flex items-center gap-0.5">
+                          <span className="flex shrink-0 items-center gap-0.5">
                             <Star className="h-3 w-3 text-amber-500" />
                             {inf.relevanceScore.toFixed(0)}
                           </span>
                         )}
                       </div>
                     </div>
-                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="flex shrink-0 items-center gap-1 opacity-100 transition-opacity [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100">
                       {(() => {
                         const updating = updateInfluencer.isPending && updateInfluencer.variables?.id === inf.id;
                         const removing = deleteInfluencer.isPending && deleteInfluencer.variables?.id === inf.id;
