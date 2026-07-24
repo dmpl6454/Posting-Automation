@@ -116,10 +116,46 @@ export interface PostReportRow {
 }
 
 /**
+ * Per-row honesty gate for Reports rows. Applies the SAME per-platform capability
+ * rule as the Channel Performance table (metricCellValue → platformMetricCapabilities):
+ * a metric the platform NEVER reports (e.g. FB impressions/reach — Meta deleted
+ * those metrics) must render "—", not a fake 0. The provider stores 0 for these,
+ * so without this Reports would show "0" while Channel Performance shows "—" for
+ * the same data. Coercing to null makes the table (num()), the CSV export, and the
+ * emailed report all honest. Also re-Numbers SQL bigints for superjson/UI.
+ * Pure + testable (report-metric-gate.test.ts).
+ */
+export function gatePostReportRow(r: PostReportRow): PostReportRow {
+  const caps = platformMetricCapabilities(r.platform);
+  const unavail = new Set(caps.unavailable);
+  // Reach that is not a distinct metric (aliased from impressions) is also "—".
+  const reachUnavailable = unavail.has("reach") || caps.reachIsDistinct === false;
+  const gate = (
+    key: "impressions" | "reach" | "likes" | "comments" | "shares" | "clicks",
+    v: number | null
+  ): number | null => {
+    if (v === null || v === undefined) return null;
+    if (key === "reach" ? reachUnavailable : unavail.has(key)) return null;
+    return Number(v);
+  };
+  return {
+    ...r,
+    impressions: gate("impressions", r.impressions),
+    clicks: gate("clicks", r.clicks),
+    likes: gate("likes", r.likes),
+    comments: gate("comments", r.comments),
+    shares: gate("shares", r.shares),
+    reach: gate("reach", r.reach),
+    engagementRate: r.engagementRate === null ? null : Number(r.engagementRate),
+  };
+}
+
+/**
  * Shared row-builder for Insights → Reports (postReports query + emailReport
  * mutation). Extracted VERBATIM from postReports 2026-07-18 — the SQL, window
  * semantics, and normalization are byte-identical to the pre-extraction query.
  * organizationId is ALWAYS in the WHERE (IDOR history — keep it).
+ * Post-SQL rows pass through gatePostReportRow for per-platform honesty.
  */
 async function fetchPostReportRows(
   prisma: PrismaClient,
@@ -192,17 +228,9 @@ async function fetchPostReportRows(
     ...params
   );
 
-  // Numeric SQL aggregates can surface as bigints — normalize for superjson/UI.
-  return rows.map((r) => ({
-    ...r,
-    impressions: r.impressions === null ? null : Number(r.impressions),
-    clicks: r.clicks === null ? null : Number(r.clicks),
-    likes: r.likes === null ? null : Number(r.likes),
-    comments: r.comments === null ? null : Number(r.comments),
-    shares: r.shares === null ? null : Number(r.shares),
-    reach: r.reach === null ? null : Number(r.reach),
-    engagementRate: r.engagementRate === null ? null : Number(r.engagementRate),
-  }));
+  // Numeric SQL aggregates can surface as bigints — normalize for superjson/UI,
+  // then apply the per-platform honesty gate (see gatePostReportRow).
+  return rows.map(gatePostReportRow);
 }
 
 export const analyticsRouter = createRouter({

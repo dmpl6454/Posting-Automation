@@ -28,6 +28,19 @@ describe("platformMetricCapabilities", () => {
     expect(platformMetricCapabilities("FACEBOOK").unavailable).not.toContain("clicks");
   });
 
+  it("marks FB impressions AND reach unavailable — Meta deleted those metrics (render '—', not a fake 0)", () => {
+    // Live-verified 2026-07-24: FB post_impressions*/reach 400 #100 for admin AND
+    // external tokens. The provider hardcodes 0; the UI must render "—".
+    const fb = platformMetricCapabilities("FACEBOOK");
+    expect(fb.unavailable).toContain("impressions");
+    expect(fb.unavailable).toContain("reach");
+    // reactions/comments/shares/clicks DO work on FB → stay available.
+    expect(fb.unavailable).not.toContain("likes");
+    expect(fb.unavailable).not.toContain("comments");
+    expect(fb.unavailable).not.toContain("shares");
+    expect(fb.unavailable).not.toContain("clicks");
+  });
+
   it("returns all-unavailable for platforms with no analytics API", () => {
     for (const p of NO_ANALYTICS_PLATFORMS) {
       const caps = platformMetricCapabilities(p);
