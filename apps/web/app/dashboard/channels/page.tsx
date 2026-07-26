@@ -723,7 +723,7 @@ export default function ChannelsPage() {
                         {activeCount} active
                       </Badge>
                     </div>
-                    <p className="text-sm text-muted-foreground">
+                    <p className="truncate text-sm text-muted-foreground">
                       {info?.description ?? "Social media platform"}
                     </p>
                   </div>
@@ -740,11 +740,12 @@ export default function ChannelsPage() {
                   <Button
                     variant="outline"
                     size="sm"
-                    className="mr-2 shrink-0"
+                    className="mr-1 shrink-0 px-2 sm:mr-2 sm:px-3"
                     onClick={() => handleConnect(platform)}
+                    aria-label={`Add ${info?.name ?? platform} account`}
                   >
-                    <Plus className="mr-1 h-3.5 w-3.5" />
-                    Add
+                    <Plus className="h-3.5 w-3.5 sm:mr-1" />
+                    <span className="hidden sm:inline">Add</span>
                   </Button>
                 </div>
 

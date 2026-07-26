@@ -308,75 +308,80 @@ function FeedCard({
   return (
     <Card>
       <CardContent className="p-4">
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <div className="flex items-start gap-3 sm:gap-4">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-orange-100 text-orange-600 dark:bg-orange-950 dark:text-orange-400">
             <Rss className="h-5 w-5" />
           </div>
-          <div className="min-w-0 flex-1 basis-40">
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <p className="truncate font-medium">{feed.name}</p>
-              <Badge variant={feed.isActive ? "default" : "secondary"} className="shrink-0 text-[10px]">
+          <div className="min-w-0 flex-1">
+            {/* Row 1: name + action buttons */}
+            <div className="flex items-center gap-2">
+              <p className="min-w-0 flex-1 truncate font-medium">{feed.name}</p>
+              <div className="flex shrink-0 items-center gap-0.5">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={onCheckNow}
+                  disabled={isCheckingNow}
+                  title="Check Now"
+                >
+                  <RefreshCw className={`h-4 w-4 ${isCheckingNow ? "animate-spin" : ""}`} />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-destructive hover:text-destructive"
+                  onClick={onDelete}
+                  title="Delete Feed"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={onToggleExpand}
+                  title={isExpanded ? "Collapse" : "Expand"}
+                >
+                  {isExpanded ? (
+                    <ChevronUp className="h-4 w-4" />
+                  ) : (
+                    <ChevronDown className="h-4 w-4" />
+                  )}
+                </Button>
+              </div>
+            </div>
+
+            {/* Row 2: status badges */}
+            <div className="mt-1 flex flex-wrap items-center gap-1.5">
+              <Badge variant={feed.isActive ? "default" : "secondary"} className="text-[10px]">
                 {feed.isActive ? "Active" : "Paused"}
               </Badge>
               {feed.autoPost && (
-                <Badge variant="outline" className="shrink-0 text-[10px]">
+                <Badge variant="outline" className="text-[10px]">
                   Auto-Post
                 </Badge>
               )}
             </div>
-            <p className="truncate text-xs text-muted-foreground">{feed.url}</p>
-          </div>
-          <div className="flex shrink-0 items-center gap-3 text-sm text-muted-foreground">
-            <div className="text-right">
-              <p className="text-xs">
-                {feed._count?.entries ?? 0} entries
-              </p>
-              <p className="flex items-center gap-1 text-[10px]">
-                <Clock className="h-3 w-3" />
+
+            {/* Row 3: url */}
+            <p className="mt-1 truncate text-xs text-muted-foreground">{feed.url}</p>
+
+            {/* Row 4: meta */}
+            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+              <span>{feed._count?.entries ?? 0} entries</span>
+              <span className="flex items-center gap-1">
+                <Clock className="h-3 w-3 shrink-0" />
                 {feed.lastCheckedAt
                   ? `Checked ${new Date(feed.lastCheckedAt).toLocaleDateString()}`
                   : "Never checked"}
-              </p>
+              </span>
               {feed.lastSyncStatus === "FAILED" && (
-                <p className="text-[10px] text-red-600" title={feed.lastSyncError ?? ""}>
+                <span className="text-red-600" title={feed.lastSyncError ?? ""}>
                   ⚠ Last sync failed{feed.lastSyncError ? `: ${feed.lastSyncError.slice(0, 80)}` : ""}
-                </p>
+                </span>
               )}
             </div>
-          </div>
-          <div className="flex shrink-0 items-center gap-1">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8"
-              onClick={onCheckNow}
-              disabled={isCheckingNow}
-              title="Check Now"
-            >
-              <RefreshCw className={`h-4 w-4 ${isCheckingNow ? "animate-spin" : ""}`} />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 text-destructive hover:text-destructive"
-              onClick={onDelete}
-              title="Delete Feed"
-            >
-              <Trash2 className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8"
-              onClick={onToggleExpand}
-              title={isExpanded ? "Collapse" : "Expand"}
-            >
-              {isExpanded ? (
-                <ChevronUp className="h-4 w-4" />
-              ) : (
-                <ChevronDown className="h-4 w-4" />
-              )}
-            </Button>
           </div>
         </div>
 
