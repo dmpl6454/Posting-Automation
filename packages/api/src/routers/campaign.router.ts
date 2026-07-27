@@ -140,6 +140,16 @@ export const campaignRouter = createRouter({
     }))
     .mutation(async ({ ctx, input }) => {
       await gateCampaigns(ctx);
+      // IDOR guard (2026-07-27): campaignId arrives from the client and was spread
+      // straight into `data`, so a tracker could be FK-attached to ANOTHER org's
+      // campaign. Mirrors the existing brandTrackerId guard in `brandContent`.
+      if (input.campaignId) {
+        const owned = await ctx.prisma.campaign.findFirst({
+          where: { id: input.campaignId, organizationId: ctx.organizationId },
+          select: { id: true },
+        });
+        if (!owned) throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
+      }
       return ctx.prisma.brandTracker.create({
         data: { organizationId: ctx.organizationId, ...input },
       });
@@ -163,6 +173,14 @@ export const campaignRouter = createRouter({
     .mutation(async ({ ctx, input }) => {
       await gateCampaigns(ctx);
       const { id, ...data } = input;
+      // Same cross-org campaignId guard as createBrand above (null = detach, allowed).
+      if (data.campaignId) {
+        const owned = await ctx.prisma.campaign.findFirst({
+          where: { id: data.campaignId, organizationId: ctx.organizationId },
+          select: { id: true },
+        });
+        if (!owned) throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
+      }
       return ctx.prisma.brandTracker.update({
         where: { id, organizationId: ctx.organizationId },
         data,

@@ -113,6 +113,13 @@ export interface PostReportRow {
   reach: number | null;
   engagementRate: number | null;
   snapshotAt: Date | null;
+  /**
+   * The captured snapshot's own honesty metadata (AnalyticsSnapshot.metadata,
+   * written by apps/worker/src/lib/snapshot-metadata.ts). Optional: legacy rows
+   * and non-snapshot rows have none. See gatePostReportRow for why it wins over
+   * the static per-platform map.
+   */
+  snapshotMetadata?: { metricsAvailable?: Record<string, boolean> } | null;
 }
 
 /**
@@ -124,17 +131,39 @@ export interface PostReportRow {
  * the same data. Coercing to null makes the table (num()), the CSV export, and the
  * emailed report all honest. Also re-Numbers SQL bigints for superjson/UI.
  * Pure + testable (report-metric-gate.test.ts).
+ *
+ * ⚠️ PER-SNAPSHOT metadata OVERRIDES the static platform map (fixed 2026-07-27).
+ * The static map is a platform-wide constant, but capability varies PER POST on
+ * Facebook: a FEED post genuinely has no impressions/reach (Meta deleted those
+ * insight metrics), while a VIDEO/REEL post returns REAL view counts through
+ * `video_insights` (facebook.provider getFacebookVideoAnalytics maps
+ * total_video_views onto the impressions slot) or the reel-scraper fallback —
+ * and those paths deliberately do NOT declare impressions unavailable.
+ * Marking FACEBOOK impressions+reach unavailable in the static map alone (PR #148)
+ * therefore hid real, successfully-captured FB video views behind "—" in Reports,
+ * CSV export and the emailed report. The provider already records the truth per
+ * capture in AnalyticsSnapshot.metadata.metricsAvailable — which, until now, NO
+ * read path consumed. Precedence: explicit `false` ⇒ "—"; metadata present and
+ * the key not false ⇒ trust the captured value; no metadata (legacy rows) ⇒ fall
+ * back to the static map, byte-identical to previous behavior.
  */
 export function gatePostReportRow(r: PostReportRow): PostReportRow {
   const caps = platformMetricCapabilities(r.platform);
   const unavail = new Set(caps.unavailable);
   // Reach that is not a distinct metric (aliased from impressions) is also "—".
   const reachUnavailable = unavail.has("reach") || caps.reachIsDistinct === false;
+  const declared = r.snapshotMetadata?.metricsAvailable;
+  const hasDeclared = declared != null && typeof declared === "object";
   const gate = (
     key: "impressions" | "reach" | "likes" | "comments" | "shares" | "clicks",
     v: number | null
   ): number | null => {
     if (v === null || v === undefined) return null;
+    if (hasDeclared && key in declared!) {
+      // The capture itself told us whether this metric was reported.
+      return declared![key] === false ? null : Number(v);
+    }
+    if (hasDeclared) return Number(v); // capture declared others, not this one ⇒ available
     if (key === "reach" ? reachUnavailable : unavail.has(key)) return null;
     return Number(v);
   };
@@ -209,7 +238,11 @@ async function fetchPostReportRows(
               WHEN s."snapshotAt" IS NOT NULL THEN 0
               ELSE NULL
             END AS "engagementRate",
-            s."snapshotAt"
+            s."snapshotAt",
+            -- Per-capture honesty metadata (metricsAvailable) — gatePostReportRow
+            -- prefers this over the static per-platform map so a real captured
+            -- value (e.g. FB video views) is never hidden as "—".
+            s.metadata        AS "snapshotMetadata"
      FROM "PostTarget" pt
      INNER JOIN "Post" p    ON p.id = pt."postId"
      INNER JOIN "Channel" c ON c.id = pt."channelId"
@@ -497,6 +530,20 @@ export const analyticsRouter = createRouter({
   postMetrics: orgProcedure
     .input(z.object({ postTargetId: z.string() }))
     .query(async ({ ctx, input }) => {
+      // IDOR guard (2026-07-27): orgProcedure proves the CALLER belongs to the
+      // acting org, but said nothing about the supplied postTargetId — any member
+      // could read another org's snapshot history (impressions/likes/comments/
+      // reach) by passing its target id.
+      // NOTE: AnalyticsSnapshot has NO Prisma relation to PostTarget (bare
+      // `postTargetId` column, see schema.prisma) — a nested `postTarget: {...}`
+      // filter does not exist here. Ownership must be proven with a separate
+      // org-scoped lookup on the target's parent post.
+      const owned = await ctx.prisma.postTarget.findFirst({
+        where: { id: input.postTargetId, post: { organizationId: ctx.organizationId } },
+        select: { id: true },
+      });
+      if (!owned) return [];
+
       return ctx.prisma.analyticsSnapshot.findMany({
         where: { postTargetId: input.postTargetId },
         orderBy: { snapshotAt: "desc" },

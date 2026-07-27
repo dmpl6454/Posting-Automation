@@ -14,8 +14,12 @@ export interface ActiveTask {
     channels?: string[];
     /** @deprecated kept for back-compat with persisted payloads — use `media` */
     mediaUrls?: string[];
-    /** Restorable attachments: items with a Media row id or a non-blob URL. */
-    media?: { url: string; mediaId?: string }[];
+    /**
+     * Restorable attachments: items with a Media row id or a non-blob URL.
+     * `superText` is the optional burned-strip config (kept as `unknown` so this
+     * provider stays package-agnostic — ComposeTab re-validates it on restore).
+     */
+    media?: { url: string; mediaId?: string; superText?: unknown }[];
   };
   createdAt: number;
 }

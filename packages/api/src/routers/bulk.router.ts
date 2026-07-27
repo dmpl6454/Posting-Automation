@@ -1,8 +1,14 @@
-// TODO(security): these procedures are protectedProcedure and take the org id from
-// input WITHOUT an OrganizationMember check (pre-existing gap, noted during the
-// 2026-07-17 RBAC sweep). Fix separately: resolve org via orgProcedure ctx instead.
+// SECURITY (fixed 2026-07-27): these procedures were `protectedProcedure` and read
+// `ctx.organizationId` — which comes VERBATIM from the client-controlled
+// `x-organization-id` header (apps/web/app/api/trpc/[trpc]/route.ts) — with NO
+// OrganizationMember check. Any authenticated user could pass another org's id and
+// csvExport its entire post history, or bulkDelete its posts. They are now
+// `orgProcedure`, which enforces a real membership before ctx.organizationId is
+// trusted (packages/api/src/trpc.ts). Do NOT downgrade them back to
+// protectedProcedure — the per-query `organizationId` filters below are only as
+// strong as the membership check that produced that id.
 import { z } from "zod";
-import { createRouter, protectedProcedure } from "../trpc";
+import { createRouter, orgProcedure } from "../trpc";
 import { prisma } from "@postautomation/db";
 import { TRPCError } from "@trpc/server";
 import Papa from "papaparse";
@@ -11,8 +17,19 @@ export const bulkRouter = createRouter({
   /**
    * Schedule multiple posts at once.
    * Updates each post's scheduledAt and sets status to SCHEDULED.
+   *
+   * ⚠️ MUST flip the post's PostTargets too (fixed 2026-07-27). The publish cron
+   * selects `targets: { where: { status: "SCHEDULED" } }`
+   * (apps/worker/src/scheduler/cron-jobs.ts) — BulkTab lists DRAFT posts, whose
+   * targets are also DRAFT (post.create writes targets with the post's status),
+   * so a post-only flip produced an EMPTY target list: the cron enqueued ZERO
+   * publish jobs, flipped the post to PUBLISHING anyway, and ~45 min later the
+   * watchdog reaped it as FAILED. Users saw "N post(s) scheduled successfully"
+   * and nothing ever published. Every other scheduling path (post.create,
+   * csvImport below, autopilot-schedule.worker step 8) flips both rows — keep
+   * this one consistent.
    */
-  bulkSchedule: protectedProcedure
+  bulkSchedule: orgProcedure
     .input(
       z.object({
         items: z
@@ -47,6 +64,14 @@ export const bulkRouter = createRouter({
             status: "SCHEDULED",
           },
         });
+
+        // Flip the post's own targets so the publish cron can actually see them.
+        // Scoped to DRAFT/FAILED only: PUBLISHED/PUBLISHING/CANCELLED targets must
+        // never be resurrected by a re-schedule (that would re-post live content).
+        await prisma.postTarget.updateMany({
+          where: { postId: item.postId, status: { in: ["DRAFT", "FAILED"] } },
+          data: { status: "SCHEDULED", errorMessage: null },
+        });
         scheduled++;
       }
 
@@ -56,7 +81,7 @@ export const bulkRouter = createRouter({
   /**
    * Delete multiple posts that belong to the organization.
    */
-  bulkDelete: protectedProcedure
+  bulkDelete: orgProcedure
     .input(
       z.object({
         postIds: z.array(z.string()).min(1).max(100),
@@ -81,7 +106,7 @@ export const bulkRouter = createRouter({
   /**
    * Change the status of multiple posts to DRAFT or CANCELLED.
    */
-  bulkUpdateStatus: protectedProcedure
+  bulkUpdateStatus: orgProcedure
     .input(
       z.object({
         postIds: z.array(z.string()).min(1).max(100),
@@ -113,7 +138,7 @@ export const bulkRouter = createRouter({
    * Creates Post records and links them to specified channels via PostTarget.
    * Fix #28: uses papaparse for robust multi-line quoted field handling.
    */
-  csvImport: protectedProcedure
+  csvImport: orgProcedure
     .input(
       z.object({
         csvData: z.string().min(1),
@@ -224,7 +249,7 @@ export const bulkRouter = createRouter({
    * Fix #26: CRLF line endings + UTF-8 BOM for Excel compatibility.
    * Fix #27: all fields are properly escaped.
    */
-  csvExport: protectedProcedure
+  csvExport: orgProcedure
     .input(
       z.object({
         status: z.string().optional(),

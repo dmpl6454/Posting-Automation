@@ -1,7 +1,9 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
-import { postPublishQueue, captionFanoutQueue, enqueueScheduledPublishJobs } from "@postautomation/queue";
+import { postPublishQueue, captionFanoutQueue, superTextQueue, enqueueScheduledPublishJobs } from "@postautomation/queue";
+import { superTextMapSchema } from "@postautomation/super-text";
+import { planSuperText, superTextJobId, type SuperTextPlan } from "../lib/super-text";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import crypto from "crypto";
@@ -132,6 +134,11 @@ export const postRouter = createRouter({
           tags: z.array(z.string()).optional(),
           privacyStatus: z.enum(["public", "unlisted", "private"]).optional(),
           videoOverlayText: z.string().optional(),
+          // Super text: per-mediaId strip config (text + emoji + per-word colours
+          // + position), burned into the video by the super-text worker BEFORE
+          // publish. Optional — when absent every path below is byte-identical to
+          // the pre-feature behaviour.
+          superText: superTextMapSchema.optional(),
         }).passthrough().optional(),
       })
     )
@@ -218,7 +225,45 @@ export const postRouter = createRouter({
         scheduledAt: input.scheduledAt ?? null,
       });
 
-      const status = captionFanout.enabled ? "DRAFT" : input.scheduledAt ? "SCHEDULED" : "DRAFT";
+      // Super text: the strip is burned into the video ONCE (a derived Media row
+      // replaces the attachment) before anything publishes, so the post parks as
+      // DRAFT exactly like caption-fanout and the worker owns the flip.
+      let superTextPlan: SuperTextPlan = {
+        enabled: false,
+        parkedSchedule: false,
+        byMediaId: {},
+        oversized: [],
+      };
+      if (input.metadata?.superText && input.mediaIds?.length) {
+        const stRows = await ctx.prisma.media.findMany({
+          where: { id: { in: input.mediaIds } },
+          select: { id: true, fileType: true, fileSize: true },
+        });
+        superTextPlan = planSuperText({
+          superText: input.metadata.superText as any,
+          // fileSize is BigInt on read — Number() at the arithmetic boundary.
+          mediaRows: stRows.map((r) => ({
+            id: r.id,
+            fileType: r.fileType,
+            fileSize: Number(r.fileSize),
+          })),
+          scheduledAt: input.scheduledAt ?? null,
+        });
+        if (superTextPlan.oversized.length > 0) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "Super text is supported for videos up to 950MB. Remove the super text from the large video, or attach a smaller one.",
+          });
+        }
+      }
+
+      const status =
+        captionFanout.enabled || superTextPlan.parkedSchedule
+          ? "DRAFT"
+          : input.scheduledAt
+            ? "SCHEDULED"
+            : "DRAFT";
 
       const post = await ctx.prisma.post.create({
         data: {
@@ -231,12 +276,33 @@ export const postRouter = createRouter({
           aiGenerated: input.aiGenerated,
           aiProvider: input.aiProvider,
           aiPrompt: input.aiPrompt,
-          metadata: (captionFanout.enabled
-            ? {
-                ...(input.metadata ?? {}),
-                captionFanout: { requested: true, pendingSchedule: captionFanout.pendingSchedule },
-              }
-            : (input.metadata ?? undefined)) as any,
+          // Gate metadata. The RAW client `superText` map is stripped and replaced
+          // by the normalized block (validated + attached-video-only), so the DB
+          // never carries configs for media that isn't on this post. With NO gates
+          // and no metadata this evaluates to `undefined` — byte-identical to the
+          // pre-feature write.
+          metadata: (() => {
+            const { superText: _rawSuperText, ...rest } = (input.metadata ?? {}) as Record<
+              string,
+              unknown
+            >;
+            const out: Record<string, unknown> = { ...rest };
+            if (captionFanout.enabled) {
+              out.captionFanout = {
+                requested: true,
+                pendingSchedule: captionFanout.pendingSchedule,
+              };
+            }
+            if (superTextPlan.enabled) {
+              out.superText = {
+                requested: true,
+                pendingBurn: true,
+                parkedSchedule: superTextPlan.parkedSchedule,
+                byMediaId: superTextPlan.byMediaId,
+              };
+            }
+            return (Object.keys(out).length > 0 ? out : undefined) as any;
+          })(),
           targets: {
             create: input.channelIds.map((channelId) => ({
               channelId,
@@ -295,6 +361,31 @@ export const postRouter = createRouter({
       // PR-5: ONE caption-fanout job per post (jobId dedupes re-submits). The
       // worker writes the per-target captions, then flips DRAFT→SCHEDULED for
       // the cron above to pick up.
+      // Super text: ONE burn job per post (jobId dedupes re-submits). The worker
+      // burns each configured video, repoints PostMedia at the derived Media row,
+      // then flips DRAFT→SCHEDULED once no gate remains. Best-effort enqueue —
+      // a Redis blip must never fail post creation; the post stays a DRAFT the
+      // user can retry rather than a scheduled post that publishes un-burned.
+      if (superTextPlan.enabled) {
+        try {
+          await superTextQueue.add(
+            "burn",
+            { postId: post.id, organizationId: ctx.organizationId },
+            {
+              jobId: superTextJobId(post.id),
+              attempts: 2,
+              backoff: { type: "exponential", delay: 60_000 },
+              removeOnComplete: { age: 3600 },
+              removeOnFail: { age: 24 * 3600 },
+            }
+          );
+        } catch (queueErr: any) {
+          console.warn(
+            `[post.create] super-text enqueue failed for ${post.id}: ${queueErr?.message}`
+          );
+        }
+      }
+
       if (captionFanout.enabled) {
         await captionFanoutQueue.add(
           captionFanoutJobId(post.id),
@@ -563,6 +654,18 @@ export const postRouter = createRouter({
         include: { targets: { include: { channel: true } } },
       });
       if (!post) throw new TRPCError({ code: "NOT_FOUND" });
+
+      // Super text: refuse to publish while the burn is still in flight —
+      // otherwise this path would push the ORIGINAL, un-burned video and the
+      // user's placed text would silently never appear. The worker flips the
+      // post to SCHEDULED itself the moment the burn lands.
+      if ((post.metadata as any)?.superText?.pendingBurn === true) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Super text is still being applied to your video. This post will publish automatically as soon as it's ready.",
+        });
+      }
 
       // If specific targetIds provided, use those; otherwise use all FAILED/DRAFT/SCHEDULED targets
       let targetsToPublish = input.targetIds?.length

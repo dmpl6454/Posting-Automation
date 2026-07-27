@@ -105,3 +105,60 @@ describe("gatePostReportRow — per-platform Reports honesty", () => {
     expect(gatePostReportRow(row("FACEBOOK", { engagementRate: null })).engagementRate).toBeNull();
   });
 });
+
+/**
+ * Regression lock (2026-07-27): PER-SNAPSHOT metricsAvailable overrides the static
+ * platform map. PR #148 marked FACEBOOK impressions+reach unavailable platform-wide,
+ * which is right for FEED posts (Meta deleted those insight metrics) but WRONG for
+ * VIDEO/REEL posts, whose real view counts arrive via video_insights /the reel
+ * scraper and land in the impressions slot. Those capture paths deliberately do NOT
+ * declare impressions unavailable — so real, captured data was being hidden as "—".
+ */
+describe("gatePostReportRow — per-snapshot metricsAvailable wins over the static map", () => {
+  it("FB VIDEO: capture did not mark impressions unavailable → real views survive", () => {
+    const g = gatePostReportRow(
+      row("FACEBOOK", {
+        impressions: 11239,
+        snapshotMetadata: { metricsAvailable: { reach: false, shares: false, clicks: false } },
+      })
+    );
+    expect(g.impressions).toBe(11239); // was null before the fix — real views hidden
+    expect(g.reach).toBeNull();
+    expect(g.shares).toBeNull();
+    expect(g.clicks).toBeNull();
+    expect(g.likes).toBe(10);
+  });
+
+  it("FB FEED: capture explicitly marks impressions/reach unavailable → still '—'", () => {
+    const g = gatePostReportRow(
+      row("FACEBOOK", {
+        impressions: 0,
+        reach: 0,
+        snapshotMetadata: {
+          metricsAvailable: { impressions: false, reach: false, comments: false },
+        },
+      })
+    );
+    expect(g.impressions).toBeNull();
+    expect(g.reach).toBeNull();
+    expect(g.comments).toBeNull();
+    expect(g.shares).toBe(3);
+  });
+
+  it("no snapshot metadata (legacy rows) → static platform map, byte-identical behavior", () => {
+    const g = gatePostReportRow(row("FACEBOOK", { snapshotMetadata: null }));
+    expect(g.impressions).toBeNull();
+    expect(g.reach).toBeNull();
+    expect(g.likes).toBe(10);
+  });
+
+  it("an explicitly captured 0 on an AVAILABLE metric stays 0, never '—'", () => {
+    const g = gatePostReportRow(
+      row("FACEBOOK", {
+        impressions: 0,
+        snapshotMetadata: { metricsAvailable: { reach: false } },
+      })
+    );
+    expect(g.impressions).toBe(0);
+  });
+});

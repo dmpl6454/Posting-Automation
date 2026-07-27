@@ -133,8 +133,15 @@ describe("wiring lock — post.create unique-captions path", () => {
   });
 
   it("uniqueCaptions=true parks the post as DRAFT; false keeps today's status expression", () => {
+    // Updated 2026-07-27: super text is a SECOND gate that parks a post as DRAFT
+    // while its video strip is burned, so the expression gained
+    // `|| superTextPlan.parkedSchedule`. The caption-fanout contract this lock
+    // exists to protect is UNCHANGED: captionFanout.enabled still forces DRAFT,
+    // and with neither gate active the status is still
+    // `scheduledAt ? SCHEDULED : DRAFT`. Whitespace-tolerant because the
+    // expression is now multi-line.
     expect(read("post.router.ts")).toMatch(
-      /const status = captionFanout\.enabled \? "DRAFT" : input\.scheduledAt \? "SCHEDULED" : "DRAFT";/
+      /const status =\s*captionFanout\.enabled \|\| superTextPlan\.parkedSchedule\s*\?\s*"DRAFT"\s*:\s*input\.scheduledAt\s*\?\s*"SCHEDULED"\s*:\s*"DRAFT";/
     );
   });
 

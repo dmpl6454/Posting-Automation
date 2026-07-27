@@ -3,6 +3,9 @@
 import { humanizeError } from "~/lib/errors";
 import { withNormalizedVideoMime } from "~/lib/video-mime";
 import { withPosterHint } from "~/lib/video-poster";
+import { superTextConfigSchema, type SuperTextConfig } from "@postautomation/super-text";
+import { buildSuperTextPayload } from "~/lib/super-text-payload";
+import { SuperTextEditor } from "./SuperTextEditor";
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
@@ -120,7 +123,9 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   // PR-5: unique caption per channel (AI) — only meaningful with >1 channel.
   const [uniqueCaptions, setUniqueCaptions] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [postMedia, setPostMedia] = useState<{ url: string; mediaId?: string; file?: File; uploading?: boolean; progress?: number }[]>([]);
+  const [postMedia, setPostMedia] = useState<{ url: string; mediaId?: string; file?: File; uploading?: boolean; progress?: number; superText?: SuperTextConfig }[]>([]);
+  // Index into postMedia whose super text is being edited (null = dialog closed).
+  const [superTextEditIndex, setSuperTextEditIndex] = useState<number | null>(null);
   // Aspect ratio of the first attached video (width/height). Null until measured.
   // Used to block non-vertical videos chosen as YouTube Shorts before publishing,
   // since YouTube only treats 9:16 vertical/square clips as Shorts and the worker
@@ -204,7 +209,14 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
     );
     if (!hasDeepLinkMedia && media.length > 0) {
       setPostMedia((prev) =>
-        prev.length === 0 ? media.map(({ url, mediaId }) => ({ url, mediaId })) : prev
+        prev.length === 0
+          ? media.map(({ url, mediaId, superText }: any) => {
+              // Re-validate: a draft persisted by an older build (or hand-edited
+              // localStorage) must never inject an invalid config into post.create.
+              const parsed = superText ? superTextConfigSchema.safeParse(superText) : null;
+              return { url, mediaId, ...(parsed?.success ? { superText: parsed.data } : {}) };
+            })
+          : prev
       );
       // Reconcile restored ids against the live library (best-effort, mirrors
       // the channel-id reconciliation above): a Media row deleted since the
@@ -238,7 +250,9 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   // JSON write plus an ActiveTaskProvider re-render of the whole subtree,
   // several times per second for the duration of a video upload.
   const draftMediaSignature = useMemo(
-    () => JSON.stringify(postMedia.map((m) => [m.url, m.mediaId ?? null])),
+    // superText included so an overlay edit re-persists the draft; still a
+    // STRING (never the postMedia array identity — see the comment above).
+    () => JSON.stringify(postMedia.map((m) => [m.url, m.mediaId ?? null, m.superText ?? null])),
     [postMedia]
   );
   useEffect(() => {
@@ -257,7 +271,11 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
           // completed uploads) — blob-only tiles can't survive a remount.
           media: postMedia
             .filter((m) => m.mediaId || (m.url && !m.url.startsWith("blob:")))
-            .map(({ url, mediaId }) => ({ url, mediaId })),
+            .map(({ url, mediaId, superText }) => ({
+              url,
+              mediaId,
+              ...(superText ? { superText } : {}),
+            })),
         },
         createdAt: getTask(TASK_ID)?.createdAt || Date.now(),
       });
@@ -920,6 +938,12 @@ ${content}`;
       // the create) if an attached image can't be saved — no silent media-less post.
       const mediaIds = await resolvePostMediaIds();
 
+      // Super text: key each config by its RESOLVED media id. resolvePostMediaIds
+      // pushes exactly one id per postMedia item (or throws), so index i lines up
+      // with postMedia[i]. Re-validated here so a stale restored draft can never
+      // 400 the whole post — an invalid config is simply dropped.
+      const superTextByMediaId = buildSuperTextPayload(postMedia, mediaIds);
+
       createPost.mutate({
         content,
         channelIds: selectedChannels,
@@ -936,7 +960,13 @@ ${content}`;
         ...(uniqueCaptions && selectedChannels.length > 1 && { uniqueCaptions: true }),
         ...(mediaIds.length > 0 && { mediaIds }),
         ...(Object.keys(formatByChannelId).length > 0 && { formatByChannelId }),
-        ...(Object.keys(ytMetadata).length > 0 && { metadata: ytMetadata }),
+        ...(() => {
+          const md = {
+            ...ytMetadata,
+            ...(Object.keys(superTextByMediaId).length > 0 ? { superText: superTextByMediaId } : {}),
+          };
+          return Object.keys(md).length > 0 ? { metadata: md } : {};
+        })(),
       });
     } catch (err: any) {
       toast({
@@ -1307,6 +1337,20 @@ ${content}`;
                             className="absolute bottom-0 left-0 right-0 bg-black/50 py-0.5 text-center text-[10px] text-white opacity-100 [@media(hover:hover)]:opacity-0 transition-opacity [@media(hover:hover)]:group-hover:opacity-100"
                           >
                             Edit
+                          </button>
+                        )}
+                        {/* Super text — videos only. Controls stay visible on
+                            touch devices ([@media(hover:hover)] gates the
+                            hover-reveal so desktop is pixel-identical). */}
+                        {isVideo && (
+                          <button
+                            type="button"
+                            onClick={() => setSuperTextEditIndex(idx)}
+                            className={`absolute bottom-0 left-0 right-0 py-0.5 text-center text-[10px] text-white opacity-100 transition-opacity [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 ${
+                              item.superText ? "bg-primary/80 font-semibold" : "bg-black/50"
+                            }`}
+                          >
+                            {item.superText ? "Super text ✓" : "Super text"}
                           </button>
                         )}
                       </div>
@@ -1687,10 +1731,17 @@ ${content}`;
                   // real mediaId. Throws if an image can't be saved → we block the
                   // create instead of silently saving a draft with no image (the bug).
                   const mediaIds = await resolvePostMediaIds();
+                  // Carry super text on the draft path too, so a saved draft keeps
+                  // the strip the user placed (the burn runs now; the draft simply
+                  // isn't scheduled, so there is no flip to wait for).
+                  const superTextByMediaId = buildSuperTextPayload(postMedia, mediaIds);
                   createPost.mutate({
                     content,
                     channelIds: selectedChannels.length > 0 ? selectedChannels : [],
                     ...(mediaIds.length > 0 && { mediaIds }),
+                    ...(Object.keys(superTextByMediaId).length > 0 && {
+                      metadata: { superText: superTextByMediaId },
+                    }),
                   });
                 } catch (err: any) {
                   toast({
@@ -1768,6 +1819,26 @@ ${content}`;
         onSelect={handleMediaLibrarySelect}
         title="Attach Image from Library"
       />
+      {/* Super text editor — mounted only while open so its aspect probe and
+          ResizeObserver don't exist for the (common) no-super-text case. */}
+      {superTextEditIndex !== null && postMedia[superTextEditIndex] && (
+        <SuperTextEditor
+          open
+          onOpenChange={(o) => {
+            if (!o) setSuperTextEditIndex(null);
+          }}
+          videoUrl={postMedia[superTextEditIndex]!.url}
+          videoFile={postMedia[superTextEditIndex]!.file}
+          initial={postMedia[superTextEditIndex]!.superText ?? null}
+          onSave={(cfg) => {
+            const idx = superTextEditIndex;
+            setPostMedia((prev) =>
+              prev.map((m, i) => (i === idx ? { ...m, superText: cfg ?? undefined } : m))
+            );
+            setSuperTextEditIndex(null);
+          }}
+        />
+      )}
     </div>
   );
 }

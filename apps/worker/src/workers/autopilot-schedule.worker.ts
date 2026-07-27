@@ -148,13 +148,22 @@ export function createAutopilotScheduleWorker() {
           data: { status: "SCHEDULED" },
         });
 
-        // 11. Update PipelineRun postsScheduled counter
-        await prisma.pipelineRun.update({
-          where: { id: pipelineRunId },
-          data: {
-            postsScheduled: { increment: 1 },
-          },
-        });
+        // 11. Update PipelineRun postsScheduled counter.
+        // Manual approvals (autopilot.router approvePost / the sibling enqueue)
+        // legitimately carry pipelineRunId: "" — there is no pipeline run behind a
+        // human clicking Approve in the Review Queue. `update` on a non-existent id
+        // THROWS (P2025), which fell into the catch below and stamped the
+        // AutopilotPost FAILED even though steps 7–10 had already scheduled the
+        // post successfully — so every manually-approved post showed as failed
+        // while quietly publishing. Only touch the counter when there is a run.
+        if (pipelineRunId) {
+          await prisma.pipelineRun.update({
+            where: { id: pipelineRunId },
+            data: {
+              postsScheduled: { increment: 1 },
+            },
+          });
+        }
 
         console.log(
           `[AutopilotSchedule] Done. Post ${post.id} scheduled at ${scheduledAt.toISOString()} for autopilotPost ${autopilotPostId}`,

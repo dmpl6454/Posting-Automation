@@ -192,3 +192,14 @@ export interface RepurposeVideoJobData {
     duration: number;
   };
 }
+
+/**
+ * Super text burn: ONE job per post. The worker renders each configured video's
+ * text strip to a transparent PNG, composites it with ffmpeg, creates a DERIVED
+ * Media row, repoints the post's PostMedia at it, then flips the parked
+ * DRAFT→SCHEDULED once no other gate remains.
+ */
+export interface SuperTextBurnJobData {
+  postId: string;
+  organizationId: string;
+}

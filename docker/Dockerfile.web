@@ -20,6 +20,10 @@ COPY packages/ai/package.json packages/ai/
 COPY packages/queue/package.json packages/queue/
 COPY packages/billing/package.json packages/billing/
 COPY packages/logger/package.json packages/logger/
+# super-text: shared strip schema + HTML builder (compose preview AND worker burn).
+# apps/web + packages/api declare it as a workspace dep, so it MUST be copied here
+# or `pnpm install --frozen-lockfile` below fails with an unresolved workspace link.
+COPY packages/super-text/package.json packages/super-text/
 COPY apps/web/package.json apps/web/
 RUN pnpm install --frozen-lockfile
 

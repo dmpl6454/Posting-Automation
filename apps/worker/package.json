@@ -17,7 +17,8 @@
     "bullmq": "^5.34.0",
     "ioredis": "^5.4.0",
     "nodemailer": "^7.0.7",
-    "sharp": "^0.33.0"
+    "sharp": "^0.33.0",
+    "@postautomation/super-text": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

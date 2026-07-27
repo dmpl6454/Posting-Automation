@@ -396,6 +396,87 @@ describe("flipPendingFanoutPost", () => {
     await expect(flipPendingFanoutPost({ prisma: prisma as any }, "post-1", "org-1")).resolves.toBe(false);
     expect(prisma.post.update).not.toHaveBeenCalled();
   });
+
+  it("with NO super-text metadata the flip is unchanged (byte-identical legacy path)", async () => {
+    const { prisma, state } = statefulPrisma(pendingFanoutPost([target("t1", "TWITTER")]));
+    await expect(flipPendingFanoutPost({ prisma: prisma as any }, "post-1", "org-1")).resolves.toBe(true);
+    expect(state.post.status).toBe("SCHEDULED");
+    expect(state.post.targets[0]!.status).toBe("SCHEDULED");
+    expect((state.post.metadata as any).captionFanout.pendingSchedule).toBe(false);
+  });
+});
+
+/**
+ * Super-text gate coordination (2026-07-27). Both features park a post as DRAFT.
+ * Whichever finishes LAST performs the flip — captions must never flip a post
+ * whose video strip is still being burned, or the cron would publish the
+ * ORIGINAL, un-burned video.
+ */
+describe("flipPendingFanoutPost × super-text gate", () => {
+  const withBurnPending = (pendingBurn: boolean) => ({
+    ...pendingFanoutPost([target("t1", "TWITTER"), target("t2", "INSTAGRAM")]),
+    // A parked post ALWAYS has scheduledAt in production — both planCaptionFanout
+    // and planSuperText only set their pending flags when scheduledAt != null —
+    // and flipParkedPostIfReady refuses to flip without one (it must never
+    // schedule a post the user saved as a plain draft).
+    scheduledAt: new Date("2099-01-01T10:00:00.000Z"),
+    metadata: {
+      captionFanout: { requested: true, pendingSchedule: true },
+      superText: { requested: true, pendingBurn, parkedSchedule: true },
+    },
+  });
+
+  it("does NOT flip while the burn is pending, but DOES clear its own caption flag", async () => {
+    const { prisma, state } = statefulPrisma(withBurnPending(true));
+
+    await expect(flipPendingFanoutPost({ prisma: prisma as any }, "post-1", "org-1")).resolves.toBe(false);
+
+    // Our own gate is released…
+    expect((state.post.metadata as any).captionFanout.pendingSchedule).toBe(false);
+    // …but the post and its targets stay DRAFT until the burn lands.
+    expect(state.post.status).toBe("DRAFT");
+    expect(state.post.targets.every((t) => t.status === "DRAFT")).toBe(true);
+  });
+
+  it("flips normally once the burn has already completed", async () => {
+    const { prisma, state } = statefulPrisma(withBurnPending(false));
+
+    await expect(flipPendingFanoutPost({ prisma: prisma as any }, "post-1", "org-1")).resolves.toBe(true);
+
+    expect(state.post.status).toBe("SCHEDULED");
+    expect(state.post.targets.every((t) => t.status === "SCHEDULED")).toBe(true);
+  });
+
+  it("post-write re-check flips when the burn finishes between our read and our write", async () => {
+    // Simulates the race: at read time the burn is pending, but it completes
+    // before we re-check — flipParkedPostIfReady (fresh read) must catch it, so
+    // the post can never be stranded in DRAFT with no gate left to flip it.
+    const { prisma, state } = statefulPrisma(withBurnPending(true));
+    const realFindFirst = prisma.post.findFirst;
+    let call = 0;
+    prisma.post.findFirst = vi.fn(async (args: any) => {
+      call++;
+      if (call > 1) {
+        // The burn worker cleared its flag in the meantime.
+        (state.post.metadata as any).superText.pendingBurn = false;
+      }
+      return realFindFirst(args);
+    }) as any;
+
+    await flipPendingFanoutPost({ prisma: prisma as any }, "post-1", "org-1");
+
+    expect(state.post.status).toBe("SCHEDULED");
+    expect(state.post.targets.every((t) => t.status === "SCHEDULED")).toBe(true);
+  });
+
+  it("a degraded flip still defers to the burn (never publishes un-burned video)", async () => {
+    const { prisma, state } = statefulPrisma(withBurnPending(true));
+
+    await flipPendingFanoutPost({ prisma: prisma as any }, "post-1", "org-1", { degraded: true });
+
+    expect(state.post.status).toBe("DRAFT");
+    expect((state.post.metadata as any).captionFanout.degraded).toBe(true);
+  });
 });
 
 describe("post-publish worker content precedence (wiring lock)", () => {

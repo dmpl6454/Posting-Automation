@@ -191,14 +191,25 @@ export async function flipPendingFanoutPost(
   const fanoutMeta = (meta.captionFanout ?? {}) as Record<string, any>;
   if (post.status !== "DRAFT" || fanoutMeta.pendingSchedule !== true) return false;
 
-  await deps.prisma.postTarget.updateMany({
-    where: { postId, status: "DRAFT" },
-    data: { status: "SCHEDULED" },
-  });
+  // Super-text gate: if the strip burn is still running, this post must STAY a
+  // DRAFT — flipping it now would let the cron publish the ORIGINAL, un-burned
+  // video. Clear our own flag either way; whichever gate finishes LAST performs
+  // the flip (flipParkedPostIfReady re-reads fresh metadata, so a burn that
+  // completes between our read and our write cannot strand the post).
+  // With no super-text metadata this is `false` and the behaviour below is
+  // byte-identical to the pre-super-text flip.
+  const superTextPending = (meta as Record<string, any>).superText?.pendingBurn === true;
+
+  if (!superTextPending) {
+    await deps.prisma.postTarget.updateMany({
+      where: { postId, status: "DRAFT" },
+      data: { status: "SCHEDULED" },
+    });
+  }
   await deps.prisma.post.update({
     where: { id: postId },
     data: {
-      status: "SCHEDULED",
+      ...(superTextPending ? {} : { status: "SCHEDULED" }),
       metadata: {
         ...meta,
         captionFanout: {
@@ -212,8 +223,16 @@ export async function flipPendingFanoutPost(
       },
     },
   });
+
   if (opts?.degraded) {
     await notifyDegradedFanout(deps, postId, organizationId, post.createdById);
+  }
+
+  if (superTextPending) {
+    // Post-write re-check closes the simultaneous-completion race.
+    const { flipParkedPostIfReady } = await import("../lib/publish-gates");
+    await flipParkedPostIfReady(deps.prisma as any, postId, organizationId);
+    return false;
   }
   return true;
 }
