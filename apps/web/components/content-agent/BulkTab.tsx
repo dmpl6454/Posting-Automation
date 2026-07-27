@@ -571,16 +571,25 @@ export function BulkTab() {
   return (
     <div className="space-y-6">
       <Tabs defaultValue="schedule" className="space-y-4">
-        <TabsList className="grid h-auto w-full grid-cols-3">
-          <TabsTrigger value="schedule" className="gap-1.5 py-1.5 text-xs sm:text-sm">
+        <TabsList className="grid h-auto w-full grid-cols-3 gap-1">
+          <TabsTrigger
+            value="schedule"
+            className="min-w-0 gap-1.5 px-1.5 py-2 text-[11px] sm:px-3 sm:text-sm"
+          >
             <Calendar className="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4" />
             <span>Bulk Schedule</span>
           </TabsTrigger>
-          <TabsTrigger value="import" className="gap-1.5 py-1.5 text-xs sm:text-sm">
+          <TabsTrigger
+            value="import"
+            className="min-w-0 gap-1.5 px-1.5 py-2 text-[11px] sm:px-3 sm:text-sm"
+          >
             <Upload className="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4" />
             <span>CSV Import</span>
           </TabsTrigger>
-          <TabsTrigger value="export" className="gap-1.5 py-1.5 text-xs sm:text-sm">
+          <TabsTrigger
+            value="export"
+            className="min-w-0 gap-1.5 px-1.5 py-2 text-[11px] sm:px-3 sm:text-sm"
+          >
             <Download className="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4" />
             <span>CSV Export</span>
           </TabsTrigger>
