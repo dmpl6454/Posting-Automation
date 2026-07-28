@@ -13,7 +13,11 @@ import {
   createRedisConnection,
   type SuperTextBurnJobData,
 } from "@postautomation/queue";
-import { buildSuperTextFrameHtml, superTextConfigSchema } from "@postautomation/super-text";
+import {
+  buildSuperTextFrameHtml,
+  superTextConfigSchema,
+  resolveSuperTextFont,
+} from "@postautomation/super-text";
 import { launchCreativeBrowser } from "@postautomation/ai";
 import { buildSuperTextCompositeArgs, durationIntegrityOk } from "../lib/super-text-burn";
 import { flipParkedPostIfReady } from "../lib/publish-gates";
@@ -103,14 +107,59 @@ async function downloadToFile(url: string, destPath: string): Promise<void> {
   await pipeline(Readable.fromWeb(res.body as never), createWriteStream(destPath));
 }
 
+/** How long to wait for an embedded webfont before giving up and rendering anyway. */
+const FONT_READY_TIMEOUT_MS = 10_000;
+
 /** Render the strip as a transparent full-frame PNG at the video's native size. */
-async function renderStripPng(html: string, width: number, height: number, outPath: string) {
+async function renderStripPng(
+  html: string,
+  width: number,
+  height: number,
+  outPath: string,
+  /** Embedded family to await, or null when the font needs no loading. */
+  embeddedFamily: string | null
+) {
   const browser = await launchCreativeBrowser();
   try {
     const page = await browser.newPage();
     await page.setViewport({ width, height });
     // `load` (not networkidle0) — the page is fully self-contained inline HTML.
     await page.setContent(html, { waitUntil: "load", timeout: 30_000 });
+
+    // `waitUntil:"load"` does NOT wait for @font-face. Screenshotting here would
+    // silently bake the FALLBACK face while the compose preview showed the real
+    // one — exactly the preview/burn drift this shared-renderer design exists to
+    // prevent, and it fails with no error at all.
+    //
+    // Bounded by a timeout so a font problem degrades to a fallback render
+    // instead of hanging the burn (which the watchdog would later reap FAILED).
+    if (embeddedFamily) {
+      await Promise.race([
+        // NOTE: this callback body executes INSIDE the browser page, so `document`
+        // exists at runtime — but the worker's tsconfig has no DOM lib, so reach it
+        // through globalThis with a narrow local type rather than a bare identifier.
+        page.evaluate(async (family: string) => {
+          const { fonts } = (
+            globalThis as unknown as {
+              document: {
+                fonts: { load: (f: string) => Promise<unknown>; ready: Promise<unknown> };
+              };
+            }
+          ).document;
+          try {
+            // Explicitly kick the load: fonts.ready only settles work already
+            // triggered by layout, so asking for the exact face is the reliable
+            // way to know it resolved.
+            await fonts.load(`700 100px "${family}"`);
+          } catch {
+            /* fall through to fonts.ready */
+          }
+          await fonts.ready;
+        }, embeddedFamily),
+        new Promise((resolve) => setTimeout(resolve, FONT_READY_TIMEOUT_MS)),
+      ]);
+    }
+
     const png = (await page.screenshot({
       type: "png",
       omitBackground: true, // transparency is what makes overlay=0:0 work
@@ -234,7 +283,17 @@ export async function runSuperTextBurn(
       const inputPath = path.join(tmpDir, `in-${mediaId}.mp4`);
       const outputPath = path.join(tmpDir, `out-${mediaId}.mp4`);
 
-      await renderStripPng(buildSuperTextFrameHtml(parsed.data, width, height), width, height, stripPath);
+      // Guard on a non-empty payload so a missing generated font file skips the
+      // wait rather than burning FONT_READY_TIMEOUT_MS on a face that never arrives.
+      const fontSpec = resolveSuperTextFont(parsed.data.font);
+      const embeddedFamily = fontSpec.embedded?.base64 ? fontSpec.embedded.family : null;
+      await renderStripPng(
+        buildSuperTextFrameHtml(parsed.data, width, height),
+        width,
+        height,
+        stripPath,
+        embeddedFamily
+      );
       await downloadToFile(media.url, inputPath);
       await execFileAsync(
         "ffmpeg",
