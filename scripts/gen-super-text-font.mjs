@@ -1,7 +1,7 @@
 /**
  * Regenerates packages/super-text/src/fonts/dm-sans-700-latin.ts.
  *
- * Fetches the LATIN subset of DM Sans at weight 700 from Google Fonts and emits
+ * Fetches the LATIN subset of Plus Jakarta Sans at weight 800 from Google Fonts and emits
  * it as a base64 woff2 string. Google serves woff2 only to a modern UA, so the
  * User-Agent header below is load-bearing — without it you get ttf and the
  * payload balloons.
@@ -15,10 +15,11 @@
  */
 import { writeFileSync } from "node:fs";
 
-const CSS_URL = "https://fonts.googleapis.com/css2?family=DM+Sans:wght@700&display=block";
+const CSS_URL =
+  "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@800&display=block";
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
-const OUT = "packages/super-text/src/fonts/dm-sans-700-latin.ts";
+const OUT = "packages/super-text/src/fonts/plus-jakarta-sans-800-latin.ts";
 
 const cssRes = await fetch(CSS_URL, { headers: { "User-Agent": UA } });
 if (!cssRes.ok) throw new Error(`Google Fonts CSS fetch failed: HTTP ${cssRes.status}`);
@@ -37,10 +38,11 @@ if (!latin) {
 const url = latin.match(/url\((https:\/\/[^)]+\.woff2)\)/)?.[1];
 if (!url) throw new Error("no woff2 URL in the latin block — is the UA being honoured?");
 
+const EXPECTED_WEIGHT = "800";
 const weight = latin.match(/font-weight:\s*(\d+)/)?.[1];
-if (weight !== "700") {
+if (weight !== EXPECTED_WEIGHT) {
   throw new Error(
-    `expected weight 700, got ${weight}. A Regular file would make Chromium ` +
+    `expected weight ${EXPECTED_WEIGHT}, got ${weight}. A lighter file would make Chromium ` +
       `synthesise fake bold, which rasterises differently on macOS vs Alpine.`
   );
 }
@@ -67,14 +69,14 @@ writeFileSync(
  * GENERATED FILE — do not hand-edit.
  * Regenerate with: node scripts/gen-super-text-font.mjs
  *
- * DM Sans 700 (latin subset), SIL Open Font License 1.1.
+ * Plus Jakarta Sans 800 (latin subset), SIL Open Font License 1.1.
  * Source: ${url}
  * Raw: ${buf.length} bytes -> base64: ${base64.length} chars
  *
  * Embedded as a data URI (not installed in the Docker image) so the compose
  * preview and the worker burn use literally the same bytes and cannot drift.
  */
-export const DM_SANS_700_LATIN_WOFF2_BASE64 =
+export const SUPER_TEXT_SANS_WOFF2_BASE64 =
   "${base64}";
 `
 );

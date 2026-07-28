@@ -1,4 +1,4 @@
-import { DM_SANS_700_LATIN_WOFF2_BASE64 } from "./fonts/dm-sans-700-latin";
+import { SUPER_TEXT_SANS_WOFF2_BASE64 } from "./fonts/plus-jakarta-sans-800-latin";
 
 /**
  * Strip geometry is expressed in `em` off ONE font-size so the live compose
@@ -97,13 +97,17 @@ export const SUPER_TEXT_FONTS: Record<SuperTextFontKey, SuperTextFontSpec> = {
   sans: {
     label: "Sans",
     // Embedded family first, then the classic stack as the fallback chain so a
-    // glyph DM Sans lacks (Devanagari, CJK) still resolves — exactly as today.
+    // glyph this face lacks (Devanagari, CJK) still resolves — exactly as today.
     stack: `'${EMBEDDED_SANS_FAMILY}', ${SUPER_TEXT_FONT_STACK}`,
-    weight: 700,
-    // Instagram's display text is tracked slightly tighter than DM Sans's
-    // default. This is the fidelity dial — adjust here, nowhere else.
-    letterSpacingEm: -0.012,
-    embedded: { family: EMBEDDED_SANS_FAMILY, base64: DM_SANS_700_LATIN_WOFF2_BASE64 },
+    // 800, not 700. Plus Jakarta Sans at 700 sits too close to Arial Bold to be
+    // a distinguishable second option; 800 is what makes the picker read as a
+    // real choice. Must match the weight in the embedded @font-face or Chromium
+    // synthesises bold and preview/burn diverge.
+    weight: 800,
+    // Instagram's display text is tracked tighter than the face's default. This
+    // is the fidelity dial — adjust here, nowhere else.
+    letterSpacingEm: -0.02,
+    embedded: { family: EMBEDDED_SANS_FAMILY, base64: SUPER_TEXT_SANS_WOFF2_BASE64 },
   },
 };
 
