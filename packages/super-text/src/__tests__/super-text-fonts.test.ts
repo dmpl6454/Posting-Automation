@@ -93,11 +93,21 @@ describe("super text font registry", () => {
     }
   });
 
-  it("every registry entry declares a real bold weight (no synthetic bold)", () => {
-    // Synthetic bold rasterises differently on macOS vs Alpine Chromium, which
-    // would make the burn diverge from the preview even with identical bytes.
+  it("every registry entry declares a bold-or-heavier weight", () => {
     for (const key of SUPER_TEXT_FONT_KEYS) {
-      expect(SUPER_TEXT_FONTS[key].weight).toBe(700);
+      expect(SUPER_TEXT_FONTS[key].weight).toBeGreaterThanOrEqual(700);
+    }
+  });
+
+  it("an embedded face's @font-face weight MATCHES the spec weight (no synthetic bold)", () => {
+    // The real invariant, rather than a hardcoded number: if the declared
+    // font-weight and the @font-face weight disagree, Chromium synthesises bold —
+    // and synthetic-bold rasterisation differs between macOS and Alpine, so the
+    // burn would diverge from the preview even with identical font bytes.
+    for (const key of SUPER_TEXT_FONT_KEYS) {
+      const spec = SUPER_TEXT_FONTS[key];
+      if (!spec.embedded?.base64) continue;
+      expect(buildSuperTextFontFaceCss(key)).toContain(`font-weight:${spec.weight}`);
     }
   });
 });
@@ -142,10 +152,10 @@ describe("buildSuperTextFontFaceCss", () => {
     expect(buildSuperTextFontFaceCss(null)).toBe("");
   });
 
-  it("emits a weight-700 data-URI face for sans with font-display:block", () => {
+  it("emits a data-URI face for sans at its declared weight, with font-display:block", () => {
     const css = buildSuperTextFontFaceCss("sans");
     expect(css).toContain(`font-family:'${EMBEDDED_SANS_FAMILY}'`);
-    expect(css).toContain("font-weight:700");
+    expect(css).toContain(`font-weight:${SUPER_TEXT_FONTS.sans.weight}`);
     // `block`, not `swap`: swap would let the user position the strip against
     // fallback metrics and then reflow underneath them.
     expect(css).toContain("font-display:block");
@@ -202,7 +212,7 @@ describe("font application — byte identity and parity", () => {
   it("sans applies the embedded family and the tightened tracking", () => {
     const html = buildStripInnerHtml({ ...baseConfig, font: "sans" });
     expect(html).toContain(EMBEDDED_SANS_FAMILY);
-    expect(html).toContain("letter-spacing:-0.012em");
+    expect(html).toContain("letter-spacing:-0.02em");
   });
 
   it("EVERY font key still appends the emoji stack (or emoji burn as tofu)", () => {

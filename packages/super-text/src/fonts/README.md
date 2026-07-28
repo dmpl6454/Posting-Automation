@@ -1,6 +1,6 @@
 # Super Text embedded fonts
 
-`dm-sans-700-latin.ts` is **generated** — run `node scripts/gen-super-text-font.mjs`.
+`plus-jakarta-sans-800-latin.ts` is **generated** — run `node scripts/gen-super-text-font.mjs`.
 
 ## Why embedded rather than installed in the worker image
 
@@ -24,15 +24,32 @@ does *not* wait for `@font-face`. See `renderStripPng` in
 ## Which face, and why not Instagram Sans
 
 Instagram Sans is Meta's proprietary typeface and is not licensed for
-third-party redistribution — that exclusivity is the point of it. **DM Sans**
-(SIL OFL 1.1) is the closest open match: geometric, large x-height, and
-— importantly — a **double-storey `a`**, like Instagram Sans. Poppins is often
-suggested as an Instagram Sans alternative but has a *single-storey* `a`, which
-reads noticeably different at strip size.
+third-party redistribution — that exclusivity is the point of it. The shipped
+stand-in is **Plus Jakarta Sans 800** (SIL OFL 1.1): geometric, large x-height,
+tight, and — importantly — a **double-storey `a`**, like Instagram Sans.
+
+### Why not DM Sans (the first attempt)
+
+DM Sans 700 shipped first because it is the closest match to Instagram Sans *on
+paper*. In practice it was a mistake: at the dialog's real size it is nearly
+indistinguishable from Arial (measured: **0.4%** width delta on typical text), so
+the picker did not read as a real choice and the owner reported "I can see no
+difference." Plus Jakarta Sans 800 gives a **4.8%** delta and an obviously
+different face.
+
+The lesson for anyone changing this: **judge a candidate by whether a user can
+tell it apart from Classic at ~23px, not by how well its metrics match Instagram
+Sans.** Render it — do not reason about it.
+
+### Weight is 800, not 700
+
+Plus Jakarta Sans at 700 sits too close to Arial Bold. The 800 cut is what makes
+the difference legible. The `@font-face` weight and
+`SUPER_TEXT_FONTS.sans.weight` must stay equal or Chromium synthesises bold,
+which rasterises differently on macOS vs Alpine — test-locked.
 
 Tracking is tightened via `SUPER_TEXT_FONTS.sans.letterSpacingEm` in
-`../constants.ts` to match Instagram's display setting. **That is the fidelity
-dial** — adjust it there, nowhere else.
+`../constants.ts`. **That is the fidelity dial** — adjust it there, nowhere else.
 
 ## Coverage
 
@@ -44,12 +61,12 @@ common, add a second embedded entry with a `unicode-range`.
 
 ## Swapping in a licensed face
 
-1. Convert it to **woff2 at weight 700** — a real bold cut, not Regular. A
-   Regular file makes Chromium synthesise fake bold, and synthetic-bold
-   rasterisation differs between macOS and Alpine, so preview and burn would
-   diverge even with identical bytes.
-2. Base64 it and replace the string in `dm-sans-700-latin.ts` (rename the file
-   and its export if you like; update the import in `../constants.ts`).
+1. Convert it to **woff2 at the weight you declare** (currently 800) — a real cut,
+   not a lighter one. A mismatch makes Chromium synthesise fake bold, and
+   synthetic-bold rasterisation differs between macOS and Alpine, so preview and
+   burn would diverge even with identical bytes.
+2. Base64 it and replace the string in `plus-jakarta-sans-800-latin.ts` (rename
+   the file and its export if you like; update the import in `../constants.ts`).
 3. Update `EMBEDDED_SANS_FAMILY` in `../constants.ts` to the correct family name.
 4. Re-run the parity check: burn two-line text, extract a frame with ffmpeg, and
    confirm the line-break words match the compose preview.
