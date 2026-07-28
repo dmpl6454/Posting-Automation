@@ -45,4 +45,24 @@ describe("buildSuperTextPayload", () => {
   it("ignores an item with no resolved media id", () => {
     expect(buildSuperTextPayload([{ superText: cfg("x") }], [])).toEqual({});
   });
+
+  it("carries the chosen font through to the payload", () => {
+    const out = buildSuperTextPayload([{ superText: { ...cfg("hi"), font: "sans" } }], ["m1"]);
+    expect(out.m1!.font).toBe("sans");
+  });
+
+  it("a config with no font round-trips with NO injected key", () => {
+    // zod must not default this field: an injected key would change
+    // JSON.stringify and therefore the worker's S3 burn-cache hash for every
+    // pre-existing config, forcing needless re-burns of correct videos.
+    const out = buildSuperTextPayload([{ superText: cfg("hi") }], ["m1"]);
+    expect("font" in out.m1!).toBe(false);
+  });
+
+  it("drops a config with a bogus font instead of failing the whole post", () => {
+    const bad = { ...cfg("x"), font: "comic-sans" } as unknown as SuperTextConfig;
+    const out = buildSuperTextPayload([{ superText: bad }, { superText: cfg("ok") }], ["m1", "m2"]);
+    expect(out.m1).toBeUndefined();
+    expect(out.m2).toBeDefined();
+  });
 });

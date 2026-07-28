@@ -18,8 +18,13 @@ import {
   SUPER_TEXT_DEFAULTS,
   FONT_SIZE_PRESETS,
   WORD_COLOR_SWATCHES,
+  SUPER_TEXT_FONTS,
+  SUPER_TEXT_FONT_KEYS,
+  DEFAULT_SUPER_TEXT_FONT,
   type SuperTextConfig,
+  type SuperTextFontKey,
 } from "@postautomation/super-text";
+import { SuperTextFontFaces } from "./super-text-font-faces";
 import { withPosterHint } from "~/lib/video-poster";
 import { SuperTextStrip } from "./super-text-strip";
 
@@ -72,6 +77,7 @@ export function SuperTextEditor({
   const [stripColor, setStripColor] = useState(initial?.stripColor ?? SUPER_TEXT_DEFAULTS.stripColor);
   const [textColor, setTextColor] = useState(initial?.textColor ?? SUPER_TEXT_DEFAULTS.textColor);
   const [fontSizePct, setFontSizePct] = useState(initial?.fontSizePct ?? SUPER_TEXT_DEFAULTS.fontSizePct);
+  const [font, setFont] = useState<SuperTextFontKey>(initial?.font ?? DEFAULT_SUPER_TEXT_FONT);
   const [xPct, setXPct] = useState(initial?.xPct ?? SUPER_TEXT_DEFAULTS.xPct);
   const [yPct, setYPct] = useState(initial?.yPct ?? SUPER_TEXT_DEFAULTS.yPct);
   const [aspect, setAspect] = useState<number | null>(null);
@@ -132,10 +138,14 @@ export function SuperTextEditor({
       xPct,
       yPct,
       fontSizePct,
+      // Omitted when classic: an absent key keeps JSON.stringify — and so the
+      // worker's S3 burn-cache hash — identical to every pre-picker config, so
+      // existing videos are never needlessly re-burned.
+      ...(font !== DEFAULT_SUPER_TEXT_FONT ? { font } : {}),
     };
     const parsed = superTextConfigSchema.safeParse(candidate);
     return parsed.success ? parsed.data : null;
-  }, [words, wordColors, stripColor, textColor, xPct, yPct, fontSizePct]);
+  }, [words, wordColors, stripColor, textColor, xPct, yPct, fontSizePct, font]);
 
   const moveTo = (clientX: number, clientY: number) => {
     const rect = stageRef.current?.getBoundingClientRect();
@@ -149,6 +159,10 @@ export function SuperTextEditor({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
+        {/* Same shared builder the worker uses, so preview and burn load
+            identical font bytes. Mounted here (not in the strip) so the ~19KB
+            payload is injected once per editor, not per render. */}
+        <SuperTextFontFaces />
         <DialogHeader>
           <DialogTitle>Super text</DialogTitle>
           <DialogDescription>
@@ -265,6 +279,28 @@ export function SuperTextEditor({
               )}
             </div>
           )}
+
+          {/* Typeface. Each button previews its own face, so the choice is
+              visible before it is made. */}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+            <div className="flex items-center gap-1">
+              {SUPER_TEXT_FONT_KEYS.map((k) => (
+                <Button
+                  key={k}
+                  type="button"
+                  size="sm"
+                  variant={font === k ? "default" : "outline"}
+                  onClick={() => setFont(k)}
+                  style={{
+                    fontFamily: SUPER_TEXT_FONTS[k].stack,
+                    fontWeight: SUPER_TEXT_FONTS[k].weight,
+                  }}
+                >
+                  {SUPER_TEXT_FONTS[k].label}
+                </Button>
+              ))}
+            </div>
+          </div>
 
           {/* Strip + default text colour, and size */}
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
