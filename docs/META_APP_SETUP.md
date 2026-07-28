@@ -1,5 +1,11 @@
 # Meta App Setup — Facebook & Instagram Connect
 
+> **Recreating a Meta app from scratch?** Use
+> **[META_APP_RECREATION_GUIDE.md](META_APP_RECREATION_GUIDE.md)** instead — it is the
+> full step-by-step build (products, verification, test-call gate, Data Access Renewal,
+> both App Review submissions, screencast requirements, traps).
+> This file is the shorter *troubleshooting* reference for the app that already exists.
+
 The live Meta app is **"Post Automation 2"** (App ID `298449321694397`). Connecting
 Facebook/Instagram from PostAutomation requires the Meta app to be configured and
 (for non-test users) reviewed by Meta. This is operator configuration in the Meta
@@ -32,15 +38,28 @@ Facebook Login → Settings → **Valid OAuth Redirect URIs** must contain exact
 
 ## 3. Permissions / scopes
 
-The app requests these (App Dashboard → App Review → Permissions and Features):
-- Facebook: `public_profile`, `email`, `pages_show_list`, `pages_manage_posts`,
-  `pages_read_engagement`
-- Instagram: the above plus `instagram_basic`, `instagram_content_publish`,
-  `instagram_manage_comments`, `business_management`
+The app requests these (App Dashboard → App Review → Permissions and Features).
+**Authoritative source: `getDefaultScopes()` in
+[channel.router.ts](../packages/api/src/routers/channel.router.ts#L480) — if this list
+and that function disagree, the code is right.**
 
-`pages_manage_posts`, `instagram_content_publish`, and `business_management` are
-**advanced** permissions: they work for app roles in Development mode, but require
-**App Review approval** before normal users can grant them.
+- Facebook (6): `public_profile`, `pages_show_list`, `pages_manage_posts`,
+  `pages_read_engagement`, `pages_read_user_content`, `read_insights`
+- Instagram (7): `public_profile`, `pages_show_list`, `pages_read_engagement`,
+  `instagram_basic`, `instagram_content_publish`, `business_management`,
+  `instagram_manage_insights`
+
+Deliberately **not** requested:
+- `email` — dropped 2026-06-02; sign-in is via Google and the FB/IG providers never read it.
+- `instagram_manage_comments` — dropped 2026-06-17 after Meta rejected it as a
+  *Disallowed Use Case*. Comment **counts** ride on `instagram_basic`. Do not re-add
+  without building real comment moderation.
+
+All except `public_profile` are **advanced** permissions: they work for app roles
+(admin/developer/tester) in Development mode, but require **App Review approval**
+before normal users can grant them. The 6 publishing permissions are approved
+(2026-07-17); the 3 analytics-read permissions (`pages_read_user_content`,
+`read_insights`, `instagram_manage_insights`) were submitted 2026-07-24 and are pending.
 
 ## 4. Make it work for normal users — pick one
 

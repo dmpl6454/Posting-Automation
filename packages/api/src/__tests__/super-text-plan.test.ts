@@ -87,6 +87,39 @@ describe("planSuperText", () => {
     });
     expect(Object.keys(plan.byMediaId).sort()).toEqual(["a", "b"]);
   });
+
+  it("carries the font through to the worker and is otherwise structurally identical", () => {
+    const withFont = planSuperText({
+      superText: { a: { ...cfg, font: "sans" } },
+      mediaRows: [video("a")],
+      scheduledAt: null,
+    });
+    const withoutFont = planSuperText({
+      superText: { a: cfg },
+      mediaRows: [video("a")],
+      scheduledAt: null,
+    });
+
+    // The font MUST reach the worker — it is what the burn renders with.
+    expect(withFont.byMediaId.a!.font).toBe("sans");
+    expect("font" in withoutFont.byMediaId.a!).toBe(false);
+
+    // Apart from that one field the plan is identical: the publish gate must not
+    // care WHICH typeface it is, only that a burn is pending. Stripping `font`
+    // and deep-comparing means a future field can't silently diverge either.
+    const { font: _dropped, ...withFontCfgSansFont } = withFont.byMediaId.a!;
+    expect({ ...withFont, byMediaId: { a: withFontCfgSansFont } }).toEqual(withoutFont);
+    expect(withFont.enabled).toBe(true);
+  });
+
+  it("still parks the schedule for a font-carrying config", () => {
+    const plan = planSuperText({
+      superText: { a: { ...cfg, font: "sans" } },
+      mediaRows: [video("a")],
+      scheduledAt: new Date("2026-08-01T10:00:00Z"),
+    });
+    expect(plan.parkedSchedule).toBe(true);
+  });
 });
 
 describe("superTextJobId", () => {

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SUPER_TEXT_FONT_KEYS } from "./constants";
 
 /**
  * Strict #RRGGBB only. Every colour in a SuperTextConfig is interpolated into a
@@ -38,6 +39,15 @@ export const superTextConfigSchema = z.object({
   yPct: z.number().min(5).max(95),
   /** Font size as a percentage of the video WIDTH (device/resolution independent). */
   fontSizePct: z.number().min(2).max(8),
+  /**
+   * Which typeface to render. OPTIONAL and deliberately NOT `.default()`: zod's
+   * default would INJECT the key, changing JSON.stringify output and therefore
+   * the worker's S3 burn-cache hash for every pre-existing config — forcing
+   * needless re-burns of already-correct videos. Absent =>
+   * resolveSuperTextFont() => "classic", which reproduces the pre-picker CSS
+   * exactly.
+   */
+  font: z.enum(SUPER_TEXT_FONT_KEYS).optional(),
 });
 
 export type SuperTextSegment = z.infer<typeof superTextSegmentSchema>;
