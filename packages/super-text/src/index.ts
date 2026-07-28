@@ -7,4 +7,11 @@ export {
   type SuperTextMap,
 } from "./schema";
 export * from "./constants";
-export { buildStripInnerHtml, buildSuperTextFrameHtml, safeHexColor, escapeHtml } from "./html";
+export {
+  buildStripInnerHtml,
+  buildSuperTextFrameHtml,
+  buildSuperTextFontFaceCss,
+  buildAllSuperTextFontFaceCss,
+  safeHexColor,
+  escapeHtml,
+} from "./html";
