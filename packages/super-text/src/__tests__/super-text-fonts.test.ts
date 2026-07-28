@@ -172,6 +172,19 @@ describe("buildSuperTextFontFaceCss", () => {
   it("an injecting key emits no face at all", () => {
     expect(buildSuperTextFontFaceCss(`x';}@font-face{src:url(https://evil/x)`)).toBe("");
   });
+
+  it("contains no markup characters, so it is safe as a <style> TEXT child", () => {
+    // apps/web/components/content-agent/super-text-font-faces.tsx renders this
+    // as a text child rather than via dangerouslySetInnerHTML. React would
+    // escape < > & inside textContent and corrupt the CSS, and any of those
+    // characters would also mean the string could carry markup. Neither is true:
+    // the payload is base64 (A-Za-z0-9+/=) plus CSS punctuation.
+    const css = buildAllSuperTextFontFaceCss();
+    expect(css).not.toContain("<");
+    expect(css).not.toContain(">");
+    expect(css).not.toContain("&");
+    expect(css).not.toContain("</style");
+  });
 });
 
 describe("font application — byte identity and parity", () => {

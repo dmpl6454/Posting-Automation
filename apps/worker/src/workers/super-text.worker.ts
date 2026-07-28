@@ -110,6 +110,26 @@ async function downloadToFile(url: string, destPath: string): Promise<void> {
 /** How long to wait for an embedded webfont before giving up and rendering anyway. */
 const FONT_READY_TIMEOUT_MS = 10_000;
 
+/**
+ * A timeout leg for Promise.race whose timer can be CLEARED once the race is
+ * settled. A bare `new Promise(r => setTimeout(r, ms))` leaves the timer armed
+ * even after the other leg wins, holding the event loop for up to ms and delaying
+ * process exit.
+ */
+class Deferred {
+  readonly promise: Promise<void>;
+  private handle: ReturnType<typeof setTimeout> | undefined;
+  constructor(ms = FONT_READY_TIMEOUT_MS) {
+    this.promise = new Promise<void>((resolve) => {
+      this.handle = setTimeout(resolve, ms);
+    });
+  }
+  cancel(): void {
+    if (this.handle) clearTimeout(this.handle);
+    this.handle = undefined;
+  }
+}
+
 /** Render the strip as a transparent full-frame PNG at the video's native size. */
 async function renderStripPng(
   html: string,
@@ -133,31 +153,78 @@ async function renderStripPng(
     //
     // Bounded by a timeout so a font problem degrades to a fallback render
     // instead of hanging the burn (which the watchdog would later reap FAILED).
+    //
+    // The whole wait is best-effort: it must never be the thing that FAILS a burn
+    // that would otherwise have succeeded. Before this feature there was no
+    // evaluate call here at all, so letting a CDP/page hiccup reject would have
+    // introduced a brand-new failure mode for every super-text post. If the page
+    // is genuinely broken, page.screenshot below fails loudly on its own.
     if (embeddedFamily) {
-      await Promise.race([
-        // NOTE: this callback body executes INSIDE the browser page, so `document`
-        // exists at runtime — but the worker's tsconfig has no DOM lib, so reach it
-        // through globalThis with a narrow local type rather than a bare identifier.
-        page.evaluate(async (family: string) => {
-          const { fonts } = (
-            globalThis as unknown as {
-              document: {
-                fonts: { load: (f: string) => Promise<unknown>; ready: Promise<unknown> };
-              };
+      const timer = new Deferred();
+      try {
+        await Promise.race([
+          // NOTE: this callback body executes INSIDE the browser page, so `document`
+          // exists at runtime — but the worker's tsconfig has no DOM lib, so reach it
+          // through globalThis with a narrow local type rather than a bare identifier.
+          page.evaluate(async (family: string) => {
+            const { fonts } = (
+              globalThis as unknown as {
+                document: {
+                  fonts: { load: (f: string) => Promise<unknown>; ready: Promise<unknown> };
+                };
+              }
+            ).document;
+            try {
+              // Explicitly kick the load: fonts.ready only settles work already
+              // triggered by layout, so asking for the exact face is the reliable
+              // way to know it resolved.
+              await fonts.load(`700 100px "${family}"`);
+            } catch {
+              /* fall through to fonts.ready */
             }
-          ).document;
-          try {
-            // Explicitly kick the load: fonts.ready only settles work already
-            // triggered by layout, so asking for the exact face is the reliable
-            // way to know it resolved.
-            await fonts.load(`700 100px "${family}"`);
-          } catch {
-            /* fall through to fonts.ready */
-          }
-          await fonts.ready;
-        }, embeddedFamily),
-        new Promise((resolve) => setTimeout(resolve, FONT_READY_TIMEOUT_MS)),
-      ]);
+            await fonts.ready;
+          }, embeddedFamily),
+          timer.promise,
+        ]);
+      } catch (err) {
+        console.warn(
+          `[SuperText] font-readiness wait errored for "${embeddedFamily}" — continuing:`,
+          err instanceof Error ? err.message : err
+        );
+      } finally {
+        timer.cancel();
+      }
+
+      // fonts.ready resolves once loading FINISHES, whether or not this specific
+      // face succeeded, and the timeout leg resolves silently. fonts.check() is
+      // the only call that distinguishes "loaded" from "fell back", so without
+      // this a wrong-font burn would be indistinguishable from a correct one.
+      //
+      // Scope of the guard (measured in the worker image): with a corrupt payload
+      // check() === false, so it DOES catch the real failure mode. But with no
+      // @font-face declared at all it returns TRUE, because check() answers "can I
+      // render this text?" and a system fallback counts. That case is unreachable
+      // here — `embeddedFamily` is only non-null under the same condition that made
+      // buildSuperTextFontFaceCss emit the face — but do not reuse check() as a
+      // general "is my webfont present" test.
+      //
+      // Deliberately a WARNING, not a throw: the burn is still a valid video and
+      // failing it here would be a regression for a cosmetic problem.
+      const active = await page
+        .evaluate(
+          (family: string) =>
+            (
+              globalThis as unknown as { document: { fonts: { check: (f: string) => boolean } } }
+            ).document.fonts.check(`700 100px "${family}"`),
+          embeddedFamily
+        )
+        .catch(() => null);
+      if (active === false) {
+        console.warn(
+          `[SuperText] embedded font "${embeddedFamily}" did NOT activate — the strip ` +
+            `will burn in the fallback face and may wrap differently than the preview.`
+        );
+      }
     }
 
     const png = (await page.screenshot({
