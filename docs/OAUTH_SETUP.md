@@ -210,18 +210,31 @@ This is the most involved registration. Facebook and Instagram share the same Me
    - **App Icon**: 1024x1024 PNG
    - **Category**: Business and Pages → Social Networking
 6. Copy from **Settings → Basic**:
-   - **App ID** → both `FACEBOOK_APP_ID` and `INSTAGRAM_CLIENT_ID`
-   - **App secret** → both `FACEBOOK_APP_SECRET` and `INSTAGRAM_CLIENT_SECRET`
+   - **App ID** → both `FACEBOOK_CLIENT_ID` and `INSTAGRAM_CLIENT_ID`
+   - **App secret** → both `FACEBOOK_CLIENT_SECRET` and `INSTAGRAM_CLIENT_SECRET`
 
    (Yes, same credentials. The env var split is purely to match the code's `<PLATFORM>_CLIENT_*` convention.)
 
-7. **App Review → Permissions and Features** — request:
+   ⚠️ The names are `*_CLIENT_ID` / `*_CLIENT_SECRET`, **not** `FACEBOOK_APP_ID`/`_APP_SECRET`
+   (which this doc said before 2026-07-28). The OAuth layer only reads the `_CLIENT_*` form —
+   see [.env.example](../.env.example#L27) — so the `_APP_*` names leave the Connect button
+   stuck on "Setup required".
+
+7. **App Review → Permissions and Features** — request the 6 publishing permissions:
    - `pages_show_list`
    - `pages_manage_posts`
    - `pages_read_engagement`
    - `instagram_basic`
    - `instagram_content_publish`
    - `business_management`
+
+   Then, in a **second** submission, the 3 analytics-read permissions (external users
+   cannot read comment counts or IG insights without them): `pages_read_user_content`,
+   `read_insights`, `instagram_manage_insights`.
+
+   > Full build walkthrough — verification, the test-call gate that un-greys these
+   > buttons, Data Access Renewal, screencast requirements, and the traps:
+   > **[META_APP_RECREATION_GUIDE.md](META_APP_RECREATION_GUIDE.md)**.
 
    For each, you must:
    - Click **Edit Settings** and fill out the "How will you use this permission?" form.
