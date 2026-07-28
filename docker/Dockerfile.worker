@@ -44,6 +44,14 @@ COPY --from=deps /app/packages/queue/node_modules ./packages/queue/node_modules
 COPY --from=deps /app/packages/social/node_modules ./packages/social/node_modules
 COPY --from=deps /app/packages/ai/node_modules ./packages/ai/node_modules
 COPY --from=deps /app/packages/logger/node_modules ./packages/logger/node_modules
+# ⚠️ EVERY workspace package with runtime deps needs its node_modules copied here
+# explicitly — the builder does NOT inherit them from `COPY packages/`. Omitting
+# this line shipped a worker that crash-looped on `Cannot find module 'zod'` from
+# packages/super-text/src/schema.ts (prod incident 2026-07-28). It passed local
+# image testing only because .dockerignore is EMPTY, so `COPY packages/` pulled in
+# the developer's own node_modules and masked the gap — a clean checkout (which is
+# what the server has) has none. Verify new packages with a `git archive` build.
+COPY --from=deps /app/packages/super-text/node_modules ./packages/super-text/node_modules
 COPY --from=deps /app/apps/worker/node_modules ./apps/worker/node_modules
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
 COPY packages/ ./packages/
