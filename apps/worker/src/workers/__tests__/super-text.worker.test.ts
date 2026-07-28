@@ -39,6 +39,9 @@ const { ctl, s3Send, optimizeAdd, db } = vi.hoisted(() => ({
     sourceHeight: 1280,
     ffmpegCalls: 0,
     screenshotCalls: 0,
+    evaluateArgs: [] as unknown[],
+    evaluateThrows: false,
+    fontActive: true as boolean | null,
   },
   s3Send: vi.fn(async (..._a: any[]) => ({})),
   optimizeAdd: vi.fn(async (..._a: any[]) => ({})),
@@ -77,6 +80,15 @@ vi.mock("@postautomation/ai", () => ({
     newPage: async () => ({
       setViewport: vi.fn(async () => {}),
       setContent: vi.fn(async () => {}),
+      // The font-readiness wait and the activation probe both go through
+      // page.evaluate. Recording the args is how we prove the embedded-font path
+      // is entered for `sans` and skipped entirely for `classic`.
+      evaluate: vi.fn(async (_fn: unknown, arg?: unknown) => {
+        ctl.evaluateArgs.push(arg);
+        if (ctl.evaluateThrows) throw new Error("Target closed: simulated CDP failure");
+        // Stands in for document.fonts.check() — the activation probe.
+        return ctl.fontActive;
+      }),
       screenshot: vi.fn(async () => {
         ctl.screenshotCalls++;
         return Buffer.from("fake-png").toString("base64");
@@ -225,6 +237,9 @@ beforeEach(() => {
   ctl.sourceHeight = 1280;
   ctl.ffmpegCalls = 0;
   ctl.screenshotCalls = 0;
+  ctl.evaluateArgs = [];
+  ctl.evaluateThrows = false;
+  ctl.fontActive = true;
   warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
   logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -292,6 +307,81 @@ describe("runSuperTextBurn — gate coordination", () => {
     expect(db.state.post.metadata.superText.pendingBurn).toBe(false);
     expect(res.flipped).toBe(false);
     expect(db.state.post.status).toBe("DRAFT");
+  });
+});
+
+describe("runSuperTextBurn — embedded font path", () => {
+  /**
+   * Before these, EVERY worker test used a font-less config, so `embeddedFamily`
+   * was always null and the whole font-readiness branch was unexercised — a
+   * "simplification" of the resolveSuperTextFont guard would have failed no test
+   * and silently produced fallback-face burns.
+   */
+  it("skips the font wait entirely for a font-less (classic) config", async () => {
+    seed();
+    const res = (await runSuperTextBurn({ postId: "post-1", organizationId: "org-1" })) as any;
+    expect(res.burned).toBe(1);
+    // No evaluate at all: no readiness wait, no activation probe.
+    expect(ctl.evaluateArgs).toEqual([]);
+  });
+
+  it("awaits the embedded family and probes activation for font:'sans'", async () => {
+    seed({
+      superText: {
+        requested: true,
+        pendingBurn: true,
+        parkedSchedule: true,
+        byMediaId: { "media-1": { ...cfg, font: "sans" } },
+      },
+    });
+
+    const res = (await runSuperTextBurn({ postId: "post-1", organizationId: "org-1" })) as any;
+
+    expect(res.burned).toBe(1);
+    // Both the readiness wait and the activation probe are passed the family.
+    expect(ctl.evaluateArgs).toEqual(["PA Display Sans", "PA Display Sans"]);
+    expect(ctl.screenshotCalls).toBe(1);
+  });
+
+  it("warns but still burns when the embedded face did not activate", async () => {
+    ctl.fontActive = false; // document.fonts.check() === false
+    seed({
+      superText: {
+        requested: true,
+        pendingBurn: true,
+        parkedSchedule: true,
+        byMediaId: { "media-1": { ...cfg, font: "sans" } },
+      },
+    });
+
+    const res = (await runSuperTextBurn({ postId: "post-1", organizationId: "org-1" })) as any;
+
+    // A wrong FACE is cosmetic — the video is valid, so this must not fail the
+    // burn. But it must be diagnosable rather than silent.
+    expect(res.burned).toBe(1);
+    expect(warnSpy.mock.calls.flat().join(" ")).toMatch(/did NOT activate/i);
+  });
+
+  it("a CDP failure during the font wait can never fail an otherwise-good burn", async () => {
+    // Before this feature there was no page.evaluate here at all, so letting a
+    // rejection escape would have been a brand-new failure mode for every
+    // super-text post — and super text is FAIL-VISIBLE, so it would mark the post
+    // and all its targets FAILED.
+    ctl.evaluateThrows = true;
+    seed({
+      superText: {
+        requested: true,
+        pendingBurn: true,
+        parkedSchedule: true,
+        byMediaId: { "media-1": { ...cfg, font: "sans" } },
+      },
+    });
+
+    const res = (await runSuperTextBurn({ postId: "post-1", organizationId: "org-1" })) as any;
+
+    expect(res.burned).toBe(1);
+    expect(ctl.screenshotCalls).toBe(1);
+    expect(db.state.post.targets.every((t: any) => t.status !== "FAILED")).toBe(true);
   });
 });
 
