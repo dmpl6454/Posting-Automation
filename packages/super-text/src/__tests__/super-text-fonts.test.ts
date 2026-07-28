@@ -18,6 +18,18 @@ import {
   SUPER_TEXT_FONT_STACK,
   STRIP_FONT_WEIGHT,
 } from "../constants";
+import { superTextConfigSchema } from "../schema";
+
+/** A valid config with NO font key — i.e. every config written before this feature. */
+const baseConfig = {
+  version: 1 as const,
+  segments: [{ text: "Ranveer" }, { text: "returns", color: "#EF4444" }],
+  stripColor: "#FFFFFF",
+  textColor: "#111111",
+  xPct: 50,
+  yPct: 72,
+  fontSizePct: 4.2,
+};
 
 describe("super text font registry", () => {
   it("exposes exactly the two supported keys", () => {
@@ -79,5 +91,38 @@ describe("super text font registry", () => {
     for (const key of SUPER_TEXT_FONT_KEYS) {
       expect(SUPER_TEXT_FONTS[key].weight).toBe(700);
     }
+  });
+});
+
+describe("superTextConfigSchema — font field", () => {
+  it("accepts a config with NO font (every pre-existing draft and DB row)", () => {
+    expect(superTextConfigSchema.safeParse(baseConfig).success).toBe(true);
+  });
+
+  it("does NOT inject a font key when absent — the burn cache hash must not shift", () => {
+    const parsed = superTextConfigSchema.parse(baseConfig);
+    expect("font" in parsed).toBe(false);
+    // The worker keys S3 objects on sha1(JSON.stringify(parsed)); if zod
+    // defaulted this field, every existing config would re-burn for nothing.
+    expect(JSON.stringify(parsed)).toBe(JSON.stringify(baseConfig));
+  });
+
+  it("accepts both supported font keys", () => {
+    expect(superTextConfigSchema.safeParse({ ...baseConfig, font: "classic" }).success).toBe(true);
+    expect(superTextConfigSchema.safeParse({ ...baseConfig, font: "sans" }).success).toBe(true);
+  });
+
+  it("rejects an unknown font key at the boundary", () => {
+    expect(superTextConfigSchema.safeParse({ ...baseConfig, font: "comic-sans" }).success).toBe(
+      false
+    );
+    expect(superTextConfigSchema.safeParse({ ...baseConfig, font: "__proto__" }).success).toBe(
+      false
+    );
+  });
+
+  it("rejects a font key carrying CSS (defence in depth with the resolver)", () => {
+    const evil = { ...baseConfig, font: `Arial;background:url(https://evil.example/x)` };
+    expect(superTextConfigSchema.safeParse(evil).success).toBe(false);
   });
 });
