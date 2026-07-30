@@ -222,7 +222,7 @@ export default function LandingHome() {
     // cursor-proximity: warm the cube + drift splash colour toward violet
     const hex2rgb = (h: string) => {
       h = h.replace("#", "");
-      if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+      if (h.length === 3) h = h.replace(/./g, (c) => c + c);
       return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
     };
     const rgb2hex = (c: number[]) => "#" + c.map((v) => Math.round(v).toString(16).padStart(2, "0")).join("");
@@ -241,7 +241,7 @@ export default function LandingHome() {
       const tq = Math.round(Math.max(0, 1 - d / R) * 8) / 8;
       if (tq !== curT && splash && splash.setColor) {
         curT = tq;
-        splash.setColor(rgb2hex(from.map((v, i) => v + (to[i] - v) * tq)));
+        splash.setColor(rgb2hex(from.map((v, i) => v + ((to[i] ?? v) - v) * tq)));
       }
     };
     window.addEventListener("mousemove", onMouseMove);
