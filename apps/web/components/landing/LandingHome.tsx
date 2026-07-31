@@ -10,8 +10,45 @@ const ACCENT = "#2f6bff";
 const GLOBAL_CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800;900&family=Chakra+Petch:wght@400;500;600;700&display=swap');
 html{scroll-behavior:smooth;}
-html,body{background:#060912;}
+html,body{background:#060912;margin:0;padding:0;}
 @keyframes paBounce{0%,100%{transform:translateY(0)}50%{transform:translateY(5px)}}
+
+/* ---- hero mobile responsiveness (overrides inline styles) ---- */
+@media (max-width:860px){
+  .pa-nav{padding:13px 16px !important;}
+  .pa-nav-links{gap:8px !important;}
+  .pa-nav-hide{display:none !important;}
+  .pa-nav-links a{padding:9px 14px !important;letter-spacing:0.1em !important;}
+  .pa-nav-brand{font-size:12.5px !important;letter-spacing:0.12em !important;}
+  .pa-hero-col{width:100% !important;padding:118px 22px 64px !important;}
+  .pa-hero-fade{background:linear-gradient(to bottom,rgba(5,7,14,0.8),rgba(5,7,14,0.5)) !important;}
+  .pa-stats{gap:16px !important;}
+}
+@media (max-width:520px){
+  .pa-nav-brand{display:none !important;}
+  .pa-nav-links a{padding:8px 12px !important;font-size:11px !important;}
+  .pa-hero-col{padding-left:18px !important;padding-right:18px !important;}
+}
+
+/* ---- content sections mobile responsiveness ---- */
+@media (max-width:980px){
+  .pa-grid-3{grid-template-columns:repeat(2,1fr) !important;}
+  .pa-pricing{grid-template-columns:repeat(2,1fr) !important;}
+}
+@media (max-width:768px){
+  .pa-sec{padding-left:22px !important;padding-right:22px !important;}
+  .pa-steps{grid-template-columns:1fr !important;}
+  .pa-steps > div{border-right:none !important;border-bottom:1px solid rgba(120,150,230,0.14) !important;padding:26px 0 22px !important;}
+  .pa-steps > div:last-child{border-bottom:none !important;}
+}
+@media (max-width:640px){
+  .pa-grid-3{grid-template-columns:1fr !important;}
+  .pa-pricing{grid-template-columns:1fr !important;}
+  .pa-footer{grid-template-columns:1fr !important;gap:26px !important;}
+}
+@media (max-width:480px){
+  .pa-sec{padding-left:16px !important;padding-right:16px !important;}
+}
 `;
 
 // three.js r128 + example postprocessing (global THREE.* build, matches the design).
@@ -82,17 +119,6 @@ export default function LandingHome() {
         el.removeEventListener("mouseleave", leave);
       });
     });
-
-    // ---------- scroll-to-features ----------
-    const scrollBtn = root.querySelector<HTMLElement>("#pa-scroll");
-    if (scrollBtn) {
-      const onClick = () => {
-        const el = document.getElementById("features");
-        if (el) window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 20, behavior: "smooth" });
-      };
-      scrollBtn.addEventListener("click", onClick);
-      cleanups.push(() => scrollBtn.removeEventListener("click", onClick));
-    }
 
     // ---------- reveal on scroll ----------
     const revealEls = Array.from(root.querySelectorAll<HTMLElement>("[data-reveal]"));
