@@ -41,6 +41,7 @@ import {
 import { PlatformIcon } from "~/components/icons/platform-icons";
 import { ChannelAvatar } from "~/components/channel-avatar";
 import { windowChannels } from "~/lib/channel-list-window";
+import { platformCounts, filterByPlatform, chunkIds } from "~/lib/channel-platform-filter";
 
 type PlatformAuthInfo = {
   platform: string;
@@ -335,6 +336,65 @@ export default function ChannelsPage() {
       toast({ title: `Removed from ${group?.name ?? "group"}` });
     },
   });
+
+  // Batch add/remove behind the group cards' "Select all" / "Remove all".
+  // Deliberately NOT a loop over addChannel: this org can hold hundreds of
+  // channels (387 FB Pages), and one mutation per channel would trip the tRPC
+  // rate limiter and half-populate the group. One call = one atomic write.
+  // No onSuccess/onError toast here — runGroupBatch owns the messaging so a
+  // chunked run reports ONE accumulated total instead of one toast per chunk.
+  const setGroupChannels = trpc.channelGroup.setChannels.useMutation();
+
+  // Matches the router's `.max(500)` guardrail. A group select-all on this
+  // platform can span hundreds of channels (387 FB Pages on one org), and an
+  // unchunked call would fail the whole batch with the same
+  // "Array must contain at most N element(s)" that broke bulk-delete >100.
+  const GROUP_BATCH = 500;
+
+  /**
+   * Chunked batch add/remove for one group card. Mirrors runBulkDelete:
+   * sequential batches, accumulated count, partial-progress surfaced on error
+   * (earlier chunks have already committed and cannot be rolled back).
+   */
+  const runGroupBatch = async (groupId: string, mode: "add" | "remove", ids: string[]) => {
+    if (ids.length === 0) return;
+    setPendingGroupId(groupId);
+    let changed = 0;
+    try {
+      for (const batch of chunkIds(ids, GROUP_BATCH)) {
+        const r = await setGroupChannels.mutateAsync({ groupId, channelIds: batch, mode });
+        changed += r.changed;
+      }
+      toast({
+        title:
+          mode === "add"
+            ? `Added ${changed} channel${changed === 1 ? "" : "s"} to the group`
+            : `Removed ${changed} channel${changed === 1 ? "" : "s"} from the group`,
+      });
+    } catch (err) {
+      toast({
+        variant: "destructive",
+        title: humanizeError(err),
+        description:
+          changed > 0
+            ? `${changed} channel${changed === 1 ? "" : "s"} were updated before the error.`
+            : undefined,
+      });
+    } finally {
+      setPendingGroupId(null);
+      refetchGroups();
+    }
+  };
+
+  // Per-group platform filter for the group cards. Keyed by group id so each
+  // card filters independently — a filter shared across cards would silently
+  // change what a "Select all" in a *different* card acts on.
+  const [groupPlatformFilter, setGroupPlatformFilter] = useState<Record<string, string | null>>({});
+
+  // Which group card currently has a batch write in flight — used to disable
+  // that card's buttons only, so a slow 300-channel write can't be double-fired
+  // while leaving other cards usable.
+  const [pendingGroupId, setPendingGroupId] = useState<string | null>(null);
 
   // Group channels by platform
   const groupedChannels = useMemo(() => {
@@ -999,9 +1059,105 @@ export default function ChannelsPage() {
                       )}
                     </div>
 
+                    {/* Platform filter + batch select-all for this group.
+                        The filter scopes BOTH the checkbox list below and the
+                        batch buttons, so "Select all" while filtered to Instagram
+                        adds only Instagram channels. */}
+                    {(() => {
+                      const activeFilter = groupPlatformFilter[group.id] ?? null;
+                      const counts = platformCounts(channels as any[]);
+                      const visible = filterByPlatform(channels as any[], activeFilter);
+                      const memberIds = new Set<string>(
+                        ((group.channels ?? []) as any[]).map((c: any) => c.id as string)
+                      );
+                      const visibleIds = visible.map((c: any) => c.id as string);
+                      const missing = visibleIds.filter((id) => !memberIds.has(id));
+                      const present = visibleIds.filter((id) => memberIds.has(id));
+                      // Gate on this card's OWN in-flight id, not the shared
+                      // mutation's isPending: two cards writing concurrently
+                      // would otherwise re-enable each other's buttons mid-flight
+                      // and allow a double-fire.
+                      const busy = pendingGroupId === group.id;
+
+                      const runBatch = (mode: "add" | "remove", ids: string[]) =>
+                        void runGroupBatch(group.id, mode, ids);
+
+                      return (
+                        <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                          {counts.length > 1 && (
+                            <>
+                              <button
+                                type="button"
+                                aria-pressed={activeFilter === null}
+                                onClick={() =>
+                                  setGroupPlatformFilter((prev) => ({ ...prev, [group.id]: null }))
+                                }
+                                className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                                  activeFilter === null ? "border-primary bg-primary/10" : "hover:bg-muted/50"
+                                }`}
+                              >
+                                All
+                                <span className="text-[10px] text-muted-foreground">
+                                  {(channels as any[]).length}
+                                </span>
+                              </button>
+                              {counts.map(({ platform, count }) => {
+                                const active = activeFilter === platform;
+                                return (
+                                  <button
+                                    key={platform}
+                                    type="button"
+                                    aria-pressed={active}
+                                    aria-label={`Filter this group's list to ${platform} (${count})`}
+                                    onClick={() =>
+                                      setGroupPlatformFilter((prev) => ({
+                                        ...prev,
+                                        // Clicking the active pill clears back to All.
+                                        [group.id]: active ? null : platform,
+                                      }))
+                                    }
+                                    className={`inline-flex min-w-0 max-w-full shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                                      active ? "border-primary bg-primary/10" : "hover:bg-muted/50"
+                                    }`}
+                                  >
+                                    <PlatformIcon platform={platform} size="sm" className="shrink-0" />
+                                    <span className="truncate">{platform}</span>
+                                    <span className="shrink-0 text-[10px] text-muted-foreground">{count}</span>
+                                  </button>
+                                );
+                              })}
+                            </>
+                          )}
+                          <div className="ml-auto flex shrink-0 items-center gap-1.5">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 text-xs"
+                              disabled={busy || missing.length === 0}
+                              onClick={() => runBatch("add", missing)}
+                            >
+                              {busy ? (
+                                <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                              ) : null}
+                              Select all{missing.length > 0 ? ` (${missing.length})` : ""}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 text-xs"
+                              disabled={busy || present.length === 0}
+                              onClick={() => runBatch("remove", present)}
+                            >
+                              Remove all{present.length > 0 ? ` (${present.length})` : ""}
+                            </Button>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
                     {/* Channel checkboxes */}
                     <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
-                      {channels.map((channel: any) => {
+                      {filterByPlatform(channels as any[], groupPlatformFilter[group.id] ?? null).map((channel: any) => {
                         const inGroup = (group.channels ?? []).some((c: any) => c.id === channel.id);
                         return (
                           <label
