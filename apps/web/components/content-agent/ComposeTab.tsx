@@ -45,6 +45,12 @@ import { PostPreviewSwitcher } from "~/components/previews";
 import { MediaPickerDialog } from "~/components/media-picker-dialog";
 import { ImageGenerationPanel } from "~/components/content-agent/ImageGenerationPanel";
 import { ChannelAvatar } from "~/components/channel-avatar";
+import { PlatformIcon } from "~/components/icons/platform-icons";
+import {
+  platformCounts,
+  filterByPlatform,
+  computeSelectAll,
+} from "~/lib/channel-platform-filter";
 
 const MediaEditor = dynamic(
   () => import("~/components/media-editor/MediaEditor").then((m) => ({ default: m.MediaEditor })),
@@ -138,6 +144,11 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   const [isUploading, setIsUploading] = useState(false);
   const [channelSearch, setChannelSearch] = useState("");
   const [channelDropdownOpen, setChannelDropdownOpen] = useState(false);
+  // Platform filter for the channel picker. `null` = All. This narrows only what
+  // the picker DISPLAYS (and therefore what "Select all" acts on) — it never
+  // touches `selectedChannels`, so switching filters preserves picks made under
+  // a previous filter.
+  const [platformFilter, setPlatformFilter] = useState<string | null>(null);
   const [formatByChannelId, setFormatByChannelId] = useState<Record<string, "FEED" | "REEL" | "STORY" | "SHORT" | "VIDEO" | "CAROUSEL">>({});
   const [ytMetadata, setYtMetadata] = useState<{ title?: string; privacyStatus?: "public" | "unlisted" | "private" }>({});
   const channelSectionRef = useRef<HTMLDivElement>(null);
@@ -1469,6 +1480,57 @@ ${content}`;
                     );
                   })()}
 
+                  {/* Platform filter pills — narrow the picker to one platform.
+                      Purely a DISPLAY filter: it changes what the list shows (and
+                      therefore what "Select all" below acts on) and never mutates
+                      selectedChannels, so switching platforms keeps earlier picks. */}
+                  {(() => {
+                    const counts = platformCounts((channels as any[]) ?? []);
+                    // Nothing to filter with a single platform — don't add chrome
+                    // that can only ever be a no-op.
+                    if (counts.length < 2) return null;
+                    const totalCount = ((channels as any[]) ?? []).length;
+                    return (
+                      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                        <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                          Platform
+                        </span>
+                        <button
+                          type="button"
+                          aria-pressed={platformFilter === null}
+                          onClick={() => setPlatformFilter(null)}
+                          className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
+                            platformFilter === null ? "border-primary bg-primary/10" : "hover:bg-muted/50"
+                          }`}
+                        >
+                          All
+                          <span className="text-[10px] text-muted-foreground">{totalCount}</span>
+                        </button>
+                        {counts.map(({ platform, count }) => {
+                          const active = platformFilter === platform;
+                          return (
+                            <button
+                              key={platform}
+                              type="button"
+                              aria-pressed={active}
+                              aria-label={`Show only ${platform} channels (${count})`}
+                              // Clicking the active pill returns to All — a filter
+                              // you can't clear from the pill row is a trap.
+                              onClick={() => setPlatformFilter(active ? null : platform)}
+                              className={`inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
+                                active ? "border-primary bg-primary/10" : "hover:bg-muted/50"
+                              }`}
+                            >
+                              <PlatformIcon platform={platform} size="sm" className="shrink-0" />
+                              <span className="truncate">{platform}</span>
+                              <span className="shrink-0 text-[10px] text-muted-foreground">{count}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
+
                   {/* Selected channels as chips */}
                   {selectedChannels.length > 0 && (
                     <div className="flex flex-wrap gap-1.5">
@@ -1525,7 +1587,11 @@ ${content}`;
                   {/* Dropdown results — always visible when section is active */}
                   {(channelDropdownOpen || channels?.length) && (() => {
                     const recentSet = new Set(recentlyUsedIds || []);
-                    const allFiltered = channels?.filter((channel: any) => {
+                    // Platform filter is applied BEFORE the text search, so the
+                    // visible list (and therefore Select all) can never include a
+                    // channel from a platform the user filtered out.
+                    const platformScoped = filterByPlatform((channels as any[]) ?? [], platformFilter);
+                    const allFiltered = platformScoped.filter((channel: any) => {
                       const matchesSearch =
                         !channelSearch ||
                         channel.name.toLowerCase().includes(channelSearch.toLowerCase()) ||
@@ -1542,7 +1608,37 @@ ${content}`;
                       return a.name.localeCompare(b.name);
                     });
 
+                    // Select-all operates on exactly what is visible above.
+                    const visibleIds = sorted.map((c: any) => c.id as string);
+                    const { allSelected, selectedVisibleCount, next } = computeSelectAll(
+                      visibleIds,
+                      selectedChannels
+                    );
+
                     return (
+                      <>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-xs text-muted-foreground">
+                          {sorted.length} channel{sorted.length === 1 ? "" : "s"}
+                          {platformFilter ? ` · ${platformFilter}` : ""}
+                          {selectedVisibleCount > 0 ? ` · ${selectedVisibleCount} selected` : ""}
+                        </span>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-7 text-xs"
+                          disabled={sorted.length === 0}
+                          // Acts on the filtered+searched list only. Deselect
+                          // removes just those ids, so picks made under another
+                          // platform filter survive.
+                          onClick={() => setSelectedChannels(next)}
+                        >
+                          {allSelected
+                            ? `Deselect all (${sorted.length})`
+                            : `Select all (${sorted.length})`}
+                        </Button>
+                      </div>
                       <div className="max-h-48 overflow-y-auto rounded-md border bg-background shadow-sm">
                         {sorted.length === 0 ? (
                           <p className="p-3 text-center text-xs text-muted-foreground">No channels found</p>
@@ -1589,6 +1685,7 @@ ${content}`;
                           })
                         )}
                       </div>
+                      </>
                     );
                   })()}
                 </>
