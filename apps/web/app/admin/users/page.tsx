@@ -123,16 +123,23 @@ export default function AdminUsersPage() {
       header: "Access",
       cell: (row) => {
         const pending = setAppRole.isPending && setAppRole.variables?.userId === row.id;
+        // isSuperAdmin implies ADMIN at EVERY appRole gate (isAppAdmin in trpc.ts),
+        // so this selector genuinely cannot demote such a user. The select is
+        // disabled below, but a hover-only title reads as "nothing happened" —
+        // state the override visibly instead.
+        if (row.isSuperAdmin) {
+          return (
+            <span className="text-xs text-muted-foreground">
+              overridden by super admin
+            </span>
+          );
+        }
         return (
           <select
             className="h-8 rounded-md border bg-background px-2 text-sm disabled:opacity-50"
             value={row.appRole}
-            disabled={pending || row.isSuperAdmin}
-            title={
-              row.isSuperAdmin
-                ? "Super admins pass every gate regardless of access role"
-                : "App-level access: USER = Dashboard, Content Studio, Super Agent, Media, Insights, Channels. ADMIN = everything."
-            }
+            disabled={pending}
+            title="App-level access: USER = Dashboard, Content Studio, Super Agent, Media, Insights, Channels. ADMIN = everything."
             onChange={(e) =>
               setAppRole.mutate({ userId: row.id, appRole: e.target.value as "USER" | "ADMIN" })
             }
