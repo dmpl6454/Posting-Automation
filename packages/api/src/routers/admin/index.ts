@@ -8,11 +8,13 @@ import { adminAgentsRouter } from "./agents.router";
 import { adminMediaRouter } from "./media.router";
 import { adminQueuesRouter } from "./queues.router";
 import { adminAuditRouter } from "./audit.router";
+import { adminTeamsRouter } from "./teams.router";
 
 export const adminRouter = createRouter({
   overview: adminOverviewRouter,
   users: adminUsersRouter,
   orgs: adminOrgsRouter,
+  teams: adminTeamsRouter,
   posts: adminPostsRouter,
   channels: adminChannelsRouter,
   agents: adminAgentsRouter,
