@@ -1332,6 +1332,57 @@ Then open a PR against `main` summarizing: the teams router + UI, the Users-pane
 
 ---
 
+---
+
+## Verification results (2026-08-05, all tasks complete)
+
+**Automated:** `packages/api` 638 passed / 7 skipped (0 failures); `tsc --noEmit` clean for
+both `@postautomation/api` and `@postautomation/web`; `SKIP_ENV_VALIDATION=1 web build` exit 0
+with `/admin/teams` and `/admin/teams/[id]` registered.
+
+**Scope check:** `git diff main --stat` for `apps/worker/`, `packages/social/`,
+`apps/web/app/api/oauth/`, `packages/api/src/trpc.ts`, `packages/db/prisma/schema.prisma`
+returned **empty** — the publish pipeline, providers, OAuth callback, orgProcedure and schema
+are untouched.
+
+**End-to-end against real Postgres — 15/15** (throwaway harness, fixtures cleaned up, verified
+0 rows left). Exercised the real router through `appRouter.createCaller`, i.e. the same
+`orgProcedure` path the app uses:
+
+1. B is blocked from A's org before being added (isolation intact)
+2. `appRole=ADMIN` non-super-admin is refused by `admin.teams` (super-admin only)
+3. `addMember` creates the membership
+4. `addMember` is idempotent — a double-click reports `alreadyMember`, no 500
+5. **B sees all of A's channels after being added (pooling works — the core claim)**
+6. **B can create a post targeting A's channel (simultaneous posting confirmed)**
+7. Last-OWNER removal refused
+8. `getById` exposes org role MEMBER + app role USER (the mismatch the UI warns about)
+9. `getById` reports `channelsByPlatform` correctly
+10. `searchUsers` excludes users who are already members
+11. `updateMemberRole` MEMBER→ADMIN works
+12. OWNER rejected as an assignable role (zod)
+13. `removeMember` deletes no channels (non-destructive)
+14. B loses access immediately after removal
+15. Audit trail written (3 `admin.team.*` entries)
+
+**Deviations from the plan as written, and why:**
+
+- `ConfirmDialog` is **trigger-based** (`trigger`/`onConfirm`), not `open`/`onOpenChange` as the
+  plan assumed. The detail page uses the real API with `mutateAsync` so the dialog awaits,
+  shows loading, and stays open on failure. The OWNER row renders a plain disabled button
+  rather than a dialog with a disabled trigger.
+- `DataTable` has built-in `onSearch`/`hasMore`/`onLoadMore` and **no** `emptyMessage`; the list
+  page uses those instead of its own search input.
+- `User`'s back-relation is **`memberships`**, not `members` — caught by tsc.
+- The wiring-lock test **strips comments** before matching, because the router's own doc comment
+  mentions `orgProcedure` in prose.
+- Task 6 turned out narrower than planned: the Access selector was *already* disabled for super
+  admins with a tooltip. Rather than duplicate that, the row now renders a visible
+  "overridden by super admin" label (a hover-only title reads as a silent no-op), and the
+  now-dead `isSuperAdmin` branches in `disabled`/`title` were removed.
+
+---
+
 ## Out of scope — do NOT implement
 
 - **Channel migration between orgs.** Moving a `Channel` orphans its `PostTarget`s from their parent `Post` (which carries its own `organizationId`), creating history invisible to both orgs. Owner-approved: make the existing workspace the team instead.
