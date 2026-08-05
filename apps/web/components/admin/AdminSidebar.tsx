@@ -6,6 +6,7 @@ import { signOut } from "next-auth/react";
 import {
   LayoutDashboard,
   Users,
+  UsersRound,
   Building2,
   FileText,
   Radio,
@@ -29,6 +30,7 @@ const navItems = [
   { label: "Overview", href: "/admin", icon: LayoutDashboard },
   { label: "Users", href: "/admin/users", icon: Users },
   { label: "Organizations", href: "/admin/orgs", icon: Building2 },
+  { label: "Teams", href: "/admin/teams", icon: UsersRound },
   { label: "Posts", href: "/admin/posts", icon: FileText },
   { label: "Channels", href: "/admin/channels", icon: Radio },
   { label: "Agents", href: "/admin/agents", icon: Bot },
