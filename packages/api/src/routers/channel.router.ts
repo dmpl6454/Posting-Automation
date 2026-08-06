@@ -5,7 +5,7 @@ import { avatarCacheQueue } from "@postautomation/queue";
 import { getSocialProvider, getSupportedPlatforms, signState } from "@postautomation/social";
 import { resolveChannelErrorsOnReconnect } from "@postautomation/db";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
-import { readInsightsHealth } from "../lib/insights-health";
+import { evaluateChannelInsightsStatus } from "../lib/insights-health";
 import { enforcePlanLimit } from "../middleware/plan-limit.middleware";
 import {
   TOKEN_PLATFORMS,
@@ -59,7 +59,7 @@ export const channelRouter = createRouter({
     // otherwise a dead token is silently indistinguishable from zero engagement.
     return channels.map(({ metadata, ...c }) => ({
       ...c,
-      insightsHealth: readInsightsHealth(metadata),
+      insightsHealth: evaluateChannelInsightsStatus(metadata),
     }));
   }),
 

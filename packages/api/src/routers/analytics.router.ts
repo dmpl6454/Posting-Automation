@@ -14,8 +14,9 @@ import { escapeHtml } from "../lib/sanitize";
 import {
   platformMetricCapabilities,
   effectiveChannelUnavailable,
+  reportableMetrics,
 } from "../lib/platform-metrics";
-import { readInsightsHealth, summarizeInsightsHealth } from "../lib/insights-health";
+import { evaluateChannelInsightsStatus, summarizeChannelStatuses } from "../lib/insights-health";
 import { toCsv } from "../lib/report-csv";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 
@@ -432,6 +433,16 @@ export const analyticsRouter = createRouter({
 
       const targetIds = targets.map((t: any) => t.id);
 
+      // Which metrics ANY connected platform can ever report. Lets the UI drop
+      // dead tiles/cards entirely instead of showing a confident "0" for a
+      // metric that is structurally impossible — e.g. "Total Reach: 0" on an
+      // org with only Facebook channels, where Meta deleted the reach metric.
+      const activeChannels = await ctx.prisma.channel.findMany({
+        where: { organizationId: ctx.organizationId, isActive: true },
+        select: { platform: true },
+      });
+      const reportable = reportableMetrics(activeChannels.map((c) => c.platform as string));
+
       if (targetIds.length === 0) {
         return {
           impressions: 0,
@@ -441,6 +452,7 @@ export const analyticsRouter = createRouter({
           comments: 0,
           reach: 0,
           engagementRate: 0,
+          reportableMetrics: reportable,
         };
       }
 
@@ -491,6 +503,7 @@ export const analyticsRouter = createRouter({
         comments: Number(row?.comments ?? 0),
         reach: Number(row?.reach ?? 0),
         engagementRate: Number(row?.engagementRate ?? 0),
+        reportableMetrics: reportable,
       };
     }),
 
@@ -748,7 +761,7 @@ export const analyticsRouter = createRouter({
           unavailable,
           // "Reconnect to restore Insights" signal, written by the sync worker
           // from the Graph errors it already sees (channel-insights-health.ts).
-          insightsHealth: readInsightsHealth(channel.metadata),
+          insightsHealth: evaluateChannelInsightsStatus(channel.metadata),
         };
       });
 
@@ -773,11 +786,14 @@ export const analyticsRouter = createRouter({
       where: { organizationId: ctx.organizationId, isActive: true },
       select: { id: true, name: true, platform: true, metadata: true },
     });
-    const summary = summarizeInsightsHealth(channels);
+    // Covers BOTH failure modes: broken now (dead token / missing scope) and
+    // about to lapse (Meta's 90-day data-access window, which nothing monitored
+    // and which a background refresh provably cannot extend).
+    const summary = summarizeChannelStatuses(channels);
     return {
       ...summary,
       // Cap the enumerated list so an org with hundreds of stale channels can't
-      // bloat the payload; the count stays exact for the banner copy.
+      // bloat the payload; the counts stay exact for the banner copy.
       channels: summary.channels.slice(0, 50),
       totalActiveChannels: channels.length,
     };
@@ -933,6 +949,15 @@ export const analyticsRouter = createRouter({
         window: input.window,
         mode: input.mode,
         generatedAt: new Date().toISOString(),
+        // Columns worth rendering at all: derived from the platforms actually
+        // present in these rows (plus any per-capture override), so a metric no
+        // platform here can EVER report is dropped instead of showing a column
+        // of "—". Computed from capability, not from "all values are null" —
+        // the latter also means "not synced yet".
+        reportableMetrics: reportableMetrics(
+          rows.map((r) => r.platform),
+          rows.map((r) => r.snapshotMetadata?.metricsAvailable as any)
+        ),
       };
     }),
 

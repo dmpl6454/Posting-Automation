@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma, encryptToken, resolveChannelErrorsOnReconnect } from "@postautomation/db";
-import { getSocialProvider, FacebookProvider, InstagramProvider, LinkedInProvider, verifyState } from "@postautomation/social";
+import { getSocialProvider, FacebookProvider, InstagramProvider, LinkedInProvider, verifyState, fetchMetaTokenWindow } from "@postautomation/social";
 // Deep import via @postautomation/api (a declared, transpiled web dependency):
 // apps/web has no direct dep on @postautomation/queue, so the api package
 // bridges the avatar-cache enqueue.
@@ -221,6 +221,29 @@ export async function GET(
         ? ({ id: "", name: "" } as Awaited<ReturnType<typeof provider.getProfile>>)
         : await provider.getProfile(tokens);
 
+    // Meta's 90-day DATA-ACCESS window. Captured ONCE per consent (the same user
+    // token backs every Page / IG account granted here), never per channel — a
+    // per-channel debug_token sweep over ~1300 channels trips Meta's app-level
+    // rate limit. This is the clock that actually kills Meta insights every ~3
+    // months: `expires_at` is genuinely "never" (so tokenExpiresAt is correctly
+    // NULL), while data access silently lapses at +90 days. A server-side
+    // refresh CANNOT extend it — verified: fb_exchange_token returns a token with
+    // an identical data_access_expires_at — so the only cure is this reconnect,
+    // and the only useful thing we can do is record the deadline and warn ahead
+    // of it. Best-effort: must never break a connect.
+    const metaTokenWindow =
+      platform === "FACEBOOK" || platform === "INSTAGRAM"
+        ? await fetchMetaTokenWindow(tokens.accessToken, oauthClientId, oauthClientSecret).catch(
+            () => null
+          )
+        : null;
+    const metaWindowMeta = metaTokenWindow?.dataAccessExpiresAt
+      ? {
+          dataAccessExpiresAt: metaTokenWindow.dataAccessExpiresAt.toISOString(),
+          dataAccessCheckedAt: new Date().toISOString(),
+        }
+      : {};
+
     // For Facebook, fetch and save managed Pages instead of the user account
     if (platform === "FACEBOOK" && provider instanceof FacebookProvider) {
       const pages = await provider.getPages(tokens);
@@ -259,7 +282,7 @@ export async function GET(
               // (the accessToken column is encrypted via the Prisma extension; metadata is not).
               // NOTE: userAccessToken is stored encrypted; any future reader MUST decryptToken()
               // it before use. It is currently written here but read nowhere.
-              metadata: { pageId: page.id, userAccessToken: encryptToken(tokens.accessToken) },
+              metadata: { pageId: page.id, userAccessToken: encryptToken(tokens.accessToken), ...metaWindowMeta },
             },
             create: {
               organizationId,
@@ -275,7 +298,7 @@ export async function GET(
               // (the accessToken column is encrypted via the Prisma extension; metadata is not).
               // NOTE: userAccessToken is stored encrypted; any future reader MUST decryptToken()
               // it before use. It is currently written here but read nowhere.
-              metadata: { pageId: page.id, userAccessToken: encryptToken(tokens.accessToken) },
+              metadata: { pageId: page.id, userAccessToken: encryptToken(tokens.accessToken), ...metaWindowMeta },
             },
           });
           // Fresh token → clear this channel's open token/auth monitoring errors.
@@ -323,7 +346,7 @@ export async function GET(
             username: ig.username || null,
             avatar: ig.avatar || null,
             isActive: true,
-            metadata: { igUserId: ig.id },
+            metadata: { igUserId: ig.id, ...metaWindowMeta },
           },
           create: {
             organizationId,
@@ -336,7 +359,7 @@ export async function GET(
             refreshToken: tokens.refreshToken || null,
             tokenExpiresAt: tokens.expiresAt || null,
             scopes: tokens.scopes || [],
-            metadata: { igUserId: ig.id },
+            metadata: { igUserId: ig.id, ...metaWindowMeta },
           },
         });
         // Fresh token → clear this channel's open token/auth monitoring errors.

@@ -1,13 +1,102 @@
 import { prisma } from "@postautomation/db";
 import { tokenRefreshQueue, analyticsSyncQueue, agentRunQueue, trendDiscoverQueue, listeningSyncQueue, campaignAnalyticsSyncQueue, brandContentSyncQueue, outreachPollQueue, rssSyncQueue, avatarCacheQueue } from "@postautomation/queue";
+import { fetchMetaTokenWindow } from "@postautomation/social";
 import { runAutoHealerWithLogging } from "../workers/auto-healer.worker";
 import { runCelebrityDetectors } from "../workers/celebrity-detect.worker";
 import { enqueueScheduledPublishJobs } from "@postautomation/queue";
 import { HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE } from "../lib/publish-recovery";
 
 /**
+ * Backfill Meta's 90-day DATA-ACCESS deadline onto channels that predate its
+ * capture at connect time, so the Insights banner can warn before metrics die.
+ *
+ * ⚠️ Context — this is the failure nobody was watching. Meta reports
+ * `expires_at = never` for BOTH FB Page and IG user tokens, so
+ * `Channel.tokenExpiresAt` is legitimately NULL; but `scheduleTokenRefreshes`
+ * filters `tokenExpiresAt: { lte: soon }`, which NULL can never satisfy — so that
+ * cron has never selected a single Meta channel (measured: 1338 of 1339). The
+ * clock that actually matters is `data_access_expires_at`, +90 days from consent,
+ * and a server-side `fb_exchange_token` refresh provably does NOT extend it (the
+ * new token carries an identical value). So the only remedy is a user reconnect,
+ * and the only useful engineering is to know the deadline in advance.
+ *
+ * Rate-limit discipline (learned the hard way — a 1328-channel debug_token sweep
+ * tripped `#4 Application request limit reached` partway through):
+ *   - DEDUPE BY TOKEN. One consent's user token backs every IG account from it,
+ *     so distinct tokens are far fewer than channels.
+ *   - hard cap per run, oldest-checked first, so a large backlog drains over days
+ *     instead of burning the app's hourly quota in one go.
+ */
+const DATA_ACCESS_BACKFILL_MAX_TOKENS = 40;
+
+export async function scheduleMetaDataAccessBackfill() {
+  const clientId = process.env.FACEBOOK_CLIENT_ID || process.env.INSTAGRAM_CLIENT_ID;
+  const clientSecret = process.env.FACEBOOK_CLIENT_SECRET || process.env.INSTAGRAM_CLIENT_SECRET;
+  if (!clientId || !clientSecret) return;
+
+  const candidates = await prisma.channel.findMany({
+    where: { isActive: true, platform: { in: ["FACEBOOK", "INSTAGRAM"] as any } },
+    orderBy: { updatedAt: "asc" },
+    select: { id: true, accessToken: true, metadata: true, platform: true },
+    take: 600,
+  });
+
+  // Only channels with no recorded deadline (or a stale check) need a call.
+  const needing = candidates.filter((c) => {
+    const md = (c.metadata ?? null) as Record<string, unknown> | null;
+    if (md && typeof md === "object" && typeof md.dataAccessExpiresAt === "string") return false;
+    return !!c.accessToken && !c.accessToken.startsWith("enc:");
+  });
+
+  // Group by token so one debug_token call serves every channel sharing it.
+  const byToken = new Map<string, string[]>();
+  for (const c of needing) {
+    const list = byToken.get(c.accessToken) ?? [];
+    list.push(c.id);
+    byToken.set(c.accessToken, list);
+  }
+
+  let calls = 0;
+  let stamped = 0;
+  for (const [token, channelIds] of byToken) {
+    if (calls >= DATA_ACCESS_BACKFILL_MAX_TOKENS) break;
+    calls++;
+    const window = await fetchMetaTokenWindow(token, clientId, clientSecret).catch(() => null);
+    if (!window?.dataAccessExpiresAt) continue;
+    const stamp = {
+      dataAccessExpiresAt: window.dataAccessExpiresAt.toISOString(),
+      dataAccessCheckedAt: new Date().toISOString(),
+    };
+    for (const id of channelIds) {
+      const existing = candidates.find((c) => c.id === id)?.metadata;
+      const base =
+        existing && typeof existing === "object" && !Array.isArray(existing)
+          ? (existing as Record<string, unknown>)
+          : {};
+      await prisma.channel
+        .update({ where: { id }, data: { metadata: { ...base, ...stamp } as any } })
+        .then(() => {
+          stamped++;
+        })
+        .catch(() => {});
+    }
+  }
+
+  if (calls > 0) {
+    console.log(
+      `[Cron:MetaDataAccess] ${calls} debug_token call(s) covering ${stamped} channel(s); ${byToken.size - calls} token group(s) deferred to the next run`
+    );
+  }
+}
+
+/**
  * Check for channels with expiring tokens and queue refresh jobs.
  * Run every 30 minutes.
+ *
+ * ⚠️ NOTE: this reaches almost no Meta channel, and that is CORRECT — Meta
+ * tokens genuinely never expire (`tokenExpiresAt` NULL), and a refresh cannot
+ * extend their separate 90-day data-access window anyway. Meta channels are
+ * handled by scheduleMetaDataAccessBackfill + the Insights reconnect prompt.
  */
 export async function scheduleTokenRefreshes() {
   const soon = new Date(Date.now() + 60 * 60 * 1000); // 1 hour from now
@@ -766,6 +855,12 @@ export function startCronJobs() {
   // Token refresh check every 30 minutes
   setInterval(scheduleTokenRefreshes, 30 * 60 * 1000);
   scheduleTokenRefreshes(); // Run immediately on startup
+
+  // Meta 90-day data-access deadline backfill, once daily. Token-deduped and
+  // hard-capped, so a ~1300-channel backlog drains over days rather than
+  // burning the app's hourly Graph quota in one pass.
+  setInterval(scheduleMetaDataAccessBackfill, 24 * 60 * 60 * 1000);
+  setTimeout(scheduleMetaDataAccessBackfill, 11 * 60 * 1000); // after 11 min warmup
 
   // Analytics sync every 6 hours
   setInterval(scheduleAnalyticsSync, 6 * 60 * 60 * 1000);

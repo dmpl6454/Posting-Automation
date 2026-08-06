@@ -84,6 +84,46 @@ function staticallyUnavailable(key: MetricKey, caps: PlatformMetricCapabilities)
 }
 
 /**
+ * Which metrics ANY of these platforms can ever report.
+ *
+ * Drives column/tile hiding: a metric no connected platform can report is not a
+ * "0" and not even a "—" worth a column — it is dead screen furniture. For an
+ * org with only Facebook channels, Impressions and Reach can NEVER be populated
+ * (Meta deleted those Page-post metrics — re-verified 2026-08-06 WITH
+ * `read_insights` granted), so rendering the columns at all just invites the
+ * reasonable-but-wrong conclusion that the product is broken.
+ *
+ * Deliberately computed from PLATFORM CAPABILITY, not from "are all the current
+ * values null?" — an all-null column can simply mean "nothing has synced yet",
+ * and hiding it then would erase a column that is about to fill in.
+ *
+ * `declaredPerPlatform` lets a per-capture override widen the result: a Facebook
+ * channel that posted a VIDEO does report views (via `video_insights` → the
+ * impressions slot), so Impressions must stay visible for that org.
+ */
+export function reportableMetrics(
+  platforms: Iterable<string>,
+  declaredAvailable?: Iterable<Partial<Record<MetricKey, boolean>> | undefined>
+): MetricKey[] {
+  const reportable = new Set<MetricKey>();
+  for (const platform of platforms) {
+    const caps = platformMetricCapabilities(platform);
+    for (const key of ALL_METRIC_KEYS) {
+      if (!staticallyUnavailable(key, caps)) reportable.add(key);
+    }
+  }
+  // A capture that actually returned a metric proves the platform CAN report it
+  // for at least some post type, even when the static default says otherwise.
+  for (const declared of declaredAvailable ?? []) {
+    if (!declared) continue;
+    for (const key of ALL_METRIC_KEYS) {
+      if (declared[key] === true) reportable.add(key);
+    }
+  }
+  return ALL_METRIC_KEYS.filter((k) => reportable.has(k));
+}
+
+/**
  * Channel-level equivalent of gatePostReportRow's per-snapshot override, for the
  * AGGREGATE read paths (perChannelStats → Channel Performance table, groupStats →
  * Group Performance card).

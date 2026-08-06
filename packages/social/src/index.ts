@@ -24,3 +24,6 @@ export type { OAuthStatePayload } from "./utils/oauth-helper";
 // a circular dep between db and social).
 export { encryptToken, decryptToken, isEncrypted } from "@postautomation/db";
 export { validateMediaForPlatform } from "./utils/media-validator";
+// Meta's 90-day DATA-ACCESS window — a separate clock from token expiry, and the
+// real reason Meta insights die every ~3 months. See meta-data-access.ts.
+export { fetchMetaTokenWindow, type MetaTokenWindow } from "./utils/meta-data-access";

@@ -51,22 +51,19 @@ function isStaleSnapshot(snapshotAt: Date | string | null): boolean {
 
 const EXPORT_LIMIT = 1000;
 
-const CSV_HEADER = [
+/**
+ * Fixed leading columns. The METRIC columns that follow are assembled at export
+ * time from what is actually reportable, so a metric no platform in the export
+ * can populate doesn't ship as an all-empty CSV column (and header/row indexes
+ * stay aligned).
+ */
+const CSV_HEADER_FIXED = [
   "Post",
   "Channel",
   "Handle",
   "Platform",
   "Published At (UTC)",
   "Post URL",
-  "Views/Impressions",
-  "Clicks",
-  "Likes",
-  "Comments",
-  "Shares",
-  "Reach",
-  "Saves",
-  "Engagement %",
-  "Metric captured at (UTC)",
 ];
 
 /**
@@ -93,6 +90,19 @@ export function ReportsTab() {
   );
 
   const rows = data?.rows ?? [];
+
+  // Capability-driven columns: a metric that NO platform in these rows can ever
+  // report is dropped entirely rather than rendering a column full of "—".
+  // Derived server-side from platform capability (plus per-capture overrides) —
+  // deliberately NOT from "are all values null?", since that also means "not
+  // synced yet" and would hide a column that is about to fill in.
+  const reportable = new Set<string>(data?.reportableMetrics ?? []);
+  // While loading (or on a legacy payload) show everything, so the header doesn't
+  // reflow once data lands.
+  const show = (key: string) => reportable.size === 0 || reportable.has(key);
+  // Saves ride in capture metadata rather than the metric map; show the column
+  // only when some row actually carries one.
+  const anySaves = rows.some((r) => r.saved != null);
 
   const emailReport = trpc.analytics.emailReport.useMutation({
     onSuccess: (res) => {
@@ -132,13 +142,38 @@ export function ReportsTab() {
         mode,
         limit: EXPORT_LIMIT + 1,
       });
+      // Export mirrors what the table shows: a column dropped for being
+      // structurally unreportable must not reappear as an all-empty CSV column.
+      const exportReportable = new Set<string>(full?.reportableMetrics ?? data?.reportableMetrics ?? []);
+      const inCsv = (key: string) => exportReportable.size === 0 || exportReportable.has(key);
       const fetched = full?.rows ?? rows;
       const truncated = fetched.length > EXPORT_LIMIT ? "-truncated" : "";
       const exportRows = fetched.slice(0, EXPORT_LIMIT);
+      // Metric columns, filtered to what is actually reportable, so the header
+      // and every row stay index-aligned.
+      type ExportRow = (typeof exportRows)[number];
+      const allMetricCols: Array<{ key: string; header: string; get: (r: ExportRow) => any }> = [
+        { key: "impressions", header: "Views/Impressions", get: (r: ExportRow) => r.impressions },
+        { key: "clicks", header: "Clicks", get: (r: ExportRow) => r.clicks },
+        { key: "likes", header: "Likes", get: (r: ExportRow) => r.likes },
+        { key: "comments", header: "Comments", get: (r: ExportRow) => r.comments },
+        { key: "shares", header: "Shares", get: (r: ExportRow) => r.shares },
+        { key: "reach", header: "Reach", get: (r: ExportRow) => r.reach },
+      ];
+      const metricCols = allMetricCols.filter((c) => inCsv(c.key));
+      const includeSaves = exportRows.some((r) => r.saved != null);
+      const includeEng = inCsv("impressions");
+
       downloadCsv(
         `postautomation-report-${win}-${mode}-${new Date().toISOString().slice(0, 10)}${truncated}.csv`,
         toCsv(
-          CSV_HEADER,
+          [
+            ...CSV_HEADER_FIXED,
+            ...metricCols.map((c) => c.header),
+            ...(includeSaves ? ["Saves"] : []),
+            ...(includeEng ? ["Engagement %"] : []),
+            "Metric captured at (UTC)",
+          ],
           exportRows.map((r) => [
             r.contentPreview,
             r.channelName,
@@ -146,14 +181,9 @@ export function ReportsTab() {
             r.platform,
             r.publishedAt ? new Date(r.publishedAt).toISOString() : "",
             r.publishedUrl ?? "",
-            r.impressions,
-            r.clicks,
-            r.likes,
-            r.comments,
-            r.shares,
-            r.reach,
-            r.saved,
-            r.engagementRate,
+            ...metricCols.map((c) => c.get(r)),
+            ...(includeSaves ? [r.saved] : []),
+            ...(includeEng ? [r.engagementRate] : []),
             r.snapshotAt ? new Date(r.snapshotAt).toISOString() : "",
           ])
         )
@@ -319,21 +349,33 @@ export function ReportsTab() {
                   <th className="py-2.5 pr-3 font-medium">Post</th>
                   <th className="py-2.5 pr-3 font-medium">Channel</th>
                   <th className="py-2.5 pr-3 font-medium">Published (UTC)</th>
-                  <th className="py-2.5 pr-3 text-right font-medium">Views/Impr.</th>
-                  <th className="py-2.5 pr-3 text-right font-medium">Clicks</th>
-                  <th className="py-2.5 pr-3 text-right font-medium">Likes</th>
-                  <th className="py-2.5 pr-3 text-right font-medium">Comments</th>
-                  <th className="py-2.5 pr-3 text-right font-medium">Shares</th>
-                  <th className="py-2.5 pr-3 text-right font-medium">Reach</th>
-                  <th
-                    className="py-2.5 pr-3 text-right font-medium"
-                    title="Saves / bookmarks — a distinct action from a like. Reported by Instagram (and Pinterest saves)."
-                  >
-                    Saves
-                  </th>
-                  <th className="py-2.5 pr-3 text-right font-medium" title="Engagement rate">
-                    Eng %
-                  </th>
+                  {/* Columns are capability-driven: a metric that NO platform in
+                      these rows can ever report is dropped rather than rendering a
+                      full column of "—". Server-computed from the platforms
+                      present plus any per-capture override. */}
+                  {show("impressions") && (
+                    <th className="py-2.5 pr-3 text-right font-medium">Views/Impr.</th>
+                  )}
+                  {show("clicks") && <th className="py-2.5 pr-3 text-right font-medium">Clicks</th>}
+                  {show("likes") && <th className="py-2.5 pr-3 text-right font-medium">Likes</th>}
+                  {show("comments") && (
+                    <th className="py-2.5 pr-3 text-right font-medium">Comments</th>
+                  )}
+                  {show("shares") && <th className="py-2.5 pr-3 text-right font-medium">Shares</th>}
+                  {show("reach") && <th className="py-2.5 pr-3 text-right font-medium">Reach</th>}
+                  {anySaves && (
+                    <th
+                      className="py-2.5 pr-3 text-right font-medium"
+                      title="Saves / bookmarks — a distinct action from a like. Reported by Instagram (and Pinterest saves)."
+                    >
+                      Saves
+                    </th>
+                  )}
+                  {show("impressions") && (
+                    <th className="py-2.5 pr-3 text-right font-medium" title="Engagement rate">
+                      Eng %
+                    </th>
+                  )}
                   <th className="py-2.5 pr-3 font-medium">Captured (UTC)</th>
                   <th className="py-2.5 font-medium">Link</th>
                 </tr>
@@ -366,27 +408,43 @@ export function ReportsTab() {
                     <td className="whitespace-nowrap py-2.5 pr-3 text-muted-foreground">
                       {fmtUtc(r.publishedAt)}
                     </td>
-                    <td className="py-2.5 pr-3 text-right tabular-nums">{num(r.impressions)}</td>
-                    <td className="py-2.5 pr-3 text-right tabular-nums">{num(r.clicks)}</td>
-                    <td className="py-2.5 pr-3 text-right tabular-nums">{num(r.likes)}</td>
-                    <td className="py-2.5 pr-3 text-right tabular-nums">{num(r.comments)}</td>
-                    <td className="py-2.5 pr-3 text-right tabular-nums">{num(r.shares)}</td>
-                    <td className="py-2.5 pr-3 text-right tabular-nums">{num(r.reach)}</td>
-                    <td
-                      className="py-2.5 pr-3 text-right tabular-nums"
-                      // Reels also report watch time; surface it as a hint rather
-                      // than another column so the table stays readable.
-                      title={
-                        r.avgWatchTimeMs
-                          ? `Avg watch time: ${(r.avgWatchTimeMs / 1000).toFixed(1)}s`
-                          : undefined
-                      }
-                    >
-                      {num(r.saved)}
-                    </td>
-                    <td className="whitespace-nowrap py-2.5 pr-3 text-right tabular-nums">
-                      {r.engagementRate === null ? "—" : `${r.engagementRate.toFixed(1)}%`}
-                    </td>
+                    {show("impressions") && (
+                      <td className="py-2.5 pr-3 text-right tabular-nums">{num(r.impressions)}</td>
+                    )}
+                    {show("clicks") && (
+                      <td className="py-2.5 pr-3 text-right tabular-nums">{num(r.clicks)}</td>
+                    )}
+                    {show("likes") && (
+                      <td className="py-2.5 pr-3 text-right tabular-nums">{num(r.likes)}</td>
+                    )}
+                    {show("comments") && (
+                      <td className="py-2.5 pr-3 text-right tabular-nums">{num(r.comments)}</td>
+                    )}
+                    {show("shares") && (
+                      <td className="py-2.5 pr-3 text-right tabular-nums">{num(r.shares)}</td>
+                    )}
+                    {show("reach") && (
+                      <td className="py-2.5 pr-3 text-right tabular-nums">{num(r.reach)}</td>
+                    )}
+                    {anySaves && (
+                      <td
+                        className="py-2.5 pr-3 text-right tabular-nums"
+                        // Reels also report watch time; surface it as a hint rather
+                        // than another column so the table stays readable.
+                        title={
+                          r.avgWatchTimeMs
+                            ? `Avg watch time: ${(r.avgWatchTimeMs / 1000).toFixed(1)}s`
+                            : undefined
+                        }
+                      >
+                        {num(r.saved)}
+                      </td>
+                    )}
+                    {show("impressions") && (
+                      <td className="whitespace-nowrap py-2.5 pr-3 text-right tabular-nums">
+                        {r.engagementRate === null ? "—" : `${r.engagementRate.toFixed(1)}%`}
+                      </td>
+                    )}
                     <td className="whitespace-nowrap py-2.5 pr-3 text-muted-foreground">
                       {fmtUtc(r.snapshotAt)}
                       {mode === "current" && isStaleSnapshot(r.snapshotAt) && (
