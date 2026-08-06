@@ -24,10 +24,21 @@ import { HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE } from "../lib/publish-r
  * tripped `#4 Application request limit reached` partway through):
  *   - DEDUPE BY TOKEN. One consent's user token backs every IG account from it,
  *     so distinct tokens are far fewer than channels.
- *   - hard cap per run, oldest-checked first, so a large backlog drains over days
- *     instead of burning the app's hourly quota in one go.
+ *   - hard cap per run so a large backlog drains over days instead of burning the
+ *     app's hourly quota in one go.
+ *
+ * ⚠️ ORDER FRESHEST-FIRST, and cool down failures — the first version of this
+ * did neither and consequently NEVER WORKED. Ordering `updatedAt: asc` sounded
+ * like "oldest-checked first", but the oldest-updated Meta channels are exactly
+ * the DEAD ones (tokens from a retired app / invalidated sessions). Measured: the
+ * 8 oldest all returned no window at all, so the entire 40-call budget was spent
+ * on hopeless channels every run while the freshly reconnected channels — the
+ * only ones that actually have a deadline to record — sat at the back of a
+ * 1339-row queue and were never reached. Zero channels were stamped.
  */
 const DATA_ACCESS_BACKFILL_MAX_TOKENS = 40;
+/** Don't re-probe a token that just failed; it starves the live ones. */
+const DATA_ACCESS_RECHECK_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
 
 export async function scheduleMetaDataAccessBackfill() {
   const clientId = process.env.FACEBOOK_CLIENT_ID || process.env.INSTAGRAM_CLIENT_ID;
@@ -36,16 +47,30 @@ export async function scheduleMetaDataAccessBackfill() {
 
   const candidates = await prisma.channel.findMany({
     where: { isActive: true, platform: { in: ["FACEBOOK", "INSTAGRAM"] as any } },
-    orderBy: { updatedAt: "asc" },
+    // Freshest first: a recently connected/updated channel is the one most likely
+    // to still have a live token and therefore a real deadline worth recording.
+    orderBy: { updatedAt: "desc" },
     select: { id: true, accessToken: true, metadata: true, platform: true },
-    take: 600,
   });
 
-  // Only channels with no recorded deadline (or a stale check) need a call.
+  const cooldownCutoff = Date.now() - DATA_ACCESS_RECHECK_COOLDOWN_MS;
+  const metaOf = (c: { metadata: unknown }): Record<string, unknown> =>
+    c.metadata && typeof c.metadata === "object" && !Array.isArray(c.metadata)
+      ? (c.metadata as Record<string, unknown>)
+      : {};
+
   const needing = candidates.filter((c) => {
-    const md = (c.metadata ?? null) as Record<string, unknown> | null;
-    if (md && typeof md === "object" && typeof md.dataAccessExpiresAt === "string") return false;
-    return !!c.accessToken && !c.accessToken.startsWith("enc:");
+    if (!c.accessToken || c.accessToken.startsWith("enc:")) return false;
+    const md = metaOf(c);
+    // Already recorded → nothing to do.
+    if (typeof md.dataAccessExpiresAt === "string") return false;
+    // Checked recently and yielded nothing → skip until the cooldown lapses, so
+    // dead tokens can't monopolise the call budget.
+    if (typeof md.dataAccessCheckedAt === "string") {
+      const t = Date.parse(md.dataAccessCheckedAt);
+      if (Number.isFinite(t) && t > cooldownCutoff) return false;
+    }
+    return true;
   });
 
   // Group by token so one debug_token call serves every channel sharing it.
@@ -56,27 +81,30 @@ export async function scheduleMetaDataAccessBackfill() {
     byToken.set(c.accessToken, list);
   }
 
+  const metaById = new Map(candidates.map((c) => [c.id, metaOf(c)]));
   let calls = 0;
   let stamped = 0;
+  let unavailable = 0;
   for (const [token, channelIds] of byToken) {
     if (calls >= DATA_ACCESS_BACKFILL_MAX_TOKENS) break;
     calls++;
     const window = await fetchMetaTokenWindow(token, clientId, clientSecret).catch(() => null);
-    if (!window?.dataAccessExpiresAt) continue;
-    const stamp = {
-      dataAccessExpiresAt: window.dataAccessExpiresAt.toISOString(),
-      dataAccessCheckedAt: new Date().toISOString(),
-    };
+    const checkedAt = new Date().toISOString();
+    // Stamp the ATTEMPT even on failure — that is what makes the cooldown work.
+    const stamp = window?.dataAccessExpiresAt
+      ? {
+          dataAccessExpiresAt: window.dataAccessExpiresAt.toISOString(),
+          dataAccessCheckedAt: checkedAt,
+        }
+      : { dataAccessCheckedAt: checkedAt };
+    if (!window?.dataAccessExpiresAt) unavailable += channelIds.length;
+
     for (const id of channelIds) {
-      const existing = candidates.find((c) => c.id === id)?.metadata;
-      const base =
-        existing && typeof existing === "object" && !Array.isArray(existing)
-          ? (existing as Record<string, unknown>)
-          : {};
+      const base = metaById.get(id) ?? {};
       await prisma.channel
         .update({ where: { id }, data: { metadata: { ...base, ...stamp } as any } })
         .then(() => {
-          stamped++;
+          if (window?.dataAccessExpiresAt) stamped++;
         })
         .catch(() => {});
     }
@@ -84,7 +112,9 @@ export async function scheduleMetaDataAccessBackfill() {
 
   if (calls > 0) {
     console.log(
-      `[Cron:MetaDataAccess] ${calls} debug_token call(s) covering ${stamped} channel(s); ${byToken.size - calls} token group(s) deferred to the next run`
+      `[Cron:MetaDataAccess] ${calls} debug_token call(s): recorded a deadline for ${stamped} channel(s), ` +
+        `${unavailable} had no readable window (dead token — cooling down ${DATA_ACCESS_RECHECK_COOLDOWN_MS / 86400000}d); ` +
+        `${Math.max(0, byToken.size - calls)} token group(s) deferred to the next run`
     );
   }
 }
