@@ -410,14 +410,20 @@ export class FacebookProvider extends SocialProvider {
     // reactions/comments need pages_read_user_content). NEVER fatal.
     let fieldsReactions: number | null = null;
     let comments: number | null = null;
-    let shares = 0;
+    // null (not 0) until a call actually resolves it. A post with no shares and
+    // a post whose shares we were never allowed to read are different facts, and
+    // storing 0 for the second is the silent-zero bug this subsystem exists to
+    // prevent (measured: 26 prod captures stored shares:0 from a failed fetch).
+    let shares: number | null = null;
     let fieldsDegradation: AnalyticsDegradation | undefined;
     const postRes = await this.graphFetch(
       `${this.graphBaseUrl}/${this.apiVersion}/${platformPostId}?fields=shares,comments.summary(true),reactions.summary(true)&access_token=${tokens.accessToken}`
     );
     const postData: any = await postRes.json();
     if (postRes.ok) {
-      shares = postData.shares?.count || 0;
+      // `shares` is OMITTED by Graph for a post with zero shares, so an ok
+      // response with no `shares` key is a real 0 — not an unknown.
+      shares = postData.shares?.count ?? 0;
       comments = postData.comments?.summary?.total_count ?? null;
       fieldsReactions = postData.reactions?.summary?.total_count ?? null;
     } else {
@@ -427,7 +433,7 @@ export class FacebookProvider extends SocialProvider {
       const sRes = await this.graphFetch(
         `${this.graphBaseUrl}/${this.apiVersion}/${platformPostId}?fields=shares&access_token=${tokens.accessToken}`
       );
-      if (sRes.ok) shares = ((await sRes.json()) as any)?.shares?.count || 0;
+      if (sRes.ok) shares = ((await sRes.json()) as any)?.shares?.count ?? 0;
     }
 
     // Prefer the fields reaction count (all reaction types) when available; else
@@ -442,7 +448,7 @@ export class FacebookProvider extends SocialProvider {
       impressions: 0,
       clicks: insightsUsable ? metrics.post_clicks || 0 : 0,
       likes: reactions ?? 0,
-      shares,
+      shares: shares ?? 0,
       comments: comments ?? 0,
       reach: 0,
       // No impressions ⇒ no meaningful rate. Reports recomputes engagement as
@@ -451,12 +457,18 @@ export class FacebookProvider extends SocialProvider {
       // impressions/reach: deleted by Meta (permanent). clicks: needs
       // read_insights. comments/likes: need pages_read_user_content (or the
       // insights reaction fallback). Anything false renders "—", never a fake 0.
+      //
+      // ⚠️ `shares` MUST be declared. An OMITTED key reads as "available" in
+      // gatePostReportRow/effectiveChannelUnavailable ("metadata present and the
+      // key not false ⇒ trust the value"), so leaving it out published a failed
+      // fetch as a confident 0.
       metricsAvailable: {
         impressions: false,
         reach: false,
         clicks: insightsUsable,
         comments: commentsAvailable,
         likes: reactionsAvailable,
+        shares: shares !== null,
       },
       likeKind: "reactions", // FB "likes" are all reaction types
       reachIsDistinct: false,

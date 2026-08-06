@@ -24,10 +24,19 @@
  * (packages/api/src/__tests__/group-stats.test.ts).
  */
 
+import type { MetricKey } from "./platform-metrics";
+
 /** One per-channel aggregate row (already Number()-normalized, no BigInts). */
 export interface ChannelStatRow {
   channelId: string;
   posts: number;
+  /**
+   * The EFFECTIVE unavailable list for this channel (static platform map ∪
+   * per-capture overrides), as computed by effectiveChannelUnavailable. Supplied
+   * by perChannelStats' caller so group rows can inherit the same honesty rules
+   * instead of rendering a fake 0. Optional: older callers/tests omit it.
+   */
+  unavailable?: MetricKey[];
   impressions: number;
   reach: number;
   likes: number;
@@ -94,6 +103,28 @@ export interface GroupStatsRow {
   clicks: number;
   /** Percent (0–100), computed from the summed metrics. 0 when no impressions. */
   engagementRate: number;
+  /**
+   * Metrics NO member channel of this group can report — the group-level
+   * equivalent of the per-channel `unavailable` list.
+   *
+   * ⚠️ Why this exists. Group Performance summed raw metrics and rendered them
+   * with formatNumber(), consulting no capability metadata at all — so the SAME
+   * data rendered "—" in Channel Performance and "0" in Group Performance, one
+   * card apart on one page. Measured on prod: the FB-only group "fb" showed
+   * "Reach 0" while both its channels declared reach unavailable (Meta deleted
+   * the FB Page-post reach metric — no permission restores it).
+   *
+   * A metric is unavailable for the GROUP only when EVERY contributing channel
+   * marks it unavailable; if one member can report it, the sum is meaningful.
+   */
+  unavailable: MetricKey[];
+  /**
+   * How narrow the rate's base is, same semantics as the per-channel row: a rate
+   * pooled over one impressioned post must not read as the group's overall rate.
+   */
+  engagementRateBasis: { impressionedPosts: number; totalPosts: number };
+  /** false ⇒ no member channel has a captured snapshot yet (render "—", not 0). */
+  hasSnapshot: boolean;
 }
 
 /** Sentinel id for the bucket of channels that belong to no group. */
@@ -143,6 +174,44 @@ function rateFromRows(rows: ChannelStatRow[]): number {
   return den > 0 ? (num / den) * 100 : 0;
 }
 
+const ALL_METRIC_KEYS: MetricKey[] = [
+  "impressions",
+  "reach",
+  "likes",
+  "comments",
+  "shares",
+  "clicks",
+];
+
+/**
+ * A metric is unavailable for a GROUP only when EVERY contributing channel marks
+ * it unavailable. If even one member can report it, the summed number is real
+ * and must be shown (a mixed FB+IG group keeps Reach, because IG reports it).
+ *
+ * Rows with NO capability info (older callers/tests) are treated as "can report"
+ * so this can never hide a number that used to be visible.
+ */
+function groupUnavailable(rows: ChannelStatRow[]): MetricKey[] {
+  if (rows.length === 0) return [];
+  return ALL_METRIC_KEYS.filter((key) =>
+    rows.every((r) => (r.unavailable ?? []).includes(key))
+  );
+}
+
+/** How many of the group's posts reported impressions (the rate's real base). */
+function basisFromRows(rows: ChannelStatRow[]): {
+  impressionedPosts: number;
+  totalPosts: number;
+} {
+  let impressionedPosts = 0;
+  let totalPosts = 0;
+  for (const r of rows) {
+    impressionedPosts += r.impressionedPosts ?? 0;
+    totalPosts += r.posts;
+  }
+  return { impressionedPosts, totalPosts };
+}
+
 export function sumChannelRowsIntoGroups(
   groups: GroupWithChannels[],
   channelRows: ChannelStatRow[],
@@ -175,6 +244,9 @@ export function sumChannelRowsIntoGroups(
       channelCount: group.channels.length,
       ...sums,
       engagementRate: rateFromRows(groupRows),
+      unavailable: groupUnavailable(groupRows),
+      engagementRateBasis: basisFromRows(groupRows),
+      hasSnapshot: groupRows.some((r) => r.hasSnapshot !== false),
     };
   });
 
@@ -193,6 +265,9 @@ export function sumChannelRowsIntoGroups(
       channelCount: ungroupedCount,
       ...sums,
       engagementRate: rateFromRows(ungrouped),
+      unavailable: groupUnavailable(ungrouped),
+      engagementRateBasis: basisFromRows(ungrouped),
+      hasSnapshot: ungrouped.some((r) => r.hasSnapshot !== false),
     });
   }
 
