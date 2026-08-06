@@ -64,6 +64,7 @@ const CSV_HEADER = [
   "Comments",
   "Shares",
   "Reach",
+  "Saves",
   "Engagement %",
   "Metric captured at (UTC)",
 ];
@@ -151,6 +152,7 @@ export function ReportsTab() {
             r.comments,
             r.shares,
             r.reach,
+            r.saved,
             r.engagementRate,
             r.snapshotAt ? new Date(r.snapshotAt).toISOString() : "",
           ])
@@ -323,6 +325,12 @@ export function ReportsTab() {
                   <th className="py-2.5 pr-3 text-right font-medium">Comments</th>
                   <th className="py-2.5 pr-3 text-right font-medium">Shares</th>
                   <th className="py-2.5 pr-3 text-right font-medium">Reach</th>
+                  <th
+                    className="py-2.5 pr-3 text-right font-medium"
+                    title="Saves / bookmarks — a distinct action from a like. Reported by Instagram (and Pinterest saves)."
+                  >
+                    Saves
+                  </th>
                   <th className="py-2.5 pr-3 text-right font-medium" title="Engagement rate">
                     Eng %
                   </th>
@@ -364,6 +372,18 @@ export function ReportsTab() {
                     <td className="py-2.5 pr-3 text-right tabular-nums">{num(r.comments)}</td>
                     <td className="py-2.5 pr-3 text-right tabular-nums">{num(r.shares)}</td>
                     <td className="py-2.5 pr-3 text-right tabular-nums">{num(r.reach)}</td>
+                    <td
+                      className="py-2.5 pr-3 text-right tabular-nums"
+                      // Reels also report watch time; surface it as a hint rather
+                      // than another column so the table stays readable.
+                      title={
+                        r.avgWatchTimeMs
+                          ? `Avg watch time: ${(r.avgWatchTimeMs / 1000).toFixed(1)}s`
+                          : undefined
+                      }
+                    >
+                      {num(r.saved)}
+                    </td>
                     <td className="whitespace-nowrap py-2.5 pr-3 text-right tabular-nums">
                       {r.engagementRate === null ? "—" : `${r.engagementRate.toFixed(1)}%`}
                     </td>

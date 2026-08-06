@@ -13,6 +13,12 @@ export interface SnapshotMetaInput {
   likeKind?: string;
   metricsAvailable?: Record<string, boolean>;
   source?: string;
+  /** IG Reels mean watch time, milliseconds (`ig_reels_avg_watch_time`). */
+  avgWatchTimeMs?: number;
+  /** IG Reels total accumulated watch time, milliseconds. */
+  totalWatchTimeMs?: number;
+  /** Why this capture came back short (missing scope / dead token). */
+  degraded?: { reason: string; missingScopes?: string[]; detail?: string };
 }
 
 export function buildSnapshotMetadata(
@@ -26,6 +32,9 @@ export function buildSnapshotMetadata(
   if (a.likeKind != null) extra.likeKind = a.likeKind;
   if (a.metricsAvailable != null) extra.metricsAvailable = a.metricsAvailable;
   if (a.source != null) extra.source = a.source;
+  if (a.avgWatchTimeMs != null) extra.avgWatchTimeMs = a.avgWatchTimeMs;
+  if (a.totalWatchTimeMs != null) extra.totalWatchTimeMs = a.totalWatchTimeMs;
+  if (a.degraded != null) extra.degraded = a.degraded;
   if (windowTag) extra.windowTag = windowTag;
   if (capturedLate) extra.capturedLate = true;
   return Object.keys(extra).length > 0 ? extra : undefined;

@@ -101,8 +101,34 @@ describe("gatePostReportRow — per-platform Reports honesty", () => {
   });
 
   it("preserves engagementRate normalization (number stays, null stays)", () => {
-    expect(gatePostReportRow(row("FACEBOOK", { engagementRate: 2.5 })).engagementRate).toBe(2.5);
-    expect(gatePostReportRow(row("FACEBOOK", { engagementRate: null })).engagementRate).toBeNull();
+    // Uses INSTAGRAM: engagement rate is now gated on IMPRESSIONS availability
+    // (see the next test), and Instagram genuinely reports impressions whereas
+    // Facebook no longer does.
+    expect(gatePostReportRow(row("INSTAGRAM", { engagementRate: 2.5 })).engagementRate).toBe(2.5);
+    expect(gatePostReportRow(row("INSTAGRAM", { engagementRate: null })).engagementRate).toBeNull();
+  });
+
+  it("nulls engagementRate whenever impressions are unavailable (2026-08-06)", () => {
+    // Engagement rate IS engagement ÷ impressions, so it can only be as honest
+    // as its denominator. Facebook Page posts no longer report impressions at
+    // all (Meta deleted the metric — re-verified WITH read_insights granted), so
+    // printing a rate there means deriving it from a number the UI is
+    // simultaneously rendering as "—". Worse, "0.00%" reads as "no engagement"
+    // when the truth is "not reported".
+    const fb = gatePostReportRow(row("FACEBOOK", { engagementRate: 2.5 }));
+    expect(fb.impressions).toBeNull();
+    expect(fb.engagementRate).toBeNull();
+
+    // But a FB VIDEO capture that DID report views keeps its rate: the
+    // per-snapshot override makes impressions available, so the ratio is real.
+    const fbVideo = gatePostReportRow(
+      row("FACEBOOK", {
+        engagementRate: 2.5,
+        snapshotMetadata: { metricsAvailable: { impressions: true } },
+      })
+    );
+    expect(fbVideo.impressions).toBe(100);
+    expect(fbVideo.engagementRate).toBe(2.5);
   });
 });
 

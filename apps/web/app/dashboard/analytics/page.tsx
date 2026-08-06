@@ -12,7 +12,7 @@ import { Skeleton } from "~/components/ui/skeleton";
 import { Badge } from "~/components/ui/badge";
 import {
   BarChart3, TrendingUp, CheckCircle, XCircle, Eye, Heart, MessageCircle,
-  Share, MousePointerClick, Users, Percent, Calendar, RefreshCw,
+  Share, MousePointerClick, Users, Percent, Calendar, RefreshCw, AlertTriangle,
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
@@ -163,6 +163,9 @@ function InsightsAnalyticsView() {
     dateInput,
     { placeholderData: (prev) => prev }
   );
+  // Which channels can't report Insights until reconnected. Not date-scoped —
+  // it's a property of the channel's stored token, not of the selected range.
+  const { data: health } = trpc.analytics.insightsHealth.useQuery();
 
   const stats: Array<{ name: string; value: number; icon: any; color: string; format?: boolean; sub?: string }> = [
     { name: "Total Posts", value: overview?.totalPosts ?? 0, icon: BarChart3, color: "text-blue-600 bg-blue-100 dark:text-blue-400 dark:bg-blue-950" },
@@ -234,6 +237,52 @@ function InsightsAnalyticsView() {
           </button>
         </div>
       </div>
+
+      {/* Reconnect banner. A Meta App Review approval does NOT add scopes to
+          tokens that were already issued — scopes are granted only at consent
+          time — so channels connected before approval keep reporting nothing
+          until their owner reconnects once. Without this, a dead/under-scoped
+          token is indistinguishable from genuinely zero engagement. */}
+      {health && health.needsReconnectCount > 0 && (
+        <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex gap-3">
+              <AlertTriangle className="h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400" />
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
+                  {health.needsReconnectCount} channel{health.needsReconnectCount === 1 ? "" : "s"} need
+                  {health.needsReconnectCount === 1 ? "s" : ""} reconnecting to report Insights
+                </p>
+                <p className="mt-1 text-xs text-amber-800/90 dark:text-amber-300/90">
+                  The platform is refusing to return metrics for{" "}
+                  {health.needsReconnectCount === 1 ? "this channel" : "these channels"} — its access
+                  token is expired or was granted before the analytics permissions were approved.
+                  Reconnecting takes a few seconds and restores metrics going forward.
+                  {health.missingScopes.length > 0 && (
+                    <>
+                      {" "}Missing permission{health.missingScopes.length === 1 ? "" : "s"}:{" "}
+                      <span className="font-mono">{health.missingScopes.join(", ")}</span>.
+                    </>
+                  )}
+                </p>
+                {health.channels.length > 0 && (
+                  <p className="mt-1.5 truncate text-xs text-amber-800/70 dark:text-amber-300/70">
+                    {health.channels.map((c) => c.name).join(", ")}
+                    {health.needsReconnectCount > health.channels.length &&
+                      ` and ${health.needsReconnectCount - health.channels.length} more`}
+                  </p>
+                )}
+              </div>
+            </div>
+            <Link
+              href="/dashboard/channels"
+              className="shrink-0 self-start rounded-md bg-amber-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-amber-700"
+            >
+              Reconnect channels
+            </Link>
+          </div>
+        </div>
+      )}
 
       {/* Stat Cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -452,9 +501,11 @@ function InsightsAnalyticsView() {
         <CardContent className="p-0">
           {noEngagementYet && (
             <div className="m-4 mb-0 rounded-md bg-blue-500/10 px-3 py-2 text-xs text-blue-700 dark:text-blue-400">
-              Your channels are connected, but no engagement data has synced yet. Some platforms
-              (e.g. Facebook/Instagram) only report metrics after a sync cycle and once permissions
-              are approved. Try “Sync Now” above, or check back later.
+              Your channels are connected, but no engagement data has synced yet. Metrics appear
+              after a sync cycle — try “Sync Now” above, or check back later.
+              {health && health.needsReconnectCount > 0
+                ? " Some channels also need reconnecting (see the notice above)."
+                : ""}
             </div>
           )}
           {channelLoading ? (
@@ -501,6 +552,22 @@ function InsightsAnalyticsView() {
                           >
                             {ch.platform}
                           </Badge>
+                          {/* Per-channel reconnect hint: this row's "—"s are a
+                              token problem, not an absence of engagement. */}
+                          {ch.insightsHealth?.status === "needs_reconnect" && (
+                            <Link
+                              href="/dashboard/channels"
+                              title={
+                                ch.insightsHealth.missingScopes?.length
+                                  ? `Reconnect to grant: ${ch.insightsHealth.missingScopes.join(", ")}`
+                                  : "The platform rejected this channel's access token. Reconnect to restore Insights."
+                              }
+                              className="ml-1 inline-flex items-center gap-1 rounded border border-amber-500/50 bg-amber-500/10 px-1.5 py-0 text-[10px] font-medium text-amber-700 hover:bg-amber-500/20 dark:text-amber-400"
+                            >
+                              <AlertTriangle className="h-2.5 w-2.5" />
+                              Reconnect
+                            </Link>
+                          )}
                         </div>
                       </td>
                       <td className="px-4 py-3 text-right font-medium">{ch.postCount}</td>
@@ -511,7 +578,11 @@ function InsightsAnalyticsView() {
                       <td className="px-4 py-3 text-right">{metricCell("shares", ch.shares, ch)}</td>
                       <td className="px-4 py-3 text-right">{metricCell("clicks", ch.clicks, ch)}</td>
                       <td className="px-4 py-3 text-right">
-                        {ch.hasSnapshot === false ? (
+                        {/* Engagement rate is engagement ÷ impressions, so it is
+                            only as honest as its denominator. When impressions
+                            render "—" the rate must too: "0.00%" would misread as
+                            "no engagement" when the truth is "not reported". */}
+                        {ch.hasSnapshot === false || ch.unavailable?.includes("impressions") ? (
                           <span className="text-muted-foreground">—</span>
                         ) : (
                           <span
@@ -534,7 +605,9 @@ function InsightsAnalyticsView() {
               <p className="px-4 py-3 text-xs text-muted-foreground/70 border-t">
                 &ldquo;—&rdquo; means the platform doesn&rsquo;t report that metric (or it hasn&rsquo;t synced yet), not zero.
                 &ldquo;Likes&rdquo; counts reactions on Facebook, saves on Pinterest, and upvotes on Reddit. Reach is shown only
-                where the platform reports it separately from impressions.
+                where the platform reports it separately from impressions. Facebook no longer reports
+                impressions or reach for Page posts at all — Meta removed those metrics, so no permission
+                can restore them; Facebook <em>video</em> posts still report views.
               </p>
             </div>
           ) : (
