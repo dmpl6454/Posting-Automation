@@ -84,7 +84,20 @@ export function createAnalyticsSyncWorker() {
         const latest = await prisma.analyticsSnapshot.findFirst({
           where: { postTargetId },
           orderBy: { snapshotAt: "desc" },
-          select: { impressions: true, clicks: true, likes: true, shares: true, comments: true, reach: true },
+          // metadata is REQUIRED here: dedup also compares the capability claim
+          // (metricsAvailable), so a reconnected channel whose numbers are
+          // genuinely unchanged still gets a fresh snapshot that flips its
+          // metrics from "—" to a real 0. Without selecting it, the stored
+          // availability always reads as undefined and the comparison is moot.
+          select: {
+            impressions: true,
+            clicks: true,
+            likes: true,
+            shares: true,
+            comments: true,
+            reach: true,
+            metadata: true,
+          },
         });
         if (!shouldWriteSnapshot(analytics as any, latest, false)) {
           console.log(`[AnalyticsSync] No change for target ${postTargetId} — skipping duplicate snapshot`);
