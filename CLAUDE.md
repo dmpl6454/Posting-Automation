@@ -440,7 +440,98 @@ Meta approved all three analytics-read permissions (`pages_read_user_content`, `
 - **What was built instead:** [meta-data-access.ts](packages/social/src/utils/meta-data-access.ts) `fetchMetaTokenWindow` (one `debug_token` call) is called **ONCE PER CONSENT** in the OAuth callback (the same user token backs every Page/IG account from that consent) and stamps `Channel.metadata.dataAccessExpiresAt`. `evaluateChannelInsightsStatus` ([insights-health.ts](packages/api/src/lib/insights-health.ts)) then yields `ok | expiring_soon | needs_reconnect` (warn window `DATA_ACCESS_WARN_DAYS = 14`), driving the Insights banner + a per-channel "Insights end in Nd" badge. A live capability failure OUTRANKS a future deadline (it's broken now). `scheduleMetaDataAccessBackfill` (daily) fills the value for pre-existing channels — **token-DEDUPED and hard-capped at 40 calls/run**, because a naive 1328-channel `debug_token` sweep trips `#4 Application request limit reached` (that happened during the audit).
 - **Probing tokens:** only DIRECT `prisma.channel.findUnique/findFirst/findMany` auto-decrypts `accessToken`. `/me/permissions` does NOT work on an FB **Page** token (`me` resolves to the Page, which has no `permissions` edge → `#100 nonexisting field`) — use `debug_token` with an app token (`{id}|{secret}`) for Page tokens.
 
-## ⚠️ Disconnecting a channel DESTROYS its post history (schema cascade)
+## 📊 Engagement rate MUST pool over impressioned posts only (fixed 2026-08-06)
+
+**The bug it prevents was live on prod: a channel showed `Eng. Rate 1400.00%`.** The rate summed
+the numerator over **all** of a channel's posts but built the denominator from **only** the posts
+that reported impressions. On Facebook only VIDEO posts carry an impression figure, so a
+channel's entire reaction count got divided by one video's view count (14 reactions ÷ 1 view).
+
+- The correct rule already existed in [engagement-rate.ts](packages/api/src/lib/engagement-rate.ts)
+  (`computeEngagementRate`: only rows WITH impressions contribute to **both** sides) and
+  `analytics.engagement` used it. **`perChannelStats` and `groupStats` never did** — they
+  computed the rate inline from raw channel sums, and `group-stats.ts` `rateFromRows` pooled at
+  *channel* granularity, inheriting the inflated numerator one level up (group "fb" showed
+  32.76% where the truth was 10.34%).
+- Fix: `fetchChannelStatRows` emits `impressioned{Impressions,Likes,Comments,Shares}` +
+  `impressionedPosts` via `SUM(...) FILTER (WHERE s.impressions > 0)`. **Any new rate calculation
+  must use those, never the raw sums.** Verified prod values: Bollywood `8.77% → 7.02%`,
+  Contents of bollywood `1400% → 200%`.
+- **Also disclose the base.** `engagementRateBasis {impressionedPosts, totalPosts}` renders as
+  `7.02% (1/10)`. A rate derived from one post must not read as the channel's overall rate — on
+  Facebook that is the *normal* case. Zero base ⇒ **"—"**, never `0.00%`.
+- Locked by [engagement-rate-pooling.test.ts](packages/api/src/__tests__/engagement-rate-pooling.test.ts)
+  (reproduces both prod numbers) and the real-Postgres
+  [insights-availability-sql.e2e.test.ts](packages/api/src/__tests__/insights-availability-sql.e2e.test.ts).
+
+## "Posts" ≠ the platform's post count (a recurring false bug report)
+
+Channel Performance's **"Posts sent"** counts posts published **through PostAutomation** inside
+the selected date range. The platform's own count is legitimately higher. **MEASURED 2026-08-06**
+by diffing the Page's `published_posts` edge against our `PostTarget` rows:
+
+| | Bollywood | Contents of bollywood |
+|---|---|---|
+| Facebook reports | 13 | 12 |
+| our DB | 10 | 7 |
+| id-matched both | 8 | 6 |
+| only on Facebook (posted directly) | 5 | 6 |
+| only in our DB | 2 | 1 |
+
+Both sides close: `8+5=13`, `8+2=10`. ⚠️ **"only in our DB" is partly an artifact:** video
+publishes store a bare **Video-node id** while `published_posts` returns `{page}_{post}` ids, so
+videos can never be id-matched. One of Bollywood's two was still live (the reel scraper returned
+57 views for it in the same run); only `1748002179986936` was genuinely deleted. Column renamed +
+footnoted so the comparison stops looking like a bug.
+
+## ✅ Disconnecting a channel is now a SOFT delete (2026-08-06) — history is preserved
+
+`Channel.disconnectedAt DateTime?` replaces the old hard `delete`. Three states:
+
+| State | `isActive` | `disconnectedAt` | Postable | Channels page | Insights |
+|---|---|---|---|---|---|
+| Connected | `true` | `null` | ✅ | ✅ | ✅ |
+| Paused | `false` | `null` | ❌ | ✅ badge *Paused* | ✅ history |
+| Disconnected | `false` | set | ❌ | hidden | ✅ history, badge *Disconnected* |
+
+- **`channel.delete`/`deleteMany` must NEVER return** — locked by
+  [channel-soft-delete.test.ts](packages/api/src/__tests__/channel-soft-delete.test.ts). `PostTarget.channel`
+  is `onDelete: Cascade`, so a hard delete destroys every record of posts sent to the channel plus
+  its Insights history (see the section below for the damage already done).
+- Disconnect writes `accessToken = DISCONNECTED_TOKEN` (exported from `@postautomation/db`),
+  **not `""`**: the column is NOT NULL and `encryptToken("")` returns `null`, so an empty string
+  makes Prisma reject the update ("Argument `accessToken` must not be null") — i.e. disconnect
+  would throw. Caught by the real-Postgres test, not by tsc. The real credential is still
+  destroyed; if the sentinel ever reaches a platform call it fails auth, which the insights-health
+  layer already surfaces as "reconnect this channel".
+- **Reconnect REVIVES the same row** — every OAuth upsert clears `disconnectedAt` alongside
+  `isActive: true`. This preserves history *and* stops the duplicate-channel proliferation that
+  disconnect→reconnect used to cause. The test asserts one `disconnectedAt: null` per
+  `isActive: true` site; **add both when adding a platform.**
+- **Posting guards:** `post.create`/`post.update` and `assertChannelsOwned` (chat/agent actions)
+  filter `disconnectedAt: null`. Without them a disconnected, token-less channel could be targeted
+  and would only fail at publish time.
+- **Insights count history from paused AND disconnected channels** (owner decision: "count all
+  real history"). The stat aggregate no longer filters the Channel join on `isActive` — that
+  filter is precisely why disconnecting made history vanish. ⚠️ Consequence: org totals are
+  *higher* than before, because real engagement on paused/disconnected channels now counts. Rows
+  carry `channelStatus` so the UI badges them, and they age out of the window naturally.
+
+## 🧹 Orphaned AnalyticsSnapshot janitor
+
+`AnalyticsSnapshot` has **no FK** to `PostTarget` (bare `postTargetId`, indexes only), so every
+cascade-deleted target stranded its snapshots permanently — unreadable (no join path) and
+uncollected. **MEASURED 2026-08-06: 1,324,188 FB + 2,953 IG + 487 TWITTER + 70 YOUTUBE orphans.**
+
+`purgeOrphanedAnalyticsSnapshots` ([cron-jobs.ts](apps/worker/src/scheduler/cron-jobs.ts)) runs
+daily, batched (5k) and capped (50k/run) so it never holds a long lock on the 4-core box.
+**REPORT-ONLY until `ORPHAN_PURGE_ENABLED=true`** (owner decision: see the real count first —
+deletion is irreversible). Soft delete stops the channel-driven source, but post deletion
+(`bulk.bulkDelete`, `post.delete`) still cascades targets, so this is a permanent janitor.
+**Deferred:** adding a real FK — the structural fix, but it needs the table clean first and would
+lock 1.3M rows.
+
+## ⚠️ Disconnecting a channel DESTROYED its post history (pre-2026-08-06 damage)
 
 `PostTarget.channel` is `@relation(onDelete: Cascade)`, and `channel.disconnect` / `bulkDisconnect` do a **hard `delete`**. So disconnecting a channel permanently deletes **every PostTarget for it** — the entire record of posts sent to that channel plus its Insights history — and leaves **orphaned `AnalyticsSnapshot` rows forever** (AnalyticsSnapshot has NO FK to PostTarget, so nothing cleans them up).
 

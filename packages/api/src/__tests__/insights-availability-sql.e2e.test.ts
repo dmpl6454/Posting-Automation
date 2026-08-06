@@ -227,8 +227,10 @@ describe.skipIf(!LIVE)("Insights availability — real Postgres", () => {
     const feed = rows.find((r: any) => r.name === "fb-feed")!;
     expect(feed.insightsHealth?.status).toBe("needs_reconnect");
     expect(feed.insightsHealth?.missingScopes).toContain("read_insights");
+    // A healthy channel now reports an explicit "ok" rather than null, because the
+    // evaluator also has to carry the data-access deadline when there is one.
     const video = rows.find((r: any) => r.name === "fb-video")!;
-    expect(video.insightsHealth).toBeNull();
+    expect(video.insightsHealth?.status).toBe("ok");
   });
 
   it("insightsHealth: counts only explicitly-flagged channels", async () => {
@@ -279,5 +281,58 @@ describe.skipIf(!LIVE)("Insights availability — real Postgres", () => {
     expect(ungrouped).toBeTruthy();
     // 5000 (video) + 0 (feed) + 115 (ig) + 99 (legacy)
     expect(ungrouped!.impressions).toBe(5214);
+  });
+
+  /**
+   * The engagement-rate pooling and history-inclusion changes (2026-08-06) live
+   * entirely in raw SQL (`FILTER (WHERE s.impressions > 0)` and the un-filtered
+   * Channel join), which a mocked Prisma cannot exercise at all.
+   */
+  it("perChannelStats: engagement rate pools ONLY over impressioned posts", async () => {
+    const rows = await caller().analytics.perChannelStats({});
+
+    // fb-feed reported clicks/likes but NO impressions ⇒ no honest denominator.
+    const feed = rows.find((r: any) => r.name === "fb-feed")!;
+    expect(feed.engagementRateBasis.impressionedPosts).toBe(0);
+    expect(feed.engagementRate).toBe(0); // UI renders "—" on a zero base
+
+    // fb-video DID report impressions (5000) with 7 likes + 2 comments.
+    const video = rows.find((r: any) => r.name === "fb-video")!;
+    expect(video.engagementRateBasis.impressionedPosts).toBe(1);
+    expect(video.engagementRateBasis.totalPosts).toBe(1);
+    expect(video.engagementRate).toBeCloseTo(((7 + 2) / 5000) * 100, 4);
+  });
+
+  it("perChannelStats: reports each channel's lifecycle status", async () => {
+    const rows = await caller().analytics.perChannelStats({});
+    expect(rows.find((r: any) => r.name === "fb-video")!.channelStatus).toBe("connected");
+  });
+
+  it("perChannelStats: a DISCONNECTED channel keeps its history (the whole point)", async () => {
+    // Soft-delete the IG fixture exactly as channel.disconnect does.
+    await prisma.channel.update({
+      where: { id: ids.ig! },
+      data: { disconnectedAt: new Date(), isActive: false, accessToken: "disconnected", refreshToken: null },
+    });
+    try {
+      const rows = await caller().analytics.perChannelStats({});
+      const reel = rows.find((r: any) => r.name === "ig-reel");
+      // Before soft-delete existed, a hard delete removed the row AND its
+      // PostTargets; and the isActive-filtered aggregate hid it even when paused.
+      expect(reel).toBeTruthy();
+      expect(reel!.channelStatus).toBe("disconnected");
+      expect(reel!.impressions).toBe(115);
+      expect(reel!.reach).toBe(106);
+
+      // …and it still contributes to the group/org aggregate.
+      const g = await caller().analytics.groupStats({});
+      const ungrouped = g.rows.find((r: any) => r.id === "__ungrouped__");
+      expect(ungrouped!.impressions).toBe(5214);
+    } finally {
+      await prisma.channel.update({
+        where: { id: ids.ig! },
+        data: { disconnectedAt: null, isActive: true, accessToken: "tok" },
+      });
+    }
   });
 });

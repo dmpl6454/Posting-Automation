@@ -67,6 +67,11 @@ async function fetchChannelStatRows(
     shares: bigint;
     clicks: bigint;
     hasSnapshot: boolean;
+    impressionedImpressions: bigint;
+    impressionedLikes: bigint;
+    impressionedComments: bigint;
+    impressionedShares: bigint;
+    impressionedPosts: bigint;
     availImpressions: boolean | null;
     availReach: boolean | null;
     availLikes: boolean | null;
@@ -83,6 +88,15 @@ async function fetchChannelStatRows(
             COALESCE(SUM(s.comments), 0)    AS comments,
             COALESCE(SUM(s.shares), 0)      AS shares,
             COALESCE(SUM(s.clicks), 0)      AS clicks,
+            -- Impressioned-only sums: the ONLY honest basis for an engagement
+            -- rate. Pooling engagement from ALL posts over a denominator built
+            -- from only the impressioned ones produced 1400% on prod (7 posts'
+            -- reactions ÷ one 1-view video). See engagement-rate.ts for the rule.
+            COALESCE(SUM(s.impressions) FILTER (WHERE s.impressions > 0), 0) AS "impressionedImpressions",
+            COALESCE(SUM(s.likes)       FILTER (WHERE s.impressions > 0), 0) AS "impressionedLikes",
+            COALESCE(SUM(s.comments)    FILTER (WHERE s.impressions > 0), 0) AS "impressionedComments",
+            COALESCE(SUM(s.shares)      FILTER (WHERE s.impressions > 0), 0) AS "impressionedShares",
+            COUNT(*) FILTER (WHERE s.impressions > 0)                        AS "impressionedPosts",
             -- true when at least one of this channel's targets has a captured
             -- snapshot; drives the UI's "—" (no data yet) vs "0" (real zero).
             BOOL_OR(s.id IS NOT NULL)       AS "hasSnapshot",
@@ -97,7 +111,14 @@ async function fetchChannelStatRows(
             BOOL_OR(s.id IS NOT NULL AND s.metadata IS NULL) AS "hasLegacySnapshot"
      FROM "PostTarget" pt
      INNER JOIN "Post" p ON p.id = pt."postId"
-     INNER JOIN "Channel" c ON c.id = pt."channelId" AND c."isActive" = true
+     -- ⚠️ Deliberately NOT filtered on c."isActive" (owner decision 2026-08-06:
+     -- "count all real history"). A post that WAS published and DID earn
+     -- engagement is a historical fact; excluding it because the channel was
+     -- later paused or disconnected understated every total. This is why
+     -- disconnecting a channel used to make its history vanish from Insights.
+     -- Rows carry their own status so the UI can badge Paused/Disconnected, and
+     -- they age out naturally once outside the selected window.
+     INNER JOIN "Channel" c ON c.id = pt."channelId"
      LEFT JOIN LATERAL (
        SELECT s2.* FROM "AnalyticsSnapshot" s2
        WHERE s2."postTargetId" = pt.id
@@ -127,6 +148,11 @@ async function fetchChannelStatRows(
     shares: Number(r.shares),
     clicks: Number(r.clicks),
     hasSnapshot: Boolean(r.hasSnapshot),
+    impressionedImpressions: Number(r.impressionedImpressions),
+    impressionedLikes: Number(r.impressionedLikes),
+    impressionedComments: Number(r.impressionedComments),
+    impressionedShares: Number(r.impressionedShares),
+    impressionedPosts: Number(r.impressionedPosts),
     declaredAvailable: {
       impressions: tri(r.availImpressions),
       reach: tri(r.availReach),
@@ -713,22 +739,37 @@ export const analyticsRouter = createRouter({
       // per channel; 220+ round-trips on a 110-channel org). Channel meta is
       // merged in JS so the output shape is unchanged for the UI table.
       const [channels, statRows] = await Promise.all([
+        // Live channels PLUS any channel that has published history in the window
+        // (owner decision 2026-08-06: count all real history). Disconnected and
+        // paused channels are included so their genuine engagement still counts;
+        // each row carries its status so the UI can badge it.
         ctx.prisma.channel.findMany({
-          where: { organizationId: ctx.organizationId, isActive: true },
+          where: { organizationId: ctx.organizationId },
         }),
         fetchChannelStatRows(ctx.prisma, ctx.organizationId, from, to),
       ]);
 
       const rowByChannel = new Map(statRows.map((r) => [r.channelId, r]));
 
-      const stats = channels.map((channel) => {
+      const stats = channels
+        // Keep every live channel, plus inactive/disconnected ones that actually
+        // have activity in-window. Without the second clause, disconnecting a
+        // channel would still erase its history from this table; without the
+        // first, a freshly connected channel wouldn't appear until it posted.
+        .filter((channel) => channel.isActive || rowByChannel.has(channel.id))
+        .map((channel) => {
         const m = rowByChannel.get(channel.id);
         const impressions = m?.impressions ?? 0;
         const likes = m?.likes ?? 0;
         const comments = m?.comments ?? 0;
         const shares = m?.shares ?? 0;
-        const engagementRate =
-          impressions > 0 ? ((likes + comments + shares) / impressions) * 100 : 0;
+        // Rate pools ONLY over posts that reported impressions, so a channel's
+        // whole reaction count can't be divided by one video's view count (that
+        // produced 1400% on prod). Mirrors engagement-rate.ts.
+        const impDen = m?.impressionedImpressions ?? 0;
+        const impNum =
+          (m?.impressionedLikes ?? 0) + (m?.impressionedComments ?? 0) + (m?.impressionedShares ?? 0);
+        const engagementRate = impDen > 0 ? (impNum / impDen) * 100 : 0;
         const caps = platformMetricCapabilities(channel.platform);
         // Per-capture capability OVERRIDES the platform-wide static map, so real
         // FB video views aren't hidden behind "—" here while Reports shows them.
@@ -752,6 +793,22 @@ export const analyticsRouter = createRouter({
           comments,
           reach: m?.reach ?? 0,
           engagementRate,
+          /**
+           * How narrow the rate's base is. A rate computed from ONE video must
+           * not read as the channel's overall rate — on Facebook that is the
+           * normal case, since only video posts carry an impression figure. The
+           * UI renders "7.02% (1 of 10 posts)" and shows "—" when the base is 0.
+           */
+          engagementRateBasis: {
+            impressionedPosts: m?.impressionedPosts ?? 0,
+            totalPosts: m?.posts ?? 0,
+          },
+          /** Lifecycle status so the table can badge history from dead channels. */
+          channelStatus: channel.disconnectedAt
+            ? ("disconnected" as const)
+            : channel.isActive
+              ? ("connected" as const)
+              : ("paused" as const),
           // Honesty metadata for the UI (— vs 0, honest labels, hide dup reach):
           hasSnapshot: m?.hasSnapshot ?? false,
           likeKind: caps.likeKind,

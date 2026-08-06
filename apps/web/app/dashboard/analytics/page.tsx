@@ -591,7 +591,17 @@ function InsightsAnalyticsView() {
                 <thead>
                   <tr className="border-b bg-muted/40">
                     <th className="px-4 py-3 text-left font-medium text-muted-foreground">Channel</th>
-                    <th className="px-4 py-3 text-right font-medium text-muted-foreground">Posts</th>
+                    {/* "Posts sent", not "Posts": this counts what PostAutomation
+                        published in the selected range. The platform's own post
+                        count is legitimately higher — it also includes posts made
+                        directly there and posts outside the range. Reconciled on
+                        prod: FB Page showed 13, of which 5 were posted directly. */}
+                    <th
+                      className="px-4 py-3 text-right font-medium text-muted-foreground"
+                      title="Posts published through PostAutomation to this channel, within the selected date range. The platform's own total will be higher if you also post there directly."
+                    >
+                      Posts sent
+                    </th>
                     {channelColumns.map((c) => (
                       <th key={c.key} className="px-4 py-3 text-right font-medium text-muted-foreground">
                         {c.label}
@@ -626,6 +636,28 @@ function InsightsAnalyticsView() {
                           >
                             {ch.platform}
                           </Badge>
+                          {/* Lifecycle badge. History from paused/disconnected
+                              channels now counts toward totals (a post that was
+                              published and earned engagement is a historical
+                              fact), so the row must say why it's still here. */}
+                          {ch.channelStatus === "disconnected" && (
+                            <Badge
+                              variant="outline"
+                              className="ml-1 px-1.5 py-0 text-[10px] text-muted-foreground"
+                              title="This channel was disconnected. Its past posts still count here; reconnect it to resume collecting new metrics."
+                            >
+                              Disconnected
+                            </Badge>
+                          )}
+                          {ch.channelStatus === "paused" && (
+                            <Badge
+                              variant="outline"
+                              className="ml-1 px-1.5 py-0 text-[10px] text-muted-foreground"
+                              title="This channel is paused. Its past posts still count here."
+                            >
+                              Paused
+                            </Badge>
+                          )}
                           {/* Per-channel reconnect hint: this row's "—"s are a
                               token problem, not an absence of engagement. */}
                           {ch.insightsHealth?.status === "needs_reconnect" && (
@@ -653,22 +685,44 @@ function InsightsAnalyticsView() {
                       {channelColumns.some((c) => c.key === "impressions") && (
                         <td className="px-4 py-3 text-right">
                           {/* Engagement rate is engagement ÷ impressions, so it is
-                              only as honest as its denominator. When impressions
-                              render "—" the rate must too: "0.00%" would misread as
-                              "no engagement" when the truth is "not reported". */}
-                          {ch.hasSnapshot === false || ch.unavailable?.includes("impressions") ? (
-                            <span className="text-muted-foreground">—</span>
+                              only as honest as its denominator AND its base. It is
+                              now pooled over ONLY the posts that reported
+                              impressions (pooling over all posts produced 1400% on
+                              prod), and the base is shown — on Facebook only video
+                              posts carry an impression figure, so a channel rate is
+                              often computed from a single post and must not read as
+                              the channel's overall rate. */}
+                          {ch.hasSnapshot === false ||
+                          ch.unavailable?.includes("impressions") ||
+                          (ch.engagementRateBasis?.impressionedPosts ?? 0) === 0 ? (
+                            <span
+                              className="text-muted-foreground"
+                              title="No post on this channel reported an impression/view count, so an engagement rate cannot be computed."
+                            >
+                              —
+                            </span>
                           ) : (
                             <span
-                              className={`font-medium ${
-                                ch.engagementRate > 3
-                                  ? "text-green-600 dark:text-green-400"
-                                  : ch.engagementRate > 1
-                                  ? "text-yellow-600 dark:text-yellow-400"
-                                  : "text-muted-foreground"
-                              }`}
+                              title={`Pooled over the ${ch.engagementRateBasis!.impressionedPosts} of ${ch.engagementRateBasis!.totalPosts} post(s) that reported impressions.`}
                             >
-                              {ch.engagementRate.toFixed(2)}%
+                              <span
+                                className={`font-medium ${
+                                  ch.engagementRate > 3
+                                    ? "text-green-600 dark:text-green-400"
+                                    : ch.engagementRate > 1
+                                    ? "text-yellow-600 dark:text-yellow-400"
+                                    : "text-muted-foreground"
+                                }`}
+                              >
+                                {ch.engagementRate.toFixed(2)}%
+                              </span>
+                              {ch.engagementRateBasis!.impressionedPosts <
+                                ch.engagementRateBasis!.totalPosts && (
+                                <span className="ml-1 text-[10px] text-muted-foreground/70">
+                                  ({ch.engagementRateBasis!.impressionedPosts}/
+                                  {ch.engagementRateBasis!.totalPosts})
+                                </span>
+                              )}
                             </span>
                           )}
                         </td>
@@ -683,6 +737,10 @@ function InsightsAnalyticsView() {
                 where the platform reports it separately from impressions. Facebook no longer reports
                 impressions or reach for Page posts at all — Meta removed those metrics, so no permission
                 can restore them; Facebook <em>video</em> posts still report views.
+                &ldquo;Posts sent&rdquo; counts what PostAutomation published here in this date range — the
+                platform&rsquo;s own total is higher if you also post there directly. Engagement rate is pooled
+                over only the posts that reported impressions, and shows that count in brackets when it is
+                fewer than all of them.
               </p>
             </div>
           ) : (

@@ -1,7 +1,7 @@
 import { PrismaClient } from "@prisma/client";
 import { encryptToken, decryptToken } from "./crypto";
 
-export { encryptToken, decryptToken, isEncrypted } from "./crypto";
+export { encryptToken, decryptToken, isEncrypted, DISCONNECTED_TOKEN } from "./crypto";
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;

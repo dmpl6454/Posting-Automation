@@ -221,7 +221,23 @@ model Channel {
   tokenExpiresAt DateTime?
   scopes         String[]
   metadata       Json?
+  /// User-facing pause toggle. false = "don't post here for now", still connected.
   isActive       Boolean        @default(true)
+  /// SOFT DELETE. Set when the user disconnects the channel.
+  ///
+  /// ⚠️ Exists because `PostTarget.channel` is `onDelete: Cascade`, so the old
+  /// hard `delete` permanently destroyed every record of posts sent to the
+  /// channel plus its whole Insights history — and orphaned its
+  /// AnalyticsSnapshot rows forever (AnalyticsSnapshot has no FK to PostTarget).
+  /// Measured on prod before this change: 329 PUBLISHED + 1262 FAILED + 91 DRAFT
+  /// posts left with zero targets, and 1.33M unreachable snapshot rows.
+  ///
+  /// Semantics: disconnected ⇒ `isActive = false` AND tokens cleared (a
+  /// disconnected channel must not retain live credentials), rows and history
+  /// PRESERVED. Reconnecting the same account revives this row via the
+  /// `(organizationId, platform, platformId)` upsert — which also stops the
+  /// duplicate-channel proliferation that disconnect→reconnect used to cause.
+  disconnectedAt DateTime?
 
   organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   postTargets    PostTarget[]
@@ -232,6 +248,8 @@ model Channel {
 
   @@unique([organizationId, platform, platformId])
   @@index([organizationId])
+  /// Partial-ish lookup for "live channels" queries (the common path).
+  @@index([organizationId, disconnectedAt])
 }
 
 model ChannelGroup {

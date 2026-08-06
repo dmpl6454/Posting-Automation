@@ -24,8 +24,10 @@ export async function assertChannelsOwned(
   if (ids.length === 0) {
     throw new TRPCError({ code: "BAD_REQUEST", message: "Select at least one channel to post to." });
   }
+  // disconnectedAt: null — a soft-deleted channel has its tokens cleared, so
+  // targeting it would queue a publish that can never succeed.
   const owned = await prisma.channel.findMany({
-    where: { id: { in: ids }, organizationId },
+    where: { id: { in: ids }, organizationId, disconnectedAt: null },
     select: { id: true },
   });
   if (owned.length !== ids.length) {
