@@ -135,7 +135,16 @@ function InsightsAnalyticsView() {
   const triggerSync = trpc.analytics.triggerSync.useMutation({
     onSuccess: (data) => {
       if (data.queued === 0) {
-        toast({ title: "Nothing to sync", description: "No published posts in the last 30 days to refresh yet." });
+        // The old copy ("No published posts in the last 30 days") implied posts
+        // existed but were too old, which sent people hunting for a bug. Insights
+        // are scoped to the ACTIVE WORKSPACE, and posts published by other members
+        // into their own workspaces are deliberately invisible here — so the
+        // honest message names the workspace and the real reason.
+        toast({
+          title: "Nothing to sync",
+          description:
+            "This workspace has no posts published through PostAutomation in the last 30 days. Insights only cover posts sent from this workspace — posts made directly on the platform, or in another workspace, aren't included.",
+        });
         setSyncing(false);
         return;
       }
@@ -167,6 +176,8 @@ function InsightsAnalyticsView() {
   // it's a property of the channel's stored token, not of the selected range.
   const { data: health } = trpc.analytics.insightsHealth.useQuery();
 
+  const reportableStat = new Set(engagement?.reportableMetrics ?? []);
+  const statReportable = (key: string) => reportableStat.size === 0 || reportableStat.has(key as any);
   const stats: Array<{ name: string; value: number; icon: any; color: string; format?: boolean; sub?: string }> = [
     { name: "Total Posts", value: overview?.totalPosts ?? 0, icon: BarChart3, color: "text-blue-600 bg-blue-100 dark:text-blue-400 dark:bg-blue-950" },
     {
@@ -177,23 +188,57 @@ function InsightsAnalyticsView() {
       sub: overview ? `across ${overview.totalTargets} target${overview.totalTargets === 1 ? "" : "s"}` : undefined,
     },
     { name: "Failed", value: overview?.failed ?? 0, icon: XCircle, color: "text-red-600 bg-red-100 dark:text-red-400 dark:bg-red-950" },
-    { name: "Total Reach", value: engagement?.reach ?? 0, icon: TrendingUp, color: "text-purple-600 bg-purple-100 dark:text-purple-400 dark:bg-purple-950", format: true },
+    // "Total Reach: 0" is actively misleading on an org whose platforms can't
+    // report reach at all — swap in a metric that CAN be populated.
+    ...(statReportable("reach")
+      ? [{ name: "Total Reach", value: engagement?.reach ?? 0, icon: TrendingUp, color: "text-purple-600 bg-purple-100 dark:text-purple-400 dark:bg-purple-950", format: true }]
+      : statReportable("impressions")
+        ? [{ name: "Total Views", value: engagement?.impressions ?? 0, icon: TrendingUp, color: "text-purple-600 bg-purple-100 dark:text-purple-400 dark:bg-purple-950", format: true }]
+        : [{ name: "Total Engagement", value: (engagement?.likes ?? 0) + (engagement?.comments ?? 0) + (engagement?.shares ?? 0), icon: TrendingUp, color: "text-purple-600 bg-purple-100 dark:text-purple-400 dark:bg-purple-950", format: true }]),
   ];
 
+  // Only tile metrics that SOME connected platform can actually report. A metric
+  // no channel can ever populate isn't a "0" and isn't even worth a "—" tile —
+  // it's dead furniture that reads as "this product is broken". E.g. an
+  // FB-only org can never have Impressions or Reach (Meta deleted those
+  // Page-post metrics), so those tiles are dropped rather than showing 0.
+  const reportable = new Set(engagement?.reportableMetrics ?? []);
+  const canReport = (key: string) => reportable.size === 0 || reportable.has(key as any);
   const engagementMetrics = [
-    { label: "Impressions", value: engagement?.impressions ?? 0, icon: Eye, color: "text-blue-500" },
-    { label: "Likes", value: engagement?.likes ?? 0, icon: Heart, color: "text-red-500" },
-    { label: "Comments", value: engagement?.comments ?? 0, icon: MessageCircle, color: "text-green-500" },
-    { label: "Shares", value: engagement?.shares ?? 0, icon: Share, color: "text-purple-500" },
-    { label: "Clicks", value: engagement?.clicks ?? 0, icon: MousePointerClick, color: "text-orange-500" },
-    { label: "Reach", value: engagement?.reach ?? 0, icon: Users, color: "text-cyan-500" },
-  ];
+    { key: "impressions", label: "Impressions", value: engagement?.impressions ?? 0, icon: Eye, color: "text-blue-500" },
+    { key: "likes", label: "Likes", value: engagement?.likes ?? 0, icon: Heart, color: "text-red-500" },
+    { key: "comments", label: "Comments", value: engagement?.comments ?? 0, icon: MessageCircle, color: "text-green-500" },
+    { key: "shares", label: "Shares", value: engagement?.shares ?? 0, icon: Share, color: "text-purple-500" },
+    { key: "clicks", label: "Clicks", value: engagement?.clicks ?? 0, icon: MousePointerClick, color: "text-orange-500" },
+    { key: "reach", label: "Reach", value: engagement?.reach ?? 0, icon: Users, color: "text-cyan-500" },
+  ].filter((m) => canReport(m.key));
 
   // Compress chart data if more than 30 points
   const chartData = (postsOverTime ?? []).map((d) => ({
     ...d,
     label: format(new Date(d.date), "MMM d"),
   }));
+
+  // Columns worth rendering: a metric that EVERY visible channel marks
+  // unavailable can never hold a number, so the column is dropped instead of
+  // showing a full column of "—". Derived from the per-row `unavailable` list the
+  // server computes (static platform map ∪ per-capture overrides), so a Facebook
+  // channel that posted a video keeps its Impressions column while a
+  // feed-only Facebook org loses it. Falls back to showing everything while the
+  // query is still loading so the header doesn't jump.
+  const CHANNEL_METRIC_COLUMNS: Array<{ key: MetricKey; valueKey: string; label: string }> = [
+    { key: "impressions", valueKey: "impressions", label: "Impressions" },
+    { key: "reach", valueKey: "reach", label: "Reach" },
+    { key: "likes", valueKey: "likes", label: "Likes" },
+    { key: "comments", valueKey: "comments", label: "Comments" },
+    { key: "shares", valueKey: "shares", label: "Shares" },
+    { key: "clicks", valueKey: "clicks", label: "Clicks" },
+  ];
+  const channelColumns = !channelStats?.length
+    ? CHANNEL_METRIC_COLUMNS
+    : CHANNEL_METRIC_COLUMNS.filter((c) =>
+        channelStats.some((ch: any) => !(ch.unavailable ?? []).includes(c.key))
+      );
 
   // Channels are connected but no engagement has synced yet — distinct from
   // "no channels connected" so we don't imply zero performance (audit fix 2026-06-06).
@@ -243,33 +288,61 @@ function InsightsAnalyticsView() {
           time — so channels connected before approval keep reporting nothing
           until their owner reconnects once. Without this, a dead/under-scoped
           token is indistinguishable from genuinely zero engagement. */}
-      {health && health.needsReconnectCount > 0 && (
+      {health && (health.needsReconnectCount > 0 || health.expiringSoonCount > 0) && (
         <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="flex gap-3">
               <AlertTriangle className="h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400" />
               <div className="min-w-0">
-                <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
-                  {health.needsReconnectCount} channel{health.needsReconnectCount === 1 ? "" : "s"} need
-                  {health.needsReconnectCount === 1 ? "s" : ""} reconnecting to report Insights
-                </p>
-                <p className="mt-1 text-xs text-amber-800/90 dark:text-amber-300/90">
-                  The platform is refusing to return metrics for{" "}
-                  {health.needsReconnectCount === 1 ? "this channel" : "these channels"} — its access
-                  token is expired or was granted before the analytics permissions were approved.
-                  Reconnecting takes a few seconds and restores metrics going forward.
-                  {health.missingScopes.length > 0 && (
-                    <>
-                      {" "}Missing permission{health.missingScopes.length === 1 ? "" : "s"}:{" "}
-                      <span className="font-mono">{health.missingScopes.join(", ")}</span>.
-                    </>
-                  )}
-                </p>
+                {health.needsReconnectCount > 0 ? (
+                  <>
+                    <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
+                      {health.needsReconnectCount} channel{health.needsReconnectCount === 1 ? "" : "s"} need
+                      {health.needsReconnectCount === 1 ? "s" : ""} reconnecting to report Insights
+                    </p>
+                    <p className="mt-1 text-xs text-amber-800/90 dark:text-amber-300/90">
+                      The platform is refusing to return metrics for{" "}
+                      {health.needsReconnectCount === 1 ? "this channel" : "these channels"} — its access
+                      token was rejected, or its 90-day data-access window has closed. Posting still
+                      works; only metrics are affected. Reconnecting takes a few seconds.
+                      {health.missingScopes.length > 0 && (
+                        <>
+                          {" "}Missing permission{health.missingScopes.length === 1 ? "" : "s"}:{" "}
+                          <span className="font-mono">{health.missingScopes.join(", ")}</span>.
+                        </>
+                      )}
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    {/* Meta closes a 90-day DATA-ACCESS window that is separate from
+                        token expiry, and a background refresh provably cannot extend
+                        it — only the owner reconnecting resets it. So warning ahead of
+                        the deadline is the only thing that actually prevents the
+                        outage, which is why this gets a banner of its own. */}
+                    <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
+                      {health.expiringSoonCount} channel{health.expiringSoonCount === 1 ? "" : "s"} will stop
+                      reporting Insights soon
+                    </p>
+                    <p className="mt-1 text-xs text-amber-800/90 dark:text-amber-300/90">
+                      Meta closes a 90-day data-access window per connection. Reconnect before it
+                      lapses to keep metrics flowing — a background refresh cannot extend it. Posting
+                      is unaffected either way.
+                    </p>
+                  </>
+                )}
                 {health.channels.length > 0 && (
                   <p className="mt-1.5 truncate text-xs text-amber-800/70 dark:text-amber-300/70">
-                    {health.channels.map((c) => c.name).join(", ")}
-                    {health.needsReconnectCount > health.channels.length &&
-                      ` and ${health.needsReconnectCount - health.channels.length} more`}
+                    {health.channels
+                      .slice(0, 6)
+                      .map((c) =>
+                        c.daysUntilDataAccessExpiry != null && c.status === "expiring_soon"
+                          ? `${c.name} (${c.daysUntilDataAccessExpiry}d)`
+                          : c.name
+                      )
+                      .join(", ")}
+                    {health.needsReconnectCount + health.expiringSoonCount > 6 &&
+                      ` and ${health.needsReconnectCount + health.expiringSoonCount - 6} more`}
                   </p>
                 )}
               </div>
@@ -519,13 +592,14 @@ function InsightsAnalyticsView() {
                   <tr className="border-b bg-muted/40">
                     <th className="px-4 py-3 text-left font-medium text-muted-foreground">Channel</th>
                     <th className="px-4 py-3 text-right font-medium text-muted-foreground">Posts</th>
-                    <th className="px-4 py-3 text-right font-medium text-muted-foreground">Impressions</th>
-                    <th className="px-4 py-3 text-right font-medium text-muted-foreground">Reach</th>
-                    <th className="px-4 py-3 text-right font-medium text-muted-foreground">Likes</th>
-                    <th className="px-4 py-3 text-right font-medium text-muted-foreground">Comments</th>
-                    <th className="px-4 py-3 text-right font-medium text-muted-foreground">Shares</th>
-                    <th className="px-4 py-3 text-right font-medium text-muted-foreground">Clicks</th>
-                    <th className="px-4 py-3 text-right font-medium text-muted-foreground">Eng. Rate</th>
+                    {channelColumns.map((c) => (
+                      <th key={c.key} className="px-4 py-3 text-right font-medium text-muted-foreground">
+                        {c.label}
+                      </th>
+                    ))}
+                    {channelColumns.some((c) => c.key === "impressions") && (
+                      <th className="px-4 py-3 text-right font-medium text-muted-foreground">Eng. Rate</th>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
@@ -571,33 +645,34 @@ function InsightsAnalyticsView() {
                         </div>
                       </td>
                       <td className="px-4 py-3 text-right font-medium">{ch.postCount}</td>
-                      <td className="px-4 py-3 text-right">{metricCell("impressions", ch.impressions, ch)}</td>
-                      <td className="px-4 py-3 text-right">{metricCell("reach", ch.reach, ch)}</td>
-                      <td className="px-4 py-3 text-right">{metricCell("likes", ch.likes, ch)}</td>
-                      <td className="px-4 py-3 text-right">{metricCell("comments", ch.comments, ch)}</td>
-                      <td className="px-4 py-3 text-right">{metricCell("shares", ch.shares, ch)}</td>
-                      <td className="px-4 py-3 text-right">{metricCell("clicks", ch.clicks, ch)}</td>
-                      <td className="px-4 py-3 text-right">
-                        {/* Engagement rate is engagement ÷ impressions, so it is
-                            only as honest as its denominator. When impressions
-                            render "—" the rate must too: "0.00%" would misread as
-                            "no engagement" when the truth is "not reported". */}
-                        {ch.hasSnapshot === false || ch.unavailable?.includes("impressions") ? (
-                          <span className="text-muted-foreground">—</span>
-                        ) : (
-                          <span
-                            className={`font-medium ${
-                              ch.engagementRate > 3
-                                ? "text-green-600 dark:text-green-400"
-                                : ch.engagementRate > 1
-                                ? "text-yellow-600 dark:text-yellow-400"
-                                : "text-muted-foreground"
-                            }`}
-                          >
-                            {ch.engagementRate.toFixed(2)}%
-                          </span>
-                        )}
-                      </td>
+                      {channelColumns.map((c) => (
+                        <td key={c.key} className="px-4 py-3 text-right">
+                          {metricCell(c.key, (ch as any)[c.valueKey] as number, ch)}
+                        </td>
+                      ))}
+                      {channelColumns.some((c) => c.key === "impressions") && (
+                        <td className="px-4 py-3 text-right">
+                          {/* Engagement rate is engagement ÷ impressions, so it is
+                              only as honest as its denominator. When impressions
+                              render "—" the rate must too: "0.00%" would misread as
+                              "no engagement" when the truth is "not reported". */}
+                          {ch.hasSnapshot === false || ch.unavailable?.includes("impressions") ? (
+                            <span className="text-muted-foreground">—</span>
+                          ) : (
+                            <span
+                              className={`font-medium ${
+                                ch.engagementRate > 3
+                                  ? "text-green-600 dark:text-green-400"
+                                  : ch.engagementRate > 1
+                                  ? "text-yellow-600 dark:text-yellow-400"
+                                  : "text-muted-foreground"
+                              }`}
+                            >
+                              {ch.engagementRate.toFixed(2)}%
+                            </span>
+                          )}
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>

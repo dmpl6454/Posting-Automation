@@ -883,6 +883,25 @@ export default function ChannelsPage() {
                             Insights off
                           </Badge>
                         )}
+                        {/* Meta's 90-day data-access window closing. Distinct from
+                            "Insights off": metrics still work TODAY, but will stop
+                            on a known date unless reconnected — and no background
+                            refresh can extend it (verified). */}
+                        {channel.insightsHealth?.status === "expiring_soon" && (
+                          <Badge
+                            variant="outline"
+                            className="shrink-0 gap-1 border-yellow-500/50 bg-yellow-500/10 text-[10px] text-yellow-700 dark:text-yellow-500"
+                            title={
+                              channel.insightsHealth.detail ||
+                              "Reconnect to keep Insights reporting."
+                            }
+                          >
+                            <AlertTriangle className="h-2.5 w-2.5" />
+                            {channel.insightsHealth.daysUntilDataAccessExpiry != null
+                              ? `Insights end in ${channel.insightsHealth.daysUntilDataAccessExpiry}d`
+                              : "Insights ending"}
+                          </Badge>
+                        )}
 
                         {/* Actions */}
                         <div className="flex shrink-0 items-center gap-0.5">
@@ -912,10 +931,22 @@ export default function ChannelsPage() {
                             size="icon"
                             className="h-8 w-8 text-destructive hover:text-destructive"
                             onClick={() => {
-                              if (confirm("Disconnect this channel?"))
+                              // ⚠️ Disconnect is DESTRUCTIVE beyond the channel:
+                              // PostTarget has onDelete: Cascade on channelId, so
+                              // deleting a channel permanently deletes every
+                              // post-to-this-channel record and its analytics
+                              // history. Measured on prod: 329 published posts had
+                              // already been left with zero targets this way. The
+                              // old one-line "Disconnect this channel?" gave no hint
+                              // of that, so say it plainly.
+                              if (
+                                confirm(
+                                  `Disconnect ${channel.name}?\n\nThis permanently deletes this channel's posting history and all its Insights data — every record of posts sent to it. This cannot be undone.\n\nTo stop posting to it without losing history, use Pause instead.`
+                                )
+                              )
                                 disconnect.mutate({ channelId: channel.id });
                             }}
-                            title="Disconnect"
+                            title="Disconnect (deletes this channel's post history)"
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>
@@ -1515,8 +1546,14 @@ export default function ChannelsPage() {
               {selectedIds.size === 1 ? "" : "(s)"}?
             </DialogTitle>
             <DialogDescription>
-              This cannot be undone. The selected channels will be disconnected
-              and removed from this workspace.
+              {/* The old copy said only "disconnected and removed", which hid the
+                  real consequence: PostTarget cascades on channelId, so this also
+                  permanently deletes every post record and all Insights history
+                  for these channels. */}
+              This cannot be undone. Along with the channels, this permanently
+              deletes their <strong>posting history and all Insights data</strong> —
+              every record of posts sent to them. To stop posting without losing
+              history, pause the channels instead.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
