@@ -440,19 +440,36 @@ export const analyticsRouter = createRouter({
       const from = input.from ? new Date(input.from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
       const to = input.to ? new Date(input.to) : new Date();
 
-      // Get all published targets in the org for this period. isActive: true
-      // matches perChannelStats/groupStats (which INNER JOIN Channel isActive),
-      // so the headline rate reconciles with the Channel Performance table — a
-      // disconnected channel's snapshots no longer count toward the org rate
-      // while vanishing from the per-channel breakdown.
+      // Population MUST match fetchChannelStatRows (Channel Performance / Group
+      // Performance), or the headline tiles silently disagree with the table
+      // right below them.
+      //
+      // ⚠️ This used to filter `channel: { isActive: true }`, with a comment
+      // claiming it matched perChannelStats' "INNER JOIN Channel isActive" —
+      // but that join filter was REMOVED by the 2026-08-06 soft-delete work
+      // (owner decision: "count all real history", since a post that WAS
+      // published and DID earn engagement is a historical fact). The comment
+      // outlived the code it described. Left as-is, pausing or disconnecting a
+      // channel with in-window history would drop its engagement from the
+      // headline Engagement Breakdown while the Channel Performance table below
+      // still counted it. Measured on prod 2026-08-06 the two populations were
+      // still identical (96 = 96, zero inactive channels with in-window
+      // history), so this is a latent divergence being closed before it bites —
+      // not a currently-visible wrong number.
+      //
+      // The date predicate also gains the COALESCE(publishedAt, updatedAt)
+      // fallback used by every sibling query, so a PUBLISHED post with a NULL
+      // publishedAt isn't silently dropped from the headline only.
       const targets = await ctx.prisma.postTarget.findMany({
         where: {
           post: {
             organizationId: ctx.organizationId,
-            publishedAt: { gte: from, lte: to },
+            OR: [
+              { publishedAt: { gte: from, lte: to } },
+              { publishedAt: null, updatedAt: { gte: from, lte: to } },
+            ],
           },
           status: "PUBLISHED",
-          channel: { isActive: true },
         },
         select: { id: true },
       });
@@ -463,11 +480,15 @@ export const analyticsRouter = createRouter({
       // dead tiles/cards entirely instead of showing a confident "0" for a
       // metric that is structurally impossible — e.g. "Total Reach: 0" on an
       // org with only Facebook channels, where Meta deleted the reach metric.
-      const activeChannels = await ctx.prisma.channel.findMany({
-        where: { organizationId: ctx.organizationId, isActive: true },
+      // Includes paused/disconnected channels: their history still counts toward
+      // the totals above (soft-delete decision 2026-08-06), so a metric only
+      // THEY can report must keep its tile rather than having the tile dropped
+      // while its number is still being summed into the totals.
+      const orgChannels = await ctx.prisma.channel.findMany({
+        where: { organizationId: ctx.organizationId },
         select: { platform: true },
       });
-      const reportable = reportableMetrics(activeChannels.map((c) => c.platform as string));
+      const reportable = reportableMetrics(orgChannels.map((c) => c.platform as string));
 
       if (targetIds.length === 0) {
         return {
@@ -873,7 +894,7 @@ export const analyticsRouter = createRouter({
       const from = input.from ? new Date(input.from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
       const to = input.to ? new Date(input.to) : new Date();
 
-      const [groups, statRows, ungroupedChannelCount] = await Promise.all([
+      const [groups, statRows, ungroupedChannelCount, channelPlatforms] = await Promise.all([
         ctx.prisma.channelGroup.findMany({
           where: { organizationId: ctx.organizationId },
           select: {
@@ -895,10 +916,29 @@ export const analyticsRouter = createRouter({
             channelGroups: { none: {} },
           },
         }),
+        // Platform per channel, so each stat row can carry the SAME effective
+        // capability list the Channel Performance table uses. Without it,
+        // Group Performance rendered a raw sum with no honesty gate — showing
+        // "Reach 0" for an FB-only group whose channels all report reach as
+        // unavailable, one card below the table that correctly showed "—".
+        ctx.prisma.channel.findMany({
+          where: { organizationId: ctx.organizationId },
+          select: { id: true, platform: true },
+        }),
       ]);
 
+      const platformById = new Map(channelPlatforms.map((c) => [c.id, c.platform as string]));
+      const rowsWithCaps = statRows.map((r) => ({
+        ...r,
+        unavailable: effectiveChannelUnavailable(
+          platformById.get(r.channelId) ?? "",
+          r.declaredAvailable,
+          r.hasLegacySnapshot
+        ),
+      }));
+
       return {
-        rows: sumChannelRowsIntoGroups(groups, statRows, ungroupedChannelCount),
+        rows: sumChannelRowsIntoGroups(groups, rowsWithCaps, ungroupedChannelCount),
         groupCount: groups.length,
       };
     }),

@@ -240,6 +240,29 @@ function InsightsAnalyticsView() {
         channelStats.some((ch: any) => !(ch.unavailable ?? []).includes(c.key))
       );
 
+  // Same capability-driven column filtering for Group Performance. Before this,
+  // the group table rendered every metric as a raw formatNumber() sum with no
+  // honesty gate — so an FB-only group showed "Reach 0" while the Channel
+  // Performance table one card above showed "—" for the same underlying data.
+  const groupRows = groupStats?.rows ?? [];
+  const groupColumns = !groupRows.length
+    ? CHANNEL_METRIC_COLUMNS
+    : CHANNEL_METRIC_COLUMNS.filter((c) =>
+        groupRows.some((g: any) => !(g.unavailable ?? []).includes(c.key))
+      );
+
+  /**
+   * The "Likes" column means different things per platform — Facebook reports
+   * ALL reaction types, Pinterest saves, Reddit upvotes. The API already ships
+   * `likeKind` per row and `likeColumnLabel` already maps it, but the header was
+   * hardcoded "Likes". With 975 of this deployment's channels on Facebook, that
+   * mislabels the most common case. Only relabel when every visible channel
+   * agrees; a mixed table keeps the neutral "Likes".
+   */
+  const likeKinds = new Set((channelStats ?? []).map((ch: any) => ch.likeKind).filter(Boolean));
+  const likeHeader =
+    likeKinds.size === 1 ? likeColumnLabel(likeKinds.values().next().value as string) : { label: "Likes" };
+
   // Channels are connected but no engagement has synced yet — distinct from
   // "no channels connected" so we don't imply zero performance (audit fix 2026-06-06).
   const hasChannels = !!channelStats && channelStats.length > 0;
@@ -603,8 +626,12 @@ function InsightsAnalyticsView() {
                       Posts sent
                     </th>
                     {channelColumns.map((c) => (
-                      <th key={c.key} className="px-4 py-3 text-right font-medium text-muted-foreground">
-                        {c.label}
+                      <th
+                        key={c.key}
+                        className="px-4 py-3 text-right font-medium text-muted-foreground"
+                        title={c.key === "likes" ? likeHeader.tooltip : undefined}
+                      >
+                        {c.key === "likes" ? likeHeader.label : c.label}
                       </th>
                     ))}
                     {channelColumns.some((c) => c.key === "impressions") && (
@@ -788,13 +815,14 @@ function InsightsAnalyticsView() {
                       <th className="px-4 py-3 text-left font-medium text-muted-foreground">Group</th>
                       <th className="px-4 py-3 text-right font-medium text-muted-foreground">Channels</th>
                       <th className="px-4 py-3 text-right font-medium text-muted-foreground">Publishes</th>
-                      <th className="px-4 py-3 text-right font-medium text-muted-foreground">Impressions</th>
-                      <th className="px-4 py-3 text-right font-medium text-muted-foreground">Reach</th>
-                      <th className="px-4 py-3 text-right font-medium text-muted-foreground">Likes</th>
-                      <th className="px-4 py-3 text-right font-medium text-muted-foreground">Comments</th>
-                      <th className="px-4 py-3 text-right font-medium text-muted-foreground">Shares</th>
-                      <th className="px-4 py-3 text-right font-medium text-muted-foreground">Clicks</th>
-                      <th className="px-4 py-3 text-right font-medium text-muted-foreground">Eng. %</th>
+                      {groupColumns.map((c) => (
+                        <th key={c.key} className="px-4 py-3 text-right font-medium text-muted-foreground">
+                          {c.label}
+                        </th>
+                      ))}
+                      {groupColumns.some((c) => c.key === "impressions") && (
+                        <th className="px-4 py-3 text-right font-medium text-muted-foreground">Eng. %</th>
+                      )}
                     </tr>
                   </thead>
                   <tbody>
@@ -816,25 +844,53 @@ function InsightsAnalyticsView() {
                         </td>
                         <td className="px-4 py-3 text-right">{g.channelCount}</td>
                         <td className="px-4 py-3 text-right font-medium">{g.posts}</td>
-                        <td className="px-4 py-3 text-right">{formatNumber(g.impressions)}</td>
-                        <td className="px-4 py-3 text-right">{formatNumber(g.reach)}</td>
-                        <td className="px-4 py-3 text-right">{formatNumber(g.likes)}</td>
-                        <td className="px-4 py-3 text-right">{formatNumber(g.comments)}</td>
-                        <td className="px-4 py-3 text-right">{formatNumber(g.shares)}</td>
-                        <td className="px-4 py-3 text-right">{formatNumber(g.clicks)}</td>
-                        <td className="px-4 py-3 text-right">
-                          <span
-                            className={`font-medium ${
-                              g.engagementRate > 3
-                                ? "text-green-600 dark:text-green-400"
-                                : g.engagementRate > 1
-                                ? "text-yellow-600 dark:text-yellow-400"
-                                : "text-muted-foreground"
-                            }`}
-                          >
-                            {g.engagementRate.toFixed(2)}%
-                          </span>
-                        </td>
+                        {/* Same honesty gate as Channel Performance: a metric no
+                            member channel can report renders "—", never a fake 0. */}
+                        {groupColumns.map((c) => (
+                          <td key={c.key} className="px-4 py-3 text-right">
+                            {metricCell(c.key, (g as any)[c.valueKey] as number, g as MetricRowMeta)}
+                          </td>
+                        ))}
+                        {groupColumns.some((c) => c.key === "impressions") && (
+                          <td className="px-4 py-3 text-right">
+                            {/* Gated on the same base rule as the per-channel rate:
+                                with no impressioned post there is no denominator,
+                                so "0.00%" would misread as "no engagement". */}
+                            {g.hasSnapshot === false ||
+                            (g.unavailable ?? []).includes("impressions") ||
+                            (g.engagementRateBasis?.impressionedPosts ?? 0) === 0 ? (
+                              <span
+                                className="text-muted-foreground"
+                                title="No post in this group reported an impression/view count, so an engagement rate cannot be computed."
+                              >
+                                —
+                              </span>
+                            ) : (
+                              <span
+                                title={`Pooled over the ${g.engagementRateBasis!.impressionedPosts} of ${g.engagementRateBasis!.totalPosts} publish(es) that reported impressions.`}
+                              >
+                                <span
+                                  className={`font-medium ${
+                                    g.engagementRate > 3
+                                      ? "text-green-600 dark:text-green-400"
+                                      : g.engagementRate > 1
+                                      ? "text-yellow-600 dark:text-yellow-400"
+                                      : "text-muted-foreground"
+                                  }`}
+                                >
+                                  {g.engagementRate.toFixed(2)}%
+                                </span>
+                                {g.engagementRateBasis!.impressionedPosts <
+                                  g.engagementRateBasis!.totalPosts && (
+                                  <span className="ml-1 text-[10px] text-muted-foreground/70">
+                                    ({g.engagementRateBasis!.impressionedPosts}/
+                                    {g.engagementRateBasis!.totalPosts})
+                                  </span>
+                                )}
+                              </span>
+                            )}
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>
