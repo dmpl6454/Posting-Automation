@@ -7,6 +7,79 @@ import { enqueueScheduledPublishJobs } from "@postautomation/queue";
 import { HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE } from "../lib/publish-recovery";
 
 /**
+ * Purge AnalyticsSnapshot rows whose PostTarget no longer exists.
+ *
+ * ⚠️ How 1.33M unreachable rows accumulated: `AnalyticsSnapshot` has NO foreign
+ * key to `PostTarget` (bare `postTargetId` column, indexes only), while
+ * `PostTarget.channel` is `onDelete: Cascade`. So every hard channel delete
+ * cascade-removed its targets and stranded their snapshots forever — nothing
+ * could ever read them again (no target ⇒ no join path) and nothing cleaned them
+ * up. Measured on prod 2026-08-06: 1,324,188 FACEBOOK + 2,953 INSTAGRAM + 487
+ * TWITTER + 70 YOUTUBE orphans.
+ *
+ * Channel disconnect is now a SOFT delete, which stops the main source. But post
+ * deletion (`bulk.bulkDelete`, `post.delete`) still cascades targets, so this is
+ * a permanent janitor rather than a one-off migration.
+ *
+ * SAFETY — starts in REPORT-ONLY mode (owner decision 2026-08-06: "report first,
+ * then delete"). It counts and logs, and deletes nothing until
+ * `ORPHAN_PURGE_ENABLED=true` is set. Deletion is irreversible, and while these
+ * rows are provably unreachable by every code path, a bulk delete of 1.3M rows
+ * deserves a look at the real number first.
+ *
+ * Batched + capped so it never takes a long lock on the 4-core prod box.
+ */
+const ORPHAN_PURGE_BATCH = 5_000;
+const ORPHAN_PURGE_MAX_PER_RUN = 50_000;
+
+export async function purgeOrphanedAnalyticsSnapshots() {
+  const enabled = process.env.ORPHAN_PURGE_ENABLED === "true";
+
+  const countRows = await prisma.$queryRawUnsafe<Array<{ orphans: bigint }>>(
+    `SELECT COUNT(*) AS orphans
+     FROM "AnalyticsSnapshot" s
+     WHERE NOT EXISTS (SELECT 1 FROM "PostTarget" pt WHERE pt.id = s."postTargetId")`
+  );
+  const total = Number(countRows[0]?.orphans ?? 0);
+
+  if (total === 0) {
+    console.log(`[Cron:OrphanPurge] no orphaned snapshots — nothing to do`);
+    return { total: 0, deleted: 0, enabled };
+  }
+
+  if (!enabled) {
+    console.log(
+      `[Cron:OrphanPurge] REPORT ONLY — ${total.toLocaleString()} orphaned snapshot row(s) are unreachable ` +
+        `(their PostTarget was cascade-deleted). Set ORPHAN_PURGE_ENABLED=true to start deleting ` +
+        `(≤${ORPHAN_PURGE_MAX_PER_RUN.toLocaleString()} per daily run, in ${ORPHAN_PURGE_BATCH.toLocaleString()}-row batches). 0 rows deleted.`
+    );
+    return { total, deleted: 0, enabled };
+  }
+
+  let deleted = 0;
+  while (deleted < ORPHAN_PURGE_MAX_PER_RUN) {
+    // LIMIT inside a CTE keeps each statement short — a single unbounded DELETE
+    // over 1.3M rows would hold locks long enough to stall publishing.
+    const n: number = await prisma.$executeRawUnsafe(
+      `WITH doomed AS (
+         SELECT s.id FROM "AnalyticsSnapshot" s
+         WHERE NOT EXISTS (SELECT 1 FROM "PostTarget" pt WHERE pt.id = s."postTargetId")
+         LIMIT ${ORPHAN_PURGE_BATCH}
+       )
+       DELETE FROM "AnalyticsSnapshot" WHERE id IN (SELECT id FROM doomed)`
+    );
+    deleted += n;
+    if (n < ORPHAN_PURGE_BATCH) break; // drained
+  }
+
+  console.log(
+    `[Cron:OrphanPurge] deleted ${deleted.toLocaleString()} orphaned snapshot(s); ` +
+      `${Math.max(0, total - deleted).toLocaleString()} remaining`
+  );
+  return { total, deleted, enabled };
+}
+
+/**
  * Backfill Meta's 90-day DATA-ACCESS deadline onto channels that predate its
  * capture at connect time, so the Insights banner can warn before metrics die.
  *
@@ -891,6 +964,11 @@ export function startCronJobs() {
   // burning the app's hourly Graph quota in one pass.
   setInterval(scheduleMetaDataAccessBackfill, 24 * 60 * 60 * 1000);
   setTimeout(scheduleMetaDataAccessBackfill, 11 * 60 * 1000); // after 11 min warmup
+
+  // Orphaned-snapshot janitor, once daily. REPORT-ONLY until
+  // ORPHAN_PURGE_ENABLED=true; batched + capped when armed.
+  setInterval(purgeOrphanedAnalyticsSnapshots, 24 * 60 * 60 * 1000);
+  setTimeout(purgeOrphanedAnalyticsSnapshots, 13 * 60 * 1000); // after 13 min warmup
 
   // Analytics sync every 6 hours
   setInterval(scheduleAnalyticsSync, 6 * 60 * 60 * 1000);

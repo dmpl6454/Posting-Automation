@@ -3,7 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
 import { avatarCacheQueue } from "@postautomation/queue";
 import { getSocialProvider, getSupportedPlatforms, signState } from "@postautomation/social";
-import { resolveChannelErrorsOnReconnect } from "@postautomation/db";
+import { resolveChannelErrorsOnReconnect, DISCONNECTED_TOKEN } from "@postautomation/db";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 import { evaluateChannelInsightsStatus } from "../lib/insights-health";
 import { enforcePlanLimit } from "../middleware/plan-limit.middleware";
@@ -36,7 +36,9 @@ const TOKEN_PLATFORM_SET = new Set<string>(TOKEN_PLATFORMS);
 export const channelRouter = createRouter({
   list: orgProcedure.query(async ({ ctx }) => {
     const channels = await ctx.prisma.channel.findMany({
-      where: { organizationId: ctx.organizationId },
+      // Disconnected channels are soft-deleted: hidden here (the user removed
+      // them) while their post history survives for Insights.
+      where: { organizationId: ctx.organizationId, disconnectedAt: null },
       orderBy: { createdAt: "desc" },
       select: {
         id: true,
@@ -387,7 +389,21 @@ export const channelRouter = createRouter({
         where: { id: input.channelId, organizationId: ctx.organizationId },
       });
       if (!channel) throw new TRPCError({ code: "NOT_FOUND" });
-      await ctx.prisma.channel.delete({ where: { id: input.channelId } });
+      // SOFT DELETE (2026-08-06). This used to be `channel.delete`, which — via
+      // PostTarget's onDelete: Cascade — permanently destroyed every record of
+      // posts sent to this channel plus its entire Insights history, and orphaned
+      // its AnalyticsSnapshot rows forever. Tokens are cleared so a disconnected
+      // channel retains no usable credentials, while the rows (and therefore the
+      // history) survive. Reconnecting the same account revives this row.
+      await ctx.prisma.channel.update({
+        where: { id: input.channelId },
+        data: {
+          disconnectedAt: new Date(),
+          isActive: false,
+          accessToken: DISCONNECTED_TOKEN,
+          refreshToken: null,
+        },
+      });
 
       // Fire-and-forget audit log
       createAuditLog({
@@ -405,13 +421,26 @@ export const channelRouter = createRouter({
   bulkDisconnect: orgProcedure
     .input(z.object({ channelIds: z.array(z.string()).min(1).max(100) }))
     .mutation(async ({ ctx, input }) => {
-      // Fetch the to-be-deleted channels scoped to the org (for audit + count)
+      // Fetch the to-be-disconnected channels scoped to the org (audit + count)
       const channels = await ctx.prisma.channel.findMany({
         where: { id: { in: input.channelIds }, organizationId: ctx.organizationId },
         select: { id: true, platform: true, name: true },
       });
-      const result = await ctx.prisma.channel.deleteMany({
-        where: { id: { in: input.channelIds }, organizationId: ctx.organizationId },
+      // SOFT DELETE — see the note on `disconnect` above. This was `deleteMany`,
+      // which cascade-destroyed the post history of up to 100 channels per call
+      // (111 such deletions landed in a single 14-minute window on prod).
+      const result = await ctx.prisma.channel.updateMany({
+        where: {
+          id: { in: input.channelIds },
+          organizationId: ctx.organizationId,
+          disconnectedAt: null,
+        },
+        data: {
+          disconnectedAt: new Date(),
+          isActive: false,
+          accessToken: DISCONNECTED_TOKEN,
+          refreshToken: null,
+        },
       });
 
       // Fire-and-forget audit per deleted channel

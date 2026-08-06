@@ -129,6 +129,9 @@ export async function GET(
           username: profile.username || null,
           avatar: profile.avatar || null,
           isActive: true,
+          // Reconnect REVIVES a soft-deleted channel: clearing this preserves the
+          // channel\'s entire post history and avoids creating a duplicate row.
+          disconnectedAt: null,
         },
         create: {
           organizationId,
@@ -278,6 +281,9 @@ export async function GET(
               name: page.name,
               avatar: page.avatar || null,
               isActive: true,
+              // Reconnect REVIVES a soft-deleted channel: clearing this preserves the
+              // channel\'s entire post history and avoids creating a duplicate row.
+              disconnectedAt: null,
               // SECURITY: encrypt the long-lived user token at rest in metadata
               // (the accessToken column is encrypted via the Prisma extension; metadata is not).
               // NOTE: userAccessToken is stored encrypted; any future reader MUST decryptToken()
@@ -346,6 +352,9 @@ export async function GET(
             username: ig.username || null,
             avatar: ig.avatar || null,
             isActive: true,
+            // Reconnect REVIVES a soft-deleted channel: clearing this preserves the
+            // channel\'s entire post history and avoids creating a duplicate row.
+            disconnectedAt: null,
             metadata: { igUserId: ig.id, ...metaWindowMeta },
           },
           create: {
@@ -392,6 +401,9 @@ export async function GET(
           name: `${profile.name} (Personal)`,
           avatar: profile.avatar || null,
           isActive: true,
+          // Reconnect REVIVES a soft-deleted channel: clearing this preserves the
+          // channel\'s entire post history and avoids creating a duplicate row.
+          disconnectedAt: null,
         },
         create: {
           organizationId,
@@ -430,6 +442,9 @@ export async function GET(
               name: `${page.name} (Page)`,
               avatar: page.avatar || null,
               isActive: true,
+              // Reconnect REVIVES a soft-deleted channel: clearing this preserves the
+              // channel\'s entire post history and avoids creating a duplicate row.
+              disconnectedAt: null,
               metadata: { orgId: page.id },
             },
             create: {
@@ -480,6 +495,9 @@ export async function GET(
         username: profile.username || null,
         avatar: profile.avatar || null,
         isActive: true,
+        // Reconnect REVIVES a soft-deleted channel: clearing this preserves the
+        // channel\'s entire post history and avoids creating a duplicate row.
+        disconnectedAt: null,
         ...(channelMetadata && { metadata: channelMetadata }),
       },
       create: {

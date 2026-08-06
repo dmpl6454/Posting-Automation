@@ -37,6 +37,24 @@ export interface ChannelStatRow {
   /** true when ≥1 of the channel's targets has a captured snapshot (UI: — vs 0). */
   hasSnapshot?: boolean;
   /**
+   * Sums restricted to snapshots that actually reported impressions — the ONLY
+   * honest basis for an engagement rate.
+   *
+   * ⚠️ Why these exist. The rate used to be `Σ(likes+comments+shares) ÷ Σ(impressions)`
+   * over ALL of a channel's posts. On Facebook only VIDEO posts carry an
+   * impression figure, so a channel's entire reaction count was divided by one
+   * video's view count. Measured on prod: a channel with 7 posts, 14 reactions
+   * and a single 1-view video rendered **1400.00%**. The correct rule (already
+   * documented in engagement-rate.ts and used by analytics.engagement) is that
+   * only rows WITH impressions contribute to BOTH sides.
+   */
+  impressionedImpressions?: number;
+  impressionedLikes?: number;
+  impressionedComments?: number;
+  impressionedShares?: number;
+  /** How many of this channel's posts reported impressions (rate's real base). */
+  impressionedPosts?: number;
+  /**
    * Per-metric availability DECLARED by the captures themselves
    * (AnalyticsSnapshot.metadata.metricsAvailable), aggregated across this
    * channel's targets: true ⇒ at least one capture actually reported that metric.
@@ -97,19 +115,29 @@ function addRow(sums: ReturnType<typeof emptySums>, row: ChannelStatRow) {
 }
 
 /**
- * Engagement rate pooled ONLY over channels that have impressions, so a
- * zero-impression channel (e.g. a LinkedIn member-only channel with likes but
- * no impressions API) can't inflate the group rate over a denominator it never
- * contributed to. Mirrors packages/api/src/lib/engagement-rate.ts at the
- * channel-row granularity. Returns a 0–100 percent.
+ * Engagement rate pooled over IMPRESSIONED POSTS.
+ *
+ * ⚠️ This used to pool at CHANNEL granularity — it skipped channels whose total
+ * impressions were 0, but for the channels it kept it added their FULL
+ * like/comment/share totals over a denominator built from only their impressioned
+ * posts. That inherited the exact numerator inflation this rule exists to
+ * prevent, one level up: the "fb" group measured 32.76% where the truth was
+ * ~10.34%. Using the per-channel impressioned-only sums fixes both levels with
+ * one change. Returns a 0–100 percent.
  */
 function rateFromRows(rows: ChannelStatRow[]): number {
   let num = 0;
   let den = 0;
   for (const r of rows) {
-    if (r.impressions > 0) {
-      num += r.likes + r.comments + r.shares;
-      den += r.impressions;
+    // Prefer the impressioned-only sums; fall back to the raw ones only for
+    // callers (older tests) that don't supply them.
+    const imp = r.impressionedImpressions ?? (r.impressions > 0 ? r.impressions : 0);
+    if (imp > 0) {
+      num +=
+        (r.impressionedLikes ?? r.likes) +
+        (r.impressionedComments ?? r.comments) +
+        (r.impressionedShares ?? r.shares);
+      den += imp;
     }
   }
   return den > 0 ? (num / den) * 100 : 0;

@@ -162,7 +162,10 @@ export const postRouter = createRouter({
 
       // Validate every channelId belongs to this organization before persisting
       const ownedChannels = await ctx.prisma.channel.findMany({
-        where: { id: { in: input.channelIds }, organizationId: ctx.organizationId },
+        // disconnectedAt: null — a disconnected channel has no usable token, so a
+        // post targeting it could never publish (the error copy below already
+        // names this case).
+        where: { id: { in: input.channelIds }, organizationId: ctx.organizationId, disconnectedAt: null },
         select: { id: true, platform: true },
       });
       if (ownedChannels.length !== new Set(input.channelIds).size) {
@@ -469,7 +472,7 @@ export const postRouter = createRouter({
           throw new TRPCError({ code: "BAD_REQUEST", message: "Channels can only be changed on draft or scheduled posts." });
         }
         const ownedChannels = await ctx.prisma.channel.findMany({
-          where: { id: { in: channelIds }, organizationId: ctx.organizationId },
+          where: { id: { in: channelIds }, organizationId: ctx.organizationId, disconnectedAt: null },
           select: { id: true },
         });
         if (ownedChannels.length !== new Set(channelIds).size) {

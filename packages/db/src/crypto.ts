@@ -16,6 +16,23 @@ import crypto from "crypto";
 
 const ENC_PREFIX = "enc:v1:";
 
+/**
+ * Value written to `Channel.accessToken` when a channel is soft-deleted
+ * (disconnected), so the REAL platform credential is destroyed while the row —
+ * and therefore the channel's whole post/Insights history — survives.
+ *
+ * ⚠️ Why a sentinel rather than `""`: `Channel.accessToken` is NOT NULL, and
+ * `encryptToken("")` returns `null` (see below), so writing an empty string makes
+ * Prisma reject the update with "Argument `accessToken` must not be null" — i.e.
+ * disconnect would throw. A nullable column would be the cleaner model but the
+ * field is read as a plain `string` in dozens of places.
+ *
+ * If this ever DOES reach a platform call it simply fails auth, which the
+ * insights-health layer already reports as "reconnect this channel" — a correct
+ * outcome, not a silent wrong number.
+ */
+export const DISCONNECTED_TOKEN = "disconnected";
+
 function getEncryptionKey(): Buffer {
   const k = process.env.TOKEN_ENCRYPTION_KEY || process.env.NEXTAUTH_SECRET;
   if (!k || k.length < 16) {

@@ -931,22 +931,20 @@ export default function ChannelsPage() {
                             size="icon"
                             className="h-8 w-8 text-destructive hover:text-destructive"
                             onClick={() => {
-                              // ⚠️ Disconnect is DESTRUCTIVE beyond the channel:
-                              // PostTarget has onDelete: Cascade on channelId, so
-                              // deleting a channel permanently deletes every
-                              // post-to-this-channel record and its analytics
-                              // history. Measured on prod: 329 published posts had
-                              // already been left with zero targets this way. The
-                              // old one-line "Disconnect this channel?" gave no hint
-                              // of that, so say it plainly.
+                              // Disconnect is now a SOFT delete (2026-08-06): the
+                              // channel's post history and Insights data survive,
+                              // and reconnecting the same account revives the very
+                              // same record. So the copy no longer needs to warn
+                              // about data loss — it just has to be accurate about
+                              // what stops (new posting + metric collection).
                               if (
                                 confirm(
-                                  `Disconnect ${channel.name}?\n\nThis permanently deletes this channel's posting history and all its Insights data — every record of posts sent to it. This cannot be undone.\n\nTo stop posting to it without losing history, use Pause instead.`
+                                  `Disconnect ${channel.name}?\n\nPosting and metric collection stop. Its past posts and Insights history are kept, and reconnecting this account restores it.\n\nTo pause posting temporarily without disconnecting, use Pause instead.`
                                 )
                               )
                                 disconnect.mutate({ channelId: channel.id });
                             }}
-                            title="Disconnect (deletes this channel's post history)"
+                            title="Disconnect (history is kept)"
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>
@@ -1546,14 +1544,11 @@ export default function ChannelsPage() {
               {selectedIds.size === 1 ? "" : "(s)"}?
             </DialogTitle>
             <DialogDescription>
-              {/* The old copy said only "disconnected and removed", which hid the
-                  real consequence: PostTarget cascades on channelId, so this also
-                  permanently deletes every post record and all Insights history
-                  for these channels. */}
-              This cannot be undone. Along with the channels, this permanently
-              deletes their <strong>posting history and all Insights data</strong> —
-              every record of posts sent to them. To stop posting without losing
-              history, pause the channels instead.
+              {/* Disconnect is a SOFT delete since 2026-08-06 — history survives and
+                  reconnecting revives the same records. Copy reflects that. */}
+              Posting and metric collection stop for these channels. Their past posts
+              and Insights history are <strong>kept</strong>, and reconnecting an
+              account restores it. To pause posting temporarily instead, use Pause.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
