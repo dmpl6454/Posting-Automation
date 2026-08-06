@@ -16,6 +16,33 @@ export interface SocialPostResult {
 export type LikeKind = "likes" | "reactions" | "saves" | "upvotes";
 export type AnalyticsSource = "api" | "scrape";
 
+/**
+ * Why a capture came back short of the platform's full metric set. Distinguishes
+ * "the owner must reconnect to grant a scope" from "this platform genuinely has
+ * no such metric" — the two look identical in the stored numbers (both 0), and
+ * conflating them is what made a dead Meta token indistinguishable from a post
+ * with genuinely zero engagement.
+ *
+ * VERIFIED 2026-08-06: a Meta token lacking `read_insights` gets HTTP **200 with
+ * an empty `data` array** on the FB post-insights edge — a SILENT empty, not an
+ * error. So a degradation reason cannot be inferred from HTTP status alone.
+ */
+export type AnalyticsDegradeReason =
+  /** Token rejected outright (Meta #190 / session invalidated) — reconnect required. */
+  | "token_invalid"
+  /** Token is live but lacks a scope needed to read these metrics — reconnect required. */
+  | "missing_scope"
+  /** Platform accepted the call but returned no rows for reasons we can't attribute. */
+  | "no_data";
+
+export interface AnalyticsDegradation {
+  reason: AnalyticsDegradeReason;
+  /** Scopes the platform explicitly named as missing (e.g. ["read_insights"]). */
+  missingScopes?: string[];
+  /** Short, human-readable diagnosis for the UI. Never contains a token. */
+  detail?: string;
+}
+
 export interface SocialAnalytics {
   impressions: number;
   clicks: number;
@@ -42,6 +69,12 @@ export interface SocialAnalytics {
   >;
   /** Where this row came from: official API or the scraper fallback. */
   source?: AnalyticsSource;
+  /** Mean watch time in MILLISECONDS (IG Reels `ig_reels_avg_watch_time`). */
+  avgWatchTimeMs?: number;
+  /** Total accumulated watch time in MILLISECONDS (IG Reels). */
+  totalWatchTimeMs?: number;
+  /** Present only when the capture was degraded — see AnalyticsDegradation. */
+  degraded?: AnalyticsDegradation;
 }
 
 export interface OAuthTokens {

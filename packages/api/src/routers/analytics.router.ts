@@ -11,7 +11,11 @@ import { createRateLimitMiddleware } from "../middleware/rate-limit.middleware";
 import { emailReportRateLimiter } from "../middleware/rate-limit";
 import { sendEmail } from "../lib/email";
 import { escapeHtml } from "../lib/sanitize";
-import { platformMetricCapabilities } from "../lib/platform-metrics";
+import {
+  platformMetricCapabilities,
+  effectiveChannelUnavailable,
+} from "../lib/platform-metrics";
+import { readInsightsHealth, summarizeInsightsHealth } from "../lib/insights-health";
 import { toCsv } from "../lib/report-csv";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 
@@ -39,6 +43,19 @@ async function fetchChannelStatRows(
   from: Date,
   to: Date
 ): Promise<ChannelStatRow[]> {
+  // Per-metric availability as DECLARED by each capture. Mirrors
+  // gatePostReportRow's rule, lifted to an aggregate:
+  //   metadata absent            ⇒ NULL (unknown — consult the static map)
+  //   key absent from metadata   ⇒ TRUE  (capture declared others, not this one)
+  //   key present                ⇒ TRUE unless explicitly 'false'
+  // BOOL_OR then answers "did ANY capture report this metric?".
+  // Uses ->>'key' IS NULL rather than the jsonb `?` operator on purpose — `?`
+  // reads as a placeholder to some drivers and would be fragile here.
+  const availExpr = (key: string) =>
+    `BOOL_OR(CASE WHEN s.metadata IS NULL THEN NULL
+                  WHEN (s.metadata->'metricsAvailable'->>'${key}') IS NULL THEN TRUE
+                  ELSE (s.metadata->'metricsAvailable'->>'${key}') <> 'false' END)`;
+
   const rows: Array<{
     channelId: string;
     posts: bigint;
@@ -49,6 +66,13 @@ async function fetchChannelStatRows(
     shares: bigint;
     clicks: bigint;
     hasSnapshot: boolean;
+    availImpressions: boolean | null;
+    availReach: boolean | null;
+    availLikes: boolean | null;
+    availComments: boolean | null;
+    availShares: boolean | null;
+    availClicks: boolean | null;
+    hasLegacySnapshot: boolean | null;
   }> = await (prisma.$queryRawUnsafe as any)(
     `SELECT pt."channelId"                  AS "channelId",
             COUNT(DISTINCT p.id)            AS posts,
@@ -60,7 +84,16 @@ async function fetchChannelStatRows(
             COALESCE(SUM(s.clicks), 0)      AS clicks,
             -- true when at least one of this channel's targets has a captured
             -- snapshot; drives the UI's "—" (no data yet) vs "0" (real zero).
-            BOOL_OR(s.id IS NOT NULL)       AS "hasSnapshot"
+            BOOL_OR(s.id IS NOT NULL)       AS "hasSnapshot",
+            ${availExpr("impressions")}     AS "availImpressions",
+            ${availExpr("reach")}           AS "availReach",
+            ${availExpr("likes")}           AS "availLikes",
+            ${availExpr("comments")}        AS "availComments",
+            ${availExpr("shares")}          AS "availShares",
+            ${availExpr("clicks")}          AS "availClicks",
+            -- a capture that predates the honesty metadata makes no capability
+            -- claim, so the static platform map must still apply for it.
+            BOOL_OR(s.id IS NOT NULL AND s.metadata IS NULL) AS "hasLegacySnapshot"
      FROM "PostTarget" pt
      INNER JOIN "Post" p ON p.id = pt."postId"
      INNER JOIN "Channel" c ON c.id = pt."channelId" AND c."isActive" = true
@@ -80,6 +113,9 @@ async function fetchChannelStatRows(
   );
 
   // Numeric SQL aggregates surface as BigInts — normalize for superjson/UI.
+  // BOOL_OR over zero rows (or all-NULL) yields NULL: preserve that as undefined
+  // ("unknown"), which is distinct from false ("every capture said unavailable").
+  const tri = (v: boolean | null): boolean | undefined => (v === null ? undefined : Boolean(v));
   return rows.map((r) => ({
     channelId: r.channelId,
     posts: Number(r.posts),
@@ -90,6 +126,15 @@ async function fetchChannelStatRows(
     shares: Number(r.shares),
     clicks: Number(r.clicks),
     hasSnapshot: Boolean(r.hasSnapshot),
+    declaredAvailable: {
+      impressions: tri(r.availImpressions),
+      reach: tri(r.availReach),
+      likes: tri(r.availLikes),
+      comments: tri(r.availComments),
+      shares: tri(r.availShares),
+      clicks: tri(r.availClicks),
+    },
+    hasLegacySnapshot: Boolean(r.hasLegacySnapshot),
   }));
 }
 
@@ -114,12 +159,25 @@ export interface PostReportRow {
   engagementRate: number | null;
   snapshotAt: Date | null;
   /**
+   * Saves/bookmarks — a distinct action, not a like. Captured into snapshot
+   * metadata by the providers (IG `saved`, unlocked for external users by the
+   * `instagram_manage_insights` approval); projected here by gatePostReportRow so
+   * the table and CSV can render it. null ⇒ this platform/post reports no saves.
+   */
+  saved?: number | null;
+  /** IG Reels mean watch time in milliseconds; null for everything else. */
+  avgWatchTimeMs?: number | null;
+  /**
    * The captured snapshot's own honesty metadata (AnalyticsSnapshot.metadata,
    * written by apps/worker/src/lib/snapshot-metadata.ts). Optional: legacy rows
    * and non-snapshot rows have none. See gatePostReportRow for why it wins over
    * the static per-platform map.
    */
-  snapshotMetadata?: { metricsAvailable?: Record<string, boolean> } | null;
+  snapshotMetadata?: {
+    metricsAvailable?: Record<string, boolean>;
+    saved?: number;
+    avgWatchTimeMs?: number;
+  } | null;
 }
 
 /**
@@ -167,15 +225,31 @@ export function gatePostReportRow(r: PostReportRow): PostReportRow {
     if (key === "reach" ? reachUnavailable : unavail.has(key)) return null;
     return Number(v);
   };
+  // Saves and Reels watch time live in the capture's metadata rather than in a
+  // dedicated column (AnalyticsSnapshot has a fixed metric schema). Project them
+  // onto the row so the table/CSV/email can render them without each consumer
+  // re-parsing the JSON. Absent ⇒ null ⇒ "—", never a fake 0.
+  const md = r.snapshotMetadata;
+  const savedRaw = md && typeof md === "object" ? md.saved : undefined;
+  const watchRaw = md && typeof md === "object" ? md.avgWatchTimeMs : undefined;
+  const gatedImpressions = gate("impressions", r.impressions);
   return {
     ...r,
-    impressions: gate("impressions", r.impressions),
+    impressions: gatedImpressions,
     clicks: gate("clicks", r.clicks),
     likes: gate("likes", r.likes),
     comments: gate("comments", r.comments),
     shares: gate("shares", r.shares),
     reach: gate("reach", r.reach),
-    engagementRate: r.engagementRate === null ? null : Number(r.engagementRate),
+    // Engagement rate IS engagement ÷ impressions, so it can only be as honest
+    // as its denominator. When impressions render "—" (Meta deleted the FB Page-
+    // post metric; or the capture was permission-blocked), a rate computed from
+    // that hidden number is meaningless — and "0.00%" actively misreads as "no
+    // engagement" when the truth is "not reported". Show "—" instead.
+    engagementRate:
+      gatedImpressions === null || r.engagementRate === null ? null : Number(r.engagementRate),
+    saved: typeof savedRaw === "number" ? savedRaw : null,
+    avgWatchTimeMs: typeof watchRaw === "number" ? watchRaw : null,
   };
 }
 
@@ -643,6 +717,13 @@ export const analyticsRouter = createRouter({
         const engagementRate =
           impressions > 0 ? ((likes + comments + shares) / impressions) * 100 : 0;
         const caps = platformMetricCapabilities(channel.platform);
+        // Per-capture capability OVERRIDES the platform-wide static map, so real
+        // FB video views aren't hidden behind "—" here while Reports shows them.
+        const unavailable = effectiveChannelUnavailable(
+          channel.platform,
+          m?.declaredAvailable,
+          m?.hasLegacySnapshot
+        );
 
         return {
           id: channel.id,
@@ -661,13 +742,46 @@ export const analyticsRouter = createRouter({
           // Honesty metadata for the UI (— vs 0, honest labels, hide dup reach):
           hasSnapshot: m?.hasSnapshot ?? false,
           likeKind: caps.likeKind,
-          reachIsDistinct: caps.reachIsDistinct,
-          unavailable: caps.unavailable,
+          // Keep reach visible when a capture actually reported it, even if the
+          // platform's static default treats reach as an impressions alias.
+          reachIsDistinct: unavailable.includes("reach") ? caps.reachIsDistinct : true,
+          unavailable,
+          // "Reconnect to restore Insights" signal, written by the sync worker
+          // from the Graph errors it already sees (channel-insights-health.ts).
+          insightsHealth: readInsightsHealth(channel.metadata),
         };
       });
 
       return stats.sort((a, b) => b.postCount - a.postCount);
     }),
+
+  /**
+   * Which channels can't serve Insights until their owner reconnects them.
+   *
+   * Drives the Insights banner. A pure DB read of the verdict the analytics-sync
+   * worker already wrote (channel-insights-health.ts) — deliberately NOT a live
+   * `debug_token` sweep: that would be an N+1 over ~1300 channels and a batched
+   * version exhausts Meta's app-level quota (verified — a 1328-channel audit hit
+   * `#4 Application request limit reached` partway through).
+   *
+   * Reports ONLY channels carrying an explicit `needs_reconnect` verdict, so a
+   * channel with genuinely zero engagement is never mislabeled as broken.
+   * orgProcedure — USER-role readable, like the rest of Insights.
+   */
+  insightsHealth: orgProcedure.query(async ({ ctx }) => {
+    const channels = await ctx.prisma.channel.findMany({
+      where: { organizationId: ctx.organizationId, isActive: true },
+      select: { id: true, name: true, platform: true, metadata: true },
+    });
+    const summary = summarizeInsightsHealth(channels);
+    return {
+      ...summary,
+      // Cap the enumerated list so an org with hundreds of stale channels can't
+      // bloat the payload; the count stays exact for the banner copy.
+      channels: summary.channels.slice(0, 50),
+      totalActiveChannels: channels.length,
+    };
+  }),
 
   /**
    * Group-wise ("campaign") analytics: the SAME per-channel aggregate as
@@ -869,6 +983,7 @@ export const analyticsRouter = createRouter({
           "Comments",
           "Shares",
           "Reach",
+          "Saves",
           "Engagement %",
           "Metric captured at (UTC)",
         ],
@@ -885,6 +1000,7 @@ export const analyticsRouter = createRouter({
           r.comments,
           r.shares,
           r.reach,
+          r.saved,
           r.engagementRate,
           r.snapshotAt ? new Date(r.snapshotAt).toISOString() : "",
         ])

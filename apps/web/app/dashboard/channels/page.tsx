@@ -864,6 +864,26 @@ export default function ChannelsPage() {
                           {channel.isActive ? "Active" : "Paused"}
                         </Badge>
 
+                        {/* Insights-health badge. Distinct from Active/Paused:
+                            that flag is a manual pause, this is the platform
+                            refusing to report metrics because the stored token is
+                            expired or predates the analytics-permission approval
+                            (scopes are only granted at consent time, so an
+                            approval never reaches an already-issued token). */}
+                        {channel.insightsHealth?.status === "needs_reconnect" && (
+                          <Badge
+                            variant="outline"
+                            className="shrink-0 gap-1 border-amber-500/50 bg-amber-500/10 text-[10px] text-amber-700 dark:text-amber-400"
+                            title={
+                              channel.insightsHealth.detail ||
+                              "Reconnect this channel to restore Insights."
+                            }
+                          >
+                            <AlertTriangle className="h-2.5 w-2.5" />
+                            Insights off
+                          </Badge>
+                        )}
+
                         {/* Actions */}
                         <div className="flex shrink-0 items-center gap-0.5">
                           <Button

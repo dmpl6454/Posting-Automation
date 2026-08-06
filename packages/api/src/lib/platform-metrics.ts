@@ -65,3 +65,65 @@ export function platformMetricCapabilities(platform: string): PlatformMetricCapa
   }
   return CAPS[key] ?? DEFAULT_CAPS;
 }
+
+export type MetricKey = "impressions" | "reach" | "likes" | "comments" | "shares" | "clicks";
+
+const ALL_METRIC_KEYS: MetricKey[] = [
+  "impressions",
+  "reach",
+  "likes",
+  "comments",
+  "shares",
+  "clicks",
+];
+
+/** Static-map verdict for one metric, folding in the aliased-reach rule. */
+function staticallyUnavailable(key: MetricKey, caps: PlatformMetricCapabilities): boolean {
+  if (key === "reach") return caps.unavailable.includes("reach") || caps.reachIsDistinct === false;
+  return caps.unavailable.includes(key);
+}
+
+/**
+ * Channel-level equivalent of gatePostReportRow's per-snapshot override, for the
+ * AGGREGATE read paths (perChannelStats → Channel Performance table, groupStats →
+ * Group Performance card).
+ *
+ * ⚠️ Why this is needed — the other half of the PR #148 regression.
+ * The static map is a platform-wide constant, but Facebook's capability varies
+ * PER POST: a FEED post genuinely has no impressions/reach (Meta deleted those
+ * insight metrics — re-verified 2026-08-06 with `read_insights` GRANTED, so no
+ * permission will ever restore them), while a VIDEO/REEL post returns REAL view
+ * counts through `video_insights` (mapped onto the impressions slot) or the reel
+ * scraper. Marking FACEBOOK impressions+reach unavailable in the static map alone
+ * therefore hid real, successfully-captured video views behind "—".
+ *
+ * gatePostReportRow was fixed for Reports/CSV/email in 2026-07-27, but the
+ * aggregates kept consulting the static map ONLY — so the same data showed as a
+ * number in Reports and as "—" in Channel Performance on the same page.
+ *
+ * Precedence mirrors gatePostReportRow exactly:
+ *   some capture reported the metric        ⇒ available (show the sum)
+ *   every capture declared it unavailable   ⇒ "—"
+ *   a legacy capture carries no claim       ⇒ fall back to the static map
+ *
+ * Returns the EFFECTIVE unavailable list, i.e. the same shape the UI's
+ * metricCellValue already consumes — so no UI change is required to benefit.
+ */
+export function effectiveChannelUnavailable(
+  platform: string,
+  declaredAvailable: Partial<Record<MetricKey, boolean>> | undefined,
+  hasLegacySnapshot: boolean | undefined
+): MetricKey[] {
+  const caps = platformMetricCapabilities(platform);
+  return ALL_METRIC_KEYS.filter((key) => {
+    // A capture actually reported this metric ⇒ the data is real, show it.
+    if (declaredAvailable?.[key] === true) return false;
+    // No capture claimed it, but some capture predates the metadata ⇒ static map.
+    if (hasLegacySnapshot) return staticallyUnavailable(key, caps);
+    // Every capture explicitly declared it unavailable (or there are no captures
+    // at all, in which case hasSnapshot=false already renders "—").
+    if (declaredAvailable?.[key] === false) return true;
+    return staticallyUnavailable(key, caps);
+  });
+}
+

@@ -4,11 +4,17 @@ import type {
   SocialPostPayload,
   SocialPostResult,
   SocialAnalytics,
+  AnalyticsDegradation,
   OAuthTokens,
   OAuthConfig,
   SocialProfile,
   PlatformConstraints,
 } from "../abstract/social.types";
+import {
+  diagnoseEmptyInsights,
+  diagnoseMetaError,
+  worstDegradation,
+} from "../utils/meta-insight-diagnosis";
 import { fetchT } from "../utils/fetch-timeout";
 import { headRemoteMedia } from "../utils/ranged-media";
 import { scrapeFacebookReelEngagement } from "@postautomation/social-scrapers";
@@ -353,15 +359,25 @@ export class FacebookProvider extends SocialProvider {
       return this.getVideoAnalytics(tokens, platformPostId);
     }
 
-    // Metric-source strategy verified live 2026-07-23 (admin + EXTERNAL tokens):
-    //  - Meta DELETED all post_impressions*/post_engaged_users metrics (#100
-    //    invalid; requesting one 400s the WHOLE call) → impressions/reach = "—".
-    //  - clicks + REACTIONS come from the INSIGHTS edge — these work for EXTERNAL
-    //    users on our current perms (post_clicks, post_reactions_by_type_total).
+    // Metric-source strategy — re-verified live 2026-08-06 with a token that HAS
+    // the newly-approved `read_insights` + `pages_read_user_content` granted:
+    //  - Meta DELETED all post_impressions*/post_engaged_users/post_reach/post_views
+    //    metrics. They return #100 "must be a valid insights metric" EVEN WITH
+    //    read_insights granted, while post_clicks on the SAME token returns a real
+    //    row — proving the deletion is platform-level, not permission-gated.
+    //    → impressions/reach are permanently "—". Do NOT re-add those names.
+    //  - clicks + REACTIONS come from the INSIGHTS edge and need `read_insights`.
     //  - comments have NO insights equivalent; the fields API (comments.summary)
-    //    needs `pages_read_user_content`, which EXTERNAL users DON'T have → their
-    //    comments read 400. So the fields fetch is BEST-EFFORT (never fatal), and
-    //    comments render "—" when it fails.
+    //    needs `pages_read_user_content`. So the fields fetch is BEST-EFFORT
+    //    (never fatal), and comments render "—" when it fails.
+    //
+    // ⚠️ Missing `read_insights` is a SILENT EMPTY, not an error: the call returns
+    // HTTP 200 with `{"data":[]}`. Before this was handled, that empty array was
+    // read as "every metric is zero" and stored as a confident 0 — a dead/
+    // under-scoped token was indistinguishable from a post with no engagement.
+    // post_clicks and post_reactions_by_type_total both return a row even on a
+    // zero-engagement post (verified), so they are reliable SENTINELS: 200 with
+    // zero rows ⇒ the scope is missing.
     const res = await this.graphFetch(
       `${this.graphBaseUrl}/${this.apiVersion}/${platformPostId}/insights?metric=post_clicks,post_video_views,post_reactions_by_type_total&access_token=${tokens.accessToken}`
     );
@@ -372,23 +388,30 @@ export class FacebookProvider extends SocialProvider {
     }
 
     const metrics: Record<string, number> = {};
-    if (data.data) {
-      for (const metric of data.data) {
-        // post_reactions_by_type_total is an OBJECT {like:N,love:N,...}; sum it.
-        const v = metric.values?.[0]?.value;
-        metrics[metric.name] =
-          v && typeof v === "object"
-            ? Object.values(v).reduce((s: number, n: any) => s + (Number(n) || 0), 0)
-            : v || 0;
-      }
+    const rows: any[] = Array.isArray(data?.data) ? data.data : [];
+    for (const metric of rows) {
+      // post_reactions_by_type_total is an OBJECT {like:N,love:N,...}; sum it.
+      const v = metric.values?.[0]?.value;
+      metrics[metric.name] =
+        v && typeof v === "object"
+          ? Object.values(v).reduce((s: number, n: any) => s + (Number(n) || 0), 0)
+          : v || 0;
     }
-    const reactionsFromInsights = metrics.post_reactions_by_type_total || 0;
 
-    // Best-effort post FIELDS (shares always work; reactions/comments need
-    // pages_read_user_content — 400 for external users). NEVER fatal.
+    // Insights are usable only when the call succeeded AND carried rows (the
+    // sentinel rule above). `post_clicks` present is the positive proof.
+    const insightsDegradation = res.ok
+      ? diagnoseEmptyInsights(rows.length, true, "read_insights")
+      : diagnoseMetaError(data?.error);
+    const insightsUsable = res.ok && rows.length > 0;
+    const reactionsFromInsights = insightsUsable ? metrics.post_reactions_by_type_total ?? null : null;
+
+    // Best-effort post FIELDS (shares resolves on a basic Page token;
+    // reactions/comments need pages_read_user_content). NEVER fatal.
     let fieldsReactions: number | null = null;
     let comments: number | null = null;
     let shares = 0;
+    let fieldsDegradation: AnalyticsDegradation | undefined;
     const postRes = await this.graphFetch(
       `${this.graphBaseUrl}/${this.apiVersion}/${platformPostId}?fields=shares,comments.summary(true),reactions.summary(true)&access_token=${tokens.accessToken}`
     );
@@ -399,6 +422,7 @@ export class FacebookProvider extends SocialProvider {
       fieldsReactions = postData.reactions?.summary?.total_count ?? null;
     } else {
       console.warn(`[Facebook] post fields fetch failed (likely missing pages_read_user_content) for ${platformPostId}: ${JSON.stringify(postData)}`);
+      fieldsDegradation = diagnoseMetaError(postData?.error);
       // shares alone often still resolves — try it in isolation (basic page token).
       const sRes = await this.graphFetch(
         `${this.graphBaseUrl}/${this.apiVersion}/${platformPostId}?fields=shares&access_token=${tokens.accessToken}`
@@ -407,24 +431,40 @@ export class FacebookProvider extends SocialProvider {
     }
 
     // Prefer the fields reaction count (all reaction types) when available; else
-    // fall back to the insights reaction total (works for external users).
+    // fall back to the insights reaction total.
     const reactions = fieldsReactions ?? reactionsFromInsights;
     const commentsAvailable = comments !== null;
+    // Reactions are only real if SOME source produced them. When both the fields
+    // API and the insights edge are permission-blocked, a 0 here would be a lie.
+    const reactionsAvailable = reactions !== null;
 
     return {
       impressions: 0,
-      clicks: metrics.post_clicks || 0,
-      likes: reactions,
+      clicks: insightsUsable ? metrics.post_clicks || 0 : 0,
+      likes: reactions ?? 0,
       shares,
       comments: comments ?? 0,
       reach: 0,
+      // No impressions ⇒ no meaningful rate. Reports recomputes engagement as
+      // (likes+comments+shares)/impressions, which correctly yields "—" for FB.
       engagementRate: 0,
-      // impressions/reach: deleted by Meta. comments: unavailable when the fields
-      // API 400s (external users lacking pages_read_user_content) → UI "—".
-      metricsAvailable: { impressions: false, reach: false, comments: commentsAvailable },
+      // impressions/reach: deleted by Meta (permanent). clicks: needs
+      // read_insights. comments/likes: need pages_read_user_content (or the
+      // insights reaction fallback). Anything false renders "—", never a fake 0.
+      metricsAvailable: {
+        impressions: false,
+        reach: false,
+        clicks: insightsUsable,
+        comments: commentsAvailable,
+        likes: reactionsAvailable,
+      },
       likeKind: "reactions", // FB "likes" are all reaction types
       reachIsDistinct: false,
       source: "api",
+      ...(() => {
+        const d = worstDegradation(insightsDegradation, fieldsDegradation);
+        return d ? { degraded: d } : {};
+      })(),
     };
   }
 
@@ -441,46 +481,62 @@ export class FacebookProvider extends SocialProvider {
     );
 
     const insightsData: any = await insightsRes.json();
+    let degraded: AnalyticsDegradation | undefined;
     if (!insightsRes.ok) {
       console.warn(`[Facebook] video_insights failed for ${videoId}: ${JSON.stringify(insightsData)}`);
+      // VERIFIED 2026-08-06: without read_insights this path fails LOUDLY with
+      // #200 "read_insights permission missing" (unlike the feed edge, which
+      // returns a silent empty). Capture it so the UI can prompt a reconnect.
+      degraded = diagnoseMetaError(insightsData?.error);
     }
 
     const metrics: Record<string, number> = {};
-    if (insightsData.data) {
-      for (const metric of insightsData.data) {
-        metrics[metric.name] = metric.values?.[0]?.value || 0;
-      }
+    const insightRows: any[] = Array.isArray(insightsData?.data) ? insightsData.data : [];
+    for (const metric of insightRows) {
+      metrics[metric.name] = metric.values?.[0]?.value || 0;
     }
+    // Views are only real when the insights call actually produced rows.
+    const viewsUsable = insightsRes.ok && insightRows.length > 0;
 
     const videoRes = await this.graphFetch(
       `${this.graphBaseUrl}/${this.apiVersion}/${videoId}?fields=likes.summary(true),comments.summary(true)&access_token=${tokens.accessToken}`
     );
 
     const videoData: any = await videoRes.json();
-    if (!videoRes.ok) {
+    // ⚠️ Do NOT return null here. A fields failure (e.g. missing
+    // pages_read_user_content) used to discard successfully-fetched
+    // video_insights, throwing away real view counts. Degrade per-metric instead.
+    let likes: number | null = null;
+    let comments: number | null = null;
+    if (videoRes.ok) {
+      likes = videoData.likes?.summary?.total_count ?? null;
+      comments = videoData.comments?.summary?.total_count ?? null;
+    } else {
       console.warn(`[Facebook] video fields fetch failed for ${videoId}: ${JSON.stringify(videoData)}`);
-      return null;
+      degraded = worstDegradation(degraded, diagnoseMetaError(videoData?.error));
+      // Nothing usable at all — no views AND no engagement. Returning null lets
+      // the sync worker treat it as "no analytics" rather than storing zeros.
+      if (!viewsUsable) return null;
     }
 
-    const likes = videoData.likes?.summary?.total_count || 0;
-    const comments = videoData.comments?.summary?.total_count || 0;
+    const impressions = viewsUsable
+      ? metrics.total_video_impressions || metrics.total_video_views || 0
+      : 0;
 
-    const impressions = metrics.total_video_impressions || metrics.total_video_views || 0;
-
-    // Fallback: when the API insights come back 0 (the permission-failure
-    // signature — /video_insights needs read_insights, which is pending App
-    // Review), try the public reel scraper so views/likes/comments still show.
-    // Fail-open: on any miss we keep the API result. ⚠️ Scraper-backed — verify
-    // from the deploy IP.
-    if (impressions === 0) {
+    // Scraper fallback: only when the API could NOT report views (permission
+    // error / zero rows) — NOT when it legitimately reported 0 views. Scraping a
+    // genuinely-zero-view video wastes a request and can overwrite a true 0 with
+    // a stale public number. Fail-open: on any miss we keep the API result.
+    // ⚠️ Scraper-backed — verify from the deploy IP.
+    if (!viewsUsable) {
       const scraped = await scrapeFacebookReelEngagement(videoId).catch(() => null);
       if (scraped && scraped.views != null && scraped.views > 0) {
         return {
           impressions: scraped.views,
           clicks: 0,
-          likes: scraped.likes ?? likes,
+          likes: scraped.likes ?? likes ?? 0,
           shares: scraped.shares ?? 0,
-          comments: scraped.comments ?? comments,
+          comments: scraped.comments ?? comments ?? 0,
           reach: 0,
           engagementRate:
             scraped.views > 0
@@ -489,27 +545,40 @@ export class FacebookProvider extends SocialProvider {
           source: "scrape",
           likeKind: "likes",
           reachIsDistinct: false,
-          metricsAvailable: { reach: false, clicks: false },
+          metricsAvailable: { reach: false, clicks: false, impressions: true },
+          ...(degraded ? { degraded } : {}),
         };
       }
     }
 
-    const engagementRate = impressions > 0 ? (likes + comments) / impressions : 0;
+    const engagementRate =
+      impressions > 0 ? ((likes ?? 0) + (comments ?? 0)) / impressions : 0;
 
     return {
       impressions,
       clicks: 0,
-      likes,
+      likes: likes ?? 0,
       shares: 0,
-      comments,
+      comments: comments ?? 0,
       reach: 0,
       engagementRate,
       likeKind: "likes",
       reachIsDistinct: false,
       source: "api",
       // Video-node insights don't expose reach/shares/clicks — mark unavailable
-      // so the UI renders "—", not a fake 0.
-      metricsAvailable: { reach: false, shares: false, clicks: false },
+      // so the UI renders "—", not a fake 0. `impressions` is declared TRUE when
+      // video_insights delivered rows: this is the per-capture override that
+      // keeps real FB video views from being hidden by the platform-wide static
+      // map (which marks FACEBOOK impressions unavailable for FEED posts).
+      metricsAvailable: {
+        reach: false,
+        shares: false,
+        clicks: false,
+        impressions: viewsUsable,
+        likes: likes !== null,
+        comments: comments !== null,
+      },
+      ...(degraded ? { degraded } : {}),
     };
   }
 

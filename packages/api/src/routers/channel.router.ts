@@ -5,6 +5,7 @@ import { avatarCacheQueue } from "@postautomation/queue";
 import { getSocialProvider, getSupportedPlatforms, signState } from "@postautomation/social";
 import { resolveChannelErrorsOnReconnect } from "@postautomation/db";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
+import { readInsightsHealth } from "../lib/insights-health";
 import { enforcePlanLimit } from "../middleware/plan-limit.middleware";
 import {
   TOKEN_PLATFORMS,
@@ -34,7 +35,7 @@ const TOKEN_PLATFORM_SET = new Set<string>(TOKEN_PLATFORMS);
 
 export const channelRouter = createRouter({
   list: orgProcedure.query(async ({ ctx }) => {
-    return ctx.prisma.channel.findMany({
+    const channels = await ctx.prisma.channel.findMany({
       where: { organizationId: ctx.organizationId },
       orderBy: { createdAt: "desc" },
       select: {
@@ -46,8 +47,20 @@ export const channelRouter = createRouter({
         isActive: true,
         tokenExpiresAt: true,
         createdAt: true,
+        // Read for insightsHealth only — deliberately NOT forwarded to the client
+        // raw (it carries provider internals like igUserId / orgId / instance).
+        metadata: true,
       },
     });
+    // Additive field: whether this channel's stored token still lets the platform
+    // report analytics. Written by the analytics-sync worker from the Graph errors
+    // it already observes (see apps/worker/src/lib/channel-insights-health.ts),
+    // so it costs no extra API calls here. Drives the "Reconnect" affordance —
+    // otherwise a dead token is silently indistinguishable from zero engagement.
+    return channels.map(({ metadata, ...c }) => ({
+      ...c,
+      insightsHealth: readInsightsHealth(metadata),
+    }));
   }),
 
   recentlyUsed: orgProcedure.query(async ({ ctx }) => {

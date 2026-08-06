@@ -4,6 +4,7 @@ import { getSocialProvider } from "@postautomation/social";
 import { QUEUE_NAMES, type AnalyticsSyncJobData, createRedisConnection } from "@postautomation/queue";
 import { buildSnapshotMetadata } from "../lib/snapshot-metadata";
 import { shouldWriteSnapshot } from "../lib/snapshot-dedup";
+import { deriveInsightsHealth, mergeInsightsHealth } from "../lib/channel-insights-health";
 
 export function createAnalyticsSyncWorker() {
   const worker = new Worker<AnalyticsSyncJobData>(
@@ -52,6 +53,29 @@ export function createAnalyticsSyncWorker() {
         return null;
       }
 
+      // 2b. Record whether this channel can serve Insights at all. Derived from
+      // the Graph call we JUST made, so it costs no extra API quota. Placed
+      // BEFORE the dedup early-return on purpose: a channel whose metrics are
+      // unchanged (e.g. permanently zeros because its token is dead) would
+      // otherwise never get its health verdict written. Best-effort — a health
+      // write must never fail an analytics job.
+      try {
+        const health = deriveInsightsHealth((analytics as any).degraded, new Date());
+        const merged = mergeInsightsHealth(channel.metadata, health);
+        if (merged) {
+          await prisma.channel.update({
+            where: { id: channelId },
+            data: { metadata: merged as any },
+          });
+          console.log(
+            `[AnalyticsSync] Channel ${channelId} insights health → ${health.status}` +
+              (health.reason ? ` (${health.reason}${health.missingScopes?.length ? `: ${health.missingScopes.join(",")}` : ""})` : "")
+          );
+        }
+      } catch (err: any) {
+        console.warn(`[AnalyticsSync] health write failed for channel ${channelId}: ${err.message}`);
+      }
+
       // 3a. Dedup: skip writing a duplicate snapshot when nothing changed since
       // the latest one (non-checkpoint cron jobs only). Prod had ~47 snapshots
       // per FB target, almost all identical zeros — this stops the bloat.
@@ -60,7 +84,20 @@ export function createAnalyticsSyncWorker() {
         const latest = await prisma.analyticsSnapshot.findFirst({
           where: { postTargetId },
           orderBy: { snapshotAt: "desc" },
-          select: { impressions: true, clicks: true, likes: true, shares: true, comments: true, reach: true },
+          // metadata is REQUIRED here: dedup also compares the capability claim
+          // (metricsAvailable), so a reconnected channel whose numbers are
+          // genuinely unchanged still gets a fresh snapshot that flips its
+          // metrics from "—" to a real 0. Without selecting it, the stored
+          // availability always reads as undefined and the comparison is moot.
+          select: {
+            impressions: true,
+            clicks: true,
+            likes: true,
+            shares: true,
+            comments: true,
+            reach: true,
+            metadata: true,
+          },
         });
         if (!shouldWriteSnapshot(analytics as any, latest, false)) {
           console.log(`[AnalyticsSync] No change for target ${postTargetId} — skipping duplicate snapshot`);

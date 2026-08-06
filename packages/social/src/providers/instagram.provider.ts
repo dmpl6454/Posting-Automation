@@ -4,11 +4,17 @@ import type {
   SocialPostPayload,
   SocialPostResult,
   SocialAnalytics,
+  AnalyticsDegradation,
   OAuthTokens,
   OAuthConfig,
   SocialProfile,
   PlatformConstraints,
 } from "../abstract/social.types";
+import {
+  diagnoseEmptyInsights,
+  diagnoseMetaError,
+  worstDegradation,
+} from "../utils/meta-insight-diagnosis";
 import { fetchT } from "../utils/fetch-timeout";
 
 /** Max pagination pages fetched during connect (~500 Pages at limit=25). */
@@ -276,34 +282,85 @@ export class InstagramProvider extends SocialProvider {
     const mediaData: any = await mediaRes.json();
     if (!mediaRes.ok) {
       console.warn(`[Instagram] media fields failed for ${platformPostId}: ${JSON.stringify(mediaData)}`);
-      return null;
+      // A dead or under-scoped token fails HERE, before insights are ever
+      // attempted — the single most common failure mode in production. Returning
+      // a bare null loses the diagnosis, so the channel keeps rendering zeros
+      // with no hint that it needs reconnecting. Instead, return a fully
+      // UNAVAILABLE row carrying the reason: every metric renders "—" exactly as
+      // it did before (so the visible table is unchanged), but the reconnect
+      // signal now reaches the UI. Non-actionable errors keep the old null.
+      const mediaDegradation = diagnoseMetaError(mediaData?.error);
+      if (!mediaDegradation) return null;
+      return {
+        impressions: 0,
+        clicks: 0,
+        likes: 0,
+        shares: 0,
+        comments: 0,
+        reach: 0,
+        engagementRate: 0,
+        likeKind: "likes",
+        reachIsDistinct: true,
+        source: "api",
+        metricsAvailable: {
+          impressions: false,
+          reach: false,
+          likes: false,
+          comments: false,
+          shares: false,
+          clicks: false,
+        },
+        degraded: mediaDegradation,
+      };
     }
     const likes = mediaData.like_count || 0;
     const comments = mediaData.comments_count || 0;
     const productType = String(mediaData.media_product_type ?? "").toUpperCase();
 
-    // Metric sets per media_product_type — LIVE-VERIFIED against the v18 media
-    // insights endpoint on 2026-07-24 (probing each metric name individually on
-    // real REELS/FEED/STORY media). Meta's /insights?metric= is ALL-OR-NOTHING:
-    // a single invalid name fails the WHOLE call with #100 and zeroes every
-    // metric in the set. The old sets each carried an invalid name that silently
-    // broke the whole call — `plays` (REELS) and `engagement` (FEED) both 400
-    // in v18 — so only the reach-only fallback survived and views/saved/shares/
-    // total_interactions were dropped for every post. Corrected, verified-valid:
-    //   REELS / FEED / CAROUSEL_ALBUM / unknown:
-    //     reach,saved,shares,views,likes,comments,total_interactions
-    //   STORY (no saved/likes/comments; adds replies):
-    //     reach,shares,views,total_interactions,replies
-    // Do NOT re-add `plays`, `impressions`, or `engagement` — all invalid in v18.
+    // Metric sets per media_product_type — LIVE-VERIFIED by probing every metric
+    // name INDIVIDUALLY on real REELS / FEED media (2026-07-24, re-verified and
+    // EXTENDED 2026-08-06 with `instagram_manage_insights` granted).
+    //
+    // Meta's /insights?metric= is ALL-OR-NOTHING: one unsupported name fails the
+    // WHOLE call with #100 and zeroes every metric in the set. Verified-valid:
+    //   FEED  (incl. carousels — a carousel is media_product_type FEED with
+    //          media_type CAROUSEL_ALBUM):
+    //     reach,saved,shares,views,likes,comments,total_interactions,
+    //     profile_visits,profile_activity,follows
+    //   REELS:
+    //     reach,saved,shares,views,likes,comments,total_interactions,
+    //     ig_reels_avg_watch_time,ig_reels_video_view_total_time
+    //   STORY (no saved/likes/comments; adds replies/navigation):
+    //     reach,shares,views,total_interactions,replies,navigation
+    //
+    // ⚠️ The sets are MUTUALLY EXCLUSIVE — never union them. `profile_visits`,
+    // `profile_activity` and `follows` are NOT supported for REELS: adding them
+    // to a shared set makes the combined REELS call fail outright (verified:
+    // "#100 does not support the profile_visits, profile_activity, follows metric
+    // for this media product type"), zeroing every metric for that Reel. That is
+    // the same all-or-nothing regression PR #148 already fixed once.
+    //
+    // Do NOT re-add `impressions` ("no longer supported" from v22.0), `plays`,
+    // `engagement`, `clips_replays_count`, `ig_reels_aggregated_all_plays_count`
+    // or `video_views` — all verified invalid.
     // `views` carries the impressions slot; `total_interactions` the engagement
-    // slot (see the ?? chains below). Verified sample (a real Reel):
-    //   reach=7046, views=11239, shares=3, saved=0, total_interactions=24.
-    const metricSet =
+    // slot. Verified real sample (a Reel): reach=106, views=115, saved=1,
+    // total_interactions=1, ig_reels_avg_watch_time=3038ms.
+    const BASE_SET = "reach,saved,shares,views,likes,comments,total_interactions";
+    const preferredSet =
       productType === "STORY"
-        ? "reach,shares,views,total_interactions,replies"
-        : "reach,saved,shares,views,likes,comments,total_interactions";
+        ? "reach,shares,views,total_interactions,replies,navigation"
+        : productType === "REELS"
+          ? `${BASE_SET},ig_reels_avg_watch_time,ig_reels_video_view_total_time`
+          : productType === "FEED"
+            ? `${BASE_SET},profile_visits,profile_activity,follows`
+            : BASE_SET;
 
     const metrics: Record<string, number> = {};
+    /** Metric names Meta actually RETURNED — the basis for honest availability. */
+    const present = new Set<string>();
+    let degraded: AnalyticsDegradation | undefined;
+
     const readInsights = async (metricParam: string): Promise<boolean> => {
       const res = await fetch(
         `${this.graphBaseUrl}/${this.apiVersion}/${platformPostId}/insights?metric=${metricParam}&access_token=${tokens.accessToken}`
@@ -311,56 +368,81 @@ export class InstagramProvider extends SocialProvider {
       const data: any = await res.json();
       if (!res.ok) {
         console.warn(`[Instagram] insights (${metricParam}) failed for ${platformPostId}: ${JSON.stringify(data)}`);
+        // Only permission/token problems are actionable; an unsupported-metric
+        // #100 is a set-shape problem the ladder below handles itself.
+        degraded = worstDegradation(degraded, diagnoseMetaError(data?.error));
         return false;
       }
-      if (data.data) {
-        for (const metric of data.data) {
-          metrics[metric.name] = metric.values?.[0]?.value || metric.value || 0;
-        }
+      const rows: any[] = Array.isArray(data?.data) ? data.data : [];
+      for (const metric of rows) {
+        metrics[metric.name] = metric.values?.[0]?.value || metric.value || 0;
+        present.add(metric.name);
+      }
+      // A 200 carrying zero rows is the silent-empty signature of a missing
+      // scope (same class as the FB feed edge) — `reach` is always returned when
+      // permitted, for every media product type.
+      if (rows.length === 0) {
+        degraded = worstDegradation(
+          degraded,
+          diagnoseEmptyInsights(0, true, "instagram_manage_insights")
+        );
+        return false;
       }
       return true;
     };
 
-    // If the product-type set fails unexpectedly, retry ONCE with `reach`
-    // alone (valid for every media product type) so a metric-set mismatch can
-    // never zero reach again. Deliberately NOT per-metric fetches — that would
-    // blow up call counts under the analytics sync limiter.
-    if (!(await readInsights(metricSet))) {
-      await readInsights("reach");
+    // Degradation ladder: preferred (type-specific, richest) → base (the set
+    // verified safe for every type) → `reach` alone. Because /insights is
+    // all-or-nothing, this guarantees a newly-added type-specific metric can
+    // NEVER cost us the base metrics if Meta rejects it for some media type.
+    // Descends only on failure, so the happy path stays a single call.
+    if (!(await readInsights(preferredSet))) {
+      if (preferredSet !== BASE_SET) {
+        if (!(await readInsights(BASE_SET))) await readInsights("reach");
+      } else {
+        await readInsights("reach");
+      }
     }
 
-    // `views` rides on the impressions slot for EVERY product type in v18
-    // (`plays`/`impressions` are invalid names — see the metric-set note above) —
-    // same "views ride on impressions" convention as YouTube/Threads. The
-    // `metrics.impressions ?? metrics.plays` fallbacks are dead in v18 but kept
-    // harmless in case a future API version restores those names.
-    const impressions = metrics.views ?? metrics.impressions ?? metrics.plays ?? 0;
-    const totalEngagement = metrics.engagement ?? metrics.total_interactions ?? likes + comments;
+    // `views` rides on the impressions slot (same "views ride on impressions"
+    // convention as YouTube/Threads).
+    const impressions = metrics.views ?? 0;
+    const totalEngagement = metrics.total_interactions ?? likes + comments;
     const engagementRate = impressions > 0 ? totalEngagement / impressions : 0;
-    const hasInsights = metrics.reach != null || impressions > 0;
 
     return {
       impressions,
       clicks: 0, // Instagram does not expose click counts via the API
       likes,
-      shares: metrics.shares ?? 0, // Reels expose shares; other types do not
+      shares: metrics.shares ?? 0,
       comments,
       reach: metrics.reach ?? 0,
       engagementRate,
-      saved: metrics.saved, // surfaced (Reels) — a distinct action; undefined elsewhere
+      saved: present.has("saved") ? metrics.saved : undefined,
+      // Reels watch time, in milliseconds (undefined for non-Reels).
+      ...(present.has("ig_reels_avg_watch_time")
+        ? { avgWatchTimeMs: metrics.ig_reels_avg_watch_time }
+        : {}),
+      ...(present.has("ig_reels_video_view_total_time")
+        ? { totalWatchTimeMs: metrics.ig_reels_video_view_total_time }
+        : {}),
       likeKind: "likes",
       reachIsDistinct: true, // IG reach is a genuine unique-reach metric
       source: "api",
-      // Clicks never exist on IG; impressions/reach/shares depend on the
-      // insights call (needs instagram_manage_insights). When that call fails
-      // (permission-gated), impressions stays 0 and we mark them unavailable so
-      // the UI renders "—" instead of a fake zero.
+      // Availability is derived from what Meta ACTUALLY returned, per metric.
+      // The old `hasInsights` flag was a single boolean OR'd across the whole
+      // call, so a partial success (product-type set fails, `reach`-only retry
+      // succeeds) declared impressions and shares "available" while they had
+      // never been returned — reporting a fake 0. `likes`/`comments` come from
+      // the media fields object (instagram_basic), not insights, so they are
+      // available whenever the media read succeeded.
       metricsAvailable: {
-        clicks: false,
-        impressions: hasInsights,
-        reach: metrics.reach != null,
-        shares: hasInsights,
+        clicks: false, // IG has no click metric at all
+        impressions: present.has("views"),
+        reach: present.has("reach"),
+        shares: present.has("shares"),
       },
+      ...(degraded ? { degraded } : {}),
     };
   }
 

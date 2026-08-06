@@ -120,8 +120,14 @@ describe("InstagramProvider.getPostAnalytics — media_product_type metric selec
     const provider = new InstagramProvider();
     const result = await provider.getPostAnalytics(tokens, "IG_FEED_1");
     const insightsUrl = urls.find((u) => u.includes("/insights?"))!;
-    // FEED shares the REELS core set in v18. `impressions`/`engagement` invalid → never requested.
-    expect(insightsUrl).toContain("/IG_FEED_1/insights?metric=reach,saved,shares,views,likes,comments,total_interactions&access_token=tk");
+    // UPDATED 2026-08-06: FEED no longer shares the REELS set. With
+    // `instagram_manage_insights` approved, profile_visits / profile_activity /
+    // follows were verified valid for FEED (and INVALID for REELS — see
+    // instagram-insights-metrics.test.ts), so the sets diverged on purpose.
+    // `impressions`/`engagement` remain invalid → still never requested.
+    expect(insightsUrl).toContain(
+      "/IG_FEED_1/insights?metric=reach,saved,shares,views,likes,comments,total_interactions,profile_visits,profile_activity,follows&access_token=tk"
+    );
     expect(insightsUrl).not.toContain("impressions");
     expect(insightsUrl).not.toContain("engagement");
     expect(result).toMatchObject({
@@ -154,7 +160,7 @@ describe("InstagramProvider.getPostAnalytics — media_product_type metric selec
     expect(urls.find((u) => u.includes("/insights?"))).toContain("metric=reach,saved,shares,views,likes,comments,total_interactions");
   });
 
-  it("retries ONCE with metric=reach when the product-type set fails — reach can never be zeroed by a metric mismatch again", async () => {
+  it("descends the ladder preferred → base → reach when the product-type set fails — reach can never be zeroed by a metric mismatch again", async () => {
     const insightsCalls: string[] = [];
     global.fetch = vi.fn(async (url: any) => {
       const u = String(url);
@@ -174,8 +180,14 @@ describe("InstagramProvider.getPostAnalytics — media_product_type metric selec
     const provider = new InstagramProvider();
     const result = await provider.getPostAnalytics(tokens, "IG_MEDIA_2");
 
-    expect(insightsCalls).toHaveLength(2);
-    expect(insightsCalls[1]).toContain("metric=reach&");
+    // UPDATED 2026-08-06: the ladder gained a middle rung. It is now
+    // preferred (type-specific) → base (the set verified safe for EVERY media
+    // type) → reach alone. Because /insights is all-or-nothing, the base rung
+    // guarantees a type-specific metric Meta unexpectedly rejects can never cost
+    // us the core metrics — it only ever costs us the extras.
+    expect(insightsCalls).toHaveLength(3);
+    expect(insightsCalls[1]).toContain("metric=reach,saved,shares,views,likes,comments,total_interactions&");
+    expect(insightsCalls[2]).toContain("metric=reach&");
     expect(result?.reach).toBe(800);
     expect(result?.impressions).toBe(0);
     expect(result?.likes).toBe(7);

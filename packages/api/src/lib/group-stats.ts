@@ -36,6 +36,22 @@ export interface ChannelStatRow {
   clicks: number;
   /** true when ≥1 of the channel's targets has a captured snapshot (UI: — vs 0). */
   hasSnapshot?: boolean;
+  /**
+   * Per-metric availability DECLARED by the captures themselves
+   * (AnalyticsSnapshot.metadata.metricsAvailable), aggregated across this
+   * channel's targets: true ⇒ at least one capture actually reported that metric.
+   * Lets a per-post capability override the platform-wide static map — see
+   * effectiveChannelUnavailable in platform-metrics.ts.
+   */
+  declaredAvailable?: Partial<
+    Record<"impressions" | "reach" | "likes" | "comments" | "shares" | "clicks", boolean>
+  >;
+  /**
+   * true when ≥1 capture predates the honesty metadata (snapshot with no
+   * metadata at all). Those rows carry no capability claim, so the static
+   * platform map must still be consulted for them.
+   */
+  hasLegacySnapshot?: boolean;
 }
 
 /** Group shape as selected from prisma.channelGroup.findMany. */
