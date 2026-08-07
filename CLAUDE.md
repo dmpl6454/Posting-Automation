@@ -517,6 +517,127 @@ footnoted so the comparison stops looking like a bug.
   *higher* than before, because real engagement on paused/disconnected channels now counts. Rows
   carry `channelStatus` so the UI badges them, and they age out of the window naturally.
 
+## 🔁 "Shares not visible in Insights" — an OMITTED key is NOT evidence of availability (2026-08-07)
+
+User-reported. Two different causes, only one of them a bug:
+
+- **INSTAGRAM (63 of 64 posts): not a bug.** Those captures declare `shares:false` AND carry
+  `degraded` — dead tokens (`190/460`), so nothing is returned and "—" is correct. Fixed by
+  reconnecting, not by code.
+- **🐛 FACEBOOK (12 snapshots, 2026-08-02 → 2026-08-07): a real bug.** Those rows have the
+  `shares` key **OMITTED** from `metricsAvailable` and `shares = 0`, so they rendered a
+  confident **"0 shares"**.
+
+**Root cause — a metric with an INDEPENDENT failure mode cannot inherit availability from
+its siblings.** The honesty contract's general rule is *"this capture declared other keys,
+so an omitted one must have worked"*. That holds only when every metric came from ONE
+platform call. On Facebook it does not: `clicks`/`likes` come from the post-**insights**
+edge while `shares` comes from the post-**fields** edge (which additionally needs
+`pages_read_user_content`). Insights can succeed — declaring clicks/likes — while the
+fields call silently fails, leaving `shares` omitted and stored as 0.
+
+Compounding it: **Graph OMITS the `shares` field entirely for a post with genuinely zero
+shares** (verified in the probes), so "0 shares" and "we could not read shares" are
+indistinguishable in storage. "—" is the only honest render for a capture that never
+declared it.
+
+**Fix is in TWO halves — keep both:**
+1. *Write side* (PR #161): `facebook.provider` now declares `shares: shares !== null`
+   explicitly, so NEW captures are trustworthy.
+2. *Read side* (this change): `requiresExplicitDeclaration(platform, key)` in
+   [platform-metrics.ts](packages/api/src/lib/platform-metrics.ts) — currently
+   `{ FACEBOOK: ["shares"] }` — makes `gatePostReportRow` AND
+   `effectiveChannelUnavailable` render "—" for an undeclared FB `shares`, so the 12 stale
+   rows stop lying immediately instead of waiting to self-heal.
+
+⚠️ Deliberately NARROW. Do not widen it to other metrics/platforms without evidence of a
+genuinely separate call path — over-applying it would hide real zeros. IG reads everything
+from one insights call, so its siblings ARE valid evidence and it is excluded.
+⚠️ Two pre-existing tests asserted the OLD behavior (`shares === 3` / `=== 0` from an
+undeclared key) — they encoded the bug as expected and were updated with a note.
+Tests: [shares-visibility.test.ts](packages/api/src/__tests__/shares-visibility.test.ts)
+(verified FAILING pre-fix), [facebook-shares-availability.test.ts](packages/api/src/__tests__/facebook-shares-availability.test.ts).
+
+## 📥 Insights now cover ALL posts on a connected page, not just ones we published (2026-08-07)
+
+Insights was built entirely on `PostTarget` — posts published **through** PostAutomation —
+which is why it looked so sparse. **Measured on prod: reachable Pages average 17.7 posts
+since 2026-08-01 while Pages we publish through average 3.7 — ~5x more activity was
+invisible.** New `ExternalPost` model + ingestion pipeline closes that gap for FB/IG from
+**2026-08-01 onward** (the product floor; never list older).
+
+**Everything below was LIVE-PROBED against the production Graph API** — see
+[docs/EXTERNAL-POSTS-INSIGHTS-GROUND-TRUTH-2026-08-06.md](docs/EXTERNAL-POSTS-INSIGHTS-GROUND-TRUTH-2026-08-06.md).
+Do NOT re-derive these by reasoning; that document wins over any inference.
+
+- **✅ We CAN read insights for posts we did NOT publish.** A Page token reads
+  `/{post}/insights` for any post on that Page (HTTP 200, 4 metric rows on a foreign post).
+  No extra permission beyond the approved set. Verified on 4 Pages we never posted through:
+  **14 of 16 posts returned real engagement**.
+- **Listing edge is `/{page}/published_posts`, NOT `/feed`.** Both respond, but `/feed`
+  admits visitor posts. `since=<unix>` IS honored; paging is cursor-based; ids come back
+  composite `{pageId}_{postId}`. IG uses `/{ig-user}/media` (bare ids; `media_product_type`
+  captured because IG metric sets are per-product-type and mutually exclusive).
+- **🔑 The FB video dedup problem is SOLVED.** `GET /{video-id}?fields=id,post_id` returns a
+  `post_id` that is the **second half** of the composite id, so the match key is
+  **`{pageId}_{post_id}`**. CLAUDE.md previously recorded that videos "can never be
+  id-matched" — they can. [facebook.provider.ts](packages/social/src/providers/facebook.provider.ts)
+  `resolveVideoPostId`; result persisted to `PostTarget.metadata.resolvedPostId` so the call
+  never repeats. IG needs none of this (exact string match).
+- **⚠️ Rate limits are PER-PAGE (Business Use Case), not one global pool.**
+  `x-business-use-case-usage` is keyed by page id; measured `call_count: 1` (=1%) after a
+  real listing call. A full cold sweep ≈ 4,000 calls ≈ 38/page. **Meta is NOT the
+  constraint — the 4-core box is.** Hence sharding + concurrency 2, never burst parallelism.
+- **🔴 Coverage is limited by DEAD TOKENS, not code.** Unbiased 30-Page sample: **23% of FB
+  Pages reachable** (~95 of 409); **0 of 12 IG accounts** (all `190/460 session
+  invalidated`). Only a user reconnect fixes it. ⚠️ Sibling-token failover sounds like it
+  should double coverage but measured **zero** lift — `190/460` is a USER-level event so a
+  user's tokens die together. Ranking still matters (19/20 succeed on the first ranked
+  token); failover is a ~0-5% edge case, not a strategy.
+
+**Architecture — fetch per ACCOUNT, store per CHANNEL.** 1339 active FB+IG channel rows
+collapse to **524 distinct `platformId`s** (the same Page legitimately exists in many orgs).
+One Graph call per account, then cheap rows fanned out to every channel sharing it (~4k rows
+total). That buys account-level API efficiency while keeping the ordinary
+`-> Channel -> organizationId` join every Insights query already uses, so org scoping needs
+no new machinery.
+
+- **🔒 Do NOT synthesize Post/PostTarget rows for external posts.** The publish cron only
+  selects `SCHEDULED`, so that specific risk is containable — but synthetic `Post` rows
+  would also leak into Content Studio's list, the calendar, the archive, bulk
+  delete/export, the activity feed, the watchdog, and **`enforcePlanLimit("postsPerMonth")`**,
+  burning a user's quota on posts they made directly on Facebook.
+- **Read paths union ONLY `postTargetId IS NULL`** (posts we did *not* publish) on top of the
+  existing PostTarget aggregates — purely additive, so a dedup mistake LOSES a row
+  (conservative) instead of double-counting. `fetchChannelStatRows` is now a
+  `WITH app_rows / ext_rows / all_rows` union; `analytics.engagement` was rewritten to reuse
+  it, so the headline tiles and the Channel Performance table now agree BY CONSTRUCTION.
+- **`metricsSyncedAt IS NULL` = listed but never measured ⇒ every metric renders "—", never
+  a fake 0**, and the row contributes to NEITHER side of the engagement-rate ratio (the
+  1400% bug class cannot recur through this population).
+- **⚠️ `has_meta` and `avail` are SEPARATE columns in the aggregate.** Collapsing them into
+  "avail IS NULL ⇒ unknown" silently changes behavior for snapshots carrying metadata
+  WITHOUT a `metricsAvailable` claim (e.g. at-age captures stamped only with `windowTag`) —
+  flipping them from "available" to the static map, which on Facebook turns a real number
+  into "—".
+- **Reports `at_age` mode deliberately EXCLUDES external posts** — at-age checkpoints are
+  enqueued at publish time, so a post we didn't publish can never have one. Including them
+  would render a table of "—".
+- **Cron**: `scheduleExternalPostSync` every 2h, **sharded into quarters** (full sweep per
+  8h) via a stable hash, 8-min warmup, `CRON_LEADER`-gated. jobId
+  `extsync:{platform}-{platformId}:{bucket}` — **exactly 3 colon segments** (BullMQ rejects
+  other counts). **Kill switch: `EXTERNAL_SYNC_ENABLED=false`.** Tunables:
+  `EXTERNAL_SYNC_SHARDS`, `EXTERNAL_SYNC_CONCURRENCY`, `EXTERNAL_METRICS_PER_RUN`,
+  `EXTERNAL_LIST_PAGES`.
+- **UI**: Channel Performance column renamed **"Posts sent" → "Posts"** (it is no longer only
+  what we sent — this also resolves the long-standing "we show 10, Facebook says 13"
+  complaint); Reports rows carry a **"Direct"** badge; a restrained partial-coverage notice
+  appears only when the selected range starts before 2026-08-01 AND a Meta channel exists.
+- Tests: [external-post-dedup.test.ts](apps/worker/src/__tests__/external-post-dedup.test.ts),
+  [external-sync-accounts.test.ts](apps/worker/src/__tests__/external-sync-accounts.test.ts),
+  plus **real-Postgres** [external-posts-insights.e2e.test.ts](packages/api/src/__tests__/external-posts-insights.e2e.test.ts)
+  (`LIVE_E2E=1`) — a mocked Prisma cannot catch a broken CTE/UNION.
+
 ## 🧹 Orphaned AnalyticsSnapshot janitor
 
 `AnalyticsSnapshot` has **no FK** to `PostTarget` (bare `postTargetId`, indexes only), so every

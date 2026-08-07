@@ -317,11 +317,24 @@ export function ReportsTab() {
 
         <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
           <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          Views ride on Impressions (YouTube/Threads report views there; IG Reels and FB videos report
-          plays/views there). Twitter metrics need a paid API tier; Instagram doesn&apos;t expose clicks
-          (shares only on Reels). LinkedIn exposes likes/comments only for member posts — views/clicks
-          populate for Page posts when available. Facebook refreshes at publish, at-age checkpoints, and
-          Sync Now only. All times UTC.
+          {mode === "current" ? (
+            <span>
+              Covers <strong>all posts on your connected Facebook Pages and Instagram accounts
+              from 1 Aug 2026 onward</strong>, including ones posted directly on the platform
+              (marked <em>Direct</em>) — not just posts sent through PostAutomation. Views ride on
+              Impressions (YouTube/Threads report views there; IG Reels and FB videos report
+              plays/views there). Twitter metrics need a paid API tier; Instagram doesn&apos;t expose
+              clicks (shares only on Reels). All times UTC.
+            </span>
+          ) : (
+            <span>
+              At-publish-age metrics are captured by checkpoints scheduled when{" "}
+              <strong>we</strong> publish a post, so this mode covers posts sent through
+              PostAutomation only — posts made directly on the platform have no checkpoint to
+              report. Switch to <strong>Current metrics</strong> to see every post on the page.
+              All times UTC.
+            </span>
+          )}
         </p>
       </CardHeader>
 
@@ -403,6 +416,17 @@ export function ReportsTab() {
                           {r.platform}
                         </Badge>
                         <span className="max-w-[140px] truncate">{r.channelName}</span>
+                        {/* Honest provenance. Insights now covers the whole page, so a row
+                            the user never sent must not silently read as one they did. */}
+                        {r.isExternal && (
+                          <Badge
+                            variant="outline"
+                            className="shrink-0 text-[10px] text-muted-foreground"
+                            title="Posted directly on the platform, not through PostAutomation. Its metrics are read with the same permissions."
+                          >
+                            Direct
+                          </Badge>
+                        )}
                       </div>
                     </td>
                     <td className="whitespace-nowrap py-2.5 pr-3 text-muted-foreground">

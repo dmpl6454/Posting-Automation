@@ -21,6 +21,7 @@ import { createOutreachSendWorker } from "./workers/outreach-send.worker";
 import { createOutreachPollWorker } from "./workers/outreach-poll.worker";
 import { createRepurposeVideoWorker } from "./workers/repurpose-video.worker";
 import { createAvatarCacheWorker } from "./workers/avatar-cache.worker";
+import { createExternalPostSyncWorker } from "./workers/external-post-sync.worker";
 import { createCaptionFanoutWorker } from "./workers/caption-fanout.worker";
 import { createMediaOptimizeWorker } from "./workers/media-optimize.worker";
 import { createSuperTextWorker } from "./workers/super-text.worker";
@@ -75,6 +76,7 @@ const avatarCacheWorker = createAvatarCacheWorker();
 const captionFanoutWorker = createCaptionFanoutWorker();
 const mediaOptimizeWorker = createMediaOptimizeWorker();
 const superTextWorker = createSuperTextWorker();
+const externalPostSyncWorker = createExternalPostSyncWorker();
 
 // Start cron jobs — leader-gated for future multi-worker scale-out: the
 // setInterval crons must run in EXACTLY ONE container or every scheduled
@@ -113,6 +115,7 @@ console.log("  - Repurpose Video Worker");
 console.log("  - Avatar Cache Worker");
 console.log("  - Caption Fanout Worker");
 console.log("  - Super Text Worker");
+console.log("  - External Post Sync Worker");
 console.log("  - Cron Jobs (token refresh: 30min, analytics: 6hr, agent runs: 1min, cleanup: 1hr, pipeline: 15min)");
 
 // Graceful shutdown
@@ -162,6 +165,7 @@ async function shutdown() {
     outreachPollWorker.close(),
     repurposeVideoWorker.close(),
     avatarCacheWorker.close(),
+    externalPostSyncWorker.close(),
     captionFanoutWorker.close(),
     mediaOptimizeWorker.close(),
     superTextWorker.close(),

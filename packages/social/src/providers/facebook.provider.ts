@@ -9,6 +9,9 @@ import type {
   OAuthConfig,
   SocialProfile,
   PlatformConstraints,
+  ExternalPostPage,
+  ExternalPostSummary,
+  ListPostsOptions,
 } from "../abstract/social.types";
 import {
   diagnoseEmptyInsights,
@@ -347,6 +350,112 @@ export class FacebookProvider extends SocialProvider {
     }
 
     return pages;
+  }
+
+  /**
+   * List posts the PAGE published — including ones made directly on Facebook, which
+   * Insights could never see before. LIVE-VERIFIED 2026-08-06 against production:
+   *
+   *   GET /{page-id}/published_posts
+   *       ?fields=id,created_time,message,status_type,permalink_url,attachments{media_type}
+   *       &since=<unix>&limit=25
+   *   -> HTTP 200, paging.cursors present, ids in composite "{pageId}_{postId}" form.
+   *
+   * Measured on the `Bollywood` Page: 7 posts since 2026-08-01, of which 6 were ours and
+   * 1 was posted directly — exactly the gap this feature exists to close.
+   *
+   * ⚠️ `published_posts`, NOT `/feed`. Both respond, but `/feed` also admits visitor
+   * posts and other non-Page-authored content, which is not "this Page's posts".
+   *
+   * ⚠️ Metrics are deliberately NOT fetched here. Listing and metric capture have
+   * different permissions and different failure modes; fusing them is how a successful
+   * listing would end up persisting fake-zero metrics for posts whose insights call was
+   * refused. The caller fetches metrics per post via getPostAnalytics.
+   */
+  async listRecentPosts(
+    tokens: OAuthTokens,
+    pageId: string,
+    opts: ListPostsOptions
+  ): Promise<ExternalPostPage> {
+    const since = Math.floor(opts.since.getTime() / 1000);
+    const limit = Math.min(Math.max(opts.limit ?? 25, 1), 100);
+    const cursor = opts.cursor ? `&after=${encodeURIComponent(opts.cursor)}` : "";
+
+    const res = await this.graphFetch(
+      `${this.graphBaseUrl}/${this.apiVersion}/${pageId}/published_posts` +
+        `?fields=id,created_time,message,status_type,permalink_url,attachments{media_type}` +
+        `&since=${since}&limit=${limit}${cursor}&access_token=${tokens.accessToken}`,
+      {},
+      pageId
+    );
+    const data: any = await res.json().catch(() => ({}));
+
+    if (!res.ok) {
+      // A dead token (190/460 — the dominant failure: measured, only ~23% of Pages are
+      // reachable) must surface as a DEGRADATION, never as "this Page has no posts".
+      console.warn(`[Facebook] listRecentPosts failed for page ${pageId}: ${JSON.stringify(data?.error ?? data).slice(0, 300)}`);
+      return { posts: [], degraded: diagnoseMetaError(data?.error) };
+    }
+
+    const posts: ExternalPostSummary[] = [];
+    for (const row of Array.isArray(data?.data) ? data.data : []) {
+      if (!row?.id || !row?.created_time) continue;
+      const when = new Date(row.created_time);
+      if (Number.isNaN(when.getTime())) continue;
+      posts.push({
+        platformPostId: String(row.id),
+        publishedAt: when,
+        ...(row.permalink_url ? { permalink: String(row.permalink_url) } : {}),
+        ...(row.message ? { message: String(row.message).slice(0, 2000) } : {}),
+        // attachments.media_type is the reliable photo/video/album discriminator;
+        // status_type is a weaker fallback ("added_photos", "added_video", …).
+        ...(row.attachments?.data?.[0]?.media_type
+          ? { mediaType: String(row.attachments.data[0].media_type) }
+          : row.status_type
+            ? { mediaType: String(row.status_type) }
+            : {}),
+      });
+    }
+
+    return {
+      posts,
+      ...(data?.paging?.cursors?.after && data?.paging?.next
+        ? { nextCursor: String(data.paging.cursors.after) }
+        : {}),
+    };
+  }
+
+  /**
+   * Resolve a BARE Video-node id to the composite feed-post id that
+   * `published_posts` returns — the long-missing half of FB dedup.
+   *
+   * LIVE-VERIFIED 2026-08-06:
+   *   GET /{video-id}?fields=id,post_id  ->  post_id=122111714397390760
+   *   published_posts id                 ->  1196604146874966_122111714397390760
+   * i.e. `post_id` is the SECOND HALF of the composite id, so the match key is
+   * `{pageId}_{post_id}`.
+   *
+   * This matters because video publishes store a bare Video-node id in
+   * PostTarget.publishedId while every other path stores "{page}_{post}" — which is why
+   * CLAUDE.md recorded that videos "can never be id-matched". They can now.
+   *
+   * Returns null when the video no longer exists (a deleted video 400s — verified with
+   * id 1748002179986936, which CLAUDE.md independently records as deleted).
+   */
+  async resolveVideoPostId(
+    tokens: OAuthTokens,
+    videoId: string,
+    pageId: string
+  ): Promise<string | null> {
+    const res = await this.graphFetch(
+      `${this.graphBaseUrl}/${this.apiVersion}/${videoId}?fields=id,post_id&access_token=${tokens.accessToken}`,
+      {},
+      pageId
+    );
+    if (!res.ok) return null;
+    const data: any = await res.json().catch(() => ({}));
+    const postId = data?.post_id;
+    return postId ? `${pageId}_${postId}` : null;
   }
 
   async getPostAnalytics(tokens: OAuthTokens, platformPostId: string): Promise<SocialAnalytics | null> {

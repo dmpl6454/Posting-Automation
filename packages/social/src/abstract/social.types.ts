@@ -17,6 +17,42 @@ export type LikeKind = "likes" | "reactions" | "saves" | "upvotes";
 export type AnalyticsSource = "api" | "scrape";
 
 /**
+ * One post that exists ON THE PLATFORM, as returned by a listing edge — whether or
+ * not we published it. Metrics are deliberately ABSENT here: listing and metric
+ * capture are separate calls with separate permissions and separate failure modes,
+ * and conflating them is how a listing success would end up storing fake zero
+ * metrics. The sync worker lists first, then captures metrics per post.
+ */
+export interface ExternalPostSummary {
+  /** Platform-native id. FB: composite "{pageId}_{postId}". IG: bare media id. */
+  platformPostId: string;
+  publishedAt: Date;
+  permalink?: string;
+  message?: string;
+  /** FB attachment media_type (photo/video/album/share). */
+  mediaType?: string;
+  /** IG media_product_type (FEED/REELS/STORY) — selects the metric set. */
+  productType?: string;
+}
+
+export interface ExternalPostPage {
+  posts: ExternalPostSummary[];
+  /** Opaque cursor for the next page; absent ⇒ no more pages. */
+  nextCursor?: string;
+  /** Present only when the listing was degraded (dead token / missing scope). */
+  degraded?: AnalyticsDegradation;
+}
+
+export interface ListPostsOptions {
+  /** Only posts published at or after this instant. */
+  since: Date;
+  /** Resume token from a previous ExternalPostPage. */
+  cursor?: string;
+  /** Page size. Kept small by default — the box, not Meta, is the constraint. */
+  limit?: number;
+}
+
+/**
  * Why a capture came back short of the platform's full metric set. Distinguishes
  * "the owner must reconnect to grant a scope" from "this platform genuinely has
  * no such metric" — the two look identical in the stored numbers (both 0), and
