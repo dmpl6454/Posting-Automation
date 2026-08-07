@@ -46,16 +46,30 @@ async function fetchChannelStatRows(
 ): Promise<ChannelStatRow[]> {
   // Per-metric availability as DECLARED by each capture. Mirrors
   // gatePostReportRow's rule, lifted to an aggregate:
-  //   metadata absent            ⇒ NULL (unknown — consult the static map)
-  //   key absent from metadata   ⇒ TRUE  (capture declared others, not this one)
+  //   no capability claim        ⇒ NULL (unknown — consult the static map)
+  //   key absent from the claim  ⇒ TRUE  (capture declared others, not this one)
   //   key present                ⇒ TRUE unless explicitly 'false'
   // BOOL_OR then answers "did ANY capture report this metric?".
   // Uses ->>'key' IS NULL rather than the jsonb `?` operator on purpose — `?`
   // reads as a placeholder to some drivers and would be fragile here.
+  //
+  // ⚠️ `has_meta` and `avail` are SEPARATE columns on purpose, preserving the original
+  // three-way distinction exactly:
+  //   has_meta = false                   ⇒ NULL  (the capture made no claim at all)
+  //   has_meta, but this key absent      ⇒ TRUE  (it declared others, so this one worked)
+  //   key present                        ⇒ TRUE unless explicitly 'false'
+  // Collapsing them into "avail IS NULL ⇒ unknown" would silently change behavior for
+  // snapshots that carry metadata WITHOUT a metricsAvailable claim (e.g. an at-age
+  // capture stamped only with windowTag), flipping them from "available" to the static
+  // platform map — which on Facebook means a real number turning into "—".
+  //
+  // Both branches of the union below project these two columns (from
+  // AnalyticsSnapshot.metadata for app-published posts, ExternalPost."metricsAvailable"
+  // for platform-native ones), so this one rule governs both populations.
   const availExpr = (key: string) =>
-    `BOOL_OR(CASE WHEN s.metadata IS NULL THEN NULL
-                  WHEN (s.metadata->'metricsAvailable'->>'${key}') IS NULL THEN TRUE
-                  ELSE (s.metadata->'metricsAvailable'->>'${key}') <> 'false' END)`;
+    `BOOL_OR(CASE WHEN NOT has_meta THEN NULL
+                  WHEN (avail->>'${key}') IS NULL THEN TRUE
+                  ELSE (avail->>'${key}') <> 'false' END)`;
 
   const rows: Array<{
     channelId: string;
@@ -80,55 +94,107 @@ async function fetchChannelStatRows(
     availClicks: boolean | null;
     hasLegacySnapshot: boolean | null;
   }> = await (prisma.$queryRawUnsafe as any)(
-    `SELECT pt."channelId"                  AS "channelId",
-            COUNT(DISTINCT p.id)            AS posts,
-            COALESCE(SUM(s.impressions), 0) AS impressions,
-            COALESCE(SUM(s.reach), 0)       AS reach,
-            COALESCE(SUM(s.likes), 0)       AS likes,
-            COALESCE(SUM(s.comments), 0)    AS comments,
-            COALESCE(SUM(s.shares), 0)      AS shares,
-            COALESCE(SUM(s.clicks), 0)      AS clicks,
+    // Two populations, ONE aggregate:
+    //   app_rows — posts published THROUGH PostAutomation (unchanged semantics)
+    //   ext_rows — posts that exist on the platform but were NOT published by us
+    //
+    // ⚠️ ext_rows is filtered to `postTargetId IS NULL`, i.e. ONLY posts we did not
+    // publish. Posts we did publish keep flowing through app_rows exactly as before, so
+    // this change is purely ADDITIVE and can never double-count. If dedup ever
+    // mis-classifies, it loses a row (conservative) rather than inflating a number.
+    //
+    // Both branches project the SAME normalized columns so the outer aggregate — and
+    // therefore every honesty rule below it — is written once and applies to both.
+    `WITH app_rows AS (
+       SELECT pt."channelId"                       AS channel_id,
+              'a:' || p.id                         AS post_key,
+              COALESCE(s.impressions, 0)           AS impressions,
+              COALESCE(s.reach, 0)                 AS reach,
+              COALESCE(s.likes, 0)                 AS likes,
+              COALESCE(s.comments, 0)              AS comments,
+              COALESCE(s.shares, 0)                AS shares,
+              COALESCE(s.clicks, 0)                AS clicks,
+              (s.id IS NOT NULL)                   AS has_metrics,
+              (s.metadata IS NOT NULL)             AS has_meta,
+              s.metadata->'metricsAvailable'       AS avail,
+              (s.id IS NOT NULL AND s.metadata IS NULL) AS is_legacy
+       FROM "PostTarget" pt
+       INNER JOIN "Post" p ON p.id = pt."postId"
+       -- ⚠️ Deliberately NOT filtered on c."isActive" (owner decision 2026-08-06:
+       -- "count all real history"). A post that WAS published and DID earn
+       -- engagement is a historical fact; excluding it because the channel was
+       -- later paused or disconnected understated every total. This is why
+       -- disconnecting a channel used to make its history vanish from Insights.
+       -- Rows carry their own status so the UI can badge Paused/Disconnected, and
+       -- they age out naturally once outside the selected window.
+       INNER JOIN "Channel" c ON c.id = pt."channelId"
+       LEFT JOIN LATERAL (
+         SELECT s2.* FROM "AnalyticsSnapshot" s2
+         WHERE s2."postTargetId" = pt.id
+         ORDER BY s2."snapshotAt" DESC
+         LIMIT 1
+       ) s ON TRUE
+       WHERE p."organizationId" = $1
+         AND pt.status::text = 'PUBLISHED'
+         AND COALESCE(p."publishedAt", p."updatedAt") BETWEEN $2 AND $3
+     ),
+     ext_rows AS (
+       SELECT ep."channelId"                       AS channel_id,
+              'e:' || ep.id                        AS post_key,
+              ep.impressions, ep.reach, ep.likes, ep.comments, ep.shares, ep.clicks,
+              -- NULL metricsSyncedAt = listed but never measured ⇒ "—", never a fake 0.
+              (ep."metricsSyncedAt" IS NOT NULL)    AS has_metrics,
+              -- Both Meta providers always declare metricsAvailable, so a measured row
+              -- without one made no claim ⇒ defer to the static platform map.
+              (ep."metricsAvailable" IS NOT NULL)   AS has_meta,
+              ep."metricsAvailable"                 AS avail,
+              (ep."metricsSyncedAt" IS NOT NULL AND ep."metricsAvailable" IS NULL) AS is_legacy
+       FROM "ExternalPost" ep
+       -- organizationId is proven through the Channel join — the same IDOR-safe shape
+       -- every other Insights query uses.
+       INNER JOIN "Channel" c2 ON c2.id = ep."channelId"
+       WHERE c2."organizationId" = $1
+         AND ep."postTargetId" IS NULL
+         AND ep."publishedAt" BETWEEN $2 AND $3
+     ),
+     all_rows AS (
+       SELECT * FROM app_rows
+       UNION ALL
+       SELECT * FROM ext_rows
+     )
+     SELECT channel_id                       AS "channelId",
+            COUNT(DISTINCT post_key)         AS posts,
+            COALESCE(SUM(impressions), 0)    AS impressions,
+            COALESCE(SUM(reach), 0)          AS reach,
+            COALESCE(SUM(likes), 0)          AS likes,
+            COALESCE(SUM(comments), 0)       AS comments,
+            COALESCE(SUM(shares), 0)         AS shares,
+            COALESCE(SUM(clicks), 0)         AS clicks,
             -- Impressioned-only sums: the ONLY honest basis for an engagement
             -- rate. Pooling engagement from ALL posts over a denominator built
             -- from only the impressioned ones produced 1400% on prod (7 posts'
             -- reactions ÷ one 1-view video). See engagement-rate.ts for the rule.
-            COALESCE(SUM(s.impressions) FILTER (WHERE s.impressions > 0), 0) AS "impressionedImpressions",
-            COALESCE(SUM(s.likes)       FILTER (WHERE s.impressions > 0), 0) AS "impressionedLikes",
-            COALESCE(SUM(s.comments)    FILTER (WHERE s.impressions > 0), 0) AS "impressionedComments",
-            COALESCE(SUM(s.shares)      FILTER (WHERE s.impressions > 0), 0) AS "impressionedShares",
-            COUNT(*) FILTER (WHERE s.impressions > 0)                        AS "impressionedPosts",
-            -- true when at least one of this channel's targets has a captured
-            -- snapshot; drives the UI's "—" (no data yet) vs "0" (real zero).
-            BOOL_OR(s.id IS NOT NULL)       AS "hasSnapshot",
-            ${availExpr("impressions")}     AS "availImpressions",
-            ${availExpr("reach")}           AS "availReach",
-            ${availExpr("likes")}           AS "availLikes",
-            ${availExpr("comments")}        AS "availComments",
-            ${availExpr("shares")}          AS "availShares",
-            ${availExpr("clicks")}          AS "availClicks",
-            -- a capture that predates the honesty metadata makes no capability
-            -- claim, so the static platform map must still apply for it.
-            BOOL_OR(s.id IS NOT NULL AND s.metadata IS NULL) AS "hasLegacySnapshot"
-     FROM "PostTarget" pt
-     INNER JOIN "Post" p ON p.id = pt."postId"
-     -- ⚠️ Deliberately NOT filtered on c."isActive" (owner decision 2026-08-06:
-     -- "count all real history"). A post that WAS published and DID earn
-     -- engagement is a historical fact; excluding it because the channel was
-     -- later paused or disconnected understated every total. This is why
-     -- disconnecting a channel used to make its history vanish from Insights.
-     -- Rows carry their own status so the UI can badge Paused/Disconnected, and
-     -- they age out naturally once outside the selected window.
-     INNER JOIN "Channel" c ON c.id = pt."channelId"
-     LEFT JOIN LATERAL (
-       SELECT s2.* FROM "AnalyticsSnapshot" s2
-       WHERE s2."postTargetId" = pt.id
-       ORDER BY s2."snapshotAt" DESC
-       LIMIT 1
-     ) s ON TRUE
-     WHERE p."organizationId" = $1
-       AND pt.status::text = 'PUBLISHED'
-       AND COALESCE(p."publishedAt", p."updatedAt") BETWEEN $2 AND $3
-     GROUP BY pt."channelId"`,
+            -- Unaffected by the union: an unmeasured external post has impressions
+            -- 0, so it contributes to NEITHER side — exactly the intended rule.
+            COALESCE(SUM(impressions) FILTER (WHERE impressions > 0), 0) AS "impressionedImpressions",
+            COALESCE(SUM(likes)       FILTER (WHERE impressions > 0), 0) AS "impressionedLikes",
+            COALESCE(SUM(comments)    FILTER (WHERE impressions > 0), 0) AS "impressionedComments",
+            COALESCE(SUM(shares)      FILTER (WHERE impressions > 0), 0) AS "impressionedShares",
+            COUNT(*) FILTER (WHERE impressions > 0)                      AS "impressionedPosts",
+            -- true when at least one row on this channel has captured metrics;
+            -- drives the UI's "—" (no data yet) vs "0" (real zero).
+            BOOL_OR(has_metrics)             AS "hasSnapshot",
+            ${availExpr("impressions")}      AS "availImpressions",
+            ${availExpr("reach")}            AS "availReach",
+            ${availExpr("likes")}            AS "availLikes",
+            ${availExpr("comments")}         AS "availComments",
+            ${availExpr("shares")}           AS "availShares",
+            ${availExpr("clicks")}           AS "availClicks",
+            -- a capture that makes no capability claim ⇒ the static platform map
+            -- must still apply for it.
+            BOOL_OR(is_legacy)               AS "hasLegacySnapshot"
+     FROM all_rows
+     GROUP BY channel_id`,
     organizationId,
     from,
     to
@@ -205,6 +271,12 @@ export interface PostReportRow {
     saved?: number;
     avgWatchTimeMs?: number;
   } | null;
+  /**
+   * true ⇒ this post exists on the platform but was NOT published through
+   * PostAutomation (ingested by the external-post sync). Lets the UI label it honestly
+   * instead of implying we sent it. Absent on legacy callers ⇒ treated as false.
+   */
+  isExternal?: boolean;
 }
 
 /**
@@ -316,8 +388,46 @@ async function fetchPostReportRows(
   params.push(limit);
   const limitIdx = params.length;
 
+  // Platform-native posts (not published through us) are unioned in for "current" mode.
+  // ⚠️ NOT for "at_age": those rows are pinned to at-age CHECKPOINT snapshots that only
+  // exist for posts we published (the delayed jobs are enqueued at publish time), so an
+  // external post can never have one. Including them would render a table of "—" and
+  // misrepresent at-age coverage.
+  const externalUnion =
+    mode === "current"
+      ? `
+     UNION ALL
+     SELECT ep.id             AS "targetId",
+            ep.id             AS "postId",
+            LEFT(COALESCE(ep.message, ''), 140) AS "contentPreview",
+            c2.name           AS "channelName",
+            c2.username       AS "channelUsername",
+            c2.platform::text AS "platform",
+            ep."publishedAt",
+            ep.permalink      AS "publishedUrl",
+            ep.impressions, ep.clicks, ep.likes, ep.comments, ep.shares, ep.reach,
+            CASE
+              WHEN ep.impressions > 0
+                THEN (ep.likes + ep.comments + ep.shares)::float / ep.impressions * 100
+              WHEN ep."metricsSyncedAt" IS NOT NULL THEN 0
+              ELSE NULL
+            END AS "engagementRate",
+            ep."metricsSyncedAt" AS "snapshotAt",
+            -- Shape the honesty metadata like a snapshot's so gatePostReportRow needs
+            -- no special case: it reads metadata.metricsAvailable either way.
+            CASE WHEN ep."metricsAvailable" IS NULL THEN NULL
+                 ELSE jsonb_build_object('metricsAvailable', ep."metricsAvailable") END AS "snapshotMetadata",
+            TRUE AS "isExternal"
+     FROM "ExternalPost" ep
+     INNER JOIN "Channel" c2 ON c2.id = ep."channelId"
+     WHERE c2."organizationId" = $1
+       AND ep."postTargetId" IS NULL
+       AND ep."publishedAt" >= $2`
+      : "";
+
   const rows: PostReportRow[] = await (prisma.$queryRawUnsafe as any)(
-    `SELECT pt.id              AS "targetId",
+    `SELECT * FROM (
+     SELECT pt.id              AS "targetId",
             p.id               AS "postId",
             LEFT(p.content, 140) AS "contentPreview",
             c.name             AS "channelName",
@@ -343,7 +453,8 @@ async function fetchPostReportRows(
             -- Per-capture honesty metadata (metricsAvailable) — gatePostReportRow
             -- prefers this over the static per-platform map so a real captured
             -- value (e.g. FB video views) is never hidden as "—".
-            s.metadata        AS "snapshotMetadata"
+            s.metadata        AS "snapshotMetadata",
+            FALSE AS "isExternal"
      FROM "PostTarget" pt
      INNER JOIN "Post" p    ON p.id = pt."postId"
      INNER JOIN "Channel" c ON c.id = pt."channelId"
@@ -357,7 +468,9 @@ async function fetchPostReportRows(
        AND pt.status::text = 'PUBLISHED'
        AND pt."publishedAt" IS NOT NULL
        ${publishedAtFilter}
-     ORDER BY pt."publishedAt" DESC
+     ${externalUnion}
+     ) combined
+     ORDER BY "publishedAt" DESC
      LIMIT $${limitIdx}`,
     ...params
   );
@@ -460,21 +573,14 @@ export const analyticsRouter = createRouter({
       // The date predicate also gains the COALESCE(publishedAt, updatedAt)
       // fallback used by every sibling query, so a PUBLISHED post with a NULL
       // publishedAt isn't silently dropped from the headline only.
-      const targets = await ctx.prisma.postTarget.findMany({
-        where: {
-          post: {
-            organizationId: ctx.organizationId,
-            OR: [
-              { publishedAt: { gte: from, lte: to } },
-              { publishedAt: null, updatedAt: { gte: from, lte: to } },
-            ],
-          },
-          status: "PUBLISHED",
-        },
-        select: { id: true },
-      });
-
-      const targetIds = targets.map((t: any) => t.id);
+      // ⚠️ Reuses the SAME aggregate as perChannelStats / groupStats.
+      //
+      // It previously ran its own bespoke SQL over AnalyticsSnapshot, which meant the
+      // headline tiles and the Channel Performance table below them were computed by two
+      // independent code paths that could (and did) drift apart. Sharing
+      // fetchChannelStatRows makes them agree BY CONSTRUCTION, and is also what brings
+      // platform-native posts into the headline — the union lives in one place.
+      const statRows = await fetchChannelStatRows(ctx.prisma, ctx.organizationId, from, to);
 
       // Which metrics ANY connected platform can ever report. Lets the UI drop
       // dead tiles/cards entirely instead of showing a confident "0" for a
@@ -490,66 +596,28 @@ export const analyticsRouter = createRouter({
       });
       const reportable = reportableMetrics(orgChannels.map((c) => c.platform as string));
 
-      if (targetIds.length === 0) {
-        return {
-          impressions: 0,
-          clicks: 0,
-          likes: 0,
-          shares: 0,
-          comments: 0,
-          reach: 0,
-          engagementRate: 0,
-          reportableMetrics: reportable,
-        };
-      }
+      const sum = (pick: (r: (typeof statRows)[number]) => number) =>
+        statRows.reduce((n, r) => n + pick(r), 0);
 
-      // Get the latest analytics snapshot for each target
-      const latestSnapshots: Array<{
-        impressions: bigint;
-        clicks: bigint;
-        likes: bigint;
-        shares: bigint;
-        comments: bigint;
-        reach: bigint;
-        engagementRate: number;
-      }> = await (ctx.prisma.$queryRawUnsafe as any)(
-        `SELECT
-          COALESCE(SUM(a.impressions), 0) as impressions,
-          COALESCE(SUM(a.clicks), 0) as clicks,
-          COALESCE(SUM(a.likes), 0) as likes,
-          COALESCE(SUM(a.shares), 0) as shares,
-          COALESCE(SUM(a.comments), 0) as comments,
-          COALESCE(SUM(a.reach), 0) as reach,
-          -- Only impressioned targets contribute to BOTH numerator and
-          -- denominator, so a zero-impression target (LinkedIn member post,
-          -- Reddit view_count 0) with engagement can't inflate the pooled rate.
-          CASE WHEN SUM(a.impressions) FILTER (WHERE a.impressions > 0) > 0
-            THEN CAST(SUM(a.likes + a.comments + a.shares) FILTER (WHERE a.impressions > 0) AS FLOAT)
-                 / SUM(a.impressions) FILTER (WHERE a.impressions > 0) * 100
-            ELSE 0
-          END as "engagementRate"
-        FROM (
-          -- Exactly ONE row per target (the latest). DISTINCT ON picks a single
-          -- row even when two snapshots share the max snapshotAt (id DESC breaks
-          -- the tie deterministically) — the old MAX(snapshotAt) INNER JOIN
-          -- summed BOTH tied rows, double-counting that target's metrics.
-          SELECT DISTINCT ON (s."postTargetId") s.*
-          FROM "AnalyticsSnapshot" s
-          WHERE s."postTargetId" = ANY($1::text[])
-          ORDER BY s."postTargetId", s."snapshotAt" DESC, s.id DESC
-        ) a`,
-        targetIds
-      );
+      // Engagement rate pools ONLY over rows that reported impressions, on BOTH sides of
+      // the ratio. Violating this produced 1400% on prod (a channel's whole reaction
+      // count divided by one video's view count). The impressioned* sums come straight
+      // from the shared aggregate, so the rule holds across app-published AND
+      // platform-native posts without being restated here.
+      const impDen = sum((r) => r.impressionedImpressions ?? 0);
+      const impNum =
+        sum((r) => r.impressionedLikes ?? 0) +
+        sum((r) => r.impressionedComments ?? 0) +
+        sum((r) => r.impressionedShares ?? 0);
 
-      const row = latestSnapshots[0];
       return {
-        impressions: Number(row?.impressions ?? 0),
-        clicks: Number(row?.clicks ?? 0),
-        likes: Number(row?.likes ?? 0),
-        shares: Number(row?.shares ?? 0),
-        comments: Number(row?.comments ?? 0),
-        reach: Number(row?.reach ?? 0),
-        engagementRate: Number(row?.engagementRate ?? 0),
+        impressions: sum((r) => r.impressions),
+        clicks: sum((r) => r.clicks),
+        likes: sum((r) => r.likes),
+        shares: sum((r) => r.shares),
+        comments: sum((r) => r.comments),
+        reach: sum((r) => r.reach),
+        engagementRate: impDen > 0 ? (impNum / impDen) * 100 : 0,
         reportableMetrics: reportable,
       };
     }),

@@ -203,3 +203,24 @@ export interface SuperTextBurnJobData {
   postId: string;
   organizationId: string;
 }
+
+/**
+ * Ingest the posts that exist ON a connected account — including ones published
+ * directly on the platform, which Insights could never see before.
+ *
+ * Keyed by ACCOUNT (platform + platformId), NOT by channel row. The same Page/IG
+ * account legitimately exists in many orgs (Channel is unique per
+ * [organizationId, platform, platformId]), so 1339 prod channel rows collapse to 524
+ * distinct accounts. One Graph call per account is then fanned out to every channel
+ * row sharing it — the optimization that keeps this cheap under concurrent user load.
+ */
+export interface ExternalPostSyncJobData {
+  platform: string;
+  platformId: string;
+  /** Candidate channel ids, best token FIRST (see external-sync-accounts.ts). */
+  candidateChannelIds: string[];
+  /** Every channel row for this account — the fan-out targets for fetched posts. */
+  targetChannelIds: string[];
+  /** Hard floor for the sync window; never list posts older than this. */
+  since: string;
+}

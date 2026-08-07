@@ -106,7 +106,11 @@ describe("Insights count history from paused and disconnected channels", () => {
     ]) {
       expect(src).toContain(col);
     }
-    expect(src).toMatch(/FILTER \(WHERE s\.impressions > 0\)/);
+    // The impressioned-only FILTER is what keeps the engagement rate honest. The column
+    // lost its `s.` prefix when the aggregate became a UNION over app-published and
+    // platform-native posts (both branches project a plain `impressions`), so match the
+    // rule rather than one table alias — the guarantee is the FILTER, not the prefix.
+    expect(src).toMatch(/FILTER \(WHERE (s\.)?impressions > 0\)/);
   });
 
   it("exposes the rate's base and the channel's lifecycle status to the UI", () => {

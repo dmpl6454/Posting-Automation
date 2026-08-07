@@ -242,6 +242,7 @@ model Channel {
   organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   postTargets    PostTarget[]
   channelGroups  ChannelGroup[] @relation("ChannelGroupMembers")
+  externalPosts  ExternalPost[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -250,6 +251,84 @@ model Channel {
   @@index([organizationId])
   /// Partial-ish lookup for "live channels" queries (the common path).
   @@index([organizationId, disconnectedAt])
+}
+
+/// A post that exists ON THE PLATFORM, whether or not we published it.
+///
+/// ⚠️ Why this is NOT a synthetic Post/PostTarget row.
+/// Insights used to cover only posts published through PostAutomation, which made it
+/// look empty: measured on prod, reachable Pages average 17.7 posts since 2026-08-01
+/// while Pages we publish through average 3.7 — roughly 5x more activity than Insights
+/// could see. The obvious shortcut is to synthesize Post+PostTarget rows for the
+/// platform's own posts, but those rows would leak into Content Studio's post list, the
+/// calendar, the archive, bulk delete/export, the activity feed, the stuck-post watchdog,
+/// and — worst — `enforcePlanLimit("postsPerMonth")`, burning a user's monthly quota on
+/// posts they made directly on Facebook. So external posts get their own table and are
+/// unioned ONLY in the Insights read paths. The publish pipeline is untouched.
+///
+/// Storage shape: rows are PER CHANNEL, but the Graph fetch is PER ACCOUNT. The same
+/// Page/IG account legitimately exists in many orgs (Channel is unique per
+/// [organizationId, platform, platformId]), so 1339 channel rows collapse to 524 distinct
+/// platformIds. We make ONE Graph call per account and then write cheap rows to every
+/// channel sharing that platformId (~4k rows total). That buys account-level API
+/// efficiency while keeping the ordinary `-> Channel -> organizationId` join every
+/// Insights query already uses, so org scoping / IDOR safety needs no new machinery.
+model ExternalPost {
+  id       String         @id @default(cuid())
+  channelId String
+  platform SocialPlatform
+
+  /// Platform-native id. FB: the composite "{pageId}_{postId}" returned by
+  /// /published_posts. IG: the bare media id (which is also what publishing returns,
+  /// so IG dedups exactly).
+  platformPostId String
+  publishedAt    DateTime
+  permalink      String?
+  message        String?  @db.Text
+  /// FB attachment media_type (photo/video/album/share) — drives which metric path runs.
+  mediaType      String?
+  /// IG media_product_type (FEED/REELS/STORY). IG insight metric sets are per
+  /// product type and MUTUALLY EXCLUSIVE — mixing them 400s the whole call.
+  productType    String?
+
+  /// Set when this platform post is one WE published — the dedup link. NULL means it
+  /// was made directly on the platform. Read paths union only the NULL ones on top of
+  /// the existing PostTarget aggregates, so app-published posts can never double-count.
+  postTargetId String?
+
+  /// Latest metrics, denormalized so Insights reads never touch a snapshot table.
+  /// A value here is meaningless without `metricsAvailable` — see below.
+  impressions Int @default(0)
+  clicks      Int @default(0)
+  likes       Int @default(0)
+  comments    Int @default(0)
+  shares      Int @default(0)
+  reach       Int @default(0)
+
+  /// Per-metric availability AS DECLARED BY THE CAPTURE, same contract as
+  /// AnalyticsSnapshot.metadata.metricsAvailable. ⚠️ An OMITTED key reads as AVAILABLE,
+  /// so every metric must be declared explicitly or a value we were never allowed to
+  /// read renders as a confident 0.
+  metricsAvailable Json?
+  /// "api" | "scrape" — provenance, mirrors the snapshot honesty metadata.
+  metricsSource    String?
+  /// Why a capture came back short (missing scope / dead token), when it did.
+  degraded         Json?
+  /// NULL = listed but metrics never fetched yet ⇒ every metric renders "—", not 0.
+  metricsSyncedAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  /// Idempotent upsert key for the sync worker; also prevents double-insert on retry.
+  @@unique([channelId, platformPostId])
+  /// Drives the Insights window scan: every read path filters by channel then by
+  /// publishedAt range (mirrors the PostTarget aggregates in analytics.router.ts).
+  @@index([channelId, publishedAt])
+  /// Lets the worker find rows whose metrics are stale/never-fetched without a table scan.
+  @@index([platform, metricsSyncedAt])
 }
 
 model ChannelGroup {

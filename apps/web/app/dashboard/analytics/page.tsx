@@ -263,6 +263,18 @@ function InsightsAnalyticsView() {
   const likeHeader =
     likeKinds.size === 1 ? likeColumnLabel(likeKinds.values().next().value as string) : { label: "Likes" };
 
+  /**
+   * Direct-post coverage floor. We only collect posts made outside PostAutomation from
+   * 1 Aug 2026 onward, so a range starting before that is PARTIALLY covered: app-published
+   * posts go all the way back, direct posts do not. Saying nothing would make an
+   * incomplete view look complete — the exact failure mode this codebase keeps fighting.
+   */
+  const DIRECT_POST_FLOOR = new Date("2026-08-01T00:00:00.000Z");
+  const rangeStartsBeforeFloor = new Date(from) < DIRECT_POST_FLOOR;
+  const hasMetaChannel = (channelStats ?? []).some(
+    (ch: any) => ch.platform === "FACEBOOK" || ch.platform === "INSTAGRAM"
+  );
+
   // Channels are connected but no engagement has synced yet — distinct from
   // "no channels connected" so we don't imply zero performance (audit fix 2026-06-06).
   const hasChannels = !!channelStats && channelStats.length > 0;
@@ -378,6 +390,18 @@ function InsightsAnalyticsView() {
             </Link>
           </div>
         </div>
+      )}
+
+      {/* Partial-coverage notice. Restrained on purpose: one line, no icon-shouting, and
+          only when it is actually true (a Meta channel is present AND the range reaches
+          back past the collection floor). Silence here would let a partial view read as
+          a complete one. */}
+      {rangeStartsBeforeFloor && hasMetaChannel && (
+        <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+          Posts made directly on Facebook and Instagram are included from{" "}
+          <strong>1 Aug 2026</strong> onward. Earlier dates in this range show only posts sent
+          through PostAutomation.
+        </p>
       )}
 
       {/* Stat Cards */}
@@ -614,16 +638,16 @@ function InsightsAnalyticsView() {
                 <thead>
                   <tr className="border-b bg-muted/40">
                     <th className="px-4 py-3 text-left font-medium text-muted-foreground">Channel</th>
-                    {/* "Posts sent", not "Posts": this counts what PostAutomation
-                        published in the selected range. The platform's own post
-                        count is legitimately higher — it also includes posts made
-                        directly there and posts outside the range. Reconciled on
-                        prod: FB Page showed 13, of which 5 were posted directly. */}
+                    {/* Was "Posts sent" — that was accurate when Insights could only see
+                        posts WE published. It now also ingests posts made directly on
+                        connected Facebook Pages and Instagram accounts (from 1 Aug 2026),
+                        so the count is the channel's real post count for the range, and
+                        should no longer read as "what you sent". */}
                     <th
                       className="px-4 py-3 text-right font-medium text-muted-foreground"
-                      title="Posts published through PostAutomation to this channel, within the selected date range. The platform's own total will be higher if you also post there directly."
+                      title="Posts on this channel within the selected date range — those sent through PostAutomation plus those posted directly on the platform (Facebook/Instagram, from 1 Aug 2026)."
                     >
-                      Posts sent
+                      Posts
                     </th>
                     {channelColumns.map((c) => (
                       <th
@@ -764,10 +788,12 @@ function InsightsAnalyticsView() {
                 where the platform reports it separately from impressions. Facebook no longer reports
                 impressions or reach for Page posts at all — Meta removed those metrics, so no permission
                 can restore them; Facebook <em>video</em> posts still report views.
-                &ldquo;Posts sent&rdquo; counts what PostAutomation published here in this date range — the
-                platform&rsquo;s own total is higher if you also post there directly. Engagement rate is pooled
-                over only the posts that reported impressions, and shows that count in brackets when it is
-                fewer than all of them.
+                &ldquo;Posts&rdquo; counts every post on the channel in this date range — those sent through
+                PostAutomation plus those posted directly on the platform. Direct posts are collected for
+                Facebook Pages and Instagram accounts from 1 Aug 2026 onward, and only while the channel&rsquo;s
+                connection is healthy; a channel needing reconnection shows its own posts only.
+                Engagement rate is pooled over only the posts that reported impressions, and shows that
+                count in brackets when it is fewer than all of them.
               </p>
             </div>
           ) : (

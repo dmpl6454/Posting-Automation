@@ -9,6 +9,9 @@ import type {
   OAuthConfig,
   SocialProfile,
   PlatformConstraints,
+  ExternalPostPage,
+  ExternalPostSummary,
+  ListPostsOptions,
 } from "../abstract/social.types";
 import {
   diagnoseEmptyInsights,
@@ -267,6 +270,76 @@ export class InstagramProvider extends SocialProvider {
     }
 
     return accounts;
+  }
+
+  /**
+   * List the IG account's own media — including posts made directly in the app.
+   *
+   *   GET /{ig-user-id}/media
+   *       ?fields=id,timestamp,caption,media_product_type,media_type,permalink
+   *       &since=<unix>&limit=25
+   *
+   * ⚠️ IG media ids are BARE (e.g. 17912345678901234) and are the SAME ids that
+   * publishing returns, so dedup against PostTarget.publishedId is an exact string
+   * match — no resolution step, unlike Facebook's bare Video-node ids. Measured: all 60
+   * app-published IG targets since 2026-08-01 carry bare ids.
+   *
+   * ⚠️ `media_product_type` is captured here because IG insight metric sets are
+   * PER PRODUCT TYPE and MUTUALLY EXCLUSIVE (FEED / REELS / STORY). Mixing them 400s
+   * the entire call and zeroes every metric — the all-or-nothing regression PR #148
+   * already fixed once. Persisting it lets the metric pass pick the right set without
+   * a second media read.
+   *
+   * ⚠️ REALITY CHECK (measured 2026-08-06): 0 of 12 sampled IG tokens were alive — every
+   * one returned 190/460 "session invalidated". This method is correct and will start
+   * returning data the moment owners reconnect; until then it degrades honestly rather
+   * than reporting "no posts".
+   */
+  async listRecentPosts(
+    tokens: OAuthTokens,
+    igUserId: string,
+    opts: ListPostsOptions
+  ): Promise<ExternalPostPage> {
+    const since = Math.floor(opts.since.getTime() / 1000);
+    const limit = Math.min(Math.max(opts.limit ?? 25, 1), 100);
+    const cursor = opts.cursor ? `&after=${encodeURIComponent(opts.cursor)}` : "";
+
+    const res = await fetchT(
+      `${this.graphBaseUrl}/${this.apiVersion}/${igUserId}/media` +
+        `?fields=id,timestamp,caption,media_product_type,media_type,permalink` +
+        `&since=${since}&limit=${limit}${cursor}&access_token=${tokens.accessToken}`
+    );
+    const data: any = await res.json().catch(() => ({}));
+
+    if (!res.ok) {
+      console.warn(`[Instagram] listRecentPosts failed for ${igUserId}: ${JSON.stringify(data?.error ?? data).slice(0, 300)}`);
+      return { posts: [], degraded: diagnoseMetaError(data?.error) };
+    }
+
+    const posts: ExternalPostSummary[] = [];
+    for (const row of Array.isArray(data?.data) ? data.data : []) {
+      if (!row?.id || !row?.timestamp) continue;
+      const when = new Date(row.timestamp);
+      if (Number.isNaN(when.getTime())) continue;
+      // Defensive: `since` has been unreliable on some IG API versions, so enforce the
+      // floor locally too. A post older than the window must never enter the store.
+      if (when.getTime() < opts.since.getTime()) continue;
+      posts.push({
+        platformPostId: String(row.id),
+        publishedAt: when,
+        ...(row.permalink ? { permalink: String(row.permalink) } : {}),
+        ...(row.caption ? { message: String(row.caption).slice(0, 2000) } : {}),
+        ...(row.media_type ? { mediaType: String(row.media_type) } : {}),
+        ...(row.media_product_type ? { productType: String(row.media_product_type) } : {}),
+      });
+    }
+
+    return {
+      posts,
+      ...(data?.paging?.cursors?.after && data?.paging?.next
+        ? { nextCursor: String(data.paging.cursors.after) }
+        : {}),
+    };
   }
 
   async getPostAnalytics(tokens: OAuthTokens, platformPostId: string): Promise<SocialAnalytics | null> {

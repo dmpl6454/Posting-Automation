@@ -1,5 +1,6 @@
 import { prisma } from "@postautomation/db";
-import { tokenRefreshQueue, analyticsSyncQueue, agentRunQueue, trendDiscoverQueue, listeningSyncQueue, campaignAnalyticsSyncQueue, brandContentSyncQueue, outreachPollQueue, rssSyncQueue, avatarCacheQueue } from "@postautomation/queue";
+import { tokenRefreshQueue, analyticsSyncQueue, agentRunQueue, trendDiscoverQueue, listeningSyncQueue, campaignAnalyticsSyncQueue, brandContentSyncQueue, outreachPollQueue, rssSyncQueue, avatarCacheQueue, externalPostSyncQueue } from "@postautomation/queue";
+import { groupIntoAccounts, selectShard } from "../lib/external-sync-accounts";
 import { fetchMetaTokenWindow } from "@postautomation/social";
 import { runAutoHealerWithLogging } from "../workers/auto-healer.worker";
 import { runCelebrityDetectors } from "../workers/celebrity-detect.worker";
@@ -613,6 +614,92 @@ export async function scheduleAvatarCache() {
 }
 
 /**
+ * Ingest posts that exist ON connected accounts — including ones published directly on the
+ * platform, which Insights could never see.
+ *
+ * Sizing (measured on prod 2026-08-06, unbiased 30-Page sample):
+ *   - 1339 active FB+IG channel rows collapse to 524 DISTINCT accounts. We enqueue per
+ *     ACCOUNT, so the Graph budget is driven by 524, not 1339.
+ *   - Only ~23% of FB Pages have a live token (every failure is Meta 190/460, a user-level
+ *     session invalidation that only a reconnect fixes) and ~0% of IG. Unreachable
+ *     accounts fail in ONE cheap call and record a reconnect verdict.
+ *   - Reachable Pages average 17.7 posts since 2026-08-01 vs 3.7 for Pages we publish
+ *     through — i.e. ~5x more activity than Insights could previously see.
+ *
+ * Cost per full cycle ≈ 409 liveness/list calls + ~1.7k posts x 2 metric calls ≈ 4k calls,
+ * concentrated on ~95 live per-page budgets ≈ 38 calls/page. Meta's per-page Business Use
+ * Case quota measured at 1% after a real listing call, so Meta is NOT the constraint —
+ * this 4-core box is. Hence sharding + low worker concurrency rather than parallel bursts.
+ *
+ * SHARDED: each run covers 1/EXTERNAL_SYNC_SHARDS of the accounts, chosen by a stable hash,
+ * so a 2-hourly cron sweeps everything over a predictable period without ever stampeding.
+ * Set EXTERNAL_SYNC_ENABLED=false to stop ingestion entirely (kill switch).
+ */
+export async function scheduleExternalPostSync() {
+  if (process.env.EXTERNAL_SYNC_ENABLED === "false") {
+    console.log("[Cron] External post sync disabled (EXTERNAL_SYNC_ENABLED=false)");
+    return;
+  }
+
+  const rows = await prisma.channel.findMany({
+    where: {
+      isActive: true,
+      disconnectedAt: null,
+      platform: { in: ["FACEBOOK", "INSTAGRAM"] },
+    },
+    select: {
+      id: true,
+      organizationId: true,
+      platform: true,
+      platformId: true,
+      metadata: true,
+      updatedAt: true,
+    },
+  });
+
+  const accounts = groupIntoAccounts(
+    rows.map((r) => ({ ...r, platform: String(r.platform), accessToken: "" })),
+    new Date()
+  );
+
+  const shardCount = Number(process.env.EXTERNAL_SYNC_SHARDS ?? 4);
+  // Which shard this run handles: derived from the clock so consecutive runs advance
+  // (Date.now() is fine here — this is a cron, not a replayable workflow).
+  const shardIndex = Math.floor(Date.now() / (2 * 60 * 60 * 1000)) % shardCount;
+  const slice = selectShard(accounts, shardIndex, shardCount);
+
+  // The product floor. Never list posts older than this.
+  const since = new Date("2026-08-01T00:00:00.000Z");
+  // Bucket makes the jobId stable within a run window so a re-run dedupes rather than
+  // piling up. BullMQ requires EXACTLY three colon-separated segments in a custom jobId.
+  const bucket = String(Math.floor(Date.now() / (2 * 60 * 60 * 1000)));
+
+  let queued = 0;
+  for (const account of slice) {
+    await externalPostSyncQueue.add(
+      `extsync-${account.platform}-${account.platformId}`,
+      {
+        platform: account.platform,
+        platformId: account.platformId,
+        candidateChannelIds: account.candidates.map((c) => c.id),
+        targetChannelIds: account.allRows.map((c) => c.id),
+        since: since.toISOString(),
+      },
+      {
+        jobId: `extsync:${account.platform}-${account.platformId}:${bucket}`,
+        removeOnComplete: true,
+        removeOnFail: 200,
+      }
+    );
+    queued++;
+  }
+
+  console.log(
+    `[Cron] External post sync: shard ${shardIndex + 1}/${shardCount} — queued ${queued} of ${accounts.length} accounts (${rows.length} channel rows)`
+  );
+}
+
+/**
  * Sync listening queries: fetch new mentions for active queries.
  * Run every 30 minutes.
  */
@@ -1028,7 +1115,15 @@ export function startCronJobs() {
   setInterval(scheduleAvatarCache, 24 * 60 * 60 * 1000);
   setTimeout(scheduleAvatarCache, 4 * 60 * 1000); // Start after 4 min warmup
 
+  // External post ingestion every 2h, SHARDED into quarters — one full sweep of all
+  // ~524 accounts per 8h. Sharding (rather than one big run) is what keeps this off the
+  // 4-core box's back: each run touches ~130 accounts, most of which fail fast on a dead
+  // token. Long warmup so it never competes with publish traffic at boot.
+  setInterval(scheduleExternalPostSync, 2 * 60 * 60 * 1000);
+  setTimeout(scheduleExternalPostSync, 8 * 60 * 1000); // Start after 8 min warmup
+
   console.log("[Cron] Cron jobs started");
+  console.log("[Cron]   - External post sync: every 2 hours (1/4 of accounts per run)");
   console.log("[Cron]   - Token refresh: every 30 min");
   console.log("[Cron]   - Analytics sync: every 6 hours");
   console.log("[Cron]   - Long-tail analytics sync (7d–90d): every 24 hours");
