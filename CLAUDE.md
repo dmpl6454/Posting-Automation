@@ -791,6 +791,64 @@ Root cause of "browser balloons to 17GB / whole PC dies while uploading a video 
 - **ROUND 5 (same day, PR #143) — media-optimize pipeline (owner-approved pre-publish validation + auto-transcode).** New `media-optimize` queue + [media-optimize.worker.ts](apps/worker/src/workers/media-optimize.worker.ts) (concurrency 1 — ONE ffmpeg at a time on the 4-core box): on video upload (upload.router stamps `Media.metadata.optimize={status:"pending"}` + enqueues `optimize:{mediaId}:v1`), the worker ffprobes the S3 URL and — when out of spec (non-AAC audio, non-H.264, >950MB, >12Mbps, >1920 edge; pure verdicts in [media-optimize.ts](apps/worker/src/lib/media-optimize.ts), tested) — produces ONE web rendition (H.264 veryfast CRF23 ≤8Mbps, AAC, long-edge 1920, +faststart) at `optimized/{org}/{mediaId}.mp4`, recorded in `metadata.optimize`. **Publish worker: IG/FB video prefers the rendition (`choosePublishUrl`); >950MB originals are GATED (`planOptimizeGate`) — defer via SCHEDULED-flip + `OPTIMIZE_WAIT_MESSAGE` (a watchdog keep-alive marker like HEAVY_SLOT_WAIT_MESSAGE), self-heal-enqueue for legacy rows, 45-min wait ceiling, actionable failure messages. ≤950MB videos publish immediately (zero regression); YouTube always gets the MASTER.** post.create refuses KNOWN-fatal combos early ([media-constraints.ts](packages/api/src/lib/media-constraints.ts): optimize-failed, >15min on IG). Media lightbox plays the rendition (fixes 222Mbps stutter + PCM silence). `Media.metadata Json?` added to schema. Tests: media-optimize.test.ts (11) + media-constraints.test.ts (4).
 - **ROUND 4 (same day, PR #142) — "videos never preview" + IG 2207076.** (a) **Safari never paints a poster frame for `preload="metadata"` videos** — every video tile (Media library, picker, previews) rendered as a BLACK box on Safari while Chrome showed frame 1. Fix: `withPosterHint(url)` ([apps/web/lib/video-poster.ts](apps/web/lib/video-poster.ts)) appends `#t=0.001` (WebKit-verified: frame available in ~0.4s) — use it on EVERY `preload="metadata"` video src. (b) Compose now swaps a tile's blob: URL to the durable S3 URL when its upload completes (`uploadFileToS3` returns `{id, url}`; deferred `revokeObjectURL`) — uploaded videos preview for real and drafts restore them. (c) **IG error 2207076 = the FILE violates Instagram's hard limits, not an app bug**: verified live with a 1.75GB 4K/50fps 222Mbps H.264 + **PCM-audio** camera master — IG requires MP4/MOV ≤1GB with AAC audio; IG pulls the S3 URL and rejects server-side (6/6 attempts). Pre-publish spec validation / auto-transcode is an OPEN product decision — `maxMediaSize` constraint metadata deliberately stays informational (test-locked); do not wire size gates into the publish path without an explicit owner decision.
 
+## 🔴 The watermark overlay UNDID the optimizer and collapsed a 39-channel publish (2026-08-07)
+
+**Symptom:** one post fanned out to 39 Instagram channels → **17 published, 22 FAILED** with
+`Instagram media processing timed out after 90 seconds`. Perfect step function: everything
+completing before 11:00 succeeded, everything after 11:04 failed. All live-measured on prod.
+
+**Root cause — there were TWO ffmpeg paths and only one had rate control.**
+[media-optimize.ts](apps/worker/src/lib/media-optimize.ts) correctly transcoded the source
+(214MB HEVC 16.8Mbps, 102s, 1080×1920) down to a **35.7MB** H.264 rendition. The per-channel
+watermark pass in [video-overlay.ts](apps/worker/src/lib/video-overlay.ts) then re-encoded that
+rendition with `-preset ultrafast` and **no `-crf`/`-maxrate` at all** → **128MB output, a 3.6×
+BLOAT (~10Mbps)**. The second stage silently undid the first.
+
+`ultrafast` disables CABAC/B-frames/motion refinement; with no rate control the encoder still
+holds its default quality, so it simply **spends more bits**. Fast preset ⇒ bigger file, not a
+cheaper one.
+
+**The chain:** 128MB × N served to Instagram from a **4-core** box whose CPU was already pegged
+by the encodes themselves (measured `load 14.72`, **2% idle**, two ffmpeg at **350%** of 400%)
+⇒ IG's own fetch was starved ⇒ container processing outran the publish poll budget ⇒ FAILED.
+
+**⚠️ Retries AMPLIFY it — this is a congestion collapse, not a linear slowdown.** Every retry
+re-runs the whole publish job including a fresh overlay encode + re-upload + new IG fetch.
+Measured: **83 encodes for 39 targets (2.1×)**, ≈**10.6 GB egress for ONE post**. Failures
+manufacture the load that causes more failures, which is why it flipped to 100% failure rather
+than degrading gradually.
+
+**Fixes (keep all of them):**
+- `buildOverlayFfmpegArgs` moved to its own dependency-free
+  [video-overlay-args.ts](apps/worker/src/lib/video-overlay-args.ts) and now pins
+  `-c:v libx264 -preset veryfast -crf 23 -maxrate 6M -bufsize 12M -pix_fmt yuv420p` —
+  **mirroring media-optimize's proven settings. The two ffmpeg paths MUST stay in step.**
+- `-threads` capped (`VIDEO_OVERLAY_THREADS`, default 2). ffmpeg otherwise takes every core.
+  ⚠️ Keep `VIDEO_OVERLAY_CONCURRENCY × VIDEO_OVERLAY_THREADS` under the core count.
+- ffmpeg runs under **`nice -n 10`** (verified present at `/bin/nice` in the worker image).
+  Encoding is throughput work; serving the file to Instagram is latency work — under contention
+  the encode must yield, or it starves the very fetch the publish depends on.
+- IG video poll budget was **duration-blind** (flat 90s for a 5s clip and a 102s reel alike) →
+  now `IG_VIDEO_READY_TIMEOUT_MS`, default **240s**. Still bounded (it holds a worker slot) and
+  far inside the watchdog's 30-min idle reap.
+- The timeout message now reports **actual elapsed**, not the budget — each iteration sleeps
+  *then* awaits a network read, so a busy worker overshoots and "after 90 seconds" was a lie
+  that hid how close the containers were to finishing. It also states the video is still
+  processing on Instagram's side, **not rejected**.
+- **Kill switch `VIDEO_OVERLAY_ENABLED=false`** (`isVideoOverlayEnabled()`, checked before the
+  semaphore). The overlay is the ONLY reason a publish re-encodes video at all; disabling it
+  makes IG/FB pull the optimized rendition straight from S3 at **zero CPU**. Egress is
+  ~unchanged (fixed overlay ≈ optimizer size) — the win is eliminating the encode entirely.
+- ⚠️ The overlay ALWAYS runs for IG/FB videos ≤250MB: it early-returns only when text, logo AND
+  `channelName` are all absent, and the worker always passes `channel.name`. So "no logo
+  configured" does **not** mean "no re-encode" — it means a text watermark instead.
+
+Tests: [video-overlay.test.ts](apps/worker/src/lib/video-overlay.test.ts) (rate-control guard
+verified FAILING against the pre-fix args; the pre-existing shell-injection assertions still
+pass). The pure argv builder was split out precisely so this guard runs in ms — importing
+`video-overlay.ts` drags `@postautomation/ai` → langchain → langsmith and the test could not
+execute at all.
+
 ## Publish notification email — creator-only (2026-07-17, PR #123)
 
 `sendPublishReportEmail` in [post-publish.worker.ts](apps/worker/src/workers/post-publish.worker.ts) fires for EVERY publish path (compose/scheduled/autopilot/newsgrid/chat — single worker funnel). Redesigned: **recipient = the post CREATOR** (`post.createdById`; falls back to org OWNERs only for creatorless system posts — logged), per-channel rows (platform, channel name + @handle, **UTC + IST** timestamps, platform post URL w/ dashboard fallback), outcome subjects (`✅/⚠️/❌ N/M channels`). Template is PURE + tested in [publish-email.ts](apps/worker/src/lib/publish-email.ts) — **all user content HTML-escaped, hrefs must be http(s)** (the old inline template interpolated raw). Never let email failure break publish (try/catch preserved); console fallback when SMTP unset. SMTP already configured on the worker (BO-01).

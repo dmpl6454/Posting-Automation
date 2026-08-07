@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { buildOverlayFfmpegArgs } from "./video-overlay";
+// Import from the dependency-free module, NOT ./video-overlay — the latter
+// pulls @postautomation/ai (langchain/langsmith) and the AWS SDK, which makes a
+// pure argv test cost minutes and breaks on unrelated ESM interop issues.
+import { buildOverlayFfmpegArgs } from "./video-overlay-args";
 
 describe("buildOverlayFfmpegArgs", () => {
   it("returns an array of discrete args (no shell quoting)", () => {
@@ -41,6 +44,55 @@ describe("buildOverlayFfmpegArgs", () => {
     const mapIdx = args.indexOf("-map");
     expect(args[mapIdx + 1]).toBe("[vout]"); // NOT "\"[vout]\""
     expect(args[args.length - 1]).toBe("/tmp/out.mp4"); // NOT "\"/tmp/out.mp4\""
+  });
+
+  /**
+   * REGRESSION GUARD — 2026-08-07 incident.
+   *
+   * The overlay pass ran `-preset ultrafast` with NO rate control. Burning a
+   * watermark forces a re-encode, and with no -crf/-maxrate the encoder holds
+   * quality by spending bits: a 35.7MB optimized rendition came back out at
+   * 128MB (3.6×). Instagram then had to pull 128MB per target from a saturated
+   * box, so its container processing outran the publish poll budget and 14 of
+   * 39 targets FAILED. These assertions exist so the constraints cannot be
+   * quietly dropped again.
+   */
+  describe("rate control (2026-08-07 regression guard)", () => {
+    const args = buildOverlayFfmpegArgs({
+      inputArgs: ["-i", "/tmp/in.mp4"],
+      filterComplex: "[0:v]null[vout]",
+      outputPath: "/tmp/out.mp4",
+    });
+    const valueOf = (flag: string) => args[args.indexOf(flag) + 1];
+
+    it("pins an explicit codec and a size-bounding CRF", () => {
+      expect(valueOf("-c:v")).toBe("libx264");
+      expect(valueOf("-crf")).toBe("23");
+    });
+
+    it("caps the bitrate so the output cannot balloon past its input", () => {
+      expect(args).toContain("-maxrate");
+      expect(args).toContain("-bufsize");
+      // A cap only bounds size if it is actually below the ~10Mbps the
+      // unconstrained encode produced.
+      const maxrateMbps = parseInt(valueOf("-maxrate")!.replace(/M$/, ""), 10);
+      expect(maxrateMbps).toBeLessThanOrEqual(8);
+    });
+
+    it("never reverts to the unconstrained ultrafast preset", () => {
+      expect(valueOf("-preset")).not.toBe("ultrafast");
+    });
+
+    it("bounds ffmpeg threads so concurrent encodes cannot starve nginx/MinIO", () => {
+      const threads = parseInt(valueOf("-threads") ?? "", 10);
+      expect(threads).toBeGreaterThanOrEqual(1);
+      // 4-core prod box, VIDEO_OVERLAY_CONCURRENCY=2 → must leave a core to serve.
+      expect(threads).toBeLessThanOrEqual(2);
+    });
+
+    it("still stream-copies audio (re-encoding it would be pure waste)", () => {
+      expect(valueOf("-codec:a")).toBe("copy");
+    });
   });
 
   it("a shell-injection payload in filterComplex stays inert (one literal element, no shell parsing)", () => {
