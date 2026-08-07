@@ -517,6 +517,25 @@ footnoted so the comparison stops looking like a bug.
   *higher* than before, because real engagement on paused/disconnected channels now counts. Rows
   carry `channelStatus` so the UI badges them, and they age out of the window naturally.
 
+## 📊 Shares per platform — what is actually obtainable (settled 2026-08-07)
+
+| platform | shares? | source | notes |
+|---|---|---|---|
+| **FACEBOOK** | ✅ yes | post-FIELDS edge `?fields=shares` | needs `pages_read_user_content`. Graph **OMITS** the key at zero, so absent ≠ 0. |
+| **INSTAGRAM** | ✅ yes | insights `shares` metric | present in FEED/REELS/STORY sets. Measured max on prod: **27,119** on one post. |
+| **YOUTUBE** | ❌ **never** | — | Data API v3 `statistics` has **no share count at all**. |
+
+**🔴 YouTube shares are IMPOSSIBLE on the current API — do not try to "fix" this.**
+`statistics` exposes only `viewCount` / `likeCount` / `commentCount` / `favoriteCount`. The
+provider used to map `favoriteCount` into the shares slot, but Google deprecated that field
+years ago and it returns **0 for every video, permanently**. Verified on prod 2026-08-07:
+**263 YouTube snapshots, ZERO with shares > 0**, while 78 had likes and 137 had views — the
+pipeline is healthy; the metric does not exist. Share counts are only available from the
+**YouTube Analytics API** (`sharingService` dimension), a DIFFERENT API requiring
+`yt-analytics.readonly` + channel ownership — not wired, and a separate project.
+`metricsAvailable.shares: false` is therefore CORRECT for YouTube: the UI renders "—"
+("not reported") rather than "0" ("measured as zero").
+
 ## 🔁 "Shares not visible in Insights" — an OMITTED key is NOT evidence of availability (2026-08-07)
 
 User-reported. Two different causes, only one of them a bug:
@@ -551,7 +570,17 @@ declared it.
    rows stop lying immediately instead of waiting to self-heal.
 
 ⚠️ Deliberately NARROW. Do not widen it to other metrics/platforms without evidence of a
-genuinely separate call path — over-applying it would hide real zeros. IG reads everything
+genuinely separate call path — over-applying it would hide real zeros.
+
+**⚠️⚠️ The per-row rule must NEVER be applied to the AGGREGATE — I made exactly this mistake
+and it hid real data on prod.** `effectiveChannelUnavailable` receives `declaredAvailable`
+as a `BOOL_OR` across EVERY capture on the channel, so it already answers *"did ANY capture
+report this metric?"*. An undefined key there means "no evidence at all", NOT "one call
+failed". Applying `requiresExplicitDeclaration` there blanked the **Shares column for whole
+channels** while the stored `metricsAvailable` held `shares: true` — 629 external posts with
+real shares (one Instagram post at 27,119) rendered "—". Fixed by removing the clause from
+the aggregate and keeping it in `gatePostReportRow`, which is per-row and where it belongs.
+Regression-guarded in [shares-visibility.test.ts](packages/api/src/__tests__/shares-visibility.test.ts). IG reads everything
 from one insights call, so its siblings ARE valid evidence and it is excluded.
 ⚠️ Two pre-existing tests asserted the OLD behavior (`shares === 3` / `=== 0` from an
 undeclared key) — they encoded the bug as expected and were updated with a note.
@@ -628,7 +657,27 @@ no new machinery.
   `extsync:{platform}-{platformId}:{bucket}` — **exactly 3 colon segments** (BullMQ rejects
   other counts). **Kill switch: `EXTERNAL_SYNC_ENABLED=false`.** Tunables:
   `EXTERNAL_SYNC_SHARDS`, `EXTERNAL_SYNC_CONCURRENCY`, `EXTERNAL_METRICS_PER_RUN`,
-  `EXTERNAL_LIST_PAGES`.
+  `EXTERNAL_LIST_PAGE_SIZE`, `EXTERNAL_LIST_PAGE_HARD_STOP`.
+- **🔴 LISTING RUNS TO EXHAUSTION — there must be NO cap that truncates a post count.**
+  v1 used 4 pages × limit 25 = exactly 100, and every busy channel reported **"Posts: 100"**
+  — a cap masquerading as a count (ten channels all showing precisely 100 on prod).
+  A displayed number must be the truth, not a ceiling. Listing is the CHEAP half (ONE call
+  per 100 posts vs TWO calls per post for metrics), so even a 5,000-post channel costs 50
+  calls ≈ 1% of a Page's budget. `LIST_PAGE_HARD_STOP` (5000 pages) is a **runaway guard**
+  for a non-terminating cursor, logged loudly as an anomaly — never a silent product cap.
+  A repeated cursor also breaks the loop.
+  **`METRICS_PER_RUN` (150) IS a legitimate throttle** — metrics cost 2 calls/post — and it
+  is safe ONLY because an unmeasured post keeps `metricsSyncedAt = NULL`, renders "—" (not
+  a fake 0), and contributes to neither side of the engagement rate. So the post COUNT is
+  always complete immediately; the numbers fill in newest-first over later passes.
+  **Rule of thumb: a cap that changes a displayed value is a bug; one that only defers a
+  value is a budget.**
+- **"Sync Now" (`analytics.triggerSync`)** refreshes BOTH populations: app-published targets
+  AND direct posts (it enqueues external sync per ACCOUNT for the org's FB/IG channels).
+  ⚠️ jobIds are bucketed to a **2-minute window** (`syncnow:{targetId}:{bucket}` /
+  `extsyncnow:{platform}-{platformId}:{bucket}`). They previously used `Date.now()`, which
+  is unique per click, so BullMQ dedup NEVER fired and N users clicking enqueued N copies
+  of identical work. Do NOT reintroduce a timestamp in a jobId.
 - **UI**: Channel Performance column renamed **"Posts sent" → "Posts"** (it is no longer only
   what we sent — this also resolves the long-standing "we show 10, Facebook says 13"
   complaint); Reports rows carry a **"Direct"** badge; a restrained partial-coverage notice
@@ -741,6 +790,64 @@ Root cause of "browser balloons to 17GB / whole PC dies while uploading a video 
 - **ROUND 5/6 LIVE RESULTS (2026-07-21 evening):** ✅ Instagram published the 1.6GB camera master's post end-to-end via the rendition (user-confirmed); ✅ lightbox playback "near flawless" (user's words). Addenda shipped after live E2E: **PR #144** — ffmpeg reading the S3 URL through nginx got silently TRUNCATED (63s→40s, exit 0) when encode stalls out-ran nginx's send timeout → source now streams to /tmp first AND the output's probed duration must be ≥ source−2% or the job fails (NEVER let ffmpeg read http via nginx for long encodes); **PR #145 (owner resolution constraint)** — stored originals are always untouched full-res; YouTube always gets the master; **FACEBOOK (4K-capable) publishes the full-res original unless probe shows a bad codec or >950MB**; Instagram always gets the 1080×1920 rendition (IG's own serving ceiling — nothing real lost). ⚠️ Owner: "the posting process works — do NOT break it": IG/FB publish paths are working and frozen; extend, don't rewrite.
 - **ROUND 5 (same day, PR #143) — media-optimize pipeline (owner-approved pre-publish validation + auto-transcode).** New `media-optimize` queue + [media-optimize.worker.ts](apps/worker/src/workers/media-optimize.worker.ts) (concurrency 1 — ONE ffmpeg at a time on the 4-core box): on video upload (upload.router stamps `Media.metadata.optimize={status:"pending"}` + enqueues `optimize:{mediaId}:v1`), the worker ffprobes the S3 URL and — when out of spec (non-AAC audio, non-H.264, >950MB, >12Mbps, >1920 edge; pure verdicts in [media-optimize.ts](apps/worker/src/lib/media-optimize.ts), tested) — produces ONE web rendition (H.264 veryfast CRF23 ≤8Mbps, AAC, long-edge 1920, +faststart) at `optimized/{org}/{mediaId}.mp4`, recorded in `metadata.optimize`. **Publish worker: IG/FB video prefers the rendition (`choosePublishUrl`); >950MB originals are GATED (`planOptimizeGate`) — defer via SCHEDULED-flip + `OPTIMIZE_WAIT_MESSAGE` (a watchdog keep-alive marker like HEAVY_SLOT_WAIT_MESSAGE), self-heal-enqueue for legacy rows, 45-min wait ceiling, actionable failure messages. ≤950MB videos publish immediately (zero regression); YouTube always gets the MASTER.** post.create refuses KNOWN-fatal combos early ([media-constraints.ts](packages/api/src/lib/media-constraints.ts): optimize-failed, >15min on IG). Media lightbox plays the rendition (fixes 222Mbps stutter + PCM silence). `Media.metadata Json?` added to schema. Tests: media-optimize.test.ts (11) + media-constraints.test.ts (4).
 - **ROUND 4 (same day, PR #142) — "videos never preview" + IG 2207076.** (a) **Safari never paints a poster frame for `preload="metadata"` videos** — every video tile (Media library, picker, previews) rendered as a BLACK box on Safari while Chrome showed frame 1. Fix: `withPosterHint(url)` ([apps/web/lib/video-poster.ts](apps/web/lib/video-poster.ts)) appends `#t=0.001` (WebKit-verified: frame available in ~0.4s) — use it on EVERY `preload="metadata"` video src. (b) Compose now swaps a tile's blob: URL to the durable S3 URL when its upload completes (`uploadFileToS3` returns `{id, url}`; deferred `revokeObjectURL`) — uploaded videos preview for real and drafts restore them. (c) **IG error 2207076 = the FILE violates Instagram's hard limits, not an app bug**: verified live with a 1.75GB 4K/50fps 222Mbps H.264 + **PCM-audio** camera master — IG requires MP4/MOV ≤1GB with AAC audio; IG pulls the S3 URL and rejects server-side (6/6 attempts). Pre-publish spec validation / auto-transcode is an OPEN product decision — `maxMediaSize` constraint metadata deliberately stays informational (test-locked); do not wire size gates into the publish path without an explicit owner decision.
+
+## 🔴 The watermark overlay UNDID the optimizer and collapsed a 39-channel publish (2026-08-07)
+
+**Symptom:** one post fanned out to 39 Instagram channels → **17 published, 22 FAILED** with
+`Instagram media processing timed out after 90 seconds`. Perfect step function: everything
+completing before 11:00 succeeded, everything after 11:04 failed. All live-measured on prod.
+
+**Root cause — there were TWO ffmpeg paths and only one had rate control.**
+[media-optimize.ts](apps/worker/src/lib/media-optimize.ts) correctly transcoded the source
+(214MB HEVC 16.8Mbps, 102s, 1080×1920) down to a **35.7MB** H.264 rendition. The per-channel
+watermark pass in [video-overlay.ts](apps/worker/src/lib/video-overlay.ts) then re-encoded that
+rendition with `-preset ultrafast` and **no `-crf`/`-maxrate` at all** → **128MB output, a 3.6×
+BLOAT (~10Mbps)**. The second stage silently undid the first.
+
+`ultrafast` disables CABAC/B-frames/motion refinement; with no rate control the encoder still
+holds its default quality, so it simply **spends more bits**. Fast preset ⇒ bigger file, not a
+cheaper one.
+
+**The chain:** 128MB × N served to Instagram from a **4-core** box whose CPU was already pegged
+by the encodes themselves (measured `load 14.72`, **2% idle**, two ffmpeg at **350%** of 400%)
+⇒ IG's own fetch was starved ⇒ container processing outran the publish poll budget ⇒ FAILED.
+
+**⚠️ Retries AMPLIFY it — this is a congestion collapse, not a linear slowdown.** Every retry
+re-runs the whole publish job including a fresh overlay encode + re-upload + new IG fetch.
+Measured: **83 encodes for 39 targets (2.1×)**, ≈**10.6 GB egress for ONE post**. Failures
+manufacture the load that causes more failures, which is why it flipped to 100% failure rather
+than degrading gradually.
+
+**Fixes (keep all of them):**
+- `buildOverlayFfmpegArgs` moved to its own dependency-free
+  [video-overlay-args.ts](apps/worker/src/lib/video-overlay-args.ts) and now pins
+  `-c:v libx264 -preset veryfast -crf 23 -maxrate 6M -bufsize 12M -pix_fmt yuv420p` —
+  **mirroring media-optimize's proven settings. The two ffmpeg paths MUST stay in step.**
+- `-threads` capped (`VIDEO_OVERLAY_THREADS`, default 2). ffmpeg otherwise takes every core.
+  ⚠️ Keep `VIDEO_OVERLAY_CONCURRENCY × VIDEO_OVERLAY_THREADS` under the core count.
+- ffmpeg runs under **`nice -n 10`** (verified present at `/bin/nice` in the worker image).
+  Encoding is throughput work; serving the file to Instagram is latency work — under contention
+  the encode must yield, or it starves the very fetch the publish depends on.
+- IG video poll budget was **duration-blind** (flat 90s for a 5s clip and a 102s reel alike) →
+  now `IG_VIDEO_READY_TIMEOUT_MS`, default **240s**. Still bounded (it holds a worker slot) and
+  far inside the watchdog's 30-min idle reap.
+- The timeout message now reports **actual elapsed**, not the budget — each iteration sleeps
+  *then* awaits a network read, so a busy worker overshoots and "after 90 seconds" was a lie
+  that hid how close the containers were to finishing. It also states the video is still
+  processing on Instagram's side, **not rejected**.
+- **Kill switch `VIDEO_OVERLAY_ENABLED=false`** (`isVideoOverlayEnabled()`, checked before the
+  semaphore). The overlay is the ONLY reason a publish re-encodes video at all; disabling it
+  makes IG/FB pull the optimized rendition straight from S3 at **zero CPU**. Egress is
+  ~unchanged (fixed overlay ≈ optimizer size) — the win is eliminating the encode entirely.
+- ⚠️ The overlay ALWAYS runs for IG/FB videos ≤250MB: it early-returns only when text, logo AND
+  `channelName` are all absent, and the worker always passes `channel.name`. So "no logo
+  configured" does **not** mean "no re-encode" — it means a text watermark instead.
+
+Tests: [video-overlay.test.ts](apps/worker/src/lib/video-overlay.test.ts) (rate-control guard
+verified FAILING against the pre-fix args; the pre-existing shell-injection assertions still
+pass). The pure argv builder was split out precisely so this guard runs in ms — importing
+`video-overlay.ts` drags `@postautomation/ai` → langchain → langsmith and the test could not
+execute at all.
 
 ## Publish notification email — creator-only (2026-07-17, PR #123)
 

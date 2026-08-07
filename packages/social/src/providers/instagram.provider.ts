@@ -23,6 +23,22 @@ import { fetchT } from "../utils/fetch-timeout";
 /** Max pagination pages fetched during connect (~500 Pages at limit=25). */
 const MAX_CONNECT_PAGINATION_PAGES = 20;
 
+/**
+ * How long to wait for a VIDEO container to reach FINISHED.
+ *
+ * Was a flat 90s, which is duration-blind: Instagram's own transcode scales with
+ * reel length, so a 102s reel needs far longer than a 10s one. On 2026-08-07 a
+ * single 102s reel fanned out to 39 channels lost 22 of them to
+ * "media processing timed out after 90 seconds" — the containers were still
+ * IN_PROGRESS, not broken. Raised to 4 min so a long reel under load finishes
+ * instead of being marked FAILED. Bounded (not unbounded) because the poll holds
+ * a publish-worker slot; still far inside the watchdog's 30-min idle reap.
+ */
+const VIDEO_READY_TIMEOUT_MS = Math.max(
+  30_000,
+  parseInt(process.env.IG_VIDEO_READY_TIMEOUT_MS || "", 10) || 240_000
+);
+
 export class InstagramProvider extends SocialProvider {
   readonly platform: SocialPlatform = "INSTAGRAM";
   readonly displayName = "Instagram";
@@ -138,7 +154,7 @@ export class InstagramProvider extends SocialProvider {
     await this.waitForMediaReady(
       tokens,
       containerId,
-      isVideo ? 90000 : 30000,
+      isVideo ? VIDEO_READY_TIMEOUT_MS : 30000,
       isVideo ? 5000 : 2000,
     );
 
@@ -161,6 +177,7 @@ export class InstagramProvider extends SocialProvider {
     pollInterval = 5000,
   ): Promise<void> {
     const maxAttempts = Math.ceil(maxWaitMs / pollInterval);
+    const startedAt = Date.now();
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       await new Promise((r) => setTimeout(r, pollInterval));
@@ -178,7 +195,16 @@ export class InstagramProvider extends SocialProvider {
       // IN_PROGRESS, an unknown status, or a transient read error → keep polling.
     }
 
-    throw new Error(`Instagram media processing timed out after ${Math.round(maxWaitMs / 1000)} seconds`);
+    // Report ACTUAL elapsed, not the budget: each iteration sleeps `pollInterval`
+    // and then awaits a network read, so a busy worker overshoots the nominal
+    // budget. Printing the budget made the 2026-08-07 incident look like a hard
+    // 90s cutoff when the real waits were longer — hiding how close these
+    // containers were to finishing.
+    const waitedSec = Math.round((Date.now() - startedAt) / 1000);
+    throw new Error(
+      `Instagram media processing did not finish within ${waitedSec}s ` +
+        `(budget ${Math.round(maxWaitMs / 1000)}s) — the video is still processing on Instagram's side, not rejected`
+    );
   }
 
   async deletePost(tokens: OAuthTokens, platformPostId: string): Promise<void> {

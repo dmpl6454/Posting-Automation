@@ -6,6 +6,11 @@ import { Readable } from "node:stream";
 import { join } from "path";
 import crypto from "crypto";
 import { createSemaphore } from "@postautomation/ai";
+// Pure argv builder lives in its own dependency-free module so it stays
+// unit-testable without dragging langchain through this file. Re-exported
+// for existing importers.
+import { buildOverlayFfmpegArgs } from "./video-overlay-args";
+export { buildOverlayFfmpegArgs } from "./video-overlay-args";
 
 // Async ffmpeg (stability guard, 2026-07-18): the sync encode blocked the whole
 // worker event loop (every queue) for up to 180s. Same argv-array/no-shell
@@ -27,39 +32,20 @@ const overlaySemaphore = createSemaphore(
 );
 
 /**
- * Build the ffmpeg argument ARRAY for the overlay pass (pure — no I/O).
+ * Kill switch for the whole watermark pass. The overlay is the ONLY reason a
+ * publish re-encodes video at all; turning it off makes IG/FB pull the
+ * already-optimized rendition straight from S3.
  *
- * SECURITY: every element is a discrete, UNQUOTED arg. With `execFile`
- * (no shell) each array element is passed verbatim, so shell metachars in
- * the (user-controlled) `text`/`channelName` baked into `filterComplex` are
- * inert. Do NOT wrap any element in shell quotes — quotes would become part
- * of the literal filename / filtergraph value.
- *   - `inputArgs` is already discrete (`["-i", path1, "-i", path2, ...]`).
- *   - `filterComplex` is ONE element (do not split / quote).
- *   - `[vout]` and `outputPath` are their own UNQUOTED elements.
+ * The saving is CPU, not bandwidth: now that the encode is rate-controlled its
+ * output is ~the same size as the optimizer's rendition, so egress is roughly
+ * unchanged either way. What disappears is the per-channel re-encode — the
+ * thing that pegged the 4-core box on 2026-08-07. On a wide fan-out that is the
+ * dominant cost, since the work is per TARGET (39 channels ⇒ 39 encodes).
+ *
+ * Set VIDEO_OVERLAY_ENABLED=false to drop branding without a code change.
  */
-export function buildOverlayFfmpegArgs(opts: {
-  inputArgs: string[];
-  filterComplex: string;
-  outputPath: string;
-}): string[] {
-  return [
-    "-y",
-    ...opts.inputArgs,
-    "-filter_complex",
-    opts.filterComplex,
-    "-map",
-    "[vout]",
-    "-map",
-    "0:a?",
-    "-codec:a",
-    "copy",
-    "-preset",
-    "ultrafast",
-    "-movflags",
-    "+faststart",
-    opts.outputPath,
-  ];
+export function isVideoOverlayEnabled(): boolean {
+  return process.env.VIDEO_OVERLAY_ENABLED !== "false";
 }
 
 interface VideoOverlayOptions {
@@ -99,6 +85,12 @@ export async function processVideoOverlay(
   } = options;
 
   if (!text && !logoUrl && !channelName) return videoUrl; // nothing to do
+  // Operator kill switch — checked BEFORE the semaphore so a disabled overlay
+  // never queues behind an in-flight encode.
+  if (!isVideoOverlayEnabled()) {
+    console.log("[VideoOverlay] Disabled via VIDEO_OVERLAY_ENABLED=false — posting original");
+    return videoUrl;
+  }
 
   return overlaySemaphore.run(async () => {
   if (!existsSync(TMP_DIR)) mkdirSync(TMP_DIR, { recursive: true });
@@ -205,7 +197,20 @@ export async function processVideoOverlay(
     const args = buildOverlayFfmpegArgs({ inputArgs, filterComplex, outputPath });
 
     console.log(`[VideoOverlay] Processing: logo=${hasLogo ? "yes" : channelName ? "text" : "none"}, text=${text ? "yes" : "no"}`);
-    await execFileAsync("ffmpeg", args, { timeout: 180000, maxBuffer: 32 * 1024 * 1024 });
+    // Run the encode at LOW PRIORITY via `nice`. Encoding is throughput work;
+    // serving the finished file to Instagram (nginx → MinIO) is latency work,
+    // and on this 4-core box they compete. On 2026-08-07 sustained ffmpeg load
+    // starved the serving path, so IG's own download ran long enough to blow the
+    // publish poll budget. Renicing lets the encode use whatever is spare while
+    // nginx/MinIO/Postgres stay responsive — throughput is preserved (no
+    // concurrency reduction), only priority under contention changes.
+    // `nice` is coreutils, present in the worker image; argv form keeps the
+    // no-shell injection guarantee intact.
+    await execFileAsync(
+      "nice",
+      ["-n", "10", "ffmpeg", ...args],
+      { timeout: 180000, maxBuffer: 32 * 1024 * 1024 }
+    );
 
     // 5. Upload to S3
     const { S3Client, PutObjectCommand } = await import("@aws-sdk/client-s3");
