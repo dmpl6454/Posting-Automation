@@ -134,24 +134,36 @@ function InsightsAnalyticsView() {
   const utils = trpc.useUtils();
   const triggerSync = trpc.analytics.triggerSync.useMutation({
     onSuccess: (data) => {
-      if (data.queued === 0) {
-        // The old copy ("No published posts in the last 30 days") implied posts
-        // existed but were too old, which sent people hunting for a bug. Insights
-        // are scoped to the ACTIVE WORKSPACE, and posts published by other members
-        // into their own workspaces are deliberately invisible here — so the
-        // honest message names the workspace and the real reason.
+      // Sync Now refreshes BOTH populations: posts we published (`queued`) and posts
+      // made directly on connected Facebook/Instagram accounts (`accountsQueued`).
+      // Only report "nothing to sync" when neither has anything — the old copy claimed
+      // direct posts "aren't included", which stopped being true.
+      const accounts = data.accountsQueued ?? 0;
+      if (data.queued === 0 && accounts === 0) {
         toast({
           title: "Nothing to sync",
           description:
-            "This workspace has no posts published through PostAutomation in the last 30 days. Insights only cover posts sent from this workspace — posts made directly on the platform, or in another workspace, aren't included.",
+            "This workspace has no posts published through PostAutomation in the last 30 days, and no connected Facebook or Instagram accounts to check for direct posts. Insights only cover this workspace — posts made in another workspace aren't included.",
         });
         setSyncing(false);
         return;
       }
-      toast({ title: "Analytics sync started", description: `Refreshing ${data.queued} post${data.queued === 1 ? "" : "s"}. Numbers update as each one completes.` });
+      // Name BOTH populations so the button's effect is obvious — a user who only posts
+      // directly used to see "Refreshing 0 posts" and assume it did nothing.
+      const parts: string[] = [];
+      if (data.queued > 0) parts.push(`${data.queued} post${data.queued === 1 ? "" : "s"}`);
+      if (accounts > 0) parts.push(`${accounts} connected account${accounts === 1 ? "" : "s"}`);
+      toast({
+        title: "Analytics sync started",
+        description: `Refreshing ${parts.join(" and ")}. Numbers update as each one completes; direct posts can take a few minutes.`,
+      });
       // Worker jobs finish at different times; refetch a few times instead of a single
       // fixed cliff so slow syncs still surface without leaving stale data (audit #13).
-      [4000, 9000, 15000].forEach((ms) => setTimeout(() => { void utils.analytics.invalidate(); }, ms));
+      // Direct-post ingestion lists then measures, so it lands later than an app-post
+      // refresh — hence the longer tail.
+      [4000, 9000, 15000, 30000, 60000].forEach((ms) =>
+        setTimeout(() => { void utils.analytics.invalidate(); }, ms)
+      );
       setTimeout(() => setSyncing(false), 4000);
     },
     onError: () => {

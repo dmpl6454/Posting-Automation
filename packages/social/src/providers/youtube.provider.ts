@@ -273,20 +273,41 @@ export class YouTubeProvider extends SocialProvider {
     const views = parseInt(stats.viewCount || "0", 10);
     const likes = parseInt(stats.likeCount || "0", 10);
     const comments = parseInt(stats.commentCount || "0", 10);
-    const favorites = parseInt(stats.favoriteCount || "0", 10);
 
     return {
       impressions: views,
       clicks: 0,
       likes,
-      shares: favorites,
+      // ⚠️ YouTube Data API v3 `statistics` has NO share count. It exposes
+      // viewCount / likeCount / commentCount / favoriteCount only, and Google
+      // deprecated `favoriteCount` long ago — it returns 0 for every video,
+      // permanently. This slot used to be mapped from favoriteCount, which meant
+      // every YouTube post reported a hard-coded 0 shares that LOOKED like a real
+      // measurement. Verified on prod 2026-08-07: 263 YouTube snapshots, ZERO with
+      // shares > 0, while 78 had likes and 137 had views — i.e. the pipeline was
+      // healthy and the metric simply does not exist.
+      //
+      // Reporting 0 here is now purely structural; `metricsAvailable.shares:false`
+      // is what the UI reads, so it renders "—" (not reported) rather than "0"
+      // (measured as zero). Share counts are only obtainable from YouTube Analytics
+      // API (`sharingService` dimension), a DIFFERENT API needing
+      // yt-analytics.readonly and channel ownership — not wired here.
+      shares: 0,
       comments,
       reach: views,
       engagementRate: views > 0 ? (likes + comments) / views : 0,
       likeKind: "likes",
       reachIsDistinct: false, // reach is aliased from views — not a distinct metric
       source: "api",
-      metricsAvailable: { clicks: false, shares: false, reach: false }, // YT favorites are effectively dead
+      // Declared EXPLICITLY per metric — an omitted key reads as AVAILABLE downstream.
+      metricsAvailable: {
+        impressions: true,
+        likes: true,
+        comments: true,
+        clicks: false,
+        shares: false, // no such metric in Data API v3 — see above
+        reach: false, // aliased from views, not distinct
+      },
     };
   }
 

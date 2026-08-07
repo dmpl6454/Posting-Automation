@@ -43,27 +43,39 @@ import { deriveInsightsHealth, mergeInsightsHealth } from "../lib/channel-insigh
 const HARD_FLOOR = new Date("2026-08-01T00:00:00.000Z");
 
 /**
- * Max posts whose metrics we capture in ONE job. Bounds Graph + CPU per run.
- * Metrics accrue across runs (a post keeps `metricsSyncedAt = NULL` and renders "—" until
- * measured), so this throttles cost without ever losing a post.
+ * Max posts whose metrics we capture in ONE job.
+ *
+ * Unlike the listing, this one is a genuine throttle — metrics cost TWO Graph calls per
+ * post, so measuring 5,000 posts in one run would be 10,000 calls on a 4-core box.
+ *
+ * It is safe to throttle here precisely BECAUSE an unmeasured post is never misreported:
+ * it keeps `metricsSyncedAt = NULL`, renders "—" (not a fake 0), and contributes to
+ * NEITHER side of the engagement-rate ratio. So the post COUNT is always complete and
+ * truthful immediately, while the numbers fill in over subsequent passes, newest first.
+ * A cap that changes a displayed value is a bug; a cap that only defers one is a budget.
  */
-const METRICS_PER_RUN = Number(process.env.EXTERNAL_METRICS_PER_RUN ?? 60);
+const METRICS_PER_RUN = Number(process.env.EXTERNAL_METRICS_PER_RUN ?? 150);
 
 /**
- * Max listing pages per job, 100 posts/page.
+ * Listing runs to EXHAUSTION — it pages until Meta stops returning a cursor.
  *
- * ⚠️ This was 4 pages x limit 25 = exactly 100 posts, which made EVERY busy channel
- * report "Posts: 100" — a cap masquerading as a count (observed in prod 2026-08-07:
- * ten channels all showing precisely 100). Listing is the CHEAP half of the sync (one
- * call per 100 posts vs two calls per post for metrics), so paging deeper costs little:
- * 12 x 100 = up to 1,200 posts/run for ~12 calls.
+ * ⚠️ There must be NO cap that silently truncates a channel's post count. The first
+ * version used 4 pages x limit 25 = exactly 100, and every busy channel reported
+ * "Posts: 100" — a cap masquerading as a count (observed in prod 2026-08-07: ten
+ * different channels all showing precisely 100). A displayed number must be the truth,
+ * not a ceiling.
  *
- * A channel busier than that still converges — `since` is pinned to the watermark floor
- * and each run re-lists from the start, so the newest posts are always covered and the
- * cap only defers the long tail.
+ * Affordable because listing is the CHEAP half of the sync: ONE call returns 100 posts,
+ * versus TWO calls per post for metrics. Even a 5,000-post channel costs 50 listing
+ * calls, ~1% of a Page's Business-Use-Case budget (measured `call_count: 1` after a real
+ * listing call). The window is also bounded at 2026-08-01, so this is not "all history".
+ *
+ * LIST_PAGE_HARD_STOP is a RUNAWAY GUARD, not a product cap — it only trips on a
+ * pathological account (>500k posts in the window) or a Graph cursor that fails to
+ * terminate. Reaching it is logged loudly as an anomaly, never silently.
  */
-const MAX_LIST_PAGES = Number(process.env.EXTERNAL_LIST_PAGES ?? 12);
 const LIST_PAGE_SIZE = Number(process.env.EXTERNAL_LIST_PAGE_SIZE ?? 100);
+const LIST_PAGE_HARD_STOP = Number(process.env.EXTERNAL_LIST_PAGE_HARD_STOP ?? 5000);
 
 /**
  * Re-measure cadence. A post's metrics move fast early then plateau, so spend the budget
@@ -152,8 +164,19 @@ export function createExternalPostSyncWorker() {
         mediaType?: string;
         productType?: string;
       }> = [...listing.page.posts];
+      // Page to EXHAUSTION — stop only when Meta stops handing back a cursor. Guard
+      // against a non-terminating cursor with a seen-set (a repeated cursor means the
+      // API is looping) plus a runaway ceiling.
       let cursor = listing.page.nextCursor;
-      for (let i = 1; i < MAX_LIST_PAGES && cursor; i++) {
+      const seenCursors = new Set<string>();
+      let pages = 1;
+      while (cursor && pages < LIST_PAGE_HARD_STOP) {
+        if (seenCursors.has(cursor)) {
+          console.warn(`[ExternalSync] ${platform}:${platformId} — cursor repeated, stopping to avoid a loop`);
+          break;
+        }
+        seenCursors.add(cursor);
+
         const next = await provider.listRecentPosts(listing.tokens, listing.accountId, {
           since: windowStart,
           limit: LIST_PAGE_SIZE,
@@ -162,9 +185,14 @@ export function createExternalPostSyncWorker() {
         if (next?.degraded || !next?.posts?.length) break;
         listed.push(...next.posts);
         cursor = next.nextCursor;
+        pages++;
       }
       if (cursor) {
-        console.log(`[ExternalSync] ${platform}:${platformId} — listing capped at ${MAX_LIST_PAGES} pages`);
+        // Only reachable on a pathological account. Loud, because a truncated count is
+        // exactly the "cap displayed as a count" failure this design exists to prevent.
+        console.error(
+          `[ExternalSync] ⚠️ ${platform}:${platformId} — hit the ${LIST_PAGE_HARD_STOP}-page RUNAWAY GUARD after ${listed.length} posts; the count for this channel is INCOMPLETE`
+        );
       }
       if (!listed.length) return { listed: 0, reachable: true };
 

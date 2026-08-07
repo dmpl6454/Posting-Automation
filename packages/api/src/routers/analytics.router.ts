@@ -1,7 +1,9 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
-import { analyticsSyncQueue } from "@postautomation/queue";
+import { analyticsSyncQueue, externalPostSyncQueue } from "@postautomation/queue";
+import { groupChannelsIntoAccounts } from "../lib/sync-accounts";
+import { EXTERNAL_POST_FLOOR } from "../lib/external-post-floor";
 import type { PrismaClient } from "@postautomation/db";
 import {
   sumChannelRowsIntoGroups,
@@ -1066,6 +1068,17 @@ export const analyticsRouter = createRouter({
       },
     });
 
+    // ⚠️ Bucket the jobId to a 2-MINUTE window instead of Date.now().
+    //
+    // The id used to be `analytics-manual-{targetId}-{Date.now()}`, which is UNIQUE on
+    // every click — so BullMQ's dedup could never fire and N people (or N impatient
+    // clicks) enqueued N copies of the same work, each burning Meta quota to fetch
+    // identical numbers. Bucketing makes concurrent clicks collapse onto ONE job per
+    // target while still allowing a genuine re-sync a couple of minutes later.
+    // `removeOnComplete: true` would otherwise let a finished job's id be re-added
+    // immediately; the bucket is what actually holds the dedup window open.
+    const bucket = Math.floor(Date.now() / (2 * 60 * 1000));
+
     let queued = 0;
     for (const target of publishedTargets) {
       if (!target.publishedId) continue;
@@ -1078,7 +1091,9 @@ export const analyticsRouter = createRouter({
           platformPostId: target.publishedId,
         },
         {
-          jobId: `analytics-manual-${target.id}-${Date.now()}`,
+          // BullMQ only permits ':' in a custom jobId with EXACTLY three
+          // colon-separated segments — keep this shape.
+          jobId: `syncnow:${target.id}:${bucket}`,
           removeOnComplete: true,
           removeOnFail: 100,
         }
@@ -1086,7 +1101,64 @@ export const analyticsRouter = createRouter({
       queued++;
     }
 
-    return { queued };
+    // Sync Now must ALSO refresh posts made directly on the platform. Without this it
+    // only re-read app-published posts, so a user clicking it saw their directly-posted
+    // content stay stale and reasonably concluded the button was broken.
+    // Same account-level keying as the cron: one job per DISTINCT platformId, fanned out
+    // to every channel row for it — so this costs 1 Graph call per account, not per row.
+    const metaChannels = await ctx.prisma.channel.findMany({
+      where: {
+        organizationId: ctx.organizationId,
+        isActive: true,
+        disconnectedAt: null,
+        platform: { in: ["FACEBOOK", "INSTAGRAM"] },
+      },
+      select: {
+        id: true,
+        organizationId: true,
+        platform: true,
+        platformId: true,
+        metadata: true,
+        updatedAt: true,
+      },
+    });
+
+    let accountsQueued = 0;
+    if (metaChannels.length > 0) {
+      const accounts = groupChannelsIntoAccounts(
+        metaChannels.map((c) => ({
+          id: c.id,
+          platform: String(c.platform),
+          platformId: c.platformId,
+          metadata: c.metadata,
+          updatedAt: c.updatedAt,
+        })),
+        new Date()
+      );
+      for (const account of accounts) {
+        await externalPostSyncQueue.add(
+          `extsync-manual-${account.platform}-${account.platformId}`,
+          {
+            platform: account.platform,
+            platformId: account.platformId,
+            candidateChannelIds: account.candidateChannelIds,
+            targetChannelIds: account.targetChannelIds,
+            since: EXTERNAL_POST_FLOOR.toISOString(),
+          },
+          {
+            // Same 2-minute dedup bucket, so simultaneous clicks collapse to one job.
+            jobId: `extsyncnow:${account.platform}-${account.platformId}:${bucket}`,
+            removeOnComplete: true,
+            removeOnFail: 100,
+          }
+        );
+        accountsQueued++;
+      }
+    }
+
+    // `queued` keeps its original meaning (app-published targets) so the existing
+    // "Nothing to sync" UI check is unchanged; accounts are reported alongside.
+    return { queued, accountsQueued };
   }),
 
   /**

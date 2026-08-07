@@ -517,6 +517,25 @@ footnoted so the comparison stops looking like a bug.
   *higher* than before, because real engagement on paused/disconnected channels now counts. Rows
   carry `channelStatus` so the UI badges them, and they age out of the window naturally.
 
+## 📊 Shares per platform — what is actually obtainable (settled 2026-08-07)
+
+| platform | shares? | source | notes |
+|---|---|---|---|
+| **FACEBOOK** | ✅ yes | post-FIELDS edge `?fields=shares` | needs `pages_read_user_content`. Graph **OMITS** the key at zero, so absent ≠ 0. |
+| **INSTAGRAM** | ✅ yes | insights `shares` metric | present in FEED/REELS/STORY sets. Measured max on prod: **27,119** on one post. |
+| **YOUTUBE** | ❌ **never** | — | Data API v3 `statistics` has **no share count at all**. |
+
+**🔴 YouTube shares are IMPOSSIBLE on the current API — do not try to "fix" this.**
+`statistics` exposes only `viewCount` / `likeCount` / `commentCount` / `favoriteCount`. The
+provider used to map `favoriteCount` into the shares slot, but Google deprecated that field
+years ago and it returns **0 for every video, permanently**. Verified on prod 2026-08-07:
+**263 YouTube snapshots, ZERO with shares > 0**, while 78 had likes and 137 had views — the
+pipeline is healthy; the metric does not exist. Share counts are only available from the
+**YouTube Analytics API** (`sharingService` dimension), a DIFFERENT API requiring
+`yt-analytics.readonly` + channel ownership — not wired, and a separate project.
+`metricsAvailable.shares: false` is therefore CORRECT for YouTube: the UI renders "—"
+("not reported") rather than "0" ("measured as zero").
+
 ## 🔁 "Shares not visible in Insights" — an OMITTED key is NOT evidence of availability (2026-08-07)
 
 User-reported. Two different causes, only one of them a bug:
@@ -551,7 +570,17 @@ declared it.
    rows stop lying immediately instead of waiting to self-heal.
 
 ⚠️ Deliberately NARROW. Do not widen it to other metrics/platforms without evidence of a
-genuinely separate call path — over-applying it would hide real zeros. IG reads everything
+genuinely separate call path — over-applying it would hide real zeros.
+
+**⚠️⚠️ The per-row rule must NEVER be applied to the AGGREGATE — I made exactly this mistake
+and it hid real data on prod.** `effectiveChannelUnavailable` receives `declaredAvailable`
+as a `BOOL_OR` across EVERY capture on the channel, so it already answers *"did ANY capture
+report this metric?"*. An undefined key there means "no evidence at all", NOT "one call
+failed". Applying `requiresExplicitDeclaration` there blanked the **Shares column for whole
+channels** while the stored `metricsAvailable` held `shares: true` — 629 external posts with
+real shares (one Instagram post at 27,119) rendered "—". Fixed by removing the clause from
+the aggregate and keeping it in `gatePostReportRow`, which is per-row and where it belongs.
+Regression-guarded in [shares-visibility.test.ts](packages/api/src/__tests__/shares-visibility.test.ts). IG reads everything
 from one insights call, so its siblings ARE valid evidence and it is excluded.
 ⚠️ Two pre-existing tests asserted the OLD behavior (`shares === 3` / `=== 0` from an
 undeclared key) — they encoded the bug as expected and were updated with a note.
@@ -628,7 +657,27 @@ no new machinery.
   `extsync:{platform}-{platformId}:{bucket}` — **exactly 3 colon segments** (BullMQ rejects
   other counts). **Kill switch: `EXTERNAL_SYNC_ENABLED=false`.** Tunables:
   `EXTERNAL_SYNC_SHARDS`, `EXTERNAL_SYNC_CONCURRENCY`, `EXTERNAL_METRICS_PER_RUN`,
-  `EXTERNAL_LIST_PAGES`.
+  `EXTERNAL_LIST_PAGE_SIZE`, `EXTERNAL_LIST_PAGE_HARD_STOP`.
+- **🔴 LISTING RUNS TO EXHAUSTION — there must be NO cap that truncates a post count.**
+  v1 used 4 pages × limit 25 = exactly 100, and every busy channel reported **"Posts: 100"**
+  — a cap masquerading as a count (ten channels all showing precisely 100 on prod).
+  A displayed number must be the truth, not a ceiling. Listing is the CHEAP half (ONE call
+  per 100 posts vs TWO calls per post for metrics), so even a 5,000-post channel costs 50
+  calls ≈ 1% of a Page's budget. `LIST_PAGE_HARD_STOP` (5000 pages) is a **runaway guard**
+  for a non-terminating cursor, logged loudly as an anomaly — never a silent product cap.
+  A repeated cursor also breaks the loop.
+  **`METRICS_PER_RUN` (150) IS a legitimate throttle** — metrics cost 2 calls/post — and it
+  is safe ONLY because an unmeasured post keeps `metricsSyncedAt = NULL`, renders "—" (not
+  a fake 0), and contributes to neither side of the engagement rate. So the post COUNT is
+  always complete immediately; the numbers fill in newest-first over later passes.
+  **Rule of thumb: a cap that changes a displayed value is a bug; one that only defers a
+  value is a budget.**
+- **"Sync Now" (`analytics.triggerSync`)** refreshes BOTH populations: app-published targets
+  AND direct posts (it enqueues external sync per ACCOUNT for the org's FB/IG channels).
+  ⚠️ jobIds are bucketed to a **2-minute window** (`syncnow:{targetId}:{bucket}` /
+  `extsyncnow:{platform}-{platformId}:{bucket}`). They previously used `Date.now()`, which
+  is unique per click, so BullMQ dedup NEVER fired and N users clicking enqueued N copies
+  of identical work. Do NOT reintroduce a timestamp in a jobId.
 - **UI**: Channel Performance column renamed **"Posts sent" → "Posts"** (it is no longer only
   what we sent — this also resolves the long-standing "we show 10, Facebook says 13"
   complaint); Reports rows carry a **"Direct"** badge; a restrained partial-coverage notice
