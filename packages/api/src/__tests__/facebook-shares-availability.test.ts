@@ -86,17 +86,22 @@ describe("facebook shares availability", () => {
     expect(gated.reach).toBeNull();
   });
 
-  it("documents the pre-fix hazard: an OMITTED key reads as available", () => {
+  it("an OMITTED shares key on FACEBOOK now renders '—' (the read-side half of the fix)", () => {
     const gated = gatePostReportRow(
       row({
         shares: 0,
         snapshotMetadata: {
-          // shares deliberately omitted — the pre-fix provider shape.
+          // shares deliberately omitted — the pre-fix provider shape, still present in
+          // 12 prod snapshots written 2026-08-02 → 2026-08-07.
           metricsAvailable: { impressions: false, reach: false, comments: false },
         },
       })
     );
-    // This is why the provider MUST declare shares explicitly: omission = trust.
-    expect(gated.shares).toBe(0);
+    // ⚠️ This assertion was `toBe(0)` when the suite was written, documenting the hazard
+    // as unavoidable for pre-fix rows. It is now fixed on the READ side too
+    // (requiresExplicitDeclaration), so those stale rows stop publishing a fake 0 rather
+    // than waiting to self-heal on their next capture. The provider-side fix (declaring
+    // `shares` explicitly) still matters — it is what makes NEW captures trustworthy.
+    expect(gated.shares).toBeNull();
   });
 });

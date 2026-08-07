@@ -68,6 +68,37 @@ export function platformMetricCapabilities(platform: string): PlatformMetricCapa
 
 export type MetricKey = "impressions" | "reach" | "likes" | "comments" | "shares" | "clicks";
 
+/**
+ * Metrics that a capture must declare EXPLICITLY before we will believe its value —
+ * because they come from a DIFFERENT platform call than their siblings and can fail
+ * independently.
+ *
+ * The general honesty rule is "this capture declared some keys, so an omitted key must
+ * have worked". That is sound only when every metric arrived on one call. On Facebook it
+ * does not: `clicks`/`likes` come from the post-INSIGHTS edge, while `shares` comes from
+ * the post-FIELDS edge (which additionally needs `pages_read_user_content`). The insights
+ * call can succeed — declaring clicks/likes — while the fields call silently fails,
+ * leaving `shares` omitted and stored as 0. The generic rule then published that as a
+ * confident "0 shares".
+ *
+ * Measured on prod 2026-08-07: 12 FACEBOOK snapshots had the `shares` key omitted AND
+ * shares = 0. Users reported this as "shares are not working / not visible". Graph also
+ * OMITS the `shares` field for a post with genuinely zero shares, so "0 shares" and "we
+ * could not read shares" are indistinguishable in storage — "—" is the only honest render
+ * for a capture that never declared it.
+ *
+ * Captures written after the provider fix always declare `shares`, so this only affects
+ * pre-fix rows and self-heals on the next capture.
+ */
+const REQUIRES_EXPLICIT_DECLARATION: Record<string, ReadonlySet<MetricKey>> = {
+  FACEBOOK: new Set<MetricKey>(["shares"]),
+};
+
+/** True when this platform/metric may NOT inherit availability from sibling keys. */
+export function requiresExplicitDeclaration(platform: string, key: MetricKey): boolean {
+  return REQUIRES_EXPLICIT_DECLARATION[String(platform ?? "").toUpperCase()]?.has(key) ?? false;
+}
+
 const ALL_METRIC_KEYS: MetricKey[] = [
   "impressions",
   "reach",
@@ -158,6 +189,12 @@ export function effectiveChannelUnavailable(
   return ALL_METRIC_KEYS.filter((key) => {
     // A capture actually reported this metric ⇒ the data is real, show it.
     if (declaredAvailable?.[key] === true) return false;
+    // Independent-failure metrics (FB `shares`, read via a different Graph call than its
+    // siblings) may not inherit availability — an undeclared one renders "—". Keeps this
+    // aggregate in step with gatePostReportRow, so Channel Performance and Reports agree.
+    if (declaredAvailable && declaredAvailable[key] === undefined && requiresExplicitDeclaration(platform, key)) {
+      return true;
+    }
     // No capture claimed it, but some capture predates the metadata ⇒ static map.
     if (hasLegacySnapshot) return staticallyUnavailable(key, caps);
     // Every capture explicitly declared it unavailable (or there are no captures

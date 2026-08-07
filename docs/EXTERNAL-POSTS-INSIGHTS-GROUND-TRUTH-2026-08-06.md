@@ -254,6 +254,63 @@ Existing cadence in `apps/worker/src/scheduler/cron-jobs.ts`:
 A new external-post sync must not double-spend quota with `scheduleAnalyticsSync`, and must
 respect the `CRON_LEADER` gate (only one cron leader may run).
 
+## 6f. Do duplicate connections multiply API calls? (measured — NO)
+
+A recurring and reasonable worry: "if users A and B both connect the same account, do we
+call Meta twice?"
+
+**Same-org duplication is structurally impossible.** `Channel` is
+`@@unique([organizationId, platform, platformId])`, so a second user connecting the same
+Page in the same workspace UPSERTS the existing row. Proven by measurement — the channel
+count and the distinct (org, account) pair count are IDENTICAL:
+
+| | channel rows | distinct (org, platformId) pairs | distinct accounts | rows/account |
+|---|---|---|---|---|
+| FACEBOOK | 975 | **975** | 409 | 2.38 |
+| INSTAGRAM | 364 | **364** | 115 | 3.17 |
+
+If same-org duplication were possible, rows would EXCEED the pair count. They are equal.
+**All duplication is cross-ORG** — the same Page connected from several workspaces, which
+is legitimate.
+
+**And cross-org duplication costs nothing**, because ingestion is keyed on
+`platform:platformId`: 1339 rows → **524 Graph calls, not 1339** (a 61% reduction). Results
+are then fanned out to every channel row as cheap DB writes.
+
+Fan-out distribution (accounts by number of orgs sharing them):
+
+```
+FACEBOOK  1 org: 34   2: 269   3: 36   4: 57   5: 11   6: 2
+INSTAGRAM 1 org: 39   2: 9     3: 13   4: 13   5: 30   6: 11
+```
+
+### ⚠️ Deleting users/orgs barely reduces the API budget
+
+Because the cost is already per-account, removing an org only helps for accounts that org
+holds EXCLUSIVELY. Measured:
+
+| org removed | distinct accounts before | after | **saved** |
+|---|---|---|---|
+| sds (496 channels) | 524 | 471 | **53** |
+| Digital Sukoon (383 channels) | 524 | 516 | **8** |
+| DASHMANI (180 channels) | 524 | 522 | **2** |
+| Tabish's Workspace (121) | 524 | 523 | **1** |
+| nikhil's Workspace (120) | 524 | 524 | **0** |
+
+Deleting a 120-channel workspace saves **zero** calls — every one of its accounts is
+connected elsewhere too. Overlap per org:
+
+| org | accounts | shared with other orgs | exclusive |
+|---|---|---|---|
+| sds | 496 | 443 | 53 |
+| Digital Sukoon | 383 | 375 | 8 |
+| DASHMANI | 180 | 178 | 2 |
+| Tabish's Workspace | 121 | 120 | 1 |
+| nikhil's Workspace | 120 | 120 | 0 |
+
+⇒ Deleting users is a UI-clutter decision, **not** an API-cost decision. The dedup already
+did that work.
+
 ## 7. Consequences for the design
 
 1. **FB-first is the honest reality**, but IG ingestion must still be built — it is dead

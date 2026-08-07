@@ -517,6 +517,47 @@ footnoted so the comparison stops looking like a bug.
   *higher* than before, because real engagement on paused/disconnected channels now counts. Rows
   carry `channelStatus` so the UI badges them, and they age out of the window naturally.
 
+## 🔁 "Shares not visible in Insights" — an OMITTED key is NOT evidence of availability (2026-08-07)
+
+User-reported. Two different causes, only one of them a bug:
+
+- **INSTAGRAM (63 of 64 posts): not a bug.** Those captures declare `shares:false` AND carry
+  `degraded` — dead tokens (`190/460`), so nothing is returned and "—" is correct. Fixed by
+  reconnecting, not by code.
+- **🐛 FACEBOOK (12 snapshots, 2026-08-02 → 2026-08-07): a real bug.** Those rows have the
+  `shares` key **OMITTED** from `metricsAvailable` and `shares = 0`, so they rendered a
+  confident **"0 shares"**.
+
+**Root cause — a metric with an INDEPENDENT failure mode cannot inherit availability from
+its siblings.** The honesty contract's general rule is *"this capture declared other keys,
+so an omitted one must have worked"*. That holds only when every metric came from ONE
+platform call. On Facebook it does not: `clicks`/`likes` come from the post-**insights**
+edge while `shares` comes from the post-**fields** edge (which additionally needs
+`pages_read_user_content`). Insights can succeed — declaring clicks/likes — while the
+fields call silently fails, leaving `shares` omitted and stored as 0.
+
+Compounding it: **Graph OMITS the `shares` field entirely for a post with genuinely zero
+shares** (verified in the probes), so "0 shares" and "we could not read shares" are
+indistinguishable in storage. "—" is the only honest render for a capture that never
+declared it.
+
+**Fix is in TWO halves — keep both:**
+1. *Write side* (PR #161): `facebook.provider` now declares `shares: shares !== null`
+   explicitly, so NEW captures are trustworthy.
+2. *Read side* (this change): `requiresExplicitDeclaration(platform, key)` in
+   [platform-metrics.ts](packages/api/src/lib/platform-metrics.ts) — currently
+   `{ FACEBOOK: ["shares"] }` — makes `gatePostReportRow` AND
+   `effectiveChannelUnavailable` render "—" for an undeclared FB `shares`, so the 12 stale
+   rows stop lying immediately instead of waiting to self-heal.
+
+⚠️ Deliberately NARROW. Do not widen it to other metrics/platforms without evidence of a
+genuinely separate call path — over-applying it would hide real zeros. IG reads everything
+from one insights call, so its siblings ARE valid evidence and it is excluded.
+⚠️ Two pre-existing tests asserted the OLD behavior (`shares === 3` / `=== 0` from an
+undeclared key) — they encoded the bug as expected and were updated with a note.
+Tests: [shares-visibility.test.ts](packages/api/src/__tests__/shares-visibility.test.ts)
+(verified FAILING pre-fix), [facebook-shares-availability.test.ts](packages/api/src/__tests__/facebook-shares-availability.test.ts).
+
 ## 📥 Insights now cover ALL posts on a connected page, not just ones we published (2026-08-07)
 
 Insights was built entirely on `PostTarget` — posts published **through** PostAutomation —

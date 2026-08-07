@@ -168,7 +168,15 @@ describe("gatePostReportRow — per-snapshot metricsAvailable wins over the stat
     expect(g.impressions).toBeNull();
     expect(g.reach).toBeNull();
     expect(g.comments).toBeNull();
-    expect(g.shares).toBe(3);
+    // ⚠️ UPDATED 2026-08-07 — this used to assert `shares === 3`, encoding the rule
+    // "the capture declared other keys, so an omitted one must have worked". Production
+    // disproved that for FACEBOOK `shares` specifically: it is read from the post-FIELDS
+    // edge while clicks/likes come from the post-INSIGHTS edge, so the fields call can
+    // fail silently while insights succeeds — leaving `shares` omitted and stored as 0,
+    // which then rendered as a confident "0 shares" (12 prod snapshots; users reported it
+    // as "shares not working"). An undeclared FB `shares` is now "—".
+    // See shares-visibility.test.ts and requiresExplicitDeclaration().
+    expect(g.shares).toBeNull();
   });
 
   it("no snapshot metadata (legacy rows) → static platform map, byte-identical behavior", () => {

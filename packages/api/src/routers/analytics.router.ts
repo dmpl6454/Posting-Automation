@@ -15,6 +15,7 @@ import {
   platformMetricCapabilities,
   effectiveChannelUnavailable,
   reportableMetrics,
+  requiresExplicitDeclaration,
 } from "../lib/platform-metrics";
 import { evaluateChannelInsightsStatus, summarizeChannelStatuses } from "../lib/insights-health";
 import { toCsv } from "../lib/report-csv";
@@ -320,6 +321,26 @@ export function gatePostReportRow(r: PostReportRow): PostReportRow {
       // The capture itself told us whether this metric was reported.
       return declared![key] === false ? null : Number(v);
     }
+    // ⚠️ NARROW EXCEPTION — a metric with an INDEPENDENT failure mode cannot inherit
+    // "available" from its siblings.
+    //
+    // The general rule below ("this capture declared other keys, so an omitted one
+    // worked") holds when every metric came from the same Graph call. On FACEBOOK it
+    // does NOT: `clicks`/`likes` come from the post-INSIGHTS edge while `shares` comes
+    // from the post-FIELDS edge (which additionally needs pages_read_user_content). A
+    // capture could therefore succeed on insights — declaring clicks:true, likes:true —
+    // while the fields call silently failed, leaving `shares` omitted and stored as 0.
+    // The generic rule then published that 0 as a confident "0 shares".
+    //
+    // Measured on prod 2026-08-07: 12 FACEBOOK snapshots (2026-08-02 → 2026-08-07) have
+    // the `shares` key omitted AND shares = 0 — users reported exactly this as "shares
+    // are not visible / not working". Graph also OMITS the `shares` field entirely for a
+    // post with genuinely zero shares, so "0 shares" and "we could not read shares" are
+    // indistinguishable in storage; the only honest answer for a legacy row is "—".
+    //
+    // Captures written after the provider fix always declare `shares` explicitly, so
+    // this branch only ever applies to pre-fix rows and self-heals on the next capture.
+    if (hasDeclared && requiresExplicitDeclaration(r.platform, key)) return null;
     if (hasDeclared) return Number(v); // capture declared others, not this one ⇒ available
     if (key === "reach" ? reachUnavailable : unavail.has(key)) return null;
     return Number(v);
