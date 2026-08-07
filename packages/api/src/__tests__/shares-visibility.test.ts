@@ -119,16 +119,40 @@ describe("shares visibility (user-reported bug)", () => {
   });
 });
 
-describe("shares visibility — Channel Performance aggregate agrees with Reports", () => {
-  it("an omitted shares claim marks the channel column unavailable too", () => {
+describe("shares visibility — the per-row rule must NOT leak into the aggregate", () => {
+  /**
+   * ⚠️ REGRESSION GUARD (prod incident 2026-08-07).
+   *
+   * requiresExplicitDeclaration is a PER-ROW rule: on one capture, an omitted `shares`
+   * really does mean that capture's fields call never resolved. On the AGGREGATE it is
+   * semantically wrong — `declaredAvailable` there is a BOOL_OR across EVERY capture on
+   * the channel, so it already answers "did ANY capture report this?".
+   *
+   * Applying the per-row rule to the aggregate blanked the Shares column for entire
+   * channels and hid thousands of real captured shares: every FB row rendered "—" in
+   * Channel Performance while the stored metricsAvailable held shares:true.
+   */
+  it("does NOT mark shares unavailable just because the aggregate lacks the key", () => {
     const unavailable = effectiveChannelUnavailable(
       "FACEBOOK",
       { impressions: false, reach: false, clicks: true, likes: true },
       false
     );
-    // Without this, Reports would show "—" while Channel Performance showed 0 —
-    // the exact same-page disagreement PR #161 fixed for other metrics.
-    expect(unavailable).toContain("shares");
+    // No capture reported shares ⇒ fall through to the static map, which permits
+    // shares on FACEBOOK. It must NOT be force-hidden.
+    expect(unavailable).not.toContain("shares");
+  });
+
+  it("the real prod aggregate (shares:true) keeps the column visible", () => {
+    // Exactly what prod stores after the ingestion pipeline ran.
+    const unavailable = effectiveChannelUnavailable(
+      "FACEBOOK",
+      { likes: true, reach: false, clicks: true, shares: true, comments: true, impressions: false },
+      false
+    );
+    expect(unavailable).not.toContain("shares");
+    expect(unavailable).toContain("impressions"); // Meta deleted these — still hidden
+    expect(unavailable).toContain("reach");
   });
 
   it("a declared shares:true keeps the column visible", () => {

@@ -42,10 +42,28 @@ import { deriveInsightsHealth, mergeInsightsHealth } from "../lib/channel-insigh
 /** Never list posts older than this — the product floor for this feature. */
 const HARD_FLOOR = new Date("2026-08-01T00:00:00.000Z");
 
-/** Max posts whose metrics we capture in ONE job. Bounds Graph + CPU per run. */
-const METRICS_PER_RUN = Number(process.env.EXTERNAL_METRICS_PER_RUN ?? 25);
-/** Max listing pages per job (25 posts/page). Bounds a very busy Page. */
-const MAX_LIST_PAGES = Number(process.env.EXTERNAL_LIST_PAGES ?? 4);
+/**
+ * Max posts whose metrics we capture in ONE job. Bounds Graph + CPU per run.
+ * Metrics accrue across runs (a post keeps `metricsSyncedAt = NULL` and renders "—" until
+ * measured), so this throttles cost without ever losing a post.
+ */
+const METRICS_PER_RUN = Number(process.env.EXTERNAL_METRICS_PER_RUN ?? 60);
+
+/**
+ * Max listing pages per job, 100 posts/page.
+ *
+ * ⚠️ This was 4 pages x limit 25 = exactly 100 posts, which made EVERY busy channel
+ * report "Posts: 100" — a cap masquerading as a count (observed in prod 2026-08-07:
+ * ten channels all showing precisely 100). Listing is the CHEAP half of the sync (one
+ * call per 100 posts vs two calls per post for metrics), so paging deeper costs little:
+ * 12 x 100 = up to 1,200 posts/run for ~12 calls.
+ *
+ * A channel busier than that still converges — `since` is pinned to the watermark floor
+ * and each run re-lists from the start, so the newest posts are always covered and the
+ * cap only defers the long tail.
+ */
+const MAX_LIST_PAGES = Number(process.env.EXTERNAL_LIST_PAGES ?? 12);
+const LIST_PAGE_SIZE = Number(process.env.EXTERNAL_LIST_PAGE_SIZE ?? 100);
 
 /**
  * Re-measure cadence. A post's metrics move fast early then plateau, so spend the budget
@@ -99,7 +117,7 @@ export function createExternalPostSyncWorker() {
 
         const page = await provider.listRecentPosts(tokens, accountId, {
           since: windowStart,
-          limit: 25,
+          limit: LIST_PAGE_SIZE,
         });
 
         if (page?.degraded) {
@@ -138,7 +156,7 @@ export function createExternalPostSyncWorker() {
       for (let i = 1; i < MAX_LIST_PAGES && cursor; i++) {
         const next = await provider.listRecentPosts(listing.tokens, listing.accountId, {
           since: windowStart,
-          limit: 25,
+          limit: LIST_PAGE_SIZE,
           cursor,
         });
         if (next?.degraded || !next?.posts?.length) break;

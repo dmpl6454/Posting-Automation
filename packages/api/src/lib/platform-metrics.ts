@@ -189,12 +189,23 @@ export function effectiveChannelUnavailable(
   return ALL_METRIC_KEYS.filter((key) => {
     // A capture actually reported this metric ⇒ the data is real, show it.
     if (declaredAvailable?.[key] === true) return false;
-    // Independent-failure metrics (FB `shares`, read via a different Graph call than its
-    // siblings) may not inherit availability — an undeclared one renders "—". Keeps this
-    // aggregate in step with gatePostReportRow, so Channel Performance and Reports agree.
-    if (declaredAvailable && declaredAvailable[key] === undefined && requiresExplicitDeclaration(platform, key)) {
-      return true;
-    }
+    //
+    // ⚠️ Do NOT apply requiresExplicitDeclaration here. It is a PER-ROW rule and is
+    // semantically wrong on an AGGREGATE.
+    //
+    // `declaredAvailable` arrives as a BOOL_OR across EVERY capture on the channel, i.e.
+    // it already answers "did ANY capture report this metric?". A channel mixing one old
+    // app-published snapshot (which omitted `shares`) with hundreds of fresh captures
+    // (which declare `shares: true`) collapses to `shares: undefined` only when NOTHING
+    // reported it — so an undefined here is genuinely "no evidence", not "one call
+    // failed". Applying the per-row rule blanked the Shares column for the WHOLE channel
+    // and hid thousands of real, successfully-captured shares (observed in prod
+    // 2026-08-07: every FB row rendered "—" while metricsAvailable held shares:true).
+    //
+    // gatePostReportRow keeps the per-row rule, which is where it belongs: there,
+    // `metricsAvailable` describes ONE capture, so an omitted key really does mean that
+    // capture's fields call never resolved.
+    //
     // No capture claimed it, but some capture predates the metadata ⇒ static map.
     if (hasLegacySnapshot) return staticallyUnavailable(key, caps);
     // Every capture explicitly declared it unavailable (or there are no captures
