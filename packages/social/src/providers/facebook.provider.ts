@@ -650,23 +650,48 @@ export class FacebookProvider extends SocialProvider {
     // a stale public number. Fail-open: on any miss we keep the API result.
     // ⚠️ Scraper-backed — verify from the deploy IP.
     if (!viewsUsable) {
-      const scraped = await scrapeFacebookReelEngagement(videoId).catch(() => null);
+      const scraped = await scrapeFacebookReelEngagement(videoId, {
+        timeoutMs: Number(process.env.FB_SCRAPE_TIMEOUT_MS ?? 6000),
+      }).catch(() => null);
       if (scraped && scraped.views != null && scraped.views > 0) {
+        // Prefer the SCRAPED value, falling back to the API's. We only reach this
+        // branch because video_insights could not report views, and on a Reel the
+        // Video-node fields are unreliable in the same way — whereas the scraper
+        // reads the counts rendered on the page itself. NULL stays NULL: a metric
+        // neither source produced must never be stored as a confident 0.
+        const mergedLikes = scraped.likes ?? likes ?? null;
+        const mergedComments = scraped.comments ?? comments ?? null;
         return {
           impressions: scraped.views,
           clicks: 0,
-          likes: scraped.likes ?? likes ?? 0,
-          shares: scraped.shares ?? 0,
-          comments: scraped.comments ?? comments ?? 0,
+          likes: mergedLikes ?? 0,
+          shares: 0,
+          comments: mergedComments ?? 0,
           reach: 0,
-          engagementRate:
-            scraped.views > 0
-              ? ((scraped.likes ?? 0) + (scraped.comments ?? 0)) / scraped.views
-              : 0,
+          // Left at 0 deliberately: every read path recomputes the rate from
+          // impressioned rows. Computing it here would mix units with the SQL
+          // recompute (stored rate is a fraction on some platforms, a percent on
+          // others) — the bug the pooled recompute exists to avoid.
+          engagementRate: 0,
           source: "scrape",
-          likeKind: "likes",
+          // parseFbReelHtml reads the og:title REACTIONS segment, not "likes" —
+          // same semantics as the feed path, which also declares "reactions".
+          likeKind: "reactions",
           reachIsDistinct: false,
-          metricsAvailable: { reach: false, clicks: false, impressions: true },
+          // ⚠️ ALL SIX keys are declared. An OMITTED key reads as AVAILABLE in
+          // gatePostReportRow/effectiveChannelUnavailable, so the previous 3-key
+          // object published `shares: 0` and `likes: 0` as confident measurements.
+          // `shares` is the worst of these: scrapeFacebookReelEngagement returns
+          // `shares: null` UNCONDITIONALLY, so the old `scraped.shares ?? 0` was a
+          // fabricated zero on every scraped capture.
+          metricsAvailable: {
+            impressions: true, // a real view count was read off the page
+            reach: false, // deleted by Meta platform-wide; no source, ever
+            clicks: false, // the Video node exposes no clicks edge
+            likes: mergedLikes !== null, // og:title often has no reactions segment
+            comments: mergedComments !== null,
+            shares: false, // the scraper structurally cannot read shares
+          },
           ...(degraded ? { degraded } : {}),
         };
       }
