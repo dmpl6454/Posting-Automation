@@ -244,6 +244,19 @@ services:
       # Required for decrypting channel tokens stored by the web container
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
       TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY}
+      # ─── External-post sync (Insights for posts we did not publish) ───
+      # ⚠️ This service uses an explicit `environment:` allowlist, NOT `env_file:`.
+      # A key present in .env.prod but ABSENT here never reaches the container —
+      # it arrives as an empty string. Both switches below fail OPEN in code
+      # (`!== "false"`), so an unplumbed var silently means ENABLED. Adding the
+      # key to .env.prod alone is NOT enough; it must also be named here.
+      EXTERNAL_SYNC_ENABLED: ${EXTERNAL_SYNC_ENABLED:-true}
+      EXTERNAL_VIEW_SCRAPE_ENABLED: ${EXTERNAL_VIEW_SCRAPE_ENABLED:-false}
+      EXTERNAL_SCRAPE_PER_RUN: ${EXTERNAL_SCRAPE_PER_RUN:-5}
+      EXTERNAL_SYNC_SHARDS: ${EXTERNAL_SYNC_SHARDS:-4}
+      EXTERNAL_SYNC_CONCURRENCY: ${EXTERNAL_SYNC_CONCURRENCY:-2}
+      EXTERNAL_METRICS_PER_RUN: ${EXTERNAL_METRICS_PER_RUN:-150}
+      FB_SCRAPE_TIMEOUT_MS: ${FB_SCRAPE_TIMEOUT_MS:-6000}
     depends_on:
       postgres:
         condition: service_healthy
