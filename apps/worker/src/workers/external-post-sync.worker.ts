@@ -1,6 +1,10 @@
 import { Worker, type Job } from "bullmq";
 import { prisma } from "@postautomation/db";
-import { getSocialProvider } from "@postautomation/social";
+import {
+  getSocialProvider,
+  isFacebookVideoLike,
+  type ExternalPostSummary,
+} from "@postautomation/social";
 import {
   QUEUE_NAMES,
   type ExternalPostSyncJobData,
@@ -55,6 +59,25 @@ const HARD_FLOOR = new Date("2026-08-01T00:00:00.000Z");
  * A cap that changes a displayed value is a bug; a cap that only defers one is a budget.
  */
 const METRICS_PER_RUN = Number(process.env.EXTERNAL_METRICS_PER_RUN ?? 150);
+
+/**
+ * Reel-scrape budget, SEPARATE from METRICS_PER_RUN.
+ *
+ * A scrape costs ~2.1s of wall time (measured on prod: 50/50 success, avg
+ * 2130ms) against ~0.3s for a Graph call, on a 4-core box shared with Postgres
+ * and MinIO. This is a budget that DEFERS a value — an unscraped post keeps
+ * `metricsSyncedAt = NULL`, renders "—" (never a fake 0), and stays at the front
+ * of the next run's queue — which is what makes it safe.
+ *
+ * ⚠️ `EXTERNAL_VIEW_SCRAPE_ENABLED` defaults ON because the failure mode is
+ * fail-open: a blocked IP degrades to exactly today's behavior (impressions
+ * declared false ⇒ "—"), never to a wrong number. Ship it `false` in .env.prod
+ * and flip it after the canary.
+ */
+const SCRAPE_PER_RUN = Number(process.env.EXTERNAL_SCRAPE_PER_RUN ?? 40);
+const SCRAPE_ENABLED = process.env.EXTERNAL_VIEW_SCRAPE_ENABLED !== "false";
+/** Consecutive misses that trip the per-run circuit breaker (soft IP ban). */
+const SCRAPE_BREAKER_MISSES = Number(process.env.EXTERNAL_SCRAPE_BREAKER_MISSES ?? 5);
 
 /**
  * Listing runs to EXHAUSTION — it pages until Meta stops returning a cursor.
@@ -156,14 +179,10 @@ export function createExternalPostSyncWorker() {
       }
 
       // ── 2. Page through the listing (bounded).
-      const listed: Array<{
-        platformPostId: string;
-        publishedAt: Date;
-        permalink?: string;
-        message?: string;
-        mediaType?: string;
-        productType?: string;
-      }> = [...listing.page.posts];
+      // Typed from the provider's own summary so new fields (videoId/isReel)
+      // flow through automatically — a hand-copied shape here silently drops
+      // them, which is exactly what happened when the video id was added.
+      const listed: ExternalPostSummary[] = [...listing.page.posts];
       // Page to EXHAUSTION — stop only when Meta stops handing back a cursor. Guard
       // against a non-terminating cursor with a seen-set (a repeated cursor means the
       // API is looping) plus a runaway ceiling.
@@ -256,14 +275,26 @@ export function createExternalPostSyncWorker() {
               mediaType: summary.mediaType ?? null,
               productType: summary.productType ?? null,
               postTargetId: targetIdByPost.get(p.platformPostId) ?? null,
+              ...(summary.videoId
+                ? { resolvedVideoId: summary.videoId, videoResolvedAt: new Date() }
+                : {}),
+              ...(summary.isReel ? { isReel: true } : {}),
             },
             update: {
               // Re-classify on every pass: a post may be matched to its PostTarget only
               // after a later video-id resolution.
               postTargetId: targetIdByPost.get(p.platformPostId) ?? null,
               permalink: summary.permalink ?? null,
-              mediaType: summary.mediaType ?? null,
-              productType: summary.productType ?? null,
+              // ⚠️ Only write these when the listing actually supplied them.
+              // The old unconditional `?? null` let ONE attachment-less listing
+              // response null a known-video row, permanently demoting it out of
+              // the video-recovery path.
+              ...(summary.mediaType ? { mediaType: summary.mediaType } : {}),
+              ...(summary.productType ? { productType: summary.productType } : {}),
+              ...(summary.videoId
+                ? { resolvedVideoId: summary.videoId, videoResolvedAt: new Date() }
+                : {}),
+              ...(summary.isReel ? { isReel: true } : {}),
             },
           });
         }
@@ -275,21 +306,78 @@ export function createExternalPostSyncWorker() {
       const due = await prisma.externalPost.findMany({
         where: { channelId: canonicalChannelId, publishedAt: { gte: windowStart } },
         orderBy: { publishedAt: "desc" },
-        select: { platformPostId: true, publishedAt: true, metricsSyncedAt: true, productType: true },
+        select: {
+          platformPostId: true,
+          publishedAt: true,
+          metricsSyncedAt: true,
+          productType: true,
+          mediaType: true,
+          permalink: true,
+          resolvedVideoId: true,
+          isReel: true,
+          postTargetId: true,
+        },
       });
 
       const toMeasure = due.filter((p) => needsMetrics(p.publishedAt, p.metricsSyncedAt, now)).slice(0, METRICS_PER_RUN);
       let measured = 0;
+      // Scrape budget for this run. Separate from METRICS_PER_RUN because a
+      // scrape costs ~2.1s of wall time (measured) against ~0.3s for a Graph
+      // call, and the box is 4 cores shared with Postgres and MinIO.
+      let scrapeBudget = SCRAPE_ENABLED ? SCRAPE_PER_RUN : 0;
+      let consecutiveScrapeMisses = 0;
 
       for (const p of toMeasure) {
+        // Only FACEBOOK posts that could carry a view count take the recovery
+        // path. `postTargetId != null` rows are app-published and are read
+        // through PostTarget, so scraping them is pure waste.
+        const videoLike =
+          platform === "FACEBOOK" &&
+          p.postTargetId === null &&
+          isFacebookVideoLike({
+            mediaType: p.mediaType,
+            permalink: p.permalink,
+            videoId: p.resolvedVideoId,
+          });
+
+        // ⚠️ Once the scrape budget is exhausted, STOP processing video-like
+        // rows entirely — do not fall through to a feed-only capture. A
+        // feed-only capture sets metricsSyncedAt, and needsMetrics would then
+        // hide the post for a WEEK before it could get its views. Leaving it
+        // unmeasured keeps it at the front of the next run's queue and renders
+        // "—" meanwhile (a cap that DEFERS a value, never one that changes it).
+        const wantsScrape = videoLike && (p.isReel === true || !p.resolvedVideoId);
+        if (wantsScrape && scrapeBudget <= 0) continue;
+
         let analytics: any = null;
         try {
-          analytics = await provider.getPostAnalytics(listing.tokens, p.platformPostId);
+          analytics = videoLike
+            ? await provider.getExternalPostAnalytics(listing.tokens, p.platformPostId, {
+                pageId: platformId,
+                videoId: p.resolvedVideoId,
+                isReel: p.isReel === true,
+                allowScrape: scrapeBudget > 0,
+              })
+            : await provider.getPostAnalytics(listing.tokens, p.platformPostId);
         } catch (err: any) {
           console.warn(`[ExternalSync] metrics failed ${p.platformPostId}: ${err.message}`);
           continue;
         }
         if (!analytics) continue;
+
+        if (wantsScrape) {
+          scrapeBudget--;
+          // Circuit breaker: a soft IP ban makes every scrape miss. Stop for the
+          // rest of this run rather than burning the budget — and the IP — on
+          // calls that cannot succeed. Fail-open: the feed capture still lands.
+          if (analytics.source === "scrape") consecutiveScrapeMisses = 0;
+          else if (++consecutiveScrapeMisses >= SCRAPE_BREAKER_MISSES) {
+            console.warn(
+              `[ExternalSync] ${platform}:${platformId} — ${consecutiveScrapeMisses} consecutive scrape misses, stopping scrapes for this run`
+            );
+            scrapeBudget = 0;
+          }
+        }
 
         // ⚠️ metricsAvailable must be stored EXACTLY as the provider declared it. An
         // omitted key reads as AVAILABLE downstream, so dropping this makes a metric we

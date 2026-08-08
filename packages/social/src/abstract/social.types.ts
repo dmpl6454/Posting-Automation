@@ -33,6 +33,18 @@ export interface ExternalPostSummary {
   mediaType?: string;
   /** IG media_product_type (FEED/REELS/STORY) — selects the metric set. */
   productType?: string;
+  /**
+   * FB: the Video/Reel node id behind a video attachment
+   * (`attachments.target.id`), resolved for free during listing.
+   *
+   * Load-bearing: Facebook reports a post's view count ONLY on this node. The
+   * feed-post insights edge returns `post_video_views = 0` for every video
+   * (measured 40/40 on prod), so without this id a video post's views are
+   * unreachable — which is why 94% of FB external rows stored impressions = 0.
+   */
+  videoId?: string;
+  /** FB: true when the attachment target URL is a /reel/ permalink. */
+  isReel?: boolean;
 }
 
 export interface ExternalPostPage {

@@ -19,7 +19,13 @@ import {
   PieChart, Pie, Cell,
 } from "recharts";
 import { format, subDays } from "date-fns";
-import { metricCellValue, likeColumnLabel, type MetricKey, type MetricRowMeta } from "~/lib/metric-cell";
+import {
+  metricCellValue,
+  likeColumnLabel,
+  engagementRateCell,
+  type MetricKey,
+  type MetricRowMeta,
+} from "~/lib/metric-cell";
 
 function formatNumber(num: number): string {
   if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1)}M`;
@@ -172,11 +178,38 @@ function InsightsAnalyticsView() {
     },
   });
 
+  // Per-platform Insights view. `null` = All. Validated against the platforms
+  // this org actually has before it is applied (see platformFilter below), so a
+  // stale URL param or a channel disconnect can never strand the table empty.
+  const [platformView, setPlatformView] = useState<string | null>(null);
+  const { data: orgPlatforms } = trpc.analytics.platformsInWindow.useQuery();
+
+  // ⚠️ Fall back to All for an unknown platform rather than returning nothing.
+  // filterByPlatform's contract yields an empty list for an unknown platform —
+  // right for a channel PICKER (showing everything would select unintended
+  // channels) but wrong here, where an unexplained empty table reads as a bug.
+  const platformFilter =
+    platformView && (orgPlatforms ?? []).includes(platformView) ? platformView : undefined;
+
+  const dateInputWithPlatform = { ...dateInput, platform: platformFilter };
+
   const { data: overview, isLoading: overviewLoading } = trpc.analytics.overview.useQuery(dateInput);
-  const { data: engagement, isLoading: engagementLoading } = trpc.analytics.engagement.useQuery(dateInput);
+  // placeholderData on the platform-aware queries: a new `platform` in the key is
+  // a NEW query, so without it every pill click collapses the table to skeletons.
+  const { data: engagement, isLoading: engagementLoading } = trpc.analytics.engagement.useQuery(
+    dateInputWithPlatform,
+    { placeholderData: (prev) => prev }
+  );
   const { data: platformBreakdown, isLoading: breakdownLoading } = trpc.analytics.platformBreakdown.useQuery(dateInput);
   const { data: postsOverTime, isLoading: chartLoading } = trpc.analytics.postsOverTime.useQuery(dateInput);
-  const { data: channelStats, isLoading: channelLoading } = trpc.analytics.perChannelStats.useQuery(dateInput);
+  const { data: channelStats, isLoading: channelLoading } = trpc.analytics.perChannelStats.useQuery(
+    dateInputWithPlatform,
+    { placeholderData: (prev) => prev }
+  );
+  // Unfiltered copy, used ONLY for org-wide statements ("connected but nothing
+  // synced yet") that must not change meaning when a platform view is selected.
+  // Same key as the All view, so it is a cache hit whenever no pill is active.
+  const { data: unfilteredChannelStats } = trpc.analytics.perChannelStats.useQuery(dateInput);
   // keepPreviousData so a date-range change doesn't unmount the Group
   // Performance card mid-refetch (which would cause layout shift on every
   // range change for group-having orgs).
@@ -290,10 +323,14 @@ function InsightsAnalyticsView() {
   // Channels are connected but no engagement has synced yet — distinct from
   // "no channels connected" so we don't imply zero performance (audit fix 2026-06-06).
   const hasChannels = !!channelStats && channelStats.length > 0;
+  // ⚠️ Computed over the UNFILTERED stats. Deriving it from the platform-filtered
+  // rows would flash "connected but nothing synced yet" across a healthy org the
+  // moment someone views a quiet platform — a false statement about the org.
   const noEngagementYet =
-    hasChannels &&
-    channelStats!.every(
-      (ch) => (ch.impressions + ch.reach + ch.likes + ch.comments + ch.shares) === 0
+    !!unfilteredChannelStats &&
+    unfilteredChannelStats.length > 0 &&
+    unfilteredChannelStats.every(
+      (ch: any) => (ch.impressions + ch.reach + ch.likes + ch.comments + ch.shares) === 0
     );
 
   // Engagement Breakdown all-zeros hint (mirrors the Channel Performance
@@ -531,9 +568,32 @@ function InsightsAnalyticsView() {
                   <Percent className="h-5 w-5 text-primary" />
                   <div>
                     <p className="text-xs text-muted-foreground">Engagement Rate</p>
-                    <p className="text-lg font-semibold text-primary">
-                      {(engagement?.engagementRate ?? 0).toFixed(2)}%
-                    </p>
+                    {(() => {
+                      // This tile used to coalesce a null/impossible rate to
+                      // 0 and print "0.00%" — the least honest surface of the
+                      // four, since it also carried no base disclosure.
+                      const cell = engagementRateCell({
+                        engagementRate: engagement?.engagementRate,
+                        engagementRateBasis: engagement?.engagementRateBasis,
+                        engagementRateFlags: engagement?.engagementRateFlags,
+                        unit: "post",
+                      });
+                      return (
+                        <p
+                          className={`text-lg font-semibold ${
+                            cell.text === null ? "text-muted-foreground" : "text-primary"
+                          }`}
+                          title={cell.title}
+                        >
+                          {cell.text ?? "—"}
+                          {cell.lowBase && (
+                            <span className="ml-1 text-[10px] font-normal text-muted-foreground">
+                              · low base
+                            </span>
+                          )}
+                        </p>
+                      );
+                    })()}
                   </div>
                 </div>
               </>
@@ -629,6 +689,44 @@ function InsightsAnalyticsView() {
         <CardHeader>
           <CardTitle className="text-base">Channel Performance</CardTitle>
           <CardDescription>Metrics per connected channel</CardDescription>
+          {/* Per-platform view. The container is ALWAYS mounted (min-h) so the
+              table never shifts down once the platform list resolves. */}
+          <div className="mt-2 flex min-h-[28px] flex-wrap items-center gap-1.5">
+            {(orgPlatforms?.length ?? 0) > 1 && (
+              <>
+                <button
+                  type="button"
+                  aria-pressed={platformFilter === undefined}
+                  onClick={() => setPlatformView(null)}
+                  className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                    platformFilter === undefined
+                      ? "border-primary bg-primary/10"
+                      : "hover:bg-muted/50"
+                  }`}
+                >
+                  All
+                </button>
+                {orgPlatforms!.map((p) => {
+                  const active = platformFilter === p;
+                  return (
+                    <button
+                      key={p}
+                      type="button"
+                      aria-pressed={active}
+                      aria-label={`Show only ${p} channels`}
+                      // Clicking the active pill clears back to All.
+                      onClick={() => setPlatformView(active ? null : p)}
+                      className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium capitalize transition-colors ${
+                        active ? "border-primary bg-primary/10" : "hover:bg-muted/50"
+                      }`}
+                    >
+                      {p.toLowerCase()}
+                    </button>
+                  );
+                })}
+              </>
+            )}
+          </div>
         </CardHeader>
         <CardContent className="p-0">
           {noEngagementYet && (
@@ -755,39 +853,49 @@ function InsightsAnalyticsView() {
                               posts carry an impression figure, so a channel rate is
                               often computed from a single post and must not read as
                               the channel's overall rate. */}
-                          {ch.hasSnapshot === false ||
-                          ch.unavailable?.includes("impressions") ||
-                          (ch.engagementRateBasis?.impressionedPosts ?? 0) === 0 ? (
-                            <span
-                              className="text-muted-foreground"
-                              title="No post on this channel reported an impression/view count, so an engagement rate cannot be computed."
-                            >
-                              —
-                            </span>
-                          ) : (
-                            <span
-                              title={`Pooled over the ${ch.engagementRateBasis!.impressionedPosts} of ${ch.engagementRateBasis!.totalPosts} post(s) that reported impressions.`}
-                            >
-                              <span
-                                className={`font-medium ${
-                                  ch.engagementRate > 3
-                                    ? "text-green-600 dark:text-green-400"
-                                    : ch.engagementRate > 1
-                                    ? "text-yellow-600 dark:text-yellow-400"
-                                    : "text-muted-foreground"
-                                }`}
-                              >
-                                {ch.engagementRate.toFixed(2)}%
-                              </span>
-                              {ch.engagementRateBasis!.impressionedPosts <
-                                ch.engagementRateBasis!.totalPosts && (
-                                <span className="ml-1 text-[10px] text-muted-foreground/70">
-                                  ({ch.engagementRateBasis!.impressionedPosts}/
-                                  {ch.engagementRateBasis!.totalPosts})
+                          {(() => {
+                            const hidden =
+                              ch.hasSnapshot === false ||
+                              ch.unavailable?.includes("impressions");
+                            const cell = engagementRateCell({
+                              engagementRate: hidden ? null : ch.engagementRate,
+                              engagementRateBasis: ch.engagementRateBasis,
+                              engagementRateFlags: ch.engagementRateFlags,
+                              unit: "post",
+                            });
+                            if (cell.text === null) {
+                              return (
+                                <span className="text-muted-foreground" title={cell.title}>
+                                  —
                                 </span>
-                              )}
-                            </span>
-                          )}
+                              );
+                            }
+                            return (
+                              <span title={cell.title}>
+                                <span
+                                  className={`font-medium ${
+                                    ch.engagementRate! > 3
+                                      ? "text-green-600 dark:text-green-400"
+                                      : ch.engagementRate! > 1
+                                      ? "text-yellow-600 dark:text-yellow-400"
+                                      : "text-muted-foreground"
+                                  }`}
+                                >
+                                  {cell.text}
+                                </span>
+                                {cell.basis && (
+                                  <span className="ml-1 text-[10px] text-muted-foreground/70">
+                                    {cell.basis}
+                                  </span>
+                                )}
+                                {cell.lowBase && (
+                                  <span className="ml-1 text-[10px] text-muted-foreground/70">
+                                    · low base
+                                  </span>
+                                )}
+                              </span>
+                            );
+                          })()}
                         </td>
                       )}
                     </tr>
@@ -811,17 +919,36 @@ function InsightsAnalyticsView() {
           ) : (
             // Fix #34: empty state includes a CTA to connect channels
             <div className="flex h-48 items-center justify-center">
-              <div className="text-center">
-                <Users className="mx-auto h-8 w-8 text-muted-foreground/30" />
-                <p className="mt-2 text-sm text-muted-foreground">No active channels found</p>
-                <p className="mt-1 text-xs text-muted-foreground/70">Connect a channel to see analytics data</p>
-                <Link
-                  href="/dashboard/channels"
-                  className="mt-3 inline-block rounded-lg bg-primary px-4 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
-                >
-                  Connect a channel
-                </Link>
-              </div>
+              {/* ⚠️ A platform view with no rows must NEVER claim the org has no
+                  channels — that is flatly false and sends the user to connect a
+                  channel they already have. Name the filter and offer a way out. */}
+              {platformFilter ? (
+                <div className="text-center">
+                  <Users className="mx-auto h-8 w-8 text-muted-foreground/30" />
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    No {platformFilter.toLowerCase()} channels in this date range
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setPlatformView(null)}
+                    className="mt-3 inline-block rounded-lg bg-primary px-4 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+                  >
+                    Show all platforms
+                  </button>
+                </div>
+              ) : (
+                <div className="text-center">
+                  <Users className="mx-auto h-8 w-8 text-muted-foreground/30" />
+                  <p className="mt-2 text-sm text-muted-foreground">No active channels found</p>
+                  <p className="mt-1 text-xs text-muted-foreground/70">Connect a channel to see analytics data</p>
+                  <Link
+                    href="/dashboard/channels"
+                    className="mt-3 inline-block rounded-lg bg-primary px-4 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+                  >
+                    Connect a channel
+                  </Link>
+                </div>
+              )}
             </div>
           )}
         </CardContent>
@@ -834,7 +961,11 @@ function InsightsAnalyticsView() {
           zero-group orgs (which would then unmount, shifting layout on every
           visit). placeholderData keeps groupStats defined across refetches, so a
           group-having org's card never disappears mid-range-change. */}
-      {(groupStats?.groupCount ?? 0) > 0 && (
+      {/* ⚠️ Hidden entirely on a platform view. A ChannelGroup may span
+          platforms, so groupStats deliberately IGNORES the platform input —
+          leaving the card visible would show org-wide group totals next to a
+          filtered channel table, i.e. two populations on one screen. */}
+      {(groupStats?.groupCount ?? 0) > 0 && !platformFilter && (
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Group Performance</CardTitle>
@@ -894,39 +1025,49 @@ function InsightsAnalyticsView() {
                             {/* Gated on the same base rule as the per-channel rate:
                                 with no impressioned post there is no denominator,
                                 so "0.00%" would misread as "no engagement". */}
-                            {g.hasSnapshot === false ||
-                            (g.unavailable ?? []).includes("impressions") ||
-                            (g.engagementRateBasis?.impressionedPosts ?? 0) === 0 ? (
-                              <span
-                                className="text-muted-foreground"
-                                title="No post in this group reported an impression/view count, so an engagement rate cannot be computed."
-                              >
-                                —
-                              </span>
-                            ) : (
-                              <span
-                                title={`Pooled over the ${g.engagementRateBasis!.impressionedPosts} of ${g.engagementRateBasis!.totalPosts} publish(es) that reported impressions.`}
-                              >
-                                <span
-                                  className={`font-medium ${
-                                    g.engagementRate > 3
-                                      ? "text-green-600 dark:text-green-400"
-                                      : g.engagementRate > 1
-                                      ? "text-yellow-600 dark:text-yellow-400"
-                                      : "text-muted-foreground"
-                                  }`}
-                                >
-                                  {g.engagementRate.toFixed(2)}%
-                                </span>
-                                {g.engagementRateBasis!.impressionedPosts <
-                                  g.engagementRateBasis!.totalPosts && (
-                                  <span className="ml-1 text-[10px] text-muted-foreground/70">
-                                    ({g.engagementRateBasis!.impressionedPosts}/
-                                    {g.engagementRateBasis!.totalPosts})
+                            {(() => {
+                              const hidden =
+                                g.hasSnapshot === false ||
+                                (g.unavailable ?? []).includes("impressions");
+                              const cell = engagementRateCell({
+                                engagementRate: hidden ? null : g.engagementRate,
+                                engagementRateBasis: g.engagementRateBasis,
+                                engagementRateFlags: g.engagementRateFlags,
+                                unit: "publish",
+                              });
+                              if (cell.text === null) {
+                                return (
+                                  <span className="text-muted-foreground" title={cell.title}>
+                                    —
                                   </span>
-                                )}
-                              </span>
-                            )}
+                                );
+                              }
+                              return (
+                                <span title={cell.title}>
+                                  <span
+                                    className={`font-medium ${
+                                      g.engagementRate! > 3
+                                        ? "text-green-600 dark:text-green-400"
+                                        : g.engagementRate! > 1
+                                        ? "text-yellow-600 dark:text-yellow-400"
+                                        : "text-muted-foreground"
+                                    }`}
+                                  >
+                                    {cell.text}
+                                  </span>
+                                  {cell.basis && (
+                                    <span className="ml-1 text-[10px] text-muted-foreground/70">
+                                      {cell.basis}
+                                    </span>
+                                  )}
+                                  {cell.lowBase && (
+                                    <span className="ml-1 text-[10px] text-muted-foreground/70">
+                                      · low base
+                                    </span>
+                                  )}
+                                </span>
+                              );
+                            })()}
                           </td>
                         )}
                       </tr>
