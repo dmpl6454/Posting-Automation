@@ -383,7 +383,11 @@ export class FacebookProvider extends SocialProvider {
 
     const res = await this.graphFetch(
       `${this.graphBaseUrl}/${this.apiVersion}/${pageId}/published_posts` +
-        `?fields=id,created_time,message,status_type,permalink_url,attachments{media_type}` +
+        // `target{id,url}` resolves the Video/Reel node id for FREE — no extra
+        // Graph call per post. VERIFIED live on the published_posts EDGE
+        // 2026-08-08 (the nested expansion is accepted there, not only on a
+        // single-post node). ⚠️ Never use `object_id`: deprecated, error #12.
+        `?fields=id,created_time,message,status_type,permalink_url,attachments{media_type,target{id,url}}` +
         `&since=${since}&limit=${limit}${cursor}&access_token=${tokens.accessToken}`,
       {},
       pageId
@@ -414,6 +418,16 @@ export class FacebookProvider extends SocialProvider {
           : row.status_type
             ? { mediaType: String(row.status_type) }
             : {}),
+        // The Video/Reel node behind a video attachment. Facebook reports a
+        // post's view count ONLY on this node — the feed-post insights edge
+        // returns post_video_views = 0 for every video (measured 40/40), so
+        // without this id a video post can never show its views.
+        ...(row.attachments?.data?.[0]?.target?.id
+          ? { videoId: String(row.attachments.data[0].target.id) }
+          : {}),
+        ...(String(row.attachments?.data?.[0]?.target?.url ?? "").includes("/reel/")
+          ? { isReel: true }
+          : {}),
       });
     }
 
@@ -467,7 +481,23 @@ export class FacebookProvider extends SocialProvider {
     if (!platformPostId.includes("_")) {
       return this.getVideoAnalytics(tokens, platformPostId);
     }
+    return this.getFeedPostAnalytics(tokens, platformPostId);
+  }
 
+  /**
+   * Composite-id ("{page}_{post}") analytics — extracted VERBATIM from
+   * getPostAnalytics 2026-08-08 as a pure refactor, so the external-post sync
+   * can reuse it without touching the shared entry point.
+   *
+   * ⚠️ This body runs INSIDE the publish job (post-publish.worker.ts step 4b)
+   * and in analytics-sync, and app-published FB posts are frequently
+   * composite-id. Its network shape is FROZEN — do not add calls here. The
+   * video-view recovery lives in getExternalPostAnalytics, which wraps this.
+   */
+  private async getFeedPostAnalytics(
+    tokens: OAuthTokens,
+    platformPostId: string
+  ): Promise<SocialAnalytics | null> {
     // Metric-source strategy — re-verified live 2026-08-06 with a token that HAS
     // the newly-approved `read_insights` + `pages_read_user_content` granted:
     //  - Meta DELETED all post_impressions*/post_engaged_users/post_reach/post_views
@@ -584,6 +614,129 @@ export class FacebookProvider extends SocialProvider {
       source: "api",
       ...(() => {
         const d = worstDegradation(insightsDegradation, fieldsDegradation);
+        return d ? { degraded: d } : {};
+      })(),
+    };
+  }
+
+  /**
+   * Analytics for a Facebook post we did NOT publish (a composite id listed from
+   * /published_posts). Called ONLY by external-post-sync.
+   *
+   * ── Why this is a separate method ────────────────────────────────────────
+   * `getPostAnalytics` runs inside the publish job (post-publish.worker.ts step
+   * 4b) and in analytics-sync, and app-published FB posts are frequently
+   * composite-id — so editing its composite branch would change the network
+   * shape of the frozen publish path. This method wraps it instead.
+   *
+   * ── Why it MERGES rather than re-routes ──────────────────────────────────
+   * Prod holds, on FB `mediaType='video'` external rows: 22,419 with clicks>0,
+   * 8,714 shares>0, 7,522 comments>0, 21,057 likes>0 — all produced by the feed
+   * branch. Routing video posts to `getVideoAnalytics` (which declares
+   * `clicks:false, shares:false`) would trade an impressions gap for a
+   * clicks/shares/comments gap at 37k-row scale. So the feed capture is ALWAYS
+   * taken and only `impressions` is filled in on top.
+   *
+   * ── Why it costs ~zero extra Graph calls ─────────────────────────────────
+   * `videoId` arrives from the listing call's field expansion (free), and reels
+   * skip `video_insights` entirely — measured 0 view rows on 36/36 reels, so
+   * asking would spend app quota for nothing. That matters because
+   * `usageCache` is module-global and the uncapped publish path reads it.
+   */
+  async getExternalPostAnalytics(
+    tokens: OAuthTokens,
+    compositeId: string,
+    opts: {
+      pageId: string;
+      videoId?: string | null;
+      isReel?: boolean;
+      /** Gate for the reel scraper (env kill switch + per-run budget). */
+      allowScrape?: boolean;
+      /** Injectable for tests; defaults to the real scraper. */
+      scrape?: (videoId: string) => Promise<{ views?: number | null } | null>;
+    }
+  ): Promise<SocialAnalytics | null> {
+    const feed = await this.getFeedPostAnalytics(tokens, compositeId);
+    // null ⇒ the worker `continue`s and metricsSyncedAt stays NULL ⇒ "—".
+    // Unchanged semantics; never a fabricated row.
+    if (!feed) return null;
+
+    // Rows listed BEFORE the field expansion shipped have no stored videoId, so
+    // resolve it once. Clamped opts and `pageId` so the per-page usage header is
+    // tracked; a failed resolve is non-fatal (we simply return the feed capture).
+    let videoId = opts.videoId ?? null;
+    if (!videoId) {
+      const res = await this.graphFetch(
+        `${this.graphBaseUrl}/${this.apiVersion}/${compositeId}` +
+          `?fields=attachments{media_type,target{id,url}}&access_token=${tokens.accessToken}`,
+        {},
+        opts.pageId,
+        CONNECT_GRAPH_OPTS
+      );
+      if (res.ok) {
+        const data: any = await res.json().catch(() => ({}));
+        const target = data?.attachments?.data?.[0]?.target;
+        if (target?.id) {
+          videoId = String(target.id);
+          if (String(target.url ?? "").includes("/reel/")) opts = { ...opts, isReel: true };
+        }
+      }
+    }
+
+    if (!videoId) return feed; // byte-identical to today for non-video posts
+
+    let views: number | null = null;
+    let usedScrape = false;
+    let videoDegraded: AnalyticsDegradation | undefined;
+
+    // Non-reel videos can still answer on the Video node. Reels cannot
+    // (measured 0/36), so asking is pure quota waste.
+    if (!opts.isReel) {
+      const res = await this.graphFetch(
+        `${this.graphBaseUrl}/${this.apiVersion}/${videoId}/video_insights` +
+          `?metric=total_video_impressions,total_video_views&access_token=${tokens.accessToken}`,
+        {},
+        opts.pageId
+      );
+      const data: any = await res.json().catch(() => ({}));
+      const rows: any[] = Array.isArray(data?.data) ? data.data : [];
+      if (!res.ok) videoDegraded = diagnoseMetaError(data?.error);
+      if (res.ok && rows.length > 0) {
+        const m: Record<string, number> = {};
+        for (const r of rows) m[r.name] = Number(r.values?.[0]?.value ?? 0);
+        views = m.total_video_impressions || m.total_video_views || 0;
+      }
+    }
+
+    // Reel, or the Video node returned nothing.
+    if (views === null && opts.allowScrape) {
+      const scraper = opts.scrape ?? ((id: string) => scrapeFacebookReelEngagement(id, {
+        timeoutMs: Number(process.env.FB_SCRAPE_TIMEOUT_MS ?? 6000),
+      }));
+      // Wrapped in Promise.resolve(): the scraper is fail-open by contract, and
+      // a throwing (or non-promise-returning) implementation must degrade to
+      // "no view count" rather than losing the feed capture we already have.
+      const scraped = await Promise.resolve()
+        .then(() => scraper(videoId!))
+        .catch(() => null);
+      if (scraped && scraped.views != null && scraped.views > 0) {
+        views = scraped.views;
+        usedScrape = true;
+      }
+    }
+
+    return {
+      ...feed, // clicks / likes / comments / shares PRESERVED — never overwritten
+      impressions: views ?? 0,
+      source: usedScrape ? "scrape" : feed.source,
+      metricsAvailable: {
+        ...feed.metricsAvailable,
+        // The ONLY key this path may change. `false` when no source produced a
+        // view count, so the cell renders "—" rather than a confident 0.
+        impressions: views !== null,
+      },
+      ...(() => {
+        const d = worstDegradation(feed.degraded, videoDegraded);
         return d ? { degraded: d } : {};
       })(),
     };

@@ -291,6 +291,20 @@ model ExternalPost {
   /// product type and MUTUALLY EXCLUSIVE — mixing them 400s the whole call.
   productType    String?
 
+  /// FB: the Video/Reel node id behind a video attachment (attachments.target.id).
+  ///
+  /// Load-bearing for view counts: Facebook reports a post's views ONLY on this
+  /// node — the feed-post insights edge returns post_video_views = 0 for every
+  /// video (measured 40/40 on prod). Resolved for free during listing; persisted
+  /// so the resolve never repeats. NULL + videoResolvedAt set ⇒ "we looked and
+  /// there is no video node", which must not be retried every pass.
+  resolvedVideoId String?
+  /// When the video-id resolution last ran (success or miss).
+  videoResolvedAt DateTime?
+  /// FB: the attachment target is a /reel/ permalink. Reels return NO rows from
+  /// video_insights (measured 0/36), so they skip straight to the scraper.
+  isReel         Boolean?
+
   /// Set when this platform post is one WE published — the dedup link. NULL means it
   /// was made directly on the platform. Read paths union only the NULL ones on top of
   /// the existing PostTarget aggregates, so app-published posts can never double-count.
