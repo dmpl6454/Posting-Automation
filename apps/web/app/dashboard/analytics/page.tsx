@@ -178,11 +178,38 @@ function InsightsAnalyticsView() {
     },
   });
 
+  // Per-platform Insights view. `null` = All. Validated against the platforms
+  // this org actually has before it is applied (see platformFilter below), so a
+  // stale URL param or a channel disconnect can never strand the table empty.
+  const [platformView, setPlatformView] = useState<string | null>(null);
+  const { data: orgPlatforms } = trpc.analytics.platformsInWindow.useQuery();
+
+  // ⚠️ Fall back to All for an unknown platform rather than returning nothing.
+  // filterByPlatform's contract yields an empty list for an unknown platform —
+  // right for a channel PICKER (showing everything would select unintended
+  // channels) but wrong here, where an unexplained empty table reads as a bug.
+  const platformFilter =
+    platformView && (orgPlatforms ?? []).includes(platformView) ? platformView : undefined;
+
+  const dateInputWithPlatform = { ...dateInput, platform: platformFilter };
+
   const { data: overview, isLoading: overviewLoading } = trpc.analytics.overview.useQuery(dateInput);
-  const { data: engagement, isLoading: engagementLoading } = trpc.analytics.engagement.useQuery(dateInput);
+  // placeholderData on the platform-aware queries: a new `platform` in the key is
+  // a NEW query, so without it every pill click collapses the table to skeletons.
+  const { data: engagement, isLoading: engagementLoading } = trpc.analytics.engagement.useQuery(
+    dateInputWithPlatform,
+    { placeholderData: (prev) => prev }
+  );
   const { data: platformBreakdown, isLoading: breakdownLoading } = trpc.analytics.platformBreakdown.useQuery(dateInput);
   const { data: postsOverTime, isLoading: chartLoading } = trpc.analytics.postsOverTime.useQuery(dateInput);
-  const { data: channelStats, isLoading: channelLoading } = trpc.analytics.perChannelStats.useQuery(dateInput);
+  const { data: channelStats, isLoading: channelLoading } = trpc.analytics.perChannelStats.useQuery(
+    dateInputWithPlatform,
+    { placeholderData: (prev) => prev }
+  );
+  // Unfiltered copy, used ONLY for org-wide statements ("connected but nothing
+  // synced yet") that must not change meaning when a platform view is selected.
+  // Same key as the All view, so it is a cache hit whenever no pill is active.
+  const { data: unfilteredChannelStats } = trpc.analytics.perChannelStats.useQuery(dateInput);
   // keepPreviousData so a date-range change doesn't unmount the Group
   // Performance card mid-refetch (which would cause layout shift on every
   // range change for group-having orgs).
@@ -296,10 +323,14 @@ function InsightsAnalyticsView() {
   // Channels are connected but no engagement has synced yet — distinct from
   // "no channels connected" so we don't imply zero performance (audit fix 2026-06-06).
   const hasChannels = !!channelStats && channelStats.length > 0;
+  // ⚠️ Computed over the UNFILTERED stats. Deriving it from the platform-filtered
+  // rows would flash "connected but nothing synced yet" across a healthy org the
+  // moment someone views a quiet platform — a false statement about the org.
   const noEngagementYet =
-    hasChannels &&
-    channelStats!.every(
-      (ch) => (ch.impressions + ch.reach + ch.likes + ch.comments + ch.shares) === 0
+    !!unfilteredChannelStats &&
+    unfilteredChannelStats.length > 0 &&
+    unfilteredChannelStats.every(
+      (ch: any) => (ch.impressions + ch.reach + ch.likes + ch.comments + ch.shares) === 0
     );
 
   // Engagement Breakdown all-zeros hint (mirrors the Channel Performance
@@ -658,6 +689,44 @@ function InsightsAnalyticsView() {
         <CardHeader>
           <CardTitle className="text-base">Channel Performance</CardTitle>
           <CardDescription>Metrics per connected channel</CardDescription>
+          {/* Per-platform view. The container is ALWAYS mounted (min-h) so the
+              table never shifts down once the platform list resolves. */}
+          <div className="mt-2 flex min-h-[28px] flex-wrap items-center gap-1.5">
+            {(orgPlatforms?.length ?? 0) > 1 && (
+              <>
+                <button
+                  type="button"
+                  aria-pressed={platformFilter === undefined}
+                  onClick={() => setPlatformView(null)}
+                  className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                    platformFilter === undefined
+                      ? "border-primary bg-primary/10"
+                      : "hover:bg-muted/50"
+                  }`}
+                >
+                  All
+                </button>
+                {orgPlatforms!.map((p) => {
+                  const active = platformFilter === p;
+                  return (
+                    <button
+                      key={p}
+                      type="button"
+                      aria-pressed={active}
+                      aria-label={`Show only ${p} channels`}
+                      // Clicking the active pill clears back to All.
+                      onClick={() => setPlatformView(active ? null : p)}
+                      className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium capitalize transition-colors ${
+                        active ? "border-primary bg-primary/10" : "hover:bg-muted/50"
+                      }`}
+                    >
+                      {p.toLowerCase()}
+                    </button>
+                  );
+                })}
+              </>
+            )}
+          </div>
         </CardHeader>
         <CardContent className="p-0">
           {noEngagementYet && (
@@ -850,17 +919,36 @@ function InsightsAnalyticsView() {
           ) : (
             // Fix #34: empty state includes a CTA to connect channels
             <div className="flex h-48 items-center justify-center">
-              <div className="text-center">
-                <Users className="mx-auto h-8 w-8 text-muted-foreground/30" />
-                <p className="mt-2 text-sm text-muted-foreground">No active channels found</p>
-                <p className="mt-1 text-xs text-muted-foreground/70">Connect a channel to see analytics data</p>
-                <Link
-                  href="/dashboard/channels"
-                  className="mt-3 inline-block rounded-lg bg-primary px-4 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
-                >
-                  Connect a channel
-                </Link>
-              </div>
+              {/* ⚠️ A platform view with no rows must NEVER claim the org has no
+                  channels — that is flatly false and sends the user to connect a
+                  channel they already have. Name the filter and offer a way out. */}
+              {platformFilter ? (
+                <div className="text-center">
+                  <Users className="mx-auto h-8 w-8 text-muted-foreground/30" />
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    No {platformFilter.toLowerCase()} channels in this date range
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setPlatformView(null)}
+                    className="mt-3 inline-block rounded-lg bg-primary px-4 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+                  >
+                    Show all platforms
+                  </button>
+                </div>
+              ) : (
+                <div className="text-center">
+                  <Users className="mx-auto h-8 w-8 text-muted-foreground/30" />
+                  <p className="mt-2 text-sm text-muted-foreground">No active channels found</p>
+                  <p className="mt-1 text-xs text-muted-foreground/70">Connect a channel to see analytics data</p>
+                  <Link
+                    href="/dashboard/channels"
+                    className="mt-3 inline-block rounded-lg bg-primary px-4 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+                  >
+                    Connect a channel
+                  </Link>
+                </div>
+              )}
             </div>
           )}
         </CardContent>
@@ -873,7 +961,11 @@ function InsightsAnalyticsView() {
           zero-group orgs (which would then unmount, shifting layout on every
           visit). placeholderData keeps groupStats defined across refetches, so a
           group-having org's card never disappears mid-range-change. */}
-      {(groupStats?.groupCount ?? 0) > 0 && (
+      {/* ⚠️ Hidden entirely on a platform view. A ChannelGroup may span
+          platforms, so groupStats deliberately IGNORES the platform input —
+          leaving the card visible would show org-wide group totals next to a
+          filtered channel table, i.e. two populations on one screen. */}
+      {(groupStats?.groupCount ?? 0) > 0 && !platformFilter && (
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Group Performance</CardTitle>

@@ -46,7 +46,17 @@ async function fetchChannelStatRows(
   prisma: PrismaClient,
   organizationId: string,
   from: Date,
-  to: Date
+  to: Date,
+  /**
+   * Optional per-platform view (e.g. "FACEBOOK"). Omitted/undefined ⇒ every
+   * platform, byte-identical to the pre-2026-08-08 behavior.
+   *
+   * Filtering SERVER-side is deliberate: the caller's row set also drives
+   * `reportableMetrics`, so a client-side filter would leave capability computed
+   * org-wide while the numbers narrowed — the same class of same-page
+   * disagreement Phase 2 just removed.
+   */
+  platform?: string
 ): Promise<ChannelStatRow[]> {
   // Per-metric availability as DECLARED by each capture. Mirrors
   // gatePostReportRow's rule, lifted to an aggregate:
@@ -141,6 +151,10 @@ async function fetchChannelStatRows(
        WHERE p."organizationId" = $1
          AND pt.status::text = 'PUBLISHED'
          AND COALESCE(p."publishedAt", p."updatedAt") BETWEEN $2 AND $3
+         -- Optional per-platform view. NULL ⇒ every platform (the default, and
+         -- byte-identical to the pre-filter behavior). Parameterized, never
+         -- interpolated; org scoping above is untouched.
+         AND ($4::text IS NULL OR c.platform::text = $4)
      ),
      ext_rows AS (
        SELECT ep."channelId"                       AS channel_id,
@@ -160,6 +174,7 @@ async function fetchChannelStatRows(
        WHERE c2."organizationId" = $1
          AND ep."postTargetId" IS NULL
          AND ep."publishedAt" BETWEEN $2 AND $3
+         AND ($4::text IS NULL OR c2.platform::text = $4)
      ),
      all_rows AS (
        SELECT * FROM app_rows
@@ -201,7 +216,8 @@ async function fetchChannelStatRows(
      GROUP BY channel_id`,
     organizationId,
     from,
-    to
+    to,
+    platform ?? null
   );
 
   // Numeric SQL aggregates surface as BigInts — normalize for superjson/UI.
@@ -399,7 +415,9 @@ async function fetchPostReportRows(
   organizationId: string,
   window: ReportWindow,
   mode: ReportMode,
-  limit: number
+  limit: number,
+  /** Optional per-platform view. Undefined ⇒ every platform (unchanged). */
+  platform?: string
 ): Promise<PostReportRow[]> {
   const hours = { "24h": 24, "7d": 168, "15d": 360, "30d": 720 }[window];
   const boundary = new Date(Date.now() - hours * 3_600_000);
@@ -422,6 +440,18 @@ async function fetchPostReportRows(
   if (mode === "at_age") params.push(window);
   params.push(limit);
   const limitIdx = params.length;
+
+  // Optional per-platform view, applied to BOTH union arms.
+  //
+  // ⚠️ Server-side is MANDATORY here, not a nicety: this query is capped at
+  // `limit` (500 for the table, 1000 for the export) and ordered by publishedAt.
+  // A client-side filter would silently drop a platform whose rows all sit past
+  // the cap — a cap that changes a displayed value, which this codebase counts
+  // as a bug (see the EXTERNAL_LIST_PAGE_HARD_STOP note).
+  params.push(platform ?? null);
+  const platformIdx = params.length;
+  const platformFilterApp = `AND ($${platformIdx}::text IS NULL OR c.platform::text = $${platformIdx})`;
+  const platformFilterExt = `AND ($${platformIdx}::text IS NULL OR c2.platform::text = $${platformIdx})`;
 
   // Platform-native posts (not published through us) are unioned in for "current" mode.
   // ⚠️ NOT for "at_age": those rows are pinned to at-age CHECKPOINT snapshots that only
@@ -460,7 +490,8 @@ async function fetchPostReportRows(
      INNER JOIN "Channel" c2 ON c2.id = ep."channelId"
      WHERE c2."organizationId" = $1
        AND ep."postTargetId" IS NULL
-       AND ep."publishedAt" >= $2`
+       AND ep."publishedAt" >= $2
+       ${platformFilterExt}`
       : "";
 
   const rows: PostReportRow[] = await (prisma.$queryRawUnsafe as any)(
@@ -507,6 +538,7 @@ async function fetchPostReportRows(
        AND pt.status::text = 'PUBLISHED'
        AND pt."publishedAt" IS NOT NULL
        ${publishedAtFilter}
+       ${platformFilterApp}
      ${externalUnion}
      ) combined
      ORDER BY "publishedAt" DESC
@@ -586,6 +618,11 @@ export const analyticsRouter = createRouter({
       z.object({
         from: z.string().datetime().optional(),
         to: z.string().datetime().optional(),
+        /**
+         * Optional per-platform view. Bound as a QUERY PARAMETER, never
+         * interpolated, so an unrecognized value simply matches no rows.
+         */
+        platform: z.string().optional(),
       })
     )
     .query(async ({ ctx, input }) => {
@@ -619,7 +656,13 @@ export const analyticsRouter = createRouter({
       // independent code paths that could (and did) drift apart. Sharing
       // fetchChannelStatRows makes them agree BY CONSTRUCTION, and is also what brings
       // platform-native posts into the headline — the union lives in one place.
-      const statRows = await fetchChannelStatRows(ctx.prisma, ctx.organizationId, from, to);
+      const statRows = await fetchChannelStatRows(
+        ctx.prisma,
+        ctx.organizationId,
+        from,
+        to,
+        input.platform
+      );
 
       // Which metrics ANY connected platform can ever report. Lets the UI drop
       // dead tiles/cards entirely instead of showing a confident "0" for a
@@ -888,6 +931,11 @@ export const analyticsRouter = createRouter({
       z.object({
         from: z.string().datetime().optional(),
         to: z.string().datetime().optional(),
+        /**
+         * Optional per-platform view. Bound as a QUERY PARAMETER, never
+         * interpolated, so an unrecognized value simply matches no rows.
+         */
+        platform: z.string().optional(),
       })
     )
     .query(async ({ ctx, input }) => {
@@ -903,9 +951,15 @@ export const analyticsRouter = createRouter({
         // paused channels are included so their genuine engagement still counts;
         // each row carries its status so the UI can badge it.
         ctx.prisma.channel.findMany({
-          where: { organizationId: ctx.organizationId },
+          where: {
+            organizationId: ctx.organizationId,
+            // Narrow the CHANNEL list with the same predicate as the stat rows.
+            // Filtering only one of the two would render empty rows for the
+            // other platforms instead of removing them.
+            ...(input.platform ? { platform: input.platform as any } : {}),
+          },
         }),
-        fetchChannelStatRows(ctx.prisma, ctx.organizationId, from, to),
+        fetchChannelStatRows(ctx.prisma, ctx.organizationId, from, to, input.platform),
       ]);
 
       const rowByChannel = new Map(statRows.map((r) => [r.channelId, r]));
@@ -1015,6 +1069,31 @@ export const analyticsRouter = createRouter({
    * channel with genuinely zero engagement is never mislabeled as broken.
    * orgProcedure — USER-role readable, like the rest of Insights.
    */
+  /**
+   * Platforms this org actually has channels on — the pill row for the
+   * per-platform Insights view.
+   *
+   * ⚠️ Deliberately UNFILTERED by the selected platform. If the pill list were
+   * derived from the filtered rows, choosing "Facebook" would delete every other
+   * pill and strand the user with no way back.
+   *
+   * Deliberately NOT window-scoped either: a platform whose posts all fall
+   * outside the selected date range must still offer its pill, otherwise the
+   * control vanishes exactly when someone is trying to find out why a platform
+   * looks empty. Cheap — one DISTINCT over an indexed org column.
+   *
+   * Includes paused/disconnected channels, matching the stat aggregate, which
+   * counts their history (soft-delete decision 2026-08-06).
+   */
+  platformsInWindow: orgProcedure.query(async ({ ctx }) => {
+    const rows = await ctx.prisma.channel.findMany({
+      where: { organizationId: ctx.organizationId },
+      select: { platform: true },
+      distinct: ["platform"],
+    });
+    return rows.map((r) => r.platform as string).sort();
+  }),
+
   insightsHealth: orgProcedure.query(async ({ ctx }) => {
     const channels = await ctx.prisma.channel.findMany({
       where: { organizationId: ctx.organizationId, isActive: true },
@@ -1044,6 +1123,19 @@ export const analyticsRouter = createRouter({
       z.object({
         from: z.string().datetime().optional(),
         to: z.string().datetime().optional(),
+        /**
+         * ⚠️ ACCEPTED AND DELIBERATELY IGNORED.
+         *
+         * A ChannelGroup may span platforms, so "the Facebook view of a group"
+         * is undefined: narrowing the rows would silently redefine each group as
+         * a partial version of itself, and its Channels count would no longer
+         * match its own membership. The UI hides the Group Performance card on a
+         * platform view instead.
+         *
+         * The input exists so the client can pass one options object to all
+         * three procedures without special-casing this one.
+         */
+        platform: z.string().optional(),
       })
     )
     .query(async ({ ctx, input }) => {
@@ -1256,6 +1348,12 @@ export const analyticsRouter = createRouter({
         // 1001 so the export can fetch EXPORT_LIMIT(1000)+1 to detect truncation
         // (distinguish "exactly 1000, complete" from ">1000, truncated").
         limit: z.number().min(1).max(1001).default(500),
+        /**
+         * Optional per-platform view. MUST be applied server-side: this query is
+         * capped by `limit`, so a client-side filter would hide a platform whose
+         * rows all sit past the cap.
+         */
+        platform: z.string().optional(),
       })
     )
     .query(async ({ ctx, input }) => {
@@ -1264,7 +1362,8 @@ export const analyticsRouter = createRouter({
         ctx.organizationId,
         input.window,
         input.mode,
-        input.limit
+        input.limit,
+        input.platform
       );
 
       return {
@@ -1297,6 +1396,8 @@ export const analyticsRouter = createRouter({
         to: z.string().email(),
         window: z.enum(["24h", "7d", "15d", "30d"]),
         mode: z.enum(["current", "at_age"]).default("current"),
+        /** Keeps the emailed CSV identical to the filtered table on screen. */
+        platform: z.string().optional(),
         limit: z.number().min(1).max(1000).default(1000),
       })
     )
@@ -1306,7 +1407,8 @@ export const analyticsRouter = createRouter({
         ctx.organizationId,
         input.window,
         input.mode,
-        input.limit
+        input.limit,
+        input.platform
       );
 
       if (rows.length === 0) {

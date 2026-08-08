@@ -80,13 +80,23 @@ export function ReportsTab() {
   const [exporting, setExporting] = useState(false);
   const [emailOpen, setEmailOpen] = useState(false);
   const [recipient, setRecipient] = useState("");
+  // Per-platform view. `null` = All.
+  const [platformView, setPlatformView] = useState<string | null>(null);
 
   const { toast } = useToast();
   const utils = trpc.useUtils();
 
+  const { data: orgPlatforms } = trpc.analytics.platformsInWindow.useQuery();
+  // Fall back to All for a platform this org doesn't have, rather than rendering
+  // an unexplained empty table.
+  const platformFilter =
+    platformView && (orgPlatforms ?? []).includes(platformView) ? platformView : undefined;
+
   const { data, isLoading } = trpc.analytics.postReports.useQuery(
-    { window: win, mode },
-    { staleTime: 60 * 1000 }
+    { window: win, mode, platform: platformFilter },
+    // A new `platform` in the key is a NEW query — without placeholderData the
+    // table collapses to skeletons on every pill click.
+    { staleTime: 60 * 1000, placeholderData: (prev) => prev }
   );
 
   const rows = data?.rows ?? [];
@@ -125,7 +135,7 @@ export function ReportsTab() {
   const onSendEmail = () => {
     const to = recipient.trim();
     if (!to || emailReport.isPending) return;
-    emailReport.mutate({ to, window: win, mode });
+    emailReport.mutate({ to, window: win, mode, platform: platformFilter });
   };
 
   const onExport = async () => {
@@ -138,6 +148,9 @@ export function ReportsTab() {
       // `=== EXPORT_LIMIT` check falsely labeled a complete 1000-row dataset
       // as truncated.
       const full = await utils.analytics.postReports.fetch({
+        // Export the SAME rows the table shows — a CSV that silently widens
+        // past the on-screen filter is a different report than the one asked for.
+        platform: platformFilter,
         window: win,
         mode,
         limit: EXPORT_LIMIT + 1,
@@ -313,6 +326,44 @@ export function ReportsTab() {
               At publish-age
             </button>
           </div>
+
+          {/* Per-platform view. Always mounted (min-h) so the table never shifts
+              once the platform list resolves. */}
+          <div className="flex min-h-[28px] flex-wrap items-center gap-1.5">
+            {(orgPlatforms?.length ?? 0) > 1 && (
+              <>
+                <button
+                  type="button"
+                  aria-pressed={platformFilter === undefined}
+                  onClick={() => setPlatformView(null)}
+                  className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                    platformFilter === undefined
+                      ? "border-primary bg-primary/10"
+                      : "hover:bg-muted/50"
+                  }`}
+                >
+                  All
+                </button>
+                {orgPlatforms!.map((p) => {
+                  const active = platformFilter === p;
+                  return (
+                    <button
+                      key={p}
+                      type="button"
+                      aria-pressed={active}
+                      aria-label={`Show only ${p} posts`}
+                      onClick={() => setPlatformView(active ? null : p)}
+                      className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[11px] font-medium capitalize transition-colors ${
+                        active ? "border-primary bg-primary/10" : "hover:bg-muted/50"
+                      }`}
+                    >
+                      {p.toLowerCase()}
+                    </button>
+                  );
+                })}
+              </>
+            )}
+          </div>
         </div>
 
         <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
@@ -347,9 +398,24 @@ export function ReportsTab() {
           </div>
         ) : rows.length === 0 ? (
           <div className="py-10 text-center text-sm text-muted-foreground">
-            {mode === "at_age"
-              ? "No posts are old enough to have reached this age yet — at-age data accrues for posts published after 2026-07-17."
-              : "No posts were published in this window."}
+            {/* Name the active filter — "no posts in this window" would be false
+                when the org posted plenty on a platform that is filtered out. */}
+            {platformFilter ? (
+              <>
+                No {platformFilter.toLowerCase()} posts in this window.{" "}
+                <button
+                  type="button"
+                  onClick={() => setPlatformView(null)}
+                  className="underline underline-offset-2 hover:text-foreground"
+                >
+                  Show all platforms
+                </button>
+              </>
+            ) : mode === "at_age" ? (
+              "No posts are old enough to have reached this age yet — at-age data accrues for posts published after 2026-07-17."
+            ) : (
+              "No posts were published in this window."
+            )}
           </div>
         ) : (
           <div className="overflow-x-auto">
