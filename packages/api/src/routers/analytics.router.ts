@@ -633,7 +633,20 @@ export const analyticsRouter = createRouter({
         where: { organizationId: ctx.organizationId },
         select: { platform: true },
       });
-      const reportable = reportableMetrics(orgChannels.map((c) => c.platform as string));
+      // ⚠️ The SECOND argument is load-bearing and was missing until 2026-08-08.
+      // Without it this only ever consulted the static per-platform map, which
+      // marks FACEBOOK impressions/reach unavailable — so an org whose Facebook
+      // channels DO report video views had the Impressions tile and the "Total
+      // Views" card dropped while `perChannelStats` (which does pass the
+      // override, via effectiveChannelUnavailable) rendered those same numbers
+      // in the table right below. Same page, two answers.
+      //
+      // This is the PR #148 regression in its other half: capability must widen
+      // from what captures actually reported, never from the static map alone.
+      const reportable = reportableMetrics(
+        orgChannels.map((c) => c.platform as string),
+        statRows.map((r) => r.declaredAvailable)
+      );
 
       const sum = (pick: (r: (typeof statRows)[number]) => number) =>
         statRows.reduce((n, r) => n + pick(r), 0);
