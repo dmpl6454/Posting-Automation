@@ -19,7 +19,13 @@ import {
   PieChart, Pie, Cell,
 } from "recharts";
 import { format, subDays } from "date-fns";
-import { metricCellValue, likeColumnLabel, type MetricKey, type MetricRowMeta } from "~/lib/metric-cell";
+import {
+  metricCellValue,
+  likeColumnLabel,
+  engagementRateCell,
+  type MetricKey,
+  type MetricRowMeta,
+} from "~/lib/metric-cell";
 
 function formatNumber(num: number): string {
   if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1)}M`;
@@ -531,9 +537,32 @@ function InsightsAnalyticsView() {
                   <Percent className="h-5 w-5 text-primary" />
                   <div>
                     <p className="text-xs text-muted-foreground">Engagement Rate</p>
-                    <p className="text-lg font-semibold text-primary">
-                      {(engagement?.engagementRate ?? 0).toFixed(2)}%
-                    </p>
+                    {(() => {
+                      // This tile used to coalesce a null/impossible rate to
+                      // 0 and print "0.00%" — the least honest surface of the
+                      // four, since it also carried no base disclosure.
+                      const cell = engagementRateCell({
+                        engagementRate: engagement?.engagementRate,
+                        engagementRateBasis: engagement?.engagementRateBasis,
+                        engagementRateFlags: engagement?.engagementRateFlags,
+                        unit: "post",
+                      });
+                      return (
+                        <p
+                          className={`text-lg font-semibold ${
+                            cell.text === null ? "text-muted-foreground" : "text-primary"
+                          }`}
+                          title={cell.title}
+                        >
+                          {cell.text ?? "—"}
+                          {cell.lowBase && (
+                            <span className="ml-1 text-[10px] font-normal text-muted-foreground">
+                              · low base
+                            </span>
+                          )}
+                        </p>
+                      );
+                    })()}
                   </div>
                 </div>
               </>
@@ -755,39 +784,49 @@ function InsightsAnalyticsView() {
                               posts carry an impression figure, so a channel rate is
                               often computed from a single post and must not read as
                               the channel's overall rate. */}
-                          {ch.hasSnapshot === false ||
-                          ch.unavailable?.includes("impressions") ||
-                          (ch.engagementRateBasis?.impressionedPosts ?? 0) === 0 ? (
-                            <span
-                              className="text-muted-foreground"
-                              title="No post on this channel reported an impression/view count, so an engagement rate cannot be computed."
-                            >
-                              —
-                            </span>
-                          ) : (
-                            <span
-                              title={`Pooled over the ${ch.engagementRateBasis!.impressionedPosts} of ${ch.engagementRateBasis!.totalPosts} post(s) that reported impressions.`}
-                            >
-                              <span
-                                className={`font-medium ${
-                                  ch.engagementRate > 3
-                                    ? "text-green-600 dark:text-green-400"
-                                    : ch.engagementRate > 1
-                                    ? "text-yellow-600 dark:text-yellow-400"
-                                    : "text-muted-foreground"
-                                }`}
-                              >
-                                {ch.engagementRate.toFixed(2)}%
-                              </span>
-                              {ch.engagementRateBasis!.impressionedPosts <
-                                ch.engagementRateBasis!.totalPosts && (
-                                <span className="ml-1 text-[10px] text-muted-foreground/70">
-                                  ({ch.engagementRateBasis!.impressionedPosts}/
-                                  {ch.engagementRateBasis!.totalPosts})
+                          {(() => {
+                            const hidden =
+                              ch.hasSnapshot === false ||
+                              ch.unavailable?.includes("impressions");
+                            const cell = engagementRateCell({
+                              engagementRate: hidden ? null : ch.engagementRate,
+                              engagementRateBasis: ch.engagementRateBasis,
+                              engagementRateFlags: ch.engagementRateFlags,
+                              unit: "post",
+                            });
+                            if (cell.text === null) {
+                              return (
+                                <span className="text-muted-foreground" title={cell.title}>
+                                  —
                                 </span>
-                              )}
-                            </span>
-                          )}
+                              );
+                            }
+                            return (
+                              <span title={cell.title}>
+                                <span
+                                  className={`font-medium ${
+                                    ch.engagementRate! > 3
+                                      ? "text-green-600 dark:text-green-400"
+                                      : ch.engagementRate! > 1
+                                      ? "text-yellow-600 dark:text-yellow-400"
+                                      : "text-muted-foreground"
+                                  }`}
+                                >
+                                  {cell.text}
+                                </span>
+                                {cell.basis && (
+                                  <span className="ml-1 text-[10px] text-muted-foreground/70">
+                                    {cell.basis}
+                                  </span>
+                                )}
+                                {cell.lowBase && (
+                                  <span className="ml-1 text-[10px] text-muted-foreground/70">
+                                    · low base
+                                  </span>
+                                )}
+                              </span>
+                            );
+                          })()}
                         </td>
                       )}
                     </tr>
@@ -894,39 +933,49 @@ function InsightsAnalyticsView() {
                             {/* Gated on the same base rule as the per-channel rate:
                                 with no impressioned post there is no denominator,
                                 so "0.00%" would misread as "no engagement". */}
-                            {g.hasSnapshot === false ||
-                            (g.unavailable ?? []).includes("impressions") ||
-                            (g.engagementRateBasis?.impressionedPosts ?? 0) === 0 ? (
-                              <span
-                                className="text-muted-foreground"
-                                title="No post in this group reported an impression/view count, so an engagement rate cannot be computed."
-                              >
-                                —
-                              </span>
-                            ) : (
-                              <span
-                                title={`Pooled over the ${g.engagementRateBasis!.impressionedPosts} of ${g.engagementRateBasis!.totalPosts} publish(es) that reported impressions.`}
-                              >
-                                <span
-                                  className={`font-medium ${
-                                    g.engagementRate > 3
-                                      ? "text-green-600 dark:text-green-400"
-                                      : g.engagementRate > 1
-                                      ? "text-yellow-600 dark:text-yellow-400"
-                                      : "text-muted-foreground"
-                                  }`}
-                                >
-                                  {g.engagementRate.toFixed(2)}%
-                                </span>
-                                {g.engagementRateBasis!.impressionedPosts <
-                                  g.engagementRateBasis!.totalPosts && (
-                                  <span className="ml-1 text-[10px] text-muted-foreground/70">
-                                    ({g.engagementRateBasis!.impressionedPosts}/
-                                    {g.engagementRateBasis!.totalPosts})
+                            {(() => {
+                              const hidden =
+                                g.hasSnapshot === false ||
+                                (g.unavailable ?? []).includes("impressions");
+                              const cell = engagementRateCell({
+                                engagementRate: hidden ? null : g.engagementRate,
+                                engagementRateBasis: g.engagementRateBasis,
+                                engagementRateFlags: g.engagementRateFlags,
+                                unit: "publish",
+                              });
+                              if (cell.text === null) {
+                                return (
+                                  <span className="text-muted-foreground" title={cell.title}>
+                                    —
                                   </span>
-                                )}
-                              </span>
-                            )}
+                                );
+                              }
+                              return (
+                                <span title={cell.title}>
+                                  <span
+                                    className={`font-medium ${
+                                      g.engagementRate! > 3
+                                        ? "text-green-600 dark:text-green-400"
+                                        : g.engagementRate! > 1
+                                        ? "text-yellow-600 dark:text-yellow-400"
+                                        : "text-muted-foreground"
+                                    }`}
+                                  >
+                                    {cell.text}
+                                  </span>
+                                  {cell.basis && (
+                                    <span className="ml-1 text-[10px] text-muted-foreground/70">
+                                      {cell.basis}
+                                    </span>
+                                  )}
+                                  {cell.lowBase && (
+                                    <span className="ml-1 text-[10px] text-muted-foreground/70">
+                                      · low base
+                                    </span>
+                                  )}
+                                </span>
+                              );
+                            })()}
                           </td>
                         )}
                       </tr>

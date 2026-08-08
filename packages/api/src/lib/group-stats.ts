@@ -1,3 +1,5 @@
+import { pooledEngagementRate, type RateVerdict } from "./engagement-rate";
+
 /**
  * Pure aggregation for group-wise ("campaign") analytics: fold per-channel
  * metric rows into per-group totals, plus an "Ungrouped" bucket for channels
@@ -101,8 +103,14 @@ export interface GroupStatsRow {
   comments: number;
   shares: number;
   clicks: number;
-  /** Percent (0–100), computed from the summed metrics. 0 when no impressions. */
-  engagementRate: number;
+  /**
+   * Percent (0–100) computed from the summed metrics, or NULL when the group
+   * has no impressioned base or the summed interactions EXCEED the summed
+   * impressions (a cross-source mismatch — see engagement-rate.ts).
+   */
+  engagementRate: number | null;
+  /** Why the rate is null, and whether its base is thin. */
+  engagementRateFlags: { lowBase: boolean; reason: "no_basis" | "rate_impossible" | null };
   /**
    * Metrics NO member channel of this group can report — the group-level
    * equivalent of the per-channel `unavailable` list.
@@ -156,9 +164,10 @@ function addRow(sums: ReturnType<typeof emptySums>, row: ChannelStatRow) {
  * ~10.34%. Using the per-channel impressioned-only sums fixes both levels with
  * one change. Returns a 0–100 percent.
  */
-function rateFromRows(rows: ChannelStatRow[]): number {
+function rateFromRows(rows: ChannelStatRow[]): RateVerdict {
   let num = 0;
   let den = 0;
+  let posts = 0;
   for (const r of rows) {
     // Prefer the impressioned-only sums; fall back to the raw ones only for
     // callers (older tests) that don't supply them.
@@ -169,9 +178,18 @@ function rateFromRows(rows: ChannelStatRow[]): number {
         (r.impressionedComments ?? r.comments) +
         (r.impressionedShares ?? r.shares);
       den += imp;
+      // Fall back to 1 for callers that don't supply impressionedPosts (older
+      // tests, and the raw-sums path above). This count only distinguishes
+      // "no basis" from "a basis"; the DENOMINATOR is what gates the rate, so
+      // defaulting to 1 must never let a zero-impression row through — `imp > 0`
+      // already guarantees it cannot.
+      posts += r.impressionedPosts ?? 1;
     }
   }
-  return den > 0 ? (num / den) * 100 : 0;
+  // ⚠️ Aggregate FIRST, judge the summed base — do NOT drop sub-threshold member
+  // channels. A group of twelve 50-impression channels is a legitimate
+  // 600-impression base; excluding its members would understate the group.
+  return pooledEngagementRate({ impressions: den, interactions: num, impressionedPosts: posts });
 }
 
 const ALL_METRIC_KEYS: MetricKey[] = [
@@ -237,13 +255,15 @@ export function sumChannelRowsIntoGroups(
         groupRows.push(row);
       }
     }
+    const groupRate = rateFromRows(groupRows);
     return {
       id: group.id,
       name: group.name,
       color: group.color,
       channelCount: group.channels.length,
       ...sums,
-      engagementRate: rateFromRows(groupRows),
+      engagementRate: groupRate.rate,
+      engagementRateFlags: { lowBase: groupRate.lowBase, reason: groupRate.reason ?? null },
       unavailable: groupUnavailable(groupRows),
       engagementRateBasis: basisFromRows(groupRows),
       hasSnapshot: groupRows.some((r) => r.hasSnapshot !== false),
@@ -258,13 +278,18 @@ export function sumChannelRowsIntoGroups(
   if (ungroupedCount > 0 || ungrouped.length > 0) {
     const sums = emptySums();
     for (const row of ungrouped) addRow(sums, row);
+    const ungroupedRate = rateFromRows(ungrouped);
     result.push({
       id: UNGROUPED_ID,
       name: "Ungrouped",
       color: UNGROUPED_COLOR,
       channelCount: ungroupedCount,
       ...sums,
-      engagementRate: rateFromRows(ungrouped),
+      engagementRate: ungroupedRate.rate,
+      engagementRateFlags: {
+        lowBase: ungroupedRate.lowBase,
+        reason: ungroupedRate.reason ?? null,
+      },
       unavailable: groupUnavailable(ungrouped),
       engagementRateBasis: basisFromRows(ungrouped),
       hasSnapshot: ungrouped.some((r) => r.hasSnapshot !== false),

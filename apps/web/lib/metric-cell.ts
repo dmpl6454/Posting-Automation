@@ -32,6 +32,68 @@ export function metricCellValue(
   return value;
 }
 
+export interface RateCellInput {
+  engagementRate: number | null | undefined;
+  engagementRateBasis?: { impressionedPosts: number; totalPosts: number } | null;
+  engagementRateFlags?: { lowBase: boolean; reason: "no_basis" | "rate_impossible" | null } | null;
+  /** "post" for channels, "publish" for groups (a post to N channels counts N times). */
+  unit?: "post" | "publish";
+}
+
+export interface RateCell {
+  /** Formatted percent, or null when the cell must render "—". */
+  text: string | null;
+  /** Reason-specific tooltip. NEVER the generic "unavailable" copy. */
+  title: string;
+  /** Render a muted "low base" chip beside the number. */
+  lowBase: boolean;
+  /** "(1/10)" style base disclosure, or null when the base is complete. */
+  basis: string | null;
+}
+
+/**
+ * The ONE engagement-rate cell decision, shared by Channel Performance, Group
+ * Performance and the headline tile.
+ *
+ * ⚠️ The gate is `engagementRate === null`, NOT `impressionedPosts === 0`. A
+ * `rate_impossible` verdict has a perfectly non-zero base but still must render
+ * "—", so the old post-count test would have printed it.
+ *
+ * ⚠️ The two null REASONS get different copy on purpose. "We could not read it"
+ * and "we read it and it is impossible" are different facts, and reusing the
+ * unavailable-metric tooltip for the second one states something false.
+ */
+export function engagementRateCell(row: RateCellInput): RateCell {
+  const unit = row.unit ?? "post";
+  const basisData = row.engagementRateBasis;
+  const reason = row.engagementRateFlags?.reason ?? null;
+
+  if (row.engagementRate === null || row.engagementRate === undefined) {
+    return {
+      text: null,
+      title:
+        reason === "rate_impossible"
+          ? `More interactions than recorded views. Facebook reports reactions and video views from different sources, so a rate can't be computed for this row.`
+          : `No ${unit} here reported an impression or view count, so there is no denominator to compute a rate from.`,
+      lowBase: false,
+      basis: null,
+    };
+  }
+
+  const impressioned = basisData?.impressionedPosts ?? 0;
+  const total = basisData?.totalPosts ?? 0;
+  const lowBase = row.engagementRateFlags?.lowBase ?? false;
+
+  return {
+    text: `${row.engagementRate.toFixed(2)}%`,
+    title: lowBase
+      ? `Based on a small number of impressions — treat as indicative. Pooled over the ${impressioned} of ${total} ${unit}(s) that reported impressions.`
+      : `Pooled over the ${impressioned} of ${total} ${unit}(s) that reported impressions.`,
+    lowBase,
+    basis: total > 0 && impressioned < total ? `(${impressioned}/${total})` : null,
+  };
+}
+
 const LIKE_LABELS: Record<string, string> = {
   reactions: "Reactions",
   saves: "Saves",

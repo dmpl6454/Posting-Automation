@@ -9,6 +9,7 @@ import {
   sumChannelRowsIntoGroups,
   type ChannelStatRow,
 } from "../lib/group-stats";
+import { pooledEngagementRate } from "../lib/engagement-rate";
 import { createRateLimitMiddleware } from "../middleware/rate-limit.middleware";
 import { emailReportRateLimiter } from "../middleware/rate-limit";
 import { sendEmail } from "../lib/email";
@@ -368,8 +369,19 @@ export function gatePostReportRow(r: PostReportRow): PostReportRow {
     // post metric; or the capture was permission-blocked), a rate computed from
     // that hidden number is meaningless — and "0.00%" actively misreads as "no
     // engagement" when the truth is "not reported". Show "—" instead.
+    // A second gate on top: even with a visible denominator, interactions that
+    // EXCEED impressions mean the two sides came from different metric sources
+    // (FB reactions from the insights edge vs. views from video_insights/the
+    // scraper). Uses the GATED values so a metric rendering "—" cannot drive it.
     engagementRate:
-      gatedImpressions === null || r.engagementRate === null ? null : Number(r.engagementRate),
+      gatedImpressions === null || r.engagementRate === null
+        ? null
+        : (gate("likes", r.likes) ?? 0) +
+              (gate("comments", r.comments) ?? 0) +
+              (gate("shares", r.shares) ?? 0) >
+            gatedImpressions
+          ? null
+          : Number(r.engagementRate),
     saved: typeof savedRaw === "number" ? savedRaw : null,
     avgWatchTimeMs: typeof watchRaw === "number" ? watchRaw : null,
   };
@@ -432,7 +444,10 @@ async function fetchPostReportRows(
             CASE
               WHEN ep.impressions > 0
                 THEN (ep.likes + ep.comments + ep.shares)::float / ep.impressions * 100
-              WHEN ep."metricsSyncedAt" IS NOT NULL THEN 0
+              -- A measured row with ZERO impressions has an undefined rate, not a
+              -- zero one: 0/0. Emitting 0 here read as "no engagement" when the
+              -- truth is "no denominator".
+              WHEN ep."metricsSyncedAt" IS NOT NULL AND ep.impressions > 0 THEN 0
               ELSE NULL
             END AS "engagementRate",
             ep."metricsSyncedAt" AS "snapshotAt",
@@ -469,7 +484,8 @@ async function fetchPostReportRows(
             CASE
               WHEN s.impressions > 0
                 THEN (s.likes + s.comments + s.shares)::float / s.impressions * 100
-              WHEN s."snapshotAt" IS NOT NULL THEN 0
+              -- See the ext_rows arm: 0 impressions ⇒ undefined rate, not 0.
+              WHEN s."snapshotAt" IS NOT NULL AND s.impressions > 0 THEN 0
               ELSE NULL
             END AS "engagementRate",
             s."snapshotAt",
@@ -633,6 +649,16 @@ export const analyticsRouter = createRouter({
         sum((r) => r.impressionedComments ?? 0) +
         sum((r) => r.impressionedShares ?? 0);
 
+      // Same ONE implementation as perChannelStats/groupStats. This procedure
+      // previously returned a NON-NULLABLE rate with no basis, so an impossible
+      // or baseless rate rendered as a confident "0.00%" on the headline tile —
+      // the least honest of the four surfaces.
+      const orgRate = pooledEngagementRate({
+        impressions: impDen,
+        interactions: impNum,
+        impressionedPosts: sum((r) => r.impressionedPosts ?? 0),
+      });
+
       return {
         impressions: sum((r) => r.impressions),
         clicks: sum((r) => r.clicks),
@@ -640,7 +666,15 @@ export const analyticsRouter = createRouter({
         shares: sum((r) => r.shares),
         comments: sum((r) => r.comments),
         reach: sum((r) => r.reach),
-        engagementRate: impDen > 0 ? (impNum / impDen) * 100 : 0,
+        engagementRate: orgRate.rate,
+        engagementRateBasis: {
+          impressionedPosts: orgRate.impressionedPosts,
+          totalPosts: sum((r) => r.posts ?? 0),
+        },
+        engagementRateFlags: {
+          lowBase: orgRate.lowBase,
+          reason: orgRate.reason ?? null,
+        },
         reportableMetrics: reportable,
       };
     }),
@@ -881,7 +915,15 @@ export const analyticsRouter = createRouter({
         const impDen = m?.impressionedImpressions ?? 0;
         const impNum =
           (m?.impressionedLikes ?? 0) + (m?.impressionedComments ?? 0) + (m?.impressionedShares ?? 0);
-        const engagementRate = impDen > 0 ? (impNum / impDen) * 100 : 0;
+        // ONE implementation for every granularity — see engagement-rate.ts.
+        // Suppresses only the definitionally impossible (interactions >
+        // impressions, a cross-source mismatch that rendered 200% on prod) and
+        // flags a thin base without hiding it.
+        const rateVerdict = pooledEngagementRate({
+          impressions: impDen,
+          interactions: impNum,
+          impressionedPosts: m?.impressionedPosts ?? 0,
+        });
         const caps = platformMetricCapabilities(channel.platform);
         // Per-capture capability OVERRIDES the platform-wide static map, so real
         // FB video views aren't hidden behind "—" here while Reports shows them.
@@ -904,7 +946,7 @@ export const analyticsRouter = createRouter({
           shares,
           comments,
           reach: m?.reach ?? 0,
-          engagementRate,
+          engagementRate: rateVerdict.rate,
           /**
            * How narrow the rate's base is. A rate computed from ONE video must
            * not read as the channel's overall rate — on Facebook that is the
@@ -914,6 +956,16 @@ export const analyticsRouter = createRouter({
           engagementRateBasis: {
             impressionedPosts: m?.impressionedPosts ?? 0,
             totalPosts: m?.posts ?? 0,
+          },
+          /**
+           * Why the rate is "—", or why it carries a low-base chip. The UI must
+           * NOT reuse the generic "unavailable" tooltip for `rate_impossible` —
+           * "we could not read it" and "we read it and it is impossible" are
+           * different facts.
+           */
+          engagementRateFlags: {
+            lowBase: rateVerdict.lowBase,
+            reason: rateVerdict.reason ?? null,
           },
           /** Lifecycle status so the table can badge history from dead channels. */
           channelStatus: channel.disconnectedAt

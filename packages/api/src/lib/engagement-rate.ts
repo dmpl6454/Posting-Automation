@@ -25,3 +25,78 @@ export function computeEngagementRate(
   }
   return den > 0 ? (num / den) * 100 : 0;
 }
+
+/**
+ * Below this many pooled impressions a rate is real but statistically thin, so
+ * it is rendered WITH a "low base" chip rather than withheld.
+ *
+ * ⚠️ Do NOT raise this to suppress small numbers. It must stay below the
+ * smallest prod-verified TRUE rate we are required to keep rendering: the
+ * "Bollywood" channel at denominator 57 (7.02%) and the group row at 58
+ * (10.34%), both pinned in engagement-rate-pooling.test.ts. 50 is the largest
+ * round number under 57. This threshold NEVER suppresses — it only decorates.
+ */
+export const MIN_CONFIDENT_RATE_IMPRESSIONS = 50;
+
+export type RateVerdict = {
+  /** 0–100 percent, or null when the cell must render "—". */
+  rate: number | null;
+  /** Why the rate is null. Absent when a number is returned. */
+  reason?: "no_basis" | "rate_impossible";
+  /** 0 < impressions < MIN_CONFIDENT_RATE_IMPRESSIONS. The rate is STILL returned. */
+  lowBase: boolean;
+  impressions: number;
+  interactions: number;
+  impressionedPosts: number;
+};
+
+/**
+ * The ONE engagement-rate decision. Every granularity (org tile, channel row,
+ * group row, per-post report row) must route through this so a single page
+ * cannot disagree with itself.
+ *
+ * Two tiers, and only the impossible tier suppresses:
+ *
+ *   "—"  no_basis        impressionedPosts === 0 or impressions === 0
+ *   "—"  rate_impossible interactions > impressions
+ *   n%   + low-base chip 0 < impressions < MIN_CONFIDENT_RATE_IMPRESSIONS
+ *   n%                   impressions >= MIN_CONFIDENT_RATE_IMPRESSIONS
+ *
+ * ⚠️ Suppressing merely-SMALL bases was considered and rejected: prod-verified
+ * reel denominators are 54/452/17/7/75, so a minimum of 100 would blank three
+ * of five legitimate rates. A threshold also does not fix >100%, which is a
+ * population mismatch and unbounded at any denominator.
+ */
+export function pooledEngagementRate(p: {
+  impressions: number;
+  interactions: number;
+  impressionedPosts: number;
+}): RateVerdict {
+  const base = {
+    impressions: p.impressions,
+    interactions: p.interactions,
+    impressionedPosts: p.impressionedPosts,
+    lowBase: false,
+  };
+
+  if (p.impressionedPosts <= 0 || p.impressions <= 0) {
+    return { ...base, rate: null, reason: "no_basis" };
+  }
+
+  if (p.interactions > p.impressions) {
+    // Definitionally impossible. Numerator and denominator are summed over the
+    // SAME `FILTER (WHERE impressions > 0)` rows, so this can only mean the two
+    // sides came from different metric SOURCES — on Facebook, reactions from the
+    // post-insights edge against views from video_insights/the reel scraper.
+    // Observed on prod 2026-08-08: "Contents of bollywood" rendered 200.00%
+    // from 2 interactions over a single 1-view video. Printing that is worse
+    // than withholding it.
+    return { ...base, rate: null, reason: "rate_impossible" };
+  }
+
+  return {
+    ...base,
+    rate: (p.interactions / p.impressions) * 100,
+    lowBase: p.impressions < MIN_CONFIDENT_RATE_IMPRESSIONS,
+  };
+}

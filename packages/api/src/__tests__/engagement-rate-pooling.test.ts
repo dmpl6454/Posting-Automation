@@ -94,12 +94,14 @@ describe("group-level rate pools from the impressioned-only channel sums", () =>
     expect(sumChannelRowsIntoGroups(groups, rows, 0)[0]!.engagementRate).toBeCloseTo(10, 5);
   });
 
-  it("is 0 — never Infinity or NaN — when nothing reported impressions", () => {
+  it("is NULL — never 0, Infinity or NaN — when nothing reported impressions", () => {
     const rows = [row({ channelId: "c1", posts: 3, impressions: 0, likes: 9,
                         impressionedImpressions: 0, impressionedLikes: 0, impressionedPosts: 0 })];
     const rate = sumChannelRowsIntoGroups(groups, rows, 0)[0]!.engagementRate;
-    expect(rate).toBe(0);
-    expect(Number.isFinite(rate)).toBe(true);
+    // ⚠️ Was `toBe(0)` before 2026-08-08 — that encoded the OLD behavior. Nine
+    // likes over an unknown denominator has no computable rate; "0.00%" claims
+    // there was no engagement, which is the opposite of what the row shows.
+    expect(rate).toBeNull();
   });
 
   it("a zero-impression channel can't inflate a group containing an impressioned one", () => {

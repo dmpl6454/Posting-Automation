@@ -105,16 +105,23 @@ describe("sumChannelRowsIntoGroups", () => {
     expect(empty.posts).toBe(0);
     expect(empty.impressions).toBe(0);
     expect(empty.clicks).toBe(0);
-    expect(empty.engagementRate).toBe(0);
+    // ⚠️ Was `toBe(0)` before 2026-08-08. That encoded the OLD behavior: a group
+    // with no impressioned base rendered a confident "0.00%", which reads as "no
+    // engagement" when the truth is "no denominator". It is now null ⇒ "—".
+    expect(empty.engagementRate).toBeNull();
+    expect(empty.engagementRateFlags.reason).toBe("no_basis");
   });
 
-  it("returns engagementRate 0 (not NaN/Infinity) when impressions are 0", () => {
+  it('returns a null rate (not 0, NaN or Infinity) when impressions are 0', () => {
     const groups = [group("g1", ["c1"])];
     const rows = [row("c1", { impressions: 0, likes: 7, comments: 2, shares: 1 })];
 
     const out = sumChannelRowsIntoGroups(groups, rows);
-    expect(out[0]!.engagementRate).toBe(0);
-    expect(Number.isFinite(out[0]!.engagementRate)).toBe(true);
+    // ⚠️ Was `toBe(0)`. Same reason as above — 7 likes with zero recorded
+    // impressions has NO computable rate; printing 0% asserts the opposite of
+    // what the data says.
+    expect(out[0]!.engagementRate).toBeNull();
+    expect(out[0]!.engagementRateFlags.reason).toBe("no_basis");
   });
 
   it("returns an empty array for no groups and no rows", () => {
