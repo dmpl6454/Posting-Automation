@@ -459,6 +459,15 @@ Live-probed on production (real decrypted Page tokens, one metric per call, 5 me
 - **Engagement rate is safe**: measured 0 of 120 live posts would trip `rate_impossible`. Both sides of the ratio now come from the same post's metrics, so the 200%/1400% class cannot recur.
 - **METHOD LESSON:** a probe answers *"does name X work?"* — it can **never** answer *"does a name Y exist that I haven't thought of?"* The `#100 "must be a valid insights metric"` message was literally naming the problem. **When an API says a name is invalid, search the vendor's docs for the replacement before concluding the capability is gone.**
 - Tests: [fb-insight-metrics.test.ts](packages/social/src/__tests__/fb-insight-metrics.test.ts) (19), [facebook-media-view-ladder.test.ts](packages/social/src/__tests__/facebook-media-view-ladder.test.ts) (11), [external-recapture-floor.test.ts](apps/worker/src/__tests__/external-recapture-floor.test.ts) (9).
+- **⚠️ Run the real-Postgres availability suite before enabling the flag** — it is the ONLY executable proof the aggregate `has_meta`/`avail`/`BOOL_OR` jsonb logic works (a mocked Prisma cannot cover `$queryRawUnsafe`), and being `skipIf(!LIVE_E2E)` it never runs in a normal pass, so its fixtures rot silently. Verified 12/12 on 2026-08-11. Exact invocation (note: the psql role is `postautomation`, NOT `postgres`, and the key falls back to `NEXTAUTH_SECRET` from `.env`):
+  ```bash
+  cd packages/db && DATABASE_URL="postgresql://postautomation:postautomation_dev@localhost:5433/postautomation" \
+    npx prisma db push --skip-generate            # local DB drifts; sync it first
+  cd .. && set -a; source .env; set +a
+  DATABASE_URL="postgresql://postautomation:postautomation_dev@localhost:5433/postautomation" \
+    LIVE_E2E=1 npx vitest run insights-availability-sql
+  ```
+  One assertion in it had gone stale (`engagementRate` `toBe(0)` where `pooledEngagementRate` now correctly returns `null` for a zero base) — confirmed pre-existing by running the suite at `6482fa8` in a throwaway worktree, then fixed with a note. **When a skipped suite fails, check it against the pre-change commit before assuming your diff caused it.**
 
 ## 🔑 Meta token lifetime — the 90-day DATA-ACCESS cliff (2026-08-06) — READ before debugging "insights stopped working"
 

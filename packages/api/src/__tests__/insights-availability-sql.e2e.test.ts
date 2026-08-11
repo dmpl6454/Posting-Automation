@@ -294,7 +294,19 @@ describe.skipIf(!LIVE)("Insights availability — real Postgres", () => {
     // fb-feed reported clicks/likes but NO impressions ⇒ no honest denominator.
     const feed = rows.find((r: any) => r.name === "fb-feed")!;
     expect(feed.engagementRateBasis.impressionedPosts).toBe(0);
-    expect(feed.engagementRate).toBe(0); // UI renders "—" on a zero base
+    // ⚠️ Updated 2026-08-11 (was `toBe(0)`). This assertion had gone STALE and
+    // nothing caught it, because this whole suite is `skipIf(!LIVE_E2E)` and so
+    // never runs in a normal test pass — the exact rot the plan's P2-8 gap warned
+    // about. Verified by running the suite at pre-change main (6482fa8): it fails
+    // there identically, so this is not a regression.
+    //
+    // `pooledEngagementRate` returns `rate: null` + `reason: "no_basis"` for a
+    // zero base (engagement-rate.ts:83). null is the CORRECT contract: a channel
+    // with no impressioned posts has no rate, and 0 would be indistinguishable
+    // from "measured zero engagement". The sibling test above
+    // ("postReports: nulls the engagement rate…") already asserts null for the
+    // same situation — this line was simply never updated alongside it.
+    expect(feed.engagementRate).toBeNull(); // UI renders "—"; null, never a fake 0
 
     // fb-video DID report impressions (5000) with 7 likes + 2 comments.
     const video = rows.find((r: any) => r.name === "fb-video")!;
