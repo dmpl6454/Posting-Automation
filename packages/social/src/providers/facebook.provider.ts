@@ -20,6 +20,17 @@ import {
 } from "../utils/meta-insight-diagnosis";
 import { fetchT } from "../utils/fetch-timeout";
 import { headRemoteMedia } from "../utils/ranged-media";
+import {
+  FB_METRIC_IMPRESSIONS,
+  FB_METRIC_REACH,
+  FB_INSIGHT_METRICS_BASE,
+  FB_INSIGHT_METRICS_PREFERRED,
+  fbMetricParam,
+  readMetricValue,
+  presentMetricNames,
+  classifyFbRung,
+  isFbMediaViewEnabled,
+} from "../utils/fb-insight-metrics";
 import { scrapeFacebookReelEngagement } from "@postautomation/social-scrapers";
 
 /**
@@ -498,13 +509,18 @@ export class FacebookProvider extends SocialProvider {
     tokens: OAuthTokens,
     platformPostId: string
   ): Promise<SocialAnalytics | null> {
-    // Metric-source strategy — re-verified live 2026-08-06 with a token that HAS
-    // the newly-approved `read_insights` + `pages_read_user_content` granted:
-    //  - Meta DELETED all post_impressions*/post_engaged_users/post_reach/post_views
-    //    metrics. They return #100 "must be a valid insights metric" EVEN WITH
-    //    read_insights granted, while post_clicks on the SAME token returns a real
-    //    row — proving the deletion is platform-level, not permission-gated.
-    //    → impressions/reach are permanently "—". Do NOT re-add those names.
+    // Metric-source strategy — re-verified live 2026-08-11 with a token that HAS
+    // the approved `read_insights` + `pages_read_user_content` granted:
+    //  - Meta RENAMED per-post impressions/reach; it did NOT delete them. Their
+    //    deprecated-metrics page names the successors, and both were live-probed
+    //    on 5 mediaTypes + 25/25 reels using ONLY already-approved scopes:
+    //      post_media_view              -> impressions
+    //      post_total_media_view_unique -> reach
+    //    (An earlier comment here claimed they were permanently deleted. That was
+    //    wrong: it was derived from probing the OLD names, which ARE dead. See
+    //    docs/FB-MEDIA-VIEW-METRICS-PLAN-2026-08-11.md.)
+    //    Every `post_impressions*` / `post_reach` / `post_views` name IS dead and
+    //    must never be re-added — one invalid name 400s the WHOLE call.
     //  - clicks + REACTIONS come from the INSIGHTS edge and need `read_insights`.
     //  - comments have NO insights equivalent; the fields API (comments.summary)
     //    needs `pages_read_user_content`. So the fields fetch is BEST-EFFORT
@@ -517,33 +533,65 @@ export class FacebookProvider extends SocialProvider {
     // post_clicks and post_reactions_by_type_total both return a row even on a
     // zero-engagement post (verified), so they are reliable SENTINELS: 200 with
     // zero rows ⇒ the scope is missing.
-    const res = await this.graphFetch(
-      `${this.graphBaseUrl}/${this.apiVersion}/${platformPostId}/insights?metric=post_clicks,post_video_views,post_reactions_by_type_total&access_token=${tokens.accessToken}`
-    );
+    //
+    // ── The two-rung ladder ─────────────────────────────────────────────────
+    // `?metric=` is ALL-OR-NOTHING, and this body runs inside the publish job. A
+    // single rejected name would silently cost clicks AND likes across every FB
+    // target (diagnoseMetaError deliberately returns undefined for #100, so the
+    // loss would not even raise a health verdict). Rung 2 is byte-identical to
+    // the pre-change call, so a future Meta rename can only cost the two new
+    // metrics. Descend ONLY on a metric-NAME error — never on a 200-with-zero-
+    // rows, which is the missing-scope sentinel and cannot be fixed by a shorter
+    // list. Mirrors the Instagram ladder (instagram.provider.ts).
+    const wantMediaView = isFbMediaViewEnabled();
+    const insightsUrl = (metricParam: string) =>
+      `${this.graphBaseUrl}/${this.apiVersion}/${platformPostId}/insights?metric=${metricParam}&access_token=${tokens.accessToken}`;
 
-    const data: any = await res.json();
+    let res = await this.graphFetch(
+      insightsUrl(
+        fbMetricParam(wantMediaView ? FB_INSIGHT_METRICS_PREFERRED : FB_INSIGHT_METRICS_BASE)
+      )
+    );
+    let data: any = await res.json();
+    let rows: any[] = Array.isArray(data?.data) ? data.data : [];
+    let rung = classifyFbRung(res.ok, data?.error, rows.length);
+
+    if (wantMediaView && rung.kind === "bad_metric") {
+      // Loud + distinct: because #100 maps to NO degradation, this log line is
+      // the ONLY signal that Meta renamed a metric out from under us.
+      console.error(
+        `[Facebook] media-view metrics REJECTED by Graph (falling back to base metrics). ` +
+          `Meta may have renamed them again — re-probe before trusting Impressions/Reach. ` +
+          `post=${platformPostId} error=${JSON.stringify(data?.error)}`
+      );
+      res = await this.graphFetch(insightsUrl(fbMetricParam(FB_INSIGHT_METRICS_BASE)));
+      data = await res.json();
+      rows = Array.isArray(data?.data) ? data.data : [];
+      rung = classifyFbRung(res.ok, data?.error, rows.length);
+    }
+
     if (!res.ok) {
       console.warn(`[Facebook] getPostAnalytics insights failed for ${platformPostId}: ${JSON.stringify(data)}`);
     }
 
-    const metrics: Record<string, number> = {};
-    const rows: any[] = Array.isArray(data?.data) ? data.data : [];
-    for (const metric of rows) {
-      // post_reactions_by_type_total is an OBJECT {like:N,love:N,...}; sum it.
-      const v = metric.values?.[0]?.value;
-      metrics[metric.name] =
-        v && typeof v === "object"
-          ? Object.values(v).reduce((s: number, n: any) => s + (Number(n) || 0), 0)
-          : v || 0;
-    }
-
     // Insights are usable only when the call succeeded AND carried rows (the
     // sentinel rule above). `post_clicks` present is the positive proof.
+    // NOTE: the degradation is computed from the FINAL rung's response, so a
+    // genuinely under-scoped token still reports missing_scope rather than being
+    // masked by rung 1's name error.
     const insightsDegradation = res.ok
       ? diagnoseEmptyInsights(rows.length, true, "read_insights")
       : diagnoseMetaError(data?.error);
-    const insightsUsable = res.ok && rows.length > 0;
-    const reactionsFromInsights = insightsUsable ? metrics.post_reactions_by_type_total ?? null : null;
+    const insightsUsable = rung.kind === "ok";
+    // ⚠️ Read every metric via readMetricValue, NEVER a last-wins loop: Meta
+    // returns BOTH a `lifetime` and a stale zero-valued `day` row for some
+    // metrics, and the `day` row comes LAST. See fb-insight-metrics.ts.
+    const present = presentMetricNames(rows);
+    const reactionsFromInsights = insightsUsable
+      ? readMetricValue(rows, "post_reactions_by_type_total")
+      : null;
+    const mediaViewImpressions = insightsUsable ? readMetricValue(rows, FB_METRIC_IMPRESSIONS) : null;
+    const mediaViewReach = insightsUsable ? readMetricValue(rows, FB_METRIC_REACH) : null;
 
     // Best-effort post FIELDS (shares resolves on a basic Page token;
     // reactions/comments need pages_read_user_content). NEVER fatal.
@@ -584,33 +632,39 @@ export class FacebookProvider extends SocialProvider {
     const reactionsAvailable = reactions !== null;
 
     return {
-      impressions: 0,
-      clicks: insightsUsable ? metrics.post_clicks || 0 : 0,
+      impressions: mediaViewImpressions ?? 0,
+      clicks: insightsUsable ? readMetricValue(rows, "post_clicks") ?? 0 : 0,
       likes: reactions ?? 0,
       shares: shares ?? 0,
       comments: comments ?? 0,
-      reach: 0,
-      // No impressions ⇒ no meaningful rate. Reports recomputes engagement as
-      // (likes+comments+shares)/impressions, which correctly yields "—" for FB.
+      reach: mediaViewReach ?? 0,
+      // Left 0 deliberately: every read path recomputes the rate from
+      // impressioned rows (engagement-rate.ts). Computing it here would mix
+      // units with the SQL recompute — the bug the pooled recompute exists to
+      // avoid.
       engagementRate: 0,
-      // impressions/reach: deleted by Meta (permanent). clicks: needs
-      // read_insights. comments/likes: need pages_read_user_content (or the
-      // insights reaction fallback). Anything false renders "—", never a fake 0.
+      // Availability is derived PER METRIC NAME from what Graph actually
+      // returned — never one boolean for the whole call (that bug was fixed
+      // 2026-08-06). A name absent from `present` renders "—", never a fake 0.
       //
-      // ⚠️ `shares` MUST be declared. An OMITTED key reads as "available" in
+      // ⚠️ ALL SIX keys MUST be present. An OMITTED key reads as "available" in
       // gatePostReportRow/effectiveChannelUnavailable ("metadata present and the
-      // key not false ⇒ trust the value"), so leaving it out published a failed
+      // key not false ⇒ trust the value"), so leaving one out publishes a failed
       // fetch as a confident 0.
       metricsAvailable: {
-        impressions: false,
-        reach: false,
+        impressions: insightsUsable && present.has(FB_METRIC_IMPRESSIONS),
+        reach: insightsUsable && present.has(FB_METRIC_REACH),
         clicks: insightsUsable,
         comments: commentsAvailable,
         likes: reactionsAvailable,
         shares: shares !== null,
       },
       likeKind: "reactions", // FB "likes" are all reaction types
-      reachIsDistinct: false,
+      // post_total_media_view_unique IS a distinct-people count, unlike the
+      // impressions figure — so reach no longer merely duplicates impressions.
+      // ⚠️ This is per-POST uniqueness. SUM(reach) across posts is NOT reach;
+      // see the aggregate disclosure in analytics.router.ts.
+      reachIsDistinct: present.has(FB_METRIC_REACH),
       source: "api",
       ...(() => {
         const d = worstDegradation(insightsDegradation, fieldsDegradation);
@@ -660,6 +714,22 @@ export class FacebookProvider extends SocialProvider {
     // null ⇒ the worker `continue`s and metricsSyncedAt stays NULL ⇒ "—".
     // Unchanged semantics; never a fabricated row.
     if (!feed) return null;
+
+    // ⚠️ EARLY RETURN — must come BEFORE the videoId block below.
+    // When the feed capture already produced a POSITIVE view count (post_media_view
+    // is valid on videos and reels too — measured 25/25 reels), the Video-node
+    // fetch and the scraper are both redundant, so skipping them saves a Graph
+    // call and a page scrape per post.
+    //
+    // Two non-obvious requirements, each a bug that was caught in review:
+    //  1. Predicate on a POSITIVE COUNT, not on `metricsAvailable.impressions`.
+    //     Presence of a post_media_view ROW is not evidence of a usable number;
+    //     only a positive value justifies retiring the fallbacks.
+    //  2. It must `return` here, NOT fall through. The merge at the bottom does
+    //     `impressions: best ?? feed.impressions` — but a fall-through would also
+    //     re-run the availability derivation, and an earlier draft clobbered the
+    //     good value back to a declared-unavailable 0.
+    if ((feed.impressions ?? 0) > 0) return feed;
 
     // Rows listed BEFORE the field expansion shipped have no stored videoId, so
     // resolve it once. Clamped opts and `pageId` so the per-page usage header is
@@ -725,15 +795,37 @@ export class FacebookProvider extends SocialProvider {
       }
     }
 
+    // MAX-preferring merge — NEVER `views ?? 0`, which clobbered the feed value.
+    //
+    // Measured 2026-08-11: the scraper UNDERCOUNTS badly. On one reel it stored
+    // 6,421 where post_media_view reports 83,582 (and post_video_views 38,609).
+    // So the sources disagree by more than an order of magnitude and the larger,
+    // API-sourced figure is the right one — but a bare `??` or a blind overwrite
+    // could also let an API **0** beat a recovered scraped 10,291. Taking the max
+    // of the positive candidates is monotonic: a stored number can only go UP,
+    // which also makes the rollback story safe (see the plan's §4 asymmetry note).
+    const positives = [feed.impressions, views].filter(
+      (v): v is number => v !== null && v !== undefined && v > 0
+    );
+    const mergedImpressions = positives.length
+      ? Math.max(...positives)
+      : views ?? feed.impressions ?? 0;
+    // Available if EITHER source produced the metric. A genuine 0 from a source
+    // that did answer stays `true` (measured 0 is a fact); only "no source
+    // answered at all" renders "—".
+    const impressionsAvailable = views !== null || feed.metricsAvailable?.impressions === true;
+
     return {
-      ...feed, // clicks / likes / comments / shares PRESERVED — never overwritten
-      impressions: views ?? 0,
-      source: usedScrape ? "scrape" : feed.source,
+      ...feed, // clicks / likes / comments / shares / reach PRESERVED — never overwritten
+      impressions: mergedImpressions,
+      // Only claim "scrape" when the scrape actually won the merge; otherwise the
+      // provenance would lie about where the stored number came from.
+      source: usedScrape && mergedImpressions === views ? "scrape" : feed.source,
       metricsAvailable: {
         ...feed.metricsAvailable,
         // The ONLY key this path may change. `false` when no source produced a
         // view count, so the cell renders "—" rather than a confident 0.
-        impressions: views !== null,
+        impressions: impressionsAvailable,
       },
       ...(() => {
         const d = worstDegradation(feed.degraded, videoDegraded);
