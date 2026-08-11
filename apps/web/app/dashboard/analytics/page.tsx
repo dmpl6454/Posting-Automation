@@ -235,8 +235,11 @@ function InsightsAnalyticsView() {
     { name: "Failed", value: overview?.failed ?? 0, icon: XCircle, color: "text-red-600 bg-red-100 dark:text-red-400 dark:bg-red-950" },
     // "Total Reach: 0" is actively misleading on an org whose platforms can't
     // report reach at all — swap in a metric that CAN be populated.
+    // ⚠️ NOT "Total Reach": this is a sum of per-post reach, so it double-counts
+    // anyone who saw more than one post. Naming it "Total Reach" would assert a
+    // deduplicated audience size we cannot compute from per-post metrics.
     ...(statReportable("reach")
-      ? [{ name: "Total Reach", value: engagement?.reach ?? 0, icon: TrendingUp, color: "text-purple-600 bg-purple-100 dark:text-purple-400 dark:bg-purple-950", format: true }]
+      ? [{ name: "Reach (summed)", value: engagement?.reach ?? 0, icon: TrendingUp, color: "text-purple-600 bg-purple-100 dark:text-purple-400 dark:bg-purple-950", format: true }]
       : statReportable("impressions")
         ? [{ name: "Total Views", value: engagement?.impressions ?? 0, icon: TrendingUp, color: "text-purple-600 bg-purple-100 dark:text-purple-400 dark:bg-purple-950", format: true }]
         : [{ name: "Total Engagement", value: (engagement?.likes ?? 0) + (engagement?.comments ?? 0) + (engagement?.shares ?? 0), icon: TrendingUp, color: "text-purple-600 bg-purple-100 dark:text-purple-400 dark:bg-purple-950", format: true }]),
@@ -244,9 +247,15 @@ function InsightsAnalyticsView() {
 
   // Only tile metrics that SOME connected platform can actually report. A metric
   // no channel can ever populate isn't a "0" and isn't even worth a "—" tile —
-  // it's dead furniture that reads as "this product is broken". E.g. an
-  // FB-only org can never have Impressions or Reach (Meta deleted those
-  // Page-post metrics), so those tiles are dropped rather than showing 0.
+  // it's dead furniture that reads as "this product is broken", so the tile is
+  // dropped rather than showing 0.
+  //
+  // NOTE (2026-08-11): this used to say an FB-only org "can never" have
+  // Impressions or Reach because Meta deleted the Page-post metrics. Meta RENAMED
+  // them (post_media_view / post_total_media_view_unique) and they work on the
+  // already-approved scopes, so Facebook DOES populate both once captures carry
+  // the new declaration. The gate below is still correct — it is driven by
+  // per-capture capability, not by a hardcoded platform assumption.
   const reportable = new Set(engagement?.reportableMetrics ?? []);
   const canReport = (key: string) => reportable.size === 0 || reportable.has(key as any);
   const engagementMetrics = [
@@ -255,7 +264,11 @@ function InsightsAnalyticsView() {
     { key: "comments", label: "Comments", value: engagement?.comments ?? 0, icon: MessageCircle, color: "text-green-500" },
     { key: "shares", label: "Shares", value: engagement?.shares ?? 0, icon: Share, color: "text-purple-500" },
     { key: "clicks", label: "Clicks", value: engagement?.clicks ?? 0, icon: MousePointerClick, color: "text-orange-500" },
-    { key: "reach", label: "Reach", value: engagement?.reach ?? 0, icon: Users, color: "text-cyan-500" },
+    // ⚠️ "summed" is load-bearing, not decoration. Reach is distinct PEOPLE per
+    // POST, so adding it across posts counts the same person once per post they
+    // saw. Calling this bare "Reach" would state an audience size we do not have
+    // (a deduplicated figure needs the page-level edge, which has no code path).
+    { key: "reach", label: "Reach (summed per post)", value: engagement?.reach ?? 0, icon: Users, color: "text-cyan-500" },
   ].filter((m) => canReport(m.key));
 
   // Compress chart data if more than 30 points
@@ -273,7 +286,8 @@ function InsightsAnalyticsView() {
   // query is still loading so the header doesn't jump.
   const CHANNEL_METRIC_COLUMNS: Array<{ key: MetricKey; valueKey: string; label: string }> = [
     { key: "impressions", valueKey: "impressions", label: "Impressions" },
-    { key: "reach", valueKey: "reach", label: "Reach" },
+    // Summed across the channel's posts — see the engagementMetrics note above.
+    { key: "reach", valueKey: "reach", label: "Reach (summed)" },
     { key: "likes", valueKey: "likes", label: "Likes" },
     { key: "comments", valueKey: "comments", label: "Comments" },
     { key: "shares", valueKey: "shares", label: "Shares" },
@@ -905,9 +919,9 @@ function InsightsAnalyticsView() {
               <p className="px-4 py-3 text-xs text-muted-foreground/70 border-t">
                 &ldquo;—&rdquo; means the platform doesn&rsquo;t report that metric (or it hasn&rsquo;t synced yet), not zero.
                 &ldquo;Likes&rdquo; counts reactions on Facebook, saves on Pinterest, and upvotes on Reddit. Reach is shown only
-                where the platform reports it separately from impressions. Facebook no longer reports
-                impressions or reach for Page posts at all — Meta removed those metrics, so no permission
-                can restore them; Facebook <em>video</em> posts still report views.
+                where the platform reports it separately from impressions, and where it is summed across
+                posts it is labelled &ldquo;summed&rdquo; — the same person seeing two posts counts twice, so it is
+                not a deduplicated audience size.
                 &ldquo;Posts&rdquo; counts every post on the channel in this date range — those sent through
                 PostAutomation plus those posted directly on the platform. Direct posts are collected for
                 Facebook Pages and Instagram accounts from 1 Aug 2026 onward, and only while the channel&rsquo;s

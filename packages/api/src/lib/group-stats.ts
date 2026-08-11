@@ -119,8 +119,13 @@ export interface GroupStatsRow {
    * with formatNumber(), consulting no capability metadata at all — so the SAME
    * data rendered "—" in Channel Performance and "0" in Group Performance, one
    * card apart on one page. Measured on prod: the FB-only group "fb" showed
-   * "Reach 0" while both its channels declared reach unavailable (Meta deleted
-   * the FB Page-post reach metric — no permission restores it).
+   * "Reach 0" while both its channels declared reach unavailable.
+   *
+   * (Historical note: that FB reach gap was attributed to Meta deleting the
+   * Page-post metric. Meta RENAMED it — post_total_media_view_unique works on the
+   * approved scopes as of 2026-08-11 — so FB channels now DO declare reach
+   * available. The capability gate below is unchanged and still correct, because
+   * it reads per-capture declarations rather than assuming per platform.)
    *
    * A metric is unavailable for the GROUP only when EVERY contributing channel
    * marks it unavailable; if one member can report it, the sum is meaningful.

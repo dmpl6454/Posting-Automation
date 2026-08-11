@@ -184,6 +184,16 @@ async function fetchChannelStatRows(
      SELECT channel_id                       AS "channelId",
             COUNT(DISTINCT post_key)         AS posts,
             COALESCE(SUM(impressions), 0)    AS impressions,
+            -- ⚠️ This is a SUM of PER-POST reach, which is NOT reach.
+            -- Every platform that reports reach reports it as "distinct people who
+            -- saw THIS post", so summing across posts counts the same person once
+            -- per post they saw. Facebook is the first platform where this becomes
+            -- a large, confidently-wrong number (post_total_media_view_unique
+            -- measured 3 / 106 / 1 / 255 / 36 on five posts).
+            -- The UI therefore labels this "Reach (summed per post)" rather than
+            -- implying a deduplicated audience. A real deduplicated figure needs
+            -- the PAGE-level edge (page_total_media_view_unique), which this repo
+            -- has no code path for — a separate feature, not a relabel.
             COALESCE(SUM(reach), 0)          AS reach,
             COALESCE(SUM(likes), 0)          AS likes,
             COALESCE(SUM(comments), 0)       AS comments,
@@ -199,7 +209,11 @@ async function fetchChannelStatRows(
             COALESCE(SUM(likes)       FILTER (WHERE impressions > 0), 0) AS "impressionedLikes",
             COALESCE(SUM(comments)    FILTER (WHERE impressions > 0), 0) AS "impressionedComments",
             COALESCE(SUM(shares)      FILTER (WHERE impressions > 0), 0) AS "impressionedShares",
-            COUNT(*) FILTER (WHERE impressions > 0)                      AS "impressionedPosts",
+            -- COUNT(DISTINCT post_key), not COUNT(*): the "posts" column above is
+            -- distinct, so a post carrying two rows (e.g. two snapshots at the
+            -- same snapshotAt) made the disclosed basis chip print a numerator
+            -- ABOVE its denominator — "(2/1)". Both sides must count the same thing.
+            COUNT(DISTINCT post_key) FILTER (WHERE impressions > 0)       AS "impressionedPosts",
             -- true when at least one row on this channel has captured metrics;
             -- drives the UI's "—" (no data yet) vs "0" (real zero).
             BOOL_OR(has_metrics)             AS "hasSnapshot",
@@ -1418,7 +1432,39 @@ export const analyticsRouter = createRouter({
         });
       }
 
-      // Same columns as the Reports page CSV export (ReportsTab.tsx).
+      // Capability-filtered columns, exactly as the Reports page CSV does.
+      //
+      // ⚠️ These headers were hardcoded, so the EMAILED csv disagreed with the
+      // on-screen table and the downloaded csv from the same procedure family: an
+      // FB-only org received two permanently-empty columns the UI had dropped.
+      // Header and rows are built from ONE filtered list so their indexes cannot
+      // drift apart.
+      const reportable = new Set(
+        reportableMetrics(
+          rows.map((r) => r.platform),
+          rows.map((r) => r.snapshotMetadata?.metricsAvailable as any)
+        )
+      );
+      const inCsv = (key: string) => reportable.size === 0 || reportable.has(key as any);
+
+      type Row = (typeof rows)[number];
+      type CsvCell = string | number | null | undefined;
+      const allMetricCols: Array<{ key: string; header: string; get: (r: Row) => CsvCell }> = [
+        { key: "impressions", header: "Views/Impressions", get: (r) => r.impressions },
+        { key: "clicks", header: "Clicks", get: (r) => r.clicks },
+        { key: "likes", header: "Likes", get: (r) => r.likes },
+        { key: "comments", header: "Comments", get: (r) => r.comments },
+        { key: "shares", header: "Shares", get: (r) => r.shares },
+        { key: "reach", header: "Reach", get: (r) => r.reach },
+      ];
+      const metricCols = allMetricCols.filter((c) => inCsv(c.key));
+
+      const includeSaves = rows.some((r) => r.saved != null);
+      // Engagement rate is impressions ÷ engagement, so it can only be as honest
+      // as its denominator: with impressions dropped, a printed rate would be
+      // derived from a hidden number.
+      const includeEng = inCsv("impressions");
+
       const csv = toCsv(
         [
           "Post",
@@ -1427,14 +1473,9 @@ export const analyticsRouter = createRouter({
           "Platform",
           "Published At (UTC)",
           "Post URL",
-          "Views/Impressions",
-          "Clicks",
-          "Likes",
-          "Comments",
-          "Shares",
-          "Reach",
-          "Saves",
-          "Engagement %",
+          ...metricCols.map((c) => c.header),
+          ...(includeSaves ? ["Saves"] : []),
+          ...(includeEng ? ["Engagement %"] : []),
           "Metric captured at (UTC)",
         ],
         rows.map((r) => [
@@ -1444,14 +1485,11 @@ export const analyticsRouter = createRouter({
           r.platform,
           r.publishedAt ? new Date(r.publishedAt).toISOString() : "",
           r.publishedUrl ?? "",
-          r.impressions,
-          r.clicks,
-          r.likes,
-          r.comments,
-          r.shares,
-          r.reach,
-          r.saved,
-          r.engagementRate,
+          ...metricCols.map((c) => c.get(r)),
+          ...(includeSaves ? [r.saved] : []),
+          // A suppressed rate carries a reason token so an owner reconciling the
+          // email against the page can tell "not reported" from "measured zero".
+          ...(includeEng ? [r.engagementRate === null ? "—" : r.engagementRate] : []),
           r.snapshotAt ? new Date(r.snapshotAt).toISOString() : "",
         ])
       );

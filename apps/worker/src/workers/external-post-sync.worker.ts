@@ -101,11 +101,48 @@ const LIST_PAGE_SIZE = Number(process.env.EXTERNAL_LIST_PAGE_SIZE ?? 100);
 const LIST_PAGE_HARD_STOP = Number(process.env.EXTERNAL_LIST_PAGE_HARD_STOP ?? 5000);
 
 /**
+ * One-shot backfill floor. Any capture taken BEFORE this instant is eligible for
+ * re-measurement regardless of the decay cadence below.
+ *
+ * This is the entire backfill mechanism — no new job, no new column, no new state
+ * to reconcile. `metricsSyncedAt` is already the progress marker: a re-measured
+ * row moves past the floor and stops matching, so the sweep converges
+ * monotonically and is safe to re-run or interrupt.
+ *
+ * Set it to the deploy time of a capability change (e.g. the media-view metrics)
+ * so existing rows pick up newly-available metrics instead of waiting out the
+ * weekly decay. UNSET IT once the sweep is clean, or every run re-measures
+ * everything forever.
+ *
+ * Invalid/absent values disable the floor rather than throwing — a malformed env
+ * var must not take the sync down.
+ */
+const RECAPTURE_BEFORE = (() => {
+  const raw = process.env.EXTERNAL_RECAPTURE_BEFORE;
+  if (!raw) return null;
+  const t = new Date(raw);
+  if (Number.isNaN(t.getTime())) {
+    console.warn(`[ExternalSync] ignoring unparseable EXTERNAL_RECAPTURE_BEFORE=${JSON.stringify(raw)}`);
+    return null;
+  }
+  console.log(`[ExternalSync] recapture floor active: re-measuring captures older than ${t.toISOString()}`);
+  return t;
+})();
+
+/**
  * Re-measure cadence. A post's metrics move fast early then plateau, so spend the budget
  * on young posts instead of re-reading month-old ones every cycle.
  */
-function needsMetrics(publishedAt: Date, metricsSyncedAt: Date | null, now: Date): boolean {
+export function needsMetrics(
+  publishedAt: Date,
+  metricsSyncedAt: Date | null,
+  now: Date,
+  recaptureBefore: Date | null = RECAPTURE_BEFORE
+): boolean {
   if (!metricsSyncedAt) return true; // never measured — highest priority
+  // Backfill floor wins over the decay cadence: a capture taken before a
+  // capability change is stale in a way its AGE cannot express.
+  if (recaptureBefore && metricsSyncedAt < recaptureBefore) return true;
   const ageH = (now.getTime() - publishedAt.getTime()) / 3_600_000;
   const sinceH = (now.getTime() - metricsSyncedAt.getTime()) / 3_600_000;
   if (ageH <= 48) return sinceH >= 6; // fresh post: refresh often
@@ -165,8 +202,24 @@ export function createExternalPostSyncWorker() {
 
         listing = { page, tokens, accountId, channel };
         usedChannelId = channelId;
-        // A successful listing is positive evidence this channel is healthy.
-        await writeHealth(channelId, channel.metadata, undefined, now);
+        // 🔴 Deliberately NO positive health write here.
+        //
+        // `listRecentPosts` hits /{page}/published_posts, which needs NONE of the
+        // three insight scopes (read_insights / pages_read_user_content /
+        // instagram_manage_insights). So a channel that cannot read a single
+        // insight still lists posts fine — and stamping `insightsHealth: ok` from
+        // that success cleared the reconnect banner every 2 hours, for exactly the
+        // channels that most needed it.
+        //
+        // Worse, `healthVerdictChanged` returns false for a repeated identical
+        // `needs_reconnect`, so `checkedAt` never refreshed while the condition
+        // persisted — the verdict could be cleared by a listing but not re-armed
+        // by an unchanged failure.
+        //
+        // A positive verdict is written ONLY from the metrics pass below, which
+        // actually exercises the insight edges. A negative verdict from listing
+        // (the `page.degraded` branch above) is still recorded, because a failed
+        // LISTING is real evidence of a broken token.
         break;
       }
 
@@ -319,13 +372,46 @@ export function createExternalPostSyncWorker() {
         },
       });
 
-      const toMeasure = due.filter((p) => needsMetrics(p.publishedAt, p.metricsSyncedAt, now)).slice(0, METRICS_PER_RUN);
+      // Newest-first within each bucket, but NON-VIDEO posts are measured first.
+      //
+      // Why: a video row usually already carries a recovered view count, while a
+      // photo/album/status/link row has NOTHING (measured on prod 2026-08-11:
+      // 2,672 non-video FB rows, zero with impressions). Non-video captures are
+      // also strictly cheaper — no video-node fetch, no scrape, no scrape budget —
+      // so front-loading them converts the most "—" cells per unit of budget.
+      // METRICS_PER_RUN still caps the run; this only reorders within the cap, and
+      // an unmeasured row keeps metricsSyncedAt NULL so it stays at the front of
+      // the next run (a cap that DEFERS a value, never one that changes it).
+      // ⚠️ Bucket with isFacebookVideoLike — never a bare mediaType equality
+      // check. mediaType carries two Meta vocabularies (media_type ∪
+      // status_type), so comparing it to the single literal "video" silently
+      // treats `added_video` as non-video and would spend the cheap front of the
+      // budget on real videos. external-video-budget.test.ts forbids that
+      // comparison at the source level and caught exactly this mistake here.
+      const eligible = due.filter((p) => needsMetrics(p.publishedAt, p.metricsSyncedAt, now));
+      const videoLikeRow = (p: (typeof eligible)[number]) =>
+        isFacebookVideoLike({
+          mediaType: p.mediaType,
+          permalink: p.permalink,
+          videoId: p.resolvedVideoId,
+        }) || p.productType === "REELS";
+      const toMeasure = [
+        ...eligible.filter((p) => !videoLikeRow(p)),
+        ...eligible.filter((p) => videoLikeRow(p)),
+      ].slice(0, METRICS_PER_RUN);
       let measured = 0;
       // Scrape budget for this run. Separate from METRICS_PER_RUN because a
       // scrape costs ~2.1s of wall time (measured) against ~0.3s for a Graph
       // call, and the box is 4 cores shared with Postgres and MinIO.
       let scrapeBudget = SCRAPE_ENABLED ? SCRAPE_PER_RUN : 0;
       let consecutiveScrapeMisses = 0;
+      // Insights health, derived from the METRICS pass rather than the listing.
+      //   undefined = no capture ran, so we learned nothing -> write nothing
+      //   null      = at least one clean capture -> healthy
+      //   object    = every capture degraded -> that verdict
+      // Leaving it `undefined` when nothing was measured is deliberate: silence is
+      // "no new evidence", which must not overwrite a standing verdict either way.
+      let insightVerdict: { reason: string; missingScopes?: string[]; detail?: string } | null | undefined;
 
       for (const p of toMeasure) {
         // Only FACEBOOK posts that could carry a view count take the recovery
@@ -379,6 +465,17 @@ export function createExternalPostSyncWorker() {
           }
         }
 
+        // Health evidence from a call that ACTUALLY exercised the insight edges.
+        // The listing pass deliberately writes no positive verdict (it needs none
+        // of the insight scopes), so this is the only place a channel can be
+        // declared healthy. First capture wins for the negative case; a single
+        // clean capture proves the scopes work.
+        if (insightVerdict === undefined) {
+          insightVerdict = analytics.degraded ?? null;
+        } else if (insightVerdict !== null && !analytics.degraded) {
+          insightVerdict = null; // a later clean capture clears an earlier failure
+        }
+
         // ⚠️ metricsAvailable must be stored EXACTLY as the provider declared it. An
         // omitted key reads as AVAILABLE downstream, so dropping this makes a metric we
         // were never allowed to read display as a confident 0.
@@ -400,6 +497,12 @@ export function createExternalPostSyncWorker() {
           data: metricData,
         });
         measured++;
+      }
+
+      // Write the insights verdict ONCE per run, from real insight-edge evidence.
+      // `undefined` (nothing measured) writes nothing — see the declaration above.
+      if (insightVerdict !== undefined && usedChannelId) {
+        await writeHealth(usedChannelId, listing.channel.metadata, insightVerdict ?? undefined, now);
       }
 
       console.log(

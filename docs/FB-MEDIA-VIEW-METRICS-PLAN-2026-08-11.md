@@ -1,8 +1,26 @@
 # Facebook impressions/reach recovery — `post_media_view` implementation plan + backfill
 
-**Status:** design complete, nothing implemented. Supersedes the "FB impressions/reach are
-permanently gone" conclusion in CLAUDE.md and in
+**Status: Deploy 1 IMPLEMENTED, flag OFF, not yet deployed.** Supersedes the "FB
+impressions/reach are permanently gone" conclusion in CLAUDE.md and in
 `docs/INSIGHTS-META-PERMISSIONS-GRANTED-2026-08-06.md`.
+
+| Item | State |
+|---|---|
+| §3.2 two-rung ladder + §2 lifetime selection | ✅ `packages/social/src/utils/fb-insight-metrics.ts` + provider |
+| §3.3 MAX-preferring merge, §3.4 scraper demotion (early return) | ✅ |
+| §3.5 `CAPS.FACEBOOK.unavailable` untouched | ✅ verified byte-identical |
+| §3.6 `SUM(reach)` relabelled + `impressionedPosts` DISTINCT fix | ✅ |
+| P0-1 listing must not stamp insights health | ✅ verdict moved to the metrics pass |
+| P1-3 `emailReport` capability-filtered columns | ✅ |
+| §4 backfill floor `EXTERNAL_RECAPTURE_BEFORE` + non-video-first ordering | ✅ |
+| Kill switch plumbed in `docker-compose.prod.yml` | ✅ fail-closed, defaults `false` |
+| §3.7 engagement-rate `rate_impossible` measurement (Deploy 0) | ⏳ **not run — gates enabling the flag** |
+| P1-6 FB excluded from periodic crons | ⏳ accepted/documented, not changed |
+| P2-7 `chat.router` second aggregate | ⏳ follow-up PR |
+| P2-8 run the `LIVE_E2E` availability SQL suite | ⏳ checklist gate before enabling |
+| P2-10 pass `pageId` on the feed insights call | ⏳ not done |
+
+Verification: **2,268 tests pass** (39 new), `tsc` clean on social/api/worker, web build green.
 
 **Every fact below was live-probed against the production Graph API** from inside
 `postautomation-worker-1` with real decrypted Page tokens on 2026-08-11. Design reviewed by a
