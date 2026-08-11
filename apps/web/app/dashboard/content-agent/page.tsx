@@ -50,7 +50,7 @@ function ContentStudioInner() {
   const [pendingMedia, setPendingMedia] = useState<{ dataUrl: string } | null>(null);
 
   return (
-    <div className="mx-auto max-w-4xl space-y-4 p-4">
+    <div className="w-full space-y-4">
         {/* Header */}
         <div>
           <h1 className="text-xl font-bold tracking-tight">Content Studio</h1>

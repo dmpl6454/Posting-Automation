@@ -1257,7 +1257,9 @@ export default function ChannelsPage() {
               to the official sign-in flow when their credentials are configured.
             </p>
           </div>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {/* 4 columns only from 2xl — at lg/xl the cards were ~220px, too narrow
+              for icon + name + badge + trailing action without truncating. */}
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
             {unconnectedPlatforms.map((p) => {
               const info = authInfoByPlatform.get(p.platform);
               const isToken = info?.authType === "token";
@@ -1270,8 +1272,13 @@ export default function ChannelsPage() {
                 >
                   <PlatformIcon platform={p.platform} size="md" />
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-1.5">
-                      <p className="truncate font-medium">{p.displayName}</p>
+                    {/* The platform name gets the row to itself. It used to share
+                        one line with the Token/Setup badge, and since the badge is
+                        shrink-0 the NAME absorbed all the overflow — in a narrow
+                        card that rendered "Threa…", which is unreadable. The badge
+                        now rides with the status line below. */}
+                    <p className="truncate font-medium">{p.displayName}</p>
+                    <div className="mt-0.5 flex items-center gap-1.5">
                       {isToken && (
                         <Badge variant="secondary" className="shrink-0 text-[9px]">
                           Token
@@ -1285,14 +1292,14 @@ export default function ChannelsPage() {
                           Setup
                         </Badge>
                       )}
+                      <p className="truncate text-xs text-muted-foreground">
+                        {isToken
+                          ? "No developer app needed"
+                          : needsSetup
+                          ? "Credentials missing"
+                          : "Click to connect"}
+                      </p>
                     </div>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {isToken
-                        ? "No developer app needed"
-                        : needsSetup
-                        ? "OAuth credentials missing"
-                        : "Click to connect"}
-                    </p>
                   </div>
                   {needsSetup ? (
                     <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />

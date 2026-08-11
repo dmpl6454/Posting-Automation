@@ -414,7 +414,7 @@ export function ImageTab({ onImageGenerated }: ImageTabProps = {}) {
   const isSaving = saveMutation.isPending;
 
   return (
-    <div className="mx-auto max-w-7xl space-y-6">
+    <div className="w-full space-y-6">
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Left Column - Controls */}
         <div className="space-y-6">

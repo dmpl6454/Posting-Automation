@@ -53,6 +53,15 @@ const nextConfig = {
   eslint: {
     ignoreDuringBuilds: true,
   },
+  // DEV ONLY (ignored by `next build`). Next keeps just ~5 compiled routes in
+  // memory and disposes them after ~60s idle, so clicking around a dashboard
+  // this size means constantly recompiling pages you visited a minute ago —
+  // measured as multi-second waits on routes that were already built. Hold more
+  // of them, for longer.
+  onDemandEntries: {
+    maxInactiveAge: 30 * 60 * 1000,
+    pagesBufferLength: 32,
+  },
   transpilePackages: [
     "@postautomation/api",
     "@postautomation/db",

@@ -90,7 +90,7 @@ function WebhookDeliveryPageInner() {
   }
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6">
+    <div className="w-full space-y-6">
       {/* Back link */}
       <Button variant="ghost" size="sm" asChild>
         <a href="/dashboard/settings/webhooks" className="flex items-center gap-1">

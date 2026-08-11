@@ -158,7 +158,7 @@ function AuditLogPageInner() {
   const hasActiveFilters = action || entityType || startDate || endDate;
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    <div className="w-full space-y-6">
       {/* Header */}
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Audit Log</h1>

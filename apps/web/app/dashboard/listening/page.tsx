@@ -421,7 +421,9 @@ function ListeningPageInner() {
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Recent Mentions */}
         <div className="lg:col-span-2">
-          <div className="flex items-center justify-between mb-3">
+          {/* Fixed-height header row so this column's box lines up with the
+              sidebar's, in both the with- and without-"Sync Now" states. */}
+          <div className="mb-3 flex h-8 items-center justify-between">
             <h2 className="text-sm font-semibold text-muted-foreground">Recent Mentions</h2>
             {selectedQuery && (
               <Button
@@ -492,92 +494,99 @@ function ListeningPageInner() {
 
         {/* Sidebar: Sources + Queries */}
         <div className="space-y-6">
-          {/* Source Breakdown */}
+          {/* Source Breakdown — the heading sits ABOVE the card (matching
+              "Recent Mentions") rather than inside a CardHeader, so the two
+              columns' boxes start at the same y instead of being offset by the
+              height of the heading. */}
           {sources && sources.length > 0 && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-sm font-medium">Sources</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2">
-                {sources.map((s) => (
-                  <div key={s.source} className="flex items-center justify-between">
-                    <span className="text-sm">{s.source}</span>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold">{s.count}</span>
-                      <span className="text-[10px] text-muted-foreground">
-                        {s.reach.toLocaleString()} reach
-                      </span>
+            <div>
+              <h2 className="mb-3 flex h-8 items-center text-sm font-semibold text-muted-foreground">
+                Sources
+              </h2>
+              <Card>
+                <CardContent className="space-y-2 pt-6">
+                  {sources.map((s) => (
+                    <div key={s.source} className="flex items-center justify-between">
+                      <span className="text-sm">{s.source}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-semibold">{s.count}</span>
+                        <span className="text-[10px] text-muted-foreground">
+                          {s.reach.toLocaleString()} reach
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
+                  ))}
+                </CardContent>
+              </Card>
+            </div>
           )}
 
-          {/* Listening Queries */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-sm font-medium">Your Queries</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              {queriesLoading ? (
-                [1, 2].map((i) => <Skeleton key={i} className="h-12 rounded-xl" />)
-              ) : queries && queries.length > 0 ? (
-                queries.map((q) => (
-                  <div
-                    key={q.id}
-                    className="flex items-center justify-between rounded-lg border border-border/30 p-2.5"
-                  >
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{q.name}</p>
-                      <p className="truncate text-[10px] text-muted-foreground">
-                        {q.keywords.slice(0, 3).join(", ")}
-                        {q._count.mentions > 0 && ` · ${q._count.mentions} mentions`}
-                      </p>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-1">
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="h-7 w-7"
-                        disabled={updateMutation.isPending && updateMutation.variables?.id === q.id}
-                        onClick={() =>
-                          updateMutation.mutate({ id: q.id, isActive: !q.isActive })
-                        }
-                      >
-                        {updateMutation.isPending && updateMutation.variables?.id === q.id ? (
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                        ) : q.isActive ? (
-                          <Power className="h-3 w-3 text-emerald-500" />
-                        ) : (
-                          <PowerOff className="h-3 w-3 text-muted-foreground" />
-                        )}
-                      </Button>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="h-7 w-7 text-destructive"
-                        disabled={deleteMutation.isPending && deleteMutation.variables?.id === q.id}
-                        onClick={() => {
-                          if (confirm("Delete this query and all its mentions?")) {
-                            deleteMutation.mutate({ id: q.id });
+          {/* Listening Queries — same heading-above-card pattern as above. */}
+          <div>
+            <h2 className="mb-3 flex h-8 items-center text-sm font-semibold text-muted-foreground">
+              Your Queries
+            </h2>
+            <Card>
+              <CardContent className="space-y-2 pt-6">
+                {queriesLoading ? (
+                  [1, 2].map((i) => <Skeleton key={i} className="h-12 rounded-xl" />)
+                ) : queries && queries.length > 0 ? (
+                  queries.map((q) => (
+                    <div
+                      key={q.id}
+                      className="flex items-center justify-between rounded-lg border border-border/30 p-2.5"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">{q.name}</p>
+                        <p className="truncate text-[10px] text-muted-foreground">
+                          {q.keywords.slice(0, 3).join(", ")}
+                          {q._count.mentions > 0 && ` · ${q._count.mentions} mentions`}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7"
+                          disabled={updateMutation.isPending && updateMutation.variables?.id === q.id}
+                          onClick={() =>
+                            updateMutation.mutate({ id: q.id, isActive: !q.isActive })
                           }
-                        }}
-                      >
-                        {deleteMutation.isPending && deleteMutation.variables?.id === q.id
-                          ? <Loader2 className="h-3 w-3 animate-spin" />
-                          : <Trash2 className="h-3 w-3" />}
-                      </Button>
+                        >
+                          {updateMutation.isPending && updateMutation.variables?.id === q.id ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : q.isActive ? (
+                            <Power className="h-3 w-3 text-emerald-500" />
+                          ) : (
+                            <PowerOff className="h-3 w-3 text-muted-foreground" />
+                          )}
+                        </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7 text-destructive"
+                          disabled={deleteMutation.isPending && deleteMutation.variables?.id === q.id}
+                          onClick={() => {
+                            if (confirm("Delete this query and all its mentions?")) {
+                              deleteMutation.mutate({ id: q.id });
+                            }
+                          }}
+                        >
+                          {deleteMutation.isPending && deleteMutation.variables?.id === q.id
+                            ? <Loader2 className="h-3 w-3 animate-spin" />
+                            : <Trash2 className="h-3 w-3" />}
+                        </Button>
+                      </div>
                     </div>
-                  </div>
-                ))
-              ) : (
-                <p className="text-sm text-muted-foreground text-center py-4">
-                  No queries yet
-                </p>
-              )}
-            </CardContent>
-          </Card>
+                  ))
+                ) : (
+                  <p className="text-sm text-muted-foreground text-center py-4">
+                    No queries yet
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          </div>
         </div>
       </div>
     </div>

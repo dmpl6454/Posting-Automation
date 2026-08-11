@@ -13,6 +13,15 @@ html{scroll-behavior:smooth;}
 html,body{background:#060912;margin:0;padding:0;}
 @keyframes paBounce{0%,100%{transform:translateY(0)}50%{transform:translateY(5px)}}
 
+/* The hero scrim is inset:0 on a 100vh hero, so it used to terminate in a hard
+   horizontal edge at the hero's bottom — a visible band/step while scrolling into
+   the content sheet. Ramp it out vertically so the hero dissolves into the sheet
+   fade continuously. Text sits in the top ~60%, so legibility is unaffected. */
+.pa-hero-fade{
+  -webkit-mask-image:linear-gradient(to bottom,#000 0%,#000 68%,rgba(0,0,0,0.62) 84%,rgba(0,0,0,0) 100%);
+  mask-image:linear-gradient(to bottom,#000 0%,#000 68%,rgba(0,0,0,0.62) 84%,rgba(0,0,0,0) 100%);
+}
+
 /* ---- hero mobile responsiveness (overrides inline styles) ---- */
 @media (max-width:860px){
   .pa-nav{padding:13px 16px !important;}
@@ -64,6 +73,25 @@ const THREE_SCRIPTS = [
 ];
 const SPLASH_SCRIPT = "/landing/splash-cursor.js";
 
+// An element's own inline `transition`, captured before the reveal animation
+// overwrites it. Module-scoped (not per-effect) so that a re-run of the effect
+// — React StrictMode invokes effects twice in development — reuses the value
+// captured on the first pass instead of re-reading the already-mutated style.
+const BASE_TRANSITION = new WeakMap<HTMLElement, string>();
+
+// "a:b;c:d" -> [["a","b"],["c","d"]]. Values may themselves contain ":" (e.g.
+// a url), so only the first colon of each declaration is a separator.
+function parseDecls(css: string): [string, string][] {
+  const out: [string, string][] = [];
+  for (const part of css.split(";")) {
+    const decl = part.trim();
+    if (!decl) continue;
+    const i = decl.indexOf(":");
+    if (i > 0) out.push([decl.slice(0, i).trim(), decl.slice(i + 1).trim()]);
+  }
+  return out;
+}
+
 function loadScript(src: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const existing = document.querySelector<HTMLScriptElement>(`script[data-pa-src="${src}"]`);
@@ -103,14 +131,34 @@ export default function LandingHome() {
     const cleanups: (() => void)[] = [];
 
     // ---------- hover (style-hover attribute) ----------
+    // Apply the hover declarations property-by-property, and on leave restore
+    // only those same properties to whatever they were at hover time.
+    //
+    // The previous implementation snapshotted the whole `style` attribute once
+    // and swapped the attribute wholesale. That is unsafe here because the
+    // reveal animation below writes into the same inline style: the snapshot
+    // could capture the reveal's *hidden* state (opacity:0; translateY(28px)),
+    // and hovering then re-applied it — permanently hiding the card, since
+    // mouseleave restored the same snapshot and the observer had already
+    // unobserved the element.
     root.querySelectorAll<HTMLElement>("[style-hover]").forEach((el) => {
-      const base = el.getAttribute("style") || "";
-      const hover = el.getAttribute("style-hover") || "";
+      const decls = parseDecls(el.getAttribute("style-hover") || "");
+      if (!decls.length) return;
+      let restore: [string, string, string][] = [];
       const enter = () => {
-        el.setAttribute("style", base + ";" + hover);
+        restore = decls.map(([prop]) => [
+          prop,
+          el.style.getPropertyValue(prop),
+          el.style.getPropertyPriority(prop),
+        ]);
+        decls.forEach(([prop, value]) => el.style.setProperty(prop, value));
       };
       const leave = () => {
-        el.setAttribute("style", base);
+        restore.forEach(([prop, value, priority]) => {
+          if (value) el.style.setProperty(prop, value, priority);
+          else el.style.removeProperty(prop);
+        });
+        restore = [];
       };
       el.addEventListener("mouseenter", enter);
       el.addEventListener("mouseleave", leave);
@@ -124,10 +172,18 @@ export default function LandingHome() {
     const revealEls = Array.from(root.querySelectorAll<HTMLElement>("[data-reveal]"));
     if (revealEls.length) {
       const idx = new Map<Element, number>();
+      const stagger = new Map<HTMLElement, number>();
       revealEls.forEach((el) => {
         const p = el.parentElement as Element;
         const k = idx.get(p) || 0;
         idx.set(p, k + 1);
+        stagger.set(el, k * 85);
+        // Remember the element's OWN transition (e.g. the card's
+        // "border-color .3s, transform .3s" hover lift) before the reveal
+        // transition overwrites it, so it can be handed back afterwards.
+        // Guarded so a re-run of this effect can't capture the reveal
+        // transition as if it were the element's own.
+        if (!BASE_TRANSITION.has(el)) BASE_TRANSITION.set(el, el.style.transition);
         el.style.opacity = "0";
         el.style.transform = "translateY(28px)";
         el.style.willChange = "opacity,transform";
@@ -137,6 +193,15 @@ export default function LandingHome() {
       const reveal = (el: HTMLElement) => {
         el.style.opacity = "1";
         el.style.transform = "none";
+        // Once the reveal has played, give the element its own transition back
+        // so hover effects run at their intended speed rather than the .8s
+        // reveal easing.
+        timers.push(
+          setTimeout(() => {
+            el.style.willChange = "";
+            el.style.transition = BASE_TRANSITION.get(el) || "";
+          }, 800 + (stagger.get(el) || 0) + 60)
+        );
       };
       if ("IntersectionObserver" in window) {
         const io = new IntersectionObserver(

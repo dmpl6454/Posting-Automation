@@ -1031,7 +1031,7 @@ ${content}`;
     : null;
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
+    <div className="w-full space-y-6">
       <div className="grid min-w-0 gap-6 xl:grid-cols-[1fr,400px]">
         {/* Left column - Editor */}
         <div className="min-w-0 space-y-6">

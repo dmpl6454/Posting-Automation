@@ -408,7 +408,15 @@ export default function SuperAgentPage() {
   const hasMessages = messages.length > 0 || !!streamingContent;
 
   return (
-    <div className="relative flex h-[calc(100dvh-4rem)] overflow-hidden">
+    // Fill whatever the shell gives us rather than guessing a viewport offset —
+    // the ActiveTaskBar above is conditional, so any fixed calc() is wrong half
+    // the time (that mismatch is what cropped the chat window).
+    //
+    // The negative margins cancel the shell's own `p-4 sm:p-6 lg:p-8` so the chat
+    // runs edge to edge. A chat surface is full-bleed by nature: framing it in
+    // 32px of dead gutter both wastes space and leaves it visibly detached from
+    // the scrollbars. Keep these in step with the shell's padding scale.
+    <div className="relative -m-4 flex min-h-0 flex-1 overflow-hidden sm:-m-6 lg:-m-8">
       {/* Mobile drawer backdrop — only when the sidebar is open below lg */}
       {sidebarOpen && (
         <div
@@ -590,7 +598,7 @@ export default function SuperAgentPage() {
             </div>
           ) : (
             /* ── Message list ── */
-            <div className="mx-auto max-w-3xl space-y-4 p-4">
+            <div className="mx-auto w-full max-w-5xl space-y-4 p-4">
               {messages.map((msg) => (
                 <div key={msg.id} className={cn("flex gap-3", msg.role === "user" && "flex-row-reverse")}>
                   <div
@@ -703,7 +711,7 @@ export default function SuperAgentPage() {
 
         {/* ── Input Bar ── */}
         <div className="border-t bg-background p-3">
-          <div className="mx-auto max-w-3xl">
+          <div className="mx-auto w-full max-w-5xl">
             {/* Attachment thumbnails (audit fix 2026-06-06) */}
             {attachments.length > 0 && (
               <div className="mb-2 flex flex-wrap gap-2">
