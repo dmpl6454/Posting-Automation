@@ -14,7 +14,7 @@ impressions/reach are permanently gone" conclusion in CLAUDE.md and in
 | P1-3 `emailReport` capability-filtered columns | ✅ |
 | §4 backfill floor `EXTERNAL_RECAPTURE_BEFORE` + non-video-first ordering | ✅ |
 | Kill switch plumbed in `docker-compose.prod.yml` | ✅ fail-closed, defaults `false` |
-| §3.7 engagement-rate `rate_impossible` measurement (Deploy 0) | ⏳ **not run — gates enabling the flag** |
+| §3.7 engagement-rate `rate_impossible` measurement (Deploy 0) | ✅ **RUN — 0 of 120 would be suppressed** (see below) |
 | P1-6 FB excluded from periodic crons | ⏳ accepted/documented, not changed |
 | P2-7 `chat.router` second aggregate | ⏳ follow-up PR |
 | P2-8 run the `LIVE_E2E` availability SQL suite | ⏳ checklist gate before enabling |
@@ -338,9 +338,24 @@ Feed posts gain a real denominator, so they enter the pooling in
   impressions when a post is shared onward. With `impressions` as low as 3–14 on photos and
   statuses, this is not hypothetical.
 
-**Required before enabling:** run the `interactions > post_media_view` count across a sample and
-report it. If it is material, `rate_impossible` needs a different remedy for FB (e.g. treat it as
-`low_confidence` rather than suppression) — that is a product decision, not a code detail.
+**✅ MEASURED 2026-08-11 (n=120 live prod posts) — the risk is nil:**
+
+```
+impressions == 0             : 0    (renders "—", no rate either way)
+low base (0 < impr < 50)     : 50   (renders WITH a low-base chip, NOT suppressed)
+interactions > impressions   : 0    => 0.0% would be suppressed
+by mediaType                 : video 0/112, album 0/8
+```
+
+No remedy needed; `rate_impossible` stays as-is. The reason it fired before and cannot now: the
+`200%`/`1400%` incidents divided a numerator and denominator drawn from **different sources**
+(reactions from the insights edge over one video's view count). Both sides now come from the same
+post's own metrics, and `post_media_view` is by construction ≥ any single interaction count. The
+50 low-base rows render *with* a disclosure chip rather than being hidden — the honest middle
+ground, not suppression.
+
+⚠️ The sample is video-heavy (112/120) because that is the population. Re-check after the
+non-video-first backfill ordering has measured a few thousand photo/album/status rows.
 
 ---
 
