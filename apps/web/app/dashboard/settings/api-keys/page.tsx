@@ -49,7 +49,7 @@ function ApiKeysPageInner() {
   };
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <div className="w-full space-y-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">API Keys</h1>
         <p className="text-muted-foreground">Manage API access to your account</p>

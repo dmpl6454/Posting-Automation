@@ -219,11 +219,8 @@ export default function DashboardPage() {
           : statItems.map((stat) => (
               <div
                 key={stat.name}
-                className="group relative overflow-hidden rounded-2xl border border-black/[0.06] bg-white/60 p-5 shadow-sm transition-all hover:shadow-lg dark:border-white/[0.08] dark:bg-white/[0.04]"
-                style={{
-                  backdropFilter: "blur(16px) saturate(180%)",
-                  WebkitBackdropFilter: "blur(16px) saturate(180%)",
-                }}
+                // No backdrop-filter here — see the AI Tools grid below for why.
+                className="group relative overflow-hidden rounded-2xl border border-black/[0.06] bg-white/80 p-5 shadow-sm transition-all hover:shadow-lg dark:border-white/[0.08] dark:bg-white/[0.06]"
               >
                 <div className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${stat.gradient} opacity-50`} />
                 <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-black/[0.04] to-transparent dark:via-white/15" />
@@ -261,15 +258,20 @@ export default function DashboardPage() {
               <CardWrapper
                 key={card.href}
                 {...(wrapperProps as any)}
+                // NO backdrop-filter on these cards. A backdrop-filter element
+                // renders from the pixels *behind* it, and all the cards in this
+                // grid share one backdrop root — so hovering any card (its
+                // shadow-xl + blurred accent glow repaint the shared backdrop)
+                // made every other card re-sample and re-saturate, showing up as
+                // a glare/overlay sweeping across cards the cursor never touched.
+                // The card's own styles were provably unchanged during that, so
+                // the coupling could only come from backdrop sampling. Slightly
+                // more opaque backgrounds keep the same visual weight.
                 className={`group relative flex w-full items-center gap-4 overflow-hidden rounded-2xl border p-5 shadow-sm transition-all text-left ${
                   locked
-                    ? "cursor-pointer border-black/[0.06] bg-white/40 opacity-70 dark:border-white/[0.08] dark:bg-white/[0.02]"
-                    : "border-black/[0.06] bg-white/60 hover:shadow-xl hover:shadow-black/[0.08] active:scale-[0.98] dark:border-white/[0.08] dark:bg-white/[0.04] dark:hover:shadow-black/20"
+                    ? "cursor-pointer border-black/[0.06] bg-white/60 opacity-70 dark:border-white/[0.08] dark:bg-white/[0.03]"
+                    : "border-black/[0.06] bg-white/80 hover:shadow-xl hover:shadow-black/[0.08] active:scale-[0.98] dark:border-white/[0.08] dark:bg-white/[0.06] dark:hover:shadow-black/20"
                 }`}
-                style={{
-                  backdropFilter: "blur(20px) saturate(180%)",
-                  WebkitBackdropFilter: "blur(20px) saturate(180%)",
-                }}
               >
                 {/* Liquid glass gradient overlay */}
                 <div className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${card.accentFrom}/[0.08] ${card.accentTo}/[0.04] opacity-60 transition-opacity group-hover:opacity-100 dark:${card.accentFrom}/[0.06] dark:${card.accentTo}/[0.03]`} />

@@ -48,7 +48,7 @@ function WebhooksPageInner() {
   });
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <div className="w-full space-y-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Webhooks</h1>
         <p className="text-muted-foreground">Get notified when events happen in your account</p>

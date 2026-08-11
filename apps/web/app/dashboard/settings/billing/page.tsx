@@ -31,7 +31,7 @@ function BillingPageInner() {
 
   if (isLoading) {
     return (
-      <div className="mx-auto max-w-4xl space-y-6">
+      <div className="w-full space-y-6">
         <Skeleton className="h-8 w-48" />
         <Skeleton className="h-32 rounded-xl" />
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -42,7 +42,7 @@ function BillingPageInner() {
   }
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6">
+    <div className="w-full space-y-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Billing</h1>
         <p className="text-muted-foreground">Manage your subscription and billing</p>
@@ -123,7 +123,7 @@ function BillingPageInner() {
           return (
             <Card
               key={plan.type}
-              className={isCurrent ? "border-primary ring-1 ring-primary" : ""}
+              className={`flex flex-col ${isCurrent ? "border-primary ring-1 ring-primary" : ""}`}
             >
               <CardHeader className="pb-3">
                 <div className="flex items-center justify-between">
@@ -135,15 +135,11 @@ function BillingPageInner() {
                   <span className="text-sm text-muted-foreground">/mo</span>
                 </div>
               </CardHeader>
-              <CardContent className="space-y-4">
-                <ul className="space-y-2">
-                  {plan.features.map((f) => (
-                    <li key={f} className="flex items-start gap-2 text-sm">
-                      <CheckCircle className="mt-0.5 h-4 w-4 shrink-0 text-green-500" />
-                      <span>{f}</span>
-                    </li>
-                  ))}
-                </ul>
+              {/* Action sits directly under the price, above the feature list, so
+                  the CTA is reachable without reading the whole card. The list
+                  below grows to fill, keeping every card the same height and the
+                  buttons on one line across the row. */}
+              <CardContent className="flex flex-1 flex-col space-y-4">
                 {isCurrent ? (
                   <Button variant="outline" className="w-full" disabled>
                     Current Plan
@@ -157,7 +153,29 @@ function BillingPageInner() {
                     <Zap className="h-4 w-4" />
                     Upgrade
                   </Button>
-                ) : null}
+                ) : (
+                  // No action for Free while on a paid plan. Reserve the row with
+                  // a real (hidden) Button rather than a fixed height, so the
+                  // feature lists stay aligned even if the button size token
+                  // changes.
+                  <Button
+                    variant="outline"
+                    className="invisible w-full"
+                    disabled
+                    aria-hidden
+                    tabIndex={-1}
+                  >
+                    &nbsp;
+                  </Button>
+                )}
+                <ul className="flex-1 space-y-2">
+                  {plan.features.map((f) => (
+                    <li key={f} className="flex items-start gap-2 text-sm">
+                      <CheckCircle className="mt-0.5 h-4 w-4 shrink-0 text-green-500" />
+                      <span>{f}</span>
+                    </li>
+                  ))}
+                </ul>
               </CardContent>
             </Card>
           );
