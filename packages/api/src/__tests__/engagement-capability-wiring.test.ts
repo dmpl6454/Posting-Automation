@@ -32,12 +32,46 @@ describe("analytics.engagement passes the per-capture override", () => {
   const src = read("packages/api/src/routers/analytics.router.ts");
 
   it("never calls reportableMetrics with only the platform list", () => {
-    // A single-argument call is the bug. Match the call and assert it spans a
-    // second argument before its closing paren.
-    const calls = [...src.matchAll(/reportableMetrics\(([\s\S]{0,240}?)\)\s*;/g)];
-    expect(calls.length).toBeGreaterThan(0);
-    for (const [, args] of calls) {
-      expect(args).toMatch(/declaredAvailable/);
+    // A single-argument call is the bug. Match each call and assert it passes a
+    // SECOND argument — i.e. a top-level comma in the argument list.
+    //
+    // Deliberately not matching the identifier `declaredAvailable`: callers
+    // legitimately source the override from different shapes (statRows carry
+    // `declaredAvailable`; postReports/emailReport read
+    // `snapshotMetadata.metricsAvailable` straight off the rows). Pinning the
+    // NAME would fail an equally-correct caller, so what is asserted is the
+    // presence of the override argument itself.
+    // Brace-match each call's argument list so a nested `)` cannot truncate it
+    // (a lazy `[\s\S]*?\)` stops at `c.platform as string)` and reports a false
+    // single-argument call).
+    const argLists: string[] = [];
+    const NEEDLE = "reportableMetrics(";
+    for (let i = src.indexOf(NEEDLE); i !== -1; i = src.indexOf(NEEDLE, i + 1)) {
+      let depth = 0;
+      const start = i + NEEDLE.length;
+      for (let k = start; k < src.length; k++) {
+        const c = src[k];
+        if (c === "(") depth++;
+        else if (c === ")") {
+          if (depth === 0) {
+            argLists.push(src.slice(start, k));
+            break;
+          }
+          depth--;
+        }
+      }
+    }
+    // The import line and the type-only references are not calls; require at
+    // least the two production call sites.
+    expect(argLists.length).toBeGreaterThanOrEqual(2);
+    for (const args of argLists) {
+      const topLevel = args.replace(/\([^()]*\)/g, "");
+      expect(
+        topLevel.includes(","),
+        `reportableMetrics called with a single argument — the per-capture override is missing:\n${args}`
+      ).toBe(true);
+      // And the second argument must be a capability source, not just anything.
+      expect(args).toMatch(/declaredAvailable|metricsAvailable/);
     }
   });
 

@@ -253,6 +253,12 @@ services:
       EXTERNAL_SYNC_ENABLED: ${EXTERNAL_SYNC_ENABLED:-true}
       EXTERNAL_VIEW_SCRAPE_ENABLED: ${EXTERNAL_VIEW_SCRAPE_ENABLED:-false}
       EXTERNAL_SCRAPE_PER_RUN: ${EXTERNAL_SCRAPE_PER_RUN:-5}
+      # FB impressions/reach via post_media_view + post_total_media_view_unique.
+      # Fail-CLOSED in code (=== "true"), so an unplumbed value keeps it OFF.
+      FB_MEDIA_VIEW_METRICS_ENABLED: ${FB_MEDIA_VIEW_METRICS_ENABLED:-false}
+      # One-shot backfill floor (ISO timestamp). Re-measures captures older than
+      # this regardless of the decay cadence. UNSET once the sweep is clean.
+      EXTERNAL_RECAPTURE_BEFORE: ${EXTERNAL_RECAPTURE_BEFORE:-}
       EXTERNAL_SYNC_SHARDS: ${EXTERNAL_SYNC_SHARDS:-4}
       EXTERNAL_SYNC_CONCURRENCY: ${EXTERNAL_SYNC_CONCURRENCY:-2}
       EXTERNAL_METRICS_PER_RUN: ${EXTERNAL_METRICS_PER_RUN:-150}
