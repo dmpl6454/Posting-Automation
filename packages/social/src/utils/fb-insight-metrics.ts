@@ -125,6 +125,34 @@ export function presentMetricNames(rows: readonly FbInsightRow[]): Set<string> {
   return s;
 }
 
+/**
+ * 🔴 AVAILABILITY MUST BE DERIVED FROM THE SAME ROW THE VALUE CAME FROM.
+ *
+ * `presentMetricNames` answers "did any row carry this name?" — it iterates
+ * EVERY row, so a lone stale `period=day` row marks the metric present. But the
+ * VALUE comes from `selectLifetimeRow`, which prefers `lifetime` and falls back
+ * to `matching[0]`. When Meta returns ONLY a day row, those two disagree: the
+ * value resolves to the day bucket's 0 while availability resolves to `true`.
+ * The result is a fabricated zero declared available — precisely the lie this
+ * subsystem exists to prevent.
+ *
+ * MEASURED ON PROD 2026-08-12: 113 Facebook ExternalPost rows synced that day
+ * carried `impressions > 0`, `reach = 0`, `metricsSource = "api"` AND
+ * `metricsAvailable.reach = "true"`. One of them (596165523816494_1604121547940633)
+ * stored reach 0 while Graph reported `post_total_media_view_unique` lifetime
+ * 16,438. `post_media_view` is lifetime-only, which is exactly why impressions
+ * survived on the same row — the asymmetry that fingerprints this bug.
+ *
+ * A `day` row is a real measurement OF ONE DAY; it is never the lifetime total,
+ * so it must not be published as one. A row with NO period is still trusted, so
+ * the deliberate `?? matching[0]` fallback for a hypothetical lifetime-less
+ * metric keeps working.
+ */
+export function hasTrustedValue(rows: readonly FbInsightRow[], name: string): boolean {
+  const row = selectLifetimeRow(rows, name);
+  return !!row && row.period !== "day";
+}
+
 export type FbRungVerdict =
   /** Rows came back — use them. */
   | { kind: "ok" }

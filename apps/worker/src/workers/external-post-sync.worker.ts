@@ -16,6 +16,7 @@ import {
   type PublishedTargetLike,
 } from "../lib/external-post-dedup";
 import { deriveInsightsHealth, mergeInsightsHealth } from "../lib/channel-insights-health";
+import { stepScrapeBudget, shouldDeferUnmeasured } from "../lib/scrape-budget";
 
 /**
  * Ingests posts that exist ON a connected account — including ones published directly on
@@ -426,14 +427,17 @@ export function createExternalPostSyncWorker() {
             videoId: p.resolvedVideoId,
           });
 
-        // ⚠️ Once the scrape budget is exhausted, STOP processing video-like
-        // rows entirely — do not fall through to a feed-only capture. A
-        // feed-only capture sets metricsSyncedAt, and needsMetrics would then
-        // hide the post for a WEEK before it could get its views. Leaving it
-        // unmeasured keeps it at the front of the next run's queue and renders
-        // "—" meanwhile (a cap that DEFERS a value, never one that changes it).
+        // This row needs a view count that only the Video node or the scraper
+        // could historically supply.
+        //
+        // ⚠️ Do NOT skip it up-front when the scrape budget is gone. That guard
+        // predates FB_MEDIA_VIEW_METRICS_ENABLED: the feed capture now usually
+        // carries a real `post_media_view` number, so skipping would throw away
+        // a good measurement to protect a fallback that is no longer needed.
+        // The deferral it existed for is preserved below — after the capture,
+        // where we can see whether anything usable actually came back.
         const wantsScrape = videoLike && (p.isReel === true || !p.resolvedVideoId);
-        if (wantsScrape && scrapeBudget <= 0) continue;
+        const scrapeAllowed = scrapeBudget > 0;
 
         let analytics: any = null;
         try {
@@ -442,7 +446,7 @@ export function createExternalPostSyncWorker() {
                 pageId: platformId,
                 videoId: p.resolvedVideoId,
                 isReel: p.isReel === true,
-                allowScrape: scrapeBudget > 0,
+                allowScrape: scrapeAllowed,
               })
             : await provider.getPostAnalytics(listing.tokens, p.platformPostId);
         } catch (err: any) {
@@ -451,18 +455,45 @@ export function createExternalPostSyncWorker() {
         }
         if (!analytics) continue;
 
-        if (wantsScrape) {
-          scrapeBudget--;
-          // Circuit breaker: a soft IP ban makes every scrape miss. Stop for the
-          // rest of this run rather than burning the budget — and the IP — on
-          // calls that cannot succeed. Fail-open: the feed capture still lands.
-          if (analytics.source === "scrape") consecutiveScrapeMisses = 0;
-          else if (++consecutiveScrapeMisses >= SCRAPE_BREAKER_MISSES) {
-            console.warn(
-              `[ExternalSync] ${platform}:${platformId} — ${consecutiveScrapeMisses} consecutive scrape misses, stopping scrapes for this run`
-            );
-            scrapeBudget = 0;
-          }
+        // 🔴 Budget and breaker accounting keys off whether a scrape ACTUALLY
+        // RAN — never off `source !== "scrape"`, which is also what a clean API
+        // success looks like.
+        //
+        // That conflation stalled the pipeline: when the media-view metrics went
+        // live (2026-08-11 11:35 UTC) the provider began returning early with
+        // `source: "api"` whenever `post_media_view` yielded a positive count, so
+        // five consecutive SUCCESSES tripped the 5-miss breaker, zeroed the
+        // budget, and the old up-front guard then skipped every remaining reel in
+        // the account. Scrape-sourced captures went 1,824/h → 0 inside the hour
+        // and 94.3% of FB reels went unmeasured, with the backlog growing daily.
+        const step = stepScrapeBudget(
+          { budget: scrapeBudget, consecutiveMisses: consecutiveScrapeMisses },
+          analytics,
+          SCRAPE_BREAKER_MISSES
+        );
+        scrapeBudget = step.budget;
+        consecutiveScrapeMisses = step.consecutiveMisses;
+        if (step.tripped) {
+          console.warn(
+            `[ExternalSync] ${platform}:${platformId} — ${step.consecutiveMisses} consecutive scrape misses, stopping scrapes for this run`
+          );
+        }
+
+        // The deferral the old up-front `continue` protected, now applied where
+        // it can be decided on evidence: only leave the row unmeasured when it
+        // WANTED a view count, no scrape was available to fetch one, AND the API
+        // supplied none either. Stamping metricsSyncedAt on a valueless capture
+        // would hide the post behind needsMetrics for up to a week; leaving it
+        // keeps it at the front of the next run (a cap that DEFERS a value,
+        // never one that changes it).
+        if (
+          shouldDeferUnmeasured(
+            wantsScrape,
+            scrapeAllowed,
+            analytics.metricsAvailable?.impressions
+          )
+        ) {
+          continue;
         }
 
         // Health evidence from a call that ACTUALLY exercised the insight edges.
