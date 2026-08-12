@@ -28,6 +28,7 @@ import {
   fbMetricParam,
   readMetricValue,
   presentMetricNames,
+  hasTrustedValue,
   classifyFbRung,
   isFbMediaViewEnabled,
 } from "../utils/fb-insight-metrics";
@@ -429,10 +430,13 @@ export class FacebookProvider extends SocialProvider {
           : row.status_type
             ? { mediaType: String(row.status_type) }
             : {}),
-        // The Video/Reel node behind a video attachment. Facebook reports a
-        // post's view count ONLY on this node — the feed-post insights edge
-        // returns post_video_views = 0 for every video (measured 40/40), so
-        // without this id a video post can never show its views.
+        // The Video/Reel node behind a video attachment, used to recover a view
+        // count when the post node does not supply one.
+        // ⚠️ CORRECTION 2026-08-12: the old note here claimed the feed-post
+        // insights edge "returns post_video_views = 0 for every video (measured
+        // 40/40)". REFUTED live — it returns a real lifetime value plus a
+        // trailing period=day row valued 0; the 40/40 zero was a last-wins parse
+        // of that trailing row. See social.types.ts videoId and fb-insight-metrics.ts.
         ...(row.attachments?.data?.[0]?.target?.id
           ? { videoId: String(row.attachments.data[0].target.id) }
           : {}),
@@ -651,10 +655,15 @@ export class FacebookProvider extends SocialProvider {
       // gatePostReportRow/effectiveChannelUnavailable ("metadata present and the
       // key not false ⇒ trust the value"), so leaving one out publishes a failed
       // fetch as a confident 0.
+      // ⚠️ hasTrustedValue, NOT present.has — availability must come from the
+      // SAME row selection as the value. `present` sees a stale `period=day`
+      // row and says "available" while readMetricValue reads that day row's 0,
+      // publishing a fabricated zero (113 such FB rows measured on prod
+      // 2026-08-12). See fb-insight-metrics.ts.
       metricsAvailable: {
-        impressions: insightsUsable && present.has(FB_METRIC_IMPRESSIONS),
-        reach: insightsUsable && present.has(FB_METRIC_REACH),
-        clicks: insightsUsable,
+        impressions: insightsUsable && hasTrustedValue(rows, FB_METRIC_IMPRESSIONS),
+        reach: insightsUsable && hasTrustedValue(rows, FB_METRIC_REACH),
+        clicks: insightsUsable && hasTrustedValue(rows, "post_clicks"),
         comments: commentsAvailable,
         likes: reactionsAvailable,
         shares: shares !== null,
@@ -779,7 +788,9 @@ export class FacebookProvider extends SocialProvider {
     }
 
     // Reel, or the Video node returned nothing.
+    let scrapeAttempted = false;
     if (views === null && opts.allowScrape) {
+      scrapeAttempted = true;
       const scraper = opts.scrape ?? ((id: string) => scrapeFacebookReelEngagement(id, {
         timeoutMs: Number(process.env.FB_SCRAPE_TIMEOUT_MS ?? 6000),
       }));
@@ -821,6 +832,10 @@ export class FacebookProvider extends SocialProvider {
       // Only claim "scrape" when the scrape actually won the merge; otherwise the
       // provenance would lie about where the stored number came from.
       source: usedScrape && mergedImpressions === views ? "scrape" : feed.source,
+      // Reported so the caller's circuit breaker can tell "did not need to
+      // scrape" (a SUCCESS) from "scraped and got nothing" (a real miss).
+      // Deriving that from `source` conflated the two and stalled the pipeline.
+      scrapeAttempted,
       metricsAvailable: {
         ...feed.metricsAvailable,
         // The ONLY key this path may change. `false` when no source produced a

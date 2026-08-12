@@ -469,6 +469,48 @@ Live-probed on production (real decrypted Page tokens, one metric per call, 5 me
   ```
   One assertion in it had gone stale (`engagementRate` `toBe(0)` where `pooledEngagementRate` now correctly returns `null` for a zero base) — confirmed pre-existing by running the suite at `6482fa8` in a throwaway worktree, then fixed with a note. **When a skipped suite fails, check it against the pre-change commit before assuming your diff caused it.**
 
+## 🔴 The scrape breaker counted SUCCESS as failure — FB reel measurement collapsed (2026-08-12)
+
+**A capability improvement silently disabled the pipeline that fed it.** When
+`FB_MEDIA_VIEW_METRICS_ENABLED=true` landed (2026-08-11 11:35 UTC), FB reel measurement stopped
+within the hour. Found by audit, not by an alert.
+
+- **Mechanism — three correct pieces composing into a stall.** (1) `getExternalPostAnalytics`
+  returns EARLY with `source: "api"` whenever `post_media_view` yields a positive count — the happy
+  path, no scrape needed. (2) The external-sync circuit breaker (which exists to detect a soft IP
+  ban) inferred "a scrape missed" from `source !== "scrape"` — **which is also exactly what a clean
+  API success looks like**. (3) After 5 consecutive *successes* it zeroed `scrapeBudget`, and the
+  up-front `if (wantsScrape && scrapeBudget <= 0) continue;` then skipped **every remaining reel in
+  the account without measuring it at all**.
+- **Measured damage:** scrape-sourced captures `1,824/h → 0` inside the flag-flip hour and stayed
+  0 for a day; **12,845 of 13,615 FB reels (94.3%) unmeasured or stale**, backlog *growing* ~163/day
+  (933 new reels/day vs ~770 measured). Non-reel FB was fully caught up the whole time, which is why
+  nothing looked broken. The scraper itself was fine — run live it returned real numbers in ~2s, so
+  the "deploy IP is blocked" hypothesis was wrong.
+- **Fix:** `SocialAnalytics.scrapeAttempted` is set ONLY when a scrape actually executed, and the
+  breaker keys off that. **Never re-derive a scrape miss from `source`** — locked at the source
+  level by [external-video-budget.test.ts](apps/worker/src/__tests__/external-video-budget.test.ts)
+  (comments stripped before matching, since the explanatory note quotes the banned expression).
+  Arithmetic extracted to pure [scrape-budget.ts](apps/worker/src/lib/scrape-budget.ts).
+- **The up-front skip moved AFTER the capture** (`shouldDeferUnmeasured`): defer only when the row
+  wanted a view count, no scrape was available, AND the API supplied no impressions either. The old
+  guard predated the media-view metrics and was discarding good API captures to protect a fallback
+  that is no longer needed.
+- **🔴 Companion fix — availability must come from the SAME row as the value.** `presentMetricNames`
+  iterates EVERY row, so a lone stale `period=day` row marked a metric present, while the value came
+  from `selectLifetimeRow`. A day-only response therefore stored **0 declared available** — a
+  fabricated zero. **Measured: 113 FB rows on 2026-08-12** with `impressions>0, reach=0,
+  source=api, metricsAvailable.reach=true`, one storing reach 0 while Graph reported 16,438.
+  `post_media_view` is lifetime-only, which is why impressions survived on the same row — that
+  asymmetry fingerprints the bug. Use **`hasTrustedValue`**, never `present.has`, for any
+  metricsAvailable key derived from insight rows.
+- **⚠️ Two code comments were REFUTED by live probing and corrected** (facebook.provider.ts,
+  social.types.ts): both claimed the feed edge "returns `post_video_views` = 0 for every video
+  (measured 40/40)". It returns a real `lifetime` value (1,468 on a live reel) plus a trailing
+  `period=day` row valued 0 — the 40/40 zero **was the last-wins parse**. That comment is what kept
+  a working metric from ever being wired up. **A measurement taken through a known-buggy parser is
+  not evidence about the API.**
+
 ## 🔁 The PERPETUAL "reconnect channels" banner — an ORPHANED channel row (2026-08-12)
 
 **A channel left out of a later consent can never be healed by reconnecting, because the reconnect

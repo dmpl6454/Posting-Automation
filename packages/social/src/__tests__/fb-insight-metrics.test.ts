@@ -8,8 +8,10 @@ import {
   selectLifetimeRow,
   readMetricValue,
   presentMetricNames,
+  hasTrustedValue,
   classifyFbRung,
   isFbMediaViewEnabled,
+  type FbInsightRow,
 } from "../utils/fb-insight-metrics";
 
 /**
@@ -185,5 +187,60 @@ describe("isFbMediaViewEnabled — fail CLOSED", () => {
     expect(isFbMediaViewEnabled({} as any)).toBe(false);
     expect(isFbMediaViewEnabled({ FB_MEDIA_VIEW_METRICS_ENABLED: "1" } as any)).toBe(false);
     expect(isFbMediaViewEnabled({ FB_MEDIA_VIEW_METRICS_ENABLED: "TRUE" } as any)).toBe(false);
+  });
+});
+
+/**
+ * 🔴 THE CONFIDENT-ZERO REACH BUG (measured on prod 2026-08-12).
+ *
+ * 113 Facebook ExternalPost rows synced that day carried impressions > 0,
+ * reach = 0, metricsSource = "api" AND metricsAvailable.reach = "true" — a
+ * fabricated zero declared available. One of them stored reach 0 while Graph
+ * reported post_total_media_view_unique lifetime 16,438.
+ *
+ * Cause: availability came from presentMetricNames (which iterates EVERY row, so
+ * a lone stale period=day row marks the metric present) while the VALUE came
+ * from selectLifetimeRow. When only a day row exists, the two disagree.
+ * post_media_view is lifetime-only, which is exactly why impressions survived on
+ * the same row — the asymmetry that fingerprints the bug.
+ */
+describe("hasTrustedValue — availability must match the row the value came from", () => {
+  const dayOnly: FbInsightRow[] = [
+    { name: "post_total_media_view_unique", period: "day", values: [{ value: 0, end_time: "2026-08-11" }] },
+  ];
+  const lifetimeThenDay: FbInsightRow[] = [
+    { name: "post_total_media_view_unique", period: "lifetime", values: [{ value: 16438 }] },
+    { name: "post_total_media_view_unique", period: "day", values: [{ value: 0, end_time: "2026-08-11" }] },
+  ];
+
+  it("🔴 a day-ONLY response is NOT trusted — this is the fabricated zero", () => {
+    // presentMetricNames says true (the name is there); the value is the day 0.
+    expect(presentMetricNames(dayOnly).has("post_total_media_view_unique")).toBe(true);
+    expect(readMetricValue(dayOnly, "post_total_media_view_unique")).toBe(0);
+    // …so availability must NOT follow presentMetricNames.
+    expect(hasTrustedValue(dayOnly, "post_total_media_view_unique")).toBe(false);
+  });
+
+  it("trusts a lifetime row even when a stale day row trails it", () => {
+    expect(hasTrustedValue(lifetimeThenDay, "post_total_media_view_unique")).toBe(true);
+    expect(readMetricValue(lifetimeThenDay, "post_total_media_view_unique")).toBe(16438);
+  });
+
+  it("is false for a metric that is absent entirely", () => {
+    expect(hasTrustedValue(lifetimeThenDay, "post_clicks")).toBe(false);
+  });
+
+  it("still trusts a row with NO period — preserves the deliberate fallback", () => {
+    const noPeriod: FbInsightRow[] = [{ name: "post_clicks", values: [{ value: 7 }] }];
+    expect(hasTrustedValue(noPeriod, "post_clicks")).toBe(true);
+    expect(readMetricValue(noPeriod, "post_clicks")).toBe(7);
+  });
+
+  it("agrees with presentMetricNames on the normal lifetime-only shape", () => {
+    const normal: FbInsightRow[] = [
+      { name: "post_media_view", period: "lifetime", values: [{ value: 5063 }] },
+    ];
+    expect(hasTrustedValue(normal, "post_media_view")).toBe(true);
+    expect(presentMetricNames(normal).has("post_media_view")).toBe(true);
   });
 });

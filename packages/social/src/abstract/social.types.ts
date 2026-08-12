@@ -37,10 +37,17 @@ export interface ExternalPostSummary {
    * FB: the Video/Reel node id behind a video attachment
    * (`attachments.target.id`), resolved for free during listing.
    *
-   * Load-bearing: Facebook reports a post's view count ONLY on this node. The
-   * feed-post insights edge returns `post_video_views = 0` for every video
-   * (measured 40/40 on prod), so without this id a video post's views are
-   * unreachable — which is why 94% of FB external rows stored impressions = 0.
+   * Used to recover a view count from the Video node when the post node does
+   * not supply one.
+   *
+   * ⚠️ CORRECTION 2026-08-12 — the previous note here claimed the feed-post
+   * insights edge "returns post_video_views = 0 for every video (measured
+   * 40/40)". That is REFUTED by live probing: `post_video_views` returns a real
+   * `period=lifetime` value (1,468 on reel 596165523816494_1604103394609115)
+   * AND a trailing `period=day` row valued 0. The 40/40 zero was the last-wins
+   * parse reading that trailing row — the same fake-zero trap `selectLifetimeRow`
+   * was later written to defeat. Do not restore the old claim; it is what kept
+   * a working metric from ever being wired up.
    */
   videoId?: string;
   /** FB: true when the attachment target URL is a /reel/ permalink. */
@@ -128,6 +135,22 @@ export interface SocialAnalytics {
   >;
   /** Where this row came from: official API or the scraper fallback. */
   source?: AnalyticsSource;
+  /**
+   * True only when a scrape was ACTUALLY executed for this capture.
+   *
+   * ⚠️ Load-bearing for the external-sync circuit breaker. That breaker counts
+   * "misses" to detect a soft IP ban, and it used to infer a miss from
+   * `source !== "scrape"` — which is ALSO what a clean API success looks like.
+   * When the media-view metrics went live on 2026-08-11 the provider began
+   * returning early with `source: "api"` on the happy path, so five consecutive
+   * SUCCESSES tripped the breaker and every remaining reel in the account was
+   * skipped. Scrape-sourced captures fell 1,824/h → 0 within the hour and the FB
+   * reel backlog grew to 94.3% unmeasured.
+   *
+   * Distinguishing "did not need to scrape" from "scraped and got nothing" is
+   * the whole point — never re-derive it from `source`.
+   */
+  scrapeAttempted?: boolean;
   /** Mean watch time in MILLISECONDS (IG Reels `ig_reels_avg_watch_time`). */
   avgWatchTimeMs?: number;
   /** Total accumulated watch time in MILLISECONDS (IG Reels). */

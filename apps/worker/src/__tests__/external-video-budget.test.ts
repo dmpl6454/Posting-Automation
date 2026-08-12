@@ -28,11 +28,27 @@ describe("scrape budget", () => {
     expect(src).toMatch(/let scrapeBudget/);
   });
 
-  it("STOPS processing video-like rows once exhausted — never falls through", () => {
-    // ⚠️ The load-bearing line. A feed-only capture would set metricsSyncedAt,
-    // and needsMetrics would then hide the post for a WEEK before its views
-    // could be read. Leaving it unmeasured keeps it first in the next queue.
-    expect(src).toMatch(/if \(wantsScrape && scrapeBudget <= 0\) continue;/);
+  /**
+   * ⚠️ UPDATED 2026-08-12 — this test previously asserted the UP-FRONT guard
+   * `if (wantsScrape && scrapeBudget <= 0) continue;`, i.e. it encoded the bug
+   * as the expectation.
+   *
+   * That guard predated FB_MEDIA_VIEW_METRICS_ENABLED. Once the feed capture
+   * began carrying a real `post_media_view` number, skipping the row up-front
+   * discarded a GOOD measurement to protect a fallback that was no longer
+   * needed — and, combined with the breaker counting API successes as scrape
+   * misses, it left 94.3% of FB reels unmeasured with the backlog growing.
+   *
+   * The protection it provided is preserved, but moved AFTER the capture where
+   * it can be decided on evidence: defer only when the row wanted a view count,
+   * no scrape was available, AND the API supplied no impressions either.
+   */
+  it("still refuses to stamp metricsSyncedAt on a valueless capture — now decided on evidence", () => {
+    expect(src).toMatch(/shouldDeferUnmeasured\(/);
+    // The decision must consider what actually came back, not just the budget.
+    expect(src).toMatch(/analytics\.metricsAvailable\?\.impressions/);
+    // …and the discarding up-front guard must NOT come back.
+    expect(src).not.toMatch(/if \(wantsScrape && scrapeBudget <= 0\) continue;/);
   });
 
   it("has an env kill switch that defaults ON (fail-open)", () => {
@@ -41,10 +57,35 @@ describe("scrape budget", () => {
     expect(src).toMatch(/EXTERNAL_VIEW_SCRAPE_ENABLED !== "false"/);
   });
 
+  /**
+   * ⚠️ UPDATED 2026-08-12 — the `scrapeBudget = 0` assertion moved: the breaker
+   * arithmetic now lives in the pure, unit-tested `stepScrapeBudget`
+   * (apps/worker/src/lib/scrape-budget.ts), which returns `budget: 0` on the
+   * tripping transition. Asserting the inline assignment here would forbid that
+   * extraction. The BEHAVIOUR is locked far more precisely in
+   * scrape-budget.test.ts, including the regression witness.
+   */
   it("trips a circuit breaker after consecutive misses (soft IP ban)", () => {
     expect(src).toMatch(/SCRAPE_BREAKER_MISSES/);
     expect(src).toMatch(/consecutiveScrapeMisses/);
-    expect(src).toMatch(/scrapeBudget = 0/);
+    expect(src).toMatch(/stepScrapeBudget\(/);
+  });
+
+  /**
+   * 🔴 The regression this file exists to prevent, asserted at the source level:
+   * budget/breaker accounting must key off whether a scrape ACTUALLY RAN, never
+   * off `source !== "scrape"` — which is also a clean API success.
+   */
+  it("never re-derives a scrape miss from the source field", () => {
+    // Comments are stripped first — the prohibition is on CODE. The explanatory
+    // note above the fix necessarily quotes the banned expression.
+    const codeOnly = src
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .split("\n")
+      .map((l) => l.replace(/\/\/.*$/, ""))
+      .join("\n");
+    expect(codeOnly).not.toMatch(/source\s*[!=]==?\s*["']scrape["']/);
+    expect(codeOnly).toMatch(/allowScrape: scrapeAllowed/);
   });
 
   it("never spends budget on app-published rows", () => {
