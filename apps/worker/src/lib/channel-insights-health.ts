@@ -63,7 +63,15 @@ export function deriveInsightsHealth(
 ): ChannelInsightsHealth {
   const checkedAt = now.toISOString();
   if (!degraded) return { status: "ok", checkedAt };
-  if (degraded.reason === "token_invalid" || degraded.reason === "missing_scope") {
+  // ⚠️ Every reason that the OWNER can act on must be listed here. Anything not
+  // listed falls through to "ok" below, which silently marks a broken channel
+  // healthy — so adding a new AnalyticsDegradeReason WITHOUT adding it here
+  // produces a channel that reports nothing and never says why.
+  if (
+    degraded.reason === "token_invalid" ||
+    degraded.reason === "missing_scope" ||
+    degraded.reason === "page_access_lost"
+  ) {
     return {
       status: "needs_reconnect",
       reason: degraded.reason,

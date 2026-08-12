@@ -168,6 +168,13 @@ export function summarizeChannelStatuses(
     name: string;
     platform: string;
     status: "expiring_soon" | "needs_reconnect";
+    /**
+     * Machine reason, forwarded so the banner can stop asserting a cause it does
+     * not know. "your token was rejected" is wrong for a channel simply left out
+     * of the last consent, and that wrong sentence is what kept the owner
+     * reconnecting a channel the reconnect could never reach.
+     */
+    reason?: string;
     missingScopes: string[];
     daysUntilDataAccessExpiry?: number;
   }>;
@@ -177,6 +184,7 @@ export function summarizeChannelStatuses(
     name: string;
     platform: string;
     status: "expiring_soon" | "needs_reconnect";
+    reason?: string;
     missingScopes: string[];
     daysUntilDataAccessExpiry?: number;
   }> = [];
@@ -200,6 +208,7 @@ export function summarizeChannelStatuses(
       name: c.name,
       platform: c.platform,
       status: s.status,
+      ...(s.reason ? { reason: s.reason } : {}),
       missingScopes: s.missingScopes ?? [],
       ...(s.daysUntilDataAccessExpiry != null
         ? { daysUntilDataAccessExpiry: s.daysUntilDataAccessExpiry }

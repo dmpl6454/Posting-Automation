@@ -29,6 +29,18 @@ describe("deriveInsightsHealth", () => {
     expect(deriveInsightsHealth({ reason: "token_invalid" }, NOW).status).toBe("needs_reconnect");
   });
 
+  it("maps page_access_lost to needs_reconnect and preserves the reason", () => {
+    // Every actionable reason MUST be listed in deriveInsightsHealth. An
+    // unlisted one falls through to "ok", which marks a channel that reports
+    // nothing as healthy — silent data loss with no explanation anywhere.
+    const h = deriveInsightsHealth(
+      { reason: "page_access_lost", detail: "not ticked in the permission screen" },
+      NOW
+    );
+    expect(h.status).toBe("needs_reconnect");
+    expect(h.reason).toBe("page_access_lost");
+  });
+
   it("does NOT nag for a non-actionable reason", () => {
     // "no_data" isn't something reconnecting fixes; surfacing it would train
     // users to ignore the banner.

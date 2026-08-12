@@ -45,6 +45,38 @@ describe("diagnoseMetaError", () => {
     expect(d?.reason).toBe("token_invalid");
   });
 
+  /**
+   * #190 subcode 492 — captured VERBATIM from prod 2026-08-12. It arrives WITH
+   * code 190, so the broad token-invalid test swallowed it and told the owner
+   * "your access token was rejected". It was not: on that same request the
+   * backing user token was `is_valid: true`, held all 12 scopes, had a
+   * data-access window 3 months out, and could read 72 other pages — 33 of them
+   * in the same Business as the failing one. The owner reconnected repeatedly on
+   * that false advice.
+   */
+  it("does NOT call a #190/492 a dead token — the credential is fine", () => {
+    const d = diagnoseMetaError({
+      code: 190,
+      error_subcode: 492,
+      message:
+        "The user must be an administrator, editor, or moderator of the page in order to impersonate it. If the page business requires Two Factor Authentication, the user also needs to enable Two Factor Authentication.",
+      type: "OAuthException",
+    });
+    expect(d?.reason).toBe("page_access_lost");
+    expect(d?.detail).not.toMatch(/rejected the stored access token/i);
+    expect(d?.detail).toMatch(/ticked/i);
+  });
+
+  it("keeps the more specific page_access_lost when both diagnoses occur", () => {
+    // A channel can produce both (one call surfaces the bare #190, another the
+    // 492). Losing the specific one would restore the misleading message.
+    const worst = worstDegradation(
+      { reason: "token_invalid", detail: "rejected" },
+      { reason: "page_access_lost", detail: "not ticked" }
+    );
+    expect(worst?.reason).toBe("page_access_lost");
+  });
+
   // ── The critical negative cases ───────────────────────────────────────────
   it("does NOT treat a deleted metric (#100) as a permission problem", () => {
     // VERIFIED: returned for all nine post_impressions* variants EVEN WITH

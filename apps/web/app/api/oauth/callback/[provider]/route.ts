@@ -5,7 +5,44 @@ import { getSocialProvider, FacebookProvider, InstagramProvider, LinkedInProvide
 // apps/web has no direct dep on @postautomation/queue, so the api package
 // bridges the avatar-cache enqueue.
 import { enqueueAvatarCacheJobs } from "@postautomation/api/src/lib/avatar-cache";
+import { markChannelsMissingFromGrant } from "@postautomation/api/src/lib/orphaned-grant";
 import { auth } from "~/lib/auth";
+
+/**
+ * Best-effort: correct the Insights verdict on channels this consent did NOT
+ * include. Without it, a page left unticked keeps a stale "your access token was
+ * rejected — reconnect" verdict that no reconnect can ever clear, because the
+ * upsert loop above only visits pages the platform actually returned. See
+ * orphaned-grant.ts for the prod evidence.
+ *
+ * MUST NOT throw: the channels are already saved by this point, and a bookkeeping
+ * failure must never turn a successful connect into an error redirect.
+ */
+async function correctOrphanedGrantVerdicts(
+  organizationId: string,
+  platform: string,
+  grantedPlatformIds: string[],
+  platformLabel: string
+): Promise<void> {
+  try {
+    const n = await markChannelsMissingFromGrant(
+      prisma as never,
+      organizationId,
+      platform,
+      grantedPlatformIds,
+      platformLabel
+    );
+    if (n > 0) {
+      console.info(
+        `[oauth/${platform.toLowerCase()}] corrected ${n} channel(s) left out of this consent`
+      );
+    }
+  } catch (err: any) {
+    console.warn(
+      `[oauth/${platform.toLowerCase()}] orphaned-grant correction failed (non-fatal): ${err?.message ?? err}`
+    );
+  }
+}
 
 /**
  * Best-effort: queue avatar re-cache jobs for freshly connected channels so
@@ -312,6 +349,15 @@ export async function GET(
           fbChannelIds.push(fbChannel.id);
         }
         queueAvatarCache(fbChannelIds);
+        // Pages the user did NOT tick are never visited by the loop above, so
+        // their stale "reconnect this channel" verdict would otherwise outlive
+        // every future reconnect.
+        await correctOrphanedGrantVerdicts(
+          organizationId,
+          "FACEBOOK",
+          pages.map((p) => p.id),
+          "Facebook"
+        );
       }
 
       const count = pages.length || 1;
@@ -376,6 +422,14 @@ export async function GET(
         igChannelIds.push(igChannel.id);
       }
       queueAvatarCache(igChannelIds);
+      // Same orphan class as Facebook: an IG account resolves through a Page, so
+      // an unticked Page silently drops its IG account from this consent too.
+      await correctOrphanedGrantVerdicts(
+        organizationId,
+        "INSTAGRAM",
+        igAccounts.map((a) => a.id),
+        "Instagram"
+      );
 
       return NextResponse.redirect(
         `${process.env.APP_URL}/dashboard/channels?success=connected&platform=${params.provider}&pages=${igAccounts.length}`

@@ -880,7 +880,14 @@ export default function ChannelsPage() {
                             }
                           >
                             <AlertTriangle className="h-2.5 w-2.5" />
-                            Insights off
+                            {/* A channel the last consent left out is NOT the same
+                                failure as a rejected token, and labelling both
+                                "Insights off" hid the only case where plain
+                                reconnecting provably does nothing. */}
+                            {channel.insightsHealth.reason === "not_in_latest_grant" ||
+                            channel.insightsHealth.reason === "page_access_lost"
+                              ? "Not in connection"
+                              : "Insights off"}
                           </Badge>
                         )}
                         {/* Meta's 90-day data-access window closing. Distinct from

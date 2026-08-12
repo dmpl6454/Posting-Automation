@@ -36,6 +36,23 @@ import type { AnalyticsDegradation } from "../abstract/social.types";
 /** Meta error codes that mean the token itself is no longer usable. */
 const TOKEN_INVALID_CODES = new Set([190, 102, 463, 467]);
 
+/**
+ * Meta subcode 492, returned alongside #190, is NOT a dead token — it is
+ * "the user must be an administrator, editor, or moderator of the page in order
+ * to impersonate it". LIVE-VERIFIED on prod 2026-08-12: the backing user token
+ * was `is_valid: true`, carried all 12 scopes, had a data-access window 3 months
+ * out, and could read 72 OTHER pages — including 33 in the same Business as the
+ * failing one. So neither the credential nor a scope nor the 90-day cliff was at
+ * fault; access to that ONE page was gone.
+ *
+ * Two causes are indistinguishable through the API (`me/assigned_pages` → #10,
+ * `{page}/roles` needs the very page token we cannot mint): the page was left
+ * unticked in a later consent, or the person's Page role changed. Both are fixed
+ * by the same action — reconnect and explicitly tick the page — so the copy
+ * names that action and states the fallback, rather than guessing a cause.
+ */
+const PAGE_ACCESS_LOST_SUBCODE = 492;
+
 /** Meta error codes that mean a permission/scope is missing. */
 const MISSING_SCOPE_CODES = new Set([10, 200, 3, 803]);
 
@@ -83,6 +100,19 @@ export function diagnoseMetaError(err: MetaErrorLike | undefined | null): Analyt
   if (!err) return undefined;
   const code = Number(err.code);
   const message = String(err.message ?? "");
+
+  // Checked BEFORE the generic token branch: 492 arrives *with* code 190, so the
+  // broad TOKEN_INVALID_CODES test would otherwise swallow it and report the
+  // misleading "your access token was rejected".
+  if (Number(err.error_subcode) === PAGE_ACCESS_LOST_SUBCODE) {
+    return {
+      reason: "page_access_lost",
+      detail:
+        "This platform account is no longer accessible to the connected profile. " +
+        "Reconnect and make sure it is ticked in the permission screen — if it is not listed, " +
+        "its access was changed on the platform.",
+    };
+  }
 
   if (TOKEN_INVALID_CODES.has(code)) {
     return {
@@ -136,7 +166,16 @@ export function diagnoseEmptyInsights(
 export function worstDegradation(
   ...candidates: Array<AnalyticsDegradation | undefined>
 ): AnalyticsDegradation | undefined {
-  const RANK: Record<string, number> = { token_invalid: 3, missing_scope: 2, no_data: 1 };
+  // `page_access_lost` outranks `token_invalid`: both mean "reconnect", but it is
+  // strictly the more specific diagnosis, and a channel can produce both (one
+  // call surfaces the bare #190, another the #190/492). The more precise message
+  // must win, otherwise the specific finding is silently discarded.
+  const RANK: Record<string, number> = {
+    page_access_lost: 4,
+    token_invalid: 3,
+    missing_scope: 2,
+    no_data: 1,
+  };
   let best: AnalyticsDegradation | undefined;
   for (const c of candidates) {
     if (!c) continue;
