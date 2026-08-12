@@ -469,6 +469,56 @@ Live-probed on production (real decrypted Page tokens, one metric per call, 5 me
   ```
   One assertion in it had gone stale (`engagementRate` `toBe(0)` where `pooledEngagementRate` now correctly returns `null` for a zero base) — confirmed pre-existing by running the suite at `6482fa8` in a throwaway worktree, then fixed with a note. **When a skipped suite fails, check it against the pre-change commit before assuming your diff caused it.**
 
+## 🔁 The PERPETUAL "reconnect channels" banner — an ORPHANED channel row (2026-08-12)
+
+**A channel left out of a later consent can never be healed by reconnecting, because the reconnect
+never touches it.** Root-caused live on prod; fix on branch `fix/orphaned-channel-grant-2026-08-12`.
+
+- **The mechanism.** The Meta OAuth callback upserts **only the pages/accounts the platform
+  returns** for that consent. A page the user does not tick is never visited, so its
+  `metadata.insightsHealth` keeps whatever it last had — and the only other thing that clears a
+  verdict is a **clean capture** (`shouldApplyHealthVerdict`), which can never happen while the
+  token keeps failing. **Measured:** one consent on 2026-08-11 granted 72 pages and healed all 72
+  channels; the single page left out kept a verdict written 2026-08-10 reading *"The platform
+  rejected the stored access token. Reconnect this channel."* The owner reconnected repeatedly on
+  that advice. The banner was right about the symptom and **wrong about the remedy**.
+- **🔴 `#190` + `error_subcode 492` is NOT a dead token.** *"The user must be an administrator,
+  editor, or moderator of the page in order to impersonate it…"* — on the same request the backing
+  **user token was `is_valid: true`**, held all 12 scopes, had `data_access_expires_at` 3 months
+  out, and read **72 other pages fine — 33 of them in the SAME Business** as the failing one. So
+  it is not the credential, not a scope, not the 90-day cliff, and **not business-wide 2FA**
+  (ruled out by those 33). `diagnoseMetaError` now checks the **subcode BEFORE** the broad
+  `TOKEN_INVALID_CODES` test — 492 arrives *with* code 190, so the generic branch swallowed it.
+- **⚠️ Deselection vs role-loss is UNDETERMINABLE through the API** (`me/assigned_pages` → `#10`;
+  `{page}/roles` needs the very page token you cannot mint). Do NOT assert either cause. Both are
+  fixed by the same action, so the copy names the **action** ("reconnect → *Edit settings* → tick
+  it; if it is not listed, pause/disconnect"), never a cause.
+- **⚠️ `markChannelsMissingFromGrant` ([orphaned-grant.ts](packages/api/src/lib/orphaned-grant.ts))
+  is deliberately NARROW — only channels ALREADY `needs_reconnect` are re-stamped.** A workspace
+  can hold two platform logins granting different page sets; reconnecting login B must never
+  slander login A's healthy channels. It also **fails CLOSED on an empty grant** (an empty page
+  list is evidence of an upstream failure, not of mass revocation) and is **idempotent**. It runs
+  best-effort after the upsert loop — a bookkeeping failure must never fail a connect that already
+  succeeded.
+- **⚠️ Every actionable `AnalyticsDegradeReason` MUST be listed in `deriveInsightsHealth`.** An
+  unlisted reason falls through to `"ok"`, marking a channel that reports nothing as healthy —
+  silent data loss with no explanation anywhere. `page_access_lost` outranks `token_invalid` in
+  `worstDegradation` so the specific diagnosis is not discarded when both occur.
+- **Scale (measured):** 67 of 100 Digital-Sukoon-owned pages are non-impersonable by that login;
+  **84 channels** repo-wide carry `needs_reconnect`; **5 of 13** stored FB user tokens are already
+  invalid. The banner shows a small number only because it is **scoped to the active workspace**.
+- ⚠️ **`channel.connected` is not audited** (only `channel.disconnected`), so the audit log cannot
+  confirm a reconnect. Token `issued_at` + row `updatedAt` is the reliable substitute. **Counting
+  distinct DECRYPTED `userAccessToken` values per org = counting distinct consents** — that is
+  what cracked this, and it costs zero API calls.
+- **METHOD:** `me/accounts` returning N pages proves those N are granted; it proves **nothing**
+  about *why* a missing one is missing. A single such call is an *effect*, not a *cause* — I first
+  concluded "admin lost, reconnect can never fix it" from exactly that, and both halves were wrong.
+- Tests: [orphaned-grant.test.ts](packages/api/src/__tests__/orphaned-grant.test.ts) (14),
+  plus the 492 cases in [meta-insight-diagnosis.test.ts](packages/social/src/__tests__/meta-insight-diagnosis.test.ts)
+  and [channel-insights-health.test.ts](apps/worker/src/__tests__/channel-insights-health.test.ts)
+  — all three verified FAILING against `main` in a throwaway worktree before the fix.
+
 ## 🔑 Meta token lifetime — the 90-day DATA-ACCESS cliff (2026-08-06) — READ before debugging "insights stopped working"
 
 **This is why Meta insights die every ~3 months, and it had ZERO monitoring.** All live-verified from prod with `debug_token` on freshly reconnected channels.

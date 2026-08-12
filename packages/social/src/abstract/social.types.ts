@@ -78,6 +78,17 @@ export interface ListPostsOptions {
 export type AnalyticsDegradeReason =
   /** Token rejected outright (Meta #190 / session invalidated) — reconnect required. */
   | "token_invalid"
+  /**
+   * The app no longer holds access to THIS specific Page/account, while the same
+   * user's other pages keep working (Meta #190 subcode 492). Distinct from
+   * `token_invalid` because the credential is fine — the grant for one page is
+   * gone, either because the page was left unticked in a later consent or because
+   * the person's role on it changed. Live-verified 2026-08-12: the user token was
+   * `is_valid: true` with all 12 scopes and 72 working pages, while one page
+   * returned 492. Telling that user "your access token was rejected" is false and
+   * sends them chasing the wrong fix.
+   */
+  | "page_access_lost"
   /** Token is live but lacks a scope needed to read these metrics — reconnect required. */
   | "missing_scope"
   /** Platform accepted the call but returned no rows for reasons we can't attribute. */

@@ -220,6 +220,17 @@ function InsightsAnalyticsView() {
   // Which channels can't report Insights until reconnected. Not date-scoped —
   // it's a property of the channel's stored token, not of the selected range.
   const { data: health } = trpc.analytics.insightsHealth.useQuery();
+  // Channels whose problem is the GRANT, not the credential: either the platform
+  // account was left out of the last consent, or access to that one account
+  // changed while the same login keeps working elsewhere. They need different
+  // advice — "reconnect" alone is what the owner already tried, because the
+  // reconnect never reaches a channel the consent did not include.
+  const grantAffected =
+    health?.channels.filter(
+      (c) =>
+        c.status === "needs_reconnect" &&
+        (c.reason === "not_in_latest_grant" || c.reason === "page_access_lost")
+    ) ?? [];
 
   const reportableStat = new Set(engagement?.reportableMetrics ?? []);
   const statReportable = (key: string) => reportableStat.size === 0 || reportableStat.has(key as any);
@@ -400,9 +411,14 @@ function InsightsAnalyticsView() {
                     </p>
                     <p className="mt-1 text-xs text-amber-800/90 dark:text-amber-300/90">
                       The platform is refusing to return metrics for{" "}
-                      {health.needsReconnectCount === 1 ? "this channel" : "these channels"} — its access
-                      token was rejected, or its 90-day data-access window has closed. Posting still
-                      works; only metrics are affected. Reconnecting takes a few seconds.
+                      {health.needsReconnectCount === 1 ? "this channel" : "these channels"}. Posting
+                      still works; only metrics are affected.
+                      {grantAffected.length < health.needsReconnectCount && (
+                        <>
+                          {" "}Usually the access token was rejected or the 90-day data-access window
+                          closed — reconnecting takes a few seconds.
+                        </>
+                      )}
                       {health.missingScopes.length > 0 && (
                         <>
                           {" "}Missing permission{health.missingScopes.length === 1 ? "" : "s"}:{" "}
@@ -410,6 +426,27 @@ function InsightsAnalyticsView() {
                         </>
                       )}
                     </p>
+                    {/* A channel left out of the last consent is never visited by
+                        the reconnect upsert, so it survives every reconnect. Saying
+                        "reconnect" without saying "and tick this one" is the exact
+                        advice that failed the owner repeatedly. */}
+                    {grantAffected.length > 0 && (
+                      <p className="mt-1.5 text-xs font-medium text-amber-900 dark:text-amber-200">
+                        {grantAffected.length === health.needsReconnectCount
+                          ? grantAffected.length === 1
+                            ? "This channel was"
+                            : "These channels were"
+                          : `${grantAffected.length} of them ${grantAffected.length === 1 ? "was" : "were"}`}{" "}
+                        not included in your most recent connection, so reconnecting again the same
+                        way will not fix{" "}
+                        {grantAffected.length === 1 ? "it" : "them"}. Reconnect, choose{" "}
+                        <span className="font-semibold">Edit settings</span>, and tick{" "}
+                        {grantAffected.length === 1 ? "it" : "them"} in the list. If{" "}
+                        {grantAffected.length === 1 ? "it is" : "they are"} not listed, the account is
+                        no longer available to the profile you connect with — pause or disconnect{" "}
+                        {grantAffected.length === 1 ? "it" : "them"} to clear this notice.
+                      </p>
+                    )}
                   </>
                 ) : (
                   <>
