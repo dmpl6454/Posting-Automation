@@ -42,7 +42,14 @@ const emailReportRateLimited = orgProcedure.use(
  * COALESCE(publishedAt, updatedAt) keeps PUBLISHED posts with a NULL
  * publishedAt from being silently dropped (audit fix 2026-06-06).
  */
-async function fetchChannelStatRows(
+/**
+ * ⚠️ EXPORTED so chat.router's `get_analytics` can reuse it. CLAUDE.md records an
+ * invariant that chat and the dashboard must agree; chat had its own bespoke SQL,
+ * which drifted the moment this aggregate learned about external posts and views.
+ * Sharing the query makes them agree BY CONSTRUCTION rather than by parallel
+ * maintenance.
+ */
+export async function fetchChannelStatRows(
   prisma: PrismaClient,
   organizationId: string,
   from: Date,

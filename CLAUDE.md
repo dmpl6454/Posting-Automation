@@ -469,6 +469,109 @@ Live-probed on production (real decrypted Page tokens, one metric per call, 5 me
   ```
   One assertion in it had gone stale (`engagementRate` `toBe(0)` where `pooledEngagementRate` now correctly returns `null` for a zero base) — confirmed pre-existing by running the suite at `6482fa8` in a throwaway worktree, then fixed with a note. **When a skipped suite fails, check it against the pre-change commit before assuming your diff caused it.**
 
+## ⏱️ Insights freshness + accuracy — MEASURED, and who is worst served (2026-08-13 08:46 UTC)
+
+All figures timestamped; the recapture floor was SET when measured, so this is the **backfill
+regime**, not steady state.
+
+**Direct posts (`ExternalPost`, the larger population) — healthy:**
+
+| platform | rows | never measured | p50 age | p90 | max |
+|---|---|---|---|---|---|
+| FACEBOOK | 65,536 | **0** | 2.95h | 15.65h | 45.0h |
+| INSTAGRAM | 66,909 | **0** | 5.68h | 39.79h | 135.7h |
+
+**App-published posts (`AnalyticsSnapshot`) — Facebook is badly served, and it is structural:**
+
+| platform | targets | p50 age | p90 | max |
+|---|---|---|---|---|
+| FACEBOOK | 38 | 25.7h | **260.6h (10.9d)** | **387h (16d)** |
+| INSTAGRAM | 145 | 3.1h | 63.7h | 169.5h |
+| YOUTUBE | 5 | 164.7h | 164.7h | 164.7h |
+
+- **🔴 ROOT CAUSE: `scheduleAnalyticsSync` and the daily long-tail BOTH filter
+  `platform: { not: "FACEBOOK" }`** (cron-jobs.ts:249 and :311). So an app-published FB post is
+  refreshed ONLY by the publish-time snapshot, its at-age checkpoints (24h/7d/15d/30d) and manual
+  Sync Now. **Once the 30-day checkpoint passes, nothing refreshes it again** — measured: FB targets
+  older than 31 days carry snapshots averaging **3,115h (130 days) old**. Instagram, which IS in the
+  recurring passes, shows 1.8h / 10.6h / 70.4h by post age.
+- At-age checkpoints so far: 24h=164, 7d=92, 15d=16, **30d=0** (the system started 2026-07-17, so
+  30d checkpoints begin firing ~2026-08-16). Consistent, not a bug.
+
+**🔴 THE DOMINANT LIMIT IS TOKEN HEALTH, NOT THE PIPELINE.** Of active channels never listed at all:
+
+| platform | health | channels | never listed |
+|---|---|---|---|
+| FACEBOOK | `needs_reconnect` | 670 | **670 (100%)** |
+| FACEBOOK | (no verdict) | 170 | 42 (24.7%) |
+| FACEBOOK | `ok` | 135 | 12 (8.9%) |
+| INSTAGRAM | `needs_reconnect` | 165 | 125 (75.8%) |
+| INSTAGRAM | `ok` | 96 | 1 (1.0%) |
+
+**A dead token means literally zero data (100% of FB `needs_reconnect` channels have no rows).** No
+amount of sync tuning changes that — driving reconnects is the only lever. 68.7% of active FB
+channels are `needs_reconnect`.
+
+**Accuracy — the honesty contract holds:** value/declaration disagreement is **0** on FACEBOOK for
+both views and impressions, and 0 for views on INSTAGRAM. Degraded rows: 30 FB, 0 IG out of 132k.
+⚠️ **One deliberate exception**: 66,903 IG rows have `impressions > 0` while declaring
+`impressions:false`. That is BY DESIGN — the value is retained so the engagement-rate denominator
+and historical rows keep working, while the declaration keeps it off screen. **Do not "fix" it.**
+
+**⛔ DECIDED AGAINST: a `viewsBasis` coverage chip.** Measured `pct_measured` is **100.0% on both
+platforms** — impressions/reach/likes/comments/shares/clicks have full coverage, so the original
+justification ("aggregates cover only 11-14% of posts") is gone. Only `views` is partial, and a
+naive chip there would itself mislead: against ALL FB rows it reads 47.8%, but **4,356 non-video
+rows can never have views** (video-only metric, zero suppressed — measured: 0 of 4,356 non-video
+rows carry views, exactly as intended). Against the honest video-only denominator it is 51.2% and
+climbing. A chip would need a mediaType-aware denominator the aggregate does not select. Revisit
+only if a metric with genuinely partial coverage appears.
+
+**Lifecycle — a new channel waits for its shard, unless the user clicks Sync Now.**
+`scheduleExternalPostSync` picks its shard as `floor(Date.now() / 2h) % EXTERNAL_SYNC_SHARDS`, so
+with 4 shards on a 2h cron a newly connected channel waits **0-8h** for its first listing, then
+metrics. **`analytics.triggerSync` ("Sync Now") enqueues external sync for ALL the org's Meta
+channels, bypassing the shard** — that is the documented escape hatch for a new user who wants data
+now. ⚠️ The realised new-channel latency could NOT be measured reliably: only 3 channels were
+created after 2026-08-07 (none since 08-08), and that window overlaps the scrape-breaker outage, so
+the 4-day figure the data suggests is contaminated. **Unproven — re-measure after the next real
+signup.**
+
+## 📒 Insights views + accuracy — what shipped, and the prod data corrections (2026-08-13)
+
+Three PRs, all live. Read the three sections below this one for the mechanisms; this is the ledger.
+
+| PR | What | Verified result on prod |
+|---|---|---|
+| **#171** | scrape breaker counted API SUCCESS as a scrape miss | FB never-measured **14,104 → 0**; impressions>0 **38.9% → 99.9%**; reach>0 **14.0% → 99.8%** |
+| **#172** | `views` as a first-class metric | schema applied via `db push`; IG backfilled 66,487 + 1,758 rows |
+| **#173** | #172 shipped BROKEN — duplicate column + 9 defects | IG **0 of 237** channels impressions-available (duplicate gone); FB **251 of 251** (correctly keeps both) |
+
+**⚠️ Data corrections applied by hand on prod (not in any migration — record them here or they look
+like drift):**
+1. `views = NULL` + `metricsAvailable.views = false` for **818** FACEBOOK rows that had stored a
+   measured `0`. `post_video_views` is VIDEO-only, so a photo/album legitimately returns 0 — but a
+   channel of photos then rendered "Views 0", which reads as "nobody watched".
+2. `metricsAvailable.impressions = false` on **66,293 ExternalPost + 1,641 AnalyticsSnapshot** rows
+   for IG/YT/Threads/Reddit/dev.to. **A code fix alone was not enough**: captures store their own
+   declarations, so the duplicate column would have persisted until every row happened to
+   re-capture.
+3. IG/YT `views = impressions` backfill (**66,487 + 1,758** rows, 2.27B views) — exact, because
+   that slot provably always held views.
+
+**Recapture floor is STILL SET** (`EXTERNAL_RECAPTURE_BEFORE=2026-08-13T05:37:00Z`) so FB rows pick
+up `post_video_views`. ⚠️ **Unset it once the FB sweep is clean**, or every run re-measures
+everything forever. Progress is measurable — do not quote a figure without a timestamp:
+
+```
+2026-08-13 06:0x  FB   38 of 251 channels,  11,720 of ~64,800 rows carry views
+2026-08-13 08:5x  FB  128 of 251 channels,  30,001 of  65,480 rows carry views
+```
+
+**FB views coverage will never reach 100% of ROWS and that is correct** — `post_video_views` is
+video-only and a zero is suppressed, so photo/album/link/status rows legitimately have no views.
+Compare channels-with-any-video, never rows.
+
 ## 🔴 A capability test that skips the production call shape is not a test (2026-08-13)
 
 **PR #172 shipped its central claim broken, and a green test suite said otherwise.** The static
