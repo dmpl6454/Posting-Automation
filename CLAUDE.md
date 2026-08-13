@@ -670,6 +670,20 @@ IG-heavy shard ran (5,765 rows measured in that window, **all Instagram**).
   the whole window — 8,000 rows in 30 minutes with no intervening cron tick (11:07 → 11:37).
 - ⚠️ **Completeness is still a per-ACCOUNT question** — check `max(due_posts)` grouped by
   `platformId`, never the aggregate row count.
+- **🔴 THE FLOOR IS ALL-PLATFORM, AND THAT IS MOSTLY WASTED WORK.** `EXTERNAL_RECAPTURE_BEFORE` is a
+  bare timestamp compared against `metricsSyncedAt` with **no platform predicate**, so setting it to
+  chase one platform's metric re-measures EVERY platform. Measured 2026-08-13 11:39 UTC, while the
+  floor was set for FB `post_video_views`: **INSTAGRAM 17,907 due rows / 3,380 due posts vs FACEBOOK
+  3,248 / 787** — i.e. **4× more unnecessary IG work than the FB work it was set for**, and IG's views
+  had already been backfilled by hand (`views = impressions`). Because accounts share
+  `EXTERNAL_SYNC_CONCURRENCY` inside each 2h window, that IG churn DELAYS the FB completion the floor
+  exists to achieve — it is the real reason FB progress read as a total stall from 10:07 to 10:17
+  (5,765 rows measured in that window, **all Instagram**).
+  **So: verify completion on the TARGET platform, and unset promptly — every extra hour is mostly
+  spent re-measuring platforms that did not need it.** A platform-scoped floor would be the better
+  primitive if this is ever needed again.
+- **Correct completion check** (per-account posts on the target platform, not aggregate rows) —
+  see [scripts/check-recapture-floor.sql](scripts/check-recapture-floor.sql).
 - **Separate BACKLOG from CEILING when judging completeness.** Raw "63.4% of FB video rows have
   views" conflated "not yet swept" with "swept, genuinely no view count". Splitting on
   `metricsSyncedAt >= floor` showed **99.4% of already-swept video rows got a views value** — so
