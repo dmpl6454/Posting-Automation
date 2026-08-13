@@ -654,15 +654,22 @@ IG-heavy shard ran (5,765 rows measured in that window, **all Instagram**).
   accounts processed at `EXTERNAL_SYNC_CONCURRENCY`, so ONE run measures thousands of rows even though
   each account is capped at 600. Measured 2026-08-13: **1,845 rows in 10 minutes** while an FB-heavy
   shard was active.
-- **So a floor backfill has two very different timescales — quote both or neither.** The BULK drains
-  in hours (rate above). The **TAIL** is set by the largest single account, because an account sits in
-  exactly ONE shard and its shard comes round only once per full cycle:
-  `ceil(biggest_account_due / METRICS_PER_RUN) × (EXTERNAL_SYNC_SHARDS × 2h)`.
-  Measured 2026-08-13 11:13 UTC: 15 FB accounts held 10,229 due rows, top 5 = **8,593 (84%)**,
-  biggest = **2,712** ⇒ `ceil(2712/600) = 5` of its own shard windows × 8h ≈ **~40h for that one
-  account's tail**, while the other 14 finish far sooner. ⚠️ Do NOT report the tail figure as the
-  total (I nearly did) — and do not report the bulk rate as "done" either. **Completeness is a
-  per-account question**; check `max(due_rows)` grouped by `platformId`, not the aggregate.
+- **🔴🔴 THE CAP IS DENOMINATED IN *POSTS* (per account); every natural backlog query counts *ROWS*
+  (per channel). DIVIDE BY THE FAN-OUT BEFORE APPLYING THE CAP.** This is the "fetch per ACCOUNT,
+  store per CHANNEL" architecture biting a capacity calculation, and I got the drain estimate wrong
+  **twice** by ignoring it — first quoting ~8h, then ~40h, when the truth was ~1 shard window.
+  Measured 2026-08-13 11:38 UTC, `due_rows / COUNT(DISTINCT platformPostId)` per account was exactly
+  **4.00–5.00** — i.e. the channel fan-out, nothing else. The biggest account's **1,524 due rows were
+  only 381 distinct posts**, which fits in ONE 600-post run.
+  Correct formula:
+  `runs = ceil((due_rows / channel_fanout) / METRICS_PER_RUN)`, then
+  `wall_clock = runs × (EXTERNAL_SYNC_SHARDS × 2h)` since an account sits in exactly ONE shard.
+  Always compute `due_posts` as `count(DISTINCT ep."platformPostId")`, never `count(*)`.
+- **Drain is continuous WITHIN a 2h window, not one burst per tick.** The cron enqueues one job per
+  account and the worker chews through them at `EXTERNAL_SYNC_CONCURRENCY`, so rows keep landing for
+  the whole window — 8,000 rows in 30 minutes with no intervening cron tick (11:07 → 11:37).
+- ⚠️ **Completeness is still a per-ACCOUNT question** — check `max(due_posts)` grouped by
+  `platformId`, never the aggregate row count.
 - **Separate BACKLOG from CEILING when judging completeness.** Raw "63.4% of FB video rows have
   views" conflated "not yet swept" with "swept, genuinely no view count". Splitting on
   `metricsSyncedAt >= floor` showed **99.4% of already-swept video rows got a views value** — so
