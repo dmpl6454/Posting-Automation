@@ -156,8 +156,20 @@ export function createAutopilotScheduleWorker() {
         // AutopilotPost FAILED even though steps 7–10 had already scheduled the
         // post successfully — so every manually-approved post showed as failed
         // while quietly publishing. Only touch the counter when there is a run.
+        // ⚠️ BOTH halves are load-bearing, keep them together:
+        //   1. `if (pipelineRunId)` — an ABSENT id must not reach Prisma at all.
+        //      `updateMany({ where: { id: undefined } })` matches EVERY ROW
+        //      (undefined means "no filter"), which would be catastrophic here.
+        //   2. `updateMany` rather than `update` — a PRESENT id that matches no row
+        //      is a no-op instead of a P2025 throw. The guard alone was not enough:
+        //      it tests truthiness, so the auto-healer's fabricated
+        //      `autohealer-<timestamp>` id sailed through and threw right here,
+        //      AFTER steps 7–10 had already set the post and its targets SCHEDULED,
+        //      so the catch below stamped the post FAILED while it quietly
+        //      published. The fabrication is gone, but this makes the whole class
+        //      unreachable regardless of what a future caller invents.
         if (pipelineRunId) {
-          await prisma.pipelineRun.update({
+          await prisma.pipelineRun.updateMany({
             where: { id: pipelineRunId },
             data: {
               postsScheduled: { increment: 1 },

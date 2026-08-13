@@ -490,11 +490,13 @@ regime**, not steady state.
 | YOUTUBE | 5 | 164.7h | 164.7h | 164.7h |
 
 - **🔴 ROOT CAUSE: `scheduleAnalyticsSync` and the daily long-tail BOTH filter
-  `platform: { not: "FACEBOOK" }`** (cron-jobs.ts:249 and :311). So an app-published FB post is
+  `platform: { not: "FACEBOOK" }`** (cron-jobs.ts:249 and **:308** — CLAUDE.md said :311 until
+  2026-08-13; line 311 is `select: {`). So an app-published FB post is
   refreshed ONLY by the publish-time snapshot, its at-age checkpoints (24h/7d/15d/30d) and manual
   Sync Now. **Once the 30-day checkpoint passes, nothing refreshes it again** — measured: FB targets
   older than 31 days carry snapshots averaging **3,115h (130 days) old**. Instagram, which IS in the
   recurring passes, shows 1.8h / 10.6h / 70.4h by post age.
+  **✅ ADDRESSED 2026-08-13 by `scheduleFacebookAnalyticsSync` — see the section below.**
 - At-age checkpoints so far: 24h=164, 7d=92, 15d=16, **30d=0** (the system started 2026-07-17, so
   30d checkpoints begin firing ~2026-08-16). Consistent, not a bug.
 
@@ -536,6 +538,167 @@ now. ⚠️ The realised new-channel latency could NOT be measured reliably: onl
 created after 2026-08-07 (none since 08-08), and that window overlaps the scrape-breaker outage, so
 the 4-day figure the data suggests is contaminated. **Unproven — re-measure after the next real
 signup.**
+
+## 🔵 Budgeted FACEBOOK analytics pass + the per-row never-measured gate (2026-08-13)
+
+Three changes, one branch. Gate: vitest **2360 passed** (baseline 2342, +18), `pnpm type-check`
+10/10, web build clean.
+
+### 1. `scheduleFacebookAnalyticsSync` — FB app-published targets refresh again
+
+FB is excluded from BOTH recurring analytics passes, so a target stopped refreshing **forever** once
+its 30d at-age checkpoint passed (`reconcileAtAgeCheckpoints` only re-enqueues MISSING checkpoints
+and is floored at 45d). New daily, hard-capped, stalest-first pass in
+[cron-jobs.ts](apps/worker/src/scheduler/cron-jobs.ts) over the pure planner
+[fb-analytics-budget.ts](apps/worker/src/lib/fb-analytics-budget.ts) (13 tests).
+
+- **⚠️⚠️ THE REAL REASON THE EXCLUSION EXISTS IS NOT QUOTA — and it was undocumented.**
+  `usageCache` in [facebook.provider.ts:58-66](packages/social/src/providers/facebook.provider.ts#L58)
+  is **MODULE-GLOBAL**, and post-publish runs in the **SAME OS process** as analytics-sync. The
+  publish path passes no `maxSleepMs`, so once app usage reads **≥95% every publish Graph call
+  sleeps an uncapped 60s**; `MIN_REQUEST_GAP_MS = 300` additionally serialises ALL FB traffic
+  through one gate while post-publish runs at concurrency 10. **FB analytics volume can stall
+  PUBLISHING.** Keep the cap low; never raise it to "catch up" faster.
+- **Do NOT build the "dedicated FB analytics queue with concurrency=1"** that the in-file comment
+  asks for. A new worker's concurrency-1 would run *alongside* analytics-sync's concurrency-2 =
+  THREE concurrent FB callers on one shared usage cache — strictly worse for the throttle-bypass
+  race that the number 2 was chosen to prevent (analytics-sync.worker.ts:144-147). Reusing
+  `analyticsSyncQueue` makes FB jobs interleave INSIDE the existing budget.
+- **MEASURED COST (2026-08-13):** 2 Graph round-trips per target happy-path, 4 worst-case (locked by
+  a call-COUNT assertion in `facebook-external-video-analytics.test.ts` — appending metric NAMES is
+  safe, adding a round-trip is not). FB has **44** published targets vs **318** already covered
+  across the other four platforms (TWITTER 148, INSTAGRAM 145, YOUTUBE 18, LINKEDIN 7), so full
+  coverage is a **+14%** delta ≈ ≤80 calls/day against a ~4,000-call external sweep. 42 of the 44
+  are on reachable channels (31 `ok`, 11 no-verdict, 2 `needs_reconnect`).
+- **Env (all plumbed into `docker-compose.prod.yml`'s explicit `environment:` allowlist — a key in
+  `.env.prod` alone arrives as `""`):** `FB_ANALYTICS_SYNC_ENABLED` **fail-CLOSED (`=== "true"`)**,
+  default OFF; `FB_ANALYTICS_PER_RUN` (40); `FB_ANALYTICS_MIN_STALE_HOURS` (48).
+- **⚠️ STARVATION GUARD — `DEFAULT_NEVER_MEASURED_SHARE = 0.5`, never 1.** A permanently-failing
+  target never gets a snapshot written at all: for an **untagged** cron job the analytics-sync worker
+  returns null WITHOUT writing on BOTH the throw path (:43) and the null-analytics path (:53). Its
+  `lastSnapshotAt` stays NULL forever, so pure stalest-first ordering would re-pick it every run and
+  starve the healthy targets behind it — the `DATA_ACCESS_RECHECK_COOLDOWN_MS` lesson applied to
+  target selection. The reserve is a FLOOR for the minority, never a ceiling: unused slots backfill
+  both ways so a run is never short. **Residual (accepted):** a *measured-long-ago* target on a
+  healthy channel whose individual post is permanently unreadable still sits at the head of the
+  measured queue. Harmless at 44 targets vs cap 40; a real fix needs a per-target attempt marker.
+- jobId `fbanalytics:{targetId}:{dayBucket}` — **exactly 3 colon segments**, day-bucketed so a
+  restart loop cannot re-enqueue. ⚠️ **The two existing passes still use `...-${Date.now()}`**
+  (cron-jobs.ts:273, :332) so **BullMQ dedup can never fire for them** — the mistake already fixed
+  for Sync Now. Not changed here (independent); worth bucketing to a sub-interval window.
+- Observability is **the only signal if this pass hits quota**: Graph `#4` (rate limit) and `#100`
+  (bad metric name) BOTH return `undefined` from `diagnoseMetaError`, and `deriveInsightsHealth`
+  maps no-degradation to `"ok"` — so a throttled FB pass raises no verdict and shows the user
+  nothing. The run always logs its full accounting, and a saturated candidate window `warn`s.
+
+### 2. 🔴 Reports printed confident zeros for a listed-but-never-measured post
+
+`gatePostReportRow` had **no never-measured guard**, and the root cause is the **schema, not the
+SQL**: `ExternalPost.impressions/clicks/likes/comments/shares/reach` are `Int @default(0)` **NOT
+NULL** ([schema.prisma:324-329](packages/db/prisma/schema.prisma)), so a never-measured row
+**physically stores 0**. Only `views` is nullable. The app-published arm is safe purely by accident
+of SQL shape (its `LEFT JOIN LATERAL` yields SQL NULL, tripping the gate's null check) — the
+external arm structurally cannot honor that contract.
+
+- Measured pre-fix: FACEBOOK rendered `likes 0, comments 0, shares 0, clicks 0` **beside its own
+  "Metric captured at (UTC)" cell showing "—"** — the row contradicted itself on screen, and the same
+  fake zeros went into the downloaded CSV and the emailed report. INSTAGRAM additionally faked `reach 0`.
+- **FIX:** `PostReportRow.hasMetrics?: boolean`, projected as `(ep."metricsSyncedAt" IS NOT NULL)` /
+  `(s."snapshotAt" IS NOT NULL)` from the two SQL arms, gated with **`=== false`** so an absent flag
+  leaves legacy callers byte-identical. Mirrors `metricCellValue`'s FIRST rule
+  (`if (meta.hasSnapshot === false) return null`) — which is exactly why the channel-level aggregate
+  never had this bug while Reports did.
+- **⚠️ The state is reachable BY DESIGN, not a rare transient** — `METRICS_PER_RUN` caps the metrics
+  pass and `shouldDeferUnmeasured` defers rows on purpose, both leaving `metricsSyncedAt` NULL so the
+  row stays at the front of the next run. (Prod happened to have **0** such rows when measured at
+  2026-08-13 09:29, because the backfill was running at `PER_RUN=600`.)
+- **🔴 THE EXISTING TEST ASSERTED THE BUG.** `report-metric-gate.test.ts`'s fixture defaulted
+  `snapshotAt: null` **while handing the gate numeric counters** — a shape IMPOSSIBLE on the app arm,
+  so it only ever described an external row, and "a captured 0 stays 0" was locking in the fake zero.
+  The fixture now models a genuinely captured row (`snapshotAt` set, `hasMetrics: true`) and the
+  never-measured shape has its **own** describe block, so both contracts have a real guard. **Do not
+  collapse them back into one fixture.** 3 of the 5 new tests verified FAILING against `main`
+  (`git stash` of the router only); the 2 backwards-compat tests pass in both, proving they are
+  genuine no-ops rather than tautologies.
+- **DO NOT** fix this class by editing `CAPS` (per-capture `metricsAvailable` overrides the static map
+  — PR #148's mistake), by making the counter columns nullable (132k rows; the aggregate's ext arm
+  selects them without COALESCE and its `impressions > 0` filters would break), or by applying a
+  hasMetrics guard to `fetchChannelStatRows` (a never-measured row contributing 0 to channel SUMs is
+  deliberate, and the rate already excludes it via `FILTER (WHERE impressions > 0)`).
+
+### 3. Posts Over Time / Platform Breakdown now disclose their narrower population
+
+Both count **app-published only** (`PostTarget`), while Channel Performance and the engagement tiles
+UNION in `ExternalPost`. Measured 2026-08-13, last 30 days: `sds` showed **0** here beside **28,401**
+in the table; `Tabish's Workspace` **2** vs **28,439** (a **14,219×** gap) — presented side by side as
+if they counted the same thing. That is the documented "no posts in the last 30 days" false bug report.
+
+Relabelled to "Posts you published through PostAutomation", donut hole `Published` → `Sent by you`,
+and the **empty state now says direct FB/IG posts aren't counted here and points at Channel
+Performance** — a bare relabel still leaves an apparently-broken empty chart. Router docblocks on both
+procedures record that the divergence is deliberate. **If you ever widen the population, drop those
+qualifiers in the same commit.** No test referenced any of these strings.
+
+### ⏱️ The recapture floor drains in SHARD BURSTS, not smoothly
+
+`EXTERNAL_RECAPTURE_BEFORE` was still set while measuring. Progress is **bursty and shard-keyed** —
+`floor(now/2h) % EXTERNAL_SYNC_SHARDS` means each 2h window drains one quarter, so a full cycle is
+**8h** and a 10-minute sample can read as a total stall. Measured: 2,700–3,300 rows/10min while an
+FB-heavy shard was active, then **0 across two consecutive samples** (10:07 → 10:17) while an
+IG-heavy shard ran (5,765 rows measured in that window, **all Instagram**).
+
+- **Do not diagnose a stall from one sample.** Check *which platform* is being measured, not just the
+  aggregate count.
+- **Separate BACKLOG from CEILING when judging completeness.** Raw "63.4% of FB video rows have
+  views" conflated "not yet swept" with "swept, genuinely no view count". Splitting on
+  `metricsSyncedAt >= floor` showed **99.4% of already-swept video rows got a views value** — so
+  genuine suppression is **0.6%**, not ~37%. Use:
+  `count(*) FILTER (WHERE ep."metricsSyncedAt" >= '<floor>')` as the swept denominator.
+- ⚠️ `EXTERNAL_METRICS_PER_RUN` was raised to **600** (4× the documented 150 default) for the
+  backfill. Decide explicitly whether to revert it when unsetting the floor.
+
+### ✅ FIXED: the auto-healer fabricated a `pipelineRunId` that never exists
+
+~2 `prisma.pipelineRun.update()` P2025 errors/hour on prod. **Not** a regression of the documented
+`if (pipelineRunId)` guard (intact at autopilot-schedule.worker.ts:159, added in `90453d5`, never
+removed). [auto-healer.worker.ts:248 and :284](apps/worker/src/workers/auto-healer.worker.ts) pass
+a template-literal `pipelineRunId` of `autohealer-<Date.now()>` while `PipelineRun.id` is
+`@default(cuid())` and nothing
+ever creates such a row — so P2025 is **guaranteed, not racy**. Nothing deletes `PipelineRun`.
+
+- In `content-generate.worker.ts` it is swallowed by bare `catch {}` (log noise only).
+- **The guard tests TRUTHINESS, not existence**, so `"autohealer-…"` passes it and throws at
+  autopilot-schedule.worker.ts:160 **after** steps 7–10 already set the post + targets `SCHEDULED` —
+  the outer catch then stamps the post `FAILED`. That is verbatim the bug the guard was written to
+  prevent, reachable again.
+- **Was LATENT when found:** the corrupting path requires `skipReviewGate === true`, and prod had
+  **0 of 3** account groups set; **0 of 378** FAILED AutopilotPosts carried a P2025-shaped error.
+
+**THE FIX (2026-08-13).** `pipelineRunId` is now **`?: string` (OPTIONAL)** on
+`ContentGenerateJobData` and `AutopilotScheduleJobData`, the auto-healer OMITS it (both sites), and
+`autopilot.router`'s two `pipelineRunId: ""` sentinels were dropped. Consumers guard on presence:
+3 blocks in [content-generate.worker.ts](apps/worker/src/workers/content-generate.worker.ts) and the
+site in [autopilot-schedule.worker.ts:171](apps/worker/src/workers/autopilot-schedule.worker.ts#L171),
+which ALSO moved `update` → `updateMany` so a present-but-nonexistent id is a no-op instead of a throw.
+
+- **⚠️ NEVER make `pipelineRunId` required again, and NEVER satisfy it with a placeholder.** A truthy
+  fake id defeats every `if (pipelineRunId)` guard in the codebase — that is exactly how this bug
+  reopened after being fixed once.
+- **⚠️ THE GUARD AND `updateMany` ARE BOTH REQUIRED — one without the other is worse than neither.**
+  Prisma treats **`where: { id: undefined }` as "no filter"**, so an unguarded
+  `updateMany({ where: { id: undefined } })` would match **EVERY PipelineRun ROW**. `update` merely
+  throws; `updateMany` silently mass-updates.
+- **⚠️ `tsc` CANNOT catch this class.** Prisma's `WhereUniqueInput` types `id` as OPTIONAL
+  (`id?: string`), so `{ id: undefined }` type-checks cleanly at every call site. Making the job
+  field optional produced **zero** compiler errors — the sites had to be found by grep and reasoned
+  about. Do not assume the type system is guarding a Prisma `where`.
+- content-generate deliberately keeps `update` (not `updateMany`): the returned row drives the
+  run-settle math. Its guard is what removes the log noise — the `catch {}` was already swallowing the
+  throw, but Prisma logs `prisma:error` before the catch ever runs, which is why the noise was visible
+  despite the swallow.
+- `trend-discover.worker.ts:235` and `trend-score.worker.ts:185/206` are untouched: they read
+  `TrendDiscoverJobData`/`TrendScoreJobData`, whose `pipelineRunId` stays REQUIRED because both
+  producers (cron-jobs.ts:724, autopilot.router.ts:352) always pass a real cuid.
 
 ## 📒 Insights views + accuracy — what shipped, and the prod data corrections (2026-08-13)
 

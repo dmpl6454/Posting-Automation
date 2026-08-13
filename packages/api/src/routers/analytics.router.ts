@@ -346,6 +346,27 @@ export interface PostReportRow {
    * instead of implying we sent it. Absent on legacy callers ⇒ treated as false.
    */
   isExternal?: boolean;
+  /**
+   * false ⇒ this post was LISTED but its metrics were never fetched, so every
+   * metric is UNKNOWN rather than zero.
+   *
+   * ⚠️ This flag is load-bearing for ExternalPost rows and cannot be inferred from
+   * the values. `ExternalPost.impressions/clicks/likes/comments/shares/reach` are
+   * `Int @default(0)` (NOT NULL, schema.prisma:324-329), so a never-measured row
+   * PHYSICALLY STORES 0 and is byte-indistinguishable from a measured zero. Only
+   * `views` is nullable. The app-published arm is safe by accident of SQL shape —
+   * its LEFT JOIN LATERAL yields SQL NULL when no snapshot matched — but the
+   * external arm structurally cannot honor that contract, so the "no data" signal
+   * has to be projected explicitly.
+   *
+   * This mirrors metricCellValue's FIRST rule (`if (meta.hasSnapshot === false)
+   * return null`, apps/web/lib/metric-cell.ts:40), which is what has always made
+   * the Channel Performance aggregate honest while Reports was not.
+   *
+   * Absent (undefined) on legacy callers ⇒ no gating, byte-identical to previous
+   * behavior. Only an explicit `false` blanks the row.
+   */
+  hasMetrics?: boolean;
 }
 
 /**
@@ -380,10 +401,16 @@ export function gatePostReportRow(r: PostReportRow): PostReportRow {
   const reachUnavailable = unavail.has("reach") || caps.reachIsDistinct === false;
   const declared = r.snapshotMetadata?.metricsAvailable;
   const hasDeclared = declared != null && typeof declared === "object";
+  // Listed but never measured ⇒ NOTHING was captured, so every metric is unknown.
+  // Checked with `=== false` so an absent flag (legacy callers, existing tests)
+  // leaves behavior byte-identical. See PostReportRow.hasMetrics for why the
+  // values themselves cannot carry this signal.
+  const neverMeasured = r.hasMetrics === false;
   const gate = (
     key: "impressions" | "reach" | "likes" | "comments" | "shares" | "clicks" | "views",
     v: number | null
   ): number | null => {
+    if (neverMeasured) return null;
     if (v === null || v === undefined) return null;
     if (hasDeclared && key in declared!) {
       // The capture itself told us whether this metric was reported.
@@ -547,7 +574,13 @@ async function fetchPostReportRows(
             -- no special case: it reads metadata.metricsAvailable either way.
             CASE WHEN ep."metricsAvailable" IS NULL THEN NULL
                  ELSE jsonb_build_object('metricsAvailable', ep."metricsAvailable") END AS "snapshotMetadata",
-            TRUE AS "isExternal"
+            TRUE AS "isExternal",
+            -- Listed but never measured ⇒ every metric is UNKNOWN, not zero. The
+            -- counter columns are Int @default(0) NOT NULL, so a never-measured row
+            -- stores a 0 that is indistinguishable from a measured zero — this is the
+            -- only signal that separates them. Mirrors the aggregate's has_metrics
+            -- (:181-182) so the table and Channel Performance finally agree.
+            (ep."metricsSyncedAt" IS NOT NULL) AS "hasMetrics"
      FROM "ExternalPost" ep
      INNER JOIN "Channel" c2 ON c2.id = ep."channelId"
      WHERE c2."organizationId" = $1
@@ -571,13 +604,20 @@ async function fetchPostReportRows(
             -- a 0–1 FRACTION for YT/IG/FB/Reddit but a PERCENT for
             -- Threads/Pinterest/DevTo (mixed units in historical rows).
             -- This matches how the Insights engagement procedure computes it.
-            -- NULL means "no snapshot captured yet" (UI renders "—"); a
-            -- captured snapshot with zero impressions is a real 0, NOT "—"
-            -- (s."snapshotAt" is non-null exactly when the LATERAL matched).
+            -- NULL means "no denominator" and renders "—". That covers BOTH "no
+            -- snapshot captured yet" AND "captured, but zero impressions": a rate
+            -- of 0/0 is undefined, and printing 0.00% reads as "no engagement"
+            -- when the truth is "nothing was delivered to divide by".
+            -- ⚠️ An older version of this comment claimed a zero-impression capture
+            -- yields a real 0. It does not, and has not since the AND impressions > 0
+            -- clause was appended to the second branch below — which makes that branch
+            -- UNREACHABLE (it repeats branch one's predicate). Left in place
+            -- deliberately: it is a provable no-op, and the ext_rows arm carries the
+            -- identical shape, so removing it here alone would desynchronise them.
             CASE
               WHEN s.impressions > 0
                 THEN (s.likes + s.comments + s.shares)::float / s.impressions * 100
-              -- See the ext_rows arm: 0 impressions ⇒ undefined rate, not 0.
+              -- Unreachable (see above); ELSE NULL is what actually fires.
               WHEN s."snapshotAt" IS NOT NULL AND s.impressions > 0 THEN 0
               ELSE NULL
             END AS "engagementRate",
@@ -586,7 +626,13 @@ async function fetchPostReportRows(
             -- prefers this over the static per-platform map so a real captured
             -- value (e.g. FB video views) is never hidden as "—".
             s.metadata        AS "snapshotMetadata",
-            FALSE AS "isExternal"
+            FALSE AS "isExternal",
+            -- Same flag on this arm for symmetry (UNION ALL needs matching columns).
+            -- Here it is belt-and-braces: when the LATERAL finds no snapshot every
+            -- counter is already SQL NULL, which the gate's null check catches. It
+            -- must stay derived from snapshotAt so at_age rows — non-null by
+            -- construction — are never blanked.
+            (s."snapshotAt" IS NOT NULL) AS "hasMetrics"
      FROM "PostTarget" pt
      INNER JOIN "Post" p    ON p.id = pt."postId"
      INNER JOIN "Channel" c ON c.id = pt."channelId"
@@ -840,6 +886,20 @@ export const analyticsRouter = createRouter({
    * (accuracy fix 2026-07-17 — it used to be all-time while every sibling card
    * respected the selected range). Date predicate mirrors the rest of this
    * router: parent Post publishedAt in range, updatedAt fallback when NULL.
+   *
+   * ⚠️ DELIBERATELY A NARROWER POPULATION than its neighbours on the same page.
+   * This counts PostTarget rows only — posts published THROUGH PostAutomation.
+   * `fetchChannelStatRows` (Channel Performance, Group Performance, and the
+   * `engagement` tiles) UNIONs in ExternalPost, i.e. posts made directly on
+   * connected FB Pages / IG accounts. So this card and the table beside it
+   * legitimately disagree, sometimes enormously — measured on prod 2026-08-13,
+   * one workspace had 0 here against 28,401 in the table.
+   *
+   * Do NOT "fix" that by widening this query without an explicit product decision:
+   * "what did I publish?" and "what is on my channels?" are both valid questions.
+   * What is NOT acceptable is showing them side by side unlabelled, which is why
+   * the UI now says "Posts you published through PostAutomation" on both cards.
+   * If you ever DO widen it, drop those qualifiers in the same commit.
    */
   platformBreakdown: orgProcedure
     .input(
@@ -937,7 +997,13 @@ export const analyticsRouter = createRouter({
       });
     }),
 
-  /** Daily post count over time */
+  /**
+   * Daily post count over time.
+   *
+   * ⚠️ APP-PUBLISHED ONLY — same narrower population as `platformBreakdown`; see
+   * the note there for why it deliberately disagrees with Channel Performance and
+   * why the UI must keep saying so.
+   */
   postsOverTime: orgProcedure
     .input(
       z.object({

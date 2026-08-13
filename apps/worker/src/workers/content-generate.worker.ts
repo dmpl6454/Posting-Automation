@@ -291,7 +291,14 @@ export function createContentGenerateWorker() {
           });
           // Count this item as failed so the run's completion math still
           // reaches totalItems (ADD-1), then settle the run if appropriate.
-          try {
+          // ⚠️ Guarded on presence: this job may have NO pipeline run behind it
+          // (auto-healer retry, or approvePost with a human clicking Approve).
+          // `pipelineRun.update({ where: { id: undefined } })` throws at runtime,
+          // and while the `catch {}` swallows it, Prisma still logs `prisma:error`
+          // — which is what produced ~2 spurious errors/hour on prod. `update` is
+          // kept here (rather than updateMany) because the returned row drives the
+          // settle math below.
+          if (pipelineRunId) try {
             const updated = await prisma.pipelineRun.update({
               where: { id: pipelineRunId },
               data: { postsFailed: { increment: 1 } },
@@ -357,8 +364,11 @@ export function createContentGenerateWorker() {
           );
         }
 
-        // 14. Update PipelineRun counters; mark COMPLETED if all items are done
-        try {
+        // 14. Update PipelineRun counters; mark COMPLETED if all items are done.
+        // ⚠️ Guarded on presence — see step 13's note: a healer retry / manual
+        // approval has no run, and an unguarded update logs prisma:error even
+        // though the catch swallows it.
+        if (pipelineRunId) try {
           const updated = await prisma.pipelineRun.update({
             where: { id: pipelineRunId },
             data: {
@@ -418,7 +428,9 @@ export function createContentGenerateWorker() {
             },
           });
 
-          try {
+          // ⚠️ Guarded on presence — see step 13/14: no run behind a healer retry
+          // or a manual approval, and an unguarded update logs prisma:error.
+          if (pipelineRunId) try {
             const updated = await prisma.pipelineRun.update({
               where: { id: pipelineRunId },
               data: { postsFailed: { increment: 1 } },

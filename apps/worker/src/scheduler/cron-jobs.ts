@@ -1,6 +1,7 @@
 import { prisma } from "@postautomation/db";
 import { tokenRefreshQueue, analyticsSyncQueue, agentRunQueue, trendDiscoverQueue, listeningSyncQueue, campaignAnalyticsSyncQueue, brandContentSyncQueue, outreachPollQueue, rssSyncQueue, avatarCacheQueue, externalPostSyncQueue } from "@postautomation/queue";
 import { groupIntoAccounts, selectShard } from "../lib/external-sync-accounts";
+import { planFbAnalyticsRun } from "../lib/fb-analytics-budget";
 import { fetchMetaTokenWindow } from "@postautomation/social";
 import { runAutoHealerWithLogging } from "../workers/auto-healer.worker";
 import { runCelebrityDetectors } from "../workers/celebrity-detect.worker";
@@ -340,6 +341,157 @@ export async function scheduleLongTailAnalyticsSync() {
   if (queued > 0) {
     console.log(`[Cron] Queued ${queued} long-tail analytics sync jobs (7d–90d)`);
   }
+}
+
+/**
+ * Budgeted low-frequency FACEBOOK analytics pass (2026-08-13).
+ *
+ * THE GAP THIS CLOSES
+ * -------------------
+ * Both recurring passes above filter `platform: { not: "FACEBOOK" }`, so an
+ * app-published FB target is refreshed ONLY by its publish-time snapshot and its
+ * four at-age checkpoints (24h/7d/15d/30d). `reconcileAtAgeCheckpoints` can only
+ * re-enqueue MISSING checkpoints and is floored at 45 days, so once the 30d
+ * checkpoint passes NOTHING refreshes the target again — ever.
+ *
+ * Measured on prod 2026-08-13 09:32 UTC: 4 FB targets were already past the 30d
+ * checkpoint carrying snapshots ~147 days old, and 17 more sat at 16–27 days,
+ * i.e. 3–14 days from joining them. Every live FB target crosses that cliff on a
+ * rolling 30-day basis, so the stale count only grows. The 30d tier had fired 0
+ * times platform-wide at that point (the system started 2026-07-17), which is
+ * why the damage still looked small.
+ *
+ * WHY NOT JUST DELETE THE EXCLUSION
+ * ---------------------------------
+ * Quota is the *stated* reason, but the sharper one is undocumented: `usageCache`
+ * in facebook.provider.ts is MODULE-GLOBAL, and post-publish runs in the SAME OS
+ * process as analytics-sync. The publish path passes no `maxSleepMs`, so once app
+ * usage reads >=95% EVERY publish Graph call sleeps an uncapped 60s, and
+ * `MIN_REQUEST_GAP_MS` serialises all FB traffic through one 300ms gate. Extra FB
+ * analytics volume can therefore stall PUBLISHING — a hard red line. Hence: low
+ * frequency, hard cap, and no change to the two existing passes.
+ *
+ * WHY NOT A DEDICATED QUEUE AT concurrency=1 (what the comment above asks for)
+ * ---------------------------------------------------------------------------
+ * A new queue means a new worker whose concurrency-1 runs ALONGSIDE
+ * analytics-sync's concurrency-2, giving THREE concurrent FB callers sharing one
+ * module-global usage cache — strictly worse for the throttle-bypass race that
+ * the number 2 was chosen to prevent (analytics-sync.worker.ts:144-147). Reusing
+ * `analyticsSyncQueue` makes FB jobs interleave INSIDE the existing concurrency
+ * budget instead of adding to it.
+ *
+ * MEASURED COST
+ * -------------
+ * A FB analytics run costs exactly 2 Graph round-trips per target on the happy
+ * path (insights edge + fields edge), 4 worst-case. FB has 44 published targets
+ * against 318 already covered by the recurring passes across the other four
+ * platforms, so full coverage is a ~14% delta on that pass — not a new order of
+ * magnitude. At the default cap that is <=80 calls/day against a ~4,000-call
+ * external sweep.
+ *
+ * SAFETY: fail-CLOSED kill switch. `FB_ANALYTICS_SYNC_ENABLED` must be the exact
+ * string "true". docker-compose.prod.yml uses an explicit `environment:`
+ * allowlist, so a key written only into .env.prod arrives as an EMPTY STRING — a
+ * fail-OPEN check (`!== "false"`) would read "unset" as ENABLED, which is the
+ * PR #166 incident. Same discipline as isFbMediaViewEnabled().
+ */
+const FB_ANALYTICS_CANDIDATE_FLOOR = 200;
+
+export async function scheduleFacebookAnalyticsSync() {
+  if (process.env.FB_ANALYTICS_SYNC_ENABLED !== "true") return;
+
+  const cap = Number(process.env.FB_ANALYTICS_PER_RUN ?? 40);
+  const minStaleHours = Number(process.env.FB_ANALYTICS_MIN_STALE_HOURS ?? 48);
+  if (!Number.isFinite(cap) || cap <= 0) {
+    console.warn(`[Cron] FB analytics pass: invalid FB_ANALYTICS_PER_RUN — skipping run`);
+    return;
+  }
+
+  // Candidate window. Ordered stalest-first in SQL so the LIMIT can only ever
+  // trim the FRESHEST rows — the ones we least want. Generously sized so it is
+  // not a hidden product cap; saturation is logged loudly below.
+  const candidateLimit = Math.max(Math.floor(cap) * 20, FB_ANALYTICS_CANDIDATE_FLOOR);
+
+  // ⚠️ Raw SQL is REQUIRED here, not a preference: AnalyticsSnapshot has NO Prisma
+  // relation to PostTarget (bare `postTargetId` column, indexes only), so there is
+  // no nested `snapshots: { ... }` to order by. The correlated subquery is
+  // index-backed on ("postTargetId").
+  const candidates: {
+    targetId: string;
+    publishedId: string | null;
+    channelId: string;
+    lastSnapshotAt: Date | null;
+  }[] = await (prisma.$queryRawUnsafe as any)(
+    `SELECT pt.id AS "targetId",
+            pt."publishedId",
+            pt."channelId",
+            (SELECT max(s."snapshotAt") FROM "AnalyticsSnapshot" s
+              WHERE s."postTargetId" = pt.id) AS "lastSnapshotAt"
+     FROM "PostTarget" pt
+     INNER JOIN "Channel" c ON c.id = pt."channelId"
+     WHERE c.platform::text = 'FACEBOOK'
+       AND c."isActive" = true
+       AND c."disconnectedAt" IS NULL
+       AND pt.status::text = 'PUBLISHED'
+       AND pt."publishedId" IS NOT NULL
+       AND pt."publishedAt" IS NOT NULL
+     ORDER BY "lastSnapshotAt" ASC NULLS FIRST, pt.id ASC
+     LIMIT $1`,
+    candidateLimit
+  );
+
+  if (candidates.length >= candidateLimit) {
+    // Not a silent truncation: say so. If this ever fires, raise the floor rather
+    // than letting the pass quietly ignore part of the population.
+    console.warn(
+      `[Cron] FB analytics pass: candidate window SATURATED at ${candidateLimit} — ` +
+        `some FB targets were not even considered this run`
+    );
+  }
+
+  const plan = planFbAnalyticsRun({
+    candidates,
+    now: new Date(),
+    cap: Math.floor(cap),
+    minStaleHours,
+  });
+
+  // One bucket per day so a worker restart loop cannot re-enqueue the same target
+  // repeatedly. ⚠️ EXACTLY three colon segments — BullMQ >=5.70 rejects other
+  // counts. Deliberately NOT `Date.now()`: that is why the two passes above can
+  // never dedupe (the mistake already fixed for Sync Now).
+  const dayBucket = Math.floor(Date.now() / (24 * 60 * 60 * 1000));
+
+  let queued = 0;
+  for (const target of plan.selected) {
+    if (!target.publishedId) continue; // planFbAnalyticsRun already filtered these
+    await analyticsSyncQueue.add(
+      `analytics-fb-${target.targetId}`,
+      {
+        postTargetId: target.targetId,
+        platform: "FACEBOOK",
+        channelId: target.channelId,
+        platformPostId: target.publishedId,
+      },
+      {
+        jobId: `fbanalytics:${target.targetId}:${dayBucket}`,
+        removeOnComplete: true,
+        removeOnFail: 100,
+      }
+    );
+    queued++;
+  }
+
+  // Always log the full accounting, including a zero-work run — the budget must be
+  // observable. This is also the ONLY signal if the pass starts hitting quota:
+  // Graph `#4` (rate limit) and `#100` (bad metric name) both return undefined from
+  // diagnoseMetaError, so a throttled FB pass raises no health verdict and shows
+  // the user nothing.
+  console.log(
+    `[Cron] FB analytics pass: queued ${queued}/${plan.selected.length} ` +
+      `(deferred ${plan.deferred}, fresh ${plan.freshSkipped}, unmeasurable ${plan.ineligible}, ` +
+      `cap ${Math.floor(cap)}, minStale ${minStaleHours}h)`
+  );
 }
 
 /**
@@ -1065,6 +1217,14 @@ export function startCronJobs() {
   // Long-tail analytics refresh (7d–90d-old posts, non-FB) once daily
   setInterval(scheduleLongTailAnalyticsSync, 24 * 60 * 60 * 1000);
   setTimeout(scheduleLongTailAnalyticsSync, 8 * 60 * 1000); // Start after 8 min warmup
+
+  // Budgeted FACEBOOK analytics pass, once daily. FB is excluded from BOTH passes
+  // above, so without this an app-published FB target stops being refreshed forever
+  // once its 30d at-age checkpoint passes. Hard-capped and stalest-first so the cap
+  // only defers. No-ops entirely unless FB_ANALYTICS_SYNC_ENABLED === "true".
+  // 14 min warmup: after the orphan janitor (13) so two heavy DB sweeps don't collide.
+  setInterval(scheduleFacebookAnalyticsSync, 24 * 60 * 60 * 1000);
+  setTimeout(scheduleFacebookAnalyticsSync, 14 * 60 * 1000);
 
   // At-age checkpoint reconciliation once daily (re-enqueue missed checkpoints)
   setInterval(reconcileAtAgeCheckpoints, 24 * 60 * 60 * 1000);
