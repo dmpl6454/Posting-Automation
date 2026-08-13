@@ -29,6 +29,16 @@ import { HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE } from "../lib/publish-r
  * rows are provably unreachable by every code path, a bulk delete of 1.3M rows
  * deserves a look at the real number first.
  *
+ * ⚠️ OWNER DECISION 2026-08-13: STAY REPORT-ONLY — **add the real foreign key
+ * first**, then purge. Do NOT flip `ORPHAN_PURGE_ENABLED=true` as a standalone
+ * step. Rationale: arming this janitor drains the current 1.33M backlog over ~27
+ * days but does nothing to stop the SOURCE (post deletion still cascades
+ * PostTarget rows and strands their snapshots, because AnalyticsSnapshot has no FK
+ * to PostTarget — only a bare `postTargetId` column with indexes). The FK is the
+ * structural fix; it needs the table clean first and will lock ~1.3M rows, so it is
+ * separately scheduled work. This janitor remains the permanent safety net for
+ * whatever the FK's ON DELETE cannot cover.
+ *
  * Batched + capped so it never takes a long lock on the 4-core prod box.
  */
 const ORPHAN_PURGE_BATCH = 5_000;
@@ -1287,6 +1297,15 @@ export function startCronJobs() {
   console.log("[Cron]   - Token refresh: every 30 min");
   console.log("[Cron]   - Analytics sync: every 6 hours");
   console.log("[Cron]   - Long-tail analytics sync (7d–90d): every 24 hours");
+  // Announce the FB pass AND its armed/disarmed state: it is fail-CLOSED, so a
+  // silent absence from this list is indistinguishable from "the flag is off".
+  console.log(
+    `[Cron]   - FACEBOOK analytics pass (app-published): every 24 hours — ${
+      process.env.FB_ANALYTICS_SYNC_ENABLED === "true"
+        ? `ENABLED (cap ${process.env.FB_ANALYTICS_PER_RUN ?? 40})`
+        : "disabled (FB_ANALYTICS_SYNC_ENABLED != true)"
+    }`
+  );
   console.log("[Cron]   - At-age checkpoint reconciliation: every 24 hours");
   console.log("[Cron]   - Agent runs: every 1 min");
   console.log("[Cron]   - Autopilot cleanup: every 1 hour");

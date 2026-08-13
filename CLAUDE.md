@@ -649,6 +649,20 @@ IG-heavy shard ran (5,765 rows measured in that window, **all Instagram**).
 
 - **Do not diagnose a stall from one sample.** Check *which platform* is being measured, not just the
   aggregate count.
+- **⚠️ `EXTERNAL_METRICS_PER_RUN` IS PER ACCOUNT, NOT PER RUN** — visible in the worker log as
+  `[ExternalSync] FACEBOOK:112035290218472 listed=659 channels=4 measured=600`. A shard holds ~130
+  accounts processed at `EXTERNAL_SYNC_CONCURRENCY`, so ONE run measures thousands of rows even though
+  each account is capped at 600. Measured 2026-08-13: **1,845 rows in 10 minutes** while an FB-heavy
+  shard was active.
+- **So a floor backfill has two very different timescales — quote both or neither.** The BULK drains
+  in hours (rate above). The **TAIL** is set by the largest single account, because an account sits in
+  exactly ONE shard and its shard comes round only once per full cycle:
+  `ceil(biggest_account_due / METRICS_PER_RUN) × (EXTERNAL_SYNC_SHARDS × 2h)`.
+  Measured 2026-08-13 11:13 UTC: 15 FB accounts held 10,229 due rows, top 5 = **8,593 (84%)**,
+  biggest = **2,712** ⇒ `ceil(2712/600) = 5` of its own shard windows × 8h ≈ **~40h for that one
+  account's tail**, while the other 14 finish far sooner. ⚠️ Do NOT report the tail figure as the
+  total (I nearly did) — and do not report the bulk rate as "done" either. **Completeness is a
+  per-account question**; check `max(due_rows)` grouped by `platformId`, not the aggregate.
 - **Separate BACKLOG from CEILING when judging completeness.** Raw "63.4% of FB video rows have
   views" conflated "not yet swept" with "swept, genuinely no view count". Splitting on
   `metricsSyncedAt >= floor` showed **99.4% of already-swept video rows got a views value** — so
