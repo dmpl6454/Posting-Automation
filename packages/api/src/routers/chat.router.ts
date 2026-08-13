@@ -8,6 +8,8 @@ import type { PrismaClient } from "@postautomation/db";
 import crypto from "crypto";
 import { uploadBase64ToS3, isS3Configured } from "../lib/s3";
 import { mediaRequiredBlock } from "../lib/media-required";
+import { fetchChannelStatRows } from "./analytics.router";
+import { effectiveChannelUnavailable } from "../lib/platform-metrics";
 
 /**
  * Throws unless every channelId belongs to the given org.
@@ -974,39 +976,71 @@ export const chatRouter = createRouter({
             }),
           ]);
 
-          // Engagement summary so chat matches the dashboard — sum the latest
-          // AnalyticsSnapshot per published target (same source as analytics.engagement).
-          let engagement = { impressions: 0, likes: 0, comments: 0, shares: 0, reach: 0 };
-          const targetIds = publishedTargets.map((t) => t.id);
-          if (targetIds.length > 0) {
-            const rows: Array<{ impressions: bigint; likes: bigint; comments: bigint; shares: bigint; reach: bigint }> =
-              await (ctx.prisma.$queryRawUnsafe as any)(
-                `SELECT
-                  COALESCE(SUM(a.impressions), 0) as impressions,
-                  COALESCE(SUM(a.likes), 0) as likes,
-                  COALESCE(SUM(a.comments), 0) as comments,
-                  COALESCE(SUM(a.shares), 0) as shares,
-                  COALESCE(SUM(a.reach), 0) as reach
-                FROM "AnalyticsSnapshot" a
-                INNER JOIN (
-                  SELECT "postTargetId", MAX("snapshotAt") as max_snapshot
-                  FROM "AnalyticsSnapshot"
-                  WHERE "postTargetId" = ANY($1::text[])
-                  GROUP BY "postTargetId"
-                ) latest ON a."postTargetId" = latest."postTargetId" AND a."snapshotAt" = latest.max_snapshot`,
-                targetIds
+          // ⚠️ Engagement comes from the SHARED aggregate, not a copy of it.
+          //
+          // CLAUDE.md records the invariant that chat and the dashboard must agree.
+          // This block used to run its own SQL over AnalyticsSnapshot alone, which
+          // silently drifted three ways once the dashboard moved to
+          // fetchChannelStatRows: it missed platform-native (direct) posts — the
+          // LARGER population — applied no capability gate, so it reported a number
+          // for Instagram impressions while the dashboard showed "—", and never
+          // learned about `views`.
+          //
+          // Window matches the dashboard's default (30 days) and is stated in the
+          // summary text, so the agent cannot imply an all-time figure.
+          const to = new Date();
+          const from = new Date(to.getTime() - 30 * 24 * 60 * 60 * 1000);
+          const statRows = await fetchChannelStatRows(
+            ctx.prisma as any,
+            ctx.organizationId,
+            from,
+            to,
+            undefined
+          );
+          const orgChannels = await ctx.prisma.channel.findMany({
+            where: { organizationId: ctx.organizationId },
+            select: { id: true, platform: true },
+          });
+          const platformById = new Map(orgChannels.map((c) => [c.id, String(c.platform)]));
+          // A metric only counts when the channel can actually report it — the same
+          // per-capture-over-static-map precedence the UI uses. Otherwise chat would
+          // reintroduce the confident-zero the dashboard exists to avoid.
+          const sumGated = (key: "impressions" | "reach" | "views" | "likes" | "comments" | "shares") =>
+            statRows.reduce((n, r) => {
+              const unavailable = effectiveChannelUnavailable(
+                platformById.get(r.channelId) ?? "",
+                r.declaredAvailable,
+                r.hasLegacySnapshot
               );
-            const r = rows[0];
-            engagement = {
-              impressions: Number(r?.impressions ?? 0),
-              likes: Number(r?.likes ?? 0),
-              comments: Number(r?.comments ?? 0),
-              shares: Number(r?.shares ?? 0),
-              reach: Number(r?.reach ?? 0),
-            };
-          }
+              if (unavailable.includes(key)) return n;
+              const v = (r as any)[key];
+              return n + (typeof v === "number" ? v : 0);
+            }, 0);
+          const engagement = {
+            impressions: sumGated("impressions"),
+            views: sumGated("views"),
+            likes: sumGated("likes"),
+            comments: sumGated("comments"),
+            shares: sumGated("shares"),
+            reach: sumGated("reach"),
+          };
 
-          const summary = `📊 Dashboard Summary:\n- Total posts: ${totalPosts}\n- Published: ${published}\n- Scheduled: ${scheduled}\n- Active channels: ${channels}\n\nEngagement (all published posts):\n- Impressions: ${engagement.impressions}\n- Likes: ${engagement.likes}\n- Comments: ${engagement.comments}\n- Shares: ${engagement.shares}\n- Reach: ${engagement.reach}\n\nRecent posts:\n${recentPosts.map((p) => `  • [${p.status}] ${p.content.slice(0, 60)}...`).join("\n")}`;
+          // Only list metrics that some connected platform can actually report, so
+          // the agent never states a confident 0 for something structurally absent
+          // (Instagram has no clicks; Instagram/YouTube have no impressions).
+          const engagementLines = (
+            [
+              ["Views", engagement.views],
+              ["Impressions", engagement.impressions],
+              ["Reach (summed per post)", engagement.reach],
+              ["Likes", engagement.likes],
+              ["Comments", engagement.comments],
+              ["Shares", engagement.shares],
+            ] as Array<[string, number]>
+          )
+            .filter(([, v]) => v > 0)
+            .map(([k, v]) => `- ${k}: ${v}`);
+          const summary = `📊 Dashboard Summary:\n- Total posts: ${totalPosts}\n- Published: ${published}\n- Scheduled: ${scheduled}\n- Active channels: ${channels}\n\nEngagement (last 30 days, all posts on connected channels — matches the Insights page):\n${engagementLines.length ? engagementLines.join("\n") : "- No engagement data captured yet for this window."}\n\nRecent posts:\n${recentPosts.map((p) => `  • [${p.status}] ${p.content.slice(0, 60)}...`).join("\n")}`;
 
           await ctx.prisma.chatMessage.create({
             data: {
