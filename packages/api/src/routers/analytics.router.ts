@@ -213,7 +213,12 @@ async function fetchChannelStatRows(
             -- SUM skips NULLs, so this is the total over rows that actually
             -- captured a view count. availViews below says whether ANY did.
             COALESCE(SUM(views), 0)          AS views,
-            BOOL_OR(views IS NOT NULL)       AS "availViews",
+            -- ⚠️ Honors an explicit declaration too. The column being non-NULL is
+            -- the primary evidence, but a capture that stored a value while
+            -- declaring views:false must not be counted — value and
+            -- declaration disagreeing is the fabricated-zero shape, and the
+            -- provider now guarantees they agree. Belt and braces.
+            BOOL_OR(views IS NOT NULL AND COALESCE(avail->>'views', 'true') <> 'false') AS "availViews",
             -- Impressioned-only sums: the ONLY honest basis for an engagement
             -- rate. Pooling engagement from ALL posts over a denominator built
             -- from only the impressioned ones produced 1400% on prod (7 posts'
@@ -723,7 +728,15 @@ export const analyticsRouter = createRouter({
       // THEY can report must keep its tile rather than having the tile dropped
       // while its number is still being summed into the totals.
       const orgChannels = await ctx.prisma.channel.findMany({
-        where: { organizationId: ctx.organizationId },
+        // ⚠️ The platform filter must narrow CAPABILITY as well as the numbers.
+        // Without it a filtered view computes reportableMetrics over EVERY
+        // connected platform, so selecting "Instagram" still renders tiles for
+        // metrics only Facebook can report — as a hard 0, with no "—" path.
+        // perChannelStats already scopes this way.
+        where: {
+          organizationId: ctx.organizationId,
+          ...(input.platform ? { platform: input.platform as any } : {}),
+        },
         select: { platform: true },
       });
       // ⚠️ The SECOND argument is load-bearing and was missing until 2026-08-08.
@@ -1388,9 +1401,13 @@ export const analyticsRouter = createRouter({
    *    (accuracy fix 2026-07-17). Checkpoints accrue for posts published after
    *    2026-07-17; older posts show NULL metrics (UI renders "—").
    *
-   * Metric caveats (platform APIs, not bugs): "views" ride on impressions
-   * (YouTube/Threads map views→impressions); Twitter metrics are 0 on the free
-   * API tier; Instagram never exposes clicks/shares.
+   * Metric caveats (platform APIs, not bugs): `views` and `impressions` are
+   * SEPARATE columns as of 2026-08-13 — Instagram/YouTube/Threads/dev.to/Reddit
+   * report only views (they have no impressions metric at all and declare it
+   * unavailable), while Facebook reports both and they differ ~3.45x
+   * (post_media_view counts plays/renders, post_video_views counts watched
+   * video). Twitter metrics are 0 on the free API tier; Instagram never exposes
+   * clicks.
    */
   postReports: orgProcedure
     .input(
@@ -1488,7 +1505,13 @@ export const analyticsRouter = createRouter({
       type Row = (typeof rows)[number];
       type CsvCell = string | number | null | undefined;
       const allMetricCols: Array<{ key: string; header: string; get: (r: Row) => CsvCell }> = [
-        { key: "impressions", header: "Views/Impressions", get: (r) => r.impressions },
+        // ⚠️ Keep this list in step with ReportsTab's allMetricCols. The comment
+        // above records that the emailed CSV once drifted from the on-screen
+        // table; it drifted again when `views` shipped without this file being
+        // touched, so a Threads/Reddit/dev.to org received a CSV with no
+        // delivery metric and no rate at all.
+        { key: "impressions", header: "Impressions", get: (r) => r.impressions },
+        { key: "views", header: "Views", get: (r) => r.views ?? null },
         { key: "clicks", header: "Clicks", get: (r) => r.clicks },
         { key: "likes", header: "Likes", get: (r) => r.likes },
         { key: "comments", header: "Comments", get: (r) => r.comments },
@@ -1498,10 +1521,10 @@ export const analyticsRouter = createRouter({
       const metricCols = allMetricCols.filter((c) => inCsv(c.key));
 
       const includeSaves = rows.some((r) => r.saved != null);
-      // Engagement rate is impressions ÷ engagement, so it can only be as honest
-      // as its denominator: with impressions dropped, a printed rate would be
-      // derived from a hidden number.
-      const includeEng = inCsv("impressions");
+      // Engagement rate can only be as honest as its denominator, which is
+      // impressions OR views — five platforms have no impressions metric at all.
+      // Must match ReportsTab's includeEng exactly.
+      const includeEng = inCsv("impressions") || inCsv("views");
 
       const csv = toCsv(
         [

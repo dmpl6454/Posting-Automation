@@ -317,7 +317,9 @@ export class ThreadsProvider extends SocialProvider {
       likeKind: "likes",
       reachIsDistinct: false, // reach aliased from views
       source: "api",
-      metricsAvailable: { clicks: false, reach: false, views: true },
+      // `impressions: false` must be EXPLICIT — an omitted key reads as
+      // available downstream and would render the view count under two labels.
+      metricsAvailable: { clicks: false, reach: false, impressions: false, views: true },
     };
   }
 }

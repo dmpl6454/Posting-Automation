@@ -17,8 +17,18 @@ export interface SnapshotMetrics {
   shares: number;
   comments: number;
   reach: number;
+  /** Nullable: NULL means the capture reported no view count. */
+  views?: number | null;
 }
 
+/**
+ * ⚠️ Adding a key here REQUIRES adding it to the caller's `latest` select too
+ * (analytics-sync.worker.ts). With the key in KEYS but absent from the select,
+ * `norm(latest.views)` reads `undefined → 0` on every comparison, so every
+ * capture with views > 0 looks changed and writes unconditionally —
+ * reintroducing the snapshot bloat this dedup exists to prevent (Facebook was
+ * writing 47 identical snapshots per target).
+ */
 const KEYS: (keyof SnapshotMetrics)[] = [
   "impressions",
   "clicks",
@@ -26,6 +36,7 @@ const KEYS: (keyof SnapshotMetrics)[] = [
   "shares",
   "comments",
   "reach",
+  "views",
 ];
 
 function norm(v: number | null | undefined): number {

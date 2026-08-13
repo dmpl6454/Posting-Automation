@@ -151,12 +151,22 @@ describe("Instagram getPostAnalytics — real captured values", () => {
 
     expect(a).toBeTruthy();
     expect(a!.reach).toBe(106);
-    expect(a!.impressions).toBe(115); // `views` rides the impressions slot
+    // The number still lands in BOTH slots (the impressions column is retained so
+    // historical rows and the engagement-rate denominator are unchanged) …
+    expect(a!.impressions).toBe(115);
+    expect(a!.views).toBe(115);
     expect(a!.saved).toBe(1);
     expect(a!.avgWatchTimeMs).toBe(3038);
     expect(a!.totalWatchTimeMs).toBe(328109);
+    // ⚠️ … but `impressions` must be declared FALSE. Instagram has no impressions
+    // metric (Meta deleted it in v22.0). Declaring it true — or merely OMITTING
+    // the key, which reads as available — made the UI render Impressions and
+    // Views as two columns holding the identical number, on 66,073 prod rows.
+    // The static capability map alone cannot prevent that: per-capture
+    // metricsAvailable OVERRIDES it at every consumer.
     expect(a!.metricsAvailable).toMatchObject({
-      impressions: true,
+      impressions: false,
+      views: true,
       reach: true,
       shares: true,
       clicks: false, // IG has no click metric at all

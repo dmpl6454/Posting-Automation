@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { gatePostReportRow } from "../routers/analytics.router";
 import {
   platformMetricCapabilities,
   reportableMetrics,
@@ -100,5 +101,112 @@ describe("views capability — the five platforms that never had impressions", (
       expect(un).toContain("impressions");
       expect(un).not.toContain("views");
     });
+  });
+});
+
+/**
+ * 🔴 THE GAP THAT LET THE DUPLICATE-COLUMN DEFECT SHIP.
+ *
+ * The tests above call `reportableMetrics([platform])` with ONE argument. Neither
+ * production call site does: `analytics.engagement` and `analytics.postReports`
+ * both pass the per-capture declarations as a second argument. And per-capture
+ * `metricsAvailable` OVERRIDES the static map at every consumer.
+ *
+ * So the static `unavailable: ["impressions"]` edit was dead code in production
+ * while the one-argument tests happily passed. Instagram shipped rendering
+ * Impressions AND Views as two columns holding the identical number — measured on
+ * 66,073 prod rows, both summing 2.26B, printed twice.
+ *
+ * LESSON: a capability test that does not use the production call shape is not
+ * testing the production behaviour. Every case below passes declarations.
+ */
+describe("🔴 production-shaped: per-capture declarations must not resurrect impressions", () => {
+  /** Exactly what instagram.provider now emits. */
+  const IG_DECLARED = { impressions: false, views: true, reach: true, shares: true, clicks: false };
+  /** Exactly what youtube.provider now emits. */
+  const YT_DECLARED = {
+    impressions: false,
+    views: true,
+    likes: true,
+    comments: true,
+    clicks: false,
+    shares: false,
+    reach: false,
+  };
+  /** Threads/dev.to/Reddit shape — the key must be PRESENT and false, never omitted. */
+  const THREADS_DECLARED = { clicks: false, reach: false, impressions: false, views: true };
+
+  it("INSTAGRAM: one column, not two", () => {
+    const keys = reportableMetrics(["INSTAGRAM"], [IG_DECLARED]);
+    expect(keys).toContain("views");
+    expect(keys).not.toContain("impressions");
+  });
+
+  it("YOUTUBE: one column, not two", () => {
+    const keys = reportableMetrics(["YOUTUBE"], [YT_DECLARED]);
+    expect(keys).toContain("views");
+    expect(keys).not.toContain("impressions");
+  });
+
+  it("THREADS/DEVTO/REDDIT: impressions stays out of the reportable set", () => {
+    expect(reportableMetrics(["THREADS"], [THREADS_DECLARED])).not.toContain("impressions");
+  });
+
+  /**
+   * ⚠️ WHERE THE OMITTED-KEY HAZARD ACTUALLY LIVES — measured, not assumed.
+   *
+   * `reportableMetrics` widens only on an explicit `true`, and
+   * `effectiveChannelUnavailable` falls through to the static map, so BOTH
+   * aggregate paths are safe with an omitted key. The per-ROW gate is not:
+   * `gatePostReportRow` treats "this capture declared other keys, so an omitted
+   * one must have worked" as available. That is why the five providers declare
+   * `impressions: false` EXPLICITLY rather than simply dropping the key.
+   */
+  it("gatePostReportRow is the path that needs the explicit false", () => {
+    const row = (declared: Record<string, boolean>) =>
+      gatePostReportRow({
+        targetId: "t", postId: "p", contentPreview: "x", channelName: "c",
+        channelUsername: null, platform: "THREADS", publishedAt: null, publishedUrl: null,
+        impressions: 500, clicks: null, likes: 1, comments: 0, shares: 0, reach: null,
+        views: 500, engagementRate: 1, snapshotAt: null,
+        snapshotMetadata: { metricsAvailable: declared },
+      } as any);
+
+    // Omitted ⇒ the capture's siblings vouch for it ⇒ a duplicate column.
+    expect(row({ clicks: false, reach: false, views: true }).impressions).toBe(500);
+    // Explicit false ⇒ "—", which is the truth for a platform with no such metric.
+    expect(row(THREADS_DECLARED).impressions).toBeNull();
+    expect(row(THREADS_DECLARED).views).toBe(500);
+  });
+
+  it("effectiveChannelUnavailable agrees — the aggregate side must not diverge", () => {
+    // gatePostReportRow and effectiveChannelUnavailable disagreeing on an omitted
+    // key is the same-page-two-answers class this repo has already fixed twice.
+    expect(effectiveChannelUnavailable("INSTAGRAM", IG_DECLARED, false)).toContain("impressions");
+    expect(effectiveChannelUnavailable("INSTAGRAM", IG_DECLARED, false)).not.toContain("views");
+    expect(effectiveChannelUnavailable("YOUTUBE", YT_DECLARED, false)).toContain("impressions");
+    expect(effectiveChannelUnavailable("THREADS", THREADS_DECLARED, false)).toContain("impressions");
+  });
+
+  it("a legacy metadata-less capture cannot resurrect a confident 'Views 0'", () => {
+    // views availability comes from the COLUMN (BOOL_OR(views IS NOT NULL)), not
+    // from metadata, so a definitive `false` must outrank the legacy fallback.
+    expect(effectiveChannelUnavailable("FACEBOOK", { views: false }, true)).toContain("views");
+  });
+
+  it("FACEBOOK still shows both — it is the one platform where they differ", () => {
+    const FB_DECLARED = { impressions: true, views: true, reach: true, clicks: true };
+    const keys = reportableMetrics(["FACEBOOK"], [FB_DECLARED]);
+    expect(keys).toContain("impressions");
+    expect(keys).toContain("views");
+  });
+
+  it("a mixed FB+IG org keeps Impressions (from FB) and Views (from both)", () => {
+    const keys = reportableMetrics(
+      ["FACEBOOK", "INSTAGRAM"],
+      [{ impressions: true, views: true }, IG_DECLARED]
+    );
+    expect(keys).toContain("impressions");
+    expect(keys).toContain("views");
   });
 });

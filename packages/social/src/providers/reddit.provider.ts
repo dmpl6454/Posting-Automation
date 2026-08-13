@@ -221,7 +221,8 @@ export class RedditProvider extends SocialProvider {
       likeKind: "upvotes", // Reddit has no "like"; the likes column holds upvotes
       reachIsDistinct: false, // reach aliased from view_count
       source: "api",
-      metricsAvailable: { clicks: false, reach: false, views: true },
+      // `impressions: false` must be EXPLICIT — see threads.provider.ts.
+      metricsAvailable: { clicks: false, reach: false, impressions: false, views: true },
     };
   }
 }

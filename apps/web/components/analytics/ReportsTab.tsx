@@ -378,10 +378,12 @@ export function ReportsTab() {
             <span>
               Covers <strong>all posts on your connected Facebook Pages and Instagram accounts
               from 1 Aug 2026 onward</strong>, including ones posted directly on the platform
-              (marked <em>Direct</em>) — not just posts sent through PostAutomation. Views ride on
-              Impressions (YouTube/Threads report views there; IG Reels and FB videos report
-              plays/views there). Twitter metrics need a paid API tier; Instagram doesn&apos;t expose
-              clicks (shares only on Reels). All times UTC.
+              (marked <em>Direct</em>) — not just posts sent through PostAutomation.{" "}
+              <strong>Views</strong> and <strong>Impressions</strong> are separate columns:
+              Instagram, YouTube and Threads report only views, while Facebook reports both
+              (impressions counts plays/renders, views counts watched video). Twitter metrics
+              need a paid API tier; Instagram doesn&apos;t expose clicks (shares only on Reels).
+              All times UTC.
             </span>
           ) : (
             <span>
@@ -457,7 +459,10 @@ export function ReportsTab() {
                       Saves
                     </th>
                   )}
-                  {show("impressions") && (
+                  {/* Denominator is impressions OR views — must match the CSV's
+                      includeEng and the Channel Performance gate, or the table and
+                      its own export disagree. */}
+                  {(show("impressions") || show("views")) && (
                     <th className="py-2.5 pr-3 text-right font-medium" title="Engagement rate">
                       Eng %
                     </th>
@@ -540,7 +545,7 @@ export function ReportsTab() {
                         {num(r.saved)}
                       </td>
                     )}
-                    {show("impressions") && (
+                    {(show("impressions") || show("views")) && (
                       <td className="whitespace-nowrap py-2.5 pr-3 text-right tabular-nums">
                         {r.engagementRate === null ? "—" : `${r.engagementRate.toFixed(1)}%`}
                       </td>

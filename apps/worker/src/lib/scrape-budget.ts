@@ -85,7 +85,16 @@ export function stepScrapeBudget(
 export function shouldDeferUnmeasured(
   wantsScrape: boolean,
   scrapeAllowed: boolean,
-  impressionsAvailable: boolean | undefined
+  impressionsAvailable: boolean | undefined,
+  /**
+   * ⚠️ Added 2026-08-13. Without this the predicate discards a capture that DID
+   * return a real `post_video_views` merely because impressions was unavailable
+   * — which is the same "the old guard threw away good API captures" bug this
+   * function was written to fix, reintroduced for the newer metric. Reachable on
+   * the rung-2 / flag-off Facebook path.
+   */
+  viewsAvailable?: boolean | undefined
 ): boolean {
-  return wantsScrape && !scrapeAllowed && impressionsAvailable !== true;
+  const gotSomething = impressionsAvailable === true || viewsAvailable === true;
+  return wantsScrape && !scrapeAllowed && !gotSomething;
 }

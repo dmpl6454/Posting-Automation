@@ -96,6 +96,10 @@ export function createAnalyticsSyncWorker() {
             shares: true,
             comments: true,
             reach: true,
+            // ⚠️ Must stay in step with snapshot-dedup's KEYS — see the note
+            // there. Omitting it while KEYS lists it makes every views-bearing
+            // capture write unconditionally.
+            views: true,
             metadata: true,
           },
         });

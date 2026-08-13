@@ -293,11 +293,20 @@ model ExternalPost {
 
   /// FB: the Video/Reel node id behind a video attachment (attachments.target.id).
   ///
-  /// Load-bearing for view counts: Facebook reports a post's views ONLY on this
-  /// node — the feed-post insights edge returns post_video_views = 0 for every
-  /// video (measured 40/40 on prod). Resolved for free during listing; persisted
-  /// so the resolve never repeats. NULL + videoResolvedAt set ⇒ "we looked and
-  /// there is no video node", which must not be retried every pass.
+  /// Used to recover a view count when the post node does not supply one.
+  /// Resolved for free during listing; persisted so the resolve never repeats.
+  /// NULL + videoResolvedAt set ⇒ "we looked and there is no video node", which
+  /// must not be retried every pass.
+  ///
+  /// ⚠️ CORRECTED 2026-08-13. This comment previously asserted that Facebook
+  /// reports views ONLY on the Video node because "the feed-post insights edge
+  /// returns post_video_views = 0 for every video (measured 40/40 on prod)".
+  /// REFUTED: the feed edge returns a real period=lifetime value — the 40/40
+  /// zeros were a last-wins parse reading its trailing period=day row. Measured
+  /// after the fix: 9,739 production rows carry a positive feed-sourced
+  /// post_video_views. The claim was corrected in facebook.provider.ts and
+  /// social.types.ts but survived HERE, in the canonical schema — which is the
+  /// most authoritative place a refuted claim can hide.
   resolvedVideoId String?
   /// When the video-id resolution last ran (success or miss).
   videoResolvedAt DateTime?

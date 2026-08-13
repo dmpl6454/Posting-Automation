@@ -490,7 +490,8 @@ export function createExternalPostSyncWorker() {
           shouldDeferUnmeasured(
             wantsScrape,
             scrapeAllowed,
-            analytics.metricsAvailable?.impressions
+            analytics.metricsAvailable?.impressions,
+            analytics.metricsAvailable?.views
           )
         ) {
           continue;

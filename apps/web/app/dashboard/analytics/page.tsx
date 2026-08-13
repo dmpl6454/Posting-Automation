@@ -249,11 +249,19 @@ function InsightsAnalyticsView() {
     // ⚠️ NOT "Total Reach": this is a sum of per-post reach, so it double-counts
     // anyone who saw more than one post. Naming it "Total Reach" would assert a
     // deduplicated audience size we cannot compute from per-post metrics.
+    //
+    // ⚠️ The views rung must come BEFORE the impressions one. This card used to
+    // read `engagement.impressions` under the label "Total Views" — correct only
+    // where the two are the same number, and wrong by 3.45x on Facebook (plays vs
+    // qualified views) and wrong outright on Twitter/LinkedIn (genuine
+    // impressions, no view count). Now each label names the field it sums.
     ...(statReportable("reach")
       ? [{ name: "Reach (summed)", value: engagement?.reach ?? 0, icon: TrendingUp, color: "text-purple-600 bg-purple-100 dark:text-purple-400 dark:bg-purple-950", format: true }]
-      : statReportable("impressions")
-        ? [{ name: "Total Views", value: engagement?.impressions ?? 0, icon: TrendingUp, color: "text-purple-600 bg-purple-100 dark:text-purple-400 dark:bg-purple-950", format: true }]
-        : [{ name: "Total Engagement", value: (engagement?.likes ?? 0) + (engagement?.comments ?? 0) + (engagement?.shares ?? 0), icon: TrendingUp, color: "text-purple-600 bg-purple-100 dark:text-purple-400 dark:bg-purple-950", format: true }]),
+      : statReportable("views")
+        ? [{ name: "Total Views", value: engagement?.views ?? 0, icon: TrendingUp, color: "text-purple-600 bg-purple-100 dark:text-purple-400 dark:bg-purple-950", format: true }]
+        : statReportable("impressions")
+          ? [{ name: "Total Impressions", value: engagement?.impressions ?? 0, icon: TrendingUp, color: "text-purple-600 bg-purple-100 dark:text-purple-400 dark:bg-purple-950", format: true }]
+          : [{ name: "Total Engagement", value: (engagement?.likes ?? 0) + (engagement?.comments ?? 0) + (engagement?.shares ?? 0), icon: TrendingUp, color: "text-purple-600 bg-purple-100 dark:text-purple-400 dark:bg-purple-950", format: true }]),
   ];
 
   // Only tile metrics that SOME connected platform can actually report. A metric
@@ -915,9 +923,16 @@ function InsightsAnalyticsView() {
                               often computed from a single post and must not read as
                               the channel's overall rate. */}
                           {(() => {
+                            // ⚠️ The rate's denominator is impressions OR views.
+                            // Five platforms have no impressions metric at all, so
+                            // suppressing on impressions alone blanks the rate for
+                            // every Instagram and YouTube channel — the largest
+                            // population here. Must stay in step with the column
+                            // gate above and with gatePostReportRow.
                             const hidden =
                               ch.hasSnapshot === false ||
-                              ch.unavailable?.includes("impressions");
+                              ((ch.unavailable ?? []).includes("impressions") &&
+                                (ch.unavailable ?? []).includes("views"));
                             const cell = engagementRateCell({
                               engagementRate: hidden ? null : ch.engagementRate,
                               engagementRateBasis: ch.engagementRateBasis,
@@ -1087,9 +1102,11 @@ function InsightsAnalyticsView() {
                                 with no impressioned post there is no denominator,
                                 so "0.00%" would misread as "no engagement". */}
                             {(() => {
+                              // Same impressions-OR-views rule as the channel table.
                               const hidden =
                                 g.hasSnapshot === false ||
-                                (g.unavailable ?? []).includes("impressions");
+                                ((g.unavailable ?? []).includes("impressions") &&
+                                  (g.unavailable ?? []).includes("views"));
                               const cell = engagementRateCell({
                                 engagementRate: hidden ? null : g.engagementRate,
                                 engagementRateBasis: g.engagementRateBasis,

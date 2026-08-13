@@ -842,6 +842,11 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
                 shares: analytics.shares ?? 0,
                 comments: analytics.comments ?? 0,
                 reach: analytics.reach ?? 0,
+                // ⚠️ `?? null`, never `?? 0` — NULL is "never captured" ("—"),
+                // 0 asserts a measured zero. This create was missed when views
+                // shipped, so a freshly published post stored metricsAvailable
+                // .views:true beside a NULL column until the next sync.
+                views: analytics.views ?? null,
                 engagementRate: analytics.engagementRate ?? 0,
                 // Only the honesty metadata (likeKind/reachIsDistinct/saved/
                 // metricsAvailable/source) — NOT the whole analytics object

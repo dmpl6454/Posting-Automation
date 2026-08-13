@@ -259,6 +259,16 @@ export function effectiveChannelUnavailable(
     // `metricsAvailable` describes ONE capture, so an omitted key really does mean that
     // capture's fields call never resolved.
     //
+    // ⚠️ `views` is EXEMPT from the legacy fallback.
+    //
+    // That fallback exists because a metadata-less capture makes no METADATA
+    // claim, so the static map is the best available evidence. But views
+    // availability is not metadata-derived at all — it comes from the column
+    // itself (`BOOL_OR(views IS NOT NULL)` in fetchChannelStatRows). A `false`
+    // there is therefore definitive: no capture on this channel ever stored a
+    // view count. Letting one legacy row override that renders a confident
+    // "Views 0" for a channel with no views data at all.
+    if (key === "views" && declaredAvailable?.views === false) return true;
     // No capture claimed it, but some capture predates the metadata ⇒ static map.
     if (hasLegacySnapshot) return staticallyUnavailable(key, caps);
     // Every capture explicitly declared it unavailable (or there are no captures
