@@ -88,9 +88,24 @@ describe("Facebook views — post_video_views is read, and is NOT impressions", 
     expect(a.metricsAvailable?.views).toBe(true);
   });
 
-  it("a measured ZERO stays a real 0 and stays available (a photo has 0 video views)", async () => {
-    // Live-probed on an album post: post_video_views returns lifetime 0 — a real
-    // measurement, not an absence. It must not become "—".
+  /**
+   * ⚠️ REVERSED 2026-08-13, within hours of shipping — this originally asserted
+   * that a measured 0 "stays a real 0 and stays available", on the principle that
+   * a measured zero is a fact.
+   *
+   * That principle is right in general and wrong for THIS metric.
+   * `post_video_views` is a VIDEO-only quantity: Meta genuinely returns lifetime 0
+   * for a photo or album (live-probed on prod: album 113064544342606_1102601375432493
+   * returned post_video_views=0 alongside post_media_view=274,053). Storing it is
+   * therefore not a fabricated zero — but within one recapture sweep **750
+   * non-video rows** had stored 0 and declared it available, and one Facebook
+   * channel already rendered a channel-level "Views 0". A user reads that as
+   * "nobody watched", not "there was nothing to watch".
+   *
+   * Accepted cost: a genuinely 0-view VIDEO now renders "—" instead of 0. That is
+   * the conservative direction — "unknown" rather than a misleading zero.
+   */
+  it("a zero video-view count is SUPPRESSED — a photo must not report 'Views 0'", async () => {
     const zero = {
       data: [
         { name: "post_clicks", period: "lifetime", values: [{ value: 330 }] },
@@ -100,8 +115,25 @@ describe("Facebook views — post_video_views is read, and is NOT impressions", 
     };
     installFetch((u) => (u.includes("/insights?metric=") ? ok(zero) : ok(FIELDS_OK)));
     const a = (await new FacebookProvider().getPostAnalytics(tokens, POST))!;
-    expect(a.views).toBe(0);
-    expect(a.metricsAvailable?.views).toBe(true);
+    expect(a.views).toBeUndefined();
+    expect(a.metricsAvailable?.views).toBe(false);
+    // The post's real delivery number is unaffected.
+    expect(a.impressions).toBe(40587);
+  });
+
+  it("the stored value and its declaration never disagree", async () => {
+    // A declaration that says "available" beside a NULL column (or vice versa) is
+    // the exact shape of every fabricated-zero bug in this subsystem.
+    for (const rows of [
+      [{ name: "post_video_views", period: "lifetime", values: [{ value: 1468 }] }],
+      [{ name: "post_video_views", period: "lifetime", values: [{ value: 0 }] }],
+      [{ name: "post_video_views", period: "day", values: [{ value: 0 }] }],
+      [{ name: "post_clicks", period: "lifetime", values: [{ value: 1 }] }],
+    ]) {
+      installFetch((u) => (u.includes("/insights?metric=") ? ok({ data: rows }) : ok(FIELDS_OK)));
+      const a = (await new FacebookProvider().getPostAnalytics(tokens, POST))!;
+      expect(a.metricsAvailable?.views).toBe(a.views !== undefined);
+    }
   });
 
   it("🔴 a DAY-ONLY response is not trusted — no fabricated zero", async () => {

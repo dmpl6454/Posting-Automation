@@ -307,7 +307,12 @@ export class YouTubeProvider extends SocialProvider {
       source: "api",
       // Declared EXPLICITLY per metric — an omitted key reads as AVAILABLE downstream.
       metricsAvailable: {
-        impressions: true,
+        // Data API v3 `statistics` exposes viewCount / likeCount / commentCount
+        // only — there is no impressions metric. Declaring `false` (never merely
+        // omitting) is what stops the UI showing viewCount twice; a per-capture
+        // declaration overrides the static map, and an omitted key reads as
+        // available.
+        impressions: false,
         views: true,
         likes: true,
         comments: true,

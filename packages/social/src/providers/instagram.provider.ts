@@ -553,7 +553,16 @@ export class InstagramProvider extends SocialProvider {
         // number. `impressions` stays declared so historical rows and the
         // engagement-rate denominator behave exactly as before; the static
         // capability map is what stops the UI rendering it as a second column.
-        impressions: present.has("views"),
+        // ⚠️ `impressions: false` is REQUIRED, not optional — and an OMITTED key
+        // is NOT equivalent. Per-capture `metricsAvailable` OVERRIDES the static
+        // platform map at every consumer (gatePostReportRow, availExpr,
+        // effectiveChannelUnavailable), and an omitted key reads as AVAILABLE.
+        // Declaring `true` here (or omitting it) made Instagram render Impressions
+        // AND Views as two columns holding the identical number — the exact
+        // duplication this metric was introduced to remove. Measured on prod:
+        // 66,073 IG rows, views == impressions on 100% of them, both summing
+        // 2.26B, printed twice.
+        impressions: false,
         views: present.has("views"),
         reach: present.has("reach"),
         shares: present.has("shares"),

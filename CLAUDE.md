@@ -469,6 +469,49 @@ Live-probed on production (real decrypted Page tokens, one metric per call, 5 me
   ```
   One assertion in it had gone stale (`engagementRate` `toBe(0)` where `pooledEngagementRate` now correctly returns `null` for a zero base) — confirmed pre-existing by running the suite at `6482fa8` in a throwaway worktree, then fixed with a note. **When a skipped suite fails, check it against the pre-change commit before assuming your diff caused it.**
 
+## 🔴 A capability test that skips the production call shape is not a test (2026-08-13)
+
+**PR #172 shipped its central claim broken, and a green test suite said otherwise.** The static
+`CAPS.INSTAGRAM.unavailable = ["clicks","impressions"]` edit was **dead code in production**:
+per-capture `metricsAvailable` OVERRIDES the static map at every consumer, and the providers still
+declared `impressions: true`. Instagram shipped rendering **Impressions AND Views as two columns
+holding the identical number** — measured on 66,073 prod rows, both summing 2.26B, printed twice.
+
+- **Why the test passed:** it called `reportableMetrics([platform])` with ONE argument. **Neither
+  production call site does** — `analytics.engagement` and `analytics.postReports` both pass the
+  per-capture declarations. The test exercised a shape that only exists in the test.
+  [views-capability.test.ts](packages/api/src/__tests__/views-capability.test.ts) now has a
+  `production-shaped` block that passes the EXACT `metricsAvailable` objects the providers emit.
+- **⚠️ Declaring a metric unavailable requires an EXPLICIT `false` in the provider — omitting the
+  key is NOT equivalent.** `gatePostReportRow` treats "this capture declared other keys, so an
+  omitted one worked" as available. (Measured: both aggregate paths — `reportableMetrics` and
+  `effectiveChannelUnavailable` — are safe with an omitted key; only the per-ROW gate is not. Don't
+  assume; the two behave differently.)
+- **⚠️ FIX-ORDERING HAZARD.** Making the five providers declare `impressions: false` immediately
+  activates every gate keyed on impressions. The per-row engagement-rate suppression
+  (`hidden = unavailable.includes("impressions")`) would have blanked the rate for EVERY Instagram
+  and YouTube channel. Provider change + all dependent gates are ONE atomic change.
+- **`views` availability must equal `views !== undefined`** — the provider emits the value and the
+  declaration under the SAME predicate. A stored value beside a `false` declaration (or the
+  reverse) is the exact fabricated-zero shape; the aggregate reads `BOOL_OR(views IS NOT NULL)` and
+  would count a value the capture disowned.
+- **FB `post_video_views` is VIDEO-ONLY, so a 0 is suppressed.** Meta genuinely returns lifetime 0
+  for a photo/album (live-probed), so storing it is not a fabricated zero — but within one sweep
+  **750 non-video rows** stored 0 and declared it available, and one channel already rendered
+  "Views 0". Accepted cost: a genuinely 0-view VIDEO renders "—". Unknown beats a misleading zero.
+- **⚠️ `snapshot-dedup` KEYS and the caller's `latest` select must change TOGETHER.** A key in
+  KEYS but absent from the select reads `undefined → 0` every comparison, so every capture writes
+  unconditionally — reintroducing the 47-snapshots-per-target bloat.
+- **A refuted claim hid in the canonical schema.** PR #171 corrected "the feed edge returns
+  post_video_views = 0 for every video (measured 40/40)" in `facebook.provider.ts` and
+  `social.types.ts` — but the same sentence survived in **`schema.prisma`**, the most
+  authoritative place it could hide. When correcting a refuted claim, grep the whole repo for it.
+- **Don't put backticks in SQL comments inside a template literal.** I broke the build with this
+  twice in one day — the backtick terminates the JS string.
+- **⚠️ Re-measure before building a fix for a number a previous fix already moved.** The audit
+  flagged "FB aggregates cover only 11-14% of posts"; after the scrape-breaker fix, coverage was
+  99.8% and the planned disclosure chip was unnecessary.
+
 ## 👁️ VIEWS is a first-class metric — and "Impressions" was the wrong name on 5 of 8 platforms (2026-08-13)
 
 **Surveyed every provider's `getPostAnalytics` return.** Five platforms had no impressions metric at

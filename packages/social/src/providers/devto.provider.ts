@@ -155,7 +155,8 @@ export class DevtoProvider extends SocialProvider {
       likeKind: "likes",
       reachIsDistinct: false, // reach aliased from page views
       source: "api",
-      metricsAvailable: { clicks: false, shares: false, reach: false, views: true },
+      // `impressions: false` must be EXPLICIT — see threads.provider.ts.
+      metricsAvailable: { clicks: false, shares: false, reach: false, impressions: false, views: true },
     };
   }
 }

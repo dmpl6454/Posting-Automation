@@ -652,9 +652,27 @@ export class FacebookProvider extends SocialProvider {
       shares: shares ?? 0,
       comments: comments ?? 0,
       reach: mediaViewReach ?? 0,
-      // undefined (not 0) when absent — the column must render "—", and a
-      // non-video post legitimately reports a measured 0 here.
-      ...(videoViews !== null ? { views: videoViews } : {}),
+      // ⚠️ Two guards, both load-bearing.
+      //
+      // (1) `hasTrustedValue` — the VALUE must not be published when it came from
+      //     a stale `period=day` row. Availability alone is not enough: the
+      //     aggregate derives views availability from `views IS NOT NULL`, so a
+      //     persisted untrusted value would be counted even though the capture
+      //     declared it false. Value and declaration must agree.
+      //
+      // (2) `> 0` — `post_video_views` is a VIDEO-only quantity. Meta genuinely
+      //     returns lifetime 0 for a photo or album (live-probed), so storing it
+      //     is not a fabricated zero — but a channel of photos would then render
+      //     "Views 0", which reads as "nobody watched" rather than "there was
+      //     nothing to watch". Measured on prod: 750 non-video rows had already
+      //     stored 0 and declared it available. Suppressing them costs us a
+      //     genuinely 0-view VIDEO rendering "—" instead of 0, which is the
+      //     conservative direction (unknown, not a misleading zero).
+      ...(videoViews !== null &&
+      videoViews > 0 &&
+      hasTrustedValue(rows, "post_video_views")
+        ? { views: videoViews }
+        : {}),
       // Left 0 deliberately: every read path recomputes the rate from
       // impressioned rows (engagement-rate.ts). Computing it here would mix
       // units with the SQL recompute — the bug the pooled recompute exists to
@@ -676,7 +694,12 @@ export class FacebookProvider extends SocialProvider {
       metricsAvailable: {
         impressions: insightsUsable && hasTrustedValue(rows, FB_METRIC_IMPRESSIONS),
         reach: insightsUsable && hasTrustedValue(rows, FB_METRIC_REACH),
-        views: insightsUsable && hasTrustedValue(rows, "post_video_views"),
+        // Same predicate as the value above — a declaration that disagrees with
+        // the stored column is exactly the fabricated-zero shape.
+        views:
+          insightsUsable &&
+          hasTrustedValue(rows, "post_video_views") &&
+          (videoViews ?? 0) > 0,
         clicks: insightsUsable && hasTrustedValue(rows, "post_clicks"),
         comments: commentsAvailable,
         likes: reactionsAvailable,
