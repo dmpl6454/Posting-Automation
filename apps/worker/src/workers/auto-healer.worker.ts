@@ -245,7 +245,12 @@ export async function runAutoHealer(): Promise<HealerResult> {
         {
           autopilotPostId: post.id,
           organizationId: post.organizationId,
-          pipelineRunId: `autohealer-${Date.now()}`,
+          // ⚠️ NO pipelineRunId — a healer retry has no pipeline run behind it.
+          // This used to be `autohealer-${Date.now()}`, an id that never exists
+          // (PipelineRun.id is @default(cuid()) and nothing creates one), so every
+          // healed job threw P2025. It also DEFEATED the downstream existence
+          // guards, which test truthiness — see ContentGenerateJobData.
+          // Do not reintroduce a placeholder value here.
         },
         {
           removeOnComplete: true,
@@ -281,7 +286,11 @@ export async function runAutoHealer(): Promise<HealerResult> {
           {
             autopilotPostId: stuck.id,
             organizationId: stuck.organizationId,
-            pipelineRunId: `autohealer-${Date.now()}`,
+            // ⚠️ NO pipelineRunId — see the note on the contentGenerateQueue.add
+            // above. This site is the DANGEROUS one: a fabricated id passes
+            // autopilot-schedule.worker's `if (pipelineRunId)` guard and throws
+            // AFTER the post + targets are already SCHEDULED, so the outer catch
+            // stamps the post FAILED while it quietly publishes.
           },
           { removeOnComplete: true, removeOnFail: 100 },
         );

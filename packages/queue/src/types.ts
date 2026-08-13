@@ -86,13 +86,37 @@ export interface TrendScoreJobData {
 export interface ContentGenerateJobData {
   autopilotPostId: string;
   organizationId: string;
-  pipelineRunId: string;
+  /**
+   * The PipelineRun this job belongs to, when one exists.
+   *
+   * ⚠️ OPTIONAL ON PURPOSE — do NOT make this required again, and never satisfy it
+   * with a synthesised value. Some producers legitimately have no pipeline run
+   * behind them: `autopilot.router.approvePost` (a human clicking Approve) and the
+   * auto-healer's retry sweep. The auto-healer used to paper over the required type
+   * by inventing `autohealer-<timestamp>`, but `PipelineRun.id` is
+   * `@default(cuid())` and nothing ever creates such a row — so every healed job
+   * hit `pipelineRun.update({ where: { id: "autohealer-…" } })` and threw P2025
+   * (~2/hour on prod, guaranteed rather than racy).
+   *
+   * Worse, a fabricated id DEFEATS the existence guards, which test truthiness:
+   * `"autohealer-…"` sails through `if (pipelineRunId)` and throws AFTER the post
+   * and its targets are already SCHEDULED, so the outer catch stamps the post
+   * FAILED while it quietly publishes — verbatim the bug that guard was written to
+   * prevent.
+   *
+   * ⚠️ Every consumer must guard on presence before querying. In particular
+   * `updateMany({ where: { id: undefined } })` matches EVERY ROW in Prisma
+   * (undefined means "no filter"), so an absent id without a guard is far more
+   * dangerous than the throw it replaced.
+   */
+  pipelineRunId?: string;
 }
 
 export interface AutopilotScheduleJobData {
   autopilotPostId: string;
   organizationId: string;
-  pipelineRunId: string;
+  /** See ContentGenerateJobData.pipelineRunId — optional, never synthesised. */
+  pipelineRunId?: string;
 }
 
 export interface ListeningSyncJobData {

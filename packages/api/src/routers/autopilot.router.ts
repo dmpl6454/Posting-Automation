@@ -183,7 +183,9 @@ export const autopilotRouter = createRouter({
         {
           autopilotPostId: input.autopilotPostId,
           organizationId: ctx.organizationId,
-          pipelineRunId: "",
+          // No pipelineRunId: a human clicking Approve has no pipeline run
+          // behind it. The field is optional; do NOT pass a placeholder —
+          // a truthy fake id defeats the consumers' existence guards.
         }
       );
 
@@ -247,7 +249,9 @@ export const autopilotRouter = createRouter({
           {
             autopilotPostId,
             organizationId: ctx.organizationId,
-            pipelineRunId: "",
+            // No pipelineRunId: a human clicking Approve has no pipeline run
+          // behind it. The field is optional; do NOT pass a placeholder —
+          // a truthy fake id defeats the consumers' existence guards.
           }
         );
 

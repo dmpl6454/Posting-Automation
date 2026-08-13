@@ -657,7 +657,7 @@ IG-heavy shard ran (5,765 rows measured in that window, **all Instagram**).
 - ⚠️ `EXTERNAL_METRICS_PER_RUN` was raised to **600** (4× the documented 150 default) for the
   backfill. Decide explicitly whether to revert it when unsetting the floor.
 
-### 🐛 Found, NOT fixed: the auto-healer fabricates a `pipelineRunId` that never exists
+### ✅ FIXED: the auto-healer fabricated a `pipelineRunId` that never exists
 
 ~2 `prisma.pipelineRun.update()` P2025 errors/hour on prod. **Not** a regression of the documented
 `if (pipelineRunId)` guard (intact at autopilot-schedule.worker.ts:159, added in `90453d5`, never
@@ -671,9 +671,34 @@ ever creates such a row — so P2025 is **guaranteed, not racy**. Nothing delete
   autopilot-schedule.worker.ts:160 **after** steps 7–10 already set the post + targets `SCHEDULED` —
   the outer catch then stamps the post `FAILED`. That is verbatim the bug the guard was written to
   prevent, reachable again.
-- **LATENT today:** requires `skipReviewGate === true`, and prod has **0 of 3** account groups set;
-  **0 of 378** FAILED AutopilotPosts carry a P2025-shaped error. Fix = stop fabricating the id, and/or
-  switch those `update` calls to `updateMany` (no-op on zero matches). Keep it a SEPARATE commit.
+- **Was LATENT when found:** the corrupting path requires `skipReviewGate === true`, and prod had
+  **0 of 3** account groups set; **0 of 378** FAILED AutopilotPosts carried a P2025-shaped error.
+
+**THE FIX (2026-08-13).** `pipelineRunId` is now **`?: string` (OPTIONAL)** on
+`ContentGenerateJobData` and `AutopilotScheduleJobData`, the auto-healer OMITS it (both sites), and
+`autopilot.router`'s two `pipelineRunId: ""` sentinels were dropped. Consumers guard on presence:
+3 blocks in [content-generate.worker.ts](apps/worker/src/workers/content-generate.worker.ts) and the
+site in [autopilot-schedule.worker.ts:171](apps/worker/src/workers/autopilot-schedule.worker.ts#L171),
+which ALSO moved `update` → `updateMany` so a present-but-nonexistent id is a no-op instead of a throw.
+
+- **⚠️ NEVER make `pipelineRunId` required again, and NEVER satisfy it with a placeholder.** A truthy
+  fake id defeats every `if (pipelineRunId)` guard in the codebase — that is exactly how this bug
+  reopened after being fixed once.
+- **⚠️ THE GUARD AND `updateMany` ARE BOTH REQUIRED — one without the other is worse than neither.**
+  Prisma treats **`where: { id: undefined }` as "no filter"**, so an unguarded
+  `updateMany({ where: { id: undefined } })` would match **EVERY PipelineRun ROW**. `update` merely
+  throws; `updateMany` silently mass-updates.
+- **⚠️ `tsc` CANNOT catch this class.** Prisma's `WhereUniqueInput` types `id` as OPTIONAL
+  (`id?: string`), so `{ id: undefined }` type-checks cleanly at every call site. Making the job
+  field optional produced **zero** compiler errors — the sites had to be found by grep and reasoned
+  about. Do not assume the type system is guarding a Prisma `where`.
+- content-generate deliberately keeps `update` (not `updateMany`): the returned row drives the
+  run-settle math. Its guard is what removes the log noise — the `catch {}` was already swallowing the
+  throw, but Prisma logs `prisma:error` before the catch ever runs, which is why the noise was visible
+  despite the swallow.
+- `trend-discover.worker.ts:235` and `trend-score.worker.ts:185/206` are untouched: they read
+  `TrendDiscoverJobData`/`TrendScoreJobData`, whose `pipelineRunId` stays REQUIRED because both
+  producers (cron-jobs.ts:724, autopilot.router.ts:352) always pass a real cuid.
 
 ## 📒 Insights views + accuracy — what shipped, and the prod data corrections (2026-08-13)
 
