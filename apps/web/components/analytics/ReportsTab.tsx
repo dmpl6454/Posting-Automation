@@ -166,7 +166,11 @@ export function ReportsTab() {
       // and every row stay index-aligned.
       type ExportRow = (typeof exportRows)[number];
       const allMetricCols: Array<{ key: string; header: string; get: (r: ExportRow) => any }> = [
-        { key: "impressions", header: "Views/Impressions", get: (r: ExportRow) => r.impressions },
+        // Header is plain "Impressions" now: Views has its own column, so the
+        // old "Views/Impressions" conflation is no longer needed (and was the
+        // symptom of five platforms storing views in the impressions slot).
+        { key: "impressions", header: "Impressions", get: (r: ExportRow) => r.impressions },
+        { key: "views", header: "Views", get: (r: ExportRow) => (r as any).views },
         { key: "clicks", header: "Clicks", get: (r: ExportRow) => r.clicks },
         { key: "likes", header: "Likes", get: (r: ExportRow) => r.likes },
         { key: "comments", header: "Comments", get: (r: ExportRow) => r.comments },
@@ -175,7 +179,9 @@ export function ReportsTab() {
       ];
       const metricCols = allMetricCols.filter((c) => inCsv(c.key));
       const includeSaves = exportRows.some((r) => r.saved != null);
-      const includeEng = inCsv("impressions");
+      // The rate's denominator is impressions OR views (five platforms have no
+      // impressions metric at all), so gate the column on either being reportable.
+      const includeEng = inCsv("impressions") || inCsv("views");
 
       downloadCsv(
         `postautomation-report-${win}-${mode}-${new Date().toISOString().slice(0, 10)}${truncated}.csv`,
@@ -433,8 +439,9 @@ export function ReportsTab() {
                       full column of "—". Server-computed from the platforms
                       present plus any per-capture override. */}
                   {show("impressions") && (
-                    <th className="py-2.5 pr-3 text-right font-medium">Views/Impr.</th>
+                    <th className="py-2.5 pr-3 text-right font-medium">Impressions</th>
                   )}
+                  {show("views") && <th className="py-2.5 pr-3 text-right font-medium">Views</th>}
                   {show("clicks") && <th className="py-2.5 pr-3 text-right font-medium">Clicks</th>}
                   {show("likes") && <th className="py-2.5 pr-3 text-right font-medium">Likes</th>}
                   {show("comments") && (
@@ -500,6 +507,9 @@ export function ReportsTab() {
                     </td>
                     {show("impressions") && (
                       <td className="py-2.5 pr-3 text-right tabular-nums">{num(r.impressions)}</td>
+                    )}
+                    {show("views") && (
+                      <td className="py-2.5 pr-3 text-right tabular-nums">{num((r as any).views)}</td>
                     )}
                     {show("clicks") && (
                       <td className="py-2.5 pr-3 text-right tabular-nums">{num(r.clicks)}</td>

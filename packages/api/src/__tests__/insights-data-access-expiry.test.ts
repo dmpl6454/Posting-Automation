@@ -142,18 +142,35 @@ describe("reportableMetrics", () => {
     expect(keys).toContain("impressions");
   });
 
-  it("drops clicks for an Instagram-only org — Instagram has no click metric", () => {
+  /**
+   * ⚠️ UPDATED 2026-08-13 — Instagram no longer reports "impressions". Meta
+   * deleted that metric in v22.0 and the provider has always stored Meta's
+   * `views` count in the impressions slot, so an IG-only org now gets a Views
+   * column instead of a mislabelled Impressions one.
+   */
+  it("Instagram-only org: Views replaces Impressions, and clicks stays dropped", () => {
     const keys = reportableMetrics(["INSTAGRAM"]);
     expect(keys).not.toContain("clicks");
-    expect(keys).toEqual(expect.arrayContaining(["impressions", "reach", "likes", "comments", "shares"]));
+    expect(keys).not.toContain("impressions");
+    expect(keys).toEqual(expect.arrayContaining(["views", "reach", "likes", "comments", "shares"]));
   });
 
   it("unions capability across a mixed org", () => {
-    // FB brings clicks, IG brings impressions/reach ⇒ every column earns its place.
+    // FB brings clicks AND impressions (post_media_view); IG brings views/reach.
+    // Both columns earn their place, and they are NOT the same number — see
+    // platform-metrics.ts.
     const keys = reportableMetrics(["FACEBOOK", "INSTAGRAM"]);
     expect(keys).toEqual(
-      expect.arrayContaining(["impressions", "reach", "likes", "comments", "shares", "clicks"])
+      expect.arrayContaining(["views", "reach", "likes", "comments", "shares", "clicks"])
     );
+  });
+
+  it("a Facebook capture that reported views keeps BOTH columns distinct", () => {
+    // post_media_view (impressions) and post_video_views (views) measured 5,063
+    // vs 1,468 on the same reel — conflating them misreports by 3.45x.
+    const keys = reportableMetrics(["FACEBOOK"], [{ impressions: true, views: true }]);
+    expect(keys).toContain("impressions");
+    expect(keys).toContain("views");
   });
 
   it("returns nothing for a platform with no analytics API at all", () => {

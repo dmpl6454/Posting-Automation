@@ -139,7 +139,13 @@ export class DevtoProvider extends SocialProvider {
     const comments = data.comments_count || 0;
 
     return {
+      // This platform exposes NO impressions metric — the number below is a
+      // VIEW count. It is written to both slots: `views` is the honest column
+      // the UI renders, `impressions` is retained so historical rows and the
+      // engagement-rate denominator are unchanged. platform-metrics.ts declares
+      // impressions unavailable for this platform so it is never shown twice.
       impressions: views,
+      views,
       clicks: 0,
       likes,
       shares: 0,
@@ -149,7 +155,7 @@ export class DevtoProvider extends SocialProvider {
       likeKind: "likes",
       reachIsDistinct: false, // reach aliased from page views
       source: "api",
-      metricsAvailable: { clicks: false, shares: false, reach: false },
+      metricsAvailable: { clicks: false, shares: false, reach: false, views: true },
     };
   }
 }

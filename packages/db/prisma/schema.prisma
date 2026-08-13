@@ -318,6 +318,20 @@ model ExternalPost {
   comments    Int @default(0)
   shares      Int @default(0)
   reach       Int @default(0)
+  /// Views — a DIFFERENT number from impressions, and NULLABLE on purpose.
+  ///
+  /// On Facebook the two genuinely diverge: `post_media_view` (impressions) is a
+  /// renders/plays count while `post_video_views` is a qualified view. Measured
+  /// on the same reel: 5,063 vs 1,468 (3.45x).
+  ///
+  /// On Instagram / YouTube / Threads / dev.to / Reddit the platform has NO
+  /// impressions metric at all — what those providers store in `impressions` is
+  /// already a views count. Those rows carry the same number in both columns and
+  /// declare `impressions` unavailable, so the UI shows ONE honest column.
+  ///
+  /// NULL ⇒ never captured (renders "—"), which is why this is not `@default(0)`:
+  /// a 0 default would be indistinguishable from "measured zero views".
+  views       Int?
 
   /// Per-metric availability AS DECLARED BY THE CAPTURE, same contract as
   /// AnalyticsSnapshot.metadata.metricsAvailable. ⚠️ An OMITTED key reads as AVAILABLE,
@@ -539,6 +553,10 @@ model AnalyticsSnapshot {
   shares         Int            @default(0)
   comments       Int            @default(0)
   reach          Int            @default(0)
+  /// Views — see ExternalPost.views for the full rationale. NULLABLE on purpose:
+  /// NULL means "never captured" (renders "—"), which a `@default(0)` could not
+  /// distinguish from a measured zero.
+  views          Int?
   engagementRate Float          @default(0)
   metadata       Json?
 

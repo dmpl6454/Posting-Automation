@@ -23,6 +23,7 @@ function row(platform: string, over: Partial<PostReportRow> = {}): PostReportRow
     comments: 2,
     shares: 3,
     reach: 50,
+    views: 100,
     engagementRate: 1.5,
     snapshotAt: null,
     ...over,
@@ -50,20 +51,36 @@ describe("gatePostReportRow — per-platform Reports honesty", () => {
     expect(g.reach).toBeNull();
   });
 
-  it("INSTAGRAM: reach + impressions stay real (distinct); clicks → null (IG has no clicks)", () => {
+  /**
+   * ⚠️ UPDATED 2026-08-13 — this used to assert `impressions === 100` for
+   * Instagram. That encoded the mislabelling: Meta DELETED the IG impressions
+   * metric in v22.0 ("no longer supported for the queried media"), and what the
+   * provider stores in that slot has always been Meta's `views` count. IG now
+   * declares impressions unavailable and the number surfaces as Views, so the
+   * same figure is reported once under its real name instead of twice under two.
+   */
+  it("INSTAGRAM: views is the real metric; impressions → null (Meta deleted it); clicks → null", () => {
     const g = gatePostReportRow(row("INSTAGRAM"));
-    expect(g.impressions).toBe(100);
+    expect(g.impressions).toBeNull();
+    expect(g.views).toBe(100);
     expect(g.reach).toBe(50);
     expect(g.clicks).toBeNull();
     expect(g.shares).toBe(3);
   });
 
-  it("YOUTUBE: reach/clicks/shares → null (aliased/absent); impressions/likes/comments stay real", () => {
+  /**
+   * ⚠️ UPDATED 2026-08-13 — same correction as Instagram. YouTube Data API v3
+   * `statistics` exposes viewCount / likeCount / commentCount only; there is no
+   * impressions metric, and the provider has always mapped viewCount into that
+   * slot.
+   */
+  it("YOUTUBE: views is the real metric; impressions/reach/clicks/shares → null", () => {
     const g = gatePostReportRow(row("YOUTUBE"));
     expect(g.reach).toBeNull();
     expect(g.clicks).toBeNull();
     expect(g.shares).toBeNull();
-    expect(g.impressions).toBe(100);
+    expect(g.impressions).toBeNull();
+    expect(g.views).toBe(100);
     expect(g.likes).toBe(10);
     expect(g.comments).toBe(2);
   });
@@ -101,9 +118,10 @@ describe("gatePostReportRow — per-platform Reports honesty", () => {
   });
 
   it("preserves engagementRate normalization (number stays, null stays)", () => {
-    // Uses INSTAGRAM: engagement rate is now gated on IMPRESSIONS availability
-    // (see the next test), and Instagram genuinely reports impressions whereas
-    // Facebook no longer does.
+    // Uses INSTAGRAM. The rate is gated on the DELIVERY denominator — impressions
+    // where the platform reports them, VIEWS where it does not. Instagram has no
+    // impressions metric, so its rate now rides on views; gating on impressions
+    // alone would blank the rate for every IG and YouTube channel.
     expect(gatePostReportRow(row("INSTAGRAM", { engagementRate: 2.5 })).engagementRate).toBe(2.5);
     expect(gatePostReportRow(row("INSTAGRAM", { engagementRate: null })).engagementRate).toBeNull();
   });
@@ -115,9 +133,21 @@ describe("gatePostReportRow — per-platform Reports honesty", () => {
     // printing a rate there means deriving it from a number the UI is
     // simultaneously rendering as "—". Worse, "0.00%" reads as "no engagement"
     // when the truth is "not reported".
-    const fb = gatePostReportRow(row("FACEBOOK", { engagementRate: 2.5 }));
+    // ⚠️ `views: null` matters (added 2026-08-13). The rate's denominator is now
+    // impressions OR views, because five platforms have no impressions metric at
+    // all. The property this test protects is unchanged — never print a rate whose
+    // denominator is hidden — but expressing it requires BOTH to be absent, which
+    // is exactly the shape of a legacy Facebook row that captured neither.
+    const fb = gatePostReportRow(row("FACEBOOK", { engagementRate: 2.5, views: null }));
     expect(fb.impressions).toBeNull();
+    expect(fb.views).toBeNull();
     expect(fb.engagementRate).toBeNull();
+
+    // And a FB row that DID capture video views keeps its rate, since the
+    // denominator is then visible in the Views column.
+    const fbViews = gatePostReportRow(row("FACEBOOK", { engagementRate: 2.5, views: 1468 }));
+    expect(fbViews.views).toBe(1468);
+    expect(fbViews.engagementRate).toBe(2.5);
 
     // But a FB VIDEO capture that DID report views keeps its rate: the
     // per-snapshot override makes impressions available, so the ratio is real.

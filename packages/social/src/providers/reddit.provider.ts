@@ -203,7 +203,13 @@ export class RedditProvider extends SocialProvider {
 
     const totalVotes = (post.ups || 0) + (post.downs || 0);
     return {
+      // This platform exposes NO impressions metric — the number below is a
+      // VIEW count. It is written to both slots: `views` is the honest column
+      // the UI renders, `impressions` is retained so historical rows and the
+      // engagement-rate denominator are unchanged. platform-metrics.ts declares
+      // impressions unavailable for this platform so it is never shown twice.
       impressions: post.view_count || 0,
+      views: post.view_count || 0,
       clicks: 0,
       likes: post.ups || 0,
       shares: post.crossposts?.length || 0,
@@ -215,7 +221,7 @@ export class RedditProvider extends SocialProvider {
       likeKind: "upvotes", // Reddit has no "like"; the likes column holds upvotes
       reachIsDistinct: false, // reach aliased from view_count
       source: "api",
-      metricsAvailable: { clicks: false, reach: false },
+      metricsAvailable: { clicks: false, reach: false, views: true },
     };
   }
 }

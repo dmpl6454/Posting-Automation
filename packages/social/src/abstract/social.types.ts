@@ -120,6 +120,22 @@ export interface SocialAnalytics {
   // ── extended honesty metadata (all OPTIONAL — back-compat; providers fill
   //    only what they truly have; the worker persists these into
   //    AnalyticsSnapshot.metadata; the UI + aggregation read them) ──
+  /**
+   * Views — how many times the content was actually VIEWED, which on most
+   * platforms is a different question from how many times it was delivered.
+   *
+   * ⚠️ Only Facebook currently has BOTH as separate numbers (`post_media_view`
+   * = renders/plays vs `post_video_views` = qualified views; measured 5,063 vs
+   * 1,468 on one reel). Instagram, YouTube, Threads, dev.to and Reddit have no
+   * impressions metric at all — their providers have always put a VIEWS number
+   * in the `impressions` slot. Those providers now set BOTH fields to that same
+   * number and declare `impressions` unavailable, so the UI renders one honest
+   * column instead of a mislabelled one.
+   *
+   * Leave undefined when the platform reports no view count (Twitter, LinkedIn)
+   * — undefined renders "—", never 0.
+   */
+  views?: number;
   /** Saves/bookmarks (IG saved, Pinterest save) — a distinct action, not a like. */
   saved?: number;
   /** true only when `reach` is a genuinely distinct metric from `impressions`.
@@ -131,7 +147,7 @@ export interface SocialAnalytics {
   /** Which of the 7 slots this platform can populate at all. A slot mapped to
    *  false ⇒ the UI renders "—" (not available on this platform), never 0. */
   metricsAvailable?: Partial<
-    Record<"impressions" | "reach" | "likes" | "comments" | "shares" | "clicks", boolean>
+    Record<"impressions" | "reach" | "likes" | "comments" | "shares" | "clicks" | "views", boolean>
   >;
   /** Where this row came from: official API or the scraper fallback. */
   source?: AnalyticsSource;

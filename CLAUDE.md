@@ -469,6 +469,55 @@ Live-probed on production (real decrypted Page tokens, one metric per call, 5 me
   ```
   One assertion in it had gone stale (`engagementRate` `toBe(0)` where `pooledEngagementRate` now correctly returns `null` for a zero base) — confirmed pre-existing by running the suite at `6482fa8` in a throwaway worktree, then fixed with a note. **When a skipped suite fails, check it against the pre-change commit before assuming your diff caused it.**
 
+## 👁️ VIEWS is a first-class metric — and "Impressions" was the wrong name on 5 of 8 platforms (2026-08-13)
+
+**Surveyed every provider's `getPostAnalytics` return.** Five platforms had no impressions metric at
+all and were storing a VIEW count in the `impressions` slot:
+
+| platform | what the "Impressions" column actually held |
+|---|---|
+| **INSTAGRAM** | Meta's `views` — the `impressions` metric was **deleted in v22.0** |
+| **YOUTUBE** | `statistics.viewCount` — Data API v3 exposes no impressions metric |
+| **THREADS** | `views` |
+| **DEVTO** | `page_views_count` |
+| **REDDIT** | `view_count` |
+| FACEBOOK | `post_media_view` — renders/plays, **plus** a separate `post_video_views` |
+| TWITTER / LINKEDIN | genuine `impression_count` / `impressions` |
+
+- **🔴 On Facebook the two are genuinely different numbers.** Live-measured on ONE reel:
+  `post_media_view` **5,063** (matches the Video node's `fb_reels_total_plays` 5,069) vs
+  `post_video_views` **1,468** — a **3.45×** gap. Both columns are real; conflating them
+  misreports Facebook views by a factor of three. Every other platform's two values are the SAME
+  number, so those declare `impressions` unavailable and show ONE honest Views column.
+- **`post_video_views` was already requested on every call and never read** — it is in
+  `FB_INSIGHT_METRICS_BASE`, so surfacing it costs **zero extra quota, no App Review, no
+  reconnect**. What blocked it was a code comment asserting it "returns 0 for every video
+  (measured 40/40)", which was the last-wins parse reading its trailing `period=day` row.
+  **A measurement taken through a known-buggy parser is not evidence about the API.**
+- **Storage:** `AnalyticsSnapshot.views` / `ExternalPost.views` are **`Int?` — nullable on
+  purpose**. NULL means "never captured" and renders "—"; `@default(0)` could not distinguish that
+  from a measured zero. Persist with `?? null`, **never `?? 0`**.
+- **⚠️ Availability for `views` is derived from the DATA (`BOOL_OR(views IS NOT NULL)`), not from a
+  `metricsAvailable` key.** The metadata rule is "has_meta but key absent ⇒ available", which would
+  declare views available on every capture that predates the column and render a confident 0
+  across all history. The column is nullable and therefore self-describing.
+- **⚠️ The engagement-rate denominator is `impressions ?? views`, NOT impressions alone.** Gating
+  on impressions would blank the rate for every Instagram and YouTube channel — the largest
+  population here. Same rule in `gatePostReportRow` and in the UI's Eng. Rate column gate
+  (`c.key === "impressions" || c.key === "views"`).
+- **IG writes the SAME number to both slots deliberately.** `views` is the honest column;
+  `impressions` is retained so historical rows and the rate denominator behave byte-identically.
+  The static capability map is what stops it rendering twice.
+- **Deploy mechanics:** schema changes apply via `prisma db push` in the migrate container — a
+  nullable column needs no migration file. After deploying, set `EXTERNAL_RECAPTURE_BEFORE` to the
+  deploy timestamp so existing rows re-capture and pick up `views`; that is exactly what the floor
+  is for. IG/YT history can be backfilled instantly with `views = impressions` because that slot
+  provably always held views.
+- Tests: [facebook-video-views.test.ts](packages/social/src/__tests__/facebook-video-views.test.ts) (7),
+  [views-capability.test.ts](packages/api/src/__tests__/views-capability.test.ts) (16). Four
+  pre-existing tests asserted the old mislabelling (`impressions === 100` for IG/YT) and were
+  updated with notes.
+
 ## 🔴 The scrape breaker counted SUCCESS as failure — FB reel measurement collapsed (2026-08-12)
 
 **A capability improvement silently disabled the pipeline that fed it.** When

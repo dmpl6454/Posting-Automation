@@ -275,7 +275,13 @@ export class YouTubeProvider extends SocialProvider {
     const comments = parseInt(stats.commentCount || "0", 10);
 
     return {
+      // This platform exposes NO impressions metric — the number below is a
+      // VIEW count. It is written to both slots: `views` is the honest column
+      // the UI renders, `impressions` is retained so historical rows and the
+      // engagement-rate denominator are unchanged. platform-metrics.ts declares
+      // impressions unavailable for this platform so it is never shown twice.
       impressions: views,
+      views,
       clicks: 0,
       likes,
       // ⚠️ YouTube Data API v3 `statistics` has NO share count. It exposes
@@ -302,6 +308,7 @@ export class YouTubeProvider extends SocialProvider {
       // Declared EXPLICITLY per metric — an omitted key reads as AVAILABLE downstream.
       metricsAvailable: {
         impressions: true,
+        views: true,
         likes: true,
         comments: true,
         clicks: false,
