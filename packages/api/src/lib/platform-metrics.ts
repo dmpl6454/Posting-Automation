@@ -15,31 +15,76 @@ export interface PlatformMetricCapabilities {
   /** false ⇒ reach is aliased from impressions/views (UI renders "—"). */
   reachIsDistinct: boolean;
   /** Slots this platform NEVER populates (UI renders "—", not 0). */
-  unavailable: Array<"impressions" | "reach" | "likes" | "comments" | "shares" | "clicks">;
+  unavailable: Array<
+    "impressions" | "reach" | "likes" | "comments" | "shares" | "clicks" | "views"
+  >;
 }
 
 const DEFAULT_CAPS: PlatformMetricCapabilities = {
   likeKind: "likes",
   reachIsDistinct: false,
-  unavailable: [],
+  // `views` is opt-in: a platform must be known to report a view count. The
+  // default-unavailable direction is the honest one — an unlisted platform
+  // renders "—" rather than a fabricated 0.
+  unavailable: ["views"],
 };
 
 const CAPS: Record<string, PlatformMetricCapabilities> = {
-  // FB: Meta DELETED every post_impressions*/reach metric from the Page-post
-  // insights edge (live-verified 2026-07-24: both 400 #100 for admin AND external
-  // tokens — no permission restores them). The provider hardcodes impressions:0,
-  // reach:0 and declares metricsAvailable:{impressions:false,reach:false}; mark
-  // them unavailable HERE too so the UI renders "—" (honest) instead of a fake 0.
-  FACEBOOK: { likeKind: "reactions", reachIsDistinct: true, unavailable: ["impressions", "reach"] },
-  INSTAGRAM: { likeKind: "likes", reachIsDistinct: true, unavailable: ["clicks"] },
-  YOUTUBE: { likeKind: "likes", reachIsDistinct: false, unavailable: ["reach", "clicks", "shares"] },
-  LINKEDIN: { likeKind: "likes", reachIsDistinct: true, unavailable: [] },
-  THREADS: { likeKind: "likes", reachIsDistinct: false, unavailable: ["reach", "clicks"] },
-  TWITTER: { likeKind: "likes", reachIsDistinct: false, unavailable: ["reach", "clicks"] },
-  PINTEREST: { likeKind: "saves", reachIsDistinct: false, unavailable: ["reach", "comments", "shares"] },
-  REDDIT: { likeKind: "upvotes", reachIsDistinct: false, unavailable: ["reach", "clicks"] },
-  DEVTO: { likeKind: "likes", reachIsDistinct: false, unavailable: ["reach", "clicks", "shares"] },
-  SNAPCHAT: { likeKind: "likes", reachIsDistinct: false, unavailable: ["reach", "clicks", "likes"] },
+  // FB: the ORIGINAL `post_impressions*` / `post_reach` metric NAMES are dead
+  // (#100 for admin AND external tokens alike). ⚠️ But the CAPABILITY is not —
+  // Meta RENAMED them, and `post_media_view` / `post_total_media_view_unique`
+  // answer today on already-approved scopes. This array stays as it is precisely
+  // because capability is widened per-capture, never by editing the static map.
+  //
+  // ⚠️ FACEBOOK is the ONLY platform where impressions and views are genuinely
+  // different numbers: `post_media_view` counts renders/plays, `post_video_views`
+  // counts qualified views. Measured on one reel: 5,063 vs 1,468 (3.45x). Both
+  // columns are therefore meaningful and both stay available.
+  // `unavailable` keeps ["impressions","reach"] BYTE-IDENTICAL — capability is
+  // widened only by per-capture `metricsAvailable` (editing this array was PR
+  // #148's mistake), so legacy metadata-less captures still fall back correctly.
+  FACEBOOK: {
+    likeKind: "reactions",
+    reachIsDistinct: true,
+    unavailable: ["impressions", "reach"],
+  },
+  // ⚠️ These five have NO impressions metric. Their providers have always stored
+  // a VIEWS number in the `impressions` slot, so the column was mislabelled:
+  //   INSTAGRAM  Meta's `views` (the `impressions` metric was DELETED in v22.0)
+  //   YOUTUBE    statistics.viewCount — Data API v3 exposes no impressions
+  //   THREADS    `views`
+  //   DEVTO      page_views_count
+  //   REDDIT     view_count
+  // They now populate BOTH fields with that number and declare impressions
+  // unavailable, so the UI shows one honest "Views" column instead of two
+  // identical ones. The stored `impressions` value is retained (not moved) so the
+  // engagement-rate denominator and every historical row keep working unchanged.
+  INSTAGRAM: { likeKind: "likes", reachIsDistinct: true, unavailable: ["clicks", "impressions"] },
+  YOUTUBE: {
+    likeKind: "likes",
+    reachIsDistinct: false,
+    unavailable: ["reach", "clicks", "shares", "impressions"],
+  },
+  THREADS: { likeKind: "likes", reachIsDistinct: false, unavailable: ["reach", "clicks", "impressions"] },
+  REDDIT: { likeKind: "upvotes", reachIsDistinct: false, unavailable: ["reach", "clicks", "impressions"] },
+  DEVTO: {
+    likeKind: "likes",
+    reachIsDistinct: false,
+    unavailable: ["reach", "clicks", "shares", "impressions"],
+  },
+  // Genuine impressions metrics, no view count exposed at all.
+  LINKEDIN: { likeKind: "likes", reachIsDistinct: true, unavailable: ["views"] },
+  TWITTER: { likeKind: "likes", reachIsDistinct: false, unavailable: ["reach", "clicks", "views"] },
+  PINTEREST: {
+    likeKind: "saves",
+    reachIsDistinct: false,
+    unavailable: ["reach", "comments", "shares", "views"],
+  },
+  SNAPCHAT: {
+    likeKind: "likes",
+    reachIsDistinct: false,
+    unavailable: ["reach", "clicks", "likes", "views"],
+  },
 };
 
 /** Platforms with no analytics API at all — every metric renders "—". */
@@ -60,13 +105,20 @@ export function platformMetricCapabilities(platform: string): PlatformMetricCapa
     return {
       likeKind: "likes",
       reachIsDistinct: false,
-      unavailable: ["impressions", "reach", "likes", "comments", "shares", "clicks"],
+      unavailable: ["impressions", "reach", "views", "likes", "comments", "shares", "clicks"],
     };
   }
   return CAPS[key] ?? DEFAULT_CAPS;
 }
 
-export type MetricKey = "impressions" | "reach" | "likes" | "comments" | "shares" | "clicks";
+export type MetricKey =
+  | "impressions"
+  | "reach"
+  | "views"
+  | "likes"
+  | "comments"
+  | "shares"
+  | "clicks";
 
 /**
  * Metrics that a capture must declare EXPLICITLY before we will believe its value —
@@ -102,6 +154,7 @@ export function requiresExplicitDeclaration(platform: string, key: MetricKey): b
 const ALL_METRIC_KEYS: MetricKey[] = [
   "impressions",
   "reach",
+  "views",
   "likes",
   "comments",
   "shares",

@@ -145,11 +145,20 @@ describe("FB media-view ladder (FB_MEDIA_VIEW_METRICS_ENABLED=true)", () => {
     expect(seen.filter((u) => u.includes("/insights?metric=")).length).toBe(1);
   });
 
-  it("always declares all six metricsAvailable keys", async () => {
+  /**
+   * ⚠️ Was "all SIX keys" until 2026-08-13; `views` is the seventh.
+   *
+   * The invariant is what matters, not the count: an OMITTED key reads as
+   * AVAILABLE downstream ("metadata present and the key not false ⇒ trust the
+   * value"), so every metric this provider can report must be declared
+   * explicitly or a failed fetch publishes as a confident 0. When adding a
+   * metric, add it here too.
+   */
+  it("always declares EVERY metricsAvailable key — an omitted one reads as available", async () => {
     installFetch((u) => (u.includes("/insights?metric=") ? ok(PROD_INSIGHTS) : ok(FIELDS_OK)));
     const a = (await new FacebookProvider().getPostAnalytics(tokens, POST))!;
     expect(Object.keys(a.metricsAvailable!).sort()).toEqual(
-      ["clicks", "comments", "impressions", "likes", "reach", "shares"].sort()
+      ["clicks", "comments", "impressions", "likes", "reach", "shares", "views"].sort()
     );
   });
 

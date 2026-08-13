@@ -118,6 +118,11 @@ export function createAnalyticsSyncWorker() {
           shares: analytics.shares ?? 0,
           comments: analytics.comments ?? 0,
           reach: analytics.reach ?? 0,
+          // ⚠️ `?? null`, never `?? 0`. The column is nullable precisely so
+          // "never captured" (renders "—") stays distinguishable from a measured
+          // zero — a 0 here would be exactly the fabricated-zero class this
+          // subsystem exists to prevent.
+          views: analytics.views ?? null,
           engagementRate: analytics.engagementRate ?? 0,
           snapshotAt: new Date(),
           ...(() => {

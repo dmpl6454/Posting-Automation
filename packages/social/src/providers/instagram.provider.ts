@@ -503,14 +503,26 @@ export class InstagramProvider extends SocialProvider {
       }
     }
 
-    // `views` rides on the impressions slot (same "views ride on impressions"
-    // convention as YouTube/Threads).
-    const impressions = metrics.views ?? 0;
+    // Instagram has NO impressions metric — Meta deleted it in v22.0 ("the
+    // impressions metric is no longer supported for the queried media"), and no
+    // permission restores it. What this provider has always stored in the
+    // `impressions` slot is Meta's `views` count, which is a genuinely different
+    // quantity from `reach`: measured across 62,324 prod rows, views > reach on
+    // 62,081 of them (mean ratio 3.49x for REELS, 2.07x for FEED).
+    //
+    // ⚠️ The value is written to BOTH slots on purpose. `views` is the honest
+    // column the UI renders; `impressions` is retained so the engagement-rate
+    // denominator and every historical row keep working byte-identically. The
+    // capability map declares INSTAGRAM impressions unavailable, so the UI never
+    // shows the same number twice under two names.
+    const views = metrics.views ?? 0;
+    const impressions = views;
     const totalEngagement = metrics.total_interactions ?? likes + comments;
     const engagementRate = impressions > 0 ? totalEngagement / impressions : 0;
 
     return {
       impressions,
+      ...(present.has("views") ? { views } : {}),
       clicks: 0, // Instagram does not expose click counts via the API
       likes,
       shares: metrics.shares ?? 0,
@@ -537,7 +549,12 @@ export class InstagramProvider extends SocialProvider {
       // available whenever the media read succeeded.
       metricsAvailable: {
         clicks: false, // IG has no click metric at all
+        // Both keyed on the SAME returned metric, because they hold the same
+        // number. `impressions` stays declared so historical rows and the
+        // engagement-rate denominator behave exactly as before; the static
+        // capability map is what stops the UI rendering it as a second column.
         impressions: present.has("views"),
+        views: present.has("views"),
         reach: present.has("reach"),
         shares: present.has("shares"),
       },

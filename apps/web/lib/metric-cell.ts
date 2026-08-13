@@ -9,7 +9,20 @@
  * Pure + testable (metric-cell.test.ts). The row supplies the honesty metadata
  * that analytics.perChannelStats now returns.
  */
-export type MetricKey = "impressions" | "reach" | "likes" | "comments" | "shares" | "clicks";
+export type MetricKey =
+  | "impressions"
+  | "reach"
+  /**
+   * Views. NOT a synonym for impressions: on Facebook the two are separate
+   * numbers (renders/plays vs qualified views), and on Instagram / YouTube /
+   * Threads / dev.to / Reddit there is no impressions metric at all — those
+   * platforms declare impressions unavailable and this key carries the number.
+   */
+  | "views"
+  | "likes"
+  | "comments"
+  | "shares"
+  | "clicks";
 
 export interface MetricRowMeta {
   hasSnapshot?: boolean;

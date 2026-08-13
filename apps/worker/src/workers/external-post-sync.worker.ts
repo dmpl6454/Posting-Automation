@@ -517,6 +517,9 @@ export function createExternalPostSyncWorker() {
           comments: analytics.comments ?? 0,
           shares: analytics.shares ?? 0,
           reach: analytics.reach ?? 0,
+          // ⚠️ `?? null`, never `?? 0` — see analytics-sync.worker.ts. NULL means
+          // "never captured" and renders "—"; 0 would assert a measured zero.
+          views: analytics.views ?? null,
           metricsAvailable: (analytics.metricsAvailable ?? null) as any,
           metricsSource: analytics.source ?? "api",
           degraded: (analytics.degraded ?? null) as any,

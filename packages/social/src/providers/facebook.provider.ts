@@ -596,6 +596,16 @@ export class FacebookProvider extends SocialProvider {
       : null;
     const mediaViewImpressions = insightsUsable ? readMetricValue(rows, FB_METRIC_IMPRESSIONS) : null;
     const mediaViewReach = insightsUsable ? readMetricValue(rows, FB_METRIC_REACH) : null;
+    // `post_video_views` is a QUALIFIED view count, genuinely different from
+    // `post_media_view` (renders/plays). Measured on the same reel: 1,468 vs
+    // 5,063 — a 3.45x gap, so conflating them misreports by a factor of three.
+    //
+    // It has been requested on EVERY call since FB_INSIGHT_METRICS_BASE was
+    // written, and was simply never read — the code carried a comment claiming
+    // it "returns 0 for every video (measured 40/40)", which was the last-wins
+    // parse reading its trailing `period=day` row. Reading the lifetime row costs
+    // no extra quota and no App Review.
+    const videoViews = insightsUsable ? readMetricValue(rows, "post_video_views") : null;
 
     // Best-effort post FIELDS (shares resolves on a basic Page token;
     // reactions/comments need pages_read_user_content). NEVER fatal.
@@ -642,6 +652,9 @@ export class FacebookProvider extends SocialProvider {
       shares: shares ?? 0,
       comments: comments ?? 0,
       reach: mediaViewReach ?? 0,
+      // undefined (not 0) when absent — the column must render "—", and a
+      // non-video post legitimately reports a measured 0 here.
+      ...(videoViews !== null ? { views: videoViews } : {}),
       // Left 0 deliberately: every read path recomputes the rate from
       // impressioned rows (engagement-rate.ts). Computing it here would mix
       // units with the SQL recompute — the bug the pooled recompute exists to
@@ -663,6 +676,7 @@ export class FacebookProvider extends SocialProvider {
       metricsAvailable: {
         impressions: insightsUsable && hasTrustedValue(rows, FB_METRIC_IMPRESSIONS),
         reach: insightsUsable && hasTrustedValue(rows, FB_METRIC_REACH),
+        views: insightsUsable && hasTrustedValue(rows, "post_video_views"),
         clicks: insightsUsable && hasTrustedValue(rows, "post_clicks"),
         comments: commentsAvailable,
         likes: reactionsAvailable,

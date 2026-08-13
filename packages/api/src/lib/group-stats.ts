@@ -41,6 +41,12 @@ export interface ChannelStatRow {
   unavailable?: MetricKey[];
   impressions: number;
   reach: number;
+  /**
+   * Views. Summed over rows that actually captured one — a NULL views column
+   * means "never captured" and contributes nothing, so this is never inflated by
+   * rows that predate the metric.
+   */
+  views?: number;
   likes: number;
   comments: number;
   shares: number;
@@ -73,7 +79,7 @@ export interface ChannelStatRow {
    * effectiveChannelUnavailable in platform-metrics.ts.
    */
   declaredAvailable?: Partial<
-    Record<"impressions" | "reach" | "likes" | "comments" | "shares" | "clicks", boolean>
+    Record<"impressions" | "reach" | "views" | "likes" | "comments" | "shares" | "clicks", boolean>
   >;
   /**
    * true when ≥1 capture predates the honesty metadata (snapshot with no
@@ -99,6 +105,7 @@ export interface GroupStatsRow {
   posts: number;
   impressions: number;
   reach: number;
+  views: number;
   likes: number;
   comments: number;
   shares: number;
@@ -145,13 +152,15 @@ export const UNGROUPED_ID = "__ungrouped__";
 const UNGROUPED_COLOR = "#94a3b8"; // slate-400 — neutral, never a real group color
 
 function emptySums() {
-  return { posts: 0, impressions: 0, reach: 0, likes: 0, comments: 0, shares: 0, clicks: 0 };
+  return { posts: 0, impressions: 0, reach: 0, views: 0, likes: 0, comments: 0, shares: 0, clicks: 0 };
 }
 
 function addRow(sums: ReturnType<typeof emptySums>, row: ChannelStatRow) {
   sums.posts += row.posts;
   sums.impressions += row.impressions;
   sums.reach += row.reach;
+  // Absent on rows that predate the column — contributes nothing rather than 0.
+  sums.views += row.views ?? 0;
   sums.likes += row.likes;
   sums.comments += row.comments;
   sums.shares += row.shares;
@@ -200,6 +209,7 @@ function rateFromRows(rows: ChannelStatRow[]): RateVerdict {
 const ALL_METRIC_KEYS: MetricKey[] = [
   "impressions",
   "reach",
+  "views",
   "likes",
   "comments",
   "shares",

@@ -94,6 +94,8 @@ async function fetchChannelStatRows(
     comments: bigint;
     shares: bigint;
     clicks: bigint;
+    views: bigint;
+    availViews: boolean | null;
     hasSnapshot: boolean;
     impressionedImpressions: bigint;
     impressionedLikes: bigint;
@@ -128,6 +130,13 @@ async function fetchChannelStatRows(
               COALESCE(s.comments, 0)              AS comments,
               COALESCE(s.shares, 0)                AS shares,
               COALESCE(s.clicks, 0)                AS clicks,
+              -- ⚠️ NOT COALESCEd to 0. 'views' is a NULLABLE column added after
+              -- these rows existed, so NULL genuinely means "never captured".
+              -- Availability is derived below as BOOL_OR(views IS NOT NULL) —
+              -- the metadata rule (has_meta but key absent => available) would
+              -- declare every pre-existing capture's missing views AVAILABLE and
+              -- render a confident 0 across all history.
+              s.views                              AS views,
               (s.id IS NOT NULL)                   AS has_metrics,
               (s.metadata IS NOT NULL)             AS has_meta,
               s.metadata->'metricsAvailable'       AS avail,
@@ -160,6 +169,8 @@ async function fetchChannelStatRows(
        SELECT ep."channelId"                       AS channel_id,
               'e:' || ep.id                        AS post_key,
               ep.impressions, ep.reach, ep.likes, ep.comments, ep.shares, ep.clicks,
+              -- Same position as app_rows — UNION ALL matches by ORDER, not name.
+              ep.views,
               -- NULL metricsSyncedAt = listed but never measured ⇒ "—", never a fake 0.
               (ep."metricsSyncedAt" IS NOT NULL)    AS has_metrics,
               -- Both Meta providers always declare metricsAvailable, so a measured row
@@ -199,6 +210,10 @@ async function fetchChannelStatRows(
             COALESCE(SUM(comments), 0)       AS comments,
             COALESCE(SUM(shares), 0)         AS shares,
             COALESCE(SUM(clicks), 0)         AS clicks,
+            -- SUM skips NULLs, so this is the total over rows that actually
+            -- captured a view count. availViews below says whether ANY did.
+            COALESCE(SUM(views), 0)          AS views,
+            BOOL_OR(views IS NOT NULL)       AS "availViews",
             -- Impressioned-only sums: the ONLY honest basis for an engagement
             -- rate. Pooling engagement from ALL posts over a denominator built
             -- from only the impressioned ones produced 1400% on prod (7 posts'
@@ -247,6 +262,7 @@ async function fetchChannelStatRows(
     comments: Number(r.comments),
     shares: Number(r.shares),
     clicks: Number(r.clicks),
+    views: Number(r.views),
     hasSnapshot: Boolean(r.hasSnapshot),
     impressionedImpressions: Number(r.impressionedImpressions),
     impressionedLikes: Number(r.impressionedLikes),
@@ -260,6 +276,11 @@ async function fetchChannelStatRows(
       comments: tri(r.availComments),
       shares: tri(r.availShares),
       clicks: tri(r.availClicks),
+      // Derived from the DATA (BOOL_OR(views IS NOT NULL)), not from a
+      // metricsAvailable key — see the SQL comment. `views` is nullable and
+      // therefore self-describing, and the metadata rule would have declared it
+      // available on every capture that predates the column.
+      views: tri(r.availViews),
     },
     hasLegacySnapshot: Boolean(r.hasLegacySnapshot),
   }));
@@ -283,6 +304,8 @@ export interface PostReportRow {
   comments: number | null;
   shares: number | null;
   reach: number | null;
+  /** Views. null ⇒ not reported by this platform / never captured ⇒ "—". */
+  views?: number | null;
   engagementRate: number | null;
   snapshotAt: Date | null;
   /**
@@ -346,7 +369,7 @@ export function gatePostReportRow(r: PostReportRow): PostReportRow {
   const declared = r.snapshotMetadata?.metricsAvailable;
   const hasDeclared = declared != null && typeof declared === "object";
   const gate = (
-    key: "impressions" | "reach" | "likes" | "comments" | "shares" | "clicks",
+    key: "impressions" | "reach" | "likes" | "comments" | "shares" | "clicks" | "views",
     v: number | null
   ): number | null => {
     if (v === null || v === undefined) return null;
@@ -386,9 +409,22 @@ export function gatePostReportRow(r: PostReportRow): PostReportRow {
   const savedRaw = md && typeof md === "object" ? md.saved : undefined;
   const watchRaw = md && typeof md === "object" ? md.avgWatchTimeMs : undefined;
   const gatedImpressions = gate("impressions", r.impressions);
+  const gatedViews = gate("views", r.views ?? null);
+  /**
+   * The rate's denominator is the platform's DELIVERY count.
+   *
+   * ⚠️ It cannot be "impressions" alone. Instagram, YouTube, Threads, dev.to and
+   * Reddit expose NO impressions metric — what their providers store in that slot
+   * has always been a VIEW count, and those platforms now declare impressions
+   * unavailable so the UI stops showing the same number under two names. Gating
+   * the rate on impressions alone would therefore blank the engagement rate for
+   * every Instagram and YouTube channel, which is the largest population here.
+   */
+  const rateDenominator = gatedImpressions ?? gatedViews;
   return {
     ...r,
     impressions: gatedImpressions,
+    views: gatedViews,
     clicks: gate("clicks", r.clicks),
     likes: gate("likes", r.likes),
     comments: gate("comments", r.comments),
@@ -404,12 +440,12 @@ export function gatePostReportRow(r: PostReportRow): PostReportRow {
     // (FB reactions from the insights edge vs. views from video_insights/the
     // scraper). Uses the GATED values so a metric rendering "—" cannot drive it.
     engagementRate:
-      gatedImpressions === null || r.engagementRate === null
+      rateDenominator === null || r.engagementRate === null
         ? null
         : (gate("likes", r.likes) ?? 0) +
               (gate("comments", r.comments) ?? 0) +
               (gate("shares", r.shares) ?? 0) >
-            gatedImpressions
+            rateDenominator
           ? null
           : Number(r.engagementRate),
     saved: typeof savedRaw === "number" ? savedRaw : null,
@@ -484,7 +520,7 @@ async function fetchPostReportRows(
             c2.platform::text AS "platform",
             ep."publishedAt",
             ep.permalink      AS "publishedUrl",
-            ep.impressions, ep.clicks, ep.likes, ep.comments, ep.shares, ep.reach,
+            ep.impressions, ep.clicks, ep.likes, ep.comments, ep.shares, ep.reach, ep.views,
             CASE
               WHEN ep.impressions > 0
                 THEN (ep.likes + ep.comments + ep.shares)::float / ep.impressions * 100
@@ -518,7 +554,7 @@ async function fetchPostReportRows(
             c.platform::text   AS "platform",
             pt."publishedAt",
             pt."publishedUrl",
-            s.impressions, s.clicks, s.likes, s.comments, s.shares, s.reach,
+            s.impressions, s.clicks, s.likes, s.comments, s.shares, s.reach, s.views,
             -- Recompute Eng.% from the raw counts: stored engagementRate is
             -- a 0–1 FRACTION for YT/IG/FB/Reddit but a PERCENT for
             -- Threads/Pinterest/DevTo (mixed units in historical rows).
@@ -736,6 +772,7 @@ export const analyticsRouter = createRouter({
         shares: sum((r) => r.shares),
         comments: sum((r) => r.comments),
         reach: sum((r) => r.reach),
+        views: sum((r) => r.views ?? 0),
         engagementRate: orgRate.rate,
         engagementRateBasis: {
           impressionedPosts: orgRate.impressionedPosts,
@@ -1027,6 +1064,7 @@ export const analyticsRouter = createRouter({
           shares,
           comments,
           reach: m?.reach ?? 0,
+          views: m?.views ?? 0,
           engagementRate: rateVerdict.rate,
           /**
            * How narrow the rate's base is. A rate computed from ONE video must

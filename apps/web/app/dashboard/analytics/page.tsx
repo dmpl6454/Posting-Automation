@@ -12,7 +12,7 @@ import { Skeleton } from "~/components/ui/skeleton";
 import { Badge } from "~/components/ui/badge";
 import {
   BarChart3, TrendingUp, CheckCircle, XCircle, Eye, Heart, MessageCircle,
-  Share, MousePointerClick, Users, Percent, Calendar, RefreshCw, AlertTriangle,
+  Share, MousePointerClick, Users, Percent, Calendar, RefreshCw, AlertTriangle, PlayCircle,
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
@@ -271,6 +271,9 @@ function InsightsAnalyticsView() {
   const canReport = (key: string) => reportable.size === 0 || reportable.has(key as any);
   const engagementMetrics = [
     { key: "impressions", label: "Impressions", value: engagement?.impressions ?? 0, icon: Eye, color: "text-blue-500" },
+    // Distinct from Impressions — see the CHANNEL_METRIC_COLUMNS note. For the
+    // five platforms with no impressions metric this tile REPLACES that one.
+    { key: "views", label: "Views", value: engagement?.views ?? 0, icon: PlayCircle, color: "text-sky-500" },
     { key: "likes", label: "Likes", value: engagement?.likes ?? 0, icon: Heart, color: "text-red-500" },
     { key: "comments", label: "Comments", value: engagement?.comments ?? 0, icon: MessageCircle, color: "text-green-500" },
     { key: "shares", label: "Shares", value: engagement?.shares ?? 0, icon: Share, color: "text-purple-500" },
@@ -299,6 +302,13 @@ function InsightsAnalyticsView() {
     { key: "impressions", valueKey: "impressions", label: "Impressions" },
     // Summed across the channel's posts — see the engagementMetrics note above.
     { key: "reach", valueKey: "reach", label: "Reach (summed)" },
+    // ⚠️ Views is NOT a duplicate of Impressions. On Facebook the two are
+    // genuinely different numbers (post_media_view = renders/plays vs
+    // post_video_views = qualified views; 5,063 vs 1,468 on one reel). On
+    // Instagram / YouTube / Threads / dev.to / Reddit there IS no impressions
+    // metric — those platforms declare impressions unavailable, so this column
+    // replaces it rather than sitting beside it.
+    { key: "views", valueKey: "views", label: "Views" },
     { key: "likes", valueKey: "likes", label: "Likes" },
     { key: "comments", valueKey: "comments", label: "Comments" },
     { key: "shares", valueKey: "shares", label: "Shares" },
@@ -819,7 +829,7 @@ function InsightsAnalyticsView() {
                         {c.key === "likes" ? likeHeader.label : c.label}
                       </th>
                     ))}
-                    {channelColumns.some((c) => c.key === "impressions") && (
+                    {channelColumns.some((c) => c.key === "impressions" || c.key === "views") && (
                       <th className="px-4 py-3 text-right font-medium text-muted-foreground">Eng. Rate</th>
                     )}
                   </tr>
@@ -894,7 +904,7 @@ function InsightsAnalyticsView() {
                           {metricCell(c.key, (ch as any)[c.valueKey] as number, ch)}
                         </td>
                       ))}
-                      {channelColumns.some((c) => c.key === "impressions") && (
+                      {channelColumns.some((c) => c.key === "impressions" || c.key === "views") && (
                         <td className="px-4 py-3 text-right">
                           {/* Engagement rate is engagement ÷ impressions, so it is
                               only as honest as its denominator AND its base. It is
@@ -1040,7 +1050,7 @@ function InsightsAnalyticsView() {
                           {c.label}
                         </th>
                       ))}
-                      {groupColumns.some((c) => c.key === "impressions") && (
+                      {groupColumns.some((c) => c.key === "impressions" || c.key === "views") && (
                         <th className="px-4 py-3 text-right font-medium text-muted-foreground">Eng. %</th>
                       )}
                     </tr>
@@ -1071,7 +1081,7 @@ function InsightsAnalyticsView() {
                             {metricCell(c.key, (g as any)[c.valueKey] as number, g as MetricRowMeta)}
                           </td>
                         ))}
-                        {groupColumns.some((c) => c.key === "impressions") && (
+                        {groupColumns.some((c) => c.key === "impressions" || c.key === "views") && (
                           <td className="px-4 py-3 text-right">
                             {/* Gated on the same base rule as the per-channel rate:
                                 with no impressioned post there is no denominator,

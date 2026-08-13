@@ -301,7 +301,13 @@ export class ThreadsProvider extends SocialProvider {
     const quotes = metrics.quotes || 0;
 
     return {
+      // This platform exposes NO impressions metric — the number below is a
+      // VIEW count. It is written to both slots: `views` is the honest column
+      // the UI renders, `impressions` is retained so historical rows and the
+      // engagement-rate denominator are unchanged. platform-metrics.ts declares
+      // impressions unavailable for this platform so it is never shown twice.
       impressions: views,
+      views,
       clicks: 0,
       likes,
       shares: reposts + quotes,
@@ -311,7 +317,7 @@ export class ThreadsProvider extends SocialProvider {
       likeKind: "likes",
       reachIsDistinct: false, // reach aliased from views
       source: "api",
-      metricsAvailable: { clicks: false, reach: false },
+      metricsAvailable: { clicks: false, reach: false, views: true },
     };
   }
 }
