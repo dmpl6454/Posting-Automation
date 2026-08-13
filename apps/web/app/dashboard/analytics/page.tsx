@@ -552,7 +552,18 @@ function InsightsAnalyticsView() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Posts Over Time</CardTitle>
-          <CardDescription>Number of posts published per day</CardDescription>
+          {/*
+            ⚠️ NARROWER POPULATION THAN THE TABLE BELOW — say so.
+            postsOverTime counts app-published posts only (PostTarget rows), while
+            Channel Performance and the engagement tiles union in ExternalPost
+            (posts made directly on connected FB Pages / IG accounts). Measured on
+            prod 2026-08-13: one workspace showed 0 here beside 28,401 in the table,
+            and another 2 beside 28,439 — a 14,219x gap presented as if the two
+            counted the same thing. That is the documented "no posts in the last 30
+            days" false bug report. Mirrors the Channel Performance "Posts" column
+            and the ReportsTab at_age disclosure.
+          */}
+          <CardDescription>Posts you published through PostAutomation, per day</CardDescription>
         </CardHeader>
         <CardContent>
           {chartLoading ? (
@@ -588,7 +599,20 @@ function InsightsAnalyticsView() {
             <div className="flex h-56 items-center justify-center rounded-lg border border-dashed">
               <div className="text-center">
                 <BarChart3 className="mx-auto h-8 w-8 text-muted-foreground/30" />
-                <p className="mt-2 text-sm text-muted-foreground">No posts published in this period</p>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  You didn&rsquo;t publish anything through PostAutomation in this period
+                </p>
+                {/*
+                  An empty chart here is NOT the same as "this channel had no
+                  activity" — posts made directly on the platform are counted in
+                  Channel Performance below but never in this chart. Without this
+                  line the empty state reads as data loss (measured: a workspace
+                  with 28,401 direct posts sees an empty chart).
+                */}
+                <p className="mx-auto mt-1 max-w-xs text-xs text-muted-foreground/80">
+                  Posts made directly on Facebook or Instagram aren&rsquo;t counted here —
+                  see Channel Performance below for every post on your channels.
+                </p>
                 {/* Fix #34: guide users to create posts */}
                 <Link
                   href="/dashboard/content-agent"
@@ -674,7 +698,10 @@ function InsightsAnalyticsView() {
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Platform Breakdown</CardTitle>
-            <CardDescription>Published targets per platform</CardDescription>
+            {/* Same narrower population as Posts Over Time — app-published only.
+                "targets" was already an app-published-only concept (a PostTarget
+                row), but the label never said so. */}
+            <CardDescription>Posts you published through PostAutomation, per platform</CardDescription>
           </CardHeader>
           <CardContent>
             {breakdownLoading ? (
@@ -705,7 +732,9 @@ function InsightsAnalyticsView() {
                       </Pie>
                       <Tooltip
                         formatter={(v: number, name) => [
-                          `${v} target${v === 1 ? "" : "s"}`,
+                          // "targets" is internal jargon AND ambiguous against the
+                          // table's wider "Posts" count — name the population.
+                          `${v} sent by you`,
                           name,
                         ]}
                         contentStyle={TOOLTIP_CONTENT_STYLE}
@@ -714,11 +743,14 @@ function InsightsAnalyticsView() {
                       />
                     </PieChart>
                   </ResponsiveContainer>
-                  {/* Total published targets centered in the donut hole */}
+                  {/* Total published targets centered in the donut hole.
+                      "Published" alone invited the reader to compare this with the
+                      channel's real post count in the table below, which counts a
+                      wider population. "Sent by you" names the narrower one. */}
                   <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
                     <p className="text-2xl font-bold leading-none">{formatNumber(platformTotal)}</p>
                     <p className="mt-1 text-[10px] uppercase tracking-wide text-muted-foreground">
-                      Published
+                      Sent by you
                     </p>
                   </div>
                 </div>

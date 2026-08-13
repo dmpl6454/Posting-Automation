@@ -263,6 +263,16 @@ services:
       EXTERNAL_SYNC_CONCURRENCY: ${EXTERNAL_SYNC_CONCURRENCY:-2}
       EXTERNAL_METRICS_PER_RUN: ${EXTERNAL_METRICS_PER_RUN:-150}
       FB_SCRAPE_TIMEOUT_MS: ${FB_SCRAPE_TIMEOUT_MS:-6000}
+      # Budgeted daily FACEBOOK analytics pass for APP-PUBLISHED targets (the two
+      # recurring analytics crons both exclude FACEBOOK, so without this a target
+      # stops refreshing forever once its 30d at-age checkpoint passes).
+      # Fail-CLOSED in code (=== "true") — an unplumbed value keeps it OFF.
+      # Keep the cap low: FB analytics traffic raises the MODULE-GLOBAL usageCache
+      # that the publish path shares, and at >=95% app usage every publish Graph
+      # call sleeps an uncapped 60s.
+      FB_ANALYTICS_SYNC_ENABLED: ${FB_ANALYTICS_SYNC_ENABLED:-false}
+      FB_ANALYTICS_PER_RUN: ${FB_ANALYTICS_PER_RUN:-40}
+      FB_ANALYTICS_MIN_STALE_HOURS: ${FB_ANALYTICS_MIN_STALE_HOURS:-48}
     depends_on:
       postgres:
         condition: service_healthy

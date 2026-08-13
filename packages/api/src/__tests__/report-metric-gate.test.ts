@@ -6,6 +6,18 @@ import { gatePostReportRow, type PostReportRow } from "../routers/analytics.rout
  * NEVER reports must become null (UI "—"), a metric it DOES report stays a real
  * number (a captured 0 is a real 0). Mirrors metricCellValue so Reports and the
  * Channel Performance table agree. See gatePostReportRow.
+ *
+ * ⚠️ FIXTURE CORRECTED 2026-08-13 — this helper used to default `snapshotAt: null`
+ * while handing the gate numeric counters. That shape is IMPOSSIBLE on the
+ * app-published arm (its LEFT JOIN LATERAL yields SQL NULL for every counter when
+ * no snapshot matched), so the fixture only ever described an *external* row — i.e.
+ * a listed-but-never-measured one — and the "a captured 0 stays 0" test below was
+ * therefore asserting the never-measured bug as correct behavior.
+ *
+ * The default now models what it claims to: a row whose metrics WERE captured
+ * (`snapshotAt` set, `hasMetrics: true`). The never-measured shape is exercised
+ * explicitly in its own describe block, so both contracts have a real guard
+ * instead of one fixture silently standing in for both.
  */
 function row(platform: string, over: Partial<PostReportRow> = {}): PostReportRow {
   return {
@@ -25,7 +37,8 @@ function row(platform: string, over: Partial<PostReportRow> = {}): PostReportRow
     reach: 50,
     views: 100,
     engagementRate: 1.5,
-    snapshotAt: null,
+    snapshotAt: new Date("2026-08-13T00:00:00.000Z"),
+    hasMetrics: true,
     ...over,
   };
 }
@@ -224,5 +237,98 @@ describe("gatePostReportRow — per-snapshot metricsAvailable wins over the stat
       })
     );
     expect(g.impressions).toBe(0);
+  });
+});
+
+/**
+ * A LISTED-BUT-NEVER-MEASURED row must render every metric as "—", never a 0.
+ *
+ * WHY THIS NEEDED ITS OWN BLOCK
+ * -----------------------------
+ * `ExternalPost.impressions/clicks/likes/comments/shares/reach` are
+ * `Int @default(0)` NOT NULL (schema.prisma:324-329), so a row that was listed but
+ * whose metrics were never fetched PHYSICALLY STORES 0 — indistinguishable from a
+ * measured zero by value alone. Only `views` is nullable, so before this fix a
+ * never-measured Facebook row rendered `likes 0, comments 0, shares 0, clicks 0`
+ * beside its own "Metric captured at (UTC)" cell showing "—": the row contradicted
+ * itself on screen, and the same fake zeros went into the downloaded CSV and the
+ * emailed report.
+ *
+ * The state is reachable BY DESIGN, not as a rare transient: the metrics pass is
+ * budget-capped (`METRICS_PER_RUN`) and additionally defers rows on purpose, both
+ * of which leave `metricsSyncedAt` NULL — deliberately, so the row stays at the
+ * front of the next run.
+ *
+ * The channel-level aggregate never had this bug because it projects `has_metrics`
+ * from `metricsSyncedAt IS NOT NULL` and `metricCellValue` returns null for every
+ * metric when it is false. This block locks the same rule into the per-ROW path.
+ */
+describe("gatePostReportRow — listed but never measured ⇒ '—', never a fake 0", () => {
+  /** Exactly what external-post-sync's insert leaves behind: zeros + no metadata. */
+  const neverMeasured = (platform: string) =>
+    row(platform, {
+      hasMetrics: false,
+      snapshotAt: null,
+      snapshotMetadata: null,
+      impressions: 0,
+      clicks: 0,
+      likes: 0,
+      comments: 0,
+      shares: 0,
+      reach: 0,
+      views: null,
+      engagementRate: null,
+    });
+
+  it("FACEBOOK: every metric is '—' — especially likes/comments/shares/clicks, which used to print 0", () => {
+    const g = gatePostReportRow(neverMeasured("FACEBOOK"));
+    expect(g.likes).toBeNull();
+    expect(g.comments).toBeNull();
+    expect(g.shares).toBeNull();
+    expect(g.clicks).toBeNull();
+    expect(g.impressions).toBeNull();
+    expect(g.reach).toBeNull();
+    expect(g.views).toBeNull();
+    expect(g.engagementRate).toBeNull();
+  });
+
+  it("INSTAGRAM: same — reach/likes/comments/shares used to print 0 here", () => {
+    const g = gatePostReportRow(neverMeasured("INSTAGRAM"));
+    expect(g.reach).toBeNull();
+    expect(g.likes).toBeNull();
+    expect(g.comments).toBeNull();
+    expect(g.shares).toBeNull();
+    expect(g.impressions).toBeNull();
+    expect(g.clicks).toBeNull();
+    expect(g.views).toBeNull();
+  });
+
+  it("blanks NON-ZERO values too — the flag means 'not measured', not 'measured as 0'", () => {
+    // Defensive: if a stale value were ever left behind on an unmeasured row, the
+    // flag must still win. Gating on `v === 0` instead would leak it.
+    const g = gatePostReportRow(row("FACEBOOK", { hasMetrics: false }));
+    expect(g.likes).toBeNull();
+    expect(g.comments).toBeNull();
+    expect(g.engagementRate).toBeNull();
+  });
+
+  it("hasMetrics: true is unaffected — a genuinely captured 0 still reads 0", () => {
+    const g = gatePostReportRow(
+      row("FACEBOOK", { hasMetrics: true, likes: 0, comments: 0, shares: 0 })
+    );
+    expect(g.likes).toBe(0);
+    expect(g.comments).toBe(0);
+    expect(g.shares).toBe(0);
+  });
+
+  it("an ABSENT hasMetrics changes nothing — legacy callers stay byte-identical", () => {
+    // emailReport and any other caller that does not project the flag must behave
+    // exactly as before. Only an explicit `false` gates.
+    const { hasMetrics: _omitted, ...legacy } = row("FACEBOOK", { likes: 0 });
+    const g = gatePostReportRow(legacy as PostReportRow);
+    expect(g.likes).toBe(0);
+    expect(g.clicks).toBe(5);
+    // Static-map rules still apply.
+    expect(g.impressions).toBeNull();
   });
 });
