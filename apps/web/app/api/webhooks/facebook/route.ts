@@ -123,6 +123,31 @@ async function processEventsInBackground(payload: any): Promise<void> {
           } else if (reason !== "not_our_post") {
             console.warn(`[fb-webhook] Skipped ${fbPostId}: ${reason}`);
           }
+        } else if (change.field === "mention") {
+          // Someone mentioned/tagged a connected Page. Real-time brand-
+          // mention alert. For now we just log the raw event — persisting
+          // to the Mention table needs a design decision about how these
+          // relate to ListeningQuery rows (which have listeningQueryId
+          // FKs). Logging first so we can see the actual payload shape
+          // Meta sends before designing the storage layer.
+          const senderName = change.value?.sender_name;
+          const postId = change.value?.post_id;
+          const item = change.value?.item;
+          const verb = change.value?.verb;
+          console.log(
+            `[fb-webhook] MENTION on page ${pageId} — ` +
+              `sender="${senderName}", post=${postId}, item=${item}, verb=${verb}`
+          );
+        } else if (change.field === "ratings") {
+          // New rating/review on a connected Page. Same design gap as
+          // mention above — log for now.
+          const rating = change.value?.rating;
+          const reviewText = change.value?.review_text;
+          const reviewerName = change.value?.reviewer?.name;
+          console.log(
+            `[fb-webhook] RATING on page ${pageId} — ` +
+              `${rating}★ by "${reviewerName}": ${(reviewText || "").slice(0, 100)}`
+          );
         } else {
           console.log(`[fb-webhook] Unhandled field: ${change.field}`);
         }
