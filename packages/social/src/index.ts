@@ -28,4 +28,7 @@ export { validateMediaForPlatform } from "./utils/media-validator";
 // real reason Meta insights die every ~3 months. See meta-data-access.ts.
 export { fetchMetaTokenWindow, type MetaTokenWindow } from "./utils/meta-data-access";
 export { isFacebookVideoLike } from "./utils/fb-video-like";
+// FB app-usage health check — reads x-app-usage header from a lightweight
+// call so a monitoring cron can alert before we hit the quota wall.
+export { readFacebookAppHealth, type FbAppHealthReading } from "./utils/fb-app-health";
 export type { ExternalPostSummary, ExternalPostPage } from "./abstract/social.types";

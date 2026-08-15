@@ -2,7 +2,7 @@ import { prisma } from "@postautomation/db";
 import { tokenRefreshQueue, analyticsSyncQueue, agentRunQueue, trendDiscoverQueue, listeningSyncQueue, campaignAnalyticsSyncQueue, brandContentSyncQueue, outreachPollQueue, rssSyncQueue, avatarCacheQueue, externalPostSyncQueue } from "@postautomation/queue";
 import { groupIntoAccounts, selectShard } from "../lib/external-sync-accounts";
 import { planFbAnalyticsRun } from "../lib/fb-analytics-budget";
-import { fetchMetaTokenWindow } from "@postautomation/social";
+import { fetchMetaTokenWindow, readFacebookAppHealth } from "@postautomation/social";
 import { runAutoHealerWithLogging } from "../workers/auto-healer.worker";
 import { runCelebrityDetectors } from "../workers/celebrity-detect.worker";
 import { enqueueScheduledPublishJobs } from "@postautomation/queue";
@@ -1201,6 +1201,114 @@ export async function purgeOldErrorLogs(): Promise<number> {
 }
 
 /**
+ * Facebook app-usage health check.
+ *
+ * WHY THIS EXISTS
+ * ---------------
+ * In April 2026 the old app sat at 100% x-app-usage for 8 days without any
+ * signal — publishes silently failed, users complained, ops discovered it
+ * days later. `usageCache` in facebook.provider.ts DOES track x-app-usage,
+ * but only per OS process, only after real traffic hits it, and never
+ * surfaces the value anywhere ops can see. This cron closes the loop by
+ * making one lightweight probe call to Meta and writing any warning/critical
+ * reading to `ErrorLog`, which surfaces in /dashboard/monitoring for
+ * super-admins. It replaces "someone noticed" with a real alert.
+ *
+ * COST
+ * ----
+ * 1 Graph API call per 30-minute tick = 48 calls/day = <0.5% of hourly
+ * quota. Zero DB reads unless the reading crosses a threshold, in which
+ * case one dedup'd ErrorLog upsert (see monitor.router.ts fingerprint dedup).
+ *
+ * THRESHOLDS
+ * ----------
+ * Match facebook.provider.ts throttleIfNeeded() bands so the alert fires
+ * BEFORE the provider starts adding synthetic delays: 60% → moderate,
+ * 80% → aggressive throttle, 95% → 60s hard pauses. Warn at 60, alert at
+ * 80 — that gives ops enough runway to react before publishing slows.
+ *
+ * DEDUP
+ * -----
+ * ErrorLog.fingerprint dedups same-message rows within 24h (see
+ * monitor.router.ts logError). Same-severity readings collapse into one
+ * incrementing row per day, so a sustained high-usage window produces one
+ * alert per severity per day rather than a torrent.
+ */
+const FB_HEALTH_WARN_THRESHOLD = 60;
+const FB_HEALTH_CRIT_THRESHOLD = 80;
+
+export async function runFacebookHealthCheck() {
+  const appId = process.env.FACEBOOK_CLIENT_ID;
+  const appSecret = process.env.FACEBOOK_CLIENT_SECRET;
+  if (!appId || !appSecret) return;
+
+  const reading = await readFacebookAppHealth(appId, appSecret).catch((err) => {
+    // Reading itself failed (timeout / auth). This is worth logging but
+    // NOT alerting — a transient failure to READ the health isn't the
+    // same as unhealthy. If it persists, it will keep showing up in worker
+    // logs and eventually get spotted.
+    console.warn(`[Cron:FbHealth] health probe failed: ${err?.message}`);
+    return null;
+  });
+  if (!reading) return;
+
+  const { maxUsage, callCount, totalCpuTime, totalTime } = reading;
+  console.log(
+    `[Cron:FbHealth] usage=${maxUsage}% ` +
+      `(calls=${callCount}, cpu=${totalCpuTime}, time=${totalTime})`
+  );
+
+  let severity: "error" | "warning" | "critical" | null = null;
+  if (maxUsage >= FB_HEALTH_CRIT_THRESHOLD) severity = "critical";
+  else if (maxUsage >= FB_HEALTH_WARN_THRESHOLD) severity = "warning";
+
+  if (!severity) return;
+
+  // Fingerprint groups readings by severity + app so ErrorLog's built-in
+  // 24h dedup collapses a sustained window into one incrementing row.
+  const fingerprint = `fb-app-usage-${severity}-${appId}`;
+  const message =
+    severity === "critical"
+      ? `Facebook app usage at ${maxUsage}% — throttling imminent, publishes may slow or fail`
+      : `Facebook app usage at ${maxUsage}% — approaching quota, monitor closely`;
+
+  try {
+    const existing = await prisma.errorLog.findFirst({
+      where: {
+        fingerprint,
+        resolved: false,
+        lastSeenAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+      },
+    });
+
+    if (existing) {
+      await prisma.errorLog.update({
+        where: { id: existing.id },
+        data: {
+          occurrences: { increment: 1 },
+          lastSeenAt: new Date(),
+          metadata: { appId, callCount, totalCpuTime, totalTime, maxUsage, at: new Date().toISOString() },
+        },
+      });
+    } else {
+      await prisma.errorLog.create({
+        data: {
+          source: "worker",
+          severity,
+          message,
+          endpoint: "fb-health-check",
+          metadata: { appId, callCount, totalCpuTime, totalTime, maxUsage, at: new Date().toISOString() },
+          fingerprint,
+        },
+      });
+      console.warn(`[Cron:FbHealth] ALERT ${severity.toUpperCase()} — ${message}`);
+    }
+  } catch (err: any) {
+    console.warn(`[Cron:FbHealth] ErrorLog write failed: ${err?.message}`);
+  }
+}
+
+/**
  * Start all cron jobs
  */
 export function startCronJobs() {
@@ -1235,6 +1343,12 @@ export function startCronJobs() {
   // 14 min warmup: after the orphan janitor (13) so two heavy DB sweeps don't collide.
   setInterval(scheduleFacebookAnalyticsSync, 24 * 60 * 60 * 1000);
   setTimeout(scheduleFacebookAnalyticsSync, 14 * 60 * 1000);
+
+  // FB app-usage health probe every 30 minutes. Alerts to ErrorLog before the
+  // provider starts throttling — replaces "someone noticed" with a real alert.
+  // First probe after 4 min (avoids clustering with the other warmups above).
+  setInterval(runFacebookHealthCheck, 30 * 60 * 1000);
+  setTimeout(runFacebookHealthCheck, 4 * 60 * 1000);
 
   // At-age checkpoint reconciliation once daily (re-enqueue missed checkpoints)
   setInterval(reconcileAtAgeCheckpoints, 24 * 60 * 60 * 1000);
@@ -1307,6 +1421,10 @@ export function startCronJobs() {
     }`
   );
   console.log("[Cron]   - At-age checkpoint reconciliation: every 24 hours");
+  console.log(
+    `[Cron]   - FB app-usage health probe: every 30 min ` +
+      `(warn>=${FB_HEALTH_WARN_THRESHOLD}%, critical>=${FB_HEALTH_CRIT_THRESHOLD}%)`
+  );
   console.log("[Cron]   - Agent runs: every 1 min");
   console.log("[Cron]   - Autopilot cleanup: every 1 hour");
   console.log("[Cron]   - Autopilot pipeline: every 15 min");
