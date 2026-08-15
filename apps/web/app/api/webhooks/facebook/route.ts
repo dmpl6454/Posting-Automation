@@ -141,9 +141,12 @@ async function processEventsInBackground(payload: any): Promise<void> {
         } else if (change.field === "ratings") {
           // New rating/review on a connected Page. Same design gap as
           // mention above — log for now.
+          // Meta sends reviewer_name at the top level of `value`, NOT
+          // nested under `value.reviewer.name` (verified 2026-08-15 via
+          // devtools_webhook_test — test payload had value.reviewer_name).
           const rating = change.value?.rating;
           const reviewText = change.value?.review_text;
-          const reviewerName = change.value?.reviewer?.name;
+          const reviewerName = change.value?.reviewer_name ?? change.value?.reviewer?.name ?? "unknown";
           console.log(
             `[fb-webhook] RATING on page ${pageId} — ` +
               `${rating}★ by "${reviewerName}": ${(reviewText || "").slice(0, 100)}`
