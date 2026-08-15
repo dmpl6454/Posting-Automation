@@ -2,7 +2,11 @@ import { prisma } from "@postautomation/db";
 import { tokenRefreshQueue, analyticsSyncQueue, agentRunQueue, trendDiscoverQueue, listeningSyncQueue, campaignAnalyticsSyncQueue, brandContentSyncQueue, outreachPollQueue, rssSyncQueue, avatarCacheQueue, externalPostSyncQueue } from "@postautomation/queue";
 import { groupIntoAccounts, selectShard } from "../lib/external-sync-accounts";
 import { planFbAnalyticsRun } from "../lib/fb-analytics-budget";
-import { fetchMetaTokenWindow, readFacebookAppHealth } from "@postautomation/social";
+import {
+  fetchMetaTokenWindow,
+  readFacebookAppHealth,
+  drainFbDeprecationCache,
+} from "@postautomation/social";
 import { runAutoHealerWithLogging } from "../workers/auto-healer.worker";
 import { runCelebrityDetectors } from "../workers/celebrity-detect.worker";
 import { enqueueScheduledPublishJobs } from "@postautomation/queue";
@@ -1309,6 +1313,113 @@ export async function runFacebookHealthCheck() {
 }
 
 /**
+ * Facebook Graph API deprecation-warning drainer.
+ *
+ * WHY IT'S SEPARATE FROM THE HEALTH PROBE
+ * ---------------------------------------
+ * Deprecations are detected PASSIVELY on real traffic (the FB provider
+ * sniffs response headers on every call). The provider caches them in-memory
+ * — cross-cutting DB writes on the request path would risk stalling a
+ * publish attempt for a warning-log write. This cron flushes the in-memory
+ * cache to ErrorLog on its own schedule.
+ *
+ * WHY IT'S PER-PROCESS
+ * --------------------
+ * The cache is a Map in the same OS process as everything else in this
+ * worker (see the CRON_LEADER architecture note in the file header — all
+ * queue workers share this process). So a single leader-side drain covers
+ * every FB call the worker made since the last flush. Web-side FB calls
+ * (OAuth callback, mostly connect-time) aren't covered — that's an
+ * accepted gap; deprecations on connect-flow endpoints would surface
+ * during OAuth failures anyway.
+ *
+ * DEDUP
+ * -----
+ * ErrorLog uses fingerprint dedup within 24h (monitor.router.ts). The
+ * fingerprint here is `fb-deprecation-<cleanEndpoint>-<warning[:80]>`, so
+ * the same warning on the same endpoint collapses into ONE row per day
+ * regardless of how many responses carried it.
+ *
+ * COST
+ * ----
+ * Zero API calls. Just an in-memory read + potentially one ErrorLog upsert
+ * per unique deprecation per day. Runs every 15 minutes so a warning
+ * seen right after publish is in the dashboard within ~15 min.
+ */
+export async function flushFbDeprecationWarnings() {
+  const records = drainFbDeprecationCache();
+  if (records.length === 0) return;
+
+  console.log(
+    `[Cron:FbDeprecation] draining ${records.length} unique deprecation warning(s)`
+  );
+
+  for (const record of records) {
+    const fingerprint =
+      `fb-deprecation-${record.endpoint}-${record.warning.slice(0, 80)}`;
+    const message =
+      `Facebook Graph API deprecation warning on ${record.endpoint}: ` +
+      `${record.warning}`;
+
+    try {
+      const existing = await prisma.errorLog.findFirst({
+        where: {
+          fingerprint,
+          resolved: false,
+          lastSeenAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+        },
+      });
+
+      if (existing) {
+        await prisma.errorLog.update({
+          where: { id: existing.id },
+          data: {
+            occurrences: { increment: record.occurrences },
+            lastSeenAt: record.lastSeenAt,
+            metadata: {
+              headerName: record.headerName,
+              warning: record.warning,
+              endpoint: record.endpoint,
+              firstSeenThisWindow: record.firstSeenAt.toISOString(),
+              lastSeenThisWindow: record.lastSeenAt.toISOString(),
+              windowOccurrences: record.occurrences,
+            },
+          },
+        });
+      } else {
+        await prisma.errorLog.create({
+          data: {
+            source: "worker",
+            severity: "warning",
+            message,
+            endpoint: record.endpoint,
+            metadata: {
+              headerName: record.headerName,
+              warning: record.warning,
+              endpoint: record.endpoint,
+              firstSeenThisWindow: record.firstSeenAt.toISOString(),
+              lastSeenThisWindow: record.lastSeenAt.toISOString(),
+              windowOccurrences: record.occurrences,
+            },
+            fingerprint,
+            occurrences: record.occurrences,
+            firstSeenAt: record.firstSeenAt,
+            lastSeenAt: record.lastSeenAt,
+          },
+        });
+        console.warn(
+          `[Cron:FbDeprecation] NEW ${record.endpoint} — ${record.warning}`
+        );
+      }
+    } catch (err: any) {
+      console.warn(
+        `[Cron:FbDeprecation] ErrorLog write failed for ${record.endpoint}: ${err?.message}`
+      );
+    }
+  }
+}
+
+/**
  * Start all cron jobs
  */
 export function startCronJobs() {
@@ -1349,6 +1460,13 @@ export function startCronJobs() {
   // First probe after 4 min (avoids clustering with the other warmups above).
   setInterval(runFacebookHealthCheck, 30 * 60 * 1000);
   setTimeout(runFacebookHealthCheck, 4 * 60 * 1000);
+
+  // FB Graph API deprecation-warning drainer every 15 minutes. Passive
+  // detection — the FB provider sniffs response headers on every call; this
+  // cron just flushes the in-memory cache to ErrorLog. First flush after 6
+  // min so there's real traffic to drain.
+  setInterval(flushFbDeprecationWarnings, 15 * 60 * 1000);
+  setTimeout(flushFbDeprecationWarnings, 6 * 60 * 1000);
 
   // At-age checkpoint reconciliation once daily (re-enqueue missed checkpoints)
   setInterval(reconcileAtAgeCheckpoints, 24 * 60 * 60 * 1000);
@@ -1424,6 +1542,9 @@ export function startCronJobs() {
   console.log(
     `[Cron]   - FB app-usage health probe: every 30 min ` +
       `(warn>=${FB_HEALTH_WARN_THRESHOLD}%, critical>=${FB_HEALTH_CRIT_THRESHOLD}%)`
+  );
+  console.log(
+    `[Cron]   - FB Graph deprecation warnings drain: every 15 min (passive header sniff)`
   );
   console.log("[Cron]   - Agent runs: every 1 min");
   console.log("[Cron]   - Autopilot cleanup: every 1 hour");

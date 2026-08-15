@@ -31,4 +31,12 @@ export { isFacebookVideoLike } from "./utils/fb-video-like";
 // FB app-usage health check — reads x-app-usage header from a lightweight
 // call so a monitoring cron can alert before we hit the quota wall.
 export { readFacebookAppHealth, type FbAppHealthReading } from "./utils/fb-app-health";
+// FB Graph API deprecation-warning sniffer + in-memory cache. The provider
+// records warnings from response headers; a worker cron drains + writes to
+// ErrorLog on its own schedule (keeps @postautomation/social prisma-free).
+export {
+  drainFbDeprecationCache,
+  fbDeprecationCacheSize,
+  type FbDeprecationRecord,
+} from "./utils/fb-deprecation-cache";
 export type { ExternalPostSummary, ExternalPostPage } from "./abstract/social.types";

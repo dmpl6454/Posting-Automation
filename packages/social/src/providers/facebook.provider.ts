@@ -18,6 +18,7 @@ import {
   diagnoseMetaError,
   worstDegradation,
 } from "../utils/meta-insight-diagnosis";
+import { recordFbDeprecationFromResponse } from "../utils/fb-deprecation-cache";
 import { fetchT } from "../utils/fetch-timeout";
 import { headRemoteMedia } from "../utils/ranged-media";
 import {
@@ -160,6 +161,15 @@ export class FacebookProvider extends SocialProvider {
         usageCache.page[pageId] = JSON.parse(pageUsage);
       }
     } catch { /* ignore parse errors */ }
+
+    // Also sniff deprecation warnings from the same response — passive
+    // detection catches the "FB impressions renamed to post_media_view"
+    // class of change on real traffic instead of after the metric goes to 0.
+    // The URL is extracted from the response for the endpoint label; strips
+    // query string (which may include access tokens) inside the cache util.
+    try {
+      recordFbDeprecationFromResponse(res, res.url || "unknown");
+    } catch { /* never throw from sniffing */ }
   }
 
   private getMaxUsage(pageId?: string): number {
