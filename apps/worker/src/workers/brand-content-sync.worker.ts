@@ -306,8 +306,12 @@ export function createBrandContentSyncWorker() {
         const fetchers: Promise<RawBrandContent[]>[] = [];
         if (tracker.twitterHandle) fetchers.push(fetchTwitterContent(tracker.twitterHandle));
         if (tracker.instagramHandle) fetchers.push(fetchInstagramContent(tracker.instagramHandle, organizationId));
-        // Facebook excluded: app-level rate limit at 100% — skipping /{pageId}/posts calls
-        // if (tracker.facebookPageId) fetchers.push(fetchFacebookContent(tracker.facebookPageId, organizationId));
+        // Re-enabled 2026-08 after switching to app 298449321694397 (Advanced Access,
+        // pages_read_engagement approved). /{pageId}/posts costs 1 Graph call every 4h
+        // per tracker — negligible against the daily budgeted FB analytics pass and
+        // publishing traffic. Kept OUT of the recurring analytics passes though; see
+        // scheduleFacebookAnalyticsSync in cron-jobs.ts for the throttle-race rationale.
+        if (tracker.facebookPageId) fetchers.push(fetchFacebookContent(tracker.facebookPageId, organizationId));
         if (tracker.linkedinHandle) fetchers.push(fetchLinkedInContent(tracker.linkedinHandle, organizationId));
         if (tracker.tiktokHandle) fetchers.push(fetchTikTokContent(tracker.tiktokHandle));
 
