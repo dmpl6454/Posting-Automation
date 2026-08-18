@@ -30,14 +30,26 @@ export function normalizeCaption(text: string): string {
  * (2000 chars) while a caption may be longer — and it demands 200+ characters of
  * agreement, so a shared opening line can never cause a false adoption.
  */
+export const LISTING_MESSAGE_MAX = 2000;
+
 export function captionsMatch(listed: string, published: string): boolean {
   const a = normalizeCaption(listed);
   const b = normalizeCaption(published);
   if (!a || !b) return false;
   if (a === b) return true;
-  const shorter = a.length <= b.length ? a : b;
-  const longer = a.length <= b.length ? b : a;
-  return shorter.length >= 200 && longer.startsWith(shorter);
+
+  // ⚠️ The prefix branch is ONLY for the listing edges' 2000-char truncation, and
+  // it is deliberately one-directional. A symmetric "either side is a prefix of
+  // the other" test would adopt a DIFFERENT post whose caption merely EXTENDS
+  // ours — e.g. the operator publishes "…text" and later "…text + a tail", both
+  // to the same account. This client posts near-identical copy routinely, so that
+  // is a live risk, and a false adoption records someone else's post id as ours.
+  //
+  // So: the LISTED value must be the short one, and short specifically because it
+  // was truncated (i.e. sitting exactly at the cap).
+  if (a.length !== LISTING_MESSAGE_MAX) return false;
+  if (b.length <= a.length) return false;
+  return b.startsWith(a);
 }
 
 /**

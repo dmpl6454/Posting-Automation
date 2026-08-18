@@ -537,6 +537,41 @@ that will recur:
   **silent dead click** when every target was parked — which is the NORMAL case here, since one
   transient error hits the whole fan-out.
 
+**Round 2 — the verification pass confirmed two HIGHs that the first pass had not surfaced, one of
+which shipped to prod before it was caught:**
+
+- **🔴 `findExistingPost` threw on an EMPTY listing, so BullMQ retries stopped publishing at all.**
+  The "an empty first page is inconclusive" heuristic is sound ONLY after a write (we just published
+  there, so it should not look empty). The PRE-write pre-flight is the opposite case: empty is the
+  EXPECTED answer. Throwing there parked the target as "may already be live" and stopped — so the
+  post was never published and the operator was told something false. Because the window starts at
+  `post.createdAt` (minutes old), this fired on the first retry of ANY transient failure for any
+  channel that had not posted recently — effectively killing retries for both Meta platforms.
+  `findPublishedMatch` now takes an explicit **`emptyIsInconclusive`** flag: `true` post-write,
+  `false` pre-write. **When one helper serves two contexts, check whether its heuristics are valid
+  in BOTH.**
+- **🔴 Ambiguity was discarded by a LATER attempt.** Every attempt in the `publishContainer` loop
+  reuses the SAME `creation_id`, so once one attempt has left the outcome unknown, a
+  definite-looking error from a later one (Meta rejecting an already-consumed container) is NOT
+  evidence that nothing was created. `sawIndeterminate` is now **sticky** for the whole loop.
+- **⚠️ A 5xx is indeterminate whatever the body says** — Meta returns `code: 1 "unknown error"` on
+  some server faults, which the body-only classifier read as a definite rejection. `res.status >= 500`
+  now forces indeterminate.
+- **⚠️ An unreadable body is indeterminate.** `await res.json()` sat outside the try, so a proxy's
+  HTML 502 threw a raw `SyntaxError` past every guard and became a plain re-claimable FAILED.
+- **⚠️ The caption prefix match was symmetric, so it could adopt a post whose caption merely
+  EXTENDS ours** — a live risk on an account that posts near-identical copy. It is now
+  one-directional and requires the LISTED value to sit exactly at the 2000-char truncation cap.
+- **⚠️ `bulk.bulkSchedule` armed ambiguous targets** (`DRAFT|FAILED → SCHEDULED` with no
+  `ambiguousAt` predicate). The claim then refused them, so the post would flip to PUBLISHING,
+  publish nothing, and be reaped FAILED ~45 min later. **Every writer that flips a target INTO a
+  claimable status needs the `ambiguousAt: null` predicate too** — the claim alone is not enough.
+
+**Known limitation (accepted, documented):** a media-only post with an EMPTY caption cannot be
+reconciled — `captionsMatch` has nothing to match on. Post-write that fails safe (parks as
+ambiguous); pre-write it returns null and publishes, which is the pre-fix risk level. Matching on
+media fingerprint would be the real answer.
+
 **Process note:** the verifiers ran while these were being fixed, so their verdicts read "refuted —
 the code the claim describes does not exist". That is the fixes landing, not the findings being
 wrong; each was confirmed by reading the source before it was changed.

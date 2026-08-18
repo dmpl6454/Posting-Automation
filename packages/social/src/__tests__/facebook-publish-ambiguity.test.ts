@@ -183,3 +183,30 @@ describe("Facebook findExistingPost", () => {
     ).rejects.toThrow();
   });
 });
+
+describe("Facebook findExistingPost on an EMPTY listing (review finding — HIGH)", () => {
+  it("returns null (safe to publish) — pre-write, empty means 'not there'", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonRes(publishedPostsBody([]))));
+    instantSleep();
+    const res = await new FacebookProvider().findExistingPost(
+      tokens,
+      textPayload,
+      new Date(Date.now() - 600_000)
+    );
+    expect(res).toBeNull();
+  });
+
+  it("still parks as ambiguous when the Page looks empty AFTER a write", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: any, init?: any) => {
+        const u = String(url);
+        if (u.includes("/PAGE1/feed") && init?.method === "POST") return jsonRes(TRANSIENT, false);
+        return jsonRes(publishedPostsBody([]));
+      })
+    );
+    instantSleep();
+    const err = await new FacebookProvider().publishPost(tokens, textPayload).catch((e) => e);
+    expect(isAmbiguousPublishError(err)).toBe(true);
+  });
+});

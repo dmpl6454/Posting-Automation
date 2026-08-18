@@ -256,3 +256,132 @@ describe("Instagram findExistingPost", () => {
     expect(res).toBeNull();
   });
 });
+
+describe("findExistingPost on an EMPTY listing (review finding — HIGH)", () => {
+  /**
+   * The "an empty first page is inconclusive" heuristic is sound ONLY after a
+   * write: we just published there, so the account should not look empty.
+   *
+   * `findExistingPost` is the PRE-write pre-flight, where an empty listing is the
+   * EXPECTED answer — the post genuinely is not there yet. Throwing there made the
+   * worker park the target as "may already be live" and stop, so the post was
+   * NEVER published and the operator was told something false. That killed BullMQ
+   * retries for Instagram and Facebook: the window starts at post.createdAt
+   * (minutes old), so any channel that had not posted recently hit it on the first
+   * retry of any transient failure.
+   */
+  it("returns null (safe to publish) when the account has nothing in the window", async () => {
+    mockGraph(() => ({ ok: true, body: mediaListBody([]) }));
+    const res = await new InstagramProvider().findExistingPost(
+      { accessToken: "t" },
+      payload(),
+      new Date(Date.now() - 600_000)
+    );
+    expect(res).toBeNull();
+  });
+
+  it("still THROWS on an empty listing after a write, where empty is inconclusive", async () => {
+    // Same underlying scan, opposite verdict — the context is what differs.
+    mockGraph((url, method) => {
+      if (url.includes("/media_publish")) return { ok: false, body: TRANSIENT };
+      if (method === "POST" && url.includes(`/${IG_USER}/media`)) return { ok: true, body: { id: "c" } };
+      if (url.includes("status_code")) return { ok: true, body: { status_code: "FINISHED" } };
+      return { ok: true, body: mediaListBody([]) };
+    });
+    instantSleep();
+    const err = await new InstagramProvider().publishPost({ accessToken: "t" }, payload()).catch((e) => e);
+    expect(isAmbiguousPublishError(err)).toBe(true);
+  });
+
+  it("a DEGRADED listing still throws pre-write — that really is 'cannot tell'", async () => {
+    mockGraph(() => ({ ok: false, body: { error: { code: 190, error_subcode: 460, message: "session invalidated" } } }));
+    await expect(
+      new InstagramProvider().findExistingPost({ accessToken: "t" }, payload(), new Date(Date.now() - 600_000))
+    ).rejects.toThrow();
+  });
+});
+
+describe("Instagram publish — ambiguity must not be lost by a LATER attempt (review, HIGH)", () => {
+  it("keeps the ambiguity when a follow-up attempt returns a non-transient error", async () => {
+    // Attempt 1 is transient, so the post MAY already exist. Attempt 2 (same
+    // creation_id) then returns a definite error — e.g. Meta rejecting a container
+    // that has already been consumed. Reporting that as a clean failure would put
+    // the target back in the claim set and invite a re-publish of a live post.
+    let publishAttempts = 0;
+    mockGraph((url, method) => {
+      if (url.includes("/media_publish")) {
+        publishAttempts++;
+        if (publishAttempts === 1) return { ok: false, body: TRANSIENT };
+        return { ok: false, body: { error: { code: 100, message: "Invalid parameter" } } };
+      }
+      if (method === "POST" && url.includes(`/${IG_USER}/media`)) return { ok: true, body: { id: "c" } };
+      if (url.includes("status_code")) return { ok: true, body: { status_code: "FINISHED" } };
+      return { ok: true, body: mediaListBody([]) };
+    });
+    instantSleep();
+
+    const err = await new InstagramProvider().publishPost({ accessToken: "t" }, payload()).catch((e) => e);
+    expect(isAmbiguousPublishError(err)).toBe(true);
+  });
+
+  it("treats a Meta 5xx as indeterminate even when the body looks like a definite error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: any, init?: any) => {
+        const u = String(url);
+        const method = (init?.method ?? "GET").toUpperCase();
+        if (u.includes("/media_publish")) {
+          return {
+            ok: false,
+            status: 503,
+            json: async () => ({ error: { code: 1, message: "An unknown error occurred" } }),
+            headers: { get: () => null },
+          } as any;
+        }
+        if (method === "POST" && u.includes(`/${IG_USER}/media`)) {
+          return { ok: true, status: 200, json: async () => ({ id: "c" }), headers: { get: () => null } } as any;
+        }
+        if (u.includes("status_code")) {
+          return { ok: true, status: 200, json: async () => ({ status_code: "FINISHED" }), headers: { get: () => null } } as any;
+        }
+        return { ok: true, status: 200, json: async () => mediaListBody([]), headers: { get: () => null } } as any;
+      })
+    );
+    instantSleep();
+
+    const err = await new InstagramProvider().publishPost({ accessToken: "t" }, payload()).catch((e) => e);
+    expect(isAmbiguousPublishError(err)).toBe(true);
+  });
+
+  it("treats an unparseable response body as indeterminate, not as a clean failure", async () => {
+    // A proxy's HTML 502 tells us NOTHING about whether Meta created the post.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: any, init?: any) => {
+        const u = String(url);
+        const method = (init?.method ?? "GET").toUpperCase();
+        if (u.includes("/media_publish")) {
+          return {
+            ok: false,
+            status: 502,
+            json: async () => {
+              throw new SyntaxError("Unexpected token '<'");
+            },
+            headers: { get: () => null },
+          } as any;
+        }
+        if (method === "POST" && u.includes(`/${IG_USER}/media`)) {
+          return { ok: true, status: 200, json: async () => ({ id: "c" }), headers: { get: () => null } } as any;
+        }
+        if (u.includes("status_code")) {
+          return { ok: true, status: 200, json: async () => ({ status_code: "FINISHED" }), headers: { get: () => null } } as any;
+        }
+        return { ok: true, status: 200, json: async () => mediaListBody([]), headers: { get: () => null } } as any;
+      })
+    );
+    instantSleep();
+
+    const err = await new InstagramProvider().publishPost({ accessToken: "t" }, payload()).catch((e) => e);
+    expect(isAmbiguousPublishError(err)).toBe(true);
+  });
+});
