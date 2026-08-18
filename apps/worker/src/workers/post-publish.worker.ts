@@ -1,13 +1,20 @@
 import { Worker, type Job, UnrecoverableError } from "bullmq";
 import { prisma } from "@postautomation/db";
-import { getSocialProvider } from "@postautomation/social";
+import { getSocialProvider, isAmbiguousPublishError } from "@postautomation/social";
 import { QUEUE_NAMES, postPublishQueue, analyticsSyncQueue, type PostPublishJobData, createRedisConnection } from "@postautomation/queue";
 import IORedis from "ioredis";
 import { buildPublishEmail, buildPublishReportCsv } from "../lib/publish-email";
-import { markTargetFailed, buildPublishNotifications, mediaRequiredReason, terminalizeStuckClaim, isSeedNoise, isStaleScheduleJob, isHeavyPublish, planHeavyDefer, HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE } from "../lib/publish-recovery";
+import { markTargetFailed, markTargetAmbiguous, buildPublishClaimWhere, routePublishError, shouldPreflightReconcile, buildPublishNotifications, mediaRequiredReason, terminalizeStuckClaim, isSeedNoise, isStaleScheduleJob, isHeavyPublish, planHeavyDefer, HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE } from "../lib/publish-recovery";
 import { PRIORITY_RETRY, mediaOptimizeQueue } from "@postautomation/queue";
 import { planOptimizeGate, choosePublishUrl } from "../lib/media-optimize";
 import { buildSnapshotMetadata } from "../lib/snapshot-metadata";
+
+/**
+ * How far back a PRE-FLIGHT reconciliation looks when a retry is about to
+ * re-publish. Bounded so the listing stays cheap and so a genuinely different
+ * post that happens to share a caption cannot be adopted from weeks ago.
+ */
+const PREFLIGHT_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 
 /** Integer env knob with a default and a sane clamp (bad values → default). */
 function envInt(name: string, def: number, min: number, max: number): number {
@@ -282,8 +289,12 @@ export function createPostPublishWorker() {
 
       // 0. Atomic idempotency claim — only transitions SCHEDULED/FAILED/DRAFT → PUBLISHING.
       // If the target is already PUBLISHING/PUBLISHED or doesn't exist, skip silently.
+      // ⚠️ buildPublishClaimWhere adds `ambiguousAt: null`. A target whose publish
+      // outcome could not be determined is deliberately UNCLAIMABLE, so no retry
+      // layer can re-run a create that may already have succeeded. See
+      // PostTarget.ambiguousAt and the 2026-08-13 incident.
       const claim = await prisma.postTarget.updateMany({
-        where: { id: postTargetId, status: { in: ["SCHEDULED", "FAILED", "DRAFT"] } },
+        where: buildPublishClaimWhere(postTargetId),
         data: { status: "PUBLISHING" },
       });
       if (claim.count === 0) {
@@ -660,15 +671,75 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
         // Build progress callback — only meaningful for media-heavy platforms (YouTube etc.)
         const onProgress = (percent: number) => reportProgress(postTargetId, percent);
 
+        // ── PRE-FLIGHT RECONCILIATION ──────────────────────────────────────────
+        // On a RETRY, ask the platform whether the previous attempt actually
+        // landed before writing again. This covers the one gap the publishedId
+        // short-circuit cannot: an attempt that published successfully but whose
+        // DB write never persisted leaves publishedId NULL, so the short-circuit
+        // misses and the retry duplicates the post.
+        //
+        // Costs one listing call, only on retries, only for providers that
+        // implement findExistingPost (Instagram + Facebook today). Every other
+        // provider takes the identical path it always did.
+        if (
+          shouldPreflightReconcile({
+            attemptsMade: job.attemptsMade,
+            // Durable across jobs — worker.on("failed") increments it. Required
+            // because every human Retry and every internal re-queue arrives as a
+            // BRAND-NEW job with attemptsMade === 0.
+            targetAttemptedBefore: (postTarget.retryCount ?? 0) > 0 || postTarget.errorMessage != null,
+            hasPublishedId: !!postTarget.publishedId,
+            providerSupportsReconcile: typeof provider.findExistingPost === "function",
+          })
+        ) {
+          const lookbackFloor = new Date(Date.now() - PREFLIGHT_LOOKBACK_MS);
+          const postCreatedAt = postTarget.post.createdAt ?? lookbackFloor;
+          const since = postCreatedAt > lookbackFloor ? postCreatedAt : lookbackFloor;
+          try {
+            const existing = await provider.findExistingPost!(
+              tokens,
+              { content: publishContent, mediaUrls, mediaTypes, metadata: providerMetadata },
+              since,
+            );
+            if (existing) {
+              // ⚠️ Guard against adopting a DIFFERENT post that merely shares this
+              // caption — this account posts near-identical copy routinely. If the
+              // platform id is already recorded against another target, the match
+              // is not ours and we must publish normally.
+              const claimedElsewhere = await prisma.postTarget.findFirst({
+                where: { publishedId: existing.platformPostId, id: { not: postTargetId } },
+                select: { id: true },
+              });
+              if (claimedElsewhere) {
+                console.warn(`[PostPublish] pre-flight match ${existing.platformPostId} already belongs to target ${claimedElsewhere.id} — publishing normally`);
+              } else {
+                console.warn(`[PostPublish] pre-flight found ${platform} post ${existing.platformPostId} already live for target ${postTargetId} — adopting instead of re-publishing`);
+                result = existing;
+              }
+            }
+          } catch (reconcileErr: any) {
+            // Could not tell. Do NOT publish — that is the duplicate. Park it.
+            const reason = `A previous attempt to publish this may already have gone live, and ${platform} could not confirm either way. Nothing was re-sent. Check the account, then use "It didn't publish" to try again. (${reconcileErr?.message ?? "unknown error"})`;
+            await markTargetAmbiguous(prisma, postTargetId, reason);
+            throw new UnrecoverableError(reason);
+          }
+        }
+
         // Retry up to 3 times for transient network errors (fetch timeouts under heavy load)
         let lastErr: any;
-        for (let attempt = 1; attempt <= 3; attempt++) {
+        for (let attempt = 1; attempt <= 3 && !result; attempt++) {
           try {
             result = await provider.publishPost(tokens, { content: publishContent, mediaUrls, mediaTypes, metadata: providerMetadata, onProgress });
             lastErr = null;
             break;
           } catch (e: any) {
             lastErr = e;
+            // ⚠️ NEVER replay a publish whose outcome is unknown. This loop used to
+            // re-call publishPost on any "fetch failed"/ETIMEDOUT — but a timeout
+            // AFTER the request was dispatched is exactly the case where the
+            // platform may already hold the post, and re-calling publishPost
+            // restarts the create from scratch (a new IG container = a new post).
+            if (isAmbiguousPublishError(e)) throw e;
             if (attempt < 3 && (e.message === "fetch failed" || e.message?.includes("ETIMEDOUT"))) {
               console.log(`[PostPublish] Transient error on attempt ${attempt}/3, retrying in ${attempt * 3}s...`);
               await new Promise((r) => setTimeout(r, attempt * 3000));
@@ -679,6 +750,30 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
         }
         if (lastErr) throw lastErr;
       } catch (publishErr: any) {
+        // ⚠️ ROUTE BEFORE CLASSIFYING — the order here is load-bearing.
+        // classifyError substring-matches, so "token"+"invalid" anywhere in a
+        // message yields token_expired, and THAT branch refreshes the credential
+        // and calls provider.publishPost AGAIN. The commonest reason we cannot
+        // confirm an outcome is a dead Meta token, whose reconciliation error
+        // reads "...(token_invalid) — cannot confirm whether the post published".
+        // Classifying first would therefore route an UNKNOWN outcome straight
+        // into a re-publish — the exact duplicate this fix prevents.
+        const route = routePublishError(publishErr);
+        if (route === "ambiguous") {
+          // THE 2026-08-13 FIX. Park the target: FAILED (so the watchdog, UI and
+          // publish report behave exactly as before) PLUS ambiguousAt, which
+          // removes it from the atomic claim so no retry layer can re-publish it.
+          const reason = publishErr.message || String(publishErr);
+          await markTargetAmbiguous(prisma, postTargetId, reason);
+          console.warn(`[PostPublish] target ${postTargetId} parked as AMBIGUOUS — ${platform} never confirmed the publish; not retrying (job ${job.id})`);
+          throw new UnrecoverableError(reason);
+        }
+        if (route === "terminal") {
+          // Already decided elsewhere (e.g. the pre-flight parked it). Rethrow
+          // untouched so BullMQ stops and nothing re-classifies it.
+          throw publishErr;
+        }
+
         const errMsg = publishErr.message || String(publishErr);
         const errType = classifyError(errMsg);
         console.error(`[PostPublish] Publish error detail:`, errMsg);
@@ -749,6 +844,15 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
               throw publishErr; // Can't refresh — rethrow original error
             }
           } catch (refreshRetryErr: any) {
+            // ⚠️ This branch RE-PUBLISHES with the refreshed token, so it can raise
+            // an ambiguity of its own. Writing plain FAILED here would drop the
+            // target back into the claim set and invite another re-publish.
+            if (isAmbiguousPublishError(refreshRetryErr)) {
+              const reason = refreshRetryErr.message || String(refreshRetryErr);
+              await markTargetAmbiguous(prisma, postTargetId, reason);
+              console.warn(`[PostPublish] target ${postTargetId} parked as AMBIGUOUS after token-refresh re-publish (job ${job.id})`);
+              throw new UnrecoverableError(reason);
+            }
             // Mark FAILED before throwing — otherwise the target stays at PUBLISHING,
             // the BullMQ retry's claim guard skips it as a "duplicate" (claim.count === 0),
             // and it's orphaned at PUBLISHING forever. Mirrors the generic else branch below.
@@ -772,6 +876,14 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
           try {
             result = await provider.publishPost(tokens, { content: aggressiveContent.slice(0, Math.floor(aggressiveContent.length * 0.7)), mediaUrls, mediaTypes, metadata: providerMetadata });
           } catch (truncateRetryErr: any) {
+            // Same hazard as the token-refresh branch above: this is a SECOND
+            // publish call, so it can produce its own ambiguity.
+            if (isAmbiguousPublishError(truncateRetryErr)) {
+              const reason = truncateRetryErr.message || String(truncateRetryErr);
+              await markTargetAmbiguous(prisma, postTargetId, reason);
+              console.warn(`[PostPublish] target ${postTargetId} parked as AMBIGUOUS after truncated re-publish (job ${job.id})`);
+              throw new UnrecoverableError(reason);
+            }
             // The truncated retry also failed — mark FAILED before propagating so the
             // target doesn't orphan at PUBLISHING (same reasoning as the else branch).
             await markTargetFailed(prisma, postTargetId, truncateRetryErr?.message ?? errMsg);
@@ -815,6 +927,14 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
             publishedUrl: result.url,
             publishedAt: new Date(),
             uploadProgress: null,
+            // A target that failed and then succeeded used to keep its stale
+            // errorMessage forever — which is how `papcontent` and `filmiimemes`
+            // ended up PUBLISHED while still displaying "Instagram publish
+            // failed". Clear it, and clear any ambiguity stamp: the outcome is
+            // now known.
+            errorMessage: null,
+            ambiguousAt: null,
+            ambiguousReason: null,
             metadata: (result.metadata ?? undefined) as any,
           },
         });
@@ -946,10 +1066,23 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
   worker.on("failed", async (job, err) => {
     if (!job) return;
     try {
-      const errType = classifyError(err.message);
-      console.error(`[PostPublish] Job ${job.id} failed (attempt ${job.attemptsMade}/${job.opts?.attempts ?? 1}, type: ${errType}):`, err.message);
+      // ⚠️ Route before classifying, for the same reason as the publish catch: an
+      // ambiguity message mentioning an invalid token would otherwise be rewritten
+      // as "Access token expired. Please reconnect this channel" — clobbering the
+      // actionable "may already be live, go and check" text with something
+      // misleading, and hiding the one state the operator must act on.
+      const route = routePublishError(err);
+      const errType = route === "classify" ? classifyError(err.message) : "unknown";
+      console.error(`[PostPublish] Job ${job.id} failed (attempt ${job.attemptsMade}/${job.opts?.attempts ?? 1}, route: ${route}, type: ${errType}):`, err.message);
 
-      const isFinalAttempt = job.attemptsMade >= (job.opts?.attempts ?? 1);
+      // ⚠️ An UnrecoverableError IS final even on attempt 1. BullMQ still
+      // increments attemptsMade, so the arithmetic alone reports "not final" and
+      // everything gated on it — the FAILED write, the notification, and the
+      // parent-post finalization + publish email — silently never runs. That left
+      // an ambiguous (or media-required) target with no notification and the post
+      // hanging in PUBLISHING until the 45-minute watchdog reaped it.
+      const isFinalAttempt =
+        job.attemptsMade >= (job.opts?.attempts ?? 1) || route !== "classify";
 
       // Build user-friendly error message
       let userMessage = err.message;

@@ -8,8 +8,7 @@ import {
 import {
   QUEUE_NAMES,
   type ExternalPostSyncJobData,
-  createRedisConnection,
-} from "@postautomation/queue";
+  createRedisConnection, externalPostFloor } from "@postautomation/queue";
 import {
   classifyPosts,
   targetsNeedingVideoResolution,
@@ -44,8 +43,12 @@ import { stepScrapeBudget, shouldDeferUnmeasured } from "../lib/scrape-budget";
  *   so steady-state cost stays flat as the corpus grows.
  */
 
-/** Never list posts older than this — the product floor for this feature. */
-const HARD_FLOOR = new Date("2026-08-01T00:00:00.000Z");
+/**
+ * Never list posts older than this — the product floor for this feature.
+ * Single source of truth (env-configurable): @postautomation/queue.
+ * Read per call so a restart is enough to change it.
+ */
+const hardFloor = () => externalPostFloor();
 
 /**
  * Max posts whose metrics we capture in ONE job.
@@ -92,7 +95,8 @@ const SCRAPE_BREAKER_MISSES = Number(process.env.EXTERNAL_SCRAPE_BREAKER_MISSES 
  * Affordable because listing is the CHEAP half of the sync: ONE call returns 100 posts,
  * versus TWO calls per post for metrics. Even a 5,000-post channel costs 50 listing
  * calls, ~1% of a Page's Business-Use-Case budget (measured `call_count: 1` after a real
- * listing call). The window is also bounded at 2026-08-01, so this is not "all history".
+ * listing call). The window is bounded by the configurable external-post floor
+ * (default 2026-08-01), so this is not "all history" unless that floor is lowered.
  *
  * LIST_PAGE_HARD_STOP is a RUNAWAY GUARD, not a product cap — it only trips on a
  * pathological account (>500k posts in the window) or a Graph cursor that fails to
@@ -157,7 +161,7 @@ export function createExternalPostSyncWorker() {
     async (job: Job<ExternalPostSyncJobData>) => {
       const { platform, platformId, candidateChannelIds, targetChannelIds } = job.data;
       const since = new Date(job.data.since);
-      const windowStart = since > HARD_FLOOR ? since : HARD_FLOOR;
+      const windowStart = since > hardFloor() ? since : hardFloor();
       const now = new Date();
 
       const provider: any = getSocialProvider(platform as any);
@@ -255,12 +259,31 @@ export function createExternalPostSyncWorker() {
           limit: LIST_PAGE_SIZE,
           cursor,
         });
-        if (next?.degraded || !next?.posts?.length) break;
+        if (next?.degraded || !next?.posts?.length) {
+          // ⚠️ A mid-pagination stop while a cursor is STILL outstanding truncates
+          // the post count — and this used to break silently, so the truncation
+          // would render as a complete number.
+          //
+          // It becomes reachable the moment EXTERNAL_POST_FLOOR is lowered: Meta
+          // starts returning code 1 "Please reduce the amount of data you're
+          // asking for" at roughly 52-58 pages of 100 (live-probed 2026-08-18 —
+          // two of three IG accounts hit it walking back to 2025-12). Reaching
+          // genuinely old history needs month-WINDOWED queries, not a deeper walk.
+          if (cursor) {
+            console.error(
+              `[ExternalSync] ⚠️ ${platform}:${platformId} — pagination stopped at page ${pages} ` +
+                `with a cursor still outstanding (${next?.degraded ? `degraded: ${next.degraded.reason}` : "empty page"}); ` +
+                `the count for this channel is INCOMPLETE at ${listed.length} posts. ` +
+                `If EXTERNAL_POST_FLOOR was lowered, this is Meta's deep-pagination ceiling.`
+            );
+          }
+          break;
+        }
         listed.push(...next.posts);
         cursor = next.nextCursor;
         pages++;
       }
-      if (cursor) {
+      if (cursor && pages >= LIST_PAGE_HARD_STOP) {
         // Only reachable on a pathological account. Loud, because a truncated count is
         // exactly the "cap displayed as a count" failure this design exists to prevent.
         console.error(

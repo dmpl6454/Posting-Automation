@@ -29,6 +29,11 @@ vi.mock("@postautomation/queue", () => ({
   superTextQueue: { add: (...a: any[]) => superTextAdd(...(a as [])) },
   enqueueScheduledPublishJobs: (...a: any[]) => enqueueScheduled(...(a as [])),
   repurposeVideoQueue: { add: vi.fn(async () => {}) },
+  // Mirrors the real helper — post.publishNow now supplies a deterministic jobId
+  // so repeated Retry clicks collapse (2026-08-13 duplicate-post fix).
+  buildPublishNowJobId: (targetId: string, nowMs: number) =>
+    `pubnow:${targetId}:${Math.floor(nowMs / 60_000)}`,
+  PUBLISH_NOW_DEDUPE_WINDOW_MS: 60_000,
 }));
 
 const orgMemberFindUnique = vi.fn();

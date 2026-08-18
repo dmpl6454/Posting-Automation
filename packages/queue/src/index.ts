@@ -5,5 +5,13 @@ export { scopedProgressId, pushProgress, getProgress, finishProgress } from "./p
 export type { ProgressStep, StepStatus } from "./progress";
 export { computePublishDelays, PLATFORM_STAGGER_MS, DEFAULT_STAGGER_MS } from "./publish-stagger";
 export { PRIORITY_BULK, PRIORITY_RETRY } from "./publish-priority";
+export { buildPublishNowJobId, PUBLISH_NOW_DEDUPE_WINDOW_MS } from "./publish-now-jobid";
+export {
+  externalPostFloor,
+  externalPostFloorLabel,
+  formatExternalPostFloor,
+  resolveExternalPostFloor,
+  DEFAULT_EXTERNAL_POST_FLOOR_ISO,
+} from "./external-post-floor";
 export { buildScheduledPublishJobs, enqueueScheduledPublishJobs } from "./schedule-publish";
 export type { SchedulablePublishTarget, ScheduledPublishArgs, ScheduledPublishJobSpec } from "./schedule-publish";

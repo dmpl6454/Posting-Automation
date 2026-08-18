@@ -39,4 +39,12 @@ export {
   fbDeprecationCacheSize,
   type FbDeprecationRecord,
 } from "./utils/fb-deprecation-cache";
+// Publish-outcome ambiguity. The publish worker MUST consult
+// isAmbiguousPublishError before allowing any retry layer to re-run a publish —
+// see the 2026-08-13 duplicate-post incident in ambiguous-publish.ts.
+export {
+  AmbiguousPublishError,
+  isAmbiguousPublishError,
+  isIndeterminatePublishError,
+} from "./utils/ambiguous-publish";
 export type { ExternalPostSummary, ExternalPostPage } from "./abstract/social.types";

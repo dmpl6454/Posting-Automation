@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
-import { postPublishQueue, captionFanoutQueue, superTextQueue, enqueueScheduledPublishJobs } from "@postautomation/queue";
+import { postPublishQueue, captionFanoutQueue, superTextQueue, enqueueScheduledPublishJobs, buildPublishNowJobId } from "@postautomation/queue";
 import { superTextMapSchema } from "@postautomation/super-text";
 import { planSuperText, superTextJobId, type SuperTextPlan } from "../lib/super-text";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
@@ -670,13 +670,42 @@ export const postRouter = createRouter({
         });
       }
 
+      // ⚠️ A target whose publish outcome is UNKNOWN (ambiguousAt) must never be
+      // re-published from here. On 2026-08-13 this button re-ran a create that
+      // Instagram had already completed, and one account ended up with 5 copies
+      // of the same reel. The operator clears the flag from the post detail page
+      // once they have checked the account — see clearPublishAmbiguity.
+      const isAmbiguous = (t: { ambiguousAt?: Date | null }) => t.ambiguousAt != null;
+
       // If specific targetIds provided, use those; otherwise use all FAILED/DRAFT/SCHEDULED targets
-      let targetsToPublish = input.targetIds?.length
-        ? post.targets.filter((t) => input.targetIds!.includes(t.id) && t.status !== "PUBLISHED")
+      // ⚠️ PUBLISHING is excluded as well as PUBLISHED. A mid-flight target has
+      // ambiguousAt = null, so the ambiguity guard does not cover it — and this
+      // procedure RESETS the status to SCHEDULED, which would make the in-flight
+      // target claimable again and let a second job publish it concurrently. The
+      // implicit branch never admitted PUBLISHING; the explicit branch did.
+      const requested = input.targetIds?.length
+        ? post.targets.filter(
+            (t) => input.targetIds!.includes(t.id) && t.status !== "PUBLISHED" && t.status !== "PUBLISHING"
+          )
         : post.targets.filter((t) => t.status === "FAILED" || t.status === "DRAFT" || t.status === "SCHEDULED");
 
+      const blockedAsAmbiguous = requested.filter(isAmbiguous);
+      let targetsToPublish = requested.filter((t) => !isAmbiguous(t));
+
       if (targetsToPublish.length === 0) {
+        // Naming an ambiguous target explicitly is NOT a bypass — say why.
+        if (blockedAsAmbiguous.length > 0) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              `${blockedAsAmbiguous.length} channel(s) may already have this post published — the platform never confirmed. ` +
+              `Check the account first; if it did not publish, use "It didn't publish" on the channel to allow a retry.`,
+          });
+        }
         throw new TRPCError({ code: "BAD_REQUEST", message: "No eligible channels to publish." });
+      }
+      if (blockedAsAmbiguous.length > 0) {
+        console.warn(`[publishNow] skipped ${blockedAsAmbiguous.length} ambiguous target(s) on post ${post.id}`);
       }
 
       await ctx.prisma.post.update({
@@ -689,9 +718,16 @@ export const postRouter = createRouter({
         data: { status: "SCHEDULED", errorMessage: null },
       });
 
+      // ⚠️ jobId is DETERMINISTIC (bucketed). Before this, publishNow passed no
+      // jobId at all, so BullMQ assigned a fresh auto-increment id per call and a
+      // double-click produced two fully independent jobs — each with attempts: 3.
+      // Verified in prod Redis on 2026-08-13: the same target enqueued as jobs
+      // 1576349 and 1576351, 81s apart. Keep `priority` UNSET: BullMQ drains the
+      // unprioritized wait list first, so no-priority IS the interactive fast lane.
+      const enqueuedAt = Date.now();
       for (const target of targetsToPublish) {
         await postPublishQueue.add(
-          `publish-now-${target.id}-${Date.now()}`,
+          `publish-now-${target.id}`,
           {
             postId: post.id,
             postTargetId: target.id,
@@ -699,11 +735,73 @@ export const postRouter = createRouter({
             platform: target.channel.platform,
             organizationId: ctx.organizationId,
           },
-          { delay: 0, attempts: 3, backoff: { type: "exponential", delay: 30000 } }
+          {
+            jobId: buildPublishNowJobId(target.id, enqueuedAt),
+            delay: 0,
+            attempts: 3,
+            backoff: { type: "exponential", delay: 30000 },
+          }
         );
       }
 
       return { success: true };
+    }),
+
+  /**
+   * Operator override: "I checked the account — it did NOT publish."
+   *
+   * Clears `PostTarget.ambiguousAt`, which re-arms the ordinary retry path (the
+   * publish worker's atomic claim requires ambiguousAt IS NULL). This is the ONLY
+   * way out of the ambiguous state, and it is deliberately a human decision: the
+   * platform could not tell us, so somebody has to look.
+   *
+   * PUBLISHED targets are refused — their outcome is already known, and clearing
+   * a flag there would only invite a duplicate.
+   */
+  clearPublishAmbiguity: orgProcedure
+    .input(z.object({ id: z.string(), targetIds: z.array(z.string()).min(1).max(200) }))
+    .mutation(async ({ ctx, input }) => {
+      const post = await ctx.prisma.post.findFirst({
+        where: { id: input.id, organizationId: ctx.organizationId },
+        include: { targets: true },
+      });
+      if (!post) throw new TRPCError({ code: "NOT_FOUND" });
+
+      // IDOR guard: every supplied id must belong to THIS post (which is already
+      // org-scoped above). Mirrors assertChannelsOwned in spirit.
+      const byId = new Map(post.targets.map((t) => [t.id, t]));
+      const resolved = input.targetIds.map((id) => byId.get(id));
+      if (resolved.some((t) => !t)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "One or more channels do not belong to this post." });
+      }
+      if (resolved.some((t) => t!.status === "PUBLISHED")) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "That channel is already published — there is nothing to retry.",
+        });
+      }
+
+      const res = await ctx.prisma.postTarget.updateMany({
+        where: { id: { in: input.targetIds }, postId: post.id },
+        // errorMessage is cleared too: markTargetAmbiguous writes the ambiguity
+        // prose to BOTH errorMessage and ambiguousReason, so leaving it behind
+        // makes the same text reappear in the RED failure banner — pointing at an
+        // "It didn't publish" button that has just disappeared.
+        data: { ambiguousAt: null, ambiguousReason: null, errorMessage: null },
+      });
+
+      // This is the ONLY action that authorises re-posting content which may
+      // already be live, so it is recorded like every other mutation here.
+      createAuditLog({
+        organizationId: ctx.organizationId,
+        userId: (ctx.session.user as any).id,
+        action: AUDIT_ACTIONS.POST_UPDATED,
+        entityType: "Post",
+        entityId: input.id,
+        metadata: { publishAmbiguityCleared: input.targetIds, cleared: res.count },
+      }).catch(() => {});
+
+      return { cleared: res.count };
     }),
 
   /** Recent post target activity for the activity feed */

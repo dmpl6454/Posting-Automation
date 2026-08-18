@@ -353,12 +353,22 @@ function InsightsAnalyticsView() {
 
   /**
    * Direct-post coverage floor. We only collect posts made outside PostAutomation from
-   * 1 Aug 2026 onward, so a range starting before that is PARTIALLY covered: app-published
+   * the configured floor onward, so a range starting before it is PARTIALLY covered: app-published
    * posts go all the way back, direct posts do not. Saying nothing would make an
    * incomplete view look complete — the exact failure mode this codebase keeps fighting.
    */
-  const DIRECT_POST_FLOOR = new Date("2026-08-01T00:00:00.000Z");
-  const rangeStartsBeforeFloor = new Date(from) < DIRECT_POST_FLOOR;
+  // ⚠️ The floor is CONFIGURABLE server-side (EXTERNAL_POST_FLOOR) — it was
+  // hardcoded here and in five other strings on this page until 2026-08-18. The
+  // server now returns the ACTIVE label so lowering the floor cannot leave this
+  // copy asserting a start date that is no longer true. The date fallback keeps
+  // the notice working on a stale/loading response.
+  // ⚠️ BOTH halves come from the server. Deriving only the LABEL from config while
+  // the gate kept a hardcoded date meant a lowered floor made the notice fire on
+  // ranges it had just started covering. Until the query resolves there is no
+  // floor to compare against, so the notice stays hidden rather than guessing.
+  const directFloorLabel = engagement?.externalFloorLabel;
+  const directFloorIso = engagement?.externalFloorIso;
+  const rangeStartsBeforeFloor = !!directFloorIso && new Date(from) < new Date(directFloorIso);
   const hasMetaChannel = (channelStats ?? []).some(
     (ch: any) => ch.platform === "FACEBOOK" || ch.platform === "INSTAGRAM"
   );
@@ -517,7 +527,7 @@ function InsightsAnalyticsView() {
       {rangeStartsBeforeFloor && hasMetaChannel && (
         <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
           Posts made directly on Facebook and Instagram are included from{" "}
-          <strong>1 Aug 2026</strong> onward. Earlier dates in this range show only posts sent
+          <strong>{directFloorLabel}</strong> onward. Earlier dates in this range show only posts sent
           through PostAutomation.
         </p>
       )}
@@ -851,12 +861,12 @@ function InsightsAnalyticsView() {
                     <th className="px-4 py-3 text-left font-medium text-muted-foreground">Channel</th>
                     {/* Was "Posts sent" — that was accurate when Insights could only see
                         posts WE published. It now also ingests posts made directly on
-                        connected Facebook Pages and Instagram accounts (from 1 Aug 2026),
+                        connected Facebook Pages and Instagram accounts (from {directFloorLabel ?? "the coverage start date"}),
                         so the count is the channel's real post count for the range, and
                         should no longer read as "what you sent". */}
                     <th
                       className="px-4 py-3 text-right font-medium text-muted-foreground"
-                      title="Posts on this channel within the selected date range — those sent through PostAutomation plus those posted directly on the platform (Facebook/Instagram, from 1 Aug 2026)."
+                      title={`Posts on this channel within the selected date range — those sent through PostAutomation plus those posted directly on the platform (Facebook/Instagram, from ${directFloorLabel ?? "the coverage start date"}).`}
                     >
                       Posts
                     </th>
@@ -1018,7 +1028,7 @@ function InsightsAnalyticsView() {
                 not a deduplicated audience size.
                 &ldquo;Posts&rdquo; counts every post on the channel in this date range — those sent through
                 PostAutomation plus those posted directly on the platform. Direct posts are collected for
-                Facebook Pages and Instagram accounts from 1 Aug 2026 onward, and only while the channel&rsquo;s
+                Facebook Pages and Instagram accounts from {directFloorLabel ?? "the coverage start date"} onward, and only while the channel&rsquo;s
                 connection is healthy; a channel needing reconnection shows its own posts only.
                 Engagement rate is pooled over only the posts that reported impressions, and shows that
                 count in brackets when it is fewer than all of them.

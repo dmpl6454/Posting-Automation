@@ -458,6 +458,24 @@ model PostTarget {
   /// Post.content / contentVariants path — byte-identical to pre-PR-5 behavior.
   contentOverride String? @db.Text
 
+  /// Set when a publish attempt's outcome could NOT be determined — the platform
+  /// failed the request in a way that does not prove the WRITE failed, so the post
+  /// may already be live.
+  ///
+  /// ⚠️ LOAD-BEARING: the publish worker's atomic claim only transitions
+  /// SCHEDULED|FAILED|DRAFT → PUBLISHING **when this is NULL**. That is what stops
+  /// BullMQ `attempts`, the reconciliation cron and a human clicking Retry from
+  /// re-running a NON-IDEMPOTENT create. On 2026-08-13 the absence of this column
+  /// let one Instagram account receive FIVE copies of the same reel (11 of 11
+  /// "failed" targets were in fact live). NULL for every pre-existing row, so the
+  /// claim behaves exactly as it did before.
+  ///
+  /// Cleared by `post.clearPublishAmbiguity` when the operator confirms the post
+  /// did NOT go live, which re-arms the ordinary retry path.
+  ambiguousAt     DateTime?
+  /// Operator-facing explanation shown beside the ambiguous badge.
+  ambiguousReason String?  @db.Text
+
   post    Post    @relation(fields: [postId], references: [id], onDelete: Cascade)
   channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
 

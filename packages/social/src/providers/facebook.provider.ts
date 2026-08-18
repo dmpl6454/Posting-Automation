@@ -20,6 +20,16 @@ import {
 } from "../utils/meta-insight-diagnosis";
 import { recordFbDeprecationFromResponse } from "../utils/fb-deprecation-cache";
 import { fetchT } from "../utils/fetch-timeout";
+import {
+  AmbiguousPublishError,
+  isIndeterminatePublishError,
+} from "../utils/ambiguous-publish";
+import {
+  RECONCILE_MAX_PAGES,
+  RECONCILE_SKEW_MS,
+  captionsMatch,
+  reconcileSettleMs,
+} from "../utils/publish-reconcile";
 import { headRemoteMedia } from "../utils/ranged-media";
 import {
   FB_METRIC_IMPRESSIONS,
@@ -92,6 +102,9 @@ const CONNECT_GRAPH_OPTS: GraphFetchOpts = {
 
 /** Max pagination pages fetched during connect (~500 Pages at limit=25). */
 const MAX_CONNECT_PAGINATION_PAGES = 20;
+
+/** See reconcileSettleMs — tunable with FB_RECONCILE_SETTLE_MS. */
+const RECONCILE_SETTLE_MS = reconcileSettleMs("FB_RECONCILE_SETTLE_MS");
 
 export class FacebookProvider extends SocialProvider {
   readonly platform: SocialPlatform = "FACEBOOK";
@@ -275,9 +288,41 @@ export class FacebookProvider extends SocialProvider {
 
   // ── Publishing ───────────────────────────────────────────────────────
 
+  /**
+   * Publish to a Page, with a reconciliation guard around the whole operation.
+   *
+   * ⚠️ The guard is why this is a thin wrapper rather than inline logic: EVERY
+   * Facebook publish shape (text, photo, multi-photo, buffered video, streamed
+   * video, remote-pull video) writes through `publishPostInner`, and all of them
+   * are non-idempotent. Wrapping once covers them all without reaching into the
+   * frozen media paths.
+   *
+   * On success and on definite rejections this adds nothing — no extra Graph call,
+   * same error, same shape. It only engages when the error leaves the outcome
+   * genuinely unknown. See ambiguous-publish.ts.
+   */
   async publishPost(tokens: OAuthTokens, payload: SocialPostPayload): Promise<SocialPostResult> {
     const pageId = (payload.metadata?.pageId as string) || (payload.metadata?.platformId as string) || "me";
+    const windowStart = new Date(Date.now() - RECONCILE_SKEW_MS);
 
+    try {
+      return await this.publishPostInner(tokens, payload, pageId);
+    } catch (err) {
+      if (!isIndeterminatePublishError(err)) throw err;
+      // The request failed in a way that does NOT prove the write failed.
+      // ⚠️ Accepted trade-off: an indeterminate failure raised BEFORE any write
+      // (e.g. a socket reset while streaming media) also lands here, so a case
+      // that used to auto-retry may now park for a human check instead. That is
+      // the cheap error — the expensive one is a duplicate on a live Page.
+      return this.resolveUnknownPublish(tokens, pageId, payload, windowStart, err);
+    }
+  }
+
+  private async publishPostInner(
+    tokens: OAuthTokens,
+    payload: SocialPostPayload,
+    pageId: string
+  ): Promise<SocialPostResult> {
     if (payload.mediaUrls?.length) {
       return this.publishPostWithMedia(tokens, payload, pageId);
     }
@@ -1227,6 +1272,118 @@ export class FacebookProvider extends SocialProvider {
   }
 
   // ── Publish with media ───────────────────────────────────────────────
+
+  /**
+   * Last word on a publish whose outcome Facebook never confirmed: adopt the post
+   * if the Page already has it, otherwise refuse to guess.
+   *
+   * ⚠️ Never returns "it definitely failed". `published_posts` is eventually
+   * consistent, so an absent listing is not proof of absence — and the two
+   * mistakes cost wildly different amounts (see ambiguous-publish.ts).
+   */
+  private async resolveUnknownPublish(
+    tokens: OAuthTokens,
+    pageId: string,
+    payload: SocialPostPayload,
+    since: Date,
+    cause: unknown
+  ): Promise<SocialPostResult> {
+    if (RECONCILE_SETTLE_MS > 0) {
+      await this.sleep(RECONCILE_SETTLE_MS);
+    }
+
+    const match = await this.findPublishedMatch(tokens, pageId, payload.content, since).catch((e) => {
+      console.warn(`[Facebook] reconciliation read failed for page ${pageId}: ${(e as Error)?.message}`);
+      return null;
+    });
+    if (match) {
+      console.warn(
+        `[Facebook] publish did not acknowledge, but ${match.platformPostId} is already live on page ${pageId} — adopting it instead of re-publishing`
+      );
+      return match;
+    }
+
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    throw new AmbiguousPublishError(
+      "Facebook did not confirm this post and it may already be live on the Page. " +
+        "Nothing was re-sent, so there is no duplicate — open the Page to check, then " +
+        `use "It didn't publish" if you need to try again. Platform error: ${detail}`,
+      { platform: "FACEBOOK", cause }
+    );
+  }
+
+  /**
+   * Does this Page already hold a post with this message, published at or after
+   * `since`? Result ⇒ found; `null` ⇒ readable and absent; THROW ⇒ cannot tell.
+   * Keeping those three distinct is the whole point — see SocialProvider.findExistingPost.
+   */
+  private async findPublishedMatch(
+    tokens: OAuthTokens,
+    pageId: string,
+    message: string,
+    since: Date
+  ): Promise<SocialPostResult | null> {
+    let cursor: string | undefined;
+
+    for (let page = 0; page < RECONCILE_MAX_PAGES; page++) {
+      const listed = await this.listRecentPosts(tokens, pageId, {
+        since,
+        limit: 50,
+        ...(cursor ? { cursor } : {}),
+      });
+
+      // `listRecentPosts` swallows Graph errors into an empty page — correct for
+      // the insights sweep, fatal here. A degradation is an explicit "cannot
+      // tell", and on the FIRST page an empty result is equally inconclusive: we
+      // have just written to this Page, so it should not look empty.
+      if (listed.degraded) {
+        throw new Error(
+          `Facebook listing unavailable (${listed.degraded.reason}) — cannot confirm whether the post published`
+        );
+      }
+      if (page === 0 && listed.posts.length === 0) {
+        throw new Error(
+          "Facebook returned no recent posts — cannot confirm whether the post published"
+        );
+      }
+
+      for (const post of listed.posts) {
+        if (post.publishedAt.getTime() < since.getTime()) continue;
+        if (captionsMatch(post.message ?? "", message)) {
+          return {
+            platformPostId: post.platformPostId,
+            url:
+              post.permalink ??
+              `https://www.facebook.com/${post.platformPostId.replace("_", "/posts/")}`,
+          };
+        }
+      }
+
+      if (!listed.nextCursor) break;
+      cursor = listed.nextCursor;
+    }
+
+    return null;
+  }
+
+  /**
+   * Optional cross-provider hook (see SocialProvider.findExistingPost): the publish
+   * worker's PRE-FLIGHT check before re-running a publish.
+   *
+   * ⚠️ A reconciled video post yields the COMPOSITE `{pageId}_{postId}` id rather
+   * than the bare Video-node id the publish path stores. That is deliberate and
+   * strictly better — the composite id is what `published_posts` returns and what
+   * the post-node insight metrics (`post_media_view`, …) are addressed by.
+   */
+  async findExistingPost(
+    tokens: OAuthTokens,
+    payload: SocialPostPayload,
+    since: Date
+  ): Promise<SocialPostResult | null> {
+    const pageId =
+      (payload.metadata?.pageId as string) || (payload.metadata?.platformId as string) || "me";
+    return this.findPublishedMatch(tokens, pageId, payload.content, since);
+  }
 
   private async publishPostWithMedia(
     tokens: OAuthTokens,

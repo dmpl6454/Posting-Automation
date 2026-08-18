@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { groupChannelsIntoAccounts, type SyncChannelRow } from "../lib/sync-accounts";
-import { EXTERNAL_POST_FLOOR, EXTERNAL_POST_FLOOR_LABEL } from "../lib/external-post-floor";
+import { externalPostFloor, externalPostFloorLabel } from "../lib/external-post-floor";
 
 /**
  * API-side account grouping, used by "Sync Now" so a manual sync costs ONE Graph call per
@@ -99,8 +99,27 @@ describe("groupChannelsIntoAccounts", () => {
 });
 
 describe("external post floor", () => {
-  it("is a single shared constant so cron / Sync Now / UI copy cannot drift", () => {
-    expect(EXTERNAL_POST_FLOOR.toISOString()).toBe("2026-08-01T00:00:00.000Z");
-    expect(EXTERNAL_POST_FLOOR_LABEL).toBe("1 Aug 2026");
+  /**
+   * The floor became CONFIGURABLE on 2026-08-18 (live probing showed both Meta
+   * listing edges return far older history than the hardcoded date), but it is
+   * still a SINGLE definition shared by cron / worker / Sync Now / UI copy —
+   * which is the property that actually matters. The functions read env at call
+   * time, so this asserts the shipped DEFAULT is unchanged.
+   */
+  it("still defaults to 1 Aug 2026 — deploying the config change moves nothing", () => {
+    delete process.env.EXTERNAL_POST_FLOOR;
+    expect(externalPostFloor().toISOString()).toBe("2026-08-01T00:00:00.000Z");
+    expect(externalPostFloorLabel()).toBe("1 Aug 2026");
+  });
+
+  it("honours a deliberately lowered floor, label included", () => {
+    process.env.EXTERNAL_POST_FLOOR = "2025-11-21T00:00:00.000Z";
+    try {
+      expect(externalPostFloor().toISOString()).toBe("2025-11-21T00:00:00.000Z");
+      // The label MUST track the floor — hardcoded UI copy is how the two drift.
+      expect(externalPostFloorLabel()).toBe("21 Nov 2025");
+    } finally {
+      delete process.env.EXTERNAL_POST_FLOOR;
+    }
   });
 });

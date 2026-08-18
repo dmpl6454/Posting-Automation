@@ -111,6 +111,9 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postautomation}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-postautomation}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       NEXTAUTH_URL: https://postautomation.co.in
+      # External-post coverage floor — MUST match the worker's value: the worker
+      # decides what is ingested, the web container renders "included from …".
+      EXTERNAL_POST_FLOOR: ${EXTERNAL_POST_FLOOR:-}
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
       S3_ENDPOINT: http://minio:9000
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
@@ -277,6 +280,17 @@ services:
       FB_ANALYTICS_SYNC_ENABLED: ${FB_ANALYTICS_SYNC_ENABLED:-false}
       FB_ANALYTICS_PER_RUN: ${FB_ANALYTICS_PER_RUN:-40}
       FB_ANALYTICS_MIN_STALE_HOURS: ${FB_ANALYTICS_MIN_STALE_HOURS:-48}
+      # How far back external-post ingestion collects. SINGLE source of truth,
+      # shared with the web container (the coverage copy in Insights is derived
+      # from it, so the two MUST agree). Parsing fails CLOSED to 2026-08-01 on an
+      # empty/invalid value. ⚠️ Listing is cheap (~1 call/100 posts) but METRICS
+      # are 2 calls PER POST — lower this a month at a time, never in one jump.
+      EXTERNAL_POST_FLOOR: ${EXTERNAL_POST_FLOOR:-}
+      # Pause before asking a platform "is the post already there?" after a
+      # publish whose outcome was never confirmed. Longer = more ambiguities
+      # auto-resolve instead of asking the operator to check by hand.
+      IG_RECONCILE_SETTLE_MS: ${IG_RECONCILE_SETTLE_MS:-8000}
+      FB_RECONCILE_SETTLE_MS: ${FB_RECONCILE_SETTLE_MS:-8000}
     depends_on:
       postgres:
         condition: service_healthy
