@@ -678,8 +678,15 @@ export const postRouter = createRouter({
       const isAmbiguous = (t: { ambiguousAt?: Date | null }) => t.ambiguousAt != null;
 
       // If specific targetIds provided, use those; otherwise use all FAILED/DRAFT/SCHEDULED targets
+      // ⚠️ PUBLISHING is excluded as well as PUBLISHED. A mid-flight target has
+      // ambiguousAt = null, so the ambiguity guard does not cover it — and this
+      // procedure RESETS the status to SCHEDULED, which would make the in-flight
+      // target claimable again and let a second job publish it concurrently. The
+      // implicit branch never admitted PUBLISHING; the explicit branch did.
       const requested = input.targetIds?.length
-        ? post.targets.filter((t) => input.targetIds!.includes(t.id) && t.status !== "PUBLISHED")
+        ? post.targets.filter(
+            (t) => input.targetIds!.includes(t.id) && t.status !== "PUBLISHED" && t.status !== "PUBLISHING"
+          )
         : post.targets.filter((t) => t.status === "FAILED" || t.status === "DRAFT" || t.status === "SCHEDULED");
 
       const blockedAsAmbiguous = requested.filter(isAmbiguous);
@@ -776,8 +783,24 @@ export const postRouter = createRouter({
 
       const res = await ctx.prisma.postTarget.updateMany({
         where: { id: { in: input.targetIds }, postId: post.id },
-        data: { ambiguousAt: null, ambiguousReason: null },
+        // errorMessage is cleared too: markTargetAmbiguous writes the ambiguity
+        // prose to BOTH errorMessage and ambiguousReason, so leaving it behind
+        // makes the same text reappear in the RED failure banner — pointing at an
+        // "It didn't publish" button that has just disappeared.
+        data: { ambiguousAt: null, ambiguousReason: null, errorMessage: null },
       });
+
+      // This is the ONLY action that authorises re-posting content which may
+      // already be live, so it is recorded like every other mutation here.
+      createAuditLog({
+        organizationId: ctx.organizationId,
+        userId: (ctx.session.user as any).id,
+        action: AUDIT_ACTIONS.POST_UPDATED,
+        entityType: "Post",
+        entityId: input.id,
+        metadata: { publishAmbiguityCleared: input.targetIds, cleared: res.count },
+      }).catch(() => {});
+
       return { cleared: res.count };
     }),
 

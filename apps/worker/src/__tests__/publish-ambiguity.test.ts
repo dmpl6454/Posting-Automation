@@ -3,6 +3,7 @@ import {
   PUBLISH_CLAIM_STATUSES,
   buildPublishClaimWhere,
   markTargetAmbiguous,
+  routePublishError,
   shouldPreflightReconcile,
 } from "../lib/publish-recovery";
 
@@ -72,26 +73,108 @@ describe("markTargetAmbiguous", () => {
 });
 
 describe("shouldPreflightReconcile", () => {
-  const base = { attemptsMade: 0, hasPublishedId: false, providerSupportsReconcile: true };
+  const base = {
+    attemptsMade: 0,
+    targetAttemptedBefore: false,
+    hasPublishedId: false,
+    providerSupportsReconcile: true,
+  };
 
-  it("does not spend a Graph call on a first attempt", () => {
+  it("does not spend a Graph call on a genuine first attempt", () => {
     expect(shouldPreflightReconcile(base)).toBe(false);
   });
 
-  it("checks before re-publishing on any retry", () => {
-    // This is the safety net for the case the publishedId short-circuit cannot
-    // cover: a previous attempt published but its DB write never landed.
+  it("checks before re-publishing on a BullMQ retry of the same job", () => {
     expect(shouldPreflightReconcile({ ...base, attemptsMade: 1 })).toBe(true);
     expect(shouldPreflightReconcile({ ...base, attemptsMade: 7 })).toBe(true);
   });
 
+  it("checks on a BRAND-NEW job for a target that was already attempted", () => {
+    // Review finding, and the important one: `attemptsMade` is per-JOB and resets
+    // to 0 for every human Retry click and every internal re-queue. Keying on it
+    // alone meant the pre-flight never ran on the human-Retry path — the exact
+    // path that produced the 2026-08-13 duplicates. PostTarget.retryCount is
+    // incremented by worker.on("failed") and so survives across jobs.
+    expect(shouldPreflightReconcile({ ...base, attemptsMade: 0, targetAttemptedBefore: true })).toBe(
+      true
+    );
+  });
+
   it("skips when publishedId already answers the question for free", () => {
-    expect(shouldPreflightReconcile({ ...base, attemptsMade: 2, hasPublishedId: true })).toBe(false);
+    expect(
+      shouldPreflightReconcile({ ...base, attemptsMade: 2, targetAttemptedBefore: true, hasPublishedId: true })
+    ).toBe(false);
   });
 
   it("skips for providers with no reconciliation capability — their behaviour is unchanged", () => {
     expect(
-      shouldPreflightReconcile({ ...base, attemptsMade: 2, providerSupportsReconcile: false })
+      shouldPreflightReconcile({
+        ...base,
+        attemptsMade: 2,
+        targetAttemptedBefore: true,
+        providerSupportsReconcile: false,
+      })
     ).toBe(false);
+  });
+});
+
+describe("routePublishError — ORDERING is the whole point", () => {
+  /**
+   * A defect found during review of this very fix, and the reason this function
+   * exists at all rather than an if/else chain inside the worker.
+   *
+   * The publish `catch` runs `classifyError(err.message)` FIRST. That classifier
+   * substring-matches, so `"token"` + `"invalid"` anywhere in the message yields
+   * `token_expired` — and the token_expired branch refreshes the credential and
+   * then CALLS provider.publishPost AGAIN.
+   *
+   * The dominant reason reconciliation cannot confirm an outcome is a dead Meta
+   * token, and that error reads:
+   *   "Instagram listing unavailable (token_invalid) — cannot confirm whether the post published"
+   *
+   * So without routing FIRST, the exact scenario this fix exists to prevent —
+   * an unknown outcome — would be routed into a code path that re-publishes.
+   * The ambiguity/terminal decision MUST precede classification.
+   */
+  const AMBIGUOUS_WITH_TOKEN_WORDS = Object.assign(new Error(
+    "A previous attempt to publish this may already have gone live, and INSTAGRAM could not " +
+      "confirm either way. (Instagram listing unavailable (token_invalid) — cannot confirm " +
+      "whether the post published)"
+  ), { isAmbiguousPublish: true as const });
+
+  it("routes an ambiguous error to parking even when it mentions an invalid token", () => {
+    expect(routePublishError(AMBIGUOUS_WITH_TOKEN_WORDS)).toBe("ambiguous");
+  });
+
+  it("routes an already-terminal error straight through, never to classification", () => {
+    // The pre-flight throws UnrecoverableError from INSIDE the publish try, so the
+    // catch sees it. Re-classifying it could route a parked target back into a
+    // re-publishing branch.
+    const unrecoverable = Object.assign(new Error("parked: may already be live (token_invalid)"), {
+      name: "UnrecoverableError",
+    });
+    expect(routePublishError(unrecoverable)).toBe("terminal");
+  });
+
+  it("leaves every ordinary error to the existing classification chain", () => {
+    for (const m of [
+      'Instagram publish failed: {"error":{"code":190,"message":"Error validating access token"}}',
+      "Facebook rate limit reached",
+      "Validation failed: missing media",
+      "boom",
+    ]) {
+      expect(routePublishError(new Error(m)), m).toBe("classify");
+    }
+  });
+
+  it("ambiguity outranks terminality — the target still needs parking", () => {
+    // An AmbiguousPublishError that is ALSO named UnrecoverableError must still
+    // reach the parking branch, or it would be rethrown without ambiguousAt set
+    // and the next retry could re-publish it.
+    const both = Object.assign(new Error("unknown outcome"), {
+      isAmbiguousPublish: true as const,
+      name: "UnrecoverableError",
+    });
+    expect(routePublishError(both)).toBe("ambiguous");
   });
 });

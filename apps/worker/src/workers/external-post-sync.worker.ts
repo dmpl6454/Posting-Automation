@@ -259,12 +259,31 @@ export function createExternalPostSyncWorker() {
           limit: LIST_PAGE_SIZE,
           cursor,
         });
-        if (next?.degraded || !next?.posts?.length) break;
+        if (next?.degraded || !next?.posts?.length) {
+          // ⚠️ A mid-pagination stop while a cursor is STILL outstanding truncates
+          // the post count — and this used to break silently, so the truncation
+          // would render as a complete number.
+          //
+          // It becomes reachable the moment EXTERNAL_POST_FLOOR is lowered: Meta
+          // starts returning code 1 "Please reduce the amount of data you're
+          // asking for" at roughly 52-58 pages of 100 (live-probed 2026-08-18 —
+          // two of three IG accounts hit it walking back to 2025-12). Reaching
+          // genuinely old history needs month-WINDOWED queries, not a deeper walk.
+          if (cursor) {
+            console.error(
+              `[ExternalSync] ⚠️ ${platform}:${platformId} — pagination stopped at page ${pages} ` +
+                `with a cursor still outstanding (${next?.degraded ? `degraded: ${next.degraded.reason}` : "empty page"}); ` +
+                `the count for this channel is INCOMPLETE at ${listed.length} posts. ` +
+                `If EXTERNAL_POST_FLOOR was lowered, this is Meta's deep-pagination ceiling.`
+            );
+          }
+          break;
+        }
         listed.push(...next.posts);
         cursor = next.nextCursor;
         pages++;
       }
-      if (cursor) {
+      if (cursor && pages >= LIST_PAGE_HARD_STOP) {
         // Only reachable on a pathological account. Loud, because a truncated count is
         // exactly the "cap displayed as a count" failure this design exists to prevent.
         console.error(

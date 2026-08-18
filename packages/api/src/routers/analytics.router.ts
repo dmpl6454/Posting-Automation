@@ -833,7 +833,9 @@ export const analyticsRouter = createRouter({
 
       return {
         // Active external-post coverage floor (configurable) — see postReports.
+        // Label for copy, ISO instant for the "is this range covered?" gate.
         externalFloorLabel: externalPostFloorLabel(),
+        externalFloorIso: externalPostFloor().toISOString(),
         impressions: sum((r) => r.impressions),
         clicks: sum((r) => r.clicks),
         likes: sum((r) => r.likes),
@@ -1524,10 +1526,13 @@ export const analyticsRouter = createRouter({
           rows.map((r) => r.platform),
           rows.map((r) => r.snapshotMetadata?.metricsAvailable as any)
         ),
-        // ⚠️ The coverage floor is CONFIGURABLE (EXTERNAL_POST_FLOOR). It is
-        // returned rather than hardcoded in the UI so lowering it can never leave
-        // the copy claiming a start date that is no longer true.
+        // ⚠️ The coverage floor is CONFIGURABLE (EXTERNAL_POST_FLOOR). BOTH the
+        // label and the ISO instant are returned: the UI needs the label for its
+        // copy AND the instant to decide whether to show the notice at all. When
+        // only the label was returned, the gate kept a hardcoded 2026-08-01 and
+        // the notice fired on ranges that were in fact fully covered.
         externalFloorLabel: externalPostFloorLabel(),
+        externalFloorIso: externalPostFloor().toISOString(),
       };
     }),
 

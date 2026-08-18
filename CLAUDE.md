@@ -486,6 +486,61 @@ Tests: [ambiguous-publish.test.ts](packages/social/src/__tests__/ambiguous-publi
 [publish-now-ambiguity.test.ts](packages/api/src/__tests__/publish-now-ambiguity.test.ts) (10),
 [publish-now-jobid.test.ts](packages/queue/src/__tests__/publish-now-jobid.test.ts) (7).
 
+### 🔎 What the adversarial review of THIS fix caught (all fixed before merge)
+
+A 6-dimension review found real defects **in the fix itself**. Recorded because each is a trap
+that will recur:
+
+- **🔴 ORDER IS LOAD-BEARING in the publish `catch`.** The pre-flight's
+  `throw new UnrecoverableError` sits INSIDE the publish `try`, so `classifyError(err.message)` ran
+  first — and that classifier substring-matches, so `"token"` + `"invalid"` anywhere yields
+  `token_expired`, **whose branch refreshes the credential and calls `publishPost` AGAIN**. The
+  commonest reason reconciliation cannot confirm an outcome is a dead Meta token, whose error reads
+  `"...(token_invalid) — cannot confirm whether the post published"`. So the fix would have routed
+  an UNKNOWN outcome straight into a re-publish. **`routePublishError` now runs BEFORE any
+  classification** (`ambiguous` → park, `terminal` → rethrow untouched, `classify` → old chain), and
+  ambiguity OUTRANKS terminality so the stamp is always written. The same guard is applied in
+  `worker.on("failed")`, where re-classification would also have overwritten the actionable
+  "may already be live" text with a misleading "Access token expired. Please reconnect".
+- **🔴 `job.attemptsMade` is per-JOB and useless as a "has this been tried?" signal.** Four
+  producers mint a brand-new job for the same target (`publishNow`'s new 60s bucket, the rate-limit
+  re-queue, the heavy-slot defer, the optimize-wait defer), each starting at 0 — so a pre-flight
+  keyed on it alone **never runs on the human-Retry path it exists to protect**. Use
+  `PostTarget.retryCount` (incremented by `worker.on("failed")`, so it survives across jobs).
+- **🔴 `publishNow` admitted a `PUBLISHING` target via explicit `targetIds`** and RESET it to
+  SCHEDULED, making an in-flight target claimable again so a second job could publish concurrently.
+  A mid-flight target has `ambiguousAt = null`, so the new guard does not cover it. Both
+  `PUBLISHED` and `PUBLISHING` are now excluded.
+- **⚠️ `UnrecoverableError` is final even on attempt 1, but the arithmetic says otherwise.** BullMQ
+  increments `attemptsMade` regardless, so `attemptsMade >= attempts` is false and EVERYTHING gated
+  on `isFinalAttempt` — the FAILED write, the notification, the parent-post finalization and the
+  publish email — silently never ran. That was already true for the pre-existing `media_required`
+  path; it is now fixed for both.
+- **⚠️ The two SECONDARY publish call sites were outside the guard.** The `token_expired` and
+  `content_too_large` branches call `provider.publishPost` themselves, and their catches used
+  `markTargetFailed` — writing plain FAILED (no `ambiguousAt`) and rethrowing retryably. When you
+  add a guard around publishing, grep for EVERY `publishPost(` call site, not just the main one.
+- **⚠️ Deriving only the LABEL from config is worse than hardcoding both.** The coverage-notice
+  GATE kept a literal `2026-08-01` while its text became server-driven, so a lowered floor made the
+  notice fire on ranges it had just started covering. Both halves now come from the server
+  (`externalFloorLabel` + `externalFloorIso`), and the notice stays hidden until the query resolves
+  rather than guessing.
+- **⚠️ `new Date(raw)` is not fail-closed.** V8 parses `"01-08-2026"` and `"August 2026"`, so a
+  plausible typo could silently WIDEN the ingestion window — the expensive direction.
+  `EXTERNAL_POST_FLOOR` now demands a strict ISO shape and logs what it ignored.
+- **⚠️ A mid-pagination stop was silent.** `if (next?.degraded || !next?.posts?.length) break;`
+  truncated the post count with no warning while a cursor was still outstanding — a cap rendering
+  as a count, the exact failure the listing design exists to prevent. It now logs loudly and names
+  the deep-pagination ceiling as the likely cause.
+- **⚠️ Clearing the ambiguity left `errorMessage` set**, so the ambiguity prose reappeared in the
+  RED failure banner pointing at a button that had just vanished. Also: "Retry All Failed" became a
+  **silent dead click** when every target was parked — which is the NORMAL case here, since one
+  transient error hits the whole fan-out.
+
+**Process note:** the verifiers ran while these were being fixed, so their verdicts read "refuted —
+the code the claim describes does not exist". That is the fixes landing, not the findings being
+wrong; each was confirmed by reading the source before it was changed.
+
 ### 📜 All-time historical insights — LIVE-PROBED, and the floor is now configurable (2026-08-18)
 
 **Question asked: "can we fetch all-time historical insights?" Answer: the floor was never an API

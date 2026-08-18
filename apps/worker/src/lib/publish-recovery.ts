@@ -1,3 +1,4 @@
+import { isAmbiguousPublishError } from "@postautomation/social";
 // Pure, prisma-injectable helpers for recovering posts stuck in PUBLISHING.
 //
 // Extracted out of the worker so they can be unit-tested without booting
@@ -98,14 +99,66 @@ export async function markTargetAmbiguous(
  * successfully but whose DB write never landed leaves publishedId NULL, so the
  * short-circuit misses and the retry re-posts.
  */
+/**
+ * Where an error caught by the publish handler must go.
+ *
+ * ⚠️ THIS EXISTS BECAUSE ORDER IS LOAD-BEARING, and getting it wrong silently
+ * defeats the whole duplicate-post fix.
+ *
+ * The publish `catch` historically ran `classifyError(err.message)` first. That
+ * classifier substring-matches, so "token" + "invalid" ANYWHERE in the message
+ * yields `token_expired` — and the token_expired branch refreshes the credential
+ * and then CALLS provider.publishPost AGAIN.
+ *
+ * The dominant reason reconciliation cannot confirm an outcome is a dead Meta
+ * token, and that error reads "…listing unavailable (token_invalid) — cannot
+ * confirm whether the post published". So an UNKNOWN outcome would have been
+ * routed into a branch that re-publishes: precisely the duplicate this fix
+ * exists to prevent.
+ *
+ * Routing therefore happens BEFORE any message classification:
+ *   - "ambiguous" ⇒ park the target (ambiguousAt) and stop retrying;
+ *   - "terminal"  ⇒ the outcome is already decided; rethrow untouched;
+ *   - "classify"  ⇒ ordinary error, use the existing chain unchanged.
+ *
+ * Ambiguity OUTRANKS terminality: a parked target needs its stamp written, and a
+ * bare rethrow would leave ambiguousAt NULL and thus re-claimable.
+ */
+export type PublishErrorRoute = "ambiguous" | "terminal" | "classify";
+
+export function routePublishError(err: unknown): PublishErrorRoute {
+  if (isAmbiguousPublishError(err)) return "ambiguous";
+  // Duck-typed for the same reason as isAmbiguousPublishError: BullMQ's
+  // UnrecoverableError may be a different module instance here.
+  if ((err as { name?: unknown } | null)?.name === "UnrecoverableError") return "terminal";
+  return "classify";
+}
+
 export function shouldPreflightReconcile(opts: {
+  /** BullMQ attempt counter — per JOB, so it resets on every new job. */
   attemptsMade: number;
+  /**
+   * Has THIS TARGET been attempted before, across jobs?
+   *
+   * ⚠️ REQUIRED, and the reason this function is not just `attemptsMade > 0`.
+   * `attemptsMade` is per-job, and four producers mint a BRAND-NEW job for the
+   * same target: post.publishNow (a new 60s bucket is a new job), the worker's
+   * own rate-limit re-queue, the heavy-slot defer, and the optimize-wait defer.
+   * On every one of those the counter is 0 — so keying on it alone means the
+   * pre-flight never runs on the human-Retry path it exists to protect, which is
+   * exactly the path that produced the 2026-08-13 duplicates.
+   *
+   * `PostTarget.retryCount` is incremented by worker.on("failed") and therefore
+   * survives across jobs, which makes it the durable signal.
+   */
+  targetAttemptedBefore: boolean;
   hasPublishedId: boolean;
   providerSupportsReconcile: boolean;
 }): boolean {
   if (!opts.providerSupportsReconcile) return false;
+  // publishedId already answers the question for free.
   if (opts.hasPublishedId) return false;
-  return opts.attemptsMade > 0;
+  return opts.attemptsMade > 0 || opts.targetAttemptedBefore;
 }
 
 /**

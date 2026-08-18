@@ -54,11 +54,30 @@ const MONTHS = [
  */
 export function resolveExternalPostFloor(raw?: string | null): Date {
   const fallback = new Date(DEFAULT_EXTERNAL_POST_FLOOR_ISO);
-  if (!raw || !raw.trim()) return fallback;
-  const parsed = new Date(raw.trim());
+  const value = raw?.trim();
+  if (!value) return fallback;
+
+  // ⚠️ STRICT shape, deliberately not `new Date(anything)`. V8 happily parses
+  // "01-08-2026" (as 1 Aug 2026 in some engines, or 8 Jan in others) and
+  // "August 2026" — so a plausible-looking typo could WIDEN the ingestion window
+  // silently, which is the one direction that costs real money. Only an explicit
+  // ISO date (optionally with a time) is accepted; everything else falls back.
+  if (!/^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?Z?)?$/.test(value)) {
+    console.warn(
+      `[ExternalPostFloor] ignoring EXTERNAL_POST_FLOOR=${JSON.stringify(value)} — ` +
+        `expected an ISO date such as 2026-05-01 or 2026-05-01T00:00:00.000Z. ` +
+        `Using the default ${DEFAULT_EXTERNAL_POST_FLOOR_ISO}.`
+    );
+    return fallback;
+  }
+
+  const parsed = new Date(value.includes("T") || value.includes(" ") ? value : `${value}T00:00:00.000Z`);
   if (Number.isNaN(parsed.getTime())) return fallback;
   // A floor in the future would collect nothing at all; treat it as a mistake.
-  if (parsed.getTime() > Date.now()) return fallback;
+  if (parsed.getTime() > Date.now()) {
+    console.warn(`[ExternalPostFloor] ignoring FUTURE EXTERNAL_POST_FLOOR=${value}`);
+    return fallback;
+  }
   return parsed;
 }
 

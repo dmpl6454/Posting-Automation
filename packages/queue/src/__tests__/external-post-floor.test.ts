@@ -57,3 +57,27 @@ describe("formatExternalPostFloor", () => {
     expect(formatExternalPostFloor(new Date(DEFAULT_EXTERNAL_POST_FLOOR_ISO))).toBe("1 Aug 2026");
   });
 });
+
+describe("resolveExternalPostFloor — strict shape (review finding)", () => {
+  const DEFAULT = new Date(DEFAULT_EXTERNAL_POST_FLOOR_ISO);
+
+  it("rejects a plausible-looking non-ISO typo instead of widening the window", () => {
+    // `new Date("01-08-2026")` PARSES in V8 — which engine-dependently means
+    // 1 Aug or 8 Jan. Accepting it would silently move the floor by months, and
+    // widening is the direction that costs Graph calls on every account at once.
+    for (const bad of ["01-08-2026", "08/01/2026", "August 2026", "2026", "2026-08", "next monday"]) {
+      expect(resolveExternalPostFloor(bad), bad).toEqual(DEFAULT);
+    }
+  });
+
+  it("accepts a bare ISO date and anchors it at UTC midnight", () => {
+    expect(resolveExternalPostFloor("2026-05-01")).toEqual(new Date("2026-05-01T00:00:00.000Z"));
+  });
+
+  it("accepts full ISO timestamps with and without milliseconds", () => {
+    expect(resolveExternalPostFloor("2026-05-01T06:30:00Z")).toEqual(new Date("2026-05-01T06:30:00Z"));
+    expect(resolveExternalPostFloor("2026-05-01T06:30:00.250Z")).toEqual(
+      new Date("2026-05-01T06:30:00.250Z")
+    );
+  });
+});

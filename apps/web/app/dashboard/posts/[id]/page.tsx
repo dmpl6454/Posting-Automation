@@ -290,12 +290,27 @@ export default function PostDetailPage() {
   const handlePublishAll = () => {
     // Ambiguous targets are excluded: the server refuses them anyway, and a
     // "Publish to N channels?" count that included them would be a lie.
-    const eligible =
+    const retryable =
       post?.targets.filter(
-        (t: any) =>
-          !t.ambiguousAt && (t.status === "FAILED" || t.status === "DRAFT" || t.status === "SCHEDULED")
+        (t: any) => t.status === "FAILED" || t.status === "DRAFT" || t.status === "SCHEDULED"
       ) ?? [];
-    if (eligible.length === 0) return;
+    const eligible = retryable.filter((t: any) => !t.ambiguousAt);
+    const parked = retryable.length - eligible.length;
+
+    if (eligible.length === 0) {
+      // ⚠️ Do NOT return silently. The 2026-08-13 shape was ONE transient error
+      // hitting every target of a 36-channel post, so "all targets parked" is the
+      // normal case here — and a dead button would leave the user with no idea
+      // why, which is exactly the confusion that got Retry clicked repeatedly.
+      toast({
+        title: parked > 0 ? "Nothing safe to publish yet" : "No eligible channels",
+        description:
+          parked > 0
+            ? `${parked} channel${parked !== 1 ? "s" : ""} may already have this post published — the platform never confirmed. Check the account, then use "It didn't publish" on that channel to allow a retry.`
+            : "Every channel is already published or has nothing to send.",
+      });
+      return;
+    }
     const msg = `Publish to ${eligible.length} channel${eligible.length !== 1 ? "s" : ""}?`;
     if (confirm(msg)) {
       publishNow.mutate({ id: postId, targetIds: eligible.map((t: any) => t.id) });

@@ -170,7 +170,7 @@ describe("post.clearPublishAmbiguity", () => {
     expect(res).toEqual({ cleared: 1 });
     expect(targetUpdateMany).toHaveBeenCalledWith({
       where: { id: { in: ["t1"] }, postId: "p1" },
-      data: { ambiguousAt: null, ambiguousReason: null },
+      data: { ambiguousAt: null, ambiguousReason: null, errorMessage: null },
     });
   });
 
@@ -199,5 +199,46 @@ describe("post.clearPublishAmbiguity", () => {
       makeCaller().clearPublishAmbiguity({ id: "p1", targetIds: ["t1"] })
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
     expect(targetUpdateMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("post.publishNow — an in-flight target is never reset (review finding)", () => {
+  it("refuses a PUBLISHING target named explicitly", async () => {
+    // publishNow RESETS status to SCHEDULED. A mid-flight target has
+    // ambiguousAt = null, so the ambiguity guard does not cover it — resetting it
+    // makes it claimable again and a second job can publish concurrently while
+    // the first is still uploading.
+    postFindFirst.mockResolvedValue({
+      id: "p1",
+      metadata: null,
+      targets: [target({ id: "inflight", status: "PUBLISHING" })],
+    });
+    await expect(makeCaller().publishNow({ id: "p1", targetIds: ["inflight"] })).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+    });
+    expect(queueAdd).not.toHaveBeenCalled();
+    expect(targetUpdateMany).not.toHaveBeenCalled();
+  });
+
+  it("publishes the eligible siblings and leaves the in-flight one alone", async () => {
+    postFindFirst.mockResolvedValue({
+      id: "p1",
+      metadata: null,
+      targets: [target({ id: "ok" }), target({ id: "inflight", status: "PUBLISHING" })],
+    });
+    await makeCaller().publishNow({ id: "p1", targetIds: ["ok", "inflight"] });
+    expect(queueAdd).toHaveBeenCalledTimes(1);
+    expect((queueAdd.mock.calls[0] as any[])[1].postTargetId).toBe("ok");
+  });
+});
+
+describe("post.clearPublishAmbiguity — clears the stale error text too", () => {
+  it("wipes errorMessage so the ambiguity prose cannot reappear as a red failure", async () => {
+    postFindFirst.mockResolvedValue({ id: "p1", targets: [target({ ambiguousAt: new Date() })] });
+    await makeCaller().clearPublishAmbiguity({ id: "p1", targetIds: ["t1"] });
+    expect(targetUpdateMany).toHaveBeenCalledWith({
+      where: { id: { in: ["t1"] }, postId: "p1" },
+      data: { ambiguousAt: null, ambiguousReason: null, errorMessage: null },
+    });
   });
 });
