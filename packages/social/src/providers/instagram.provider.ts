@@ -707,6 +707,13 @@ export class InstagramProvider extends SocialProvider {
     let data: any;
     let res: Response;
     const maxPublishAttempts = 5;
+    // ⚠️ STICKY. Once ANY attempt has left the outcome unknown, the post may exist
+    // — and every later attempt in this loop reuses the SAME creation_id, so a
+    // definite-looking error from one of them (Meta rejecting an already-consumed
+    // container, say) is NOT evidence that nothing was created. Reporting a clean
+    // failure at that point would drop the target back into the claim set and
+    // invite a re-publish of a live post.
+    let sawIndeterminate = false;
     for (let attempt = 0; attempt < maxPublishAttempts; attempt++) {
       const isLastAttempt = attempt >= maxPublishAttempts - 1;
 
@@ -729,7 +736,13 @@ export class InstagramProvider extends SocialProvider {
         return this.resolveUnknownPublish(tokens, igUserId, caption, windowStart, netErr);
       }
 
-      data = await res.json();
+      try {
+        data = await res.json();
+      } catch (parseErr) {
+        // A body we cannot read (a proxy's HTML 502, a truncated response) says
+        // NOTHING about whether Meta created the post.
+        return this.resolveUnknownPublish(tokens, igUserId, caption, windowStart, parseErr);
+      }
       if (res.ok) break;
 
       const subcode = data?.error?.error_subcode;
@@ -745,17 +758,29 @@ export class InstagramProvider extends SocialProvider {
       // Meta flagged this transient (`is_transient` / code 2). That claim is about
       // the REQUEST, not the WRITE: measured on production 2026-08-13, 11 of 11
       // Instagram targets that failed this way were ACTUALLY LIVE.
-      if (isIndeterminatePublishError(failure)) {
+      //
+      // A 5xx counts too, whatever the body says: Meta returns code 1 "unknown
+      // error" on some server faults, which the body-only classifier would read as
+      // a definite rejection.
+      const indeterminate = res.status >= 500 || isIndeterminatePublishError(failure);
+      if (indeterminate) sawIndeterminate = true;
+
+      if (indeterminate) {
         // A container is single-use, so re-sending media_publish with the SAME
         // creation_id cannot create a second post — this is the one safe place to
         // retry. (Re-running publishPost is NOT safe: it mints a NEW container,
         // which is a new post. That is the layer the incident retried at.)
         if (!isLastAttempt) {
-          const quick = await this.findPublishedMatch(tokens, igUserId, caption, windowStart).catch(() => null);
+          const quick = await this.findPublishedMatch(tokens, igUserId, caption, windowStart, true).catch(() => null);
           if (quick) return quick;
           await new Promise((r) => setTimeout(r, 3000 * (attempt + 1)));
           continue;
         }
+        return this.resolveUnknownPublish(tokens, igUserId, caption, windowStart, failure);
+      }
+
+      // Definite error — but only trustworthy if NO earlier attempt was ambiguous.
+      if (sawIndeterminate) {
         return this.resolveUnknownPublish(tokens, igUserId, caption, windowStart, failure);
       }
 
@@ -804,7 +829,7 @@ export class InstagramProvider extends SocialProvider {
       await new Promise((r) => setTimeout(r, RECONCILE_SETTLE_MS));
     }
 
-    const match = await this.findPublishedMatch(tokens, igUserId, caption, since).catch((e) => {
+    const match = await this.findPublishedMatch(tokens, igUserId, caption, since, true).catch((e) => {
       console.warn(`[Instagram] reconciliation read failed for ${igUserId}: ${(e as Error)?.message}`);
       return null;
     });
@@ -837,7 +862,16 @@ export class InstagramProvider extends SocialProvider {
     tokens: OAuthTokens,
     igUserId: string,
     caption: string,
-    since: Date
+    since: Date,
+    /**
+     * ⚠️ Does an EMPTY first page mean "cannot tell" or "not there"?
+     *
+     * Only AFTER a write does empty imply something is wrong — we just published
+     * to this account, so it should not look empty. BEFORE a write (the worker's
+     * pre-flight) an empty listing is the EXPECTED answer, and throwing there made
+     * the worker park a post as "may already be live" and never publish it at all.
+     */
+    emptyIsInconclusive: boolean
   ): Promise<SocialPostResult | null> {
     let cursor: string | undefined;
 
@@ -857,7 +891,7 @@ export class InstagramProvider extends SocialProvider {
           `Instagram listing unavailable (${listed.degraded.reason}) — cannot confirm whether the post published`
         );
       }
-      if (page === 0 && listed.posts.length === 0) {
+      if (emptyIsInconclusive && page === 0 && listed.posts.length === 0) {
         throw new Error(
           "Instagram returned no recent media — cannot confirm whether the post published"
         );
@@ -893,7 +927,8 @@ export class InstagramProvider extends SocialProvider {
   ): Promise<SocialPostResult | null> {
     const igUserId =
       (payload.metadata?.igUserId as string) || (await this.getInstagramBusinessAccountId(tokens));
-    return this.findPublishedMatch(tokens, igUserId, payload.content, since);
+    // PRE-write: an empty listing means "not published", so publishing must proceed.
+    return this.findPublishedMatch(tokens, igUserId, payload.content, since, false);
   }
 
   /**

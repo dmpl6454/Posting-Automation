@@ -1292,7 +1292,7 @@ export class FacebookProvider extends SocialProvider {
       await this.sleep(RECONCILE_SETTLE_MS);
     }
 
-    const match = await this.findPublishedMatch(tokens, pageId, payload.content, since).catch((e) => {
+    const match = await this.findPublishedMatch(tokens, pageId, payload.content, since, true).catch((e) => {
       console.warn(`[Facebook] reconciliation read failed for page ${pageId}: ${(e as Error)?.message}`);
       return null;
     });
@@ -1321,7 +1321,9 @@ export class FacebookProvider extends SocialProvider {
     tokens: OAuthTokens,
     pageId: string,
     message: string,
-    since: Date
+    since: Date,
+    /** See the Instagram twin: empty means "cannot tell" only AFTER a write. */
+    emptyIsInconclusive: boolean
   ): Promise<SocialPostResult | null> {
     let cursor: string | undefined;
 
@@ -1341,7 +1343,7 @@ export class FacebookProvider extends SocialProvider {
           `Facebook listing unavailable (${listed.degraded.reason}) — cannot confirm whether the post published`
         );
       }
-      if (page === 0 && listed.posts.length === 0) {
+      if (emptyIsInconclusive && page === 0 && listed.posts.length === 0) {
         throw new Error(
           "Facebook returned no recent posts — cannot confirm whether the post published"
         );
@@ -1382,7 +1384,8 @@ export class FacebookProvider extends SocialProvider {
   ): Promise<SocialPostResult | null> {
     const pageId =
       (payload.metadata?.pageId as string) || (payload.metadata?.platformId as string) || "me";
-    return this.findPublishedMatch(tokens, pageId, payload.content, since);
+    // PRE-write: an empty listing means "not published", so publishing must proceed.
+    return this.findPublishedMatch(tokens, pageId, payload.content, since, false);
   }
 
   private async publishPostWithMedia(

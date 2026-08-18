@@ -69,7 +69,13 @@ export const bulkRouter = createRouter({
         // Scoped to DRAFT/FAILED only: PUBLISHED/PUBLISHING/CANCELLED targets must
         // never be resurrected by a re-schedule (that would re-post live content).
         await prisma.postTarget.updateMany({
-          where: { postId: item.postId, status: { in: ["DRAFT", "FAILED"] } },
+          // ⚠️ `ambiguousAt: null` — a target whose publish outcome could not be
+          // determined must not be armed here. Flipping it to SCHEDULED would
+          // enqueue work the publish worker's claim then refuses (the claim
+          // requires ambiguousAt IS NULL), so the post would flip to PUBLISHING,
+          // publish nothing, and be reaped FAILED by the watchdog ~45 min later.
+          // The operator clears it from the post detail page.
+          where: { postId: item.postId, status: { in: ["DRAFT", "FAILED"] }, ambiguousAt: null },
           data: { status: "SCHEDULED", errorMessage: null },
         });
         scheduled++;
