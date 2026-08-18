@@ -3,7 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
 import { analyticsSyncQueue, externalPostSyncQueue } from "@postautomation/queue";
 import { groupChannelsIntoAccounts } from "../lib/sync-accounts";
-import { EXTERNAL_POST_FLOOR } from "../lib/external-post-floor";
+import { externalPostFloor, externalPostFloorLabel } from "../lib/external-post-floor";
 import type { PrismaClient } from "@postautomation/db";
 import {
   sumChannelRowsIntoGroups,
@@ -832,6 +832,8 @@ export const analyticsRouter = createRouter({
       });
 
       return {
+        // Active external-post coverage floor (configurable) — see postReports.
+        externalFloorLabel: externalPostFloorLabel(),
         impressions: sum((r) => r.impressions),
         clicks: sum((r) => r.clicks),
         likes: sum((r) => r.likes),
@@ -1438,7 +1440,7 @@ export const analyticsRouter = createRouter({
             platformId: account.platformId,
             candidateChannelIds: account.candidateChannelIds,
             targetChannelIds: account.targetChannelIds,
-            since: EXTERNAL_POST_FLOOR.toISOString(),
+            since: externalPostFloor().toISOString(),
           },
           {
             // Same 2-minute dedup bucket, so simultaneous clicks collapse to one job.
@@ -1522,6 +1524,10 @@ export const analyticsRouter = createRouter({
           rows.map((r) => r.platform),
           rows.map((r) => r.snapshotMetadata?.metricsAvailable as any)
         ),
+        // ⚠️ The coverage floor is CONFIGURABLE (EXTERNAL_POST_FLOOR). It is
+        // returned rather than hardcoded in the UI so lowering it can never leave
+        // the copy claiming a start date that is no longer true.
+        externalFloorLabel: externalPostFloorLabel(),
       };
     }),
 

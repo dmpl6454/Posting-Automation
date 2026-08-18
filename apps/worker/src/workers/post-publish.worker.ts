@@ -1,13 +1,20 @@
 import { Worker, type Job, UnrecoverableError } from "bullmq";
 import { prisma } from "@postautomation/db";
-import { getSocialProvider } from "@postautomation/social";
+import { getSocialProvider, isAmbiguousPublishError } from "@postautomation/social";
 import { QUEUE_NAMES, postPublishQueue, analyticsSyncQueue, type PostPublishJobData, createRedisConnection } from "@postautomation/queue";
 import IORedis from "ioredis";
 import { buildPublishEmail, buildPublishReportCsv } from "../lib/publish-email";
-import { markTargetFailed, buildPublishNotifications, mediaRequiredReason, terminalizeStuckClaim, isSeedNoise, isStaleScheduleJob, isHeavyPublish, planHeavyDefer, HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE } from "../lib/publish-recovery";
+import { markTargetFailed, markTargetAmbiguous, buildPublishClaimWhere, shouldPreflightReconcile, buildPublishNotifications, mediaRequiredReason, terminalizeStuckClaim, isSeedNoise, isStaleScheduleJob, isHeavyPublish, planHeavyDefer, HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE } from "../lib/publish-recovery";
 import { PRIORITY_RETRY, mediaOptimizeQueue } from "@postautomation/queue";
 import { planOptimizeGate, choosePublishUrl } from "../lib/media-optimize";
 import { buildSnapshotMetadata } from "../lib/snapshot-metadata";
+
+/**
+ * How far back a PRE-FLIGHT reconciliation looks when a retry is about to
+ * re-publish. Bounded so the listing stays cheap and so a genuinely different
+ * post that happens to share a caption cannot be adopted from weeks ago.
+ */
+const PREFLIGHT_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 
 /** Integer env knob with a default and a sane clamp (bad values → default). */
 function envInt(name: string, def: number, min: number, max: number): number {
@@ -282,8 +289,12 @@ export function createPostPublishWorker() {
 
       // 0. Atomic idempotency claim — only transitions SCHEDULED/FAILED/DRAFT → PUBLISHING.
       // If the target is already PUBLISHING/PUBLISHED or doesn't exist, skip silently.
+      // ⚠️ buildPublishClaimWhere adds `ambiguousAt: null`. A target whose publish
+      // outcome could not be determined is deliberately UNCLAIMABLE, so no retry
+      // layer can re-run a create that may already have succeeded. See
+      // PostTarget.ambiguousAt and the 2026-08-13 incident.
       const claim = await prisma.postTarget.updateMany({
-        where: { id: postTargetId, status: { in: ["SCHEDULED", "FAILED", "DRAFT"] } },
+        where: buildPublishClaimWhere(postTargetId),
         data: { status: "PUBLISHING" },
       });
       if (claim.count === 0) {
@@ -660,15 +671,71 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
         // Build progress callback — only meaningful for media-heavy platforms (YouTube etc.)
         const onProgress = (percent: number) => reportProgress(postTargetId, percent);
 
+        // ── PRE-FLIGHT RECONCILIATION ──────────────────────────────────────────
+        // On a RETRY, ask the platform whether the previous attempt actually
+        // landed before writing again. This covers the one gap the publishedId
+        // short-circuit cannot: an attempt that published successfully but whose
+        // DB write never persisted leaves publishedId NULL, so the short-circuit
+        // misses and the retry duplicates the post.
+        //
+        // Costs one listing call, only on retries, only for providers that
+        // implement findExistingPost (Instagram + Facebook today). Every other
+        // provider takes the identical path it always did.
+        if (
+          shouldPreflightReconcile({
+            attemptsMade: job.attemptsMade,
+            hasPublishedId: !!postTarget.publishedId,
+            providerSupportsReconcile: typeof provider.findExistingPost === "function",
+          })
+        ) {
+          const lookbackFloor = new Date(Date.now() - PREFLIGHT_LOOKBACK_MS);
+          const postCreatedAt = postTarget.post.createdAt ?? lookbackFloor;
+          const since = postCreatedAt > lookbackFloor ? postCreatedAt : lookbackFloor;
+          try {
+            const existing = await provider.findExistingPost!(
+              tokens,
+              { content: publishContent, mediaUrls, mediaTypes, metadata: providerMetadata },
+              since,
+            );
+            if (existing) {
+              // ⚠️ Guard against adopting a DIFFERENT post that merely shares this
+              // caption — this account posts near-identical copy routinely. If the
+              // platform id is already recorded against another target, the match
+              // is not ours and we must publish normally.
+              const claimedElsewhere = await prisma.postTarget.findFirst({
+                where: { publishedId: existing.platformPostId, id: { not: postTargetId } },
+                select: { id: true },
+              });
+              if (claimedElsewhere) {
+                console.warn(`[PostPublish] pre-flight match ${existing.platformPostId} already belongs to target ${claimedElsewhere.id} — publishing normally`);
+              } else {
+                console.warn(`[PostPublish] pre-flight found ${platform} post ${existing.platformPostId} already live for target ${postTargetId} — adopting instead of re-publishing`);
+                result = existing;
+              }
+            }
+          } catch (reconcileErr: any) {
+            // Could not tell. Do NOT publish — that is the duplicate. Park it.
+            const reason = `A previous attempt to publish this may already have gone live, and ${platform} could not confirm either way. Nothing was re-sent. Check the account, then use "It didn't publish" to try again. (${reconcileErr?.message ?? "unknown error"})`;
+            await markTargetAmbiguous(prisma, postTargetId, reason);
+            throw new UnrecoverableError(reason);
+          }
+        }
+
         // Retry up to 3 times for transient network errors (fetch timeouts under heavy load)
         let lastErr: any;
-        for (let attempt = 1; attempt <= 3; attempt++) {
+        for (let attempt = 1; attempt <= 3 && !result; attempt++) {
           try {
             result = await provider.publishPost(tokens, { content: publishContent, mediaUrls, mediaTypes, metadata: providerMetadata, onProgress });
             lastErr = null;
             break;
           } catch (e: any) {
             lastErr = e;
+            // ⚠️ NEVER replay a publish whose outcome is unknown. This loop used to
+            // re-call publishPost on any "fetch failed"/ETIMEDOUT — but a timeout
+            // AFTER the request was dispatched is exactly the case where the
+            // platform may already hold the post, and re-calling publishPost
+            // restarts the create from scratch (a new IG container = a new post).
+            if (isAmbiguousPublishError(e)) throw e;
             if (attempt < 3 && (e.message === "fetch failed" || e.message?.includes("ETIMEDOUT"))) {
               console.log(`[PostPublish] Transient error on attempt ${attempt}/3, retrying in ${attempt * 3}s...`);
               await new Promise((r) => setTimeout(r, attempt * 3000));
@@ -777,6 +844,20 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
             await markTargetFailed(prisma, postTargetId, truncateRetryErr?.message ?? errMsg);
             throw truncateRetryErr;
           }
+        } else if (isAmbiguousPublishError(publishErr)) {
+          // ⚠️ THE 2026-08-13 FIX. The provider could not establish whether the
+          // post went live. Writing plain FAILED here would put the target back
+          // inside the atomic claim's allowed set, and BullMQ's `attempts: 3`
+          // plus any human Retry would each re-run a NON-IDEMPOTENT create —
+          // exactly how one Instagram account received 5 copies of one reel.
+          //
+          // Park it: FAILED (so the UI, watchdog and publish report behave as
+          // before) PLUS ambiguousAt, which makes it unclaimable. UnrecoverableError
+          // stops BullMQ from retrying at all.
+          const reason = publishErr.message || String(publishErr);
+          await markTargetAmbiguous(prisma, postTargetId, reason);
+          console.warn(`[PostPublish] target ${postTargetId} parked as AMBIGUOUS — ${platform} never confirmed the publish; not retrying (job ${job.id})`);
+          throw new UnrecoverableError(reason);
         } else {
           // Unknown / unrecoverable error (e.g. a landscape video rejected by the
           // Shorts validator). Retrying re-runs the SAME input and fails identically,
@@ -815,6 +896,14 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
             publishedUrl: result.url,
             publishedAt: new Date(),
             uploadProgress: null,
+            // A target that failed and then succeeded used to keep its stale
+            // errorMessage forever — which is how `papcontent` and `filmiimemes`
+            // ended up PUBLISHED while still displaying "Instagram publish
+            // failed". Clear it, and clear any ambiguity stamp: the outcome is
+            // now known.
+            errorMessage: null,
+            ambiguousAt: null,
+            ambiguousReason: null,
             metadata: (result.metadata ?? undefined) as any,
           },
         });

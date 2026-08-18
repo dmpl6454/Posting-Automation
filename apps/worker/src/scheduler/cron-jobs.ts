@@ -1,5 +1,5 @@
 import { prisma } from "@postautomation/db";
-import { tokenRefreshQueue, analyticsSyncQueue, agentRunQueue, trendDiscoverQueue, listeningSyncQueue, campaignAnalyticsSyncQueue, brandContentSyncQueue, outreachPollQueue, rssSyncQueue, avatarCacheQueue, externalPostSyncQueue } from "@postautomation/queue";
+import { tokenRefreshQueue, analyticsSyncQueue, agentRunQueue, trendDiscoverQueue, listeningSyncQueue, campaignAnalyticsSyncQueue, brandContentSyncQueue, outreachPollQueue, rssSyncQueue, avatarCacheQueue, externalPostSyncQueue, externalPostFloor } from "@postautomation/queue";
 import { groupIntoAccounts, selectShard } from "../lib/external-sync-accounts";
 import { planFbAnalyticsRun } from "../lib/fb-analytics-budget";
 import {
@@ -834,8 +834,9 @@ export async function scheduleExternalPostSync() {
   const shardIndex = Math.floor(Date.now() / (2 * 60 * 60 * 1000)) % shardCount;
   const slice = selectShard(accounts, shardIndex, shardCount);
 
-  // The product floor. Never list posts older than this.
-  const since = new Date("2026-08-01T00:00:00.000Z");
+  // The product floor — single source of truth, env-configurable. Never list
+  // posts older than this. See @postautomation/queue/external-post-floor.
+  const since = externalPostFloor();
   // Bucket makes the jobId stable within a run window so a re-run dedupes rather than
   // piling up. BullMQ requires EXACTLY three colon-separated segments in a custom jobId.
   const bucket = String(Math.floor(Date.now() / (2 * 60 * 60 * 1000)));

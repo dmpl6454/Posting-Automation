@@ -193,6 +193,37 @@ export default function PostDetailPage() {
 
   const [retryingTargetId, setRetryingTargetId] = useState<string | null>(null);
 
+  // ── Ambiguous publish outcome ("we don't know if it went live") ─────────────
+  // A target parked with ambiguousAt must NOT offer a plain Retry: the platform
+  // may already hold the post. The only way forward is a human confirming it did
+  // not publish, which is what this mutation records.
+  const [clearingTargetId, setClearingTargetId] = useState<string | null>(null);
+  const clearAmbiguity = trpc.post.clearPublishAmbiguity.useMutation({
+    onSuccess: () => {
+      toast({
+        title: "Retry unlocked",
+        description: "You can publish to this channel again.",
+      });
+      refetch();
+    },
+    onError: (err) =>
+      toast({ title: "Couldn't unlock retry", description: humanizeError(err), variant: "destructive" }),
+    onSettled: () => setClearingTargetId(null),
+  });
+
+  const handleClearAmbiguity = (targetId: string) => {
+    if (
+      !confirm(
+        "Only do this if you have checked the account and the post is NOT there.\n\n" +
+          "If it did publish, retrying will post a second copy."
+      )
+    ) {
+      return;
+    }
+    setClearingTargetId(targetId);
+    clearAmbiguity.mutate({ id: postId, targetIds: [targetId] });
+  };
+
   // ── PR-5: per-channel caption override (unique captions review surface) ────
   const [editingCaptionTargetId, setEditingCaptionTargetId] = useState<string | null>(null);
   const [captionDraft, setCaptionDraft] = useState("");
@@ -257,7 +288,13 @@ export default function PostDetailPage() {
   };
 
   const handlePublishAll = () => {
-    const eligible = post?.targets.filter((t: any) => t.status === "FAILED" || t.status === "DRAFT" || t.status === "SCHEDULED") ?? [];
+    // Ambiguous targets are excluded: the server refuses them anyway, and a
+    // "Publish to N channels?" count that included them would be a lie.
+    const eligible =
+      post?.targets.filter(
+        (t: any) =>
+          !t.ambiguousAt && (t.status === "FAILED" || t.status === "DRAFT" || t.status === "SCHEDULED")
+      ) ?? [];
     if (eligible.length === 0) return;
     const msg = `Publish to ${eligible.length} channel${eligible.length !== 1 ? "s" : ""}?`;
     if (confirm(msg)) {
@@ -460,10 +497,37 @@ export default function PostDetailPage() {
                     </div>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
-                    <Badge variant={targetConfig.variant} className="text-xs">
-                      {target.status.charAt(0) + target.status.slice(1).toLowerCase()}
+                    <Badge
+                      variant={target.ambiguousAt ? "outline" : targetConfig.variant}
+                      className={
+                        target.ambiguousAt
+                          ? "border-amber-500 text-amber-600 dark:text-amber-400 text-xs"
+                          : "text-xs"
+                      }
+                    >
+                      {target.ambiguousAt
+                        ? "Needs check"
+                        : target.status.charAt(0) + target.status.slice(1).toLowerCase()}
                     </Badge>
-                    {(target.status === "FAILED" || target.status === "DRAFT" || target.status === "SCHEDULED") && (
+                    {target.ambiguousAt && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 px-2 text-xs"
+                        onClick={() => handleClearAmbiguity(target.id)}
+                        disabled={clearingTargetId === target.id}
+                        title="Only if you have confirmed the post is not on the account"
+                      >
+                        {clearingTargetId === target.id ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <RotateCcw className="h-3 w-3" />
+                        )}
+                        <span className="ml-1">It didn&apos;t publish</span>
+                      </Button>
+                    )}
+                    {!target.ambiguousAt &&
+                      (target.status === "FAILED" || target.status === "DRAFT" || target.status === "SCHEDULED") && (
                       <Button
                         size="sm"
                         variant="outline"
@@ -604,9 +668,37 @@ export default function PostDetailPage() {
               );
             })}
 
+            {/* Publish outcome UNKNOWN — deliberately NOT styled as a failure.
+                The post may be live; the platform simply never confirmed. Telling
+                the user "failed" here is what makes them click Retry and create a
+                duplicate. */}
+            {post.targets
+              .filter((t: any) => t.ambiguousAt)
+              .map((target: any) => (
+                <div
+                  key={`ambiguous-${target.id}`}
+                  className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 dark:border-amber-800/60 dark:bg-amber-950/30"
+                >
+                  <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-500" />
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-amber-800 dark:text-amber-300">
+                      {target.channel.name} ({target.channel.platform}) — may already be published
+                    </p>
+                    <p className="mt-0.5 text-xs text-amber-700 dark:text-amber-400">
+                      {target.ambiguousReason ??
+                        "The platform did not confirm this post. Nothing was re-sent, so there is no duplicate."}
+                    </p>
+                    <p className="mt-1 text-xs text-amber-600 dark:text-amber-500">
+                      Open the account and check. If the post is there, no action is needed. If it is
+                      not, use &quot;It didn&apos;t publish&quot; above to allow a retry.
+                    </p>
+                  </div>
+                </div>
+              ))}
+
             {/* Show error messages for failed targets */}
             {post.targets
-              .filter((t: any) => t.status === "FAILED" && t.errorMessage)
+              .filter((t: any) => t.status === "FAILED" && t.errorMessage && !t.ambiguousAt)
               .map((target: any) => (
                 <div
                   key={`error-${target.id}`}

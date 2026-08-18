@@ -19,6 +19,16 @@ import {
   worstDegradation,
 } from "../utils/meta-insight-diagnosis";
 import { fetchT } from "../utils/fetch-timeout";
+import {
+  AmbiguousPublishError,
+  isIndeterminatePublishError,
+} from "../utils/ambiguous-publish";
+import {
+  RECONCILE_MAX_PAGES,
+  RECONCILE_SKEW_MS,
+  captionsMatch,
+  reconcileSettleMs,
+} from "../utils/publish-reconcile";
 
 /** Max pagination pages fetched during connect (~500 Pages at limit=25). */
 const MAX_CONNECT_PAGINATION_PAGES = 20;
@@ -38,6 +48,9 @@ const VIDEO_READY_TIMEOUT_MS = Math.max(
   30_000,
   parseInt(process.env.IG_VIDEO_READY_TIMEOUT_MS || "", 10) || 240_000
 );
+
+/** See reconcileSettleMs — tunable with IG_RECONCILE_SETTLE_MS. */
+const RECONCILE_SETTLE_MS = reconcileSettleMs("IG_RECONCILE_SETTLE_MS");
 
 export class InstagramProvider extends SocialProvider {
   readonly platform: SocialPlatform = "INSTAGRAM";
@@ -159,7 +172,7 @@ export class InstagramProvider extends SocialProvider {
     );
 
     // Step 2: Publish the container
-    return this.publishContainer(tokens, igUserId, containerId);
+    return this.publishContainer(tokens, igUserId, containerId, payload.content);
   }
 
   /**
@@ -671,45 +684,82 @@ export class InstagramProvider extends SocialProvider {
 
   /**
    * Publish a media container.
+   *
+   * `caption` is passed for RECONCILIATION ONLY — it is never re-sent to Meta. It
+   * is how a post Instagram already created is recognised on the account when the
+   * publish call's own response is lost.
    */
   private async publishContainer(
     tokens: OAuthTokens,
     igUserId: string,
-    containerId: string
+    containerId: string,
+    caption: string
   ): Promise<SocialPostResult> {
+    // Anchor the reconciliation window BEFORE the first write attempt.
+    const windowStart = new Date(Date.now() - RECONCILE_SKEW_MS);
+
     // Even after the container reports FINISHED, media_publish can briefly still
     // return subcode 2207027 ("media is not ready to be published"). Retry a few
     // times with backoff so a one-off race resolves inside this call instead of
     // failing the whole job (which the user sees as a red "Failed" before the
     // BullMQ retry eventually fixes it). Only this specific transient subcode is
-    // retried here; any other error throws immediately.
+    // retried here; any other error is classified below.
     let data: any;
     let res: Response;
     const maxPublishAttempts = 5;
     for (let attempt = 0; attempt < maxPublishAttempts; attempt++) {
-      res = await fetch(
-        `${this.graphBaseUrl}/${this.apiVersion}/${igUserId}/media_publish`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            creation_id: containerId,
-            access_token: tokens.accessToken,
-          }),
-        }
-      );
+      const isLastAttempt = attempt >= maxPublishAttempts - 1;
+
+      try {
+        res = await fetch(
+          `${this.graphBaseUrl}/${this.apiVersion}/${igUserId}/media_publish`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              creation_id: containerId,
+              access_token: tokens.accessToken,
+            }),
+          }
+        );
+      } catch (netErr) {
+        // ⚠️ The write was DISPATCHED and its outcome never came back. Replaying
+        // it is precisely how the 2026-08-13 duplicates were produced, so stop
+        // writing and go look at the account instead.
+        return this.resolveUnknownPublish(tokens, igUserId, caption, windowStart, netErr);
+      }
 
       data = await res.json();
       if (res.ok) break;
 
       const subcode = data?.error?.error_subcode;
       const isNotReady = subcode === 2207027 || /not ready to be published|Media ID is not available/i.test(data?.error?.error_user_msg || data?.error?.message || "");
-      if (isNotReady && attempt < maxPublishAttempts - 1) {
+      if (isNotReady && !isLastAttempt) {
         // Linear-ish backoff: 3s, 6s, 9s, 12s — gives the container time to settle.
         await new Promise((r) => setTimeout(r, 3000 * (attempt + 1)));
         continue;
       }
-      throw new Error(`Instagram publish failed: ${JSON.stringify(data)}`);
+
+      const failure = new Error(`Instagram publish failed: ${JSON.stringify(data)}`);
+
+      // Meta flagged this transient (`is_transient` / code 2). That claim is about
+      // the REQUEST, not the WRITE: measured on production 2026-08-13, 11 of 11
+      // Instagram targets that failed this way were ACTUALLY LIVE.
+      if (isIndeterminatePublishError(failure)) {
+        // A container is single-use, so re-sending media_publish with the SAME
+        // creation_id cannot create a second post — this is the one safe place to
+        // retry. (Re-running publishPost is NOT safe: it mints a NEW container,
+        // which is a new post. That is the layer the incident retried at.)
+        if (!isLastAttempt) {
+          const quick = await this.findPublishedMatch(tokens, igUserId, caption, windowStart).catch(() => null);
+          if (quick) return quick;
+          await new Promise((r) => setTimeout(r, 3000 * (attempt + 1)));
+          continue;
+        }
+        return this.resolveUnknownPublish(tokens, igUserId, caption, windowStart, failure);
+      }
+
+      throw failure;
     }
 
     // media_publish returns a numeric media ID, not a shortcode.
@@ -730,6 +780,120 @@ export class InstagramProvider extends SocialProvider {
       url,
       metadata: data,
     };
+  }
+
+  /**
+   * Last word on a publish whose outcome Instagram never confirmed: adopt the
+   * post if the account already has it, otherwise refuse to guess.
+   *
+   * ⚠️ This NEVER returns "it definitely failed". Instagram's `/media` edge is
+   * eventually consistent, so an absent listing is not proof of absence — and the
+   * two mistakes are not symmetric. Being wrong about "failed" puts a duplicate
+   * in front of a real audience; being wrong about "ambiguous" costs one manual
+   * re-publish, which the post detail page offers in a single click.
+   */
+  private async resolveUnknownPublish(
+    tokens: OAuthTokens,
+    igUserId: string,
+    caption: string,
+    since: Date,
+    cause: unknown
+  ): Promise<SocialPostResult> {
+    // Let Instagram index before asking.
+    if (RECONCILE_SETTLE_MS > 0) {
+      await new Promise((r) => setTimeout(r, RECONCILE_SETTLE_MS));
+    }
+
+    const match = await this.findPublishedMatch(tokens, igUserId, caption, since).catch((e) => {
+      console.warn(`[Instagram] reconciliation read failed for ${igUserId}: ${(e as Error)?.message}`);
+      return null;
+    });
+    if (match) {
+      console.warn(
+        `[Instagram] media_publish did not acknowledge, but ${match.platformPostId} is already live on ${igUserId} — adopting it instead of re-publishing`
+      );
+      return match;
+    }
+
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    throw new AmbiguousPublishError(
+      "Instagram did not confirm this post and it may already be live on the account. " +
+        "Nothing was re-sent, so there is no duplicate — open the account to check, then " +
+        `use "It didn't publish" if you need to try again. Platform error: ${detail}`,
+      { platform: "INSTAGRAM", cause }
+    );
+  }
+
+  /**
+   * Does this account already hold a post with this exact caption, published at
+   * or after `since`?
+   *
+   * Returns the post when found, `null` when the account was readable and has no
+   * such post, and THROWS when it could not be determined. Callers must keep
+   * those three outcomes distinct — collapsing "cannot tell" into `null` is what
+   * turns a lost acknowledgement into a duplicate.
+   */
+  private async findPublishedMatch(
+    tokens: OAuthTokens,
+    igUserId: string,
+    caption: string,
+    since: Date
+  ): Promise<SocialPostResult | null> {
+    let cursor: string | undefined;
+
+    for (let page = 0; page < RECONCILE_MAX_PAGES; page++) {
+      const listed = await this.listRecentPosts(tokens, igUserId, {
+        since,
+        limit: 50,
+        ...(cursor ? { cursor } : {}),
+      });
+
+      // `listRecentPosts` swallows Graph errors into an empty page (correct for the
+      // insights sweep, fatal here). A degradation is an explicit "cannot tell";
+      // and on the FIRST page an empty result is equally inconclusive, because we
+      // have just tried to publish to this account — it should not look empty.
+      if (listed.degraded) {
+        throw new Error(
+          `Instagram listing unavailable (${listed.degraded.reason}) — cannot confirm whether the post published`
+        );
+      }
+      if (page === 0 && listed.posts.length === 0) {
+        throw new Error(
+          "Instagram returned no recent media — cannot confirm whether the post published"
+        );
+      }
+
+      for (const post of listed.posts) {
+        if (post.publishedAt.getTime() < since.getTime()) continue;
+        if (captionsMatch(post.message ?? "", caption)) {
+          return {
+            platformPostId: post.platformPostId,
+            url: post.permalink ?? `https://www.instagram.com/p/${post.platformPostId}`,
+          };
+        }
+      }
+
+      if (!listed.nextCursor) break;
+      cursor = listed.nextCursor;
+    }
+
+    return null;
+  }
+
+  /**
+   * Optional cross-provider hook (see SocialProvider.findExistingPost): used by
+   * the publish worker as a PRE-FLIGHT check before it re-runs a publish, so a
+   * retry whose predecessor succeeded-but-was-not-recorded adopts that post
+   * instead of creating a second one.
+   */
+  async findExistingPost(
+    tokens: OAuthTokens,
+    payload: SocialPostPayload,
+    since: Date
+  ): Promise<SocialPostResult | null> {
+    const igUserId =
+      (payload.metadata?.igUserId as string) || (await this.getInstagramBusinessAccountId(tokens));
+    return this.findPublishedMatch(tokens, igUserId, payload.content, since);
   }
 
   /**
@@ -811,6 +975,6 @@ export class InstagramProvider extends SocialProvider {
     await this.waitForMediaReady(tokens, carouselData.id, 60000, 3000);
 
     // Step 3: Publish the carousel
-    return this.publishContainer(tokens, igUserId, carouselData.id);
+    return this.publishContainer(tokens, igUserId, carouselData.id, payload.content);
   }
 }

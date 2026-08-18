@@ -380,6 +380,146 @@ Optional Instagram-style text strip (emoji + per-word colours + free positioning
   - **🔒 Golden gate:** [super-text-render-golden.test.ts](packages/super-text/src/__tests__/super-text-render-golden.test.ts) snapshots the default render. It must pass with **0 snapshots written** — that is the byte-identity proof for existing posts. Never `-u` it blindly. Plan: [docs/superpowers/plans/2026-07-28-super-text-instagram-fonts.md](docs/superpowers/plans/2026-07-28-super-text-instagram-fonts.md).
 - **Limits (v1):** configured at compose time only (no editing super text on an existing post), one strip per video, source ≤950MB (matches `OPTIMIZE_SIZE_BYTES`, refused at create with a friendly message). YouTube receives the burned video too — intended ("post it everywhere").
 
+## 🔴🔴 DUPLICATE POSTS after Retry — a transient error is NOT a failed write (2026-08-18)
+
+**The worst class of bug this product can have: the same post published 5-6 times to a live
+audience account.** Reported by Nikhil; root-caused from production data, not from the code alone.
+
+### What happened (all measured on prod)
+
+Post `cmsrxo9tq0003nq0itqw1nuw9` — 36 Instagram channels, one 28MB reel, `nikhil's Workspace`.
+
+| IST (14 Aug) | UTC (13 Aug) | Event |
+|---|---|---|
+| 01:21 | 19:51 | created, publishes immediately |
+| 01:22→01:31 | 19:52→20:01 | 24 accounts publish cleanly |
+| ~01:30 | ~20:00 | IG starts returning `code: 2, is_transient: true` on `media_publish` |
+| **01:32:55** | **20:02:55** | **Retry click #1** |
+| **01:34:09–01:34:33** | **20:04:09–20:04:33** | **Retry click #2** → 12 fresh jobs |
+
+Final DB state: **25 PUBLISHED / 11 FAILED**. Reality on Instagram: **all 36 published**, and
+`viralpaparazzii` got **5 copies** (20:00, 20:02, 20:06, 20:08, 20:10 — bracketing the click).
+
+| platform | FAILED targets | actually live | duplicated |
+|---|---|---|---|
+| FACEBOOK | 41 | **0** | 0 |
+| INSTAGRAM | 11 | **11 (100%)** | 1 target × 5 |
+
+Facebook is the control that validates the method: those 41 were genuine token expiries,
+correctly reported. Instagram's 11 were **100% false negatives**.
+
+### Root cause — four compounding mechanisms
+
+1. **Retry restarted at the wrong layer.** IG `publishPost` always does *create container → wait
+   → publish*. A JOB-level retry mints a NEW container, which IS a new post. Retrying
+   `media_publish` with the same `creation_id` would have been safe (containers are single-use);
+   retrying `publishPost` never is.
+2. **`FAILED` is a re-claimable status.** The claim is `SCHEDULED|FAILED|DRAFT → PUBLISHING`, and
+   four error branches deliberately write FAILED **then rethrow** (to avoid orphaning at
+   PUBLISHING). So BullMQ's `attempts: 3` re-claimed and fully re-published.
+3. **The only real idempotency key is written too late.** The `publishedId` short-circuit is the
+   one guard that could stop this, but `publishedId` is only set AFTER success — so it is NULL in
+   exactly the false-negative case.
+4. **`publishNow` could not be deduplicated.** It passed **no `jobId`**, so BullMQ minted a fresh
+   auto-increment id per call. Verified in prod Redis: the same target as jobs **1576349 and
+   1576351**, 81s apart. `2 clicks × 3 attempts = 6` ⇒ the reported "5-6 times".
+
+⚠️ **The claim is a MUTUAL-EXCLUSION guard, not an idempotency guard** — the code called it an
+"atomic idempotency claim" and that name is why this looked covered. It prevents two jobs
+publishing *simultaneously*; it does nothing about publishing again a minute later.
+
+### The fix — never re-run a create whose outcome you do not know
+
+- **[ambiguous-publish.ts](packages/social/src/utils/ambiguous-publish.ts)** — `AmbiguousPublishError`
+  + `isIndeterminatePublishError`. ⚠️ **The asymmetry is load-bearing**: a wrong "indeterminate"
+  costs one manual re-publish; a wrong "definitely failed" costs a duplicate on a live account. When
+  unsure, the answer is INDETERMINATE.
+  - ⚠️ **`is_transient` was read NOWHERE in the codebase before this.** Meta was explicitly saying
+    "this may have partially succeeded" and we discarded it.
+  - Keys on `cause.code` FIRST: `ECONNREFUSED`/`ENOTFOUND`/`EAI_AGAIN` prove the request never
+    left ⇒ safe to retry. `ETIMEDOUT`/`ECONNRESET`/`EPIPE` ⇒ dispatched, outcome unknown. Do NOT
+    collapse these; a bare `"fetch failed"` means either.
+  - A structured Meta error RETURNS EARLY, so a digit run inside `fbtrace_id` can never reach the
+    loose message patterns. (`classifyError` in the worker still substring-matches `"401"`/`"403"`
+    — a known latent misroute, deliberately untouched here.)
+  - **Duck-typed flag, never `instanceof`** — under pnpm's isolated layout the worker and a
+    provider can resolve different copies of the module.
+- **Providers reconcile before giving up.** IG `publishContainer` and the FB `publishPost` wrapper
+  ask the account "is it already there?" (`listRecentPosts` + `captionsMatch`) and ADOPT the
+  existing post rather than writing again. ⚠️ `findPublishedMatch` keeps THREE outcomes distinct —
+  result / `null` (readable and absent) / **throw** (cannot tell). `listRecentPosts` swallows Graph
+  errors into an empty page (correct for the insights sweep, fatal here), so a degradation AND an
+  empty first page both throw: we had just written to that account, it should not look empty.
+- **`PostTarget.ambiguousAt` / `ambiguousReason`** (nullable). The claim now requires
+  `ambiguousAt IS NULL` via **`buildPublishClaimWhere`** — that one predicate is what makes an
+  unknown-outcome target unreachable by EVERY retry layer (BullMQ attempts, the 30s cron, chat/
+  agent publishes, the Retry button). Status stays FAILED so the watchdog, UI and publish report
+  behave exactly as before. NULL on every pre-existing row ⇒ no behaviour change on deploy.
+- **Worker:** pre-flight `findExistingPost` before any re-publish on a retry (closes the
+  publishedId gap: an attempt that published but whose DB write never landed). ⚠️ It refuses to
+  adopt a platform id already recorded against a DIFFERENT target — this account posts
+  near-identical captions routinely. The inner `fetch failed`/ETIMEDOUT loop **no longer replays an
+  ambiguous publish**. Success now clears `errorMessage` + the ambiguity stamp (which is why
+  `papcontent`/`filmiimemes` sat PUBLISHED while still displaying "Instagram publish failed").
+- **`post.publishNow`:** deterministic `pubnow:{targetId}:{bucket}` jobId (3 colon segments), and
+  ambiguous targets are refused **even when named explicitly** — an explicit id must not be a
+  bypass. ⚠️ Keep `priority` UNSET: no-priority IS the interactive fast lane.
+- **`post.clearPublishAmbiguity`** — the operator's "I checked, it did NOT publish" override, the
+  only way out of the ambiguous state. Deliberately a human decision: the platform could not tell
+  us, so somebody has to look. UI shows an amber **"Needs check"** badge + an *"It didn't publish"*
+  button behind a confirm, and the ambiguous panel is styled as an UNKNOWN, not a failure — calling
+  it "failed" is what makes a user click Retry and create the duplicate.
+
+**Accepted trade-off, stated plainly:** an indeterminate error raised BEFORE any write (e.g. a
+socket reset while streaming FB media) also parks for a human check, where it used to auto-retry.
+That is the cheap error. Tunable via `IG_RECONCILE_SETTLE_MS` / `FB_RECONCILE_SETTLE_MS` (default
+8s) — a longer settle means more ambiguities auto-resolve instead of reaching the operator.
+
+**Do NOT:** re-add a raw timestamp to a publish jobId; remove `ambiguousAt: null` from the claim;
+"simplify" the three-outcome reconciliation contract to a boolean; or make `AmbiguousPublishError`
+detection use `instanceof`.
+
+Tests: [ambiguous-publish.test.ts](packages/social/src/__tests__/ambiguous-publish.test.ts) (13),
+[instagram-publish-ambiguity.test.ts](packages/social/src/__tests__/instagram-publish-ambiguity.test.ts) (11),
+[facebook-publish-ambiguity.test.ts](packages/social/src/__tests__/facebook-publish-ambiguity.test.ts) (8),
+[publish-ambiguity.test.ts](apps/worker/src/__tests__/publish-ambiguity.test.ts) (9),
+[publish-now-ambiguity.test.ts](packages/api/src/__tests__/publish-now-ambiguity.test.ts) (10),
+[publish-now-jobid.test.ts](packages/queue/src/__tests__/publish-now-jobid.test.ts) (7).
+
+### 📜 All-time historical insights — LIVE-PROBED, and the floor is now configurable (2026-08-18)
+
+**Question asked: "can we fetch all-time historical insights?" Answer: the floor was never an API
+limit.** Probed against production Graph with real decrypted tokens:
+
+| edge | reached back to | rows before I stopped |
+|---|---|---|
+| IG `/{ig-user}/media` | **2025-11-21** | 6,000 (hit MY page cap, not the end) |
+| FB `/{page}/published_posts` | 2026-04-04 | 4,000+ (still not exhausted at 40 pages) |
+
+- **Listing is CHEAP** (~1 call per 100 posts) — a 4,000-post Page costs ~40 calls.
+- **METRICS are the cost: 2 Graph calls PER POST.** That same Page costs ~8,000 calls to measure.
+  Walking full history for 8 accounts exceeded a 10-minute probe. So all-time *listing* is a config
+  change; all-time *metrics* is a metered backfill, not a flag flip.
+- ⚠️ **Deep pagination has its own ceiling**: Meta returns `code: 1 "Please reduce the amount of
+  data you're asking for"` at roughly **52-58 pages of 100**. Genuinely old history needs
+  time-WINDOWED queries (month by month), not one deep walk.
+- **`EXTERNAL_POST_FLOOR`** (ISO timestamp) now governs it from ONE place —
+  [external-post-floor.ts](packages/queue/src/external-post-floor.ts) — replacing three hardcoded
+  `2026-08-01` literals (api lib, worker `HARD_FLOOR`, cron `since`). Parsing **fails CLOSED** to
+  2026-08-01 on empty/garbage/future values, because compose's explicit `environment:` allowlist
+  delivers an unplumbed key as `""`. Plumbed for **both** web and worker — they must agree, since
+  the worker decides what is ingested and the web container renders "included from …".
+- **The UI label is DERIVED** (`externalFloorLabel`, returned by `analytics.engagement` and
+  `analytics.postReports`). Six hardcoded "1 Aug 2026" strings used to sit in the UI; lowering the
+  floor would have made every one of them lie.
+- **To walk it back: one month at a time**, watching the external-sync logs and the box. Remember
+  `EXTERNAL_METRICS_PER_RUN` is per ACCOUNT per run, and an unmeasured post is honest (NULL
+  `metricsSyncedAt` ⇒ renders "—", contributes to neither side of the engagement rate), so the
+  post COUNT is complete immediately while numbers fill in newest-first.
+- ⚠️ **Token health, not the floor, is the real ceiling** — and the stored verdicts are stale:
+  **0 of 400** active FB channels carried `insightsHealth.status === "ok"`, yet **3 of 3** FB pages
+  probed directly answered fine. Do not trust a stale health verdict as evidence a token is dead.
+
 ## Publish pipeline speed/fairness + exact-time scheduling (2026-07-18 PR #131 + 2026-07-20 Phase 2) — read before touching the publish queue
 
 Full audit + phased plan: [docs/PUBLISH-PIPELINE-SPEED-PLAN.md](docs/PUBLISH-PIPELINE-SPEED-PLAN.md). Phase 1 (PR #131, deployed + E2E-verified on prod: X +14.6s, IG +32.3s from scheduled time, live URLs):

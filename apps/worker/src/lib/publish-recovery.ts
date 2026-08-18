@@ -6,6 +6,109 @@
 // (the stuck-PUBLISHING reaper).
 
 /**
+ * The statuses a publish job may claim, i.e. transition to PUBLISHING.
+ *
+ * ⚠️ FAILED is in this set BY DESIGN: several error branches mark a target FAILED
+ * before rethrowing so it cannot be orphaned at PUBLISHING, and the subsequent
+ * BullMQ attempt is then meant to pick it back up. The consequence — discovered
+ * the hard way on 2026-08-13 — is that a FAILED target is fully re-publishable,
+ * so a failure that was actually a SUCCESS gets re-posted once per attempt.
+ * `ambiguousAt` (below) is what makes that survivable; do not "fix" this by
+ * removing FAILED, which would orphan targets at PUBLISHING again.
+ */
+export const PUBLISH_CLAIM_STATUSES = ["SCHEDULED", "FAILED", "DRAFT"] as const;
+
+/**
+ * The atomic claim's WHERE clause.
+ *
+ * ⚠️ `ambiguousAt: null` is the load-bearing addition. A target whose publish
+ * outcome could not be determined must be unreachable by EVERY retry layer —
+ * BullMQ `attempts`, the 30s reconciliation cron, chat/agent publishes, and a
+ * human clicking Retry all funnel through this claim. Pre-existing rows all have
+ * NULL here, so the predicate is a no-op for them.
+ *
+ * Named and exported so the guarantee is testable without booting the worker.
+ */
+export type PublishClaimStatus = (typeof PUBLISH_CLAIM_STATUSES)[number];
+
+export function buildPublishClaimWhere(postTargetId: string): {
+  id: string;
+  status: { in: PublishClaimStatus[] };
+  ambiguousAt: null;
+} {
+  return {
+    id: postTargetId,
+    // Spread to a MUTABLE array: Prisma's generated `in` filter is `PostStatus[]`
+    // and rejects a readonly tuple.
+    status: { in: [...PUBLISH_CLAIM_STATUSES] },
+    ambiguousAt: null,
+  };
+}
+
+/**
+ * Park a target whose publish outcome is UNKNOWN.
+ *
+ * Status stays FAILED so the watchdog, the UI's terminal-state handling and the
+ * publish report all behave exactly as they already do; `ambiguousAt` is what
+ * removes it from the claim so nothing re-publishes it. The operator clears it
+ * from the post detail page once they have checked the account.
+ *
+ * Bookkeeping failures are swallowed: by the time this runs the platform-side
+ * outcome is already whatever it is, and throwing here would hand the job back to
+ * BullMQ — which is the re-publish we are preventing.
+ */
+export async function markTargetAmbiguous(
+  prisma: {
+    postTarget: {
+      update: (args: {
+        where: { id: string };
+        data: {
+          status: "FAILED";
+          errorMessage: string;
+          ambiguousAt: Date;
+          ambiguousReason: string;
+        };
+      }) => Promise<unknown>;
+    };
+  },
+  postTargetId: string,
+  reason: string,
+): Promise<void> {
+  await prisma.postTarget
+    .update({
+      where: { id: postTargetId },
+      data: {
+        status: "FAILED",
+        errorMessage: reason,
+        ambiguousAt: new Date(),
+        ambiguousReason: reason,
+      },
+    })
+    .catch((e: any) =>
+      console.error(`[PostPublish] failed to mark target ambiguous:`, e?.message),
+    );
+}
+
+/**
+ * Should the worker ask the platform "is this post already live?" BEFORE it
+ * publishes?
+ *
+ * Only on a retry, and only when the answer is not already free. This closes the
+ * gap the `publishedId` short-circuit cannot: a previous attempt that published
+ * successfully but whose DB write never landed leaves publishedId NULL, so the
+ * short-circuit misses and the retry re-posts.
+ */
+export function shouldPreflightReconcile(opts: {
+  attemptsMade: number;
+  hasPublishedId: boolean;
+  providerSupportsReconcile: boolean;
+}): boolean {
+  if (!opts.providerSupportsReconcile) return false;
+  if (opts.hasPublishedId) return false;
+  return opts.attemptsMade > 0;
+}
+
+/**
  * Idempotently mark a PostTarget as FAILED with an error message.
  *
  * Mirrors EXACTLY how the generic unknown-error branch in post-publish.worker.ts

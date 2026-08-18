@@ -377,7 +377,7 @@ export function ReportsTab() {
           {mode === "current" ? (
             <span>
               Covers <strong>all posts on your connected Facebook Pages and Instagram accounts
-              from 1 Aug 2026 onward</strong>, including ones posted directly on the platform
+              from {(data as any)?.externalFloorLabel ?? "1 Aug 2026"} onward</strong>, including ones posted directly on the platform
               (marked <em>Direct</em>) — not just posts sent through PostAutomation.{" "}
               <strong>Views</strong> and <strong>Impressions</strong> are separate columns:
               Instagram, YouTube and Threads report only views, while Facebook reports both

@@ -23,6 +23,30 @@ export abstract class SocialProvider {
   abstract publishPost(tokens: OAuthTokens, payload: SocialPostPayload): Promise<SocialPostResult>;
   abstract deletePost(tokens: OAuthTokens, platformPostId: string): Promise<void>;
 
+  /**
+   * OPTIONAL reconciliation hook: "has a post with this payload already landed on
+   * this account since `since`?"
+   *
+   * Publishing is NOT idempotent, so a retry can only be safe if we first ask the
+   * platform whether the previous attempt actually landed. The publish worker
+   * calls this before EVERY re-publish; a provider that does not implement it
+   * keeps the old behaviour exactly, and its retries stay unguarded.
+   *
+   * Contract — the three outcomes must stay distinct:
+   *   - a result  ⇒ the post exists; adopt it, do not publish again;
+   *   - `null`    ⇒ the account was readable and has no such post; safe to retry;
+   *   - THROW     ⇒ could not be determined; the caller must treat it as ambiguous
+   *                 and must NOT publish again.
+   *
+   * ⚠️ Never collapse "cannot tell" into `null`. That single conflation is what
+   * produced the 2026-08-13 duplicate-post incident.
+   */
+  findExistingPost?(
+    tokens: OAuthTokens,
+    payload: SocialPostPayload,
+    since: Date
+  ): Promise<SocialPostResult | null>;
+
   // Profile info
   abstract getProfile(tokens: OAuthTokens): Promise<SocialProfile>;
 
