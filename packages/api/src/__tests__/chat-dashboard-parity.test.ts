@@ -10,8 +10,11 @@ import { join } from "path";
  * shared `fetchChannelStatRows` aggregate, while chat kept a private copy of the
  * old SQL over AnalyticsSnapshot. That copy then drifted THREE ways at once:
  *
- *   1. it missed platform-native (direct) posts — the LARGER population, ~5x
- *      more rows than app-published on this deployment;
+ *   1. it missed platform-native (direct) posts — then the LARGER population, ~5x
+ *      more rows than app-published on this deployment. ⚠️ INVERTED 2026-08-19:
+ *      direct posts are now deliberately EXCLUDED from Insights (owner decision),
+ *      so sharing the aggregate is what keeps chat excluding them too. The parity
+ *      requirement is unchanged — only the direction of the drift it prevents;
  *   2. it applied no capability gate, so it reported a number for Instagram
  *      impressions while the dashboard rendered "—" for the same data;
  *   3. it never learned about `views`.

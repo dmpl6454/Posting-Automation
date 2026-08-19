@@ -1,5 +1,5 @@
 import { prisma } from "@postautomation/db";
-import { tokenRefreshQueue, analyticsSyncQueue, agentRunQueue, trendDiscoverQueue, listeningSyncQueue, campaignAnalyticsSyncQueue, brandContentSyncQueue, outreachPollQueue, rssSyncQueue, avatarCacheQueue, externalPostSyncQueue, externalPostFloor } from "@postautomation/queue";
+import { tokenRefreshQueue, analyticsSyncQueue, agentRunQueue, trendDiscoverQueue, listeningSyncQueue, campaignAnalyticsSyncQueue, brandContentSyncQueue, outreachPollQueue, rssSyncQueue, avatarCacheQueue, externalPostSyncQueue, externalPostFloor, insightsIncludeExternalPosts } from "@postautomation/queue";
 import { groupIntoAccounts, selectShard } from "../lib/external-sync-accounts";
 import { planFbAnalyticsRun } from "../lib/fb-analytics-budget";
 import {
@@ -799,9 +799,30 @@ export async function scheduleAvatarCache() {
  *
  * SHARDED: each run covers 1/EXTERNAL_SYNC_SHARDS of the accounts, chosen by a stable hash,
  * so a 2-hourly cron sweeps everything over a predictable period without ever stampeding.
- * Set EXTERNAL_SYNC_ENABLED=false to stop ingestion entirely (kill switch).
+ *
+ * ⚠️ DORMANT BY DEFAULT since 2026-08-19 (owner decision): Insights covers posts
+ * published THROUGH PostAutomation, end to end, so this sweep makes no Graph calls
+ * unless `INSIGHTS_INCLUDE_EXTERNAL_POSTS=true`. That switch is shared with the API
+ * container (see @postautomation/queue/insights-population) precisely so ingestion and
+ * display can never disagree: a worker still sweeping while the web app has stopped
+ * reading would spend Meta quota on rows nobody can see, and the reverse would render a
+ * population frozen at whatever the last sweep caught.
+ *
+ * `EXTERNAL_SYNC_ENABLED=false` remains an INDEPENDENT ingestion-only brake — either
+ * switch alone is enough to stop the sweep.
  */
 export async function scheduleExternalPostSync() {
+  // ⚠️ Both gates precede the channel query on purpose. That findMany covers every
+  // active FB/IG row (~1,339 on prod); running it every 2 hours only to discard the
+  // result is waste with no upside.
+  if (!insightsIncludeExternalPosts()) {
+    console.log(
+      "[Cron] External post sync skipped — Insights covers app-published posts only " +
+        "(set INSIGHTS_INCLUDE_EXTERNAL_POSTS=true to ingest direct posts)"
+    );
+    return;
+  }
+
   if (process.env.EXTERNAL_SYNC_ENABLED === "false") {
     console.log("[Cron] External post sync disabled (EXTERNAL_SYNC_ENABLED=false)");
     return;

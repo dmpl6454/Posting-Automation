@@ -376,9 +376,22 @@ export function ReportsTab() {
           <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           {mode === "current" ? (
             <span>
-              Covers <strong>all posts on your connected Facebook Pages and Instagram accounts
-              {data?.externalFloorLabel ? `from ${data.externalFloorLabel} onward` : "since coverage began"}</strong>, including ones posted directly on the platform
-              (marked <em>Direct</em>) — not just posts sent through PostAutomation.{" "}
+              {/* The scope sentence is DERIVED from the population the server actually
+                  returned. Asserting "all posts on your Pages" while the query selects
+                  only app-published rows is the precise shape of copy outliving
+                  behavior that this file's history is a record of. */}
+              {data?.includesDirectPosts ? (
+                <>
+                  Covers <strong>all posts on your connected Facebook Pages and Instagram accounts
+                  {data.externalFloorLabel ? ` from ${data.externalFloorLabel} onward` : " since coverage began"}</strong>, including ones posted directly on the platform
+                  (marked <em>Direct</em>) — not just posts sent through PostAutomation.{" "}
+                </>
+              ) : (
+                <>
+                  Covers <strong>posts published through PostAutomation</strong> in this window.
+                  Posts you made directly on a platform aren&apos;t included.{" "}
+                </>
+              )}
               <strong>Views</strong> and <strong>Impressions</strong> are separate columns:
               Instagram, YouTube and Threads report only views, while Facebook reports both
               (impressions counts plays/renders, views counts watched video). Twitter metrics
@@ -388,9 +401,14 @@ export function ReportsTab() {
           ) : (
             <span>
               At-publish-age metrics are captured by checkpoints scheduled when{" "}
-              <strong>we</strong> publish a post, so this mode covers posts sent through
-              PostAutomation only — posts made directly on the platform have no checkpoint to
-              report. Switch to <strong>Current metrics</strong> to see every post on the page.
+              <strong>we</strong> publish a post, so this mode reports each post at a fixed age
+              after publishing rather than as of today.{" "}
+              {data?.includesDirectPosts && (
+                <>
+                  Posts made directly on the platform have no checkpoint to report — switch to{" "}
+                  <strong>Current metrics</strong> to see those.{" "}
+                </>
+              )}
               All times UTC.
             </span>
           )}
@@ -494,8 +512,10 @@ export function ReportsTab() {
                           {r.platform}
                         </Badge>
                         <span className="max-w-[140px] truncate">{r.channelName}</span>
-                        {/* Honest provenance. Insights now covers the whole page, so a row
-                            the user never sent must not silently read as one they did. */}
+                        {/* Honest provenance, and DATA-driven rather than copy-driven: no
+                            row carries isExternal unless the direct-post population is
+                            switched on, so this badge goes dark with the feature instead of
+                            needing its own gate. */}
                         {r.isExternal && (
                           <Badge
                             variant="outline"

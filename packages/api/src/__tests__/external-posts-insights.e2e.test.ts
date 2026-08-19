@@ -243,4 +243,54 @@ d("external posts in Insights (real Postgres)", () => {
       })
     ).rejects.toThrow();
   });
+
+  /**
+   * THE PRODUCTION QUERY, against real Postgres, in both population modes.
+   *
+   * ⚠️ Every test above runs a HAND-COPIED approximation of the aggregate (declared
+   * in `channelStats` at the top of this file). That was always a weakness — the copy
+   * has already drifted, lacking the `views` column and the per-platform filter — and
+   * it means those tests cannot catch a syntax error in the statement the app actually
+   * sends. The 2026-08-19 population switch makes the SQL *structural* (the ext_rows
+   * CTE is now interpolated in or out), so the emitted statement has TWO shapes and
+   * both must be provably executable. A mocked Prisma never parses SQL, so nothing
+   * short of this can prove `WITH app_rows AS (…), all_rows AS (SELECT * FROM app_rows)`
+   * is valid — a missing or doubled comma at the join point is a runtime-only error.
+   */
+  describe("fetchChannelStatRows — the real statement, both modes", () => {
+    const KEY = "INSIGHTS_INCLUDE_EXTERNAL_POSTS";
+    afterAll(() => {
+      delete process.env[KEY];
+    });
+
+    async function runProduction() {
+      const { fetchChannelStatRows } = await import("../routers/analytics.router");
+      return fetchChannelStatRows(prisma, orgId, FROM, TO);
+    }
+
+    it("executes in app-published-only mode (the default)", async () => {
+      delete process.env[KEY];
+      const rows = await runProduction();
+      // This org's only rows are ExternalPosts, so excluding them must yield none.
+      // If the CTE join were malformed this line would throw, not return [].
+      expect(rows).toEqual([]);
+    });
+
+    it("executes with a per-platform filter applied to the single arm", async () => {
+      delete process.env[KEY];
+      const { fetchChannelStatRows } = await import("../routers/analytics.router");
+      await expect(
+        fetchChannelStatRows(prisma, orgId, FROM, TO, "FACEBOOK")
+      ).resolves.toEqual([]);
+    });
+
+    it("executes with the external arm restored, and finds the direct posts", async () => {
+      process.env[KEY] = "true";
+      const rows = await runProduction();
+      // page_1 (+ any other in-window fixture on this channel) reappears, proving
+      // the switch reaches the SQL rather than only the surrounding copy.
+      expect(rows.length).toBeGreaterThan(0);
+      expect(rows.some((r) => r.channelId === channelId)).toBe(true);
+    });
+  });
 });

@@ -76,8 +76,10 @@ export interface ClassifiedPost {
 /**
  * Classify listed posts as ours (link to the PostTarget) or platform-native (null).
  *
- * ⚠️ Only posts classified as platform-native are unioned into the Insights read paths;
- * ours keep flowing through the existing PostTarget aggregates untouched. That is what
+ * ⚠️ Only posts classified as platform-native are unioned into the Insights read paths —
+ * and since 2026-08-19 that union is itself OFF by default (`INSIGHTS_INCLUDE_EXTERNAL_POSTS`),
+ * so in the default configuration nothing this function classifies reaches Insights at all.
+ * Ours keep flowing through the existing PostTarget aggregates untouched. That is what
  * makes this change additive: if dedup somehow mis-classifies a post as OURS, we lose a
  * row (conservative). If it mis-classifies as THEIRS, we double-count (wrong). So the
  * matching is deliberately generous — every known alias is checked.

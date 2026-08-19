@@ -21,6 +21,13 @@ import { stepScrapeBudget, shouldDeferUnmeasured } from "../lib/scrape-budget";
  * Ingests posts that exist ON a connected account — including ones published directly on
  * the platform — so Insights reflects the whole account, not just what we sent.
  *
+ * ⚠️ DORMANT SINCE 2026-08-19 (owner decision): Insights covers posts published THROUGH
+ * PostAutomation, end to end, so this worker receives no jobs unless
+ * `INSIGHTS_INCLUDE_EXTERNAL_POSTS=true`. Its producer `scheduleExternalPostSync` is gated
+ * on that switch (see cron-jobs.ts) — nothing here needed to change, and everything below
+ * still describes how it works if it is re-enabled. Measured waste it eliminated: ~62,000
+ * Graph calls in a 6-hour window, ~250k/day.
+ *
  * Why this matters (measured on prod 2026-08-06): reachable Pages average 17.7 posts since
  * 2026-08-01, while Pages we publish through average 3.7. Roughly 5x the activity was
  * invisible.
