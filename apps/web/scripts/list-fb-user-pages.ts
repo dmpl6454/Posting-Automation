@@ -1,5 +1,5 @@
 /**
- * scripts/list-fb-user-pages.ts
+ * apps/web/scripts/list-fb-user-pages.ts
  *
  * One-off export: list every Facebook Page the caller's Facebook account
  * administers (NOT just Pages already connected as Channels in
@@ -16,10 +16,18 @@
  * Output: CSV on stdout (id,name,category,url,followers). Diagnostics go
  * to stderr so `> file.csv` redirection captures only clean CSV data.
  *
- * Usage (from the production server, matching the documented pattern in
- * CLAUDE.md for one-off scripts):
+ * ⚠️ LOCATION MATTERS: this script lives under apps/web/scripts/, NOT the
+ * repo-root scripts/ dir. pnpm's isolated node_modules layout means
+ * `@postautomation/db` only resolves from directories that declare it as a
+ * direct dependency — apps/web/node_modules/@postautomation/db is a real
+ * symlink, but there is no root /app/node_modules/@postautomation/* at all.
+ * A script under root scripts/ throws MODULE_NOT_FOUND for any
+ * @postautomation/* import; verified against the container 2026-08-19.
+ *
+ * Usage (from the production server, run from the apps/web working dir so
+ * the workspace symlinks resolve):
  *   docker exec postautomation-web-1 sh -c \
- *     'cd /app && NODE_PATH=/app/packages/db/node_modules \
+ *     'cd /app/apps/web && NODE_PATH=/app/packages/db/node_modules \
  *      /app/packages/db/node_modules/.bin/tsx scripts/list-fb-user-pages.ts' \
  *     > fb-pages.csv
  */
