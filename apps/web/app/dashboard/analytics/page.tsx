@@ -26,6 +26,7 @@ import {
   type MetricKey,
   type MetricRowMeta,
 } from "~/lib/metric-cell";
+import { deriveInsightsEmptyState } from "~/lib/insights-empty-state";
 
 function formatNumber(num: number): string {
   if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1)}M`;
@@ -140,33 +141,30 @@ function InsightsAnalyticsView() {
   const utils = trpc.useUtils();
   const triggerSync = trpc.analytics.triggerSync.useMutation({
     onSuccess: (data) => {
-      // Sync Now refreshes BOTH populations: posts we published (`queued`) and posts
-      // made directly on connected Facebook/Instagram accounts (`accountsQueued`).
-      // Only report "nothing to sync" when neither has anything — the old copy claimed
-      // direct posts "aren't included", which stopped being true.
+      // Sync Now refreshes the posts this workspace published through PostAutomation
+      // (`queued`). `accountsQueued` is the direct-post population, which is 0 unless
+      // INSIGHTS_INCLUDE_EXTERNAL_POSTS is on — so the copy is DERIVED from the counts
+      // rather than asserting a population exists. Insights covers app-published posts
+      // (owner decision 2026-08-19).
       const accounts = data.accountsQueued ?? 0;
       if (data.queued === 0 && accounts === 0) {
         toast({
           title: "Nothing to sync",
           description:
-            "This workspace has no posts published through PostAutomation in the last 30 days, and no connected Facebook or Instagram accounts to check for direct posts. Insights only cover this workspace — posts made in another workspace aren't included.",
+            "This workspace has no posts published through PostAutomation in the last 30 days. Insights cover posts sent through PostAutomation from this workspace — posts made directly on a platform, or in another workspace, aren't included.",
         });
         setSyncing(false);
         return;
       }
-      // Name BOTH populations so the button's effect is obvious — a user who only posts
-      // directly used to see "Refreshing 0 posts" and assume it did nothing.
       const parts: string[] = [];
       if (data.queued > 0) parts.push(`${data.queued} post${data.queued === 1 ? "" : "s"}`);
       if (accounts > 0) parts.push(`${accounts} connected account${accounts === 1 ? "" : "s"}`);
       toast({
         title: "Analytics sync started",
-        description: `Refreshing ${parts.join(" and ")}. Numbers update as each one completes; direct posts can take a few minutes.`,
+        description: `Refreshing ${parts.join(" and ")}. Numbers update as each one completes.`,
       });
       // Worker jobs finish at different times; refetch a few times instead of a single
       // fixed cliff so slow syncs still surface without leaving stale data (audit #13).
-      // Direct-post ingestion lists then measures, so it lands later than an app-post
-      // refresh — hence the longer tail.
       [4000, 9000, 15000, 30000, 60000].forEach((ms) =>
         setTimeout(() => { void utils.analytics.invalidate(); }, ms)
       );
@@ -352,39 +350,51 @@ function InsightsAnalyticsView() {
     likeKinds.size === 1 ? likeColumnLabel(likeKinds.values().next().value as string) : { label: "Likes" };
 
   /**
-   * Direct-post coverage floor. We only collect posts made outside PostAutomation from
-   * the configured floor onward, so a range starting before it is PARTIALLY covered: app-published
-   * posts go all the way back, direct posts do not. Saying nothing would make an
-   * incomplete view look complete — the exact failure mode this codebase keeps fighting.
+   * Does this page include posts made DIRECTLY on a platform?
+   *
+   * No, by default — Insights covers posts published through PostAutomation, end to
+   * end (owner decision 2026-08-19). The server answers this rather than the client
+   * inferring it, so every string below is driven by one authoritative flag instead
+   * of guessing from whether some other field happens to be present.
+   */
+  const includesDirectPosts = engagement?.includesDirectPosts === true;
+
+  /**
+   * Direct-post coverage floor — only meaningful while direct posts ARE included.
+   * The server returns these as undefined otherwise, so the notice disappears with
+   * the population it describes rather than asserting a start date for data the page
+   * no longer shows.
    */
   // ⚠️ The floor is CONFIGURABLE server-side (EXTERNAL_POST_FLOOR) — it was
   // hardcoded here and in five other strings on this page until 2026-08-18. The
   // server now returns the ACTIVE label so lowering the floor cannot leave this
-  // copy asserting a start date that is no longer true. The date fallback keeps
-  // the notice working on a stale/loading response.
+  // copy asserting a start date that is no longer true.
   // ⚠️ BOTH halves come from the server. Deriving only the LABEL from config while
   // the gate kept a hardcoded date meant a lowered floor made the notice fire on
   // ranges it had just started covering. Until the query resolves there is no
   // floor to compare against, so the notice stays hidden rather than guessing.
   const directFloorLabel = engagement?.externalFloorLabel;
   const directFloorIso = engagement?.externalFloorIso;
-  const rangeStartsBeforeFloor = !!directFloorIso && new Date(from) < new Date(directFloorIso);
+  const rangeStartsBeforeFloor =
+    includesDirectPosts && !!directFloorIso && new Date(from) < new Date(directFloorIso);
   const hasMetaChannel = (channelStats ?? []).some(
     (ch: any) => ch.platform === "FACEBOOK" || ch.platform === "INSTAGRAM"
   );
 
   // Channels are connected but no engagement has synced yet — distinct from
   // "no channels connected" so we don't imply zero performance (audit fix 2026-06-06).
-  const hasChannels = !!channelStats && channelStats.length > 0;
   // ⚠️ Computed over the UNFILTERED stats. Deriving it from the platform-filtered
   // rows would flash "connected but nothing synced yet" across a healthy org the
   // moment someone views a quiet platform — a false statement about the org.
-  const noEngagementYet =
-    !!unfilteredChannelStats &&
-    unfilteredChannelStats.length > 0 &&
-    unfilteredChannelStats.every(
-      (ch: any) => (ch.impressions + ch.reach + ch.likes + ch.comments + ch.shares) === 0
-    );
+  //
+  // ⚠️ TWO states, not one. "No engagement synced yet — try Sync Now" is only true
+  // when a capture is outstanding. With Insights covering app-published posts, a
+  // workspace that posts mainly DIRECTLY on the platform has nothing pending, so
+  // that advice can never succeed. See insights-empty-state.ts.
+  const emptyState = deriveInsightsEmptyState(
+    unfilteredChannelStats as any,
+    includesDirectPosts
+  );
 
   // Engagement Breakdown all-zeros hint (mirrors the Channel Performance
   // empty-state convention) — display-only, tile data logic untouched.
@@ -563,15 +573,18 @@ function InsightsAnalyticsView() {
         <CardHeader>
           <CardTitle className="text-base">Posts Over Time</CardTitle>
           {/*
-            ⚠️ NARROWER POPULATION THAN THE TABLE BELOW — say so.
-            postsOverTime counts app-published posts only (PostTarget rows), while
-            Channel Performance and the engagement tiles union in ExternalPost
-            (posts made directly on connected FB Pages / IG accounts). Measured on
-            prod 2026-08-13: one workspace showed 0 here beside 28,401 in the table,
-            and another 2 beside 28,439 — a 14,219x gap presented as if the two
-            counted the same thing. That is the documented "no posts in the last 30
-            days" false bug report. Mirrors the Channel Performance "Posts" column
-            and the ReportsTab at_age disclosure.
+            Population: app-published posts (PostTarget rows) — the SAME population
+            as Channel Performance and the engagement tiles since 2026-08-19, so the
+            two agree by construction and no divergence disclaimer is needed.
+
+            ⚠️ HISTORY, so the disclaimer is restored rather than reinvented if the
+            direct-post population ever comes back: between 2026-08-07 and
+            2026-08-19 the table unioned in ExternalPost while this chart did not.
+            Measured on prod 2026-08-13, one workspace showed 0 here beside 28,401 in
+            the table, and another 2 beside 28,439 — a 14,219x gap presented as if
+            the two counted the same thing. That was the documented "no posts in the
+            last 30 days" false bug report. Every qualifier below is therefore gated
+            on `includesDirectPosts`, never deleted.
           */}
           <CardDescription>Posts you published through PostAutomation, per day</CardDescription>
         </CardHeader>
@@ -613,16 +626,17 @@ function InsightsAnalyticsView() {
                   You didn&rsquo;t publish anything through PostAutomation in this period
                 </p>
                 {/*
-                  An empty chart here is NOT the same as "this channel had no
-                  activity" — posts made directly on the platform are counted in
-                  Channel Performance below but never in this chart. Without this
-                  line the empty state reads as data loss (measured: a workspace
-                  with 28,401 direct posts sees an empty chart).
+                  Only shown while the direct-post population exists. With Insights
+                  covering app-published posts only, pointing the user at Channel
+                  Performance for direct posts would send them to a table that does
+                  not contain them either — a disclaimer that has become misdirection.
                 */}
-                <p className="mx-auto mt-1 max-w-xs text-xs text-muted-foreground/80">
-                  Posts made directly on Facebook or Instagram aren&rsquo;t counted here —
-                  see Channel Performance below for every post on your channels.
-                </p>
+                {includesDirectPosts && (
+                  <p className="mx-auto mt-1 max-w-xs text-xs text-muted-foreground/80">
+                    Posts made directly on Facebook or Instagram aren&rsquo;t counted here —
+                    see Channel Performance below for every post on your channels.
+                  </p>
+                )}
                 {/* Fix #34: guide users to create posts */}
                 <Link
                   href="/dashboard/content-agent"
@@ -840,7 +854,19 @@ function InsightsAnalyticsView() {
           </div>
         </CardHeader>
         <CardContent className="p-0">
-          {noEngagementYet && (
+          {/* ⚠️ Two different causes, two different messages. Suggesting "Sync Now"
+              when nothing was published through us sends the user to a button that
+              answers "Nothing to sync" — the banner and the button contradicting
+              each other. See insights-empty-state.ts. */}
+          {emptyState === "no_app_posts" && (
+            <div className="m-4 mb-0 rounded-md bg-blue-500/10 px-3 py-2 text-xs text-blue-700 dark:text-blue-400">
+              These channels haven&rsquo;t received any posts through PostAutomation in this date
+              range. Insights measures posts sent from PostAutomation — anything you posted
+              directly on the platform isn&rsquo;t counted here. Try a wider date range, or publish
+              from Content Studio.
+            </div>
+          )}
+          {emptyState === "no_metrics_yet" && (
             <div className="m-4 mb-0 rounded-md bg-blue-500/10 px-3 py-2 text-xs text-blue-700 dark:text-blue-400">
               Your channels are connected, but no engagement data has synced yet. Metrics appear
               after a sync cycle — try “Sync Now” above, or check back later.
@@ -859,16 +885,22 @@ function InsightsAnalyticsView() {
                 <thead>
                   <tr className="border-b bg-muted/40">
                     <th className="px-4 py-3 text-left font-medium text-muted-foreground">Channel</th>
-                    {/* Was "Posts sent" — that was accurate when Insights could only see
-                        posts WE published. It now also ingests posts made directly on
-                        connected Facebook Pages and Instagram accounts (from {directFloorLabel ?? "the coverage start date"}),
-                        so the count is the channel's real post count for the range, and
-                        should no longer read as "what you sent". */}
+                    {/* The header follows the POPULATION, in both directions.
+                        "Posts" (bare) was correct only while direct posts were ingested;
+                        with Insights covering app-published posts it would over-claim —
+                        the platform's own count is legitimately higher (measured on prod:
+                        Facebook reported 13 where we published 10), and a bare "Posts"
+                        invites exactly the "your numbers are wrong" report that the
+                        earlier rename was meant to settle. */}
                     <th
                       className="px-4 py-3 text-right font-medium text-muted-foreground"
-                      title={`Posts on this channel within the selected date range — those sent through PostAutomation plus those posted directly on the platform (Facebook/Instagram, from ${directFloorLabel ?? "the coverage start date"}).`}
+                      title={
+                        includesDirectPosts
+                          ? `Posts on this channel within the selected date range — those sent through PostAutomation plus those posted directly on the platform (Facebook/Instagram, from ${directFloorLabel ?? "the coverage start date"}).`
+                          : "Posts sent to this channel through PostAutomation within the selected date range. Posts you made directly on the platform aren't counted, so the platform's own total may be higher."
+                      }
                     >
-                      Posts
+                      {includesDirectPosts ? "Posts" : "Posts sent"}
                     </th>
                     {channelColumns.map((c) => (
                       <th
@@ -1026,10 +1058,22 @@ function InsightsAnalyticsView() {
                 where the platform reports it separately from impressions, and where it is summed across
                 posts it is labelled &ldquo;summed&rdquo; — the same person seeing two posts counts twice, so it is
                 not a deduplicated audience size.
-                &ldquo;Posts&rdquo; counts every post on the channel in this date range — those sent through
-                PostAutomation plus those posted directly on the platform. Direct posts are collected for
-                Facebook Pages and Instagram accounts from {directFloorLabel ?? "the coverage start date"} onward, and only while the channel&rsquo;s
-                connection is healthy; a channel needing reconnection shows its own posts only.
+                {includesDirectPosts ? (
+                  <>
+                    &ldquo;Posts&rdquo; counts every post on the channel in this date range — those sent
+                    through PostAutomation plus those posted directly on the platform. Direct posts are
+                    collected for Facebook Pages and Instagram accounts from {directFloorLabel ?? "the coverage start date"} onward,
+                    and only while the channel&rsquo;s connection is healthy; a channel needing
+                    reconnection shows its own posts only.
+                  </>
+                ) : (
+                  <>
+                    &ldquo;Posts sent&rdquo; counts the posts published to this channel through
+                    PostAutomation in this date range. Anything you posted directly on the platform
+                    isn&rsquo;t included, so the platform&rsquo;s own post count is usually higher — that
+                    difference is expected, not missing data.
+                  </>
+                )}{" "}
                 Engagement rate is pooled over only the posts that reported impressions, and shows that
                 count in brackets when it is fewer than all of them.
               </p>

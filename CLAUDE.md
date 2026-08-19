@@ -1342,7 +1342,158 @@ undeclared key) — they encoded the bug as expected and were updated with a not
 Tests: [shares-visibility.test.ts](packages/api/src/__tests__/shares-visibility.test.ts)
 (verified FAILING pre-fix), [facebook-shares-availability.test.ts](packages/api/src/__tests__/facebook-shares-availability.test.ts).
 
+## 🎯 Insights covers POSTS SENT THROUGH POSTAUTOMATION only — direct-post ingestion is OFF (2026-08-19)
+
+**Owner decision, and it REVERSES the default described in the section immediately below.**
+Insights measures and displays posts published through PostAutomation end to end. Posts made
+directly on a connected FB Page / IG account are **neither fetched from Meta nor shown**. Read
+this before debugging anything about "missing" Insights data or the `ExternalPost` table.
+
+- **ONE master switch, plumbed to BOTH containers**: `INSIGHTS_INCLUDE_EXTERNAL_POSTS`
+  ([insights-population.ts](packages/queue/src/insights-population.ts), re-exported via
+  [packages/api/src/lib/insights-population.ts](packages/api/src/lib/insights-population.ts)).
+  **Fail-CLOSED (`=== "true"`)** — an unplumbed compose key arrives as `""`, and a fail-open
+  check would read that as ENABLED (the PR #166 incident). Default/unset ⇒ app-published only.
+  It lives in `packages/queue` for the same reason `EXTERNAL_POST_FLOOR` does: **the worker
+  decides what is INGESTED and the web container decides what is DISPLAYED**, so if they
+  disagree you either burn Graph quota on rows nobody can see, or render a population that
+  stopped refreshing. Plumbed for web AND worker in `docker-compose.prod.yml` — keep both.
+- **What it gates** (4 sites): the `ext_rows` CTE in `fetchChannelStatRows` (Channel
+  Performance, Group Performance, engagement tiles, AND chat's `get_analytics`, which shares
+  it); the `externalUnion` arm of `fetchPostReportRows` (Reports/CSV/email); the account-level
+  enqueue in `analytics.triggerSync` ("Sync Now"); and `scheduleExternalPostSync` (the 2-hourly
+  sweep). **`EXTERNAL_SYNC_ENABLED=false` remains an INDEPENDENT ingestion-only brake** —
+  either alone stops the sweep.
+- **⚠️ `all_rows` is deliberately kept as a single-arm pass-through CTE** (`SELECT * FROM
+  app_rows`). That is what makes the ~60-line outer aggregate — `availExpr`, the
+  impressioned-only sums, `COUNT(DISTINCT post_key)`, `hasLegacySnapshot` — **byte-identical**
+  in both modes. Inlining `app_rows` into the outer SELECT is a "tidier" diff that silently
+  re-derives every honesty rule. Don't.
+- **⚠️ POSITIONAL PARAMS ARE UNCHANGED ($1 org, $2 from, $3 to, $4 platform).** The dropped arm
+  consumed the same four, so nothing renumbers — but in a `$queryRawUnsafe` template a shift
+  here would rescope the aggregate to **another organization**, i.e. an IDOR, not a cosmetic
+  bug. Locked by an explicit `expect(params).toEqual([...])`.
+- **The gate precedes the DB round-trip** in both `scheduleExternalPostSync` and `triggerSync`.
+  That channel query covers every active FB/IG row (~1,339 on prod); running it to discard the
+  result is waste with no upside.
+- **Server tells the UI, the UI never infers.** `analytics.engagement` and
+  `analytics.postReports` return **`includesDirectPosts`**, and `externalFloorLabel`/`Iso` are
+  **undefined** when excluded. Every direct-post qualifier in the UI is **gated on that flag,
+  never deleted** — so re-enabling the population restores its disclosure with it. Channel
+  Performance's column flips `Posts` ⇄ `Posts sent` (bare "Posts" over-claims when the
+  platform's own count is legitimately higher — measured: FB reported 13 where we published
+  10). Reports' "Direct" badge is data-driven off `r.isExternal`, so it goes dark on its own.
+- **⚠️ Existing `ExternalPost` rows are RETAINED, not deleted** (132k+ on prod). They are
+  excluded from every read path, so this is fully reversible. Deleting them was not asked for
+  and would be irreversible. `EXTERNAL_POST_FLOOR` / `EXTERNAL_RECAPTURE_BEFORE` /
+  `EXTERNAL_METRICS_PER_RUN` are inert while the switch is off.
+- **Verified no side-effect on app-published FB freshness:** prod has
+  `FB_ANALYTICS_SYNC_ENABLED=true`, so `scheduleFacebookAnalyticsSync` still refreshes FB
+  app-published targets. External sync never fed `AnalyticsSnapshot` (it writes `ExternalPost`
+  rows only), so turning it off cannot freeze app-published metrics. **Check that flag before
+  concluding otherwise.**
+- **⚠️ The `*.e2e` suites inline a HAND-COPIED approximation of the aggregate** (it had already
+  drifted — missing the `views` column and the platform filter), so they cannot catch a syntax
+  error in the statement the app actually sends. Since the population switch makes the SQL
+  *structural* (two shapes), a real-Postgres block that calls the **production**
+  `fetchChannelStatRows` in BOTH modes was added to
+  [external-posts-insights.e2e.test.ts](packages/api/src/__tests__/external-posts-insights.e2e.test.ts).
+  Run it after any change to that query:
+  ```bash
+  cd packages/db && DATABASE_URL="postgresql://postautomation:postautomation_dev@localhost:5433/postautomation" npx prisma db push --skip-generate
+  cd .. && set -a; source .env; set +a
+  DATABASE_URL="postgresql://postautomation:postautomation_dev@localhost:5433/postautomation" LIVE_E2E=1 npx vitest run external-posts-insights insights-availability-sql
+  ```
+- **To re-enable**: set `INSIGHTS_INCLUDE_EXTERNAL_POSTS=true` on **both** web and worker and
+  redeploy. Re-read the cost notes on `EXTERNAL_POST_FLOOR` first — listing is cheap (~1 call
+  per 100 posts) but **METRICS are 2 Graph calls PER POST**.
+- Tests: [insights-population.test.ts](packages/queue/src/__tests__/insights-population.test.ts) (6),
+  [insights-app-published-only.test.ts](packages/api/src/__tests__/insights-app-published-only.test.ts) (14),
+  [external-sync-gate.test.ts](apps/worker/src/scheduler/__tests__/external-sync-gate.test.ts) (7),
+  [insights-empty-state.test.ts](apps/web/lib/insights-empty-state.test.ts) (6),
+  [insights-health-population-scope.test.ts](packages/api/src/__tests__/insights-health-population-scope.test.ts) (4).
+  ⚠️ The worker suite pins `EXTERNAL_SYNC_SHARDS=1`: the sweep is sharded by a stable hash, so
+  with the default 4 a single fixture account lands in the active shard 1 run in 4 — which made
+  "enqueues nothing" pass for the wrong reason. Full suite 2489 passed / 0 failed.
+
+### 📏 MEASURED ON PROD before deploying (2026-08-19)
+
+**Call waste eliminated: ~62,000 Graph calls in a 6-hour window** (31,083 direct posts × 2 calls
+each) ≈ **~250k calls/day**, against 288,147 direct-post rows on 918 channels. ⚠️ This also
+REDUCES publish risk: FB `usageCache` is MODULE-GLOBAL and shared with the publish path, and at
+≥95% app usage every publish Graph call sleeps an uncapped 60s — so the old volume could stall
+PUBLISHING. Turning it off makes posting safer, not riskier.
+
+| org | app-published (what Insights now shows) | direct rows removed from view | active channels |
+|---|---|---|---|
+| nikhil's Workspace | **105 posts** across 39 channels, 3.33M impressions, 29,434 likes | 40,125 | 121 |
+| karankumar1166dt | **23 posts** across 4 channels | 2 | 3 (+1 disconnected) |
+| tabish@dashmani | **2 posts**, 0 impressions | 40,125 | 121 |
+
+- ⚠️ **`tabish@dashmani`'s workspace legitimately looks near-empty** (2 posts, zero engagement) —
+  it has barely published through the app. That is the honest number, not a bug. Its 40,125 direct
+  rows are the SAME rows as nikhil's: **all 121 platformIds are shared between the two orgs**, and
+  external sync fans one account's posts out to every channel row for it, so identical counts
+  across orgs are expected, not a query bug.
+- **✅ DISCONNECT/RECONNECT PROVEN SAFE on real rows.** Ran the ACTUAL production statement (dumped
+  from the code, not hand-copied) against prod via `PREPARE`: karan's **disconnected** channel
+  `contenttt0505` (`isActive=false`, `disconnectedAt` set) **still appears**, carrying its 1 post
+  and `hasSnapshot=true`, with availability flags `false` so its metrics render `—` rather than
+  fake zeros. `app_rows` deliberately does NOT filter `c."isActive"` (owner decision 2026-08-06),
+  and `perChannelStats` keeps `isActive || hasRow`, so **no channel vanishes on pause/disconnect
+  and reconnecting revives the same row.** Both zero-cases render honestly: one channel shows a
+  real `0` (Meta measured zero), the other `—` (not reported).
+
+### 🔧 UI gaps this change CREATED, and how they were closed
+
+Found by a dedicated audit pass; each verified against source/prod before fixing.
+
+- **🔴 The zero-state banner started blaming sync lag for a permanent condition.**
+  `perChannelStats` keeps every active channel and LEFT-joins stats, so a workspace that posts
+  mainly directly now gets a full table of all-zero rows → the old single banner fired, saying
+  *"no engagement data has synced yet … try Sync Now, or check back later"*. Clicking Sync Now
+  then answered the **opposite** — "Nothing to sync". Telling a user to wait for data that cannot
+  arrive is a false statement about the system, not just unhelpful copy. Now TWO states via the
+  pure [insights-empty-state.ts](apps/web/lib/insights-empty-state.ts): `postCount === 0`
+  everywhere ⇒ "these channels haven't received posts through PostAutomation in this range"
+  (no Sync Now suggestion); `postCount > 0` with zero metrics ⇒ the original sync-lag copy, which
+  is correct there. ⚠️ `no_app_posts` is suppressed when direct posts ARE included, since
+  `postCount` then counts them too.
+- **🔴 The Super Agent asserted the old population and the LLM repeated it.**
+  `chat.router.ts` wrote `"Engagement (last 30 days, all posts on connected channels …)"` into a
+  `chatMessage` that the model reads back and paraphrases. `get_analytics` shares
+  `fetchChannelStatRows`, so the claim became false. Now "posts published through PostAutomation".
+  ⚠️ Keep the literal substring `last 30 days` — `chat-dashboard-parity.test.ts` asserts it.
+- **🟡 The reconnect banner would have nagged forever about channels Insights no longer measures.**
+  Measured: **673 active channels carry `needs_reconnect`; 665 (98.8%) have NEVER held an
+  app-published PostTarget.** Those verdicts were written by `external-post-sync.worker`'s
+  `writeHealth`; with that sweep dormant such a channel is visited by NEITHER health writer, and
+  `shouldApplyHealthVerdict` clears `needs_reconnect` only on a later CLEAN capture — so the
+  verdict freezes on screen. That is the perpetual-banner class PR #170 fixed, re-entered by a new
+  mechanism. `analytics.insightsHealth` is now scoped to `postTargets: { some: { status:
+  "PUBLISHED" } }` when direct posts are excluded — **self-maintaining, because that is exactly
+  the set analytics-sync revisits**, so verdicts stay fresh and can still self-clear. Preferred
+  over a one-off metadata cleanup for that reason. Scope is dropped when the flag is on.
+- **🟡 `hasChannels` was dead code with a now-wrong name** (zero readers; it meant "channels with
+  rows in the window", not "the org has channels") — deleted, so nobody revives it as a false
+  signal. A genuine has-channels signal should come from `platformsInWindow` / `channel.list`.
+- **Stale rationale corrected in 4 places** (`chat.router` docblock, `chat-dashboard-parity`
+  header, `external-post-sync.worker` header, `external-post-dedup`): all argued the shared
+  aggregate mattered because it CAUGHT direct posts — "the LARGER population, ~5x more rows".
+  That reason is now **inverted** (sharing is what keeps chat EXCLUDING them); the capability-gate
+  and `views` reasons stand. Per this file's own rule: when a claim is refuted, grep the repo.
+- **Checked and clean:** every `externalFloorLabel`/`Iso` consumer is already guarded
+  (`!!directFloorIso`, `?? "the coverage start date"`, or a ternary), so no "included from
+  undefined onward" is reachable; the CSV header and emailed report never referenced the floor or
+  the population; `includesDirectPosts` is read with `=== true` so a stale client cannot crash;
+  "No active channels found" only fires for orgs genuinely without channels.
+
 ## 📥 Insights now cover ALL posts on a connected page, not just ones we published (2026-08-07)
+
+> **⚠️ SUPERSEDED 2026-08-19 — this population is now OFF BY DEFAULT.** Everything below still
+> describes how the pipeline works and what was live-probed (all of it remains accurate and is
+> the reference if it is ever re-enabled), but the default is app-published-only. See the
+> section immediately above.
 
 Insights was built entirely on `PostTarget` — posts published **through** PostAutomation —
 which is why it looked so sparse. **Measured on prod: reachable Pages average 17.7 posts

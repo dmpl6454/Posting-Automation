@@ -13,5 +13,9 @@ export {
   resolveExternalPostFloor,
   DEFAULT_EXTERNAL_POST_FLOOR_ISO,
 } from "./external-post-floor";
+export {
+  insightsIncludeExternalPosts,
+  resolveIncludeExternalPosts,
+} from "./insights-population";
 export { buildScheduledPublishJobs, enqueueScheduledPublishJobs } from "./schedule-publish";
 export type { SchedulablePublishTarget, ScheduledPublishArgs, ScheduledPublishJobSpec } from "./schedule-publish";

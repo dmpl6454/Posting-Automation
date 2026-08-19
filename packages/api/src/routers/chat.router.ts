@@ -981,10 +981,14 @@ export const chatRouter = createRouter({
           // CLAUDE.md records the invariant that chat and the dashboard must agree.
           // This block used to run its own SQL over AnalyticsSnapshot alone, which
           // silently drifted three ways once the dashboard moved to
-          // fetchChannelStatRows: it missed platform-native (direct) posts — the
-          // LARGER population — applied no capability gate, so it reported a number
-          // for Instagram impressions while the dashboard showed "—", and never
-          // learned about `views`.
+          // fetchChannelStatRows: it applied no capability gate, so it reported a
+          // number for Instagram impressions while the dashboard showed "—", it
+          // never learned about `views`, and it missed platform-native (direct)
+          // posts. ⚠️ That third reason is now INVERTED — since 2026-08-19 direct
+          // posts are deliberately EXCLUDED from Insights (owner decision), so
+          // sharing the aggregate is what keeps chat excluding them too. The first
+          // two reasons stand unchanged, and sharing remains the point: parity by
+          // construction rather than by parallel maintenance, in both directions.
           //
           // Window matches the dashboard's default (30 days) and is stated in the
           // summary text, so the agent cannot imply an all-time figure.
@@ -1040,7 +1044,7 @@ export const chatRouter = createRouter({
           )
             .filter(([, v]) => v > 0)
             .map(([k, v]) => `- ${k}: ${v}`);
-          const summary = `📊 Dashboard Summary:\n- Total posts: ${totalPosts}\n- Published: ${published}\n- Scheduled: ${scheduled}\n- Active channels: ${channels}\n\nEngagement (last 30 days, all posts on connected channels — matches the Insights page):\n${engagementLines.length ? engagementLines.join("\n") : "- No engagement data captured yet for this window."}\n\nRecent posts:\n${recentPosts.map((p) => `  • [${p.status}] ${p.content.slice(0, 60)}...`).join("\n")}`;
+          const summary = `📊 Dashboard Summary:\n- Total posts: ${totalPosts}\n- Published: ${published}\n- Scheduled: ${scheduled}\n- Active channels: ${channels}\n\nEngagement (last 30 days, posts published through PostAutomation — matches the Insights page):\n${engagementLines.length ? engagementLines.join("\n") : "- No engagement data captured yet for this window."}\n\nRecent posts:\n${recentPosts.map((p) => `  • [${p.status}] ${p.content.slice(0, 60)}...`).join("\n")}`;
 
           await ctx.prisma.chatMessage.create({
             data: {

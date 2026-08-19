@@ -4,6 +4,7 @@ import { createRouter, orgProcedure } from "../trpc";
 import { analyticsSyncQueue, externalPostSyncQueue } from "@postautomation/queue";
 import { groupChannelsIntoAccounts } from "../lib/sync-accounts";
 import { externalPostFloor, externalPostFloorLabel } from "../lib/external-post-floor";
+import { insightsIncludeExternalPosts } from "../lib/insights-population";
 import type { PrismaClient } from "@postautomation/db";
 import {
   sumChannelRowsIntoGroups,
@@ -92,6 +93,54 @@ export async function fetchChannelStatRows(
                   WHEN (avail->>'${key}') IS NULL THEN TRUE
                   ELSE (avail->>'${key}') <> 'false' END)`;
 
+  // ── WHICH POPULATION (owner decision 2026-08-19) ────────────────────────────
+  // Insights reports on posts published THROUGH PostAutomation, end to end.
+  // Posts made directly on a connected FB Page / IG account are excluded, and the
+  // worker makes no Graph calls to collect them. See insights-population.ts.
+  //
+  // ⚠️ `all_rows` stays a CTE even with a single arm, on purpose. Keeping it means
+  // the ~60-line outer aggregate below — and therefore EVERY honesty rule in it
+  // (availExpr, the impressioned-only sums, COUNT(DISTINCT post_key),
+  // hasLegacySnapshot) — is byte-identical in both modes. Inlining app_rows into
+  // the outer SELECT would be a "tidier" diff that silently re-derives all of it.
+  //
+  // ⚠️ The positional params are UNCHANGED ($1 org, $2 from, $3 to, $4 platform).
+  // The dropped arm consumed the same four, so nothing renumbers. Getting this
+  // wrong would rescope the aggregate to another organization — an IDOR.
+  const includeExternal = insightsIncludeExternalPosts();
+
+  const extRowsCte = includeExternal
+    ? `,
+     ext_rows AS (
+       SELECT ep."channelId"                       AS channel_id,
+              'e:' || ep.id                        AS post_key,
+              ep.impressions, ep.reach, ep.likes, ep.comments, ep.shares, ep.clicks,
+              -- Same position as app_rows — UNION ALL matches by ORDER, not name.
+              ep.views,
+              -- NULL metricsSyncedAt = listed but never measured ⇒ "—", never a fake 0.
+              (ep."metricsSyncedAt" IS NOT NULL)    AS has_metrics,
+              -- Both Meta providers always declare metricsAvailable, so a measured row
+              -- without one made no claim ⇒ defer to the static platform map.
+              (ep."metricsAvailable" IS NOT NULL)   AS has_meta,
+              ep."metricsAvailable"                 AS avail,
+              (ep."metricsSyncedAt" IS NOT NULL AND ep."metricsAvailable" IS NULL) AS is_legacy
+       FROM "ExternalPost" ep
+       -- organizationId is proven through the Channel join — the same IDOR-safe shape
+       -- every other Insights query uses.
+       INNER JOIN "Channel" c2 ON c2.id = ep."channelId"
+       WHERE c2."organizationId" = $1
+         AND ep."postTargetId" IS NULL
+         AND ep."publishedAt" BETWEEN $2 AND $3
+         AND ($4::text IS NULL OR c2.platform::text = $4)
+     )`
+    : "";
+
+  const allRowsBody = includeExternal
+    ? `SELECT * FROM app_rows
+       UNION ALL
+       SELECT * FROM ext_rows`
+    : `SELECT * FROM app_rows`;
+
   const rows: Array<{
     channelId: string;
     posts: bigint;
@@ -117,14 +166,16 @@ export async function fetchChannelStatRows(
     availClicks: boolean | null;
     hasLegacySnapshot: boolean | null;
   }> = await (prisma.$queryRawUnsafe as any)(
-    // Two populations, ONE aggregate:
-    //   app_rows — posts published THROUGH PostAutomation (unchanged semantics)
-    //   ext_rows — posts that exist on the platform but were NOT published by us
+    // ONE aggregate, one population by default:
+    //   app_rows — posts published THROUGH PostAutomation (the only population)
+    //   ext_rows — posts that exist on the platform but were NOT published by us.
+    //              Present ONLY when INSIGHTS_INCLUDE_EXTERNAL_POSTS=true.
     //
-    // ⚠️ ext_rows is filtered to `postTargetId IS NULL`, i.e. ONLY posts we did not
-    // publish. Posts we did publish keep flowing through app_rows exactly as before, so
-    // this change is purely ADDITIVE and can never double-count. If dedup ever
-    // mis-classifies, it loses a row (conservative) rather than inflating a number.
+    // ⚠️ When present, ext_rows is filtered to `postTargetId IS NULL`, i.e. ONLY posts
+    // we did not publish. Posts we DID publish always flow through app_rows, so the
+    // external arm can never double-count: if dedup mis-classifies, it loses a row
+    // (conservative) rather than inflating a number. That invariant is why toggling the
+    // population off cannot change a single app-published figure.
     //
     // Both branches project the SAME normalized columns so the outer aggregate — and
     // therefore every honesty rule below it — is written once and applies to both.
@@ -171,33 +222,9 @@ export async function fetchChannelStatRows(
          -- byte-identical to the pre-filter behavior). Parameterized, never
          -- interpolated; org scoping above is untouched.
          AND ($4::text IS NULL OR c.platform::text = $4)
-     ),
-     ext_rows AS (
-       SELECT ep."channelId"                       AS channel_id,
-              'e:' || ep.id                        AS post_key,
-              ep.impressions, ep.reach, ep.likes, ep.comments, ep.shares, ep.clicks,
-              -- Same position as app_rows — UNION ALL matches by ORDER, not name.
-              ep.views,
-              -- NULL metricsSyncedAt = listed but never measured ⇒ "—", never a fake 0.
-              (ep."metricsSyncedAt" IS NOT NULL)    AS has_metrics,
-              -- Both Meta providers always declare metricsAvailable, so a measured row
-              -- without one made no claim ⇒ defer to the static platform map.
-              (ep."metricsAvailable" IS NOT NULL)   AS has_meta,
-              ep."metricsAvailable"                 AS avail,
-              (ep."metricsSyncedAt" IS NOT NULL AND ep."metricsAvailable" IS NULL) AS is_legacy
-       FROM "ExternalPost" ep
-       -- organizationId is proven through the Channel join — the same IDOR-safe shape
-       -- every other Insights query uses.
-       INNER JOIN "Channel" c2 ON c2.id = ep."channelId"
-       WHERE c2."organizationId" = $1
-         AND ep."postTargetId" IS NULL
-         AND ep."publishedAt" BETWEEN $2 AND $3
-         AND ($4::text IS NULL OR c2.platform::text = $4)
-     ),
+     )${extRowsCte},
      all_rows AS (
-       SELECT * FROM app_rows
-       UNION ALL
-       SELECT * FROM ext_rows
+       ${allRowsBody}
      )
      SELECT channel_id                       AS "channelId",
             COUNT(DISTINCT post_key)         AS posts,
@@ -542,13 +569,19 @@ async function fetchPostReportRows(
   const platformFilterApp = `AND ($${platformIdx}::text IS NULL OR c.platform::text = $${platformIdx})`;
   const platformFilterExt = `AND ($${platformIdx}::text IS NULL OR c2.platform::text = $${platformIdx})`;
 
-  // Platform-native posts (not published through us) are unioned in for "current" mode.
-  // ⚠️ NOT for "at_age": those rows are pinned to at-age CHECKPOINT snapshots that only
-  // exist for posts we published (the delayed jobs are enqueued at publish time), so an
-  // external post can never have one. Including them would render a table of "—" and
-  // misrepresent at-age coverage.
+  // Platform-native posts (not published through us) are unioned in ONLY when the
+  // population switch is on AND the mode is "current".
+  //
+  // ⚠️ Two independent reasons to exclude, both permanent:
+  //   1. Owner decision 2026-08-19 — Reports covers posts sent through PostAutomation.
+  //   2. "at_age" NEVER included them: those rows are pinned to at-age CHECKPOINT
+  //      snapshots that only exist for posts we published (the delayed jobs are
+  //      enqueued at publish time), so an external post can never have one. Including
+  //      them would render a table of "—" and misrepresent at-age coverage.
+  // So the disabled branch is NOT new code — it is the branch at_age mode has taken
+  // since PR #162, which is why it needs no separate correctness argument.
   const externalUnion =
-    mode === "current"
+    mode === "current" && insightsIncludeExternalPosts()
       ? `
      UNION ALL
      SELECT ep.id             AS "targetId",
@@ -832,10 +865,24 @@ export const analyticsRouter = createRouter({
       });
 
       return {
+        // Does this response include posts made DIRECTLY on the platform?
+        //
+        // ⚠️ Returned explicitly rather than left for the UI to infer from the
+        // presence of a floor label. Six hardcoded "1 Aug 2026" strings once sat in
+        // the UI, and the lesson recorded from that was to DERIVE the copy from the
+        // server. Inferring the population from a label's absence would repeat the
+        // same mistake one level up: an implicit signal the next edit can break
+        // without any test noticing.
+        includesDirectPosts: insightsIncludeExternalPosts(),
         // Active external-post coverage floor (configurable) — see postReports.
         // Label for copy, ISO instant for the "is this range covered?" gate.
-        externalFloorLabel: externalPostFloorLabel(),
-        externalFloorIso: externalPostFloor().toISOString(),
+        // Both undefined when direct posts are excluded: there is no coverage
+        // boundary to disclose, and a stale "included from …" notice would describe
+        // data this page no longer shows.
+        externalFloorLabel: insightsIncludeExternalPosts() ? externalPostFloorLabel() : undefined,
+        externalFloorIso: insightsIncludeExternalPosts()
+          ? externalPostFloor().toISOString()
+          : undefined,
         impressions: sum((r) => r.impressions),
         clicks: sum((r) => r.clicks),
         likes: sum((r) => r.likes),
@@ -891,19 +938,23 @@ export const analyticsRouter = createRouter({
    * respected the selected range). Date predicate mirrors the rest of this
    * router: parent Post publishedAt in range, updatedAt fallback when NULL.
    *
-   * ⚠️ DELIBERATELY A NARROWER POPULATION than its neighbours on the same page.
-   * This counts PostTarget rows only — posts published THROUGH PostAutomation.
-   * `fetchChannelStatRows` (Channel Performance, Group Performance, and the
-   * `engagement` tiles) UNIONs in ExternalPost, i.e. posts made directly on
-   * connected FB Pages / IG accounts. So this card and the table beside it
-   * legitimately disagree, sometimes enormously — measured on prod 2026-08-13,
-   * one workspace had 0 here against 28,401 in the table.
+   * Counts PostTarget rows — posts published THROUGH PostAutomation. Since the
+   * 2026-08-19 owner decision that is the population EVERY card on this page uses,
+   * including `fetchChannelStatRows` (Channel Performance, Group Performance, the
+   * `engagement` tiles), so they now agree by construction.
    *
-   * Do NOT "fix" that by widening this query without an explicit product decision:
+   * ⚠️ HISTORY worth keeping, because the divergence returns the moment
+   * INSIGHTS_INCLUDE_EXTERNAL_POSTS is set: between 2026-08-07 and 2026-08-19
+   * `fetchChannelStatRows` UNIONed in ExternalPost (posts made directly on connected
+   * FB Pages / IG accounts) while this query did not, so this card and the table
+   * beside it disagreed enormously — measured on prod 2026-08-13, one workspace had
+   * 0 here against 28,401 in the table.
+   *
+   * Do NOT widen this query to match without an explicit product decision:
    * "what did I publish?" and "what is on my channels?" are both valid questions.
-   * What is NOT acceptable is showing them side by side unlabelled, which is why
-   * the UI now says "Posts you published through PostAutomation" on both cards.
-   * If you ever DO widen it, drop those qualifiers in the same commit.
+   * What is NOT acceptable is showing them side by side unlabelled — which is why
+   * the UI's qualifiers are gated on the server's `includesDirectPosts` rather than
+   * deleted, so re-enabling the population restores the disclosure with it.
    */
   platformBreakdown: orgProcedure
     .input(
@@ -1237,8 +1288,31 @@ export const analyticsRouter = createRouter({
   }),
 
   insightsHealth: orgProcedure.query(async ({ ctx }) => {
+    // ⚠️ SCOPED TO THE POPULATION INSIGHTS MEASURES, or this banner nags forever.
+    //
+    // Measured on prod 2026-08-19: 673 active channels carried `needs_reconnect` and
+    // 665 of them (98.8%) had never held an app-published PostTarget. Those verdicts
+    // were written by `external-post-sync.worker`'s writeHealth. With that sweep
+    // dormant (Insights covers app-published posts only), such a channel is visited
+    // by NEITHER health writer — analytics-sync iterates app-published targets, of
+    // which it has none — and `shouldApplyHealthVerdict` only clears a
+    // `needs_reconnect` on a later CLEAN capture. So the verdict freezes on screen
+    // and tells the user to reconnect hundreds of channels to restore metrics the
+    // pipeline no longer gathers: the perpetual-banner class PR #170 fixed, reached
+    // through a new mechanism.
+    //
+    // Scoping to channels with published history is self-maintaining rather than a
+    // one-off data patch: it is EXACTLY the set analytics-sync revisits, so verdicts
+    // here stay fresh and can still self-clear. When direct posts are included the
+    // wider population can report Insights again, so the scope is dropped and this
+    // is byte-identical to the pre-2026-08-19 query.
+    const measuredOnly = !insightsIncludeExternalPosts();
     const channels = await ctx.prisma.channel.findMany({
-      where: { organizationId: ctx.organizationId, isActive: true },
+      where: {
+        organizationId: ctx.organizationId,
+        isActive: true,
+        ...(measuredOnly ? { postTargets: { some: { status: "PUBLISHED" as const } } } : {}),
+      },
       select: { id: true, name: true, platform: true, metadata: true },
     });
     // Covers BOTH failure modes: broken now (dead token / missing scope) and
@@ -1400,28 +1474,35 @@ export const analyticsRouter = createRouter({
       queued++;
     }
 
-    // Sync Now must ALSO refresh posts made directly on the platform. Without this it
-    // only re-read app-published posts, so a user clicking it saw their directly-posted
-    // content stay stale and reasonably concluded the button was broken.
-    // Same account-level keying as the cron: one job per DISTINCT platformId, fanned out
-    // to every channel row for it — so this costs 1 Graph call per account, not per row.
-    const metaChannels = await ctx.prisma.channel.findMany({
-      where: {
-        organizationId: ctx.organizationId,
-        isActive: true,
-        disconnectedAt: null,
-        platform: { in: ["FACEBOOK", "INSTAGRAM"] },
-      },
-      select: {
-        id: true,
-        organizationId: true,
-        platform: true,
-        platformId: true,
-        metadata: true,
-        updatedAt: true,
-      },
-    });
+    // Direct-post refresh — only when that population is part of Insights.
+    //
+    // ⚠️ Gated at the QUERY, not just the enqueue. Insights covers posts published
+    // through PostAutomation (owner decision 2026-08-19), so fetching the org's Meta
+    // channels here would be a round-trip whose only possible use is work we have
+    // decided not to do. When enabled, the account-level keying matches the cron: one
+    // job per DISTINCT platformId fanned out to every channel row for it, so it costs
+    // 1 Graph call per account rather than one per row.
+    const metaChannels = insightsIncludeExternalPosts()
+      ? await ctx.prisma.channel.findMany({
+          where: {
+            organizationId: ctx.organizationId,
+            isActive: true,
+            disconnectedAt: null,
+            platform: { in: ["FACEBOOK", "INSTAGRAM"] },
+          },
+          select: {
+            id: true,
+            organizationId: true,
+            platform: true,
+            platformId: true,
+            metadata: true,
+            updatedAt: true,
+          },
+        })
+      : [];
 
+    // Stays 0 when excluded, so the toast cannot claim direct posts are refreshing
+    // when nothing was queued. The UI reads this to build its message.
     let accountsQueued = 0;
     if (metaChannels.length > 0) {
       const accounts = groupChannelsIntoAccounts(
@@ -1526,13 +1607,19 @@ export const analyticsRouter = createRouter({
           rows.map((r) => r.platform),
           rows.map((r) => r.snapshotMetadata?.metricsAvailable as any)
         ),
+        // Whether these rows can contain platform-native ("Direct") posts at all.
+        // Drives the Reports coverage paragraph and the Direct badge.
+        includesDirectPosts: insightsIncludeExternalPosts(),
         // ⚠️ The coverage floor is CONFIGURABLE (EXTERNAL_POST_FLOOR). BOTH the
         // label and the ISO instant are returned: the UI needs the label for its
         // copy AND the instant to decide whether to show the notice at all. When
         // only the label was returned, the gate kept a hardcoded 2026-08-01 and
         // the notice fired on ranges that were in fact fully covered.
-        externalFloorLabel: externalPostFloorLabel(),
-        externalFloorIso: externalPostFloor().toISOString(),
+        // Undefined when direct posts are excluded — no boundary to disclose.
+        externalFloorLabel: insightsIncludeExternalPosts() ? externalPostFloorLabel() : undefined,
+        externalFloorIso: insightsIncludeExternalPosts()
+          ? externalPostFloor().toISOString()
+          : undefined,
       };
     }),
 

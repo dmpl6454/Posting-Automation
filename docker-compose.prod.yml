@@ -111,8 +111,15 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postautomation}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-postautomation}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       NEXTAUTH_URL: https://postautomation.co.in
+      # Which POPULATION Insights reports on. Default (unset) = posts published
+      # THROUGH PostAutomation only; direct posts are neither fetched nor shown.
+      # MUST match the worker's value — the worker decides what is INGESTED and
+      # this container decides what is DISPLAYED. Fail-CLOSED in code
+      # (=== "true"), so an unplumbed/empty value keeps the cheap default.
+      INSIGHTS_INCLUDE_EXTERNAL_POSTS: ${INSIGHTS_INCLUDE_EXTERNAL_POSTS:-false}
       # External-post coverage floor — MUST match the worker's value: the worker
       # decides what is ingested, the web container renders "included from …".
+      # Only has any effect while INSIGHTS_INCLUDE_EXTERNAL_POSTS=true.
       EXTERNAL_POST_FLOOR: ${EXTERNAL_POST_FLOOR:-}
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
       S3_ENDPOINT: http://minio:9000
@@ -257,6 +264,12 @@ services:
       # it arrives as an empty string. Both switches below fail OPEN in code
       # (`!== "false"`), so an unplumbed var silently means ENABLED. Adding the
       # key to .env.prod alone is NOT enough; it must also be named here.
+      # ⚠️ MASTER SWITCH for the direct-post population — governs both INGESTION
+      # (this container) and DISPLAY (the web container), which is why the same key
+      # is plumbed in both. Default (unset) = app-published posts only, so this
+      # sweep makes NO Graph calls. Fail-CLOSED in code (=== "true").
+      # `EXTERNAL_SYNC_ENABLED` below remains an independent ingestion-only brake.
+      INSIGHTS_INCLUDE_EXTERNAL_POSTS: ${INSIGHTS_INCLUDE_EXTERNAL_POSTS:-false}
       EXTERNAL_SYNC_ENABLED: ${EXTERNAL_SYNC_ENABLED:-true}
       EXTERNAL_VIEW_SCRAPE_ENABLED: ${EXTERNAL_VIEW_SCRAPE_ENABLED:-false}
       EXTERNAL_SCRAPE_PER_RUN: ${EXTERNAL_SCRAPE_PER_RUN:-5}
