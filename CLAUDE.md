@@ -1488,6 +1488,36 @@ Found by a dedicated audit pass; each verified against source/prod before fixing
   the population; `includesDirectPosts` is read with `=== true` so a stale client cannot crash;
   "No active channels found" only fires for orgs genuinely without channels.
 
+### 🚚 DEPLOYED 2026-08-19 (PR #178, merge `f94046c`) — and the trap it exposed
+
+Flag verified `false` in BOTH containers; new code and new copy confirmed in the deployed
+`.next/server` bundle. Publishing stayed clean through the deploy (0 PUBLISHING before and after,
+0 FAILED, 0 ambiguous, publish queue 0/0/0).
+
+- **🔴 GATING THE CRON DOES NOT STOP WORK ALREADY QUEUED.** Immediately after deploy the worker was
+  still logging `[ExternalSync] …` and spending Graph calls: **99 jobs sat waiting in
+  `bull:external-post-sync`**, enqueued by the last PRE-deploy cron run (worth up to ~30k calls).
+  The deploy replaced the code, not Redis — queue state survives a restart by design. Drained with
+  BullMQ's own `drain(true)` from a one-off tsx script inside the worker container (`docker cp` +
+  `/app/node_modules/.pnpm/node_modules/.bin/tsx`), which is safe only because those jobs write
+  rows no read path consumes; `bull:post-publish` was verified untouched. **`drain()` does NOT kill
+  `active` jobs** — 2 finished naturally afterwards. **Whenever you disable a producer, check the
+  consumer's queue depth in the same session.**
+- ⚠️ **A per-minute ROW rate is not a per-minute POST rate.** `measured=37 channels=5` writes **185**
+  `ExternalPost` rows, because one account fans out to every channel row sharing it. The winding-down
+  tail looks ~5× larger than it is; don't mistake it for the sweep still running.
+- ⚠️ The `auto-healer` ErrorLog rows every ~10 min ("4 permanent failures detected… rate_limit") are
+  **pre-existing** (the known duplicate-warning finding), not deploy fallout. Check timestamps
+  against pre-deploy before blaming a release.
+- **Orgs materially affected (measured):** DASHMANI 314 app-published / 66,206 direct hidden ·
+  nikhil's 105 / 40,150 · sds 4 / 66,420 · Digital Sukoon 4 / 65,870 · Tabish's 2 / 40,150 ·
+  **arman's 0 / 9,494 — a completely empty Insights page.** Four of six now read near-empty. That is
+  the honest number, and precisely the case the `no_app_posts` banner exists to explain.
+- **Inert leftovers on prod** (harmless while the switch is off; decide explicitly if ever cleaning
+  up): `EXTERNAL_METRICS_PER_RUN=150`, `EXTERNAL_VIEW_SCRAPE_ENABLED=true`,
+  `EXTERNAL_SCRAPE_PER_RUN=40`. **`FB_ANALYTICS_SYNC_ENABLED=true` must STAY** — it serves
+  app-published FB targets, which are now the whole population.
+
 ## 📥 Insights now cover ALL posts on a connected page, not just ones we published (2026-08-07)
 
 > **⚠️ SUPERSEDED 2026-08-19 — this population is now OFF BY DEFAULT.** Everything below still
