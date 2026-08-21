@@ -68,3 +68,72 @@ describe("deriveInsightsEmptyState", () => {
     expect(deriveInsightsEmptyState(partial, false)).toBe("no_app_posts");
   });
 });
+
+/**
+ * OBSERVED ON PRODUCTION 2026-08-21, via the real page while signed in as the owner.
+ *
+ * Tabish's Workspace rendered the banner *"no engagement data has synced yet — try
+ * Sync Now, or check back later"* for two posts that BOTH already carry an
+ * AnalyticsSnapshot (verified: hasSnapshot true on every row). Their engagement is
+ * genuinely zero. So the banner blamed a pending sync for a settled fact, and Sync
+ * Now can never change it — the same "wait for data that cannot arrive" falsehood the
+ * first fix removed, just one layer deeper.
+ *
+ * `hasSnapshot` is already on every row, so the distinction costs no extra query.
+ */
+describe("deriveInsightsEmptyState separates CAPTURED-zero from NOT-YET-captured", () => {
+  it("says zero_engagement when posts have snapshots but no interactions", () => {
+    expect(
+      deriveInsightsEmptyState([row({ postCount: 2, hasSnapshot: true })], false)
+    ).toBe("zero_engagement");
+  });
+
+  it("still says no_metrics_yet when NO row has a snapshot", () => {
+    // Only here is "try Sync Now" honest: a capture really is outstanding.
+    expect(
+      deriveInsightsEmptyState([row({ postCount: 2, hasSnapshot: false })], false)
+    ).toBe("no_metrics_yet");
+  });
+
+  it("prefers no_metrics_yet when SOME rows are still uncaptured", () => {
+    // A partially-synced org has work genuinely pending, so the actionable
+    // message wins over the settled-zero one.
+    expect(
+      deriveInsightsEmptyState(
+        [row({ postCount: 2, hasSnapshot: true }), row({ postCount: 1, hasSnapshot: false })],
+        false
+      )
+    ).toBe("no_metrics_yet");
+  });
+});
+
+/**
+ * The other half of the owner's report: "data exists but is not depicted".
+ *
+ * MEASURED ON PRODUCTION 2026-08-21: 11 orgs have EVER published through
+ * PostAutomation, but only 5 published within the last 30 days — and 30 days is the
+ * page's DEFAULT window. So six orgs own real app-published history and see a blank
+ * page with no hint that widening the range would reveal it. Before the change the
+ * direct-post population always filled the window, which is why this never showed.
+ *
+ * Telling them "you haven't published here" would be FALSE; they have, just earlier.
+ */
+describe("deriveInsightsEmptyState distinguishes 'never' from 'not in this range'", () => {
+  it("says no_app_posts_in_range when history exists outside the window", () => {
+    expect(deriveInsightsEmptyState([row(), row()], false, 4)).toBe("no_app_posts_in_range");
+  });
+
+  it("still says no_app_posts when the org has never published through us", () => {
+    expect(deriveInsightsEmptyState([row(), row()], false, 0)).toBe("no_app_posts");
+  });
+
+  it("defaults to no_app_posts when the all-time count is not supplied", () => {
+    // Backwards compatible: an older client payload without the field must keep the
+    // previous, still-true message rather than claiming history that may not exist.
+    expect(deriveInsightsEmptyState([row(), row()], false)).toBe("no_app_posts");
+  });
+
+  it("never claims out-of-range history while DIRECT posts are included", () => {
+    expect(deriveInsightsEmptyState([row(), row()], true, 4)).toBe("no_metrics_yet");
+  });
+});

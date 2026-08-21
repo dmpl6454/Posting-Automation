@@ -391,9 +391,13 @@ function InsightsAnalyticsView() {
   // when a capture is outstanding. With Insights covering app-published posts, a
   // workspace that posts mainly DIRECTLY on the platform has nothing pending, so
   // that advice can never succeed. See insights-empty-state.ts.
+  // `publishedAllTime` lets the empty state distinguish "never published through us"
+  // from "published, but not in THIS range" — opposite advice, and the second is the
+  // common case now that the window no longer gets filled by direct posts.
   const emptyState = deriveInsightsEmptyState(
     unfilteredChannelStats as any,
-    includesDirectPosts
+    includesDirectPosts,
+    overview?.publishedAllTime ?? 0
   );
 
   // Engagement Breakdown all-zeros hint (mirrors the Channel Performance
@@ -860,10 +864,30 @@ function InsightsAnalyticsView() {
               each other. See insights-empty-state.ts. */}
           {emptyState === "no_app_posts" && (
             <div className="m-4 mb-0 rounded-md bg-blue-500/10 px-3 py-2 text-xs text-blue-700 dark:text-blue-400">
-              These channels haven&rsquo;t received any posts through PostAutomation in this date
-              range. Insights measures posts sent from PostAutomation — anything you posted
-              directly on the platform isn&rsquo;t counted here. Try a wider date range, or publish
-              from Content Studio.
+              These channels haven&rsquo;t received any posts through PostAutomation yet. Insights
+              measures posts sent from PostAutomation — anything you posted directly on the
+              platform isn&rsquo;t counted here. Publish from Content Studio and metrics will
+              appear here automatically.
+            </div>
+          )}
+          {/* Published before, just not in this window. The advice is the OPPOSITE of
+              the message above, which is why they are separate states: telling these
+              users they haven't published would be flatly false. */}
+          {emptyState === "no_app_posts_in_range" && (
+            <div className="m-4 mb-0 rounded-md bg-blue-500/10 px-3 py-2 text-xs text-blue-700 dark:text-blue-400">
+              No posts were published through PostAutomation in this date range, but this
+              workspace has <strong>{overview?.publishedAllTime}</strong> in total — try{" "}
+              <strong>90 days</strong> or a wider custom range to see them. Posts you made
+              directly on the platform aren&rsquo;t counted here.
+            </div>
+          )}
+          {/* Captured, and genuinely zero. Suggesting a refresh here would blame a
+              pending sync for a settled fact — the exact falsehood this replaced. */}
+          {emptyState === "zero_engagement" && (
+            <div className="m-4 mb-0 rounded-md bg-blue-500/10 px-3 py-2 text-xs text-blue-700 dark:text-blue-400">
+              Metrics have been collected for these posts and the platforms are reporting no
+              engagement yet — this isn&rsquo;t a sync delay, so there&rsquo;s nothing to
+              refresh. New posts usually take a few hours to accumulate views.
             </div>
           )}
           {emptyState === "no_metrics_yet" && (

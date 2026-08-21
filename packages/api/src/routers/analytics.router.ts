@@ -750,7 +750,29 @@ export const analyticsRouter = createRouter({
         },
       });
 
-      return { totalPosts, totalTargets, published, failed, period: { from, to } };
+      // Published through PostAutomation over ALL TIME, ignoring the window.
+      //
+      // ⚠️ Exists so an empty page can tell the truth about WHY it is empty. Measured
+      // on prod 2026-08-21: 11 orgs have ever published through PostAutomation but
+      // only 5 did so inside the default 30-day window — so six orgs own real history
+      // and saw a blank Insights page. "You haven't published here" would be false for
+      // them; the honest message is "not in this range, widen it". Until 2026-08-19
+      // the direct-post population always filled the window, which is why this
+      // distinction never had to exist.
+      //
+      // A cheap COUNT on an indexed status + org join, run once per page load.
+      const publishedAllTime = await ctx.prisma.postTarget.count({
+        where: { status: "PUBLISHED", post: { organizationId: ctx.organizationId } },
+      });
+
+      return {
+        totalPosts,
+        totalTargets,
+        published,
+        failed,
+        publishedAllTime,
+        period: { from, to },
+      };
     }),
 
   /** Aggregated engagement metrics across all published posts */

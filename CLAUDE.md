@@ -1518,6 +1518,70 @@ Flag verified `false` in BOTH containers; new code and new copy confirmed in the
   `EXTERNAL_SCRAPE_PER_RUN=40`. **`FB_ANALYTICS_SYNC_ENABLED=true` must STAY** — it serves
   app-published FB targets, which are now the whole population.
 
+### 🔎 "No metrics visible whatsoever" (2026-08-21) — NOT A BUG. The population is simply tiny.
+
+Reported as a regression after the switch. **Investigated three ways; the code is correct.** Record
+this before re-debugging it.
+
+**How it was proved (do not re-derive by reasoning — reproduce these):**
+1. **Server-side, real procedures, real DB.** Ran `createCallerFactory(analyticsRouter)` inside the
+   PROD web container against the live database for every org that has data. ⚠️ Must run from
+   INSIDE a package dir (`/app/packages/api`) — pnpm's isolated layout means `@postautomation/db`
+   resolves only via `packages/<pkg>/node_modules` (quirk #10), so a script at `/app` fails with
+   `Cannot find module '@postautomation/db'`. Result: **every org with app-published posts returns
+   fully populated payloads** — DASHMANI 386 rows / 700,869 impressions / 500,063 reach;
+   nikhil 121 rows / 3,336,129 views / 28,950 likes; `hasSnapshot: true`, `reportableMetrics`
+   correct.
+2. **The real page in a browser, on an org WITH data** (superadmin → /admin/users → Impersonate).
+   nikhil's Workspace renders Views 3.3M, Likes 28.9K, Reach 236.8K, Eng. Rate 0.87%, and a
+   populated table (paptalks 4 posts / 122.2K views / 932 likes / 0.79%). Impressions correctly
+   absent (IG-only org). No banners. **The UI works.**
+3. **38-agent adversarial code review**: 32 candidate root causes, **all 32 refuted**, zero
+   confirmed. Notably `reportableMetrics` **fails OPEN** — `reportableStat.size === 0 || …` means an
+   empty capability set renders EVERY tile, not none, so a broken capability computation could only
+   ever show all-zero tiles, never missing ones. `hasChannels` was git-verified dead BEFORE the edit.
+   `includesDirectPosts` gates copy only, never a numeric value.
+
+**THE ACTUAL REASON (measured):** app-published volume is tiny next to direct-post volume.
+
+| | count |
+|---|---|
+| orgs total | 50 |
+| orgs with active channels | 17 |
+| orgs that have EVER published through PostAutomation | **11** |
+| orgs that published within the last 30 days (the page's DEFAULT window) | **5** |
+
+So ~71% of orgs with channels see an empty Insights page, and that is arithmetic, not a defect.
+Before 2026-08-19 every one of them showed thousands of rows because **the same Meta accounts are
+shared across many orgs** and external sync fanned one account's posts into every channel row — which
+is also why "the columns used to populate accordingly". ⚠️ The owner's own workspace is one of the
+sparse ones (**2 posts, genuinely 0 engagement**), so signing in as `tabish@dashmani.com` shows an
+empty page that is nonetheless truthful. Check WHICH workspace a report comes from before debugging.
+
+**Metric CAPTURE is unaffected** — `AnalyticsSnapshot` writes continued across the deploy
+(272/361/276/175 per day around it). It is bursty because the cron is 6-hourly; a quiet hour is not a
+stall.
+
+**Two GENUINE defects this investigation did find, both fixed:**
+- **🔴 The zero-state banner blamed a pending sync for a settled fact.** Tabish's Workspace showed
+  "no engagement data has synced yet — try Sync Now" for two posts that BOTH already had snapshots
+  (`hasSnapshot: true`); their engagement is genuinely zero, so Sync Now could never change it — the
+  same "wait for data that cannot arrive" falsehood one layer deeper. `deriveInsightsEmptyState` now
+  returns **`zero_engagement`** when every posted row is captured, and only says `no_metrics_yet`
+  while a capture is actually outstanding (ANY uncaptured row wins, since real work is pending).
+- **🔴 History outside the default window was invisible with no hint.** 11 orgs have published
+  through the app but only 5 within 30 days, so six orgs own real history and saw a blank page.
+  Saying "you haven't published here" would be FALSE. `analytics.overview` now returns
+  **`publishedAllTime`** (one cheap indexed COUNT) and the new **`no_app_posts_in_range`** state says
+  "none in this range, but N in total — try 90 days", which is the opposite advice from
+  `no_app_posts` and therefore a separate state.
+
+**⚠️ THE OPEN PRODUCT DECISION (not a bug to fix):** if Insights should look populated for most
+users, the only lever is the population itself — `INSIGHTS_INCLUDE_EXTERNAL_POSTS=true` on both
+containers restores direct posts with no code change (and re-incurs ~250k Graph calls/day). Keeping
+it off is honest but sparse. Do not "fix" the sparseness by widening the population silently; that
+reverses an explicit owner decision.
+
 ## 📥 Insights now cover ALL posts on a connected page, not just ones we published (2026-08-07)
 
 > **⚠️ SUPERSEDED 2026-08-19 — this population is now OFF BY DEFAULT.** Everything below still
