@@ -1582,6 +1582,61 @@ containers restores direct posts with no code change (and re-incurs ~250k Graph 
 it off is honest but sparse. Do not "fix" the sparseness by widening the population silently; that
 reverses an explicit owner decision.
 
+## 🎬 FACEBOOK REELS need their VIDEO id resolved to a POST id, or they report nothing (2026-08-25)
+
+**Reported as "I watched and shared the reel but only likes and comments are fetched".
+The data was available the whole time, on the same token.** LIVE-PROBED the exact posts:
+
+| | Video node (what the code asked) | resolved POST node |
+|---|---|---|
+| Maahadev reel | `video_insights` → **EMPTY200** | `post_media_view=4` `post_total_media_view_unique=1` `post_video_views=1` |
+| LastSawan reel | `video_insights` → **EMPTY200** | `post_media_view=5` `post_total_media_view_unique=1` `post_video_views=1` |
+
+- **Mechanism.** A Facebook VIDEO publish stores a **BARE Video-node id** in
+  `PostTarget.publishedId` (the `{page}/videos` edge returns only `{id}`), while every
+  other path stores a composite `{pageId}_{postId}`. `getPostAnalytics` routes bare ids
+  to `getVideoAnalytics`, and **the media-view metrics exist ONLY on the POST node** —
+  so a reel yielded impressions ~1, reach 0, views "—".
+- **🔴 THE REGRESSION.** `resolveVideoPostId` has existed since 2026-08-07, but its
+  **only caller was `external-post-sync.worker`, which went DORMANT on 2026-08-19**
+  when Insights narrowed to app-published posts. From that moment no app-published reel
+  was ever resolved again. **When you make a pipeline dormant, grep for what ELSE
+  depended on it** — this is the second bug of that exact shape (the first was the
+  reconnect banner's health writer).
+- **FIX:** `analytics-sync.worker` plans the id via the pure
+  [fb-video-post-id.ts](apps/worker/src/lib/fb-video-post-id.ts) `planFacebookAnalyticsId`,
+  resolves a bare FB video id **once**, **persists it to
+  `PostTarget.metadata.resolvedPostId`**, and asks the POST node thereafter.
+  **Cost: exactly ONE extra Graph call per video target, ever.** Feed posts and
+  non-Facebook platforms cost nothing. Resolution failure never fails the job — it falls
+  back to the Video-node path so degradation is still recorded.
+- ⚠️ **Deliberately NOT in the publish path.** `getFeedPostAnalytics` carries a
+  "network shape is FROZEN — do not add calls here" contract because it runs inside
+  post-publish. The first snapshot stays Video-node; analytics-sync corrects it within
+  the hour, and dedup writes because the values differ.
+- ⚠️ **A stored `resolvedPostId` must itself be composite** or the planner rejects it —
+  otherwise we ask the Video node again under a different name and get EMPTY200 forever.
+- ⚠️ **The fake-zero trap is live on these metrics**: the probe returned
+  `post_total_media_view_unique[lifetime]=1` followed by `[day]=0`, and the day row comes
+  LAST. Always select `period === "lifetime"` via `readMetricValue` — never a last-wins loop.
+- ⚠️ **One dead metric name 400s the WHOLE call.** My first probe included
+  `post_impressions` and got `#100 "must be a valid insights metric"` for everything,
+  which looked like "the POST node has nothing". It has everything — the request was
+  malformed. Valid set: `post_media_view, post_total_media_view_unique, post_video_views,
+  post_clicks, post_reactions_by_type_total`.
+- **Instagram was NOT broken.** SHIV IG live-probed `views=1 reach=0`; the stored 0 was a
+  capture taken 30 minutes after publish, before Meta populated it. Also note that media
+  was `media_product_type=FEED, media_type=IMAGE` — not a reel — and the 8-metric REELS
+  set correctly 400s on it (`ig_reels_avg_watch_time` unsupported), which the 3-rung
+  ladder absorbs.
+- **"I posted 4 but it shows 3" was a LABELLING bug, not a count bug.** That workspace has
+  **3 posts delivered to 4 channels** (one post went to FB + IG). The cards said "Total
+  Posts" and "Published Targets" and left the reader to reconcile them. Now **"Posts
+  Created"** / **"Channel Deliveries"**, each naming the other in its subtitle, with
+  tooltips. Every other number on the page is per DELIVERY, which is why the deliveries
+  card is the one that reconciles with the table.
+- Tests: [fb-video-post-id.test.ts](apps/worker/src/__tests__/fb-video-post-id.test.ts) (6).
+
 ## 🔴 A FAILED capture must never bury the metrics you already hold (2026-08-25)
 
 **Reported as "views etc are not depicted accurately even for posts made through
