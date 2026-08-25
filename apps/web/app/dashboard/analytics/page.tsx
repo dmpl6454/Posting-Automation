@@ -232,14 +232,32 @@ function InsightsAnalyticsView() {
 
   const reportableStat = new Set(engagement?.reportableMetrics ?? []);
   const statReportable = (key: string) => reportableStat.size === 0 || reportableStat.has(key as any);
-  const stats: Array<{ name: string; value: number; icon: any; color: string; format?: boolean; sub?: string }> = [
-    { name: "Total Posts", value: overview?.totalPosts ?? 0, icon: BarChart3, color: "text-blue-600 bg-blue-100 dark:text-blue-400 dark:bg-blue-950" },
+  const stats: Array<{ name: string; value: number; icon: any; color: string; format?: boolean; sub?: string; title?: string }> = [
+    // ⚠️ These two cards count DIFFERENT things and were reported as a bug because
+    // the labels never said so: one post sent to two channels shows as "3" here and
+    // "4" below, which reads as arithmetic that does not add up. A post is what you
+    // compose; a delivery is one copy of it arriving on one channel. Every other
+    // number on this page (impressions, likes, reach) is per DELIVERY, so the
+    // deliveries card is the one that reconciles with the table.
     {
-      name: "Published Targets",
+      name: "Posts Created",
+      value: overview?.totalPosts ?? 0,
+      icon: BarChart3,
+      color: "text-blue-600 bg-blue-100 dark:text-blue-400 dark:bg-blue-950",
+      sub: overview && overview.published > overview.totalPosts
+        ? `sent to ${overview.published} channel${overview.published === 1 ? "" : "s"}`
+        : undefined,
+      title: "Posts you composed in this date range. A post sent to several channels still counts once here.",
+    },
+    {
+      name: "Channel Deliveries",
       value: overview?.published ?? 0,
       icon: CheckCircle,
       color: "text-green-600 bg-green-100 dark:text-green-400 dark:bg-green-950",
-      sub: overview ? `across ${overview.totalTargets} target${overview.totalTargets === 1 ? "" : "s"}` : undefined,
+      sub: overview
+        ? `from ${overview.totalPosts} post${overview.totalPosts === 1 ? "" : "s"}`
+        : undefined,
+      title: "Successful deliveries — one per channel a post reached. A post sent to 2 channels counts twice, which is why this can exceed Posts Created.",
     },
     { name: "Failed", value: overview?.failed ?? 0, icon: XCircle, color: "text-red-600 bg-red-100 dark:text-red-400 dark:bg-red-950" },
     // "Total Reach: 0" is actively misleading on an org whose platforms can't
@@ -558,7 +576,10 @@ function InsightsAnalyticsView() {
                       <stat.icon className="h-5 w-5" />
                     </div>
                     <div>
-                      <p className="text-sm text-muted-foreground">{stat.name}</p>
+                      {/* title explains cards whose counts legitimately differ
+                          (Posts Created vs Channel Deliveries) — reported as a bug
+                          when the labels left the reader to guess. */}
+                      <p className="text-sm text-muted-foreground" title={stat.title}>{stat.name}</p>
                       <p className="text-2xl font-bold">
                         {stat.format ? formatNumber(stat.value) : stat.value}
                       </p>

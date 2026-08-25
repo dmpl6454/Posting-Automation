@@ -6,6 +6,7 @@ import { buildSnapshotMetadata } from "../lib/snapshot-metadata";
 import { shouldWriteSnapshot } from "../lib/snapshot-dedup";
 import { deriveInsightsHealth, mergeInsightsHealth } from "../lib/channel-insights-health";
 import { shouldWriteDegradedSnapshot } from "../lib/degraded-capture-guard";
+import { planFacebookAnalyticsId } from "../lib/fb-video-post-id";
 
 export function createAnalyticsSyncWorker() {
   const worker = new Worker<AnalyticsSyncJobData>(
@@ -31,11 +32,72 @@ export function createAnalyticsSyncWorker() {
         metadata: (channel.metadata ?? undefined) as Record<string, unknown> | undefined,
       };
 
+      // 2a. FACEBOOK VIDEO/REEL: resolve the bare Video-node id to a composite
+      // "{pageId}_{postId}" before asking for insights.
+      //
+      // LIVE-PROVEN on prod 2026-08-25: the Video node reports NOTHING for a reel
+      // (video_insights → EMPTY200), while the resolved POST node returned
+      // post_media_view=4, post_total_media_view_unique=1, post_video_views=1 on the
+      // very same post and token. Without this, every app-published FB reel rendered
+      // impressions ~1 / reach 0 / views "—" while real numbers were available.
+      //
+      // ⚠️ resolveVideoPostId's only caller used to be external-post-sync, which went
+      // dormant 2026-08-19 — so app-published reels silently stopped being resolved.
+      //
+      // Cost: ONE extra Graph call per video target, ONCE. The answer is persisted to
+      // PostTarget.metadata.resolvedPostId and planFacebookAnalyticsId then
+      // short-circuits forever. Feed posts and non-FB platforms cost nothing.
+      let analyticsId = platformPostId;
+      {
+        const target = await prisma.postTarget.findUnique({
+          where: { id: postTargetId },
+          select: { metadata: true },
+        });
+        const storedResolved =
+          target?.metadata && typeof target.metadata === "object" && !Array.isArray(target.metadata)
+            ? ((target.metadata as Record<string, unknown>).resolvedPostId as string | undefined)
+            : undefined;
+
+        const plan = planFacebookAnalyticsId({ platform, publishedId: platformPostId, resolvedPostId: storedResolved });
+        if (plan.needsResolve && typeof (provider as any).resolveVideoPostId === "function") {
+          try {
+            const resolved = await (provider as any).resolveVideoPostId(
+              tokens,
+              platformPostId,
+              channel.platformId
+            );
+            if (resolved) {
+              analyticsId = resolved;
+              // Persist so this call never repeats. Merge, never overwrite: the
+              // metadata carries other keys the publish path owns.
+              const base =
+                target?.metadata && typeof target.metadata === "object" && !Array.isArray(target.metadata)
+                  ? (target.metadata as Record<string, unknown>)
+                  : {};
+              await prisma.postTarget.update({
+                where: { id: postTargetId },
+                data: { metadata: { ...base, resolvedPostId: resolved } as any },
+              });
+              console.log(`[AnalyticsSync] Resolved FB video ${platformPostId} → post ${resolved} (persisted)`);
+            } else {
+              // Null means the video no longer exists. Leave the bare id so the
+              // existing Video-node path still runs and any degradation is recorded.
+              console.warn(`[AnalyticsSync] FB video ${platformPostId} could not be resolved to a post id`);
+            }
+          } catch (err: any) {
+            // Never fail an analytics job over the resolution step.
+            console.warn(`[AnalyticsSync] resolveVideoPostId failed for ${platformPostId}: ${err.message}`);
+          }
+        } else if (plan.analyticsId) {
+          analyticsId = plan.analyticsId;
+        }
+      }
+
       let analytics;
       try {
-        analytics = await provider.getPostAnalytics(tokens, platformPostId);
+        analytics = await provider.getPostAnalytics(tokens, analyticsId);
       } catch (err: any) {
-        console.warn(`[AnalyticsSync] getPostAnalytics threw for ${platform} post ${platformPostId}: ${err.message}`);
+        console.warn(`[AnalyticsSync] getPostAnalytics threw for ${platform} post ${analyticsId}: ${err.message}`);
         // At-age checkpoint jobs (windowTag) are ONE-SHOT — a swallowed error
         // here permanently loses the checkpoint. Rethrow so BullMQ's default
         // attempts:3 + exponential backoff engages. Untagged cron jobs keep
