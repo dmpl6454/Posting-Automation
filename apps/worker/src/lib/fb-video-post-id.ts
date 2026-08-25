@@ -72,3 +72,39 @@ export function planFacebookAnalyticsId(input: FacebookAnalyticsIdInput): Facebo
 
   return { analyticsId: null, needsResolve: true };
 }
+
+/**
+ * How long after publishing to run the one-shot early sync for a Facebook VIDEO.
+ *
+ * ── Why an early pass exists at all ──────────────────────────────────────────
+ * The publish-time snapshot (post-publish step 4b) asks the Video node, because the
+ * id has not been resolved yet — and the Video node reports nothing for a reel. The
+ * next thing that would touch the target is the 24h at-age checkpoint, since
+ * FACEBOOK is excluded from BOTH recurring passes (scheduleAnalyticsSync and
+ * scheduleLongTailAnalyticsSync filter `platform: { not: "FACEBOOK" }`) and
+ * scheduleFacebookAnalyticsSync only considers targets already stale by
+ * FB_ANALYTICS_MIN_STALE_HOURS (48h by default).
+ *
+ * So without this, a user who publishes a reel and opens Insights sees views "—" for
+ * a full day — which is exactly the report that started this investigation.
+ *
+ * ── Why ~45 minutes and not immediately ──────────────────────────────────────
+ * Meta needs time to populate insights. Measured on a real post: `views` read 0 at
+ * ~30 minutes, 1 shortly after, and 2 later still. Firing instantly would just store
+ * another zero and waste the call.
+ *
+ * COST: one job and one resolve+insights pass per Facebook VIDEO publish, once. The
+ * resolved id is persisted, so every later sync is free. Bounded by video publish
+ * volume, which is small (19 such targets in the product's entire history).
+ */
+export const DEFAULT_EARLY_VIDEO_SYNC_DELAY_MS = 45 * 60 * 1000;
+
+export function earlyVideoSyncDelayMs(raw?: string | null): number {
+  const n = Number((raw ?? "").trim());
+  // Fails CLOSED to the default on empty/garbage — an unplumbed compose key arrives
+  // as "" and Number("") is 0, which would fire instantly and store a zero.
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_EARLY_VIDEO_SYNC_DELAY_MS;
+  // Floor at 5 minutes: anything sooner cannot have data yet, so it would burn a
+  // call to learn nothing.
+  return Math.max(n, 5 * 60 * 1000);
+}

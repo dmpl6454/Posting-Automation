@@ -70,3 +70,36 @@ describe("planFacebookAnalyticsId", () => {
       .toEqual({ analyticsId: null, needsResolve: false });
   });
 });
+
+import { earlyVideoSyncDelayMs, DEFAULT_EARLY_VIDEO_SYNC_DELAY_MS } from "../lib/fb-video-post-id";
+
+/**
+ * The early one-shot sync exists because FACEBOOK is excluded from BOTH recurring
+ * analytics passes, so the next thing to touch a freshly published reel is the 24h
+ * at-age checkpoint. Without an early pass a user who just published sees views "—"
+ * for a full day — the exact report that started this investigation.
+ */
+describe("earlyVideoSyncDelayMs", () => {
+  it("defaults to 45 minutes", () => {
+    expect(earlyVideoSyncDelayMs(undefined)).toBe(DEFAULT_EARLY_VIDEO_SYNC_DELAY_MS);
+    expect(earlyVideoSyncDelayMs(null)).toBe(DEFAULT_EARLY_VIDEO_SYNC_DELAY_MS);
+  });
+
+  it("fails CLOSED to the default on an empty or garbage value", () => {
+    // An unplumbed compose key arrives as "", and Number("") is 0 — which would fire
+    // instantly and store the zero Meta has not populated yet.
+    for (const raw of ["", "   ", "abc", "-1", "0"]) {
+      expect(earlyVideoSyncDelayMs(raw), `raw=${raw}`).toBe(DEFAULT_EARLY_VIDEO_SYNC_DELAY_MS);
+    }
+  });
+
+  it("honors an explicit longer delay", () => {
+    expect(earlyVideoSyncDelayMs(String(90 * 60 * 1000))).toBe(90 * 60 * 1000);
+  });
+
+  it("floors at 5 minutes — sooner cannot have data", () => {
+    // Measured on a real post: views read 0 at ~30 min, then 1, then 2. A 1-minute
+    // delay would spend a call to learn nothing.
+    expect(earlyVideoSyncDelayMs("60000")).toBe(5 * 60 * 1000);
+  });
+});

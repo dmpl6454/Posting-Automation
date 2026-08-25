@@ -4,6 +4,7 @@ import { getSocialProvider, isAmbiguousPublishError } from "@postautomation/soci
 import { QUEUE_NAMES, postPublishQueue, analyticsSyncQueue, type PostPublishJobData, createRedisConnection } from "@postautomation/queue";
 import IORedis from "ioredis";
 import { buildPublishEmail, buildPublishReportCsv } from "../lib/publish-email";
+import { planFacebookAnalyticsId, earlyVideoSyncDelayMs } from "../lib/fb-video-post-id";
 import { markTargetFailed, markTargetAmbiguous, buildPublishClaimWhere, routePublishError, shouldPreflightReconcile, buildPublishNotifications, mediaRequiredReason, terminalizeStuckClaim, isSeedNoise, isStaleScheduleJob, isHeavyPublish, planHeavyDefer, HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE } from "../lib/publish-recovery";
 import { PRIORITY_RETRY, mediaOptimizeQueue } from "@postautomation/queue";
 import { planOptimizeGate, choosePublishUrl } from "../lib/media-optimize";
@@ -1013,6 +1014,47 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
             );
           } catch (queueErr: any) {
             console.warn(`[Analytics] at-age checkpoint enqueue failed (${windowTag}) for ${postTargetId}:`, queueErr.message);
+          }
+        }
+      }
+
+      // 4d. FACEBOOK VIDEO/REEL: one early, untagged analytics pass.
+      //
+      // Step 4b above asked the Video node (the id is not resolved yet), which reports
+      // NOTHING for a reel. FACEBOOK is excluded from BOTH recurring passes and
+      // scheduleFacebookAnalyticsSync only considers targets already stale by 48h, so
+      // the next thing to touch this target would be the 24h at-age checkpoint — a
+      // full day of views showing "—" right after publishing.
+      //
+      // This enqueues ONE untagged job ~45 min out. analytics-sync resolves the bare
+      // Video id to a post id, persists it, and reads the POST node, so views/reach/
+      // impressions appear within the hour and every later sync is free.
+      //
+      // ⚠️ An ENQUEUE, not a Graph call — getFeedPostAnalytics's "network shape is
+      // FROZEN" contract is untouched. Untagged on purpose: a windowTag would forge an
+      // at-age checkpoint that Reports would then pin.
+      if (result.platformPostId) {
+        const videoPlan = planFacebookAnalyticsId({ platform, publishedId: result.platformPostId });
+        if (videoPlan.needsResolve) {
+          try {
+            await analyticsSyncQueue.add(
+              "early-video-snapshot",
+              {
+                postTargetId: updatedTarget.id,
+                channelId: updatedTarget.channelId,
+                platform,
+                platformPostId: result.platformPostId,
+              },
+              {
+                delay: earlyVideoSyncDelayMs(process.env.FB_EARLY_VIDEO_SYNC_DELAY_MS),
+                // BullMQ requires EXACTLY three colon-separated segments.
+                jobId: `vidsync:${updatedTarget.id}:v1`,
+                removeOnComplete: true,
+                removeOnFail: true,
+              }
+            );
+          } catch (queueErr: any) {
+            console.warn(`[Analytics] early video sync enqueue failed for ${postTargetId}:`, queueErr.message);
           }
         }
       }

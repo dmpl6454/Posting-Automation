@@ -293,6 +293,13 @@ services:
       FB_ANALYTICS_SYNC_ENABLED: ${FB_ANALYTICS_SYNC_ENABLED:-false}
       FB_ANALYTICS_PER_RUN: ${FB_ANALYTICS_PER_RUN:-40}
       FB_ANALYTICS_MIN_STALE_HOURS: ${FB_ANALYTICS_MIN_STALE_HOURS:-48}
+      # One early analytics pass for a freshly published FACEBOOK VIDEO/REEL. The
+      # publish-time snapshot asks the Video node (id not yet resolved), which reports
+      # nothing for a reel, and FB is excluded from both recurring passes — so without
+      # this the next touch is the 24h at-age checkpoint. Fails CLOSED to 45 min on an
+      # empty/invalid value, and is floored at 5 min because Meta needs time to
+      # populate insights (measured: views 0 at ~30 min, then 1, then 2).
+      FB_EARLY_VIDEO_SYNC_DELAY_MS: ${FB_EARLY_VIDEO_SYNC_DELAY_MS:-2700000}
       # How far back external-post ingestion collects. SINGLE source of truth,
       # shared with the web container (the coverage copy in Insights is derived
       # from it, so the two MUST agree). Parsing fails CLOSED to 2026-08-01 on an
