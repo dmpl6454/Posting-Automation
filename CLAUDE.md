@@ -1582,6 +1582,82 @@ containers restores direct posts with no code change (and re-incurs ~250k Graph 
 it off is honest but sparse. Do not "fix" the sparseness by widening the population silently; that
 reverses an explicit owner decision.
 
+## 🔴 A FAILED capture must never bury the metrics you already hold (2026-08-25)
+
+**Reported as "views etc are not depicted accurately even for posts made through
+PostAutomation". The permissions were never at fault — our own zero-write was erasing
+history from view.** Root-caused by LIVE-PROBING production, not by reasoning.
+
+- **What the probe showed.** The Instagram accounts' tokens answered normally
+  (`archivebollywood` media_count=10,717, `bollywoodchronicle` 69,314) while the stored
+  media ids returned Graph **`#100 / subcode 33` "Object … does not exist"** — those
+  posts were removed on Instagram. ⚠️ `#100/33` is **object-not-found, NOT a token
+  error**; `TOKEN_INVALID_CODES` is `{190,102,463,467}` and correctly excludes it.
+- **The mechanism.** When a capture degrades (rejected token, deleted media),
+  `getPostAnalytics` returns all-zero metrics plus a `degraded` marker, and the worker
+  wrote that as a normal snapshot. **Every read path selects the NEWEST snapshot per
+  target**, so the zero row became the displayed value and buried the real numbers
+  captured earlier — **permanently**, because a deleted post can never be re-measured.
+- **Measured damage:** 64 Instagram targets carried a degraded latest snapshot; **25 of
+  them were hiding 68,276 views and 630 likes behind zeros.** All 64 had captured
+  cleanly before (411 snapshots between them). Preferring the last clean capture moves
+  Instagram views **3,343,240 → 3,411,516** and likes **28,174 → 28,804**.
+- **THE FIX IS TWO HALVES, both required.**
+  1. *Read side* — both latest-snapshot LATERALs (`fetchChannelStatRows` and
+     `fetchPostReportRows`) order by **`(metadata->>'degraded' IS NULL) DESC,
+     snapshotAt DESC`**: clean first, newest within each group. A target with ONLY
+     degraded captures still yields its newest, so `hasSnapshot` is unchanged. **Both
+     paths must use the IDENTICAL ordering** or Reports and Channel Performance show
+     two different numbers for one post. This repairs existing rows.
+  2. *Write side* — [degraded-capture-guard.ts](apps/worker/src/lib/degraded-capture-guard.ts)
+     `shouldWriteDegradedSnapshot` skips persisting a degraded capture when a clean one
+     already exists. A FIRST failing capture is still written (it carries the reason
+     behind the reconnect banner); **at-age checkpoints are exempt** because that mode
+     needs its pinned row. The health verdict is written BEFORE this point, so skipping
+     never hides the failure.
+- ⚠️ The write-side existence test is **raw SQL using the SAME predicate as the read
+  ordering** (`(metadata->>'degraded') IS NULL`). Prisma's JSON filters cannot express
+  "key absent OR metadata NULL", and drift there would make writer and reader disagree
+  about what counts as clean.
+- ⚠️ **Backtick trap, hit again:** a backtick inside a SQL comment terminates the
+  enclosing JS template literal and breaks the build. CLAUDE.md already warned about
+  this; it still cost a cycle. Never put backticks in SQL comments here.
+- **Locked by** [degraded-snapshot-preference.test.ts](packages/api/src/__tests__/degraded-snapshot-preference.test.ts) (4),
+  [degraded-capture-guard.test.ts](apps/worker/src/__tests__/degraded-capture-guard.test.ts) (4),
+  plus a **real-Postgres** regression lock in
+  [external-posts-insights.e2e.test.ts](packages/api/src/__tests__/external-posts-insights.e2e.test.ts)
+  that seeds clean-then-degraded snapshots and asserts the production aggregate returns
+  the CLEAN values — a mocked Prisma never evaluates an ORDER BY inside a
+  `$queryRawUnsafe` LATERAL.
+
+### 📊 Freshness of app-published metrics, MEASURED 2026-08-25 (the other half of "inaccurate")
+
+Latest snapshot per app-published target, and whether the recurring crons can reach it:
+
+| platform | targets | in 6h-cron window (≤7d) | in long-tail (7–90d) | **beyond 90d = NEVER re-synced** | avg age |
+|---|---|---|---|---|---|
+| INSTAGRAM | 172 | 2 | 170 | 0 | 145h |
+| FACEBOOK | 148 | 2 | 142 (but FB is EXCLUDED from both) | 4 | 57h |
+| TWITTER | 148 | 0 | 0 | **148** | **3,343h (139 days)** |
+| YOUTUBE | 18 | 0 | 18 | 0 | 845h |
+| LINKEDIN | 7 | 0 | 0 | **7 (and ZERO snapshots ever)** | — |
+
+- ⚠️ **`scheduleAnalyticsSync` only covers 7 days**, and `scheduleLongTailAnalyticsSync`
+  covers **7–90 days**. So **anything older than 90 days is never refreshed again** —
+  Twitter's entire 148-target population and all 7 LinkedIn targets sit there. The page
+  defaults to a 30-day window so they are usually off-screen, but a widened range shows
+  months-old numbers with no staleness indication.
+- ⚠️ **`snapshotAt` is NOT a freshness signal.** `snapshot-dedup` deliberately skips
+  writing when nothing changed, so a successfully-confirmed-unchanged target keeps an
+  old timestamp. Do not infer "not synced" from an old `snapshotAt` — check whether a
+  job ran instead.
+- **Instagram views are legitimately NULL on 7 post-column captures**; the other 57
+  NULLs were captures taken BEFORE the `views` column shipped 2026-08-13. **Facebook
+  views are NULL by design** — `post_video_views` is video-only and a 0 is suppressed;
+  FB's view-equivalent (`post_media_view`) is mapped to Impressions.
+- **Still open (not fixed here):** the >90d ceiling, LinkedIn never capturing at all,
+  YouTube averaging 35 days stale, and Twitter being unmeasurable on the free API tier.
+
 ## 📥 Insights now cover ALL posts on a connected page, not just ones we published (2026-08-07)
 
 > **⚠️ SUPERSEDED 2026-08-19 — this population is now OFF BY DEFAULT.** Everything below still
