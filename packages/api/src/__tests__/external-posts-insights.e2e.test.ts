@@ -257,6 +257,91 @@ d("external posts in Insights (real Postgres)", () => {
    * short of this can prove `WITH app_rows AS (…), all_rows AS (SELECT * FROM app_rows)`
    * is valid — a missing or doubled comma at the join point is a runtime-only error.
    */
+  /**
+   * REGRESSION LOCK for the 2026-08-25 incident: a DEGRADED capture must not hide the
+   * real numbers captured earlier.
+   *
+   * Measured on prod: 64 Instagram targets carried a degraded latest snapshot and 25 of
+   * them were burying 68,276 views and 630 likes behind zeros. A post deleted on the
+   * platform can never be re-measured, so the burial was permanent.
+   *
+   * Only real Postgres can prove this: the fix is an ORDER BY inside a $queryRawUnsafe
+   * LATERAL, which a mocked Prisma never evaluates.
+   */
+  describe("a degraded latest snapshot must not bury a clean earlier one", () => {
+    let postId = "";
+    let targetId = "";
+
+    beforeAll(async () => {
+      const post = await prisma.post.create({
+        data: {
+          organizationId: orgId,
+          content: `${SUF} degraded-preference`,
+          status: "PUBLISHED",
+          publishedAt: new Date("2026-08-15T00:00:00Z"),
+          createdById: userId,
+        },
+      });
+      postId = post.id;
+      const target = await prisma.postTarget.create({
+        data: {
+          postId,
+          channelId,
+          status: "PUBLISHED",
+          publishedAt: new Date("2026-08-15T00:00:00Z"),
+          publishedId: "deg-pref-1",
+        },
+      });
+      targetId = target.id;
+
+      // Earlier CLEAN capture carrying the real numbers.
+      await prisma.analyticsSnapshot.create({
+        data: {
+          postTargetId: targetId,
+          platform: "FACEBOOK",
+          impressions: 5000, likes: 250, comments: 10, shares: 5, reach: 4000, clicks: 3,
+          views: 4500,
+          snapshotAt: new Date("2026-08-16T00:00:00Z"),
+          metadata: { metricsAvailable: { impressions: true, likes: true, views: true } } as any,
+        },
+      });
+      // LATER capture that FAILED — all zeros plus the degraded marker.
+      await prisma.analyticsSnapshot.create({
+        data: {
+          postTargetId: targetId,
+          platform: "FACEBOOK",
+          impressions: 0, likes: 0, comments: 0, shares: 0, reach: 0, clicks: 0,
+          views: null,
+          snapshotAt: new Date("2026-08-20T00:00:00Z"),
+          metadata: { degraded: { reason: "token_invalid" } } as any,
+        },
+      });
+    });
+
+    afterAll(async () => {
+      if (targetId) await prisma.analyticsSnapshot.deleteMany({ where: { postTargetId: targetId } });
+      if (postId) await prisma.postTarget.deleteMany({ where: { postId } });
+      if (postId) await prisma.post.deleteMany({ where: { id: postId } });
+    });
+
+    it("returns the CLEAN values, not the newer zeros", async () => {
+      const { fetchChannelStatRows } = await import("../routers/analytics.router");
+      const rows = await fetchChannelStatRows(
+        prisma,
+        orgId,
+        new Date("2026-08-01T00:00:00Z"),
+        new Date("2026-09-01T00:00:00Z")
+      );
+      const row = rows.find((r) => r.channelId === channelId);
+      expect(row, "channel row missing").toBeTruthy();
+      // Before the fix these were 0 / 0 / null — the incident exactly.
+      expect(row!.impressions).toBe(5000);
+      expect(row!.likes).toBe(250);
+      expect(row!.views).toBe(4500);
+      expect(row!.hasSnapshot).toBe(true);
+    });
+  });
+
   describe("fetchChannelStatRows — the real statement, both modes", () => {
     const KEY = "INSIGHTS_INCLUDE_EXTERNAL_POSTS";
     afterAll(() => {

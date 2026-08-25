@@ -212,7 +212,16 @@ export async function fetchChannelStatRows(
        LEFT JOIN LATERAL (
          SELECT s2.* FROM "AnalyticsSnapshot" s2
          WHERE s2."postTargetId" = pt.id
-         ORDER BY s2."snapshotAt" DESC
+         -- ⚠️ PREFER THE LAST *CLEAN* CAPTURE. A degraded capture (dead token,
+         -- deleted media) is still written, with every metric ZERO, and plain
+         -- plain snapshotAt-DESC therefore let that zero row bury the real numbers we
+         -- had already captured. Measured on prod 2026-08-25: 64 Instagram targets
+         -- carried a degraded latest snapshot and 25 of them had real engagement —
+         -- 68,276 views and 630 likes rendered as 0. A deleted post can never be
+         -- re-measured, so those zeros were permanent.
+         -- Clean rows sort first, newest within each group; a target with ONLY
+         -- degraded captures still yields its newest one, so hasSnapshot is unchanged.
+         ORDER BY (s2.metadata->>'degraded' IS NULL) DESC, s2."snapshotAt" DESC
          LIMIT 1
        ) s ON TRUE
        WHERE p."organizationId" = $1
@@ -672,7 +681,11 @@ async function fetchPostReportRows(
      LEFT JOIN LATERAL (
        SELECT s2.* FROM "AnalyticsSnapshot" s2
        WHERE s2."postTargetId" = pt.id ${snapshotFilter}
-       ORDER BY s2."snapshotAt" DESC
+       -- Same clean-first preference as fetchChannelStatRows (see the note there).
+       -- Reports and Channel Performance MUST pick the same row, or one post shows
+       -- two different numbers on the same page. In at_age mode the preference
+       -- applies WITHIN the windowTag filter, never instead of it.
+       ORDER BY (s2.metadata->>'degraded' IS NULL) DESC, s2."snapshotAt" DESC
        LIMIT 1
      ) s ON TRUE
      WHERE p."organizationId" = $1

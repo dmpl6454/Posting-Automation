@@ -5,6 +5,7 @@ import { QUEUE_NAMES, type AnalyticsSyncJobData, createRedisConnection } from "@
 import { buildSnapshotMetadata } from "../lib/snapshot-metadata";
 import { shouldWriteSnapshot } from "../lib/snapshot-dedup";
 import { deriveInsightsHealth, mergeInsightsHealth } from "../lib/channel-insights-health";
+import { shouldWriteDegradedSnapshot } from "../lib/degraded-capture-guard";
 
 export function createAnalyticsSyncWorker() {
   const worker = new Worker<AnalyticsSyncJobData>(
@@ -105,6 +106,43 @@ export function createAnalyticsSyncWorker() {
         });
         if (!shouldWriteSnapshot(analytics as any, latest, false)) {
           console.log(`[AnalyticsSync] No change for target ${postTargetId} — skipping duplicate snapshot`);
+          return null;
+        }
+      }
+
+      // 3a-bis. A DEGRADED capture must not REPLACE data we already hold.
+      //
+      // A rejected token or deleted media yields all-zero metrics plus a `degraded`
+      // marker. Writing that as the newest snapshot used to bury the real numbers
+      // captured earlier — permanently, because a post deleted on the platform can
+      // never be re-measured. Measured on prod 2026-08-25: 64 Instagram targets held
+      // a degraded latest snapshot, 25 of them hiding 68,276 views and 630 likes.
+      //
+      // The read paths now prefer the last clean snapshot (see the LATERAL note in
+      // analytics.router.ts), which repairs existing rows; this stops new ones being
+      // manufactured. Checkpoints are exempt — at-age mode needs its pinned row.
+      // The health verdict is written ABOVE, so skipping here never hides the failure.
+      if ((analytics as any).degraded) {
+        // ⚠️ Raw, and deliberately the SAME predicate the read paths use
+        // (metadata->>'degraded' IS NULL). Prisma's JSON path filters cannot express
+        // "key absent OR metadata NULL" cleanly, and if this test drifted from the
+        // LATERAL's ordering the writer and the reader would disagree about which
+        // snapshots count as clean.
+        const cleanRows = await prisma.$queryRawUnsafe<Array<{ id: string }>>(
+          `SELECT id FROM "AnalyticsSnapshot"
+             WHERE "postTargetId" = $1 AND (metadata->>'degraded') IS NULL
+             LIMIT 1`,
+          postTargetId
+        );
+        if (!shouldWriteDegradedSnapshot({
+          degraded: true,
+          hasCleanSnapshot: cleanRows.length > 0,
+          isCheckpoint: !!windowTag,
+        })) {
+          console.log(
+            `[AnalyticsSync] Degraded capture for target ${postTargetId} — keeping the ` +
+              `last clean snapshot instead of overwriting it with zeros`
+          );
           return null;
         }
       }
