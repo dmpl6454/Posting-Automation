@@ -1637,6 +1637,66 @@ The data was available the whole time, on the same token.** LIVE-PROBED the exac
   card is the one that reconciles with the table.
 - Tests: [fb-video-post-id.test.ts](apps/worker/src/__tests__/fb-video-post-id.test.ts) (6).
 
+### ✅ Meta e2e coverage matrix + what RECONNECTION does (measured 2026-08-25)
+
+Every app-published Meta target and the path that refreshes it:
+
+| platform / id shape | targets | ≤7d | 7–90d | >90d (no path) | on paused/disconnected |
+|---|---|---|---|---|---|
+| FACEBOOK video (bare id, needs resolve) | 19 | 2 | 17 | **0** | 0 |
+| FACEBOOK feed (composite) | 130 | 1 | 125 | **4** | 0 |
+| INSTAGRAM | 173 | 3 | 170 | **0** | 3 |
+
+- **A NEW Facebook video is covered at 4 points:** publish snapshot (Video node, no
+  views) → **early untagged sync at ~45 min** (resolves the id, POST node, views land)
+  → at-age checkpoints 24h/7d/15d/30d → `scheduleFacebookAnalyticsSync` daily.
+- **A NEW Instagram post:** publish snapshot → 6-hourly `scheduleAnalyticsSync` (≤7d) →
+  daily `scheduleLongTailAnalyticsSync` (7–90d).
+- ⚠️ **FACEBOOK's effective refresh cadence is ~4 DAYS, not daily.**
+  `scheduleFacebookAnalyticsSync` is capped at `FB_ANALYTICS_PER_RUN` (40) against 149 FB
+  targets, with `FB_ANALYTICS_MIN_STALE_HOURS` 48. **Do NOT raise the cap to "fix" this**
+  — FB analytics traffic raises the MODULE-GLOBAL `usageCache` that the publish path
+  shares, and at ≥95% app usage every publish Graph call sleeps an uncapped 60s. Slow
+  analytics is the correct trade against stalled publishing.
+- ⚠️ **>90 days = never refreshed** (4 FB feed targets today, 0 IG). Both recurring
+  passes and the long-tail stop at 90d. Those posts keep their last captured values.
+- ⚠️ **Paused/disconnected channels are never refreshed either** (3 IG targets) — both
+  crons filter `channel: { isActive: true }`. This is CORRECT: their history still
+  displays because `app_rows` deliberately does not filter `isActive`, so the last known
+  values survive rather than vanishing.
+
+**RECONNECTION is safe, and structurally so:**
+- **`PostTarget` is never touched by the OAuth callback** (0 references), so
+  `metadata.resolvedPostId` **survives a reconnect** — no re-resolution cost, no repeat
+  Graph call.
+- **`Channel.metadata` is REPLACED wholesale**, which is why it must re-set what
+  analytics needs: the IG branch writes `{ igUserId, ...metaWindowMeta }` and the FB
+  branch `{ pageId, userAccessToken, ...metaWindowMeta }`. **If you add a metadata key
+  that analytics depends on, add it to those upserts or a reconnect silently breaks it.**
+- Dropping `insightsHealth` on reconnect is intended — the channel gets a clean slate.
+- `disconnectedAt: null` appears in all 6 upsert sites, so a reconnect **revives the SAME
+  channel row** (`@@unique([organizationId, platform, platformId])`), keeping every
+  PostTarget attached and all history intact.
+- If a capture after reconnect still fails, the degraded-capture guard preserves the last
+  clean snapshot rather than zeroing it.
+
+### 🤝 SHARES on Meta: both platforms genuinely report zero (live-probed 2026-08-25)
+
+Reported as "I shared the reel but shares show 0". **Not a bug — Meta does not count it.**
+
+- **FACEBOOK**: `?fields=shares` is **OMITTED** on all three reels. Graph omits the key
+  at zero, and [facebook.provider.ts](packages/social/src/providers/facebook.provider.ts)
+  correctly treats an OK response with no key as a real **0** (`shares = postData.shares?.count ?? 0`)
+  and declares `shares: shares !== null`. `post_shares` is **not a valid metric** (`#100`).
+  `post_activity_by_action_type` — which WOULD list a share action — returns only
+  `{"like":1,"comment":1}`.
+- **INSTAGRAM**: the `shares` insights metric returns an explicit **0**.
+- **Why the user's share did not count:** a DM/story share is not a post-level share on
+  either platform. Only a public re-share increments it. Nothing to fix.
+- ⚠️ Do NOT "fix" this by defaulting shares to something else, and do NOT reintroduce
+  `shares: 0` on a FAILED fields call — 26 prod captures once stored a fabricated 0 that
+  way, which is why the provider starts from `null`.
+
 ## 🔴 A FAILED capture must never bury the metrics you already hold (2026-08-25)
 
 **Reported as "views etc are not depicted accurately even for posts made through
