@@ -610,6 +610,57 @@ limit.** Probed against production Graph with real decrypted tokens:
   **0 of 400** active FB channels carried `insightsHealth.status === "ok"`, yet **3 of 3** FB pages
   probed directly answered fine. Do not trust a stale health verdict as evidence a token is dead.
 
+## 🏋️ LOAD-READINESS VERDICT for the multi-user surge (measured 2026-08-31)
+
+Owner asked: can the platform take multiple people posting thousands of posts/day, including
+500MB+ videos, without failures — and is the Retry-duplicates incident closed? **Verdict: yes
+at the stated scale, with four documented ceilings.** Everything below was MEASURED on prod,
+not inferred.
+
+- **✅ Retry can no longer multi-post — verified at every layer on the live box.**
+  `buildPublishClaimWhere` + `ambiguousAt` exclusion present in the deployed worker,
+  `pubnow:{targetId}:{bucket}` jobId + ambiguous/PUBLISHING refusal in the deployed api.
+  Since the fix (2026-08-18): **0 targets parked ambiguous, 0 duplicate platform post ids,
+  0 targets accrued any retry.** ⚠️ `max(retryCount) = 4789` looks alarming — it is a
+  **2026-04-08 artifact** of the pre-fix retry loop (target FAILED, untouched since). Do not
+  re-investigate it.
+- **🔴 THE REAL RISK WAS DISK, and it was Docker, not media.** The 157GB disk sat at **83%
+  (26GB free)** — days from full under heavy video upload, and disk-full takes Postgres down
+  (shared volume). `docker system df` showed **build cache 77GB (0 in use) + stale image
+  layers ~73GB = ~150GB reclaimable**; MinIO media was only **28GB**. Pruned live →
+  **37% used, 95GB free** (7 running containers untouched; image prune never removes layers a
+  container references). **`deploy.sh` now self-caps**: `docker builder prune -f
+  --keep-storage 20GB` + `docker image prune -f` after each deploy, best-effort. First deploy
+  after a full cache prune rebuilds from scratch (slower once); keep-storage retains the hot
+  cache thereafter.
+- **Throughput ceilings (defaults confirmed live — every tunable unset ⇒ code default):**
+  publish worker concurrency 10, limiter 10/5s ⇒ **~7,200 target-jobs/hour**. Thousands of
+  posts/day, even ×5 channel fan-out, is well inside that. ⚠️ **A single scheduled wave over
+  ~3,600 targets outlasts the 30-min watchdog** on its tail (post flips PUBLISHING at cron
+  pick-up; queued-but-unclaimed targets don't write `updatedAt`). Spread big schedules, or
+  raise `PUBLISH_LIMITER_MAX` (env-only, plumbed).
+- **500MB+ videos are the CHEAP case for the worker, by design:** browser→S3 multipart is
+  direct (web process untouched); IG/FB publish by URL-pull with **>250MB skipping the
+  watermark overlay entirely** (zero ffmpeg); YT/X/LI stream under the heavy lane
+  (3 concurrent, excess defers); only **>950MB** gates on the optimize rendition.
+  ⚠️ Residual: an OUT-OF-SPEC ≤950MB video (HEVC/PCM) can publish its original before the
+  concurrency-1 optimize pass produces the rendition → platform may reject with an actionable
+  error. A spec problem, not a load problem; the >950MB gate already covers the worst files.
+- **Redis (512MB, noeviction) arithmetic:** measured 27MB used / 2,348 keys with queues
+  drained. At-age checkpoints keep `targets/day × 53` delayed jobs alive steady-state
+  (24h+7d+15d+30d lifetimes) ≈ ~1KB each ⇒ **~4–5k targets/day sustained approaches the
+  512MB cap** (~2k/day ≈ ~100MB: fine). If sustained volume crosses that, raise redis
+  `--maxmemory` in compose (needs redis recreate — do it in a quiet window) and watch
+  `INFO memory`.
+- **Publish-report email**: one per POST via Google Workspace SMTP, whose cap is ~2,000
+  msgs/day. At thousands of posts/day emails will throttle — **publishes are unaffected**
+  (send is try/catch'd), the reports just stop arriving. Batching/digest is the fix if it
+  matters.
+- **Meta quota headroom is large**: external-post ingestion off freed ~250k Graph calls/day,
+  and the publish path self-throttles on the shared `usageCache` (uncapped 60s sleeps at
+  ≥95% app usage) — the protection that makes analytics volume, not publish volume, the thing
+  to keep small.
+
 ## Publish pipeline speed/fairness + exact-time scheduling (2026-07-18 PR #131 + 2026-07-20 Phase 2) — read before touching the publish queue
 
 Full audit + phased plan: [docs/PUBLISH-PIPELINE-SPEED-PLAN.md](docs/PUBLISH-PIPELINE-SPEED-PLAN.md). Phase 1 (PR #131, deployed + E2E-verified on prod: X +14.6s, IG +32.3s from scheduled time, live URLs):

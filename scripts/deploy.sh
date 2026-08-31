@@ -197,6 +197,17 @@ cmd_deploy() {
   docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --no-deps worker
   docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --no-deps nginx
 
+  # Cap Docker build-cache / stale-image growth. Every deploy leaves the previous
+  # images' layers and the full builder cache behind; measured 2026-08-31 these had
+  # accumulated to ~150GB of the 157GB disk (media itself was only 28GB), leaving
+  # 26GB free — days from disk-full under heavy video upload, which takes Postgres
+  # down with it (shared volume). --keep-storage retains the hot cache so routine
+  # deploys stay fast; dangling-image prune never touches images a container
+  # references. Best-effort: cleanup must never fail a finished deploy.
+  log "Pruning Docker build cache (keep 20GB) and dangling images..."
+  docker builder prune -f --keep-storage 20GB >/dev/null 2>&1 || warn "builder prune failed (non-fatal)"
+  docker image prune -f >/dev/null 2>&1 || warn "image prune failed (non-fatal)"
+
   # Save version info + tag in git
   save_version
   tag_deployment
