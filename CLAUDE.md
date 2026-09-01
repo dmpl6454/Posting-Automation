@@ -610,6 +610,74 @@ limit.** Probed against production Graph with real decrypted tokens:
   **0 of 400** active FB channels carried `insightsHealth.status === "ok"`, yet **3 of 3** FB pages
   probed directly answered fine. Do not trust a stale health verdict as evidence a token is dead.
 
+## 🖼️ Custom uploaded THUMBNAILS for reels/videos (2026-09-01) — read before touching a video publish path
+
+Users upload a cover image per video on the Compose tile; it is applied wherever the
+platform supports one. **Absent a cover, every request is byte-identical** — the gate
+that keeps the frozen IG/FB publish paths honoured.
+
+| platform | mechanism | cost |
+|---|---|---|
+| **Instagram REELS** | `cover_url` on the media container | **zero extra calls** — Meta cURLs it exactly as it already cURLs `video_url`; no new permission (`instagram_content_publish` covers it), no API-version bump |
+| **Facebook** | `POST /{video-id}/thumbnails` (multipart, `is_preferred=true`) AFTER publish | +1 call per video with a cover |
+| **YouTube** | `thumbnails.set` after upload | +1 call; **NO new OAuth scope** — `youtube.upload` already authorizes it |
+| **X/Twitter** | impossible on any API tier | picker not shown |
+
+- ⚠️ **IG `cover_url` is REELS-ONLY and the gate is on the RESOLVED `media_type`, never
+  on "is this a video".** On a STORIES container it 400s container creation and fails
+  the WHOLE publish. Carousel children never reach this branch (`publishCarouselPost`).
+- ⚠️ **FB's `/videos` `thumb` param takes RAW BYTES, not a URL** — it cannot ride the
+  >64MB `file_url` urlencoded body, and converting that to multipart would change the
+  frozen large-video call shape. The separate `/{video-id}/thumbnails` edge avoids it.
+- 🔴 **BOTH post-publish steps NEVER THROW, and that is load-bearing.** The video is
+  already live when they run; an escaping error fails the job and BullMQ re-uploads —
+  publishing a **DUPLICATE**. That is the 2026-08-18 duplicate-post class reached from
+  a new direction. YouTube is the sharper case: it has no `findExistingPost`, so a
+  throw there really would duplicate. Both image fetches are time-bounded so a
+  cosmetic step cannot hold a publish-worker slot.
+- **SECURITY — only a `mediaId` crosses the wire.** `post.create` runs
+  `assertMediaOwned`, requires `image/*`, requires an http(s) URL, and resolves the
+  public URL **server-side**. A client-supplied URL would be an SSRF/exfil vector
+  because Meta and Google FETCH it. The inner zod object is **strip-mode** (the
+  `.passthrough()` is on the OUTER object), so a `url` sent alongside `mediaId` is
+  discarded at parse, and the raw client key is stripped before the DB write.
+  ⚠️ IG's `access_token` travels in the JSON **body**, so `cover_url` cannot exfiltrate
+  it via a query string — verify that stays true if the container call is ever rewritten.
+- ⚠️ **ONE cover per post, on `Post.metadata.videoThumbnail`, NOT keyed by mediaId.**
+  Super-text and media-optimize create DERIVED Media rows and repoint `PostMedia`, so a
+  mediaId-keyed lookup misses at publish time. It also matches the platforms: a reel, an
+  FB video and a YouTube upload each have exactly one cover.
+- **YouTube specifics:** 2MB API cap (its own UI allows more — guarded client AND
+  server side); a 403 almost always means the channel is **not phone-verified**
+  (youtube.com/verify) and Google returns no distinct reason code, so the log names the
+  likely cause; **Shorts feeds IGNORE custom thumbnails** — the image shows in the
+  channel grid and search only.
+
+### ⚠️ Three UI defects an adversarial review caught BEFORE shipping — do not reintroduce
+
+All three silently lose an explicit user input while reporting success, which is the
+worst failure shape for a publishing product. Locked by
+[thumbnail-ui-contract.test.ts](apps/web/lib/thumbnail-ui-contract.test.ts).
+
+1. **The cover upload armed no in-flight flag**, so both submit guards passed
+   mid-upload and the post published WITHOUT the cover while the success toast still
+   fired — unrecoverable for an IG Reel, whose cover cannot be changed after publish.
+   Fixed with ONE shared `mediaBusy` predicate feeding all three gates (wake lock /
+   beforeunload, submit, save-as-draft) so a future upload path cannot desync them.
+2. **The post-await write-back used the array INDEX.** The tile X-button re-indexes
+   with `filter((_, i) => i !== idx)`, so a cover could land on the WRONG tile — or
+   none — and still toast success. Now keyed on a tile URL captured at pick time, with
+   an explicit "not attached" message. The picker is **disabled while that tile's video
+   is uploading**, which is what keeps the URL stable (`startAutoUpload` swaps a tile's
+   `blob:` url to the durable S3 url on completion).
+3. **A restored draft's cover mediaId bypassed the `verifyIds` reconciliation**, so a
+   deleted cover killed the ENTIRE post with an opaque FORBIDDEN and no affordance to
+   clear it. Cover ids are now verified and stripped like any other media id.
+
+Tests: [video-thumbnail.test.ts](packages/social/src/__tests__/video-thumbnail.test.ts) (8),
+[video-thumbnail-post-create.test.ts](packages/api/src/__tests__/video-thumbnail-post-create.test.ts) (7),
+[thumbnail-ui-contract.test.ts](apps/web/lib/thumbnail-ui-contract.test.ts) (8).
+
 ## 🏋️ LOAD-READINESS VERDICT for the multi-user surge (measured 2026-08-31)
 
 Owner asked: can the platform take multiple people posting thousands of posts/day, including
