@@ -1,5 +1,6 @@
 import type { SocialPlatform } from "@postautomation/db";
 import { SocialProvider } from "../abstract/social.abstract";
+import { resolveVideoThumbnailUrl, supportsInstagramCover } from "../utils/video-thumbnail";
 import type {
   SocialPostPayload,
   SocialPostResult,
@@ -150,7 +151,23 @@ export class InstagramProvider extends SocialProvider {
     if (isVideo) {
       containerParams["video_url"] = mediaUrl;
       const fmt = String(payload.metadata?.format ?? "REEL").toUpperCase();
-      containerParams["media_type"] = fmt === "STORY" ? "STORIES" : "REELS";
+      const mediaType = fmt === "STORY" ? "STORIES" : "REELS";
+      containerParams["media_type"] = mediaType;
+
+      // Optional user-uploaded cover. Meta cURLs `cover_url` server-side exactly
+      // as it already cURLs `video_url`, so this costs no extra request and needs
+      // no new permission — instagram_content_publish already covers it.
+      //
+      // ⚠️ REELS ONLY. cover_url on a STORIES container 400s container creation
+      // and fails the whole publish, so the gate is on the resolved media_type,
+      // never on "is this a video".
+      //
+      // ⚠️ When absent, containerParams is byte-identical to the pre-feature
+      // request — the IG publish path is contractually frozen.
+      const coverUrl = resolveVideoThumbnailUrl(payload.metadata);
+      if (coverUrl && supportsInstagramCover(mediaType)) {
+        containerParams["cover_url"] = coverUrl;
+      }
     } else {
       containerParams["image_url"] = mediaUrl;
     }

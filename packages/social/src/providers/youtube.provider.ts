@@ -7,6 +7,7 @@ import { join } from "path";
 const execFileAsync = promisify(execFile);
 import crypto from "crypto";
 import { SocialProvider } from "../abstract/social.abstract";
+import { resolveVideoThumbnailUrl } from "../utils/video-thumbnail";
 import type {
   SocialPostPayload,
   SocialPostResult,
@@ -530,6 +531,22 @@ export class YouTubeProvider extends SocialProvider {
 
     if (!finalData) throw new Error("YouTube upload completed but returned no data");
 
+    // Optional user-uploaded custom thumbnail.
+    //
+    // ⚠️ NEVER RETHROW. The video is already uploaded and public at this point,
+    // but publishedId has NOT been persisted yet — so an error escaping here
+    // fails the job and BullMQ retries the ENTIRE upload, publishing a DUPLICATE
+    // video. That is the 2026-08-18 duplicate-post class reached from a new
+    // direction; a missing cover is a cosmetic loss, a duplicate upload is not.
+    //
+    // ⚠️ Needs NO new OAuth scope: thumbnails.set is authorized by the
+    // youtube.upload scope this app already requests. Adding a scope would
+    // invalidate EVERY user's refresh token (quirk #7) — do not.
+    const coverUrl = resolveVideoThumbnailUrl(payload.metadata);
+    if (coverUrl) {
+      await this.setVideoThumbnail(tokens, finalData.id, coverUrl);
+    }
+
     await onProgress?.(100);
 
     return {
@@ -537,6 +554,75 @@ export class YouTubeProvider extends SocialProvider {
       url: `https://www.youtube.com/watch?v=${finalData.id}`,
       metadata: finalData,
     };
+  }
+
+  /**
+   * Set a custom thumbnail on an uploaded video (YouTube Data API thumbnails.set).
+   *
+   * ⚠️ Best-effort by contract — see the caller. Never throws.
+   *
+   * Two failures are EXPECTED in normal operation and must read as such rather
+   * than as app bugs:
+   *   - 403: the channel is not phone-verified. YouTube returns a generic
+   *     `forbidden` with no distinct reason code, so it cannot be told apart
+   *     programmatically from other permission errors — the log names the likely
+   *     cause so support does not chase a token problem.
+   *   - 400 invalidImage: the API cap is 2MB (the Studio UI allows far more).
+   *
+   * Also note Shorts feeds IGNORE custom thumbnails — the image shows in the
+   * channel grid and search, not in the Shorts player.
+   */
+  private async setVideoThumbnail(
+    tokens: OAuthTokens,
+    videoId: string,
+    thumbnailUrl: string
+  ): Promise<void> {
+    try {
+      // ⚠️ Bounded — see the Facebook equivalent. This runs after the video is
+      // already uploaded and public; a hang here would stall the worker slot on a
+      // cosmetic step.
+      const imgRes = await fetch(thumbnailUrl, { signal: AbortSignal.timeout(30_000) });
+      if (!imgRes.ok) {
+        console.warn(`[YouTube] thumbnail fetch failed (${imgRes.status}) for ${videoId}; cover skipped`);
+        return;
+      }
+      const contentType = imgRes.headers.get("content-type") || "image/jpeg";
+      const buffer = Buffer.from(await imgRes.arrayBuffer());
+      // The API rejects >2MB with 400 invalidImage — refuse locally so the log
+      // says why instead of surfacing an opaque Google error.
+      if (buffer.byteLength > 2 * 1024 * 1024) {
+        console.warn(
+          `[YouTube] thumbnail is ${(buffer.byteLength / 1024 / 1024).toFixed(1)}MB (API cap 2MB) for ${videoId}; cover skipped`
+        );
+        return;
+      }
+      const res = await fetch(
+        `https://www.googleapis.com/upload/youtube/v3/thumbnails/set?uploadType=media&videoId=${encodeURIComponent(videoId)}`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${tokens.accessToken}`,
+            "Content-Type": contentType,
+            "Content-Length": String(buffer.byteLength),
+          },
+          body: new Uint8Array(buffer),
+        }
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        const hint =
+          res.status === 403
+            ? " (most likely the channel is not phone-verified: youtube.com/verify)"
+            : "";
+        console.warn(
+          `[YouTube] thumbnails.set failed for ${videoId}${hint} (video is live, cover skipped): ${JSON.stringify(err)}`
+        );
+        return;
+      }
+      console.log(`[YouTube] custom thumbnail set on video ${videoId}`);
+    } catch (err: any) {
+      console.warn(`[YouTube] thumbnails.set threw for ${videoId} (video is live, cover skipped): ${err?.message}`);
+    }
   }
 
   private async createCommunityPost(tokens: OAuthTokens, payload: SocialPostPayload): Promise<SocialPostResult> {

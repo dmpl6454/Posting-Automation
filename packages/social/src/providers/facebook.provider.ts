@@ -1,5 +1,6 @@
 import type { SocialPlatform } from "@postautomation/db";
 import { SocialProvider } from "../abstract/social.abstract";
+import { resolveVideoThumbnailUrl } from "../utils/video-thumbnail";
 import type {
   SocialPostPayload,
   SocialPostResult,
@@ -1145,6 +1146,73 @@ export class FacebookProvider extends SocialProvider {
     return { buffer, contentType, fileName: `upload.${fileExt}` };
   }
 
+  /**
+   * Set a user-uploaded custom thumbnail on an already-published video.
+   *
+   * ── Why AFTER publish, not during ────────────────────────────────────────
+   * Graph's `{page}/videos` edge takes a cover as `thumb`, which is raw image
+   * BYTES in a multipart part — there is no thumb_url. Our >64MB path publishes
+   * with `file_url` over `application/x-www-form-urlencoded` precisely so the
+   * worker never buffers a multi-GB video; a file part cannot ride that body,
+   * and converting it to multipart would change the FROZEN large-video call
+   * shape. `POST /{video-id}/thumbnails` reaches the same result on a separate,
+   * additive request and works identically for both upload paths.
+   *
+   * ⚠️ NEVER THROWS. The video is already live at this point. Propagating an
+   * error here would fail the publish job, and BullMQ would retry the whole
+   * upload — publishing a DUPLICATE video. That is the 2026-08-18 duplicate-post
+   * incident class, reached from a new direction. A missing cover is a cosmetic
+   * loss; a duplicate reel on a live audience account is not.
+   *
+   * ⚠️ `is_preferred=true` is required — without it the image is added to the
+   * video's thumbnail set but Facebook keeps auto-selecting its own frame.
+   */
+  private async setVideoThumbnail(
+    tokens: OAuthTokens,
+    pageId: string,
+    videoId: string,
+    thumbnailUrl: string
+  ): Promise<void> {
+    try {
+      // ⚠️ Bounded. This is a cosmetic add-on running INSIDE the publish job, after
+      // the video is already live — an unbounded fetch of a user-supplied URL could
+      // hold a publish-worker slot open indefinitely (and the watchdog would then
+      // reap a post that actually succeeded). 30s is generous for a ≤2MB image.
+      const timeout = new Promise<never>((_, rej) =>
+        setTimeout(() => rej(new Error("thumbnail step timed out after 30s")), 30_000)
+      );
+      const { buffer, contentType, fileName } = await Promise.race([
+        this.fetchMediaAsBuffer(thumbnailUrl),
+        timeout,
+      ]);
+      const { body, contentType: multipartContentType } = this.buildMultipartBody(
+        { access_token: tokens.accessToken, is_preferred: "true" },
+        { name: fileName, contentType, buffer }
+      );
+      const res = await this.graphFetch(
+        `${this.graphBaseUrl}/${this.apiVersion}/${videoId}/thumbnails`,
+        {
+          method: "POST",
+          headers: { "Content-Type": multipartContentType },
+          body: new Uint8Array(body),
+        },
+        pageId
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        console.warn(
+          `[Facebook] custom thumbnail rejected for video ${videoId} (post is live, cover skipped): ${JSON.stringify(err)}`
+        );
+        return;
+      }
+      console.log(`[Facebook] custom thumbnail set on video ${videoId}`);
+    } catch (err: any) {
+      console.warn(
+        `[Facebook] custom thumbnail failed for video ${videoId} (post is live, cover skipped): ${err?.message}`
+      );
+    }
+  }
+
   private buildMultipartBody(
     fields: Record<string, string>,
     file: { name: string; contentType: string; buffer: Buffer }
@@ -1402,6 +1470,15 @@ export class FacebookProvider extends SocialProvider {
     if (isVideo) {
       const data = await this.uploadVideoToFacebook(tokens, pageId, firstUrl, payload.content);
       const postId = data.post_id || data.id;
+
+      // Optional user-uploaded cover, applied to the Video node we just created.
+      // Best-effort by construction (setVideoThumbnail never throws) — see the
+      // duplicate-publish warning on that method. Absent metadata ⇒ no call at
+      // all, so the publish path is byte-identical to before.
+      const coverUrl = resolveVideoThumbnailUrl(payload.metadata);
+      if (coverUrl && data.id) {
+        await this.setVideoThumbnail(tokens, pageId, data.id, coverUrl);
+      }
       // The {page}/videos edge returns only a bare Video node id (no post_id),
       // so the "{page}_{post}" → /posts/ permalink rewrite is a no-op for
       // videos — facebook.com/{videoId} is a dead link. Use the canonical

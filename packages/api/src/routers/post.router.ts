@@ -139,6 +139,13 @@ export const postRouter = createRouter({
           // publish. Optional — when absent every path below is byte-identical to
           // the pre-feature behaviour.
           superText: superTextMapSchema.optional(),
+          // User-uploaded custom cover for a published video/reel.
+          //
+          // ⚠️ Only the mediaId is accepted. The public URL is resolved from the
+          // DB below, because a client-supplied url would be an SSRF/exfil vector:
+          // it is handed to Meta/Google to FETCH, and Instagram interpolates it
+          // into a container that fails the whole publish when malformed.
+          videoThumbnail: z.object({ mediaId: z.string().min(1) }).optional(),
         }).passthrough().optional(),
       })
     )
@@ -261,6 +268,41 @@ export const postRouter = createRouter({
         }
       }
 
+      // Resolve a user-uploaded custom video cover to its PUBLIC url, server-side.
+      //
+      // ⚠️ Validated UP FRONT rather than at publish time on purpose: Instagram
+      // cURLs cover_url and a bad one puts the media container into ERROR, which
+      // fails the ENTIRE reel publish. An actionable error here beats a FAILED
+      // target discovered minutes later.
+      let videoThumbnail: { mediaId: string; url: string } | null = null;
+      const thumbMediaId = (input.metadata as any)?.videoThumbnail?.mediaId as string | undefined;
+      if (thumbMediaId) {
+        // Same org-scope guard the chat action path uses — a foreign mediaId must
+        // never become a URL we hand to a platform.
+        await assertMediaOwned(ctx.prisma, ctx.organizationId, [thumbMediaId]);
+        const thumbRow = await ctx.prisma.media.findUnique({
+          where: { id: thumbMediaId },
+          select: { url: true, fileType: true },
+        });
+        if (!thumbRow?.url) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "That thumbnail image could not be found." });
+        }
+        if (!thumbRow.fileType?.startsWith("image/")) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "A video thumbnail must be an image (JPEG or PNG).",
+          });
+        }
+        if (!/^https?:\/\//i.test(thumbRow.url)) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "That thumbnail is not publicly reachable, so the platform could not fetch it. Re-upload the image.",
+          });
+        }
+        videoThumbnail = { mediaId: thumbMediaId, url: thumbRow.url };
+      }
+
       const status =
         captionFanout.enabled || superTextPlan.parkedSchedule
           ? "DRAFT"
@@ -285,11 +327,15 @@ export const postRouter = createRouter({
           // and no metadata this evaluates to `undefined` — byte-identical to the
           // pre-feature write.
           metadata: (() => {
-            const { superText: _rawSuperText, ...rest } = (input.metadata ?? {}) as Record<
-              string,
-              unknown
-            >;
+            const {
+              superText: _rawSuperText,
+              // Stripped and replaced by the server-resolved reference below, so
+              // the DB never carries a client-supplied URL.
+              videoThumbnail: _rawThumb,
+              ...rest
+            } = (input.metadata ?? {}) as Record<string, unknown>;
             const out: Record<string, unknown> = { ...rest };
+            if (videoThumbnail) out.videoThumbnail = videoThumbnail;
             if (captionFanout.enabled) {
               out.captionFanout = {
                 requested: true,

@@ -129,7 +129,7 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   // PR-5: unique caption per channel (AI) — only meaningful with >1 channel.
   const [uniqueCaptions, setUniqueCaptions] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [postMedia, setPostMedia] = useState<{ url: string; mediaId?: string; file?: File; uploading?: boolean; progress?: number; superText?: SuperTextConfig }[]>([]);
+  const [postMedia, setPostMedia] = useState<{ url: string; mediaId?: string; file?: File; uploading?: boolean; progress?: number; superText?: SuperTextConfig; thumbnail?: { mediaId: string; url: string }; thumbnailUploading?: boolean }[]>([]);
   // Index into postMedia whose super text is being edited (null = dialog closed).
   const [superTextEditIndex, setSuperTextEditIndex] = useState<number | null>(null);
   // Aspect ratio of the first attached video (width/height). Null until measured.
@@ -221,11 +221,23 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
     if (!hasDeepLinkMedia && media.length > 0) {
       setPostMedia((prev) =>
         prev.length === 0
-          ? media.map(({ url, mediaId, superText }: any) => {
+          ? media.map(({ url, mediaId, superText, thumbnail }: any) => {
               // Re-validate: a draft persisted by an older build (or hand-edited
               // localStorage) must never inject an invalid config into post.create.
               const parsed = superText ? superTextConfigSchema.safeParse(superText) : null;
-              return { url, mediaId, ...(parsed?.success ? { superText: parsed.data } : {}) };
+              // Same defensive rule for the cover: only a well-formed reference
+              // survives, and only its mediaId is ever sent onward. A stale id is
+              // caught by post.create's ownership check rather than trusted here.
+              const cover =
+                thumbnail && typeof thumbnail.mediaId === "string" && thumbnail.mediaId
+                  ? { mediaId: thumbnail.mediaId, url: typeof thumbnail.url === "string" ? thumbnail.url : "" }
+                  : null;
+              return {
+                url,
+                mediaId,
+                ...(parsed?.success ? { superText: parsed.data } : {}),
+                ...(cover ? { thumbnail: cover } : {}),
+              };
             })
           : prev
       );
@@ -235,7 +247,14 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
       // Stripping the id keeps the tile — resolvePostMediaIds re-resolves the
       // URL losslessly if the object still exists, else surfaces a clear
       // per-item error instead of an opaque whole-post rejection.
-      const ids = media.map((m) => m.mediaId).filter((x): x is string => !!x);
+      // ⚠️ Include the restored COVER ids. They are sent to post.create, which
+      // runs assertMediaOwned on them — so a cover whose Media row was deleted
+      // since the draft was saved would kill the ENTIRE post with an opaque
+      // FORBIDDEN, with no UI affordance to clear it. Verified alongside the
+      // attachment ids and stripped the same way.
+      const ids = media
+        .flatMap((m: any) => [m.mediaId, m.thumbnail?.mediaId])
+        .filter((x: unknown): x is string => typeof x === "string" && !!x);
       if (ids.length > 0) {
         void utils.media.verifyIds
           .fetch({ ids })
@@ -243,7 +262,14 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
             const owned = new Set(ownedIds);
             if (ids.every((id) => owned.has(id))) return;
             setPostMedia((prev) =>
-              prev.map((m) => (m.mediaId && !owned.has(m.mediaId) ? { ...m, mediaId: undefined } : m))
+              prev.map((m) => {
+                const next = m.mediaId && !owned.has(m.mediaId) ? { ...m, mediaId: undefined } : m;
+                // Drop a cover whose Media row is gone: the tile survives, the
+                // user simply re-picks, instead of every submit failing.
+                return next.thumbnail && !owned.has(next.thumbnail.mediaId)
+                  ? { ...next, thumbnail: undefined }
+                  : next;
+              })
             );
           })
           .catch(() => {
@@ -263,7 +289,7 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   const draftMediaSignature = useMemo(
     // superText included so an overlay edit re-persists the draft; still a
     // STRING (never the postMedia array identity — see the comment above).
-    () => JSON.stringify(postMedia.map((m) => [m.url, m.mediaId ?? null, m.superText ?? null])),
+    () => JSON.stringify(postMedia.map((m) => [m.url, m.mediaId ?? null, m.superText ?? null, m.thumbnail?.mediaId ?? null])),
     [postMedia]
   );
   useEffect(() => {
@@ -282,10 +308,11 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
           // completed uploads) — blob-only tiles can't survive a remount.
           media: postMedia
             .filter((m) => m.mediaId || (m.url && !m.url.startsWith("blob:")))
-            .map(({ url, mediaId, superText }) => ({
+            .map(({ url, mediaId, superText, thumbnail }) => ({
               url,
               mediaId,
               ...(superText ? { superText } : {}),
+              ...(thumbnail ? { thumbnail } : {}),
             })),
         },
         createdAt: getTask(TASK_ID)?.createdAt || Date.now(),
@@ -410,7 +437,11 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   // navigation — it cannot (and shouldn't) block a real crash.
   // `isUploading` covers the submit-time path (resolvePostMediaIds re-uploads
   // items whose auto-upload failed) which never sets item-level flags.
-  const anyUploading = isUploading || postMedia.some((m) => m.uploading);
+  // Any media transfer in flight — INCLUDING a cover upload, which arms its own
+  // flag. Kept as one predicate so a future upload path cannot desync the three
+  // places that gate on it (wake lock / beforeunload, submit, save-as-draft).
+  const mediaBusy = postMedia.some((m) => m.uploading || m.thumbnailUploading);
+  const anyUploading = isUploading || mediaBusy;
   useEffect(() => {
     if (!anyUploading) return;
     const handler = (e: BeforeUnloadEvent) => {
@@ -788,6 +819,81 @@ ${content}`;
     };
   }, []);
 
+  /**
+   * Attach a user-uploaded custom cover to a video tile.
+   *
+   * The image is uploaded through the SAME path as any other media, so it lands
+   * as an ordinary org-owned Media row — which is what lets post.create verify
+   * ownership and resolve the public URL server-side instead of trusting us.
+   *
+   * ⚠️ Only the mediaId is ever sent to the API; the url kept here is purely for
+   * the tile preview.
+   */
+  const handleThumbnailUpload = async (idx: number, file: File) => {
+    if (!file.type.startsWith("image/")) {
+      toast({
+        title: "Thumbnails must be an image",
+        description: "Choose a JPEG or PNG. Instagram, Facebook and YouTube all reject other formats.",
+        variant: "destructive",
+      });
+      return;
+    }
+    // YouTube's API caps thumbnails at 2MB (its own UI allows more). Refuse here
+    // so the user learns immediately rather than losing the cover at publish.
+    if (file.size > 2 * 1024 * 1024) {
+      toast({
+        title: "Thumbnail is too large",
+        description: `That image is ${(file.size / 1024 / 1024).toFixed(1)}MB. YouTube's API caps custom thumbnails at 2MB — please compress it.`,
+        variant: "destructive",
+      });
+      return;
+    }
+    // ⚠️ Capture a STABLE identity before the await. `idx` is a positional index
+    // and the tile X-button re-indexes with `filter((_, i) => i !== idx)`, so a
+    // post-await positional write can land on the WRONG tile — or on none — while
+    // still toasting success. The Thumbnail control is disabled while the tile's
+    // own video is uploading, which is what keeps this url stable (startAutoUpload
+    // swaps a tile's blob: url to the durable S3 url when that upload completes).
+    const tileUrl = postMedia[idx]?.url;
+    if (!tileUrl) return;
+
+    // ⚠️ Arm an in-flight flag. Without one, both submit guards pass mid-upload and
+    // the post publishes WITHOUT the cover while the success toast still fires —
+    // silent loss of an explicit user input, and unrecoverable for an IG Reel whose
+    // cover cannot be changed after publishing.
+    setPostMedia((prev) => prev.map((m) => (m.url === tileUrl ? { ...m, thumbnailUploading: true } : m)));
+    try {
+      const { id, url } = await uploadFileToS3(file);
+      let landed = false;
+      setPostMedia((prev) => {
+        if (!prev.some((m) => m.url === tileUrl)) return prev; // tile removed mid-upload
+        landed = true;
+        return prev.map((m) =>
+          m.url === tileUrl
+            ? { ...m, thumbnail: { mediaId: id, url: url || URL.createObjectURL(file) } }
+            : m
+        );
+      });
+      if (!landed) {
+        toast({
+          title: "Thumbnail not attached",
+          description: "That video was removed while the cover was uploading. Pick it again.",
+          variant: "destructive",
+        });
+        return;
+      }
+      toast({ title: "Thumbnail attached", description: "It will be used as the cover where the platform supports it." });
+    } catch (err: any) {
+      toast({
+        title: "Couldn't upload that thumbnail",
+        description: humanizeError(err) || "Please try a different image.",
+        variant: "destructive",
+      });
+    } finally {
+      setPostMedia((prev) => prev.map((m) => (m.url === tileUrl ? { ...m, thumbnailUploading: false } : m)));
+    }
+  };
+
   const uploadFileToS3 = async (
     file: File,
     objectUrl?: string,
@@ -932,7 +1038,7 @@ ${content}`;
       return;
     }
 
-    const stillUploading = postMedia.some((item) => item.uploading);
+    const stillUploading = postMedia.some((item) => item.uploading || item.thumbnailUploading);
     if (stillUploading) {
       toast({ title: "Please wait", description: "Media is still uploading...", variant: "destructive" });
       return;
@@ -972,9 +1078,16 @@ ${content}`;
         ...(mediaIds.length > 0 && { mediaIds }),
         ...(Object.keys(formatByChannelId).length > 0 && { formatByChannelId }),
         ...(() => {
+          // ONE cover per post: the platforms each have exactly one (a reel
+          // cover, a Facebook video thumbnail, a YouTube thumbnail), and keying
+          // by mediaId would break anyway — super-text/optimize repoint the
+          // attachment to a DERIVED Media row before publish. Take the first
+          // video that has one.
+          const cover = postMedia.find((m) => m.thumbnail)?.thumbnail;
           const md = {
             ...ytMetadata,
             ...(Object.keys(superTextByMediaId).length > 0 ? { superText: superTextByMediaId } : {}),
+            ...(cover ? { videoThumbnail: { mediaId: cover.mediaId } } : {}),
           };
           return Object.keys(md).length > 0 ? { metadata: md } : {};
         })(),
@@ -1363,6 +1476,43 @@ ${content}`;
                           >
                             {item.superText ? "Super text ✓" : "Super text"}
                           </button>
+                        )}
+                        {/* Custom cover — videos only, sits above the Super text
+                            control. Same [@media(hover:hover)] gating so it stays
+                            tappable on touch and desktop is unchanged. */}
+                        {isVideo && (
+                          <label
+                            className={`absolute bottom-[18px] left-0 right-0 py-0.5 text-center text-[10px] text-white opacity-100 transition-opacity [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 ${
+                              item.uploading || item.thumbnailUploading
+                                ? "cursor-wait bg-black/70"
+                                : "cursor-pointer"
+                            } ${item.thumbnail ? "bg-primary/80 font-semibold" : "bg-black/50"}`}
+                            title="Upload a custom cover image (Instagram Reels, Facebook and YouTube). JPEG or PNG, up to 2MB."
+                          >
+                            {item.thumbnailUploading
+                              ? "Thumbnail…"
+                              : item.thumbnail
+                                ? "Thumbnail ✓"
+                                : "Thumbnail"}
+                            <input
+                              type="file"
+                              accept="image/jpeg,image/png"
+                              className="hidden"
+                              // Disabled while THIS tile's video is still uploading:
+                              // startAutoUpload swaps the tile's blob: url to the
+                              // durable S3 url on completion, and the cover write-back
+                              // is keyed on that url — picking mid-upload would race it.
+                              // Also disabled during a cover upload so a second pick
+                              // cannot interleave.
+                              disabled={!!item.uploading || !!item.thumbnailUploading}
+                              onChange={(e) => {
+                                const f = e.target.files?.[0];
+                                // Reset so re-picking the SAME file fires change again.
+                                e.target.value = "";
+                                if (f) void handleThumbnailUpload(idx, f);
+                              }}
+                            />
+                          </label>
                         )}
                       </div>
                     );
@@ -1818,7 +1968,7 @@ ${content}`;
               variant="outline"
               className="w-full sm:w-auto"
               onClick={async () => {
-                if (postMedia.some((item) => item.uploading)) {
+                if (postMedia.some((item) => item.uploading || item.thumbnailUploading)) {
                   toast({ title: "Please wait", description: "Media is still uploading...", variant: "destructive" });
                   return;
                 }
@@ -1836,9 +1986,16 @@ ${content}`;
                     content,
                     channelIds: selectedChannels.length > 0 ? selectedChannels : [],
                     ...(mediaIds.length > 0 && { mediaIds }),
-                    ...(Object.keys(superTextByMediaId).length > 0 && {
-                      metadata: { superText: superTextByMediaId },
-                    }),
+                    ...(() => {
+                      const cover = postMedia.find((m) => m.thumbnail)?.thumbnail;
+                      const md = {
+                        ...(Object.keys(superTextByMediaId).length > 0
+                          ? { superText: superTextByMediaId }
+                          : {}),
+                        ...(cover ? { videoThumbnail: { mediaId: cover.mediaId } } : {}),
+                      };
+                      return Object.keys(md).length > 0 ? { metadata: md } : {};
+                    })(),
                   });
                 } catch (err: any) {
                   toast({
