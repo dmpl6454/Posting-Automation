@@ -107,3 +107,32 @@ describe("the landed check reads COMMITTED state, not an updater side effect (20
     expect(src).not.toMatch(/useEffect\(\(\) => \{\s*postMediaRef/);
   });
 });
+
+describe("the set cover is VISIBLE, not just toasted about (2026-09-02)", () => {
+  const previewMediaSrc = readFileSync(
+    join(ROOT, "apps/web/components/previews/preview-media.tsx"),
+    "utf8"
+  );
+
+  it("renders the processed cover image as the tile's visual", () => {
+    // Owner report: "we can never see what thumbnail was set". The tile now
+    // shows the ACTUAL processed image (crop included) when a cover exists.
+    expect(src).toMatch(/src=\{item\.thumbnail\.url\}/);
+  });
+
+  it("offers cover REMOVAL keyed on the tile URL, never the array index", () => {
+    expect(src).toMatch(/m\.url === tileUrl \? \{ \.\.\.m, thumbnail: undefined \}/);
+  });
+
+  it("threads the cover into the preview using the SAME rule as submit", () => {
+    // post.create takes the FIRST tile with a cover — the preview must mirror
+    // that or it shows a cover that will not publish.
+    expect(src).toMatch(/videoPosterUrl=\{postMedia\.find\(\(m\) => m\.thumbnail\)\?\.thumbnail\?\.url\}/);
+  });
+
+  it("PreviewMedia applies the poster ONLY on video branches", () => {
+    // The image branch must ignore it, so previews can pass it unconditionally.
+    expect(previewMediaSrc).toMatch(/poster=\{poster\}/);
+    expect(previewMediaSrc).not.toMatch(/<img src=\{url\}[^>]*poster/);
+  });
+});

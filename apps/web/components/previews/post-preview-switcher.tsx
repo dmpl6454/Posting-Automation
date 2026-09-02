@@ -62,6 +62,7 @@ export function PostPreviewSwitcher({
   authorHandle,
   authorAvatar,
   timestamp,
+  videoPosterUrl,
 }: PostPreviewSwitcherProps) {
   const previewProps: PostPreviewProps = {
     content,
@@ -71,6 +72,7 @@ export function PostPreviewSwitcher({
     authorHandle,
     authorAvatar,
     timestamp,
+    videoPosterUrl,
   };
 
   const availablePlatforms = platforms ?? (platform ? [platform] : ["instagram", "facebook", "twitter", "linkedin", "youtube"]);

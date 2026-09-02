@@ -78,12 +78,20 @@ export function PreviewMedia({
   kind,
   className,
   alt,
+  poster,
 }: {
   /** undefined tolerated so guarded `mediaUrls[0]` reads type-check under noUncheckedIndexedAccess */
   url: string | undefined;
   kind?: MediaKind;
   className: string;
   alt?: string;
+  /**
+   * The post's custom video cover (always an IMAGE url). Applied ONLY on the
+   * video branches — the image branch ignores it — so callers may pass it
+   * unconditionally. On the local-blob branch it replaces the dark placeholder
+   * with the actual cover, which is safe precisely because it is an image.
+   */
+  poster?: string;
 }) {
   if (!url) return null;
   if (classifyMediaUrl(url, kind) === "image") {
@@ -92,18 +100,26 @@ export function PreviewMedia({
   }
   if (url.startsWith("blob:")) {
     return (
-      <div className={`${className} flex items-center justify-center bg-zinc-900`}>
-        <div className="flex flex-col items-center gap-1 text-zinc-300">
+      <div className={`${className} relative flex items-center justify-center overflow-hidden bg-zinc-900`}>
+        {poster && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={poster} alt="Video cover" className="absolute inset-0 h-full w-full object-cover" />
+        )}
+        <div className="relative flex flex-col items-center gap-1 text-zinc-300">
           <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white/10">
             <Play className="h-5 w-5 fill-current" />
           </div>
-          <span className="text-[10px] font-medium">Video</span>
+          {!poster && <span className="text-[10px] font-medium">Video</span>}
         </div>
       </div>
     );
   }
   // controls: owner request 2026-07-21 — a static frame read as "preview
   // doesn't work"; native play/pause makes it obviously alive. No autoplay,
-  // so no muted requirement.
-  return <video src={withPosterHint(url)} className={className} controls playsInline preload="metadata" />;
+  // so no muted requirement. A custom cover takes precedence over the #t=0.001
+  // first-frame hint: the native poster attribute wins until playback starts,
+  // which is exactly how the platforms treat a custom cover.
+  return (
+    <video src={withPosterHint(url)} poster={poster} className={className} controls playsInline preload="metadata" />
+  );
 }

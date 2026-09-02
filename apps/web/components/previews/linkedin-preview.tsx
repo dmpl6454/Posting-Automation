@@ -23,6 +23,8 @@ export interface PostPreviewProps {
   authorHandle?: string;
   authorAvatar?: string;
   timestamp?: Date;
+  /** Custom video cover (image url) — applied by PreviewMedia on VIDEO renders only. */
+  videoPosterUrl?: string;
 }
 
 const LINKEDIN_CHAR_LIMIT = 3000;
@@ -58,6 +60,7 @@ export function LinkedInPreview({
   authorHandle = "Your Headline",
   authorAvatar,
   timestamp,
+  videoPosterUrl,
 }: PostPreviewProps) {
   const charCount = content.length;
   const isOverLimit = charCount > LINKEDIN_CHAR_LIMIT;
@@ -130,6 +133,7 @@ export function LinkedInPreview({
             {mediaUrls.length === 1 ? (
               <div className="relative aspect-video w-full bg-zinc-100 dark:bg-zinc-800">
                 <PreviewMedia
+                  poster={videoPosterUrl}
                   url={mediaUrls[0]}
                   kind={mediaKinds?.[0]}
                   className="h-full w-full object-cover"
@@ -143,6 +147,7 @@ export function LinkedInPreview({
                     className="relative aspect-square bg-zinc-100 dark:bg-zinc-800"
                   >
                     <PreviewMedia
+                      poster={videoPosterUrl}
                       url={url}
                       kind={mediaKinds?.[i]}
                       alt={`Media ${i + 1}`}

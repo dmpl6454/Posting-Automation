@@ -369,7 +369,7 @@ Optional Instagram-style text strip (emoji + per-word colours + free positioning
 - **FAIL-VISIBLE, unlike caption-fanout.** A shared caption is an acceptable degraded fallback; a MISSING text strip changes the post's meaning. On final retry exhaustion `markSuperTextFailed` marks the post + targets FAILED with an actionable message — it never publishes the un-burned video. `post.publishNow` also refuses while `pendingBurn` is true.
 - **Retry idempotency:** `metadata.superText.results[mediaId].status === "done"` is persisted per entry, so a BullMQ retry never re-burns (the Media swap is not reversible). jobId `supertext:{postId}:v1` — **exactly 3 colon segments** (BullMQ >=5.70 rejects other counts).
 - **Worker image fonts ([docker/Dockerfile.worker](docker/Dockerfile.worker)): `font-noto-emoji` + `ttf-liberation` are REQUIRED.** Without the emoji font the user's 😍 burns as tofu; Liberation Sans is Arial-metric-compatible so the strip wraps at the same words in preview and burn. Do not drop either.
-- **Compose UI** ([SuperTextEditor.tsx](apps/web/components/content-agent/SuperTextEditor.tsx)): drag-to-position over a live stage, per-word colour swatches, S/M/L size, strip+text colour, 150-char cap. Video tiles only. **Inherits the OOM rules**: local files >256MB get a placeholder stage (never a `<video>`), the aspect probe is keyed on the URL STRING and released the moment metadata arrives, no `<img>` ever gets a video URL. `draftMediaSignature` includes `superText` so overlay edits re-persist the draft; restore re-validates via zod (a stale draft can never 400 the whole post).
+- **Compose UI** ([SuperTextEditor.tsx](apps/web/components/content-agent/SuperTextEditor.tsx)): drag-to-position over a live stage, per-word colour swatches, S/M/L size, strip+text colour, 150-char cap. Video tiles only. **Inherits the OOM rules**: local files >256MB get a placeholder stage (never a `<video>`), the aspect probe is keyed on the URL STRING and released the moment metadata arrives, no `<img>` ever gets a video URL. `draftMediaSignature` includes `superText` so overlay edits re-persist the draft; restore re-validates via zod (a stale draft can never 400 the whole post). **Dialog ergonomics fixed 2026-09-02 (owner-reported: "no submit button … click outside and it disappears"):** the editor stack is taller than a laptop viewport and DialogContent had no max-height, so the FOOTER — the only way to apply — rendered below the fold unreachable; now `max-h-[92dvh]` flex-col with ONE scrollable middle (`min-h-0 flex-1 overflow-y-auto`), header+footer pinned `flex-none`. And `onInteractOutside` is `preventDefault`ed — an outside click used to dismiss and silently discard every edit; Escape still cancels (deliberate gesture). Locked by [super-text-editor-contract.test.ts](apps/web/lib/super-text-editor-contract.test.ts) — browser-verified on a 646px viewport (Apply visible, outside click keeps the dialog, Apply flips the tile to "Super text ✓").
 - **Font picker — Classic / Sans (2026-07-28).** `SuperTextConfig.font` is an OPTIONAL `z.enum(["classic","sans"])`. Fonts live in ONE registry, `SUPER_TEXT_FONTS` in [constants.ts](packages/super-text/src/constants.ts), mapping the key → `{label, stack, weight, letterSpacingEm, embedded}`.
   - **`classic` is today's exact CSS** (same stack, same weight, and NO `letter-spacing` declaration — even `letter-spacing:0em` would be a byte change). `sans` is **Plus Jakarta Sans 800 (SIL OFL)** embedded as a base64 data-URI `@font-face` from [plus-jakarta-sans-800-latin.ts](packages/super-text/src/fonts/plus-jakarta-sans-800-latin.ts) (generated — `node scripts/gen-super-text-font.mjs`). Instagram Sans itself is Meta's proprietary typeface and is NOT licensable. Fidelity dial = `SUPER_TEXT_FONTS.sans.letterSpacingEm`.
   - **⚠️ Judge a candidate face by whether a user can TELL IT APART from Classic at ~23px — not by how well its metrics match Instagram Sans. Render it; don't reason about it.** `sans` first shipped as **DM Sans 700** because it was the closest match to Instagram Sans on paper (double-storey `a`, x-height, metrics). At the dialog's real size it was nearly indistinguishable from Arial — measured **0.4%** width delta on typical text — and the owner reported "I can see no difference" the same day. Plus Jakarta Sans 800 gives **4.8%**. Weight is **800 deliberately**: at 700 it sits too close to Arial Bold. The `@font-face` weight and `SUPER_TEXT_FONTS.sans.weight` must stay equal or Chromium synthesises bold (which rasterises differently on macOS vs Alpine) — test-locked.
@@ -665,6 +665,28 @@ that keeps the frozen IG/FB publish paths honoured.
   ≤2MB JPEG/PNG, and post.create's validation is unchanged. Verified in a real browser against the
   real upload path: 9.7MB 4000×3000 landscape + 540×960 reel → 1080×1920, 1.1MB, attached, draft
   carries the right `metadata.videoThumbnail`. Transparency flattens to WHITE (JPEG has no alpha).
+- **🖼️→✅ The set cover is VISIBLE, not just toasted about (2026-09-02, second batch).** Owner:
+  "we can never see what thumbnail was set … and see it in preview". Three additions, all locked in
+  [thumbnail-ui-contract.test.ts](apps/web/lib/thumbnail-ui-contract.test.ts): (a) a tile with a
+  cover renders the PROCESSED cover image as its visual (`src={item.thumbnail.url}` — an image URL,
+  safe under the classifier rules) with a corner film badge instead of the full scrim; (b) a
+  **"Cover ✕" chip** (top-LEFT; the tile's own X is top-right) removes ONLY the cover, keyed on the
+  tile URL like every other cover write; (c) the cover threads into the Post Preview as the video's
+  **`poster`** — `videoPosterUrl` on `PostPreviewProps`, using the SAME `postMedia.find((m) =>
+  m.thumbnail)` rule as post.create so preview and publish agree. ⚠️ **PostPreviewSwitcher rebuilds
+  `previewProps` from an EXPLICIT field list** — a new PostPreviewProps field must be added to its
+  destructure + rebuild or it silently drops (this bit during the build: poster reached every
+  preview component but not the switcher). `PreviewMedia.poster` applies ONLY on video branches
+  (image branch ignores it, so callers pass it unconditionally); on the local-blob branch it
+  replaces the dark placeholder with the cover image.
+- **📺 "Thumbnail not applied on YouTube Shorts" (owner report 2026-09-02) — TWO separate causes,
+  neither a code bug.** Prod worker log showed the real one: `thumbnails.set` → **403
+  `youtube.thumbnail/forbidden` "The authenticated user doesn't have permissions to upload and set
+  custom video thumbnails"** = the connected channel is **not phone-verified** (youtube.com/verify;
+  the log line names this). The never-throw rule correctly skipped the cover and kept the video
+  live. Separately, even on a verified channel the **Shorts FEED ignores custom thumbnails**
+  (channel grid + search only) — the tile tooltip now says so. Facebook's thumbnail succeeded on
+  the same publish, proving the pipeline. Remedy = verify the channel's phone, reconnect nothing.
 - **🔴→✅ The FALSE "That video was removed while the cover was uploading" toast (2026-09-02).**
   The write-back read a `landed` flag **mutated inside the `setPostMedia` updater** and checked it
   synchronously after dispatch. React runs an updater eagerly ONLY when that hook's queue is empty

@@ -1468,26 +1468,71 @@ ${content}`;
                       <div key={idx} className="group relative flex-shrink-0">
                         {isVideo ? (
                           <div className="relative h-16 w-24 overflow-hidden rounded-md border bg-muted">
-                            {!skipInlineVideo && (
-                            <video
-                              src={withPosterHint(item.url)}
-                              className="h-full w-full object-cover"
-                              muted
-                              preload="metadata"
-                            />
+                            {/* A SET COVER becomes the tile's visual: the whole
+                                point of a cover is what the post leads with, and
+                                the owner reported never being able to SEE the
+                                processed result (crop included). thumbnail.url is
+                                always an image, so <img> is correct here. */}
+                            {item.thumbnail ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                src={item.thumbnail.url}
+                                alt="Video cover"
+                                className="h-full w-full object-cover"
+                              />
+                            ) : (
+                              !skipInlineVideo && (
+                                <video
+                                  src={withPosterHint(item.url)}
+                                  className="h-full w-full object-cover"
+                                  muted
+                                  preload="metadata"
+                                />
+                              )
                             )}
-                            <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-black/40">
-                              {item.uploading ? (
-                                <>
-                                  <Loader2 className="h-5 w-5 animate-spin text-white drop-shadow" />
-                                  {typeof item.progress === "number" && (
-                                    <span className="text-[10px] font-medium text-white drop-shadow">{item.progress}%</span>
-                                  )}
-                                </>
-                              ) : (
-                                <Film className="h-6 w-6 text-white drop-shadow" />
-                              )}
-                            </div>
+                            {/* With a cover showing, the full scrim + centered
+                                film icon would hide the very image the user asked
+                                to see — shrink it to a corner badge instead. */}
+                            {item.thumbnail && !item.uploading ? (
+                              <span
+                                className="absolute right-1 top-1 rounded bg-black/60 p-0.5"
+                                title="Video — showing its custom cover"
+                              >
+                                <Film className="h-3 w-3 text-white" />
+                              </span>
+                            ) : (
+                              <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-black/40">
+                                {item.uploading ? (
+                                  <>
+                                    <Loader2 className="h-5 w-5 animate-spin text-white drop-shadow" />
+                                    {typeof item.progress === "number" && (
+                                      <span className="text-[10px] font-medium text-white drop-shadow">{item.progress}%</span>
+                                    )}
+                                  </>
+                                ) : (
+                                  <Film className="h-6 w-6 text-white drop-shadow" />
+                                )}
+                              </div>
+                            )}
+                            {/* Remove ONLY the cover (top-left; the tile's own X
+                                sits top-right). Keyed on the tile URL like every
+                                other cover write — never the array index. */}
+                            {item.thumbnail && !item.thumbnailUploading && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const tileUrl = item.url;
+                                  setPostMedia((prev) =>
+                                    prev.map((m) => (m.url === tileUrl ? { ...m, thumbnail: undefined } : m))
+                                  );
+                                }}
+                                title="Remove the custom cover (the platform will pick a frame instead)"
+                                className="absolute left-1 top-1 z-10 flex items-center gap-0.5 rounded bg-black/60 px-1 py-0.5 text-[9px] font-medium text-white"
+                              >
+                                Cover
+                                <X className="h-2.5 w-2.5" />
+                              </button>
+                            )}
                           </div>
                         ) : (
                           <div className="relative h-16 w-16">
@@ -1552,7 +1597,7 @@ ${content}`;
                                 ? "cursor-wait bg-black/70 font-medium text-white"
                                 : `cursor-pointer ${item.thumbnail ? TILE_STRIP_SET : TILE_STRIP_IDLE}`
                             }`}
-                            title="Upload a custom cover image (Instagram Reels, Facebook and YouTube). Any image works — large ones are resized and fitted to the video automatically."
+                            title="Upload a custom cover image (Instagram Reels, Facebook and YouTube). Any image works — large ones are resized and fitted to the video automatically. Note: YouTube's Shorts FEED ignores custom covers — yours still shows in the channel grid and search."
                           >
                             {item.thumbnailUploading
                               ? "Thumbnail…"
@@ -2139,6 +2184,9 @@ ${content}`;
             mediaKinds={editorOpen && editorPreview ? ["image"] : postMedia.length > 0 ? postMedia.map((m) => (isVideoMediaItem(m) ? "video" : "image")) : undefined}
             platforms={selectedPlatforms.length > 0 ? selectedPlatforms : undefined}
             timestamp={scheduledAt ? new Date(scheduledAt) : new Date()}
+            // Same rule as submit (post.create takes the FIRST tile with a
+            // cover), so what the preview shows is what actually publishes.
+            videoPosterUrl={postMedia.find((m) => m.thumbnail)?.thumbnail?.url}
           />
           {!content && selectedPlatforms.length === 0 && (
             <p className="text-center text-xs text-muted-foreground">

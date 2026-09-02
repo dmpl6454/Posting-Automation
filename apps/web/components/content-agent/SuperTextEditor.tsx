@@ -158,19 +158,35 @@ export function SuperTextEditor({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      {/*
+       * max-h + flex-col with ONE scrollable middle region: the editor (stage +
+       * text + colours + fonts + sizes) is taller than a laptop viewport, and
+       * without this the footer — the ONLY way to apply — rendered below the
+       * fold with no way to scroll to it (owner-reported 2026-09-02: "there is
+       * no submit button"). Header and footer stay pinned; only the controls
+       * scroll.
+       *
+       * onInteractOutside is prevented because an outside click otherwise
+       * DISMISSES the dialog and silently discards every edit (same report:
+       * "if we click outside it disappears"). Escape still cancels — that is a
+       * deliberate gesture; a stray click on the page behind is not.
+       */}
+      <DialogContent
+        className="flex max-h-[92dvh] max-w-md flex-col overflow-hidden"
+        onInteractOutside={(e) => e.preventDefault()}
+      >
         {/* Same shared builder the worker uses, so preview and burn load
             identical font bytes. Mounted here (not in the strip) so the ~19KB
             payload is injected once per editor, not per render. */}
         <SuperTextFontFaces />
-        <DialogHeader>
+        <DialogHeader className="flex-none">
           <DialogTitle>Super text</DialogTitle>
           <DialogDescription>
             Add a text strip that is burned into the video before it posts — to every channel you pick.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-3">
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
           {/* Stage: the video (or a placeholder) with the draggable strip on top */}
           <div
             ref={stageRef}
@@ -340,7 +356,7 @@ export function SuperTextEditor({
           </div>
         </div>
 
-        <DialogFooter className="gap-2 sm:gap-2">
+        <DialogFooter className="flex-none gap-2 border-t pt-3 sm:gap-2">
           {initial && (
             <Button type="button" variant="destructive" onClick={() => onSave(null)}>
               Remove
