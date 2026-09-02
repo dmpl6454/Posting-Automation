@@ -652,6 +652,28 @@ that keeps the frozen IG/FB publish paths honoured.
   (youtube.com/verify) and Google returns no distinct reason code, so the log names the
   likely cause; **Shorts feeds IGNORE custom thumbnails** — the image shows in the
   channel grid and search only.
+- **🖼️→✅ SMART FIT, not refusal (2026-09-02, PR after owner report "thumbnail must work as
+  intended").** The first release HARD-REFUSED any image >2MB ("Thumbnail is too large") — phone
+  photos are routinely 3–8MB, so the picker was unusable; and non-JPEG/PNG (HEIC from iPhones —
+  `accept` is advisory on mobile) died server-side with an opaque allowlist error. Now
+  [thumbnail-image.ts](apps/web/lib/thumbnail-image.ts) fits the image CLIENT-SIDE before upload:
+  decode (`createImageBitmap`, so Safari handles HEIC) → **center-crop to the video's own aspect**
+  (reuses the probed `videoAspect`, only when the tile IS `firstVideoUrl` — never guesses) →
+  downscale to 1920 long edge → JPEG quality ladder until ≤2MB. Geometry/decisions are PURE and
+  tested ([thumbnail-image.test.ts](apps/web/lib/thumbnail-image.test.ts)); an already-fitting
+  JPEG/PNG passes through **byte-identical**. Zero server load — the server only ever receives a
+  ≤2MB JPEG/PNG, and post.create's validation is unchanged. Verified in a real browser against the
+  real upload path: 9.7MB 4000×3000 landscape + 540×960 reel → 1080×1920, 1.1MB, attached, draft
+  carries the right `metadata.videoThumbnail`. Transparency flattens to WHITE (JPEG has no alpha).
+- **🔴→✅ The FALSE "That video was removed while the cover was uploading" toast (2026-09-02).**
+  The write-back read a `landed` flag **mutated inside the `setPostMedia` updater** and checked it
+  synchronously after dispatch. React runs an updater eagerly ONLY when that hook's queue is empty
+  — with any other update in flight the flag was still `false` at the check, so the user saw the
+  failure toast while the cover HAD attached (screenshot-reported: tile visibly present, toast
+  claiming it was removed). Now: existence is read post-await from **`postMediaRef`** (a render-body
+  mirror — deliberately NOT a `[postMedia]`-keyed effect, per the OOM dep rule) and the updater
+  stays pure. **Never read back a side effect from inside a React state updater** — contract-locked
+  in thumbnail-ui-contract.test.ts (`landed = true|false` banned, mirror + purity asserted).
 
 ### ⚠️ Three UI defects an adversarial review caught BEFORE shipping — do not reintroduce
 

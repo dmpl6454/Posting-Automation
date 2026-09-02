@@ -67,3 +67,43 @@ describe("a restored draft's cover id is reconciled like any other media id", ()
     expect(src).toMatch(/next\.thumbnail && !owned\.has\(next\.thumbnail\.mediaId\)/);
   });
 });
+
+describe("oversized covers are FITTED, never refused (2026-09-02)", () => {
+  it("routes every pick through prepareThumbnail and uploads the prepared file", () => {
+    // Phone photos are routinely 3-8MB; the original hard 2MB refusal made the
+    // picker unusable, and HEIC/webp died server-side with an opaque error.
+    expect(src).toMatch(/const prepared = await prepareThumbnail\(/);
+    expect(src).toMatch(/uploadFileToS3\(prepared\.file\)/);
+  });
+
+  it("has no hard size refusal left", () => {
+    // The guard expression itself, not the phrase — comments may cite the old
+    // toast title when explaining why the refusal was removed.
+    expect(src).not.toMatch(/file\.size > 2 \* 1024 \* 1024/);
+  });
+
+  it("crops to the probed video aspect only for the probed video, never guesses", () => {
+    expect(src).toMatch(/tileUrl === firstVideoUrl \? videoAspect : null/);
+  });
+});
+
+describe("the landed check reads COMMITTED state, not an updater side effect (2026-09-02)", () => {
+  it("uses the postMediaRef mirror after the await", () => {
+    // A `landed` flag mutated inside a setPostMedia updater is unreliable: React
+    // runs updaters eagerly only when that hook's queue is empty, so any other
+    // in-flight update left the flag false — toasting "That video was removed"
+    // while the attach had in fact landed (owner-reported).
+    expect(src).toMatch(/postMediaRef\.current\.some\(\(m\) => m\.url === tileUrl\)/);
+  });
+
+  it("keeps the state updater pure — no flag mutation inside it", () => {
+    // The mutation itself, not the word — comments explain the removed pattern.
+    expect(src).not.toMatch(/landed = (?:true|false)/);
+  });
+
+  it("keeps the mirror a render-body assignment, NOT a [postMedia]-keyed effect", () => {
+    // The OOM rule: never key a ComposeTab effect on the postMedia array identity.
+    expect(src).toMatch(/postMediaRef\.current = postMedia;/);
+    expect(src).not.toMatch(/useEffect\(\(\) => \{\s*postMediaRef/);
+  });
+});
