@@ -3,6 +3,7 @@
 import { humanizeError } from "~/lib/errors";
 import { withNormalizedVideoMime } from "~/lib/video-mime";
 import { withPosterHint } from "~/lib/video-poster";
+import { prepareThumbnail } from "~/lib/thumbnail-image";
 import { isVideoMediaItem, VIDEO_EXT_RE } from "~/components/previews/preview-media";
 import { superTextConfigSchema, type SuperTextConfig } from "@postautomation/super-text";
 import { buildSuperTextPayload } from "~/lib/super-text-payload";
@@ -133,6 +134,17 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   const [postMedia, setPostMedia] = useState<{ url: string; mediaId?: string; file?: File; uploading?: boolean; progress?: number; superText?: SuperTextConfig; thumbnail?: { mediaId: string; url: string }; thumbnailUploading?: boolean }[]>([]);
   // Index into postMedia whose super text is being edited (null = dialog closed).
   const [superTextEditIndex, setSuperTextEditIndex] = useState<number | null>(null);
+  // Live mirror of postMedia for post-await reads in async handlers. A `landed`
+  // flag mutated INSIDE a setPostMedia updater is unreliable: React runs the
+  // updater eagerly only when that hook's queue is empty, so with any other
+  // update in flight the flag was still false when read back — which toasted
+  // "That video was removed while the cover was uploading" while the attach had
+  // in fact landed (owner-reported 2026-09-02). A ref read at event time sees
+  // the last committed state, which after a seconds-long upload is exact.
+  // ⚠️ Deliberately a render-body assignment, NOT a [postMedia]-keyed effect —
+  // see the OOM rule: never key a ComposeTab effect on the array identity.
+  const postMediaRef = useRef(postMedia);
+  postMediaRef.current = postMedia;
   // Aspect ratio of the first attached video (width/height). Null until measured.
   // Used to block non-vertical videos chosen as YouTube Shorts before publishing,
   // since YouTube only treats 9:16 vertical/square clips as Shorts and the worker
@@ -834,17 +846,7 @@ ${content}`;
     if (!file.type.startsWith("image/")) {
       toast({
         title: "Thumbnails must be an image",
-        description: "Choose a JPEG or PNG. Instagram, Facebook and YouTube all reject other formats.",
-        variant: "destructive",
-      });
-      return;
-    }
-    // YouTube's API caps thumbnails at 2MB (its own UI allows more). Refuse here
-    // so the user learns immediately rather than losing the cover at publish.
-    if (file.size > 2 * 1024 * 1024) {
-      toast({
-        title: "Thumbnail is too large",
-        description: `That image is ${(file.size / 1024 / 1024).toFixed(1)}MB. YouTube's API caps custom thumbnails at 2MB — please compress it.`,
+        description: "Choose a photo — JPEG, PNG, HEIC or WebP all work; it's converted and resized automatically.",
         variant: "destructive",
       });
       return;
@@ -864,18 +866,26 @@ ${content}`;
     // cover cannot be changed after publishing.
     setPostMedia((prev) => prev.map((m) => (m.url === tileUrl ? { ...m, thumbnailUploading: true } : m)));
     try {
-      const { id, url } = await uploadFileToS3(file);
-      let landed = false;
-      setPostMedia((prev) => {
-        if (!prev.some((m) => m.url === tileUrl)) return prev; // tile removed mid-upload
-        landed = true;
-        return prev.map((m) =>
-          m.url === tileUrl
-            ? { ...m, thumbnail: { mediaId: id, url: url || URL.createObjectURL(file) } }
-            : m
-        );
-      });
-      if (!landed) {
+      // Fit the image CLIENT-SIDE instead of refusing it. The old hard 2MB
+      // refusal ("Thumbnail is too large") fired on routine phone photos, and
+      // non-JPEG/PNG formats died server-side with an opaque error. Cropped to
+      // the video's aspect when known — a cover is a stand-in frame — and
+      // compressed under YouTube's 2MB cap. Zero server load: canvas work
+      // happens in the browser and only the ≤2MB result is uploaded.
+      const prepared = await prepareThumbnail(
+        file,
+        tileUrl === firstVideoUrl ? videoAspect : null
+      );
+      if (!prepared.ok) {
+        toast({ title: "Couldn't use that image", description: prepared.reason, variant: "destructive" });
+        return;
+      }
+      const { id, url } = await uploadFileToS3(prepared.file);
+      // Post-await existence check via the ref mirror, NOT a flag mutated inside
+      // the state updater (React doesn't guarantee when updaters run — the flag
+      // pattern toasted a false "video was removed" whenever another update was
+      // in flight, while the attach actually landed). The updater stays pure.
+      if (!postMediaRef.current.some((m) => m.url === tileUrl)) {
         toast({
           title: "Thumbnail not attached",
           description: "That video was removed while the cover was uploading. Pick it again.",
@@ -883,7 +893,19 @@ ${content}`;
         });
         return;
       }
-      toast({ title: "Thumbnail attached", description: "It will be used as the cover where the platform supports it." });
+      setPostMedia((prev) =>
+        prev.map((m) =>
+          m.url === tileUrl
+            ? { ...m, thumbnail: { mediaId: id, url: url || URL.createObjectURL(prepared.file) } }
+            : m
+        )
+      );
+      toast({
+        title: "Thumbnail attached",
+        description: prepared.note
+          ? `${prepared.note} It will be used as the cover where the platform supports it.`
+          : "It will be used as the cover where the platform supports it.",
+      });
     } catch (err: any) {
       toast({
         title: "Couldn't upload that thumbnail",
@@ -1492,7 +1514,7 @@ ${content}`;
                                 ? "cursor-wait bg-black/70"
                                 : "cursor-pointer"
                             } ${item.thumbnail ? "bg-primary/80 font-semibold" : "bg-black/50"}`}
-                            title="Upload a custom cover image (Instagram Reels, Facebook and YouTube). JPEG or PNG, up to 2MB."
+                            title="Upload a custom cover image (Instagram Reels, Facebook and YouTube). Any image works — large ones are resized and fitted to the video automatically."
                           >
                             {item.thumbnailUploading
                               ? "Thumbnail…"
@@ -1501,7 +1523,12 @@ ${content}`;
                                 : "Thumbnail"}
                             <input
                               type="file"
-                              accept="image/jpeg,image/png"
+                              // Broad on purpose: prepareThumbnail normalizes any
+                              // decodable format (HEIC on Safari, webp, …) to JPEG.
+                              // The old jpeg/png-only accept let phones hand over
+                              // HEIC anyway (accept is advisory on mobile), which
+                              // then died server-side with an opaque error.
+                              accept="image/*"
                               className="hidden"
                               // Disabled while THIS tile's video is still uploading:
                               // startAutoUpload swaps the tile's blob: url to the
