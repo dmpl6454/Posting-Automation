@@ -45,7 +45,7 @@ export function AdminSidebar({ open = false, onClose }: AdminSidebarProps) {
   return (
     <aside
       className={cn(
-        "flex h-dvh w-60 flex-col bg-gray-950 transition-transform duration-200",
+        "flex h-dvh w-60 flex-col border-r border-border bg-surface1 transition-transform duration-200",
         // Mobile: fixed slide-in drawer over content. lg+: static in-flow rail.
         "fixed inset-y-0 left-0 z-40 lg:static lg:z-auto lg:translate-x-0",
         open ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
@@ -54,14 +54,14 @@ export function AdminSidebar({ open = false, onClose }: AdminSidebarProps) {
       {/* Logo */}
       <div className="flex items-center justify-between px-4 py-5">
         <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-red-600 text-xs font-bold text-white">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px] bg-[#d9695f] text-[11px] font-bold leading-none text-white">
             SA
           </div>
-          <span className="text-sm font-semibold text-white">Super Admin</span>
+          <span className="text-[14px] font-semibold leading-none">Super Admin</span>
         </div>
         <button
           onClick={onClose}
-          className="rounded-md p-1 text-gray-400 hover:bg-gray-900 hover:text-gray-200 lg:hidden"
+          className="rounded-[7px] p-1 text-muted-foreground hover:bg-hover hover:text-foreground lg:hidden"
           aria-label="Close menu"
         >
           <X className="h-4 w-4" />
@@ -69,7 +69,7 @@ export function AdminSidebar({ open = false, onClose }: AdminSidebarProps) {
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 space-y-1 px-2">
+      <nav className="flex flex-1 flex-col gap-0.5 px-2">
         {navItems.map((item) => {
           const isActive =
             item.href === "/admin"
@@ -82,13 +82,13 @@ export function AdminSidebar({ open = false, onClose }: AdminSidebarProps) {
               href={item.href}
               onClick={onClose}
               className={cn(
-                "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                "flex items-center gap-[11px] rounded-[7px] px-[11px] py-[9px] text-[13px] font-medium leading-none transition-colors",
                 isActive
-                  ? "bg-gray-800 text-white"
-                  : "text-gray-400 hover:bg-gray-900 hover:text-gray-200"
+                  ? "bg-gold/[0.12] text-gold"
+                  : "text-muted-foreground hover:bg-hover hover:text-foreground"
               )}
             >
-              <item.icon className="h-4 w-4" />
+              <item.icon className="h-[15px] w-[15px] shrink-0" />
               {item.label}
             </Link>
           );
@@ -96,19 +96,19 @@ export function AdminSidebar({ open = false, onClose }: AdminSidebarProps) {
       </nav>
 
       {/* Bottom */}
-      <div className="border-t border-gray-800 p-3 space-y-1">
+      <div className="flex flex-col gap-0.5 border-t border-border px-2 py-3">
         <Link
           href="/dashboard"
-          className="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-gray-400 hover:bg-gray-900 hover:text-gray-200"
+          className="flex items-center gap-[9px] rounded-[7px] px-[11px] py-[9px] text-[13px] font-medium leading-none text-muted-foreground transition-colors hover:bg-hover hover:text-foreground"
         >
-          <ArrowLeft className="h-4 w-4" />
+          <ArrowLeft className="h-[15px] w-[15px] shrink-0" />
           Back to Dashboard
         </Link>
         <button
           onClick={() => signOut({ callbackUrl: "/" })}
-          className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-gray-400 hover:bg-gray-900 hover:text-gray-200"
+          className="flex w-full items-center gap-[9px] rounded-[7px] px-[11px] py-[9px] text-[13px] font-medium leading-none text-muted-foreground transition-colors hover:bg-hover hover:text-foreground"
         >
-          <LogOut className="h-4 w-4" />
+          <LogOut className="h-[15px] w-[15px] shrink-0" />
           Logout
         </button>
       </div>

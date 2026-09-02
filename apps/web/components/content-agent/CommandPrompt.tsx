@@ -205,11 +205,14 @@ export function CommandPrompt() {
   const hasMessages = messages.length > 0 || streamingContent;
 
   return (
-    <div className="rounded-xl border bg-gradient-to-b from-violet-50/50 to-background dark:from-violet-950/20 dark:to-background">
+    /* Flat `--card` surface on a hairline border. Was a `bg-gradient-to-b` with
+       no `from-` stop (so a transparent→background wash) plus two bare `dark:`
+       no-op classes — leftovers from the pre-restyle gradient look. */
+    <div className="rounded-xl border border-border bg-card">
       {/* Input bar */}
       <div className="flex items-start gap-2 p-3">
-        <div className="mt-1.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-violet-100 dark:bg-violet-900/40">
-          <Zap className="h-4 w-4 text-violet-600 dark:text-violet-400" />
+        <div className="mt-1.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-tile dark:bg-tile">
+          <Zap className="h-4 w-4 text-gold dark:text-gold" />
         </div>
         <div className="flex-1">
           <Textarea
@@ -226,7 +229,7 @@ export function CommandPrompt() {
           size="sm"
           onClick={handleSubmit}
           disabled={!input.trim() || isStreaming}
-          className="mt-1 gap-1.5 bg-violet-600 hover:bg-violet-700"
+          className="mt-1 gap-1.5 bg-foreground hover:opacity-[0.88]"
         >
           {isStreaming ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -253,7 +256,7 @@ export function CommandPrompt() {
                 setInput(suggestion);
                 textareaRef.current?.focus();
               }}
-              className="rounded-full border bg-background px-3 py-1 text-xs text-muted-foreground transition-colors hover:border-violet-300 hover:text-foreground"
+              className="rounded-full border bg-background px-3 py-1 text-xs text-muted-foreground transition-colors hover:border-[hsl(var(--accent-border))] hover:text-foreground"
             >
               {suggestion}
             </button>
@@ -292,7 +295,7 @@ export function CommandPrompt() {
                         ? "bg-foreground/10"
                         : msg.role === "system"
                           ? "bg-amber-100 dark:bg-amber-900/30"
-                          : "bg-violet-100 dark:bg-violet-900/30"
+                          : "bg-tile dark:bg-tile"
                     )}
                   >
                     {msg.role === "user" ? (
@@ -300,7 +303,7 @@ export function CommandPrompt() {
                     ) : msg.role === "system" ? (
                       <AlertCircle className="h-3 w-3 text-amber-600" />
                     ) : (
-                      <Bot className="h-3 w-3 text-violet-600" />
+                      <Bot className="h-3 w-3 text-gold" />
                     )}
                   </div>
                   <div className="flex-1 min-w-0">
@@ -335,8 +338,8 @@ export function CommandPrompt() {
               {/* Streaming indicator */}
               {streamingContent && (
                 <div className="flex gap-2">
-                  <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-violet-100 dark:bg-violet-900/30">
-                    <Bot className="h-3 w-3 text-violet-600 animate-pulse" />
+                  <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-tile dark:bg-tile">
+                    <Bot className="h-3 w-3 text-gold animate-pulse" />
                   </div>
                   <div className="whitespace-pre-wrap text-sm leading-relaxed">
                     {streamingContent}

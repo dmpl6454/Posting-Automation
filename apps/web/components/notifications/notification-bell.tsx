@@ -115,8 +115,13 @@ export function NotificationBell() {
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Button variant="ghost" size="icon" className="relative">
-          <Bell className="h-5 w-5" />
+        {/* Design restyle: 32px bordered square, matching the header icon set */}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="relative h-8 w-8 rounded-[9px] border border-border text-muted-foreground hover:bg-hover hover:text-foreground"
+        >
+          <Bell className="h-[15px] w-[15px]" />
           {unreadCount > 0 && (
             <Badge
               variant="destructive"

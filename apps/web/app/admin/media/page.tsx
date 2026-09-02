@@ -63,8 +63,8 @@ export default function AdminMediaPage() {
             className="h-10 w-10 rounded object-cover"
           />
         ) : (
-          <div className="flex h-10 w-10 items-center justify-center rounded bg-gray-100">
-            <ImageIcon className="h-5 w-5 text-gray-400" />
+          <div className="flex h-10 w-10 items-center justify-center rounded-[8px] bg-tile">
+            <ImageIcon className="h-5 w-5 text-faint" />
           </div>
         );
       },
@@ -97,7 +97,7 @@ export default function AdminMediaPage() {
         <ConfirmDialog
           trigger={
             <Button variant="ghost" size="icon" title="Delete media">
-              <Trash2 className="h-4 w-4 text-red-500" />
+              <Trash2 className="h-4 w-4 text-[#d9695f]" />
             </Button>
           }
           title="Delete media"
@@ -111,8 +111,15 @@ export default function AdminMediaPage() {
   ];
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Media</h1>
+    <div className="w-full space-y-5">
+      {/* Admin-console page header: plain bold title + sub (this module does
+          not use the eyebrow/display headline the user-facing pages use). */}
+      <div className="min-w-0">
+        <h1 className="text-[29px] font-bold leading-[1.1] tracking-[-0.01em]">Media</h1>
+        <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
+          Every uploaded image and video across all workspaces.
+        </p>
+      </div>
 
       {statsLoading ? (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">

@@ -11,9 +11,18 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "~/components/ui/dropdown-menu";
-import { Button } from "~/components/ui/button";
 import { ChevronsUpDown, Plus, Building2, Check } from "lucide-react";
 import { CreateOrgDialog } from "~/components/layout/create-org-dialog";
+
+/** Two-letter monogram for the gold tile, e.g. "Acme Content" → "AC". */
+function orgInitials(name: string): string {
+  const letters = name
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => word[0])
+    .join("");
+  return (letters || name.slice(0, 2)).toUpperCase().slice(0, 2);
+}
 
 export function OrgSwitcher() {
   const router = useRouter();
@@ -21,6 +30,11 @@ export function OrgSwitcher() {
   const [showCreateDialog, setShowCreateDialog] = useState(false);
 
   const { data: me } = trpc.user.me.useQuery();
+  // Plan tier reads as the second line of the switcher (design: name over tier).
+  // Same query + staleTime the sidebar already uses, so this is a cache hit.
+  const { data: planData } = trpc.billing.currentPlan.useQuery(undefined, {
+    staleTime: 5 * 60 * 1000,
+  });
 
   // Load the stored org ID from localStorage on mount
   useEffect(() => {
@@ -66,16 +80,28 @@ export function OrgSwitcher() {
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button
-            variant="outline"
-            className="w-full justify-between gap-2 px-3"
+          {/* Design restyle: gold monogram tile + org name over plan tier.
+              The bordered card around this lives in the sidebar, so the
+              trigger itself is borderless and fills it. */}
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-hover"
           >
-            <span className="flex items-center gap-2 truncate">
-              <Building2 className="h-4 w-4 shrink-0" />
-              <span className="truncate text-sm">{currentOrgName}</span>
+            <span className="pa-gold-glow flex h-6 w-6 shrink-0 items-center justify-center rounded-[6px] bg-gold text-[10px] font-semibold leading-none text-[hsl(var(--gold-foreground))]">
+              {orgInitials(currentOrgName)}
             </span>
-            <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" />
-          </Button>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[12.5px] font-medium leading-[1.3]">
+                {currentOrgName}
+              </span>
+              {planData?.planConfig?.name && (
+                <span className="block text-[10px] leading-[1.3] text-muted-foreground">
+                  {planData.planConfig.name}
+                </span>
+              )}
+            </span>
+            <ChevronsUpDown className="h-[13px] w-[13px] shrink-0 text-muted-foreground" />
+          </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent className="w-56" align="start">
           <DropdownMenuLabel>Organizations</DropdownMenuLabel>

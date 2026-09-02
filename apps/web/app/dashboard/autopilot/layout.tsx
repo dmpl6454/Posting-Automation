@@ -24,14 +24,25 @@ export default function AutopilotLayout({
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Autopilot</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Automated content pipeline powered by trending topics
+      {/* Page header — design pattern (eyebrow, display headline, sub). */}
+      <div className="min-w-0">
+        <span className="eyebrow">Autopilot</span>
+        <h1 className="display mt-2.5 text-[30px] leading-[1.1]">
+          Discover, draft, review, post.
+        </h1>
+        <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
+          Autonomous content pipeline — from trending topics to published posts
         </p>
       </div>
 
-      <ScrollableTabRow role="tablist" className="-mb-px gap-1 border-b">
+      {/* Segmented pill row, matching the design's sub-tab treatment (the same
+          one Content Studio uses) instead of the old underline row. The design
+          hardcodes a 7-column grid, which is unusable on a phone — below `lg`
+          this stays a horizontally scrollable row so every tab is reachable. */}
+      <ScrollableTabRow
+        role="tablist"
+        className="gap-1 rounded-[11px] border border-border bg-surface1 p-1 lg:grid lg:grid-cols-7 lg:overflow-visible"
+      >
         {tabs.map((tab) => {
           const isActive =
             tab.href === "/dashboard/autopilot"
@@ -44,13 +55,14 @@ export default function AutopilotLayout({
               role="tab"
               aria-selected={isActive}
               className={cn(
-                "shrink-0 border-b-2 px-4 py-2 text-sm font-medium transition-colors",
+                // Design: 8px/4px pill, 11px label, gold fill + halo when active.
+                "shrink-0 whitespace-nowrap rounded-[8px] px-3 py-2 text-center text-[11px] leading-[1.3] transition-colors lg:min-w-0 lg:px-1",
                 isActive
-                  ? "border-foreground text-foreground"
-                  : "border-transparent text-muted-foreground hover:text-foreground"
+                  ? "pa-gold-glow bg-gold font-semibold text-[hsl(var(--gold-foreground))]"
+                  : "font-medium text-muted-foreground hover:bg-hover hover:text-foreground"
               )}
             >
-              {tab.name}
+              <span className="block truncate">{tab.name}</span>
             </Link>
           );
         })}

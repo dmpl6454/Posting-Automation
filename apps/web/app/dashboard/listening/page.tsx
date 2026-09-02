@@ -4,17 +4,9 @@ import { RequireAppAdmin } from "~/components/auth/require-app-admin";
 import { useState } from "react";
 import { trpc } from "~/lib/trpc/client";
 import { Button } from "~/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "~/components/ui/card";
-import { Badge } from "~/components/ui/badge";
 import { Skeleton } from "~/components/ui/skeleton";
 import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
-import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import {
   Dialog,
   DialogContent,
@@ -25,43 +17,47 @@ import {
 import {
   Ear,
   Plus,
-  Search,
   TrendingUp,
-  TrendingDown,
-  Minus,
   MessageCircle,
   Users,
   Bell,
-  AlertTriangle,
   RefreshCw,
   Loader2,
   Trash2,
   Power,
   PowerOff,
-  ThumbsUp,
-  ThumbsDown,
   ExternalLink,
   Smile,
   Frown,
   Meh,
   Info,
 } from "lucide-react";
-import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
 
-const sentimentColors = {
-  POSITIVE: "text-emerald-600 bg-emerald-100 dark:bg-emerald-900/40 dark:text-emerald-400",
-  NEGATIVE: "text-red-600 bg-red-100 dark:bg-red-900/40 dark:text-red-400",
-  NEUTRAL: "text-gray-600 bg-gray-100 dark:bg-gray-800 dark:text-gray-400",
-  MIXED: "text-amber-600 bg-amber-100 dark:bg-amber-900/40 dark:text-amber-400",
+/**
+ * Design: sentiment is a 26px tinted glyph tile beside each mention. Literal
+ * hex from the mockup — this project's Tailwind config FLATTENS the
+ * green/red/amber scales onto the palette's status triplets, so a named shade
+ * like `bg-emerald-100 text-emerald-600` renders the icon the SAME colour as
+ * its own background (the bug already hit the Insights stat tiles).
+ */
+const SENTIMENT_STYLE: Record<
+  string,
+  { icon: typeof Smile; bg: string; color: string }
+> = {
+  POSITIVE: { icon: Smile, bg: "rgba(92,184,92,0.15)", color: "#5cb85c" },
+  NEGATIVE: { icon: Frown, bg: "rgba(217,105,95,0.15)", color: "#d9695f" },
+  NEUTRAL: { icon: Meh, bg: "hsl(var(--tile))", color: "hsl(var(--muted-foreground))" },
+  MIXED: { icon: Meh, bg: "rgba(224,184,74,0.15)", color: "#e0b84a" },
 };
 
-const sentimentIcons = {
-  POSITIVE: Smile,
-  NEGATIVE: Frown,
-  NEUTRAL: Meh,
-  MIXED: Meh,
-};
+/** The four segments of the Sentiment Distribution bar, in the design's order. */
+const SENTIMENT_BAR = [
+  { key: "positive", label: "Positive", color: "#5cb85c" },
+  { key: "neutral", label: "Neutral", color: "#8a8578" },
+  { key: "mixed", label: "Mixed", color: "#e0b84a" },
+  { key: "negative", label: "Negative", color: "#d9695f" },
+] as const;
 
 const PLATFORMS = [
   { id: "twitter", label: "X / Twitter" },
@@ -72,19 +68,73 @@ const PLATFORMS = [
   { id: "news", label: "Google News" },
 ];
 
-const sourceColors: Record<string, string> = {
-  TWITTER: "bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-400",
-  FACEBOOK: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400",
-  INSTAGRAM: "bg-pink-100 text-pink-700 dark:bg-pink-900/40 dark:text-pink-400",
-  LINKEDIN: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400",
-  REDDIT: "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-400",
-  TIKTOK: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
-  YOUTUBE: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400",
-  NEWS: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400",
-  BLOG: "bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-400",
-  FORUM: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400",
-  OTHER: "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400",
+/**
+ * Per-source tag hue, tinted to 13% for the fill. Same literal-hex reasoning as
+ * SENTIMENT_STYLE. The mockup covers seven sources; the four this app also
+ * stores (YOUTUBE/BLOG/FORUM/OTHER) take neighbouring hues from the palette so
+ * nothing falls through to an untinted grey.
+ */
+const SOURCE_TAG: Record<string, string> = {
+  TWITTER: "#C9A356",
+  FACEBOOK: "#5b9bd5",
+  INSTAGRAM: "#d15a9e",
+  LINKEDIN: "#3c6fa8",
+  REDDIT: "#e08a4a",
+  TIKTOK: "#8a8578",
+  NEWS: "#5cb85c",
+  YOUTUBE: "#d9695f",
+  BLOG: "#9a8a5c",
+  FORUM: "#a183c9",
+  OTHER: "#7e8a9a",
 };
+const SOURCE_TAG_FALLBACK = "#7e8a9a";
+
+/**
+ * Friendly source names for the Sources card. The mockup lists "Google News"
+ * and "X / Twitter"; the API returns the raw `MentionSource` enum, so without
+ * this the card reads NEWS / TWITTER in shouty uppercase.
+ *
+ * ⚠️ Deliberately NOT applied to the per-mention source tag — the mockup keeps
+ * THAT one as the raw uppercase enum (TWITTER, REDDIT, NEWS), because a 9.5px
+ * pill needs a short token, not a sentence.
+ */
+const SOURCE_LABEL: Record<string, string> = {
+  TWITTER: "X / Twitter",
+  NEWS: "Google News",
+  REDDIT: "Reddit",
+  LINKEDIN: "LinkedIn",
+  INSTAGRAM: "Instagram",
+  FACEBOOK: "Facebook",
+  TIKTOK: "TikTok",
+  YOUTUBE: "YouTube",
+  BLOG: "Blog",
+  FORUM: "Forum",
+  OTHER: "Other",
+};
+
+/**
+ * The design prints "+0.34" — a sentiment score is signed, and a bare "0.34"
+ * loses the one thing that makes it readable at a glance.
+ */
+function formatSentimentScore(n: number): string {
+  const v = n.toFixed(2);
+  return n > 0 ? `+${v}` : v;
+}
+
+/**
+ * The design's compact count — "482K", "1.2M". Measured against the mockup:
+ * its reach/engagement figures render as `210.0K`, never `210,000`. A
+ * comma-grouped six-digit number does not fit the 26px stat slot or the 10px
+ * sources caption, which is why the design compacts them.
+ *
+ * Deliberately NOT applied to Total Mentions — the mockup shows a bare `221`
+ * there, because a mention count is small enough to read exactly.
+ */
+function formatCompact(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
+}
 
 function ListeningPageInner() {
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -181,18 +231,24 @@ function ListeningPageInner() {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    /* Design stacks its sections on `margin-top: 20px`, not 24px. Measured
+       against the mockup, every section on this page sat exactly 4px low. */
+    <div className="space-y-5">
+      {/* Page header — design pattern (eyebrow, display headline, gold CTA). */}
+      <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
         <div className="min-w-0">
-          <h1 className="text-2xl font-semibold tracking-tight">Social Listening</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <span className="eyebrow">Social Listening</span>
+          <h1 className="display mt-2.5 text-[30px] leading-[1.1]">
+            Hear what they&apos;re saying.
+          </h1>
+          <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
             Monitor brand mentions, sentiment, and competitor activity
           </p>
         </div>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
-            <Button className="shrink-0">
-              <Plus className="mr-2 h-4 w-4" />
+            <Button className="pa-cta-gold h-9 shrink-0 gap-[7px] rounded-[9px] px-3.5 text-[12.5px] font-semibold">
+              <Plus className="h-3.5 w-3.5" />
               New Query
             </Button>
           </DialogTrigger>
@@ -263,46 +319,48 @@ function ListeningPageInner() {
         </Dialog>
       </div>
 
-      <Alert>
-        <Info className="h-4 w-4" />
-        <AlertTitle>How Listening works</AlertTitle>
-        <AlertDescription>
-          Create a query of keywords (and optionally pick platforms). The system polls those sources every
-          30 minutes, saves matching mentions, and scores each one’s sentiment. The first results appear after
-          the next sync — click <strong>Sync now</strong> to fetch immediately; open <strong>Alerts</strong> to
-          be notified of volume spikes.
-          <span className="block mt-1 text-xs text-muted-foreground">
-            <strong>Google News</strong> works out of the box. Twitter/X, Reddit, TikTok and Instagram/LinkedIn
-            only return mentions when their API keys are configured (or, for IG/LinkedIn, a channel is connected) —
-            otherwise those sources are simply skipped. Facebook isn’t supported for listening.
+      {/* Design: a quiet surface-1 note, not the Alert component's framing. */}
+      <div className="flex items-start gap-3 rounded-[12px] border border-border bg-surface1 px-4 py-3.5">
+        <Info className="mt-px h-[15px] w-[15px] shrink-0 text-muted-foreground" />
+        <p className="text-[12px] leading-[1.65] text-muted-foreground">
+          <b className="text-foreground">How Listening works:</b> create a query of keywords and
+          optionally pick platforms. The system polls those sources every 30 minutes, saves matching
+          mentions, and scores each one’s sentiment. Click <b className="text-foreground">Sync Now</b>{" "}
+          to fetch immediately.
+          <span className="mt-1 block text-[11px] leading-[1.6] text-faint">
+            Google News works out of the box. Twitter/X, Reddit, TikTok and Instagram/LinkedIn only
+            return mentions when their API keys are configured (or, for IG/LinkedIn, a channel is
+            connected) — otherwise those sources are simply skipped. Facebook isn’t supported for
+            listening.
           </span>
-        </AlertDescription>
-      </Alert>
+        </p>
+      </div>
 
-      {/* Alerts Banner */}
+      {/* Alerts Banner — design: a gold-keyed surface-1 panel, not an amber
+          alert box. Rows are separated by a faint gold rule rather than each
+          sitting in its own container. */}
       {alerts && alerts.length > 0 && (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950/30">
-          <div className="flex items-center gap-2 mb-2">
-            <Bell className="h-4 w-4 text-amber-600" />
-            <span className="text-sm font-semibold text-amber-800 dark:text-amber-300">
-              {alerts.length} Unread Alert{alerts.length > 1 ? "s" : ""}
-            </span>
+        <div className="rounded-[12px] border border-border bg-surface1 px-[18px] py-4">
+          <div className="flex items-center gap-[7px] text-[12.5px] font-semibold leading-none text-gold">
+            <Bell className="h-3.5 w-3.5" />
+            {alerts.length} Unread Alert{alerts.length > 1 ? "s" : ""}
           </div>
-          <div className="space-y-2">
+          <div className="mt-3 flex flex-col">
             {alerts.slice(0, 3).map((alert) => (
-              <div key={alert.id} className="flex items-start justify-between gap-2">
-                <div>
-                  <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
-                    {alert.title}
-                  </p>
-                  <p className="text-xs text-amber-700 dark:text-amber-400">
+              <div
+                key={alert.id}
+                className="flex items-center justify-between gap-4 border-t border-[rgba(201,163,86,0.18)] py-2.5"
+              >
+                <div className="min-w-0">
+                  <p className="text-[12.5px] font-semibold leading-[1.4]">{alert.title}</p>
+                  <p className="mt-1 text-[11.5px] leading-[1.55] text-muted-foreground">
                     {alert.description.slice(0, 120)}
                   </p>
                 </div>
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="shrink-0 text-xs"
+                  className="h-7 shrink-0 rounded-[7px] px-3 text-[11px] font-medium text-muted-foreground hover:bg-hover hover:text-foreground"
                   disabled={markAlertRead.isPending && markAlertRead.variables?.id === alert.id}
                   onClick={() => markAlertRead.mutate({ id: alert.id })}
                 >
@@ -317,153 +375,200 @@ function ListeningPageInner() {
         </div>
       )}
 
-      {/* Query Tabs */}
+      {/* Query Tabs — design: one segmented pill row on a surface-1 track, gold
+          fill + halo on the active pill (the app had loose outline buttons). */}
       {queries && queries.length > 0 && (
-        <div className="flex items-center gap-2 overflow-x-auto pb-1">
-          <Button
-            variant={!selectedQuery ? "default" : "outline"}
-            size="sm"
-            className="shrink-0"
+        <div className="flex flex-wrap gap-1 rounded-[11px] border border-border bg-surface1 p-1">
+          <button
+            type="button"
+            aria-pressed={!selectedQuery}
             onClick={() => setSelectedQuery(undefined)}
+            className={`flex h-8 shrink-0 items-center justify-center whitespace-nowrap rounded-[8px] px-3.5 text-[12px] transition-colors ${
+              !selectedQuery
+                ? "pa-gold-glow bg-gold font-semibold text-[hsl(var(--gold-foreground))]"
+                : "font-medium text-muted-foreground hover:bg-hover hover:text-foreground"
+            }`}
           >
             All Queries
-          </Button>
-          {queries.map((q) => (
-            <Button
-              key={q.id}
-              variant={selectedQuery === q.id ? "default" : "outline"}
-              size="sm"
-              className="shrink-0"
-              onClick={() => setSelectedQuery(q.id)}
-            >
-              {q.name}
-              <Badge variant="secondary" className="ml-1.5 text-[10px] px-1.5">
-                {q._count.mentions}
-              </Badge>
-            </Button>
-          ))}
+          </button>
+          {queries.map((q) => {
+            const on = selectedQuery === q.id;
+            return (
+              <button
+                key={q.id}
+                type="button"
+                aria-pressed={on}
+                onClick={() => setSelectedQuery(q.id)}
+                className={`flex h-8 shrink-0 items-center gap-[7px] whitespace-nowrap rounded-[8px] px-[13px] text-[12px] transition-colors ${
+                  on
+                    ? "pa-gold-glow bg-gold font-semibold text-[hsl(var(--gold-foreground))]"
+                    : "font-medium text-muted-foreground hover:bg-hover hover:text-foreground"
+                }`}
+              >
+                {q.name}
+                <span
+                  className={`rounded-full px-1.5 py-px text-[10px] font-semibold leading-[1.5] ${
+                    on ? "bg-[rgba(26,23,18,0.25)] text-[hsl(var(--gold-foreground))]" : "bg-tile text-muted-foreground"
+                  }`}
+                >
+                  {q._count.mentions}
+                </span>
+              </button>
+            );
+          })}
         </div>
       )}
 
-      {/* Sentiment Overview */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      {/* Sentiment Overview — design: 3px accent rail + tinted icon tile. */}
+      <div className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-4">
         {[
-          { title: "Total Mentions", value: overview?.total ?? 0, icon: MessageCircle, color: "text-blue-500" },
-          { title: "Total Reach", value: (overview?.totalReach ?? 0).toLocaleString(), icon: Users, color: "text-violet-500" },
-          { title: "Avg Sentiment", value: (overview?.avgSentimentScore ?? 0).toFixed(2), icon: TrendingUp, color: overview?.avgSentimentScore && overview.avgSentimentScore > 0 ? "text-emerald-500" : "text-red-500" },
-          { title: "Total Engagements", value: (overview?.totalEngagements ?? 0).toLocaleString(), icon: TrendingUp, color: "text-amber-500" },
+          { title: "Total Mentions", value: overview?.total ?? 0, icon: MessageCircle, color: "#5b9bd5", tint: "rgba(91,155,213,0.12)" },
+          { title: "Total Reach", value: formatCompact(overview?.totalReach ?? 0), icon: Users, color: "hsl(var(--accent-gold))", tint: "hsl(var(--accent-gold) / 0.12)" },
+          { title: "Avg Sentiment", value: formatSentimentScore(overview?.avgSentimentScore ?? 0), icon: TrendingUp, color: "#5cb85c", tint: "rgba(92,184,92,0.12)" },
+          { title: "Total Engagements", value: formatCompact(overview?.totalEngagements ?? 0), icon: TrendingUp, color: "#e0b84a", tint: "rgba(224,184,74,0.12)" },
         ].map((stat) => (
-          <Card key={stat.title}>
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
+          <div
+            key={stat.title}
+            className="relative overflow-hidden rounded-[14px] border border-border bg-card p-[18px] shadow-[0_8px_18px_-12px_rgba(0,0,0,.5)]"
+          >
+            <span
+              className="absolute left-0 top-0 h-full w-[3px]"
+              style={{ background: stat.color }}
+            />
+            <div className="flex items-start justify-between gap-2.5">
+              <span className="max-w-[110px] text-[11px] font-medium leading-[1.4] text-muted-foreground">
                 {stat.title}
-              </CardTitle>
-              <stat.icon className={`h-4 w-4 ${stat.color}`} />
-            </CardHeader>
-            <CardContent>
-              {overviewLoading ? (
-                <Skeleton className="h-8 w-20" />
-              ) : (
-                <p className="text-2xl font-bold">{stat.value}</p>
-              )}
-            </CardContent>
-          </Card>
+              </span>
+              <div
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px]"
+                style={{ background: stat.tint }}
+              >
+                <stat.icon className="h-[15px] w-[15px] shrink-0" style={{ color: stat.color }} />
+              </div>
+            </div>
+            {overviewLoading ? (
+              <Skeleton className="mt-2.5 h-[26px] w-20" />
+            ) : (
+              <div className="mt-2.5 text-[26px] font-bold leading-none tracking-[-0.01em]">
+                {stat.value}
+              </div>
+            )}
+          </div>
         ))}
       </div>
 
-      {/* Sentiment Breakdown Bar */}
-      {overview && overview.total > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm font-medium">Sentiment Distribution</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex h-4 w-full overflow-hidden rounded-full">
+      {/* Sentiment Breakdown Bar.
+          Design keeps this card on the page ALWAYS. It used to be gated on
+          `overview.total > 0`, so a query with no mentions in the window made
+          the whole card vanish and the page collapse — the sections below it
+          jumped up and the layout stopped matching the design. With zero
+          mentions the bar simply shows its empty tile track and the legend
+          reads 0%, which is the honest state, not a missing one. */}
+      {(
+        <div className="rounded-[14px] border border-border bg-card p-[22px] shadow-[0_8px_18px_-12px_rgba(0,0,0,.5)]">
+          <h2 className="text-[14px] font-medium leading-[1.2] text-muted-foreground">
+            Sentiment Distribution
+          </h2>
+          {/* The track carries `bg-tile`, so a partially-classified set leaves a
+              neutral remainder rather than a white gap. */}
+          <div className="mt-3.5 flex h-3.5 w-full overflow-hidden rounded-full bg-tile">
+            {SENTIMENT_BAR.map((s) => (
               <div
-                className="bg-emerald-500 transition-all"
-                style={{ width: `${sentimentPercent(overview.positive)}%` }}
+                key={s.key}
+                className="h-full transition-all"
+                style={{
+                  width: `${sentimentPercent(overview?.[s.key] ?? 0)}%`,
+                  background: s.color,
+                }}
               />
-              <div
-                className="bg-gray-400 transition-all"
-                style={{ width: `${sentimentPercent(overview.neutral)}%` }}
-              />
-              <div
-                className="bg-amber-500 transition-all"
-                style={{ width: `${sentimentPercent(overview.mixed)}%` }}
-              />
-              <div
-                className="bg-red-500 transition-all"
-                style={{ width: `${sentimentPercent(overview.negative)}%` }}
-              />
-            </div>
-            <div className="mt-3 flex items-center gap-6 text-xs">
-              <span className="flex items-center gap-1.5">
-                <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
-                Positive {sentimentPercent(overview.positive)}%
+            ))}
+          </div>
+          <div className="mt-3.5 flex flex-wrap items-center gap-5 text-[12px] leading-none text-muted-foreground">
+            {SENTIMENT_BAR.map((s) => (
+              <span key={s.key} className="flex items-center gap-[7px]">
+                <span
+                  className="h-[9px] w-[9px] rounded-full"
+                  style={{ background: s.color }}
+                />
+                {s.label} {sentimentPercent(overview?.[s.key] ?? 0)}%
               </span>
-              <span className="flex items-center gap-1.5">
-                <span className="h-2.5 w-2.5 rounded-full bg-gray-400" />
-                Neutral {sentimentPercent(overview.neutral)}%
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="h-2.5 w-2.5 rounded-full bg-amber-500" />
-                Mixed {sentimentPercent(overview.mixed)}%
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="h-2.5 w-2.5 rounded-full bg-red-500" />
-                Negative {sentimentPercent(overview.negative)}%
-              </span>
-            </div>
-          </CardContent>
-        </Card>
+            ))}
+          </div>
+        </div>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-3">
+      {/* Design: a 2fr / 1fr split with both columns top-aligned. */}
+      <div className="grid items-start gap-5 lg:grid-cols-3">
         {/* Recent Mentions */}
         <div className="lg:col-span-2">
           {/* Fixed-height header row so this column's box lines up with the
               sidebar's, in both the with- and without-"Sync Now" states. */}
-          <div className="mb-3 flex h-8 items-center justify-between">
-            <h2 className="text-sm font-semibold text-muted-foreground">Recent Mentions</h2>
-            {selectedQuery && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => syncMutation.mutate({ queryId: selectedQuery })}
-                disabled={syncMutation.isPending}
-              >
-                {syncMutation.isPending ? (
-                  <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                ) : (
-                  <RefreshCw className="mr-1 h-3 w-3" />
-                )}
-                Sync Now
-              </Button>
-            )}
+          <div className="mb-2.5 flex h-8 items-center justify-between">
+            <h2 className="text-[12.5px] font-semibold uppercase leading-none tracking-[0.06em] text-muted-foreground">
+              Recent Mentions
+            </h2>
+            {/* The design keeps Sync Now in this header at all times, so the row
+                never changes shape between the All-Queries and per-query views.
+                It only ACTS on a single query, though — `listening.triggerSync`
+                requires a queryId and enqueues one job — so on All Queries it
+                renders disabled with the reason, rather than being hidden (a
+                control that appears and disappears) or lying about what it can
+                do. Making it sync every query is a backend change; not made. */}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1.5 rounded-[7px] px-2.5 text-[11.5px] font-medium text-muted-foreground hover:bg-hover hover:text-foreground disabled:opacity-40"
+              title={
+                selectedQuery
+                  ? "Fetch new mentions for this query now"
+                  : "Pick a query above to sync it"
+              }
+              onClick={() =>
+                selectedQuery && syncMutation.mutate({ queryId: selectedQuery })
+              }
+              disabled={!selectedQuery || syncMutation.isPending}
+            >
+              {syncMutation.isPending ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <RefreshCw className="h-3 w-3" />
+              )}
+              Sync Now
+            </Button>
           </div>
-          <div className="space-y-2">
+          <div className="flex flex-col gap-2">
             {mentionsLoading ? (
-              [1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-16 rounded-xl" />)
+              [1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-[78px] rounded-[12px]" />)
             ) : mentions?.items && mentions.items.length > 0 ? (
               mentions.items.map((mention) => {
-                const SentimentIcon = sentimentIcons[mention.sentiment] || Meh;
+                const sent = SENTIMENT_STYLE[mention.sentiment] ?? SENTIMENT_STYLE.NEUTRAL!;
+                const SentimentIcon = sent.icon;
+                const tag = SOURCE_TAG[mention.source] ?? SOURCE_TAG_FALLBACK;
                 return (
                   <div
                     key={mention.id}
-                    className="flex items-start gap-3 rounded-xl border border-border/30 bg-card/50 p-3.5 transition-colors hover:bg-card/80"
+                    className="flex items-start gap-3 rounded-[12px] border border-border bg-card p-3.5 shadow-[0_6px_14px_-10px_rgba(0,0,0,.45)] transition-colors hover:border-border2"
                   >
-                    <div className={`mt-0.5 rounded-lg p-1.5 ${sentimentColors[mention.sentiment] ?? sentimentColors.NEUTRAL}`}>
-                      <SentimentIcon className="h-3.5 w-3.5" />
+                    <div
+                      className="mt-px flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[8px]"
+                      style={{ background: sent.bg, color: sent.color }}
+                    >
+                      <SentimentIcon className="h-[13px] w-[13px]" />
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm">{mention.content}</p>
-                      <div className="mt-1.5 flex items-center gap-3 text-[11px] text-muted-foreground">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[12.5px] leading-[1.5]">{mention.content}</p>
+                      <div className="mt-[7px] flex flex-wrap items-center gap-[9px] text-[11px] leading-none text-faint">
                         {mention.authorName && (
-                          <span className="font-medium">{mention.authorName}</span>
+                          <span className="font-medium text-muted-foreground">
+                            {mention.authorName}
+                          </span>
                         )}
-                        <Badge className={`text-[10px] px-1.5 py-0 border-0 ${sourceColors[mention.source] ?? sourceColors.OTHER}`}>
+                        <span
+                          className="rounded-[5px] px-[7px] py-px text-[9.5px] font-semibold leading-[1.6]"
+                          style={{ background: `${tag}22`, color: tag }}
+                        >
                           {mention.source}
-                        </Badge>
+                        </span>
                         <span>
                           {formatDistanceToNow(new Date(mention.mentionedAt), { addSuffix: true })}
                         </span>
@@ -471,23 +576,21 @@ function ListeningPageInner() {
                     </div>
                     {mention.sourceUrl && (
                       <a href={mention.sourceUrl} target="_blank" rel="noopener noreferrer">
-                        <ExternalLink className="h-3.5 w-3.5 text-muted-foreground/40 hover:text-foreground" />
+                        <ExternalLink className="h-3 w-3 shrink-0 text-faint hover:text-foreground" />
                       </a>
                     )}
                   </div>
                 );
               })
             ) : (
-              <Card>
-                <CardContent className="flex flex-col items-center py-8 text-center">
-                  <Ear className="h-10 w-10 text-muted-foreground/30 mb-3" />
-                  <p className="text-sm text-muted-foreground">
-                    {queries && queries.length > 0
-                      ? "No mentions found yet. Try syncing or adjusting your keywords."
-                      : "Create a listening query to start monitoring mentions."}
-                  </p>
-                </CardContent>
-              </Card>
+              <div className="flex flex-col items-center rounded-[12px] border border-border bg-card px-4 py-8 text-center">
+                <Ear className="mb-3 h-10 w-10 text-muted-foreground/30" />
+                <p className="text-[12.5px] leading-[1.5] text-muted-foreground">
+                  {queries && queries.length > 0
+                    ? "No mentions found yet. Try syncing or adjusting your keywords."
+                    : "Create a listening query to start monitoring mentions."}
+                </p>
+              </div>
             )}
           </div>
         </div>
@@ -498,94 +601,103 @@ function ListeningPageInner() {
               "Recent Mentions") rather than inside a CardHeader, so the two
               columns' boxes start at the same y instead of being offset by the
               height of the heading. */}
-          {sources && sources.length > 0 && (
-            <div>
-              <h2 className="mb-3 flex h-8 items-center text-sm font-semibold text-muted-foreground">
-                Sources
-              </h2>
-              <Card>
-                <CardContent className="space-y-2 pt-6">
-                  {sources.map((s) => (
-                    <div key={s.source} className="flex items-center justify-between">
-                      <span className="text-sm">{s.source}</span>
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-semibold">{s.count}</span>
-                        <span className="text-[10px] text-muted-foreground">
-                          {s.reach.toLocaleString()} reach
-                        </span>
-                      </div>
+          {/* Design keeps this card on the page ALWAYS. It used to be gated on
+              `sources.length > 0`, so an empty query dropped the whole Sources
+              column and "Your Queries" slid up into its place — the sidebar
+              stopped matching the design exactly when the page had least to
+              show. An empty card that says so is the honest state. */}
+          <div>
+            <h2 className="mb-2.5 flex h-8 items-center text-[12.5px] font-semibold uppercase leading-none tracking-[0.06em] text-muted-foreground">
+              Sources
+            </h2>
+            <div className="flex flex-col gap-[11px] rounded-[14px] border border-border bg-card p-4 shadow-[0_6px_14px_-10px_rgba(0,0,0,.4)]">
+              {sources && sources.length > 0 ? (
+                sources.map((s) => (
+                  <div key={s.source} className="flex items-center justify-between gap-3">
+                    <span className="min-w-0 truncate text-[12.5px] leading-none">
+                      {SOURCE_LABEL[s.source] ?? s.source}
+                    </span>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <span className="text-[12.5px] font-semibold leading-none">{s.count}</span>
+                      <span className="text-[10px] leading-none text-faint">
+                        {formatCompact(s.reach)} reach
+                      </span>
                     </div>
-                  ))}
-                </CardContent>
-              </Card>
+                  </div>
+                ))
+              ) : (
+                <p className="py-2 text-center text-[12px] leading-[1.5] text-muted-foreground">
+                  No mentions in this range yet
+                </p>
+              )}
             </div>
-          )}
+          </div>
 
           {/* Listening Queries — same heading-above-card pattern as above. */}
           <div>
-            <h2 className="mb-3 flex h-8 items-center text-sm font-semibold text-muted-foreground">
+            <h2 className="mb-2.5 flex h-8 items-center text-[12.5px] font-semibold uppercase leading-none tracking-[0.06em] text-muted-foreground">
               Your Queries
             </h2>
-            <Card>
-              <CardContent className="space-y-2 pt-6">
-                {queriesLoading ? (
-                  [1, 2].map((i) => <Skeleton key={i} className="h-12 rounded-xl" />)
-                ) : queries && queries.length > 0 ? (
-                  queries.map((q) => (
-                    <div
-                      key={q.id}
-                      className="flex items-center justify-between rounded-lg border border-border/30 p-2.5"
-                    >
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium truncate">{q.name}</p>
-                        <p className="truncate text-[10px] text-muted-foreground">
-                          {q.keywords.slice(0, 3).join(", ")}
-                          {q._count.mentions > 0 && ` · ${q._count.mentions} mentions`}
-                        </p>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-1">
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="h-7 w-7"
-                          disabled={updateMutation.isPending && updateMutation.variables?.id === q.id}
-                          onClick={() =>
-                            updateMutation.mutate({ id: q.id, isActive: !q.isActive })
-                          }
-                        >
-                          {updateMutation.isPending && updateMutation.variables?.id === q.id ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                          ) : q.isActive ? (
-                            <Power className="h-3 w-3 text-emerald-500" />
-                          ) : (
-                            <PowerOff className="h-3 w-3 text-muted-foreground" />
-                          )}
-                        </Button>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="h-7 w-7 text-destructive"
-                          disabled={deleteMutation.isPending && deleteMutation.variables?.id === q.id}
-                          onClick={() => {
-                            if (confirm("Delete this query and all its mentions?")) {
-                              deleteMutation.mutate({ id: q.id });
-                            }
-                          }}
-                        >
-                          {deleteMutation.isPending && deleteMutation.variables?.id === q.id
-                            ? <Loader2 className="h-3 w-3 animate-spin" />
-                            : <Trash2 className="h-3 w-3" />}
-                        </Button>
-                      </div>
+            <div className="flex flex-col gap-1.5 rounded-[14px] border border-border bg-card p-2.5 shadow-[0_6px_14px_-10px_rgba(0,0,0,.4)]">
+              {queriesLoading ? (
+                [1, 2].map((i) => <Skeleton key={i} className="h-[52px] rounded-[9px]" />)
+              ) : queries && queries.length > 0 ? (
+                queries.map((q) => (
+                  <div
+                    key={q.id}
+                    className="flex items-center justify-between gap-2.5 rounded-[9px] border border-border px-3 py-2.5 transition-colors hover:border-border2"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[12.5px] font-medium leading-[1.3]">{q.name}</p>
+                      <p className="mt-[3px] truncate text-[10.5px] leading-[1.3] text-faint">
+                        {q.keywords.slice(0, 3).join(", ")}
+                        {q._count.mentions > 0 && ` · ${q._count.mentions} mentions`}
+                      </p>
                     </div>
-                  ))
-                ) : (
-                  <p className="text-sm text-muted-foreground text-center py-4">
-                    No queries yet
-                  </p>
-                )}
-              </CardContent>
-            </Card>
+                    <div className="flex shrink-0 items-center">
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        aria-label={q.isActive ? `Pause ${q.name}` : `Activate ${q.name}`}
+                        className="h-6 w-6 rounded-[6px] hover:bg-hover"
+                        disabled={updateMutation.isPending && updateMutation.variables?.id === q.id}
+                        onClick={() =>
+                          updateMutation.mutate({ id: q.id, isActive: !q.isActive })
+                        }
+                      >
+                        {updateMutation.isPending && updateMutation.variables?.id === q.id ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : q.isActive ? (
+                          <Power className="h-3 w-3 text-[#5cb85c]" />
+                        ) : (
+                          <PowerOff className="h-3 w-3 text-muted-foreground" />
+                        )}
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        aria-label={`Delete ${q.name}`}
+                        className="h-6 w-6 rounded-[6px] text-faint hover:bg-hover hover:text-[#c96b56]"
+                        disabled={deleteMutation.isPending && deleteMutation.variables?.id === q.id}
+                        onClick={() => {
+                          if (confirm("Delete this query and all its mentions?")) {
+                            deleteMutation.mutate({ id: q.id });
+                          }
+                        }}
+                      >
+                        {deleteMutation.isPending && deleteMutation.variables?.id === q.id
+                          ? <Loader2 className="h-3 w-3 animate-spin" />
+                          : <Trash2 className="h-3 w-3" />}
+                      </Button>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <p className="py-4 text-center text-[12.5px] text-muted-foreground">
+                  No queries yet
+                </p>
+              )}
+            </div>
           </div>
         </div>
       </div>

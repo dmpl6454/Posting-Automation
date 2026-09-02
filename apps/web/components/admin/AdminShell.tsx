@@ -25,7 +25,8 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
       <AdminSidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <AdminHeader onMenuClick={() => setSidebarOpen(true)} />
-        <main className="flex-1 overflow-y-auto bg-gray-50 p-4 sm:p-6">
+        {/* Design: the content well is the app background with a 24px gutter. */}
+        <main className="flex-1 overflow-y-auto bg-background p-4 sm:p-6 lg:p-6">
           {children}
         </main>
       </div>

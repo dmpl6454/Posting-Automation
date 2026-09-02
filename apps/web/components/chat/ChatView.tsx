@@ -113,8 +113,8 @@ export function ChatView({ threadId, onThreadCreated }: ChatViewProps) {
     return (
       <div className="flex h-full flex-col">
         <div className="flex flex-1 flex-col items-center justify-center gap-4 p-8 text-center">
-          <div className="rounded-full bg-purple-100 p-4 dark:bg-purple-900/30">
-            <Bot className="h-10 w-10 text-purple-600 dark:text-purple-400" />
+          <div className="rounded-full bg-tile p-4 dark:bg-tile">
+            <Bot className="h-10 w-10 text-gold dark:text-gold" />
           </div>
           <div>
             <h2 className="text-xl font-semibold">AI Agent Assistant</h2>

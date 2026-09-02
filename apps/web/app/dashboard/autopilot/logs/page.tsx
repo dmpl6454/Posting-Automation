@@ -1,34 +1,38 @@
 "use client";
 
 import { trpc } from "~/lib/trpc/client";
-import { Badge } from "~/components/ui/badge";
-import { Card } from "~/components/ui/card";
 import { Skeleton } from "~/components/ui/skeleton";
 import { Activity } from "lucide-react";
 
-function runStatusBadge(status: string) {
-  switch (status) {
-    case "COMPLETED":
-      return (
-        <Badge variant="default" className="bg-green-600">
-          Completed
-        </Badge>
-      );
-    case "COMPLETED_WITH_ERRORS":
-      return (
-        <Badge variant="default" className="bg-amber-500">
-          Completed with errors
-        </Badge>
-      );
-    case "RUNNING":
-      return <Badge variant="secondary">Running</Badge>;
-    case "FAILED":
-      return <Badge variant="destructive">Failed</Badge>;
-    case "PENDING":
-      return <Badge variant="outline">Pending</Badge>;
-    default:
-      return <Badge variant="outline">{status}</Badge>;
-  }
+/**
+ * Design: run status is a tinted pill, in the mockup's literal hex. This
+ * project's Tailwind config flattens the green/amber/red scales onto the
+ * palette's status triplets, so a named shade here would render the pill's
+ * text the same colour as its own background.
+ */
+const RUN_STYLE: Record<string, { label: string; className: string }> = {
+  COMPLETED: { label: "Completed", className: "bg-[rgba(92,184,92,0.15)] text-[#5cb85c]" },
+  COMPLETED_WITH_ERRORS: {
+    label: "Completed with errors",
+    className: "bg-[rgba(224,184,74,0.15)] text-[#e0b84a]",
+  },
+  RUNNING: { label: "Running", className: "bg-tile text-muted-foreground" },
+  FAILED: { label: "Failed", className: "bg-[rgba(217,105,95,0.15)] text-[#d9695f]" },
+  PENDING: { label: "Pending", className: "bg-tile text-faint" },
+};
+
+function RunStatusPill({ status }: { status: string }) {
+  const s = RUN_STYLE[status] ?? {
+    label: status,
+    className: "bg-tile text-muted-foreground",
+  };
+  return (
+    <span
+      className={`shrink-0 rounded-full px-[11px] py-[3px] text-[10.5px] font-semibold leading-[1.6] ${s.className}`}
+    >
+      {s.label}
+    </span>
+  );
 }
 
 export default function PipelineLogsPage() {
@@ -39,15 +43,9 @@ export default function PipelineLogsPage() {
   return (
     <div className="space-y-4">
       {isLoading ? (
-        <div className="space-y-3">
+        <div className="flex flex-col gap-2.5">
           {Array.from({ length: 4 }).map((_, i) => (
-            <Card key={i} className="p-4">
-              <div className="flex items-center gap-4">
-                <Skeleton className="h-6 w-20" />
-                <Skeleton className="h-4 w-40" />
-                <Skeleton className="h-4 w-60 ml-auto" />
-              </div>
-            </Card>
+            <Skeleton key={i} className="h-[54px] w-full rounded-[12px]" />
           ))}
         </div>
       ) : runs.length === 0 ? (
@@ -60,53 +58,54 @@ export default function PipelineLogsPage() {
           </p>
         </div>
       ) : (
-        <div className="space-y-3">
+        <div className="flex flex-col gap-2.5">
           {runs.map((run: any) => (
-            <Card key={run.id} className="p-4">
-              <div className="flex flex-wrap items-center gap-4">
-                {/* Status */}
-                {runStatusBadge(run.status)}
+            <div
+              key={run.id}
+              className="flex flex-wrap items-center gap-3.5 rounded-[12px] border border-border bg-card px-[18px] py-3.5"
+            >
+              {/* Status */}
+              <RunStatusPill status={run.status} />
 
-                {/* Timestamp */}
-                <span className="text-sm text-muted-foreground">
-                  {new Date(run.startedAt ?? run.createdAt).toLocaleString()}
-                </span>
+              {/* Timestamp */}
+              <span className="text-[12px] leading-none text-muted-foreground">
+                {new Date(run.startedAt ?? run.createdAt).toLocaleString()}
+              </span>
 
-                {/* Stats */}
-                <div className="ml-auto flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                  {run.itemsDiscovered != null && (
-                    <span>Discovered: {run.itemsDiscovered}</span>
-                  )}
-                  {run.itemsScored != null && <span>Scored: {run.itemsScored}</span>}
-                  {run.postsGenerated != null && (
-                    <span>Generated: {run.postsGenerated}</span>
-                  )}
-                  {run.postsApproved != null && (
-                    <span>Approved: {run.postsApproved}</span>
-                  )}
-                  {run.postsScheduled != null && (
-                    <span>Scheduled: {run.postsScheduled}</span>
-                  )}
-                  {run.postsFailed != null && run.postsFailed > 0 && (
-                    <span className="font-medium text-destructive">
-                      Failed: {run.postsFailed}
-                    </span>
-                  )}
-                </div>
-
-                {/* Duration */}
-                {run.completedAt && run.startedAt && (
-                  <span className="text-xs text-muted-foreground">
-                    {Math.round(
-                      (new Date(run.completedAt).getTime() -
-                        new Date(run.startedAt).getTime()) /
-                        1000
-                    )}
-                    s
+              {/* Stats */}
+              <div className="ml-auto flex flex-wrap items-center gap-3 text-[11px] leading-none text-faint">
+                {run.itemsDiscovered != null && (
+                  <span>Discovered: {run.itemsDiscovered}</span>
+                )}
+                {run.itemsScored != null && <span>Scored: {run.itemsScored}</span>}
+                {run.postsGenerated != null && (
+                  <span>Generated: {run.postsGenerated}</span>
+                )}
+                {run.postsApproved != null && (
+                  <span>Approved: {run.postsApproved}</span>
+                )}
+                {run.postsScheduled != null && (
+                  <span>Scheduled: {run.postsScheduled}</span>
+                )}
+                {run.postsFailed != null && run.postsFailed > 0 && (
+                  <span className="font-medium text-[#d9695f]">
+                    Failed: {run.postsFailed}
                   </span>
                 )}
               </div>
-            </Card>
+
+              {/* Duration */}
+              {run.completedAt && run.startedAt && (
+                <span className="shrink-0 text-[11px] leading-none text-faint">
+                  {Math.round(
+                    (new Date(run.completedAt).getTime() -
+                      new Date(run.startedAt).getTime()) /
+                      1000
+                  )}
+                  s
+                </span>
+              )}
+            </div>
           ))}
         </div>
       )}

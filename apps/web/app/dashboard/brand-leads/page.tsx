@@ -5,11 +5,8 @@ import { useState } from "react";
 import { trpc } from "~/lib/trpc/client";
 import { useToast } from "~/hooks/use-toast";
 import { Button } from "~/components/ui/button";
-import { Badge } from "~/components/ui/badge";
 import { Skeleton } from "~/components/ui/skeleton";
 import { ScrollableTabRow } from "~/components/ui/scrollable-tab-row";
-import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
-import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import {
   Dialog,
   DialogContent,
@@ -37,7 +34,6 @@ import {
   Send,
   Clock,
   Copy,
-  Search,
   Flame,
   Newspaper,
   Briefcase,
@@ -82,18 +78,32 @@ type Lead = {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
+/**
+ * Design: lead status is a tinted pill. Literal hex — this project's Tailwind
+ * config FLATTENS the yellow/green/red scales onto the palette's status
+ * triplets, so `bg-yellow-100 text-yellow-800` renders the label the same
+ * colour as its own background.
+ *
+ * The mockup covers PENDING/APPROVED/REJECTED/SENT; the four manual outcomes
+ * this app also stores take neighbouring palette hues so none falls through
+ * to an untinted grey.
+ */
 const STATUS_STYLES: Record<string, string> = {
-  PENDING:        "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400",
-  APPROVED:       "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400",
-  REJECTED:       "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400",
-  SENT:           "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400",
-  FAILED:         "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400",
+  PENDING:        "bg-[rgba(224,184,74,0.15)] text-[#e0b84a]",
+  APPROVED:       "bg-[rgba(91,155,213,0.15)] text-[#5b9bd5]",
+  REJECTED:       "bg-tile text-muted-foreground",
+  SENT:           "bg-[rgba(92,184,92,0.15)] text-[#5cb85c]",
+  FAILED:         "bg-[rgba(217,105,95,0.15)] text-[#d9695f]",
   // Manual post-send outcomes (gap #3)
-  REPLIED:        "bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-400",
-  INTERESTED:     "bg-teal-100 text-teal-800 dark:bg-teal-900/30 dark:text-teal-400",
-  NOT_INTERESTED: "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400",
-  CLOSED:         "bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
+  REPLIED:        "bg-gold/[0.12] text-gold",
+  INTERESTED:     "bg-[rgba(92,184,92,0.15)] text-[#5cb85c]",
+  NOT_INTERESTED: "bg-tile text-muted-foreground",
+  CLOSED:         "bg-tile text-faint",
 };
+
+/** The design's one 9.5px/600 status pill. */
+const STATUS_PILL =
+  "shrink-0 rounded-full px-[9px] py-0.5 text-[9.5px] font-semibold leading-[1.6]";
 
 // Human label for the manual outcome statuses (raw enum would show NOT_INTERESTED).
 const LEAD_STATUS_LABEL: Record<string, string> = {
@@ -104,26 +114,31 @@ const LEAD_STATUS_LABEL: Record<string, string> = {
 // The manual outcomes an operator can set on a lead after sending (gap #3).
 const MANUAL_OUTCOMES = ["REPLIED", "INTERESTED", "NOT_INTERESTED", "CLOSED"] as const;
 
-const SIGNAL_META: Record<string, { label: string; icon: React.ReactNode; color: string }> = {
-  AD_LIBRARY:   { label: "Meta Ads",    icon: <TrendingUp className="h-3 w-3" />,  color: "bg-blue-50 text-blue-700 border-blue-200" },
-  PR_NEWS:      { label: "PR / News",   icon: <Newspaper className="h-3 w-3" />,   color: "bg-purple-50 text-purple-700 border-purple-200" },
-  SOCIAL_MEDIA: { label: "Social",      icon: <Flame className="h-3 w-3" />,        color: "bg-orange-50 text-orange-700 border-orange-200" },
-  JOB_POSTING:  { label: "Job Posting", icon: <Briefcase className="h-3 w-3" />,   color: "bg-gray-50 text-gray-600 border-gray-200" },
+/**
+ * Design: the signal chip is a tinted 9.5px tag, one hue per detector source.
+ * `Icon` is stored (not an element) so the same entry renders at the chip's 9px
+ * and the breakdown row's 11px without a second table.
+ */
+const SIGNAL_META: Record<string, { label: string; Icon: typeof Mail; color: string }> = {
+  AD_LIBRARY:   { label: "Meta Ads",    Icon: TrendingUp, color: "#5b9bd5" },
+  PR_NEWS:      { label: "PR / News",   Icon: Newspaper,  color: "#C9A356" },
+  SOCIAL_MEDIA: { label: "Social",      Icon: Flame,      color: "#e08a4a" },
+  JOB_POSTING:  { label: "Job Posting", Icon: Briefcase,  color: "#8a8578" },
 };
 
-const CHANNEL_META: Record<string, { icon: React.ReactNode; label: string }> = {
-  EMAIL:     { icon: <Mail className="h-3.5 w-3.5" />,     label: "Email" },
-  LINKEDIN:  { icon: <Linkedin className="h-3.5 w-3.5" />, label: "LinkedIn" },
-  TWITTER:   { icon: <Twitter className="h-3.5 w-3.5" />,  label: "Twitter" },
-  INSTAGRAM: { icon: <Instagram className="h-3.5 w-3.5" />,label: "Instagram" },
+const CHANNEL_META: Record<string, { Icon: typeof Mail; label: string }> = {
+  EMAIL:     { Icon: Mail,      label: "Email" },
+  LINKEDIN:  { Icon: Linkedin,  label: "LinkedIn" },
+  TWITTER:   { Icon: Twitter,   label: "Twitter" },
+  INSTAGRAM: { Icon: Instagram, label: "Instagram" },
 };
 
 const MSG_STATUS_STYLES: Record<string, string> = {
   DRAFT:          "text-muted-foreground",
-  QUEUED:         "text-blue-500",
-  SENT:           "text-emerald-600",
-  FAILED:         "text-red-500",
-  PENDING_MANUAL: "text-amber-600",
+  QUEUED:         "text-[#5b9bd5]",
+  SENT:           "text-[#5cb85c]",
+  FAILED:         "text-[#d9695f]",
+  PENDING_MANUAL: "text-[#e0b84a]",
 };
 
 // Friendly label for each message status (PENDING_MANUAL would otherwise read as
@@ -138,13 +153,20 @@ const MSG_STATUS_LABEL: Record<string, string> = {
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function ScoreFlames({ score }: { score: number }) {
+/**
+ * Design: three 11px flames, gold when lit and `--tile` when not.
+ *
+ * ⚠️ STROKE ONLY — measured on the mockup, its flames compute to `fill: none`.
+ * Filling them (the app's previous `fill-gold`) turns each one into a solid
+ * gold blob, which reads as a heavier, different mark at 11px.
+ */
+function ScoreFlames({ score, size = "h-[11px] w-[11px]" }: { score: number; size?: string }) {
   return (
     <div className="flex gap-0.5">
       {[1, 2, 3].map((i) => (
         <Flame
           key={i}
-          className={`h-3.5 w-3.5 ${i <= score ? "text-orange-500 fill-orange-500" : "text-gray-200 fill-gray-200 dark:text-gray-700 dark:fill-gray-700"}`}
+          className={`${size} fill-none ${i <= score ? "text-gold" : "text-tile"}`}
         />
       ))}
     </div>
@@ -160,26 +182,31 @@ function ChannelDots({ lead }: { lead: Lead }) {
   ].filter(Boolean) as string[];
 
   if (available.length === 0) {
-    return <span className="text-xs text-muted-foreground">No contacts</span>;
+    return <span className="text-[11px] leading-none text-faint">No contacts</span>;
   }
 
   return (
     <div className="flex gap-1.5">
       {available.map((ch) => {
+        const meta = CHANNEL_META[ch];
+        if (!meta) return null;
         const sent = lead.messages.find((m) => m.channel === ch);
+        /* Design: a 24px bordered square per reachable channel. The send state
+           is carried by the glyph's colour, so a sent channel is legible
+           without a second row of labels. */
+        const tone =
+          sent?.status === "SENT"           ? "border-[rgba(92,184,92,0.35)] text-[#5cb85c]" :
+          sent?.status === "FAILED"         ? "border-[rgba(217,105,95,0.35)] text-[#d9695f]" :
+          sent?.status === "QUEUED"         ? "border-[rgba(91,155,213,0.35)] text-[#5b9bd5]" :
+          sent?.status === "PENDING_MANUAL" ? "border-[rgba(224,184,74,0.35)] text-[#e0b84a]" :
+          "border-border2 text-muted-foreground";
         return (
           <span
             key={ch}
-            title={`${CHANNEL_META[ch]?.label}: ${sent ? (MSG_STATUS_LABEL[sent.status] ?? sent.status) : "not sent"}`}
-            className={`p-1 rounded-md border ${
-              sent?.status === "SENT"           ? "border-emerald-200 bg-emerald-50 text-emerald-600" :
-              sent?.status === "FAILED"         ? "border-red-200 bg-red-50 text-red-500" :
-              sent?.status === "QUEUED"         ? "border-blue-200 bg-blue-50 text-blue-500" :
-              sent?.status === "PENDING_MANUAL" ? "border-amber-200 bg-amber-50 text-amber-600" :
-              "border-border/50 text-muted-foreground"
-            }`}
+            title={`${meta.label}: ${sent ? (MSG_STATUS_LABEL[sent.status] ?? sent.status) : "not sent"}`}
+            className={`flex h-6 w-6 items-center justify-center rounded-[6px] border ${tone}`}
           >
-            {CHANNEL_META[ch]?.icon}
+            <meta.Icon className="h-[11px] w-[11px]" />
           </span>
         );
       })}
@@ -198,56 +225,73 @@ function LeadCard({ lead, onApprove, onReject, onView, isApproving, isRejecting 
   const signal = SIGNAL_META[lead.signal.signalType] ?? SIGNAL_META.PR_NEWS!;
 
   return (
-    <div className="group flex items-start gap-4 rounded-xl border border-border/50 bg-card p-4 transition-all hover:border-border hover:shadow-sm">
-      {/* Score */}
-      <div className="flex flex-col items-center gap-1.5 pt-0.5">
-        <ScoreFlames score={lead.signal.score} />
-        <span className="text-[10px] text-muted-foreground font-medium">Score {lead.signal.score}</span>
-      </div>
-
-      {/* Main content */}
-      <div className="flex-1 min-w-0">
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="font-semibold text-sm truncate">{lead.signal.brandName}</span>
-              <span className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${signal.color}`}>
-                {signal.icon}
-                {signal.label}
-              </span>
-              <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${STATUS_STYLES[lead.status]}`}>
-                {LEAD_STATUS_LABEL[lead.status] ?? lead.status}
-              </span>
-            </div>
-
-            {lead.signal.celebrityNames.length > 0 && (
-              <div className="flex flex-wrap gap-1 mt-1.5">
-                {lead.signal.celebrityNames.map((name) => (
-                  <span key={name} className="rounded-md bg-secondary px-1.5 py-0.5 text-xs font-medium">
-                    ⭐ {name}
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <span className="text-[11px] text-muted-foreground shrink-0">
-            {new Date(lead.signal.detectedAt).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
+    <div className="rounded-[12px] border border-border bg-card px-4 py-3 shadow-[0_6px_14px_-10px_rgba(0,0,0,.4)] transition-colors hover:border-border2">
+      <div className="flex items-center gap-3.5">
+        {/* Score — design: the flame stack sits in its own left column with the
+            numeric score beneath it, so the list can be scanned by heat. */}
+        <div className="flex shrink-0 flex-col items-center gap-0.5">
+          <ScoreFlames score={lead.signal.score} />
+          <span className="whitespace-nowrap text-[8.5px] font-medium leading-none text-faint">
+            Score {lead.signal.score}
           </span>
         </div>
 
-        <div className="flex items-center justify-between mt-2.5 gap-2 flex-wrap">
-          <ChannelDots lead={lead} />
+        {/* Main content */}
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <span className="truncate text-[13px] font-semibold leading-[1.3]">{lead.signal.brandName}</span>
+              <span
+                className="flex shrink-0 items-center gap-1 rounded-[5px] px-2 py-0.5 text-[9.5px] font-medium leading-[1.6]"
+                style={{ background: `${signal.color}1f`, color: signal.color }}
+              >
+                <signal.Icon className="h-[9px] w-[9px]" />
+                {signal.label}
+              </span>
+              <span className={`${STATUS_PILL} ${STATUS_STYLES[lead.status] ?? "bg-tile text-muted-foreground"}`}>
+                {LEAD_STATUS_LABEL[lead.status] ?? lead.status}
+              </span>
+              {lead.signal.celebrityNames.map((name) => (
+                <span
+                  key={name}
+                  className="shrink-0 rounded-[5px] bg-tile px-2 py-0.5 text-[10.5px] font-medium leading-[1.6] text-muted-foreground"
+                >
+                  ⭐ {name}
+                </span>
+              ))}
+            </div>
 
-          <div className="flex items-center gap-1.5 opacity-100 transition-opacity [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100">
-            <Button size="sm" variant="ghost" className="h-7 px-2 text-xs gap-1" onClick={onView}>
-              <Eye className="h-3 w-3" /> Preview
+            <span className="ml-auto shrink-0 text-[11px] leading-none text-faint">
+              {new Date(lead.signal.detectedAt).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
+            </span>
+          </div>
+
+          {/* Design: one action row, channels pushed left and the actions right.
+              These are NOT hover-revealed — Approve/Reject are the whole point
+              of the page, and a control that only exists on hover is invisible
+              on a touch screen. */}
+          <div className="mt-[9px] flex flex-wrap items-center justify-end gap-1.5">
+            <div className="mr-auto">
+              <ChannelDots lead={lead} />
+            </div>
+
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-[25px] gap-1.5 rounded-[6px] px-2.5 text-[11px] font-medium text-muted-foreground hover:bg-hover hover:text-foreground"
+              onClick={onView}
+            >
+              <Eye className="h-[11px] w-[11px]" /> Preview
             </Button>
 
             {lead.signal.signalUrl && (
               <a href={lead.signal.signalUrl} target="_blank" rel="noopener noreferrer">
-                <Button size="sm" variant="ghost" className="h-7 px-2 text-xs gap-1">
-                  <ExternalLink className="h-3 w-3" /> Source
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-[25px] gap-1.5 rounded-[6px] px-2.5 text-[11px] font-medium text-muted-foreground hover:bg-hover hover:text-foreground"
+                >
+                  <ExternalLink className="h-[11px] w-[11px]" /> Source
                 </Button>
               </a>
             )}
@@ -256,22 +300,22 @@ function LeadCard({ lead, onApprove, onReject, onView, isApproving, isRejecting 
               <>
                 <Button
                   size="sm"
-                  className="h-7 px-2.5 text-xs bg-emerald-600 hover:bg-emerald-700 gap-1"
+                  className="h-[25px] gap-1.5 rounded-[6px] bg-[#5cb85c] px-2.5 text-[11px] font-semibold text-[#0e0e0c] hover:bg-[#5cb85c] hover:brightness-110"
                   onClick={onApprove}
                   disabled={isApproving}
                 >
-                  {isApproving ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle className="h-3 w-3" />}
+                  {isApproving ? <Loader2 className="h-[11px] w-[11px] animate-spin" /> : <CheckCircle className="h-[11px] w-[11px]" />}
                   Approve
                 </Button>
                 <Button
-                  size="sm"
+                  size="icon"
                   variant="ghost"
-                  className="h-7 px-2 text-xs text-muted-foreground"
+                  className="h-[25px] w-[25px] rounded-[6px] text-faint hover:bg-hover hover:text-[#c96b56]"
                   aria-label="Reject lead"
                   onClick={onReject}
                   disabled={isRejecting}
                 >
-                  <XCircle className="h-3 w-3" />
+                  {isRejecting ? <Loader2 className="h-3 w-3 animate-spin" /> : <XCircle className="h-3 w-3" />}
                 </Button>
               </>
             )}
@@ -332,7 +376,7 @@ function MessagePreviewDialog({ lead, open, onClose, onStatusChange }: {
       <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Star className="h-4 w-4 text-orange-500" />
+            <Star className="h-4 w-4 text-gold" />
             {lead.signal.brandName}
             {lead.signal.celebrityNames.length > 0 && (
               <span className="text-sm font-normal text-muted-foreground">
@@ -343,12 +387,17 @@ function MessagePreviewDialog({ lead, open, onClose, onStatusChange }: {
         </DialogHeader>
 
         {/* Signal info */}
-        <div className="rounded-lg border border-border/50 bg-muted/30 p-3 text-sm space-y-1.5">
-          <div className="flex items-center gap-6 flex-wrap text-muted-foreground">
-            <span className="flex items-center gap-1.5">
-              {SIGNAL_META[lead.signal.signalType]?.icon}
-              {SIGNAL_META[lead.signal.signalType]?.label}
-            </span>
+        <div className="space-y-1.5 rounded-[10px] border border-border bg-surface1 p-3 text-[12.5px]">
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-muted-foreground">
+            {(() => {
+              const meta = SIGNAL_META[lead.signal.signalType];
+              return meta ? (
+                <span className="flex items-center gap-1.5" style={{ color: meta.color }}>
+                  <meta.Icon className="h-3 w-3" />
+                  {meta.label}
+                </span>
+              ) : null;
+            })()}
             <span className="flex items-center gap-1.5">
               <ScoreFlames score={lead.signal.score} />
               Score {lead.signal.score}/3
@@ -357,12 +406,12 @@ function MessagePreviewDialog({ lead, open, onClose, onStatusChange }: {
           </div>
           {lead.signal.signalUrl && (
             <a href={lead.signal.signalUrl} target="_blank" rel="noopener noreferrer"
-              className="text-xs text-blue-500 hover:underline flex items-center gap-1">
+              className="flex items-center gap-1 text-[11.5px] text-gold hover:underline">
               <ExternalLink className="h-3 w-3" /> View original source
             </a>
           )}
           {channels.length === 0 && (
-            <p className="text-xs text-amber-600 flex items-center gap-1">
+            <p className="flex items-center gap-1 text-[11.5px] text-[#e0b84a]">
               <AlertCircle className="h-3 w-3" />
               No contact info found for this brand yet
             </p>
@@ -371,10 +420,10 @@ function MessagePreviewDialog({ lead, open, onClose, onStatusChange }: {
 
         {/* Manual reply / outcome tracking (gap #3). No inbox automation exists —
             the operator logs what happened after they reached out. */}
-        <div className="rounded-lg border border-border/50 p-3 space-y-2">
+        <div className="space-y-2 rounded-[10px] border border-border p-3">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-muted-foreground">Log a reply / outcome</span>
-            <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${STATUS_STYLES[lead.status]}`}>
+            <span className="text-[11.5px] font-medium text-muted-foreground">Log a reply / outcome</span>
+            <span className={`${STATUS_PILL} ${STATUS_STYLES[lead.status] ?? "bg-tile text-muted-foreground"}`}>
               {LEAD_STATUS_LABEL[lead.status] ?? lead.status}
             </span>
           </div>
@@ -397,7 +446,7 @@ function MessagePreviewDialog({ lead, open, onClose, onStatusChange }: {
               Gated on hasEverSent (not lead.status), so it never re-locks once a
               real send has happened, no matter how many times the outcome changes. */}
           {!hasEverSent && (
-            <p className="text-[10px] text-amber-600 dark:text-amber-400">
+            <p className="text-[10px] text-[#e0b84a]">
               Available after outreach is sent.
             </p>
           )}
@@ -417,7 +466,7 @@ function MessagePreviewDialog({ lead, open, onClose, onStatusChange }: {
           )}
 
           {!isLoading && messages && messages.length === 0 && (
-            <div className="rounded-lg border border-dashed border-border/60 p-6 text-center text-sm text-muted-foreground">
+            <div className="rounded-[10px] border border-dashed border-border2 p-6 text-center text-[12.5px] text-muted-foreground">
               {lead.status === "APPROVED"
                 ? "Messages are being generated — check back shortly."
                 : lead.status === "PENDING"
@@ -427,14 +476,19 @@ function MessagePreviewDialog({ lead, open, onClose, onStatusChange }: {
           )}
 
           {messages?.map((msg) => (
-            <div key={msg.id} className="rounded-lg border border-border/50 overflow-hidden">
-              <div className="flex items-center justify-between px-3 py-2 bg-muted/40 border-b border-border/50">
-                <div className="flex items-center gap-2">
-                  <span className="text-muted-foreground">{CHANNEL_META[msg.channel]?.icon}</span>
-                  <span className="text-xs font-medium">{CHANNEL_META[msg.channel]?.label}</span>
-                  {msg.subject && <span className="text-xs text-muted-foreground">— {msg.subject}</span>}
+            /* Design: a surface-1 card with a `--tile` header strip carrying the
+               channel glyph and subject, and the body at 12px/1.6. */
+            <div key={msg.id} className="overflow-hidden rounded-[10px] border border-border bg-surface1">
+              <div className="flex items-center justify-between gap-2 border-b border-border bg-tile px-3 py-2.5">
+                <div className="flex min-w-0 items-center gap-[7px]">
+                  {(() => {
+                    const cm = CHANNEL_META[msg.channel];
+                    return cm ? <cm.Icon className="h-3 w-3 shrink-0 text-muted-foreground" /> : null;
+                  })()}
+                  <span className="text-[11.5px] font-medium">{CHANNEL_META[msg.channel]?.label}</span>
+                  {msg.subject && <span className="truncate text-[11px] text-muted-foreground">— {msg.subject}</span>}
                 </div>
-                <span className={`flex items-center gap-1 text-[10px] font-medium ${MSG_STATUS_STYLES[msg.status]}`}>
+                <span className={`flex shrink-0 items-center gap-1 text-[10px] font-medium ${MSG_STATUS_STYLES[msg.status]}`}>
                   {msg.status === "SENT" && <CheckCircle2 className="h-3 w-3" />}
                   {msg.status === "FAILED" && <AlertCircle className="h-3 w-3" />}
                   {msg.status === "QUEUED" && <Loader2 className="h-3 w-3 animate-spin" />}
@@ -447,14 +501,14 @@ function MessagePreviewDialog({ lead, open, onClose, onStatusChange }: {
                   PENDING_MANUAL — the copy is ready but the operator must send it
                   by hand. Make that explicit and one-click-copyable. */}
               {msg.status === "PENDING_MANUAL" && (
-                <div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200/60 dark:border-amber-800/40">
-                  <span className="text-[11px] text-amber-700 dark:text-amber-400">
+                <div className="flex items-center justify-between gap-2 border-b border-[rgba(224,184,74,0.3)] bg-[rgba(224,184,74,0.12)] px-3 py-1.5">
+                  <span className="text-[11px] text-[#e0b84a]">
                     No automatic send for {CHANNEL_META[msg.channel]?.label} — copy and send it manually.
                   </span>
                   <Button
                     size="sm"
                     variant="outline"
-                    className="h-6 px-2 text-[11px]"
+                    className="h-6 shrink-0 rounded-[6px] border-border2 bg-surface2 px-2 text-[11px]"
                     onClick={() => {
                       navigator.clipboard.writeText(msg.subject ? `${msg.subject}\n\n${msg.body}` : msg.body);
                     }}
@@ -463,7 +517,7 @@ function MessagePreviewDialog({ lead, open, onClose, onStatusChange }: {
                   </Button>
                 </div>
               )}
-              <pre className="p-3 text-xs whitespace-pre-wrap text-foreground/80 font-sans leading-relaxed max-h-48 overflow-y-auto">
+              <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap p-3 font-sans text-[12px] leading-[1.6] text-muted-foreground">
                 {msg.body}
               </pre>
             </div>
@@ -515,6 +569,21 @@ function BrandLeadsPageInner() {
     days: 30,
   });
 
+  /*
+   * "Approve All Today" is a HEADER action, so its count must not depend on
+   * which tab is open. It used to be derived from `leads` — the current tab's
+   * result — so opening the Sent tab (which by definition contains no PENDING
+   * lead) dropped the count to 0 and the button vanished; picking a signal
+   * filter that excluded today's leads did the same. Measured: visible on
+   * Pending Review and All Leads, GONE on Sent.
+   *
+   * Same existing procedure, just pinned to PENDING and unfiltered by signal.
+   */
+  const { data: pendingLeads } = trpc.brandLeads.list.useQuery({
+    status: "PENDING",
+    days: 30,
+  });
+
   const approve = trpc.brandLeads.approve.useMutation({
     onMutate: ({ leadId }) => setApprovingId(leadId),
     onSettled: () => {
@@ -547,123 +616,136 @@ function BrandLeadsPageInner() {
   ] as const;
 
   const statCards = [
-    { title: "Detected Today",  value: stats?.todayCount, icon: Target,      color: "text-blue-500" },
-    { title: "Pending Approval",value: stats?.pending,    icon: Clock,       color: "text-yellow-500" },
-    { title: "Outreach Sent",   value: stats?.sent,       icon: Send,        color: "text-emerald-500" },
-    { title: "Total Leads",     value: stats?.total,      icon: Star,        color: "text-purple-500" },
+    { title: "Detected Today",  value: stats?.todayCount, icon: Target, color: "#5b9bd5", tint: "rgba(91,155,213,0.12)" },
+    { title: "Pending Approval",value: stats?.pending,    icon: Clock,  color: "#e0b84a", tint: "rgba(224,184,74,0.12)" },
+    { title: "Outreach Sent",   value: stats?.sent,       icon: Send,   color: "#5cb85c", tint: "rgba(92,184,92,0.12)" },
+    { title: "Total Leads",     value: stats?.total,      icon: Star,   color: "hsl(var(--accent-gold))", tint: "hsl(var(--accent-gold) / 0.12)" },
   ];
 
   const filteredLeads = leads ?? [];
-  const pendingCount = filteredLeads.filter((l) => l.status === "PENDING").length;
   const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
-  const pendingTodayCount = filteredLeads.filter((l) => l.status === "PENDING" && new Date(l.createdAt) >= startOfToday).length;
+  // Tab-independent (see the `pendingLeads` query above).
+  const pendingTodayCount = (pendingLeads ?? []).filter(
+    (l) => new Date(l.createdAt) >= startOfToday
+  ).length;
 
   return (
-    <div className="space-y-6">
+    /* Design stacks sections on 20px, not 24px. */
+    <div className="space-y-5">
       {/* Header */}
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Brand Outreach</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Leads are found automatically — your job here is to <strong>review and approve</strong> the brands worth contacting.
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div className="min-w-0">
+          <span className="eyebrow">Brand Outreach</span>
+          <h1 className="display mt-2.5 text-[30px] leading-[1.1]">
+            Find the fit, make the ask.
+          </h1>
+          <p className="mt-2 max-w-[520px] text-[13px] leading-relaxed text-muted-foreground">
+            Leads are found automatically — your job here is to <strong className="font-semibold text-foreground">review and approve</strong> the brands worth contacting.
           </p>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
           <Button
             variant="outline"
             size="sm"
-            className="gap-1.5"
+            className="h-[34px] gap-[7px] rounded-[9px] border-border2 bg-surface2 px-[13px] text-[12px] font-medium hover:bg-hover"
             title="Re-reads saved leads — detection runs automatically in the background"
             onClick={handleRefresh}
             disabled={isRefreshing}
           >
-            <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
+            <RefreshCw className={`h-[13px] w-[13px] ${isRefreshing ? "animate-spin" : ""}`} />
             {isRefreshing ? "Refreshing…" : "Reload"}
           </Button>
           {pendingTodayCount > 0 && (
+            /* Design keeps this one green, not gold: it is a bulk APPROVE, and
+               the page's approve action is green everywhere else on the page. */
             <Button
               size="sm"
-              className="gap-1.5 bg-emerald-600 hover:bg-emerald-700"
+              className="h-[34px] gap-[7px] rounded-[9px] bg-[#5cb85c] px-3.5 text-[12px] font-semibold text-[#0e0e0c] hover:bg-[#5cb85c] hover:brightness-110"
               onClick={() => approveAll.mutate()}
               disabled={approveAll.isPending}
             >
               {approveAll.isPending
-                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                : <CheckCircle className="h-3.5 w-3.5" />}
+                ? <Loader2 className="h-[13px] w-[13px] animate-spin" />
+                : <CheckCircle className="h-[13px] w-[13px]" />}
               Approve All Today ({pendingTodayCount})
             </Button>
           )}
         </div>
       </div>
 
-      <Alert>
-        <Info className="h-4 w-4" />
-        <AlertTitle>How Brand Outreach works</AlertTitle>
-        <AlertDescription>
-          A detector scans Meta Ad Library, PR/news, and social signals every 6 hours for brands launching
-          celebrity campaigns, then enriches each with contact info and lists it here as a lead.
-          <strong> Approve</strong> a lead and we generate a personalised pitch and send it where we can:
-          email is sent automatically through the platform mailer (if a brand email was found); LinkedIn/Instagram DMs are marked
-          <em> “Send manually”</em> with the copy ready to paste — we never mark those “Sent” unless they
-          were actually delivered. Replies land in your own inbox; log the outcome on the lead.
-          <span className="block mt-1.5">
-            <strong>What you can do here:</strong> you don&apos;t add or remove brands — the detector finds them.
-            You <strong>approve</strong> a lead to generate and send outreach, <strong>reject</strong> to dismiss it,
-            and log replies manually after you hear back.
+      {/* Design: a quiet surface-1 note, not the Alert component's framing. */}
+      <div className="flex items-start gap-3 rounded-[12px] border border-border bg-surface1 px-4 py-3.5">
+        <Info className="mt-px h-[15px] w-[15px] shrink-0 text-muted-foreground" />
+        <p className="text-[12px] leading-[1.7] text-muted-foreground">
+          <b className="text-foreground">How Brand Outreach works:</b> a detector scans Meta Ad Library,
+          PR/news, and social signals every 6 hours for brands launching celebrity campaigns, then
+          enriches each with contact info and lists it here. <b className="text-foreground">Approve</b> a
+          lead and we generate a personalised pitch: email sends automatically, LinkedIn/Instagram DMs are
+          marked “Send manually” with the copy ready to paste. Log replies on the lead after you hear back.
+          <span className="mt-1 block text-[11px] leading-[1.6] text-faint">
+            Brand Outreach is standalone — it finds its own leads and isn’t fed by your Listening,
+            Campaigns, or Approvals data. Detection coverage depends on configured API keys (Meta Ad
+            Library, Twitter, Hunter); with none set, no new leads are found.
           </span>
-          <span className="block mt-1.5">
-            Brand Outreach is a <strong>standalone tool</strong> — it finds its own leads on a schedule and is
-            <strong> not fed by your Listening, Campaigns, or Approvals data</strong>.
-          </span>
-          <span className="block mt-1 text-xs text-muted-foreground">
-            Detection coverage depends on configured API keys (Meta Ad Library, Twitter, Hunter). With none set,
-            no new leads are found.
-          </span>
-        </AlertDescription>
-      </Alert>
+        </p>
+      </div>
 
-      {/* Stats */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      {/* Stats — design: 3px accent rail + tinted 28px icon tile, 26px value. */}
+      <div className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-4">
         {statCards.map((s) => (
-          <Card key={s.title}>
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">{s.title}</CardTitle>
-              <s.icon className={`h-4 w-4 ${s.color}`} />
-            </CardHeader>
-            <CardContent>
-              {statsLoading
-                ? <Skeleton className="h-8 w-16" />
-                : <p className="text-2xl font-bold">{s.value ?? 0}</p>}
-            </CardContent>
-          </Card>
+          <div
+            key={s.title}
+            className="relative overflow-hidden rounded-[14px] border border-border bg-card p-[18px] shadow-[0_8px_18px_-12px_rgba(0,0,0,.5)]"
+          >
+            <span className="absolute left-0 top-0 h-full w-[3px]" style={{ background: s.color }} />
+            <div className="flex items-center justify-between gap-2.5">
+              <span className="whitespace-nowrap text-[11px] font-medium leading-[1.3] text-muted-foreground">
+                {s.title}
+              </span>
+              <div
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px]"
+                style={{ background: s.tint }}
+              >
+                <s.icon className="h-[13px] w-[13px] shrink-0" style={{ color: s.color }} />
+              </div>
+            </div>
+            {statsLoading ? (
+              <Skeleton className="mt-2.5 h-[26px] w-16" />
+            ) : (
+              <div className="mt-2.5 text-[26px] font-bold leading-none tracking-[-0.01em]">
+                {s.value ?? 0}
+              </div>
+            )}
+          </div>
         ))}
       </div>
 
-      {/* Tabs + Filter */}
-      <div className="flex items-center justify-between gap-4 flex-wrap">
-        <ScrollableTabRow role="tablist" className="min-w-0 flex-1 -mb-px border-b border-border/50">
+      {/* Tabs + Filter — design: underline tabs sharing one bottom rule with the
+          signal filter, which sits on the same baseline at the right. */}
+      <div className="flex flex-wrap items-center justify-between gap-3.5 border-b border-border pb-3">
+        <ScrollableTabRow role="tablist" className="-mb-[13px] min-w-0 gap-[18px]">
           {tabs.map((tab) => (
             <button
               key={tab.key}
               role="tab"
               aria-selected={activeTab === tab.key}
               onClick={() => setActiveTab(tab.key)}
-              className={`shrink-0 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
+              className={`shrink-0 whitespace-nowrap border-b-2 px-1 py-[9px] text-[12.5px] font-medium leading-none transition-colors ${
                 activeTab === tab.key
-                  ? "border-primary text-foreground"
+                  ? "border-gold text-foreground"
                   : "border-transparent text-muted-foreground hover:text-foreground"
               }`}
             >
               {tab.label}
               {tab.count !== undefined && (
-                <span className="ml-1.5 text-xs text-muted-foreground">({tab.count})</span>
+                <span className="ml-1.5 text-faint">({tab.count})</span>
               )}
             </button>
           ))}
         </ScrollableTabRow>
 
         <Select value={signalFilter} onValueChange={setSignalFilter}>
-          <SelectTrigger className="w-full sm:w-40 h-8 text-xs">
+          <SelectTrigger className="h-8 w-full rounded-[8px] border-border2 bg-surface2 px-3 text-[12px] font-medium sm:w-40">
             <SelectValue placeholder="Signal type" />
           </SelectTrigger>
           <SelectContent>
@@ -687,19 +769,17 @@ function BrandLeadsPageInner() {
         )}
 
         {!leadsLoading && filteredLeads.length === 0 && (
-          <Card>
-            <CardContent className="flex flex-col items-center py-12 text-center">
-              <Zap className="h-10 w-10 text-muted-foreground/30 mb-3" />
-              <h3 className="text-sm font-semibold">
-                {activeTab === "pending" ? "No pending leads" : "No leads found"}
-              </h3>
-              <p className="text-xs text-muted-foreground mt-1 max-w-xs">
-                {activeTab === "pending"
-                  ? "All caught up! New leads are detected every 6 hours from news, ads, and social signals."
-                  : "No brand leads in the last 30 days. The detector runs every 6 hours."}
-              </p>
-            </CardContent>
-          </Card>
+          <div className="flex flex-col items-center rounded-[12px] border border-border bg-card px-4 py-12 text-center">
+            <Zap className="mb-3 h-10 w-10 text-muted-foreground/30" />
+            <h3 className="text-[13px] font-semibold">
+              {activeTab === "pending" ? "No pending leads" : "No leads found"}
+            </h3>
+            <p className="mt-1 max-w-xs text-[11.5px] leading-[1.5] text-muted-foreground">
+              {activeTab === "pending"
+                ? "All caught up! New leads are detected every 6 hours from news, ads, and social signals."
+                : "No brand leads in the last 30 days. The detector runs every 6 hours."}
+            </p>
+          </div>
         )}
 
         {filteredLeads.map((lead) => (
@@ -717,15 +797,19 @@ function BrandLeadsPageInner() {
 
       {/* Signal source breakdown */}
       {!leadsLoading && filteredLeads.length > 0 && (
-        <div className="flex items-center gap-3 pt-2 border-t border-border/50">
-          <span className="text-xs text-muted-foreground">Signal breakdown:</span>
+        <div className="flex flex-wrap items-center gap-2.5 border-t border-border pt-3">
+          <span className="text-[11px] leading-none text-muted-foreground">Signal breakdown:</span>
           {(["AD_LIBRARY", "PR_NEWS", "SOCIAL_MEDIA", "JOB_POSTING"] as const).map((type) => {
             const count = filteredLeads.filter((l) => l.signal.signalType === type).length;
             if (count === 0) return null;
             const meta = SIGNAL_META[type]!;
             return (
-              <span key={type} className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] font-medium ${meta.color}`}>
-                {meta.icon}
+              <span
+                key={type}
+                className="inline-flex items-center gap-[5px] rounded-[6px] px-[9px] py-0.5 text-[10.5px] font-medium leading-[1.6]"
+                style={{ background: `${meta.color}1f`, color: meta.color }}
+              >
+                <meta.Icon className="h-[11px] w-[11px]" />
                 {meta.label} · {count}
               </span>
             );

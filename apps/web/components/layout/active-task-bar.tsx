@@ -16,9 +16,9 @@ import {
 import { cn } from "~/lib/utils";
 
 const TYPE_CONFIG: Record<ActiveTask["type"], { icon: any; color: string; bg: string }> = {
-  compose: { icon: PenLine, color: "text-purple-500", bg: "bg-purple-500/10 border-purple-500/20" },
+  compose: { icon: PenLine, color: "text-gold", bg: "bg-tile border-[hsl(var(--accent-border))]" },
   generate: { icon: Sparkles, color: "text-blue-500", bg: "bg-blue-500/10 border-blue-500/20" },
-  repurpose: { icon: Repeat2, color: "text-cyan-500", bg: "bg-cyan-500/10 border-cyan-500/20" },
+  repurpose: { icon: Repeat2, color: "text-gold", bg: "bg-tile border-[hsl(var(--accent-border))]" },
   publish: { icon: Send, color: "text-green-500", bg: "bg-green-500/10 border-green-500/20" },
   image: { icon: ImagePlus, color: "text-orange-500", bg: "bg-orange-500/10 border-orange-500/20" },
 };

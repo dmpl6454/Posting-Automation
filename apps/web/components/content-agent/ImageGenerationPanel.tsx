@@ -550,8 +550,8 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
             className="flex w-full items-center justify-between"
           >
             <div className="flex items-center gap-2">
-              <Sparkles className="h-4 w-4 text-purple-500" />
-              <CardTitle className="text-base">AI Image Generation</CardTitle>
+              <Sparkles className="h-4 w-4 text-gold" />
+              <CardTitle>AI Image Generation</CardTitle>
             </div>
             {open ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
           </button>
@@ -640,7 +640,7 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
                               setCarouselCount(tpl.slides.length);
                             }
                           }}
-                          className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-all ${activeTemplateId === tpl.id ? "border-purple-500 bg-purple-500/10 text-purple-600 dark:text-purple-400" : "border-border text-muted-foreground hover:bg-muted/50"}`}
+                          className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-all ${activeTemplateId === tpl.id ? "border-[hsl(var(--accent-border))] bg-tile text-gold dark:text-gold" : "border-border text-muted-foreground hover:bg-muted/50"}`}
                         >
                           {tpl.name}
                           <span className="ml-1.5 text-[10px] opacity-60">{tpl.description}</span>
@@ -652,8 +652,8 @@ export function ImageGenerationPanel({ onAddToPost, postContent }: ImageGenerati
                     {perSlidePrompts.length > 0 && (
                       <div className="mt-2 space-y-2">
                         {perSlidePrompts.map((p, i) => (
-                          <div key={i} className="rounded-lg border border-purple-500/20 bg-purple-500/5 p-2">
-                            <p className="mb-1 text-[10px] font-semibold text-purple-600 dark:text-purple-400">
+                          <div key={i} className="rounded-lg border border-[hsl(var(--accent-border))] bg-tile p-2">
+                            <p className="mb-1 text-[10px] font-semibold text-gold dark:text-gold">
                               Slide {i + 1}
                             </p>
                             <textarea

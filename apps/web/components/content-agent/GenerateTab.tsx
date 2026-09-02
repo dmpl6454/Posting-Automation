@@ -115,7 +115,7 @@ export function GenerateTab() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Wand2 className="h-5 w-5 text-purple-500" />
+            <Wand2 className="h-5 w-5 text-gold" />
             Content Generator
           </CardTitle>
           <CardDescription>
@@ -219,7 +219,7 @@ export function GenerateTab() {
         <Card className="border-green-200 bg-green-50/30 dark:border-green-900 dark:bg-green-950/20">
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
-              <CardTitle className="flex items-center gap-2 text-base">
+              <CardTitle className="flex items-center gap-2">
                 <Sparkles className="h-4 w-4 text-green-600" />
                 Generated Content
               </CardTitle>

@@ -414,7 +414,7 @@ export default function PostDetailPage() {
           </p>
         </div>
         {post.aiGenerated && (
-          <Badge variant="outline" className="gap-1 text-purple-600 border-purple-200 bg-purple-50">
+          <Badge variant="outline" className="gap-1 text-gold border-[hsl(var(--accent-border))] bg-tile">
             AI Generated
           </Badge>
         )}
@@ -423,7 +423,7 @@ export default function PostDetailPage() {
       {/* Content Editor */}
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Content</CardTitle>
+          <CardTitle>Content</CardTitle>
           {!isEditable && (
             <CardDescription>
               This post is {post.status.toLowerCase()} and cannot be edited.
@@ -457,7 +457,7 @@ export default function PostDetailPage() {
       {/* Channel Targets */}
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Channels</CardTitle>
+          <CardTitle>Channels</CardTitle>
           <CardDescription>
             {post.targets.length} channel{post.targets.length !== 1 ? "s" : ""} targeted
           </CardDescription>
@@ -776,7 +776,7 @@ export default function PostDetailPage() {
       {post.mediaAttachments.length > 0 && (
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-base">
+            <CardTitle className="flex items-center gap-2">
               <ImageIcon className="h-4 w-4" />
               Media
             </CardTitle>
@@ -832,7 +832,7 @@ export default function PostDetailPage() {
       {/* Tags */}
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-base">
+          <CardTitle className="flex items-center gap-2">
             <Tag className="h-4 w-4" />
             Tags
           </CardTitle>
@@ -866,7 +866,7 @@ export default function PostDetailPage() {
       {/* Schedule */}
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-base">
+          <CardTitle className="flex items-center gap-2">
             <CalendarIcon className="h-4 w-4" />
             Schedule
           </CardTitle>

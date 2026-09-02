@@ -92,13 +92,13 @@ export default function AdminAgentsPage() {
             {toggleActive.isPending && toggleActive.variables?.agentId === row.id
               ? <Loader2 className="h-4 w-4 animate-spin" />
               : <Power
-                  className={`h-4 w-4 ${row.isActive ? "text-green-600" : "text-gray-400"}`}
+                  className={`h-4 w-4 ${row.isActive ? "text-[#5cb85c]" : "text-faint"}`}
                 />}
           </Button>
           <ConfirmDialog
             trigger={
               <Button variant="ghost" size="icon" title="Delete agent">
-                <Trash2 className="h-4 w-4 text-red-500" />
+                <Trash2 className="h-4 w-4 text-[#d9695f]" />
               </Button>
             }
             title="Delete agent"
@@ -113,8 +113,15 @@ export default function AdminAgentsPage() {
   ];
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Agents</h1>
+    <div className="w-full space-y-5">
+      {/* Admin-console page header: plain bold title + sub (this module does
+          not use the eyebrow/display headline the user-facing pages use). */}
+      <div className="min-w-0">
+        <h1 className="text-[29px] font-bold leading-[1.1] tracking-[-0.01em]">Agents</h1>
+        <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
+          Every autopilot agent across all workspaces.
+        </p>
+      </div>
       <DataTable
         columns={columns}
         data={(items as AgentRow[]) ?? []}

@@ -959,11 +959,81 @@ export const analyticsRouter = createRouter({
         }),
       ]);
 
+    /*
+     * Sparkline series for the four dashboard stat cards (design restyle).
+     *
+     * Each card shows a LIFETIME total, so the sparkline is CUMULATIVE — it is
+     * "how this number grew", not per-period activity. A per-period bar chart
+     * beside a lifetime total reads as a contradiction (the bars would fall to
+     * zero on a quiet week while the headline number stayed high).
+     *
+     * Six checkpoints, 5 days apart, ending now (a 25-day window). Deliberately
+     * ONE table scan per table with conditional aggregation rather than 6 counts
+     * per metric — an org can hold 100k+ posts, and this runs on every dashboard
+     * load. Do NOT rewrite this as a per-checkpoint subquery.
+     *
+     * `published` keys off COALESCE(publishedAt, updatedAt), matching the
+     * fallback every other query in this router uses for PUBLISHED rows whose
+     * publishedAt is NULL.
+     */
+    const cps = Array.from({ length: 6 }, (_, i) => new Date(Date.now() - (5 - i) * 5 * 24 * 60 * 60 * 1000));
+    const [c0, c1, c2, c3, c4, c5] = cps as [Date, Date, Date, Date, Date, Date];
+
+    const [postTrendRows, channelTrendRows] = await Promise.all([
+      ctx.prisma.$queryRaw<
+        Array<Record<string, bigint>>
+      >`
+        SELECT
+          count(*) FILTER (WHERE "createdAt" <= ${c0}) AS t0,
+          count(*) FILTER (WHERE "createdAt" <= ${c1}) AS t1,
+          count(*) FILTER (WHERE "createdAt" <= ${c2}) AS t2,
+          count(*) FILTER (WHERE "createdAt" <= ${c3}) AS t3,
+          count(*) FILTER (WHERE "createdAt" <= ${c4}) AS t4,
+          count(*) FILTER (WHERE "createdAt" <= ${c5}) AS t5,
+          count(*) FILTER (WHERE status = 'PUBLISHED' AND COALESCE("publishedAt", "updatedAt") <= ${c0}) AS p0,
+          count(*) FILTER (WHERE status = 'PUBLISHED' AND COALESCE("publishedAt", "updatedAt") <= ${c1}) AS p1,
+          count(*) FILTER (WHERE status = 'PUBLISHED' AND COALESCE("publishedAt", "updatedAt") <= ${c2}) AS p2,
+          count(*) FILTER (WHERE status = 'PUBLISHED' AND COALESCE("publishedAt", "updatedAt") <= ${c3}) AS p3,
+          count(*) FILTER (WHERE status = 'PUBLISHED' AND COALESCE("publishedAt", "updatedAt") <= ${c4}) AS p4,
+          count(*) FILTER (WHERE status = 'PUBLISHED' AND COALESCE("publishedAt", "updatedAt") <= ${c5}) AS p5,
+          count(*) FILTER (WHERE "aiGenerated" = true AND "createdAt" <= ${c0}) AS a0,
+          count(*) FILTER (WHERE "aiGenerated" = true AND "createdAt" <= ${c1}) AS a1,
+          count(*) FILTER (WHERE "aiGenerated" = true AND "createdAt" <= ${c2}) AS a2,
+          count(*) FILTER (WHERE "aiGenerated" = true AND "createdAt" <= ${c3}) AS a3,
+          count(*) FILTER (WHERE "aiGenerated" = true AND "createdAt" <= ${c4}) AS a4,
+          count(*) FILTER (WHERE "aiGenerated" = true AND "createdAt" <= ${c5}) AS a5
+        FROM "Post" WHERE "organizationId" = ${ctx.organizationId}
+      `,
+      ctx.prisma.$queryRaw<
+        Array<Record<string, bigint>>
+      >`
+        SELECT
+          count(*) FILTER (WHERE "createdAt" <= ${c0}) AS n0,
+          count(*) FILTER (WHERE "createdAt" <= ${c1}) AS n1,
+          count(*) FILTER (WHERE "createdAt" <= ${c2}) AS n2,
+          count(*) FILTER (WHERE "createdAt" <= ${c3}) AS n3,
+          count(*) FILTER (WHERE "createdAt" <= ${c4}) AS n4,
+          count(*) FILTER (WHERE "createdAt" <= ${c5}) AS n5
+        FROM "Channel" WHERE "organizationId" = ${ctx.organizationId} AND "isActive" = true
+      `,
+    ]);
+
+    // count() returns bigint over the wire; Number() it at the boundary so the
+    // tRPC payload is plain JSON (superjson would otherwise ship BigInt).
+    const series = (row: Record<string, bigint> | undefined, prefix: string) =>
+      Array.from({ length: 6 }, (_, i) => Number(row?.[`${prefix}${i}`] ?? 0));
+
     return {
       totalPosts,
       connectedChannels,
       published: publishedCount,
       aiGenerated: aiGeneratedCount,
+      trends: {
+        totalPosts: series(postTrendRows[0], "t"),
+        published: series(postTrendRows[0], "p"),
+        aiGenerated: series(postTrendRows[0], "a"),
+        connectedChannels: series(channelTrendRows[0], "n"),
+      },
     };
   }),
 

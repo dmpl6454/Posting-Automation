@@ -439,7 +439,7 @@ export default function SuperAgentPage() {
       >
         <div className="flex items-center justify-between border-b p-3">
           <div className="flex items-center gap-2">
-            <Zap className="h-4 w-4 text-violet-500" />
+            <Zap className="h-4 w-4 text-gold" />
             <h2 className="text-sm font-semibold">Conversations</h2>
           </div>
           <Button size="sm" variant="outline" className="h-7 gap-1 text-xs" onClick={handleNewChat}>
@@ -464,12 +464,12 @@ export default function SuperAgentPage() {
                     onClick={() => handleSelectThread(thread.id)}
                     className={cn(
                       "group flex w-full items-start gap-2.5 rounded-lg p-2.5 text-left transition-colors",
-                      isActive ? "bg-violet-100/60 dark:bg-violet-900/20" : "hover:bg-muted/60"
+                      isActive ? "bg-tile dark:bg-tile" : "hover:bg-muted/60"
                     )}
                   >
                     <div className={cn(
                       "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full",
-                      isActive ? "bg-violet-200 dark:bg-violet-800/40" : "bg-muted"
+                      isActive ? "bg-tile dark:bg-tile" : "bg-muted"
                     )}>
                       <MessageSquare className="h-3.5 w-3.5 text-muted-foreground" />
                     </div>
@@ -509,13 +509,16 @@ export default function SuperAgentPage() {
             <MessageSquare className="h-4 w-4" />
           </button>
           <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-violet-500 to-purple-600">
-              <Zap className="h-4 w-4 text-white" />
+            {/* Design: the agent mark is a GOLD tile with a near-black bolt.
+                It was a white bolt on `bg-tile` (#0F0F0E) — nearly invisible
+                against the new true-black surfaces. */}
+            <div className="pa-gold-glow flex h-8 w-8 items-center justify-center rounded-lg bg-gold">
+              <Zap className="h-4 w-4 text-[color:hsl(var(--gold-foreground))]" />
             </div>
             <div>
               <h1 className="text-sm font-semibold">Super Agent</h1>
               <p className="text-[11px] text-muted-foreground">
-                Your AI-powered platform operator — ask anything, execute any task
+                Your AI platform operator — ask anything, execute any task
               </p>
             </div>
           </div>
@@ -539,11 +542,14 @@ export default function SuperAgentPage() {
                is why this only showed up on real phones. */
             <div className="flex h-full flex-col items-center p-6">
               <div className="m-auto flex flex-col items-center gap-6">
-                <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-500 to-purple-600 shadow-lg">
-                  <Zap className="h-8 w-8 text-white" />
+                {/* Design: 64px gold mark with a soft accent halo ring. */}
+                <div className="flex h-16 w-16 items-center justify-center rounded-[18px] bg-gold shadow-[0_0_0_8px_hsl(var(--accent-gold)/0.12),0_20px_40px_-14px_hsl(var(--accent-gold)/0.5)]">
+                  <Zap className="h-7 w-7 text-[color:hsl(var(--gold-foreground))]" />
                 </div>
                 <div className="text-center">
-                  <h2 className="text-xl font-bold">What can I help you with?</h2>
+                  {/* Design: the welcome heading is the `.display` treatment at
+                      24px, not a plain bold — it is the one headline on this screen. */}
+                  <h2 className="display text-2xl leading-[1.15]">What can I help you with?</h2>
                   <p className="mt-1 max-w-md text-sm text-muted-foreground">
                     Tell me what you want in plain English. I can <strong>generate captions &amp; images</strong>,{" "}
                     <strong>attach your own photos or videos</strong> (use the paperclip below), and{" "}
@@ -554,7 +560,7 @@ export default function SuperAgentPage() {
                 {/* Connected channels — make it obvious where posts can go (audit clarity 2026-06-06) */}
                 <div className="flex max-w-md flex-wrap items-center justify-center gap-1.5">
                   {(channels ?? []).length === 0 ? (
-                    <a href="/dashboard/channels" className="text-xs font-medium text-violet-600 underline">
+                    <a href="/dashboard/channels" className="text-xs font-medium text-gold underline">
                       Connect a channel to start posting →
                     </a>
                   ) : (
@@ -588,7 +594,7 @@ export default function SuperAgentPage() {
                     <button
                       key={action}
                       onClick={() => handleSend(action)}
-                      className="rounded-xl border bg-muted/30 p-3 text-left text-sm transition-all hover:border-violet-300 hover:bg-muted/60"
+                      className="rounded-xl border bg-muted/30 p-3 text-left text-sm transition-all hover:border-[hsl(var(--accent-border))] hover:bg-muted/60"
                     >
                       {action}
                     </button>
@@ -608,7 +614,7 @@ export default function SuperAgentPage() {
                         ? "bg-foreground/10"
                         : msg.role === "system"
                           ? "bg-amber-100 dark:bg-amber-900/30"
-                          : "bg-gradient-to-br from-violet-500 to-purple-600"
+                          : "bg-tile"
                     )}
                   >
                     {msg.role === "user" ? (
@@ -616,14 +622,14 @@ export default function SuperAgentPage() {
                     ) : msg.role === "system" ? (
                       <AlertCircle className="h-4 w-4 text-amber-600" />
                     ) : (
-                      <Bot className="h-4 w-4 text-white" />
+                      <Bot className="h-4 w-4 text-gold" />
                     )}
                   </div>
                   <div
                     className={cn(
                       "max-w-[80%] rounded-2xl px-4 py-3",
                       msg.role === "user"
-                        ? "bg-violet-600 text-white"
+                        ? "bg-foreground text-background"
                         : msg.role === "system"
                           ? "bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800"
                           : "bg-muted/60"
@@ -655,7 +661,7 @@ export default function SuperAgentPage() {
                           ) : (
                             <Button
                               size="sm"
-                              className="h-6 gap-1 text-xs bg-violet-600 hover:bg-violet-700 text-white"
+                              className="h-6 gap-1 text-xs bg-foreground hover:opacity-[0.88] text-background"
                               onClick={() => executeAction(msg)}
                               disabled={executeActionMutation.isPending || executedActionIds.has(actionKey(msg))}
                             >
@@ -677,8 +683,10 @@ export default function SuperAgentPage() {
               {/* Streaming */}
               {streamingContent && (
                 <div className="flex gap-3">
-                  <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-violet-500 to-purple-600">
-                    <Bot className="h-4 w-4 text-white animate-pulse" />
+                  <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-tile">
+                    {/* text-gold, matching MessageBubble's bot avatar. `text-white`
+                        was invisible in LIGHT theme, where --tile is #EAE8E1. */}
+                    <Bot className="h-4 w-4 animate-pulse text-gold" />
                   </div>
                   <div className="max-w-[80%] rounded-2xl bg-muted/60 px-4 py-3">
                     <div className="whitespace-pre-wrap text-sm leading-relaxed">
@@ -691,8 +699,8 @@ export default function SuperAgentPage() {
 
               {isStreaming && !streamingContent && (
                 <div className="flex gap-3">
-                  <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-violet-500 to-purple-600">
-                    <Bot className="h-4 w-4 text-white" />
+                  <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-tile">
+                    <Bot className="h-4 w-4 text-gold" />
                   </div>
                   <div className="rounded-2xl bg-muted/60 px-4 py-3">
                     <div className="flex gap-1">
@@ -782,7 +790,7 @@ export default function SuperAgentPage() {
               <Button
                 onClick={() => handleSend()}
                 disabled={!input.trim() || isStreaming}
-                className="h-12 w-12 shrink-0 rounded-xl bg-violet-600 hover:bg-violet-700"
+                className="h-12 w-12 shrink-0 rounded-xl bg-foreground hover:opacity-[0.88]"
               >
                 {isStreaming ? (
                   <Loader2 className="h-5 w-5 animate-spin" />

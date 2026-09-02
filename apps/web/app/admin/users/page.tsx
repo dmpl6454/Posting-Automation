@@ -104,12 +104,12 @@ export default function AdminUsersPage() {
       cell: (row) => (
         <div className="flex gap-1">
           {row.isSuperAdmin && (
-            <Badge variant="outline" className="border-red-200 bg-red-100 text-red-700">
+            <Badge variant="outline" className="border-[rgba(217,105,95,0.3)] bg-[rgba(217,105,95,0.13)] text-[#d9695f]">
               super admin
             </Badge>
           )}
           {row.isBanned && (
-            <Badge variant="outline" className="border-red-200 bg-red-100 text-red-700">
+            <Badge variant="outline" className="border-[rgba(217,105,95,0.3)] bg-[rgba(217,105,95,0.13)] text-[#d9695f]">
               banned
             </Badge>
           )}
@@ -171,7 +171,7 @@ export default function AdminUsersPage() {
           >
             {toggleAdmin.isPending && toggleAdmin.variables?.userId === row.id
               ? <Loader2 className="h-4 w-4 animate-spin" />
-              : <Shield className={`h-4 w-4 ${row.isSuperAdmin ? "text-red-600" : ""}`} />}
+              : <Shield className={`h-4 w-4 ${row.isSuperAdmin ? "text-[#d9695f]" : ""}`} />}
           </Button>
           <Button
             variant="ghost"
@@ -182,7 +182,7 @@ export default function AdminUsersPage() {
           >
             {toggleBan.isPending && toggleBan.variables?.userId === row.id
               ? <Loader2 className="h-4 w-4 animate-spin" />
-              : <Ban className={`h-4 w-4 ${row.isBanned ? "text-red-600" : ""}`} />}
+              : <Ban className={`h-4 w-4 ${row.isBanned ? "text-[#d9695f]" : ""}`} />}
           </Button>
           <Button
             variant="ghost"
@@ -198,7 +198,7 @@ export default function AdminUsersPage() {
           <ConfirmDialog
             trigger={
               <Button variant="ghost" size="icon" title="Delete user">
-                <Trash2 className="h-4 w-4 text-red-500" />
+                <Trash2 className="h-4 w-4 text-[#d9695f]" />
               </Button>
             }
             title="Delete user"
@@ -213,8 +213,15 @@ export default function AdminUsersPage() {
   ];
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Users</h1>
+    <div className="w-full space-y-5">
+      {/* Admin-console page header: plain bold title + sub (this module does
+          not use the eyebrow/display headline the user-facing pages use). */}
+      <div className="min-w-0">
+        <h1 className="text-[29px] font-bold leading-[1.1] tracking-[-0.01em]">Users</h1>
+        <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
+          Everyone with an account, across all workspaces.
+        </p>
+      </div>
       <DataTable
         columns={columns}
         data={(items as UserRow[]) ?? []}

@@ -4,8 +4,6 @@ import { RequireAppAdmin } from "~/components/auth/require-app-admin";
 import { useState } from "react";
 import { trpc } from "~/lib/trpc/client";
 import { Button } from "~/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
-import { Badge } from "~/components/ui/badge";
 import { Skeleton } from "~/components/ui/skeleton";
 import { Switch } from "~/components/ui/switch";
 import { Input } from "~/components/ui/input";
@@ -27,7 +25,22 @@ import {
 } from "~/components/ui/dialog";
 import { ConfirmDialog } from "~/components/ui/confirm-dialog";
 import { Plus, Trash2, Pencil, Bot, Loader2, Play, Info } from "lucide-react";
-import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
+
+/**
+ * Design: each agent card takes one hue from the palette's group ramp, cycling
+ * by position — the same ramp the Channels, RSS and Short Links cards use, so
+ * a workspace reads as one system rather than eight unrelated colour schemes.
+ */
+const AGENT_ACCENTS = [
+  "#C9A356",
+  "#8a9a7e",
+  "#a17a5c",
+  "#6b7d9e",
+  "#b85c5c",
+  "#7e8a9a",
+  "#9a8a5c",
+  "#5c8a7e",
+] as const;
 
 const TONES = ["professional", "casual", "humorous", "formal", "inspiring"] as const;
 const FREQUENCIES = ["daily", "weekdays", "weekly", "custom"] as const;
@@ -151,30 +164,33 @@ function AutopilotAgentsPageInner() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <span className="text-sm text-muted-foreground">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <span className="text-[12.5px] leading-none text-muted-foreground">
           {(agents as any[])?.length ?? 0} agent{((agents as any[])?.length ?? 0) !== 1 ? "s" : ""}
         </span>
-        <Button className="gap-2" onClick={openCreate}>
-          <Plus className="h-4 w-4" />
+        <Button
+          className="pa-cta-gold h-[34px] gap-[7px] rounded-[9px] px-3.5 text-[12.5px] font-semibold"
+          onClick={openCreate}
+        >
+          <Plus className="h-[13px] w-[13px]" />
           New Agent
         </Button>
       </div>
 
-      <Alert>
-        <Info className="h-4 w-4" />
-        <AlertTitle>How Agents work</AlertTitle>
-        <AlertDescription>
-          Agents are reusable templates that drive Autopilot runs. Each agent has a persona, niche, topics,
-          tone, and a posting schedule. Toggle an agent Active to include it in the next pipeline run, or
-          click Run Now to generate immediately.
-        </AlertDescription>
-      </Alert>
+      {/* Design: a quiet surface-1 note rather than the Alert component. */}
+      <div className="flex items-start gap-3 rounded-[12px] border border-border bg-surface1 px-4 py-3.5">
+        <Info className="mt-px h-[15px] w-[15px] shrink-0 text-muted-foreground" />
+        <p className="text-[12px] leading-[1.6] text-muted-foreground">
+          <b className="text-foreground">How Agents work:</b> reusable templates that drive
+          Autopilot runs, each with a persona, niche, topics, tone, and posting schedule.
+          Toggle Active to include an agent in the next run, or Run Now to generate immediately.
+        </p>
+      </div>
 
       {isLoading ? (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
           {Array.from({ length: 3 }).map((_, i) => (
-            <Card key={i}><CardContent className="pt-6"><Skeleton className="h-24 w-full" /></CardContent></Card>
+            <Skeleton key={i} className="h-[210px] w-full rounded-[14px]" />
           ))}
         </div>
       ) : (agents as any[])?.length === 0 ? (
@@ -184,76 +200,113 @@ function AutopilotAgentsPageInner() {
           <p className="mt-1 text-sm text-muted-foreground">
             Create an agent to automate content generation.
           </p>
-          <Button className="mt-4 gap-2" onClick={openCreate}>
-            <Plus className="h-4 w-4" /> New Agent
+          <Button
+            className="pa-cta-gold mt-4 h-[34px] gap-[7px] rounded-[9px] px-3.5 text-[12.5px] font-semibold"
+            onClick={openCreate}
+          >
+            <Plus className="h-[13px] w-[13px]" /> New Agent
           </Button>
         </div>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {(agents as any[])?.map((agent: any) => (
-            <Card key={agent.id}>
-              <CardHeader className="flex flex-row items-start justify-between pb-2">
-                <div className="flex items-center gap-2 min-w-0">
-                  <Bot className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  <CardTitle className="truncate text-base">{agent.name}</CardTitle>
+        <div className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
+          {(agents as any[])?.map((agent: any, idx: number) => {
+            const accent = AGENT_ACCENTS[idx % AGENT_ACCENTS.length]!;
+            return (
+              <div
+                key={agent.id}
+                className="rounded-[14px] border border-border bg-card p-[18px] shadow-[0_8px_18px_-12px_rgba(0,0,0,.5)] transition-transform hover:-translate-y-0.5"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-[9px]">
+                    <div
+                      className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[9px] border"
+                      style={{ background: `${accent}22`, borderColor: `${accent}55` }}
+                    >
+                      <Bot className="h-3.5 w-3.5" style={{ color: accent }} />
+                    </div>
+                    <p className="truncate text-[13.5px] font-semibold leading-[1.3]">
+                      {agent.name}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center">
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-6 w-6 rounded-[6px] text-muted-foreground hover:bg-hover hover:text-foreground"
+                      title="Run Now"
+                      disabled={runNowMutation.isPending}
+                      onClick={() => runNowMutation.mutate({ id: agent.id })}
+                    >
+                      <Play className="h-3 w-3" />
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-6 w-6 rounded-[6px] text-muted-foreground hover:bg-hover hover:text-foreground"
+                      aria-label={`Edit ${agent.name}`}
+                      onClick={() => openEdit(agent)}
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-6 w-6 rounded-[6px] text-faint hover:bg-hover hover:text-[#c96b56]"
+                      aria-label={`Delete ${agent.name}`}
+                      disabled={deleteMutation.isPending}
+                      onClick={() => setPendingDelete(agent)}
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </Button>
+                  </div>
                 </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    className="h-7 w-7 text-muted-foreground hover:text-green-600"
-                    title="Run Now"
-                    disabled={runNowMutation.isPending}
-                    onClick={() => runNowMutation.mutate({ id: agent.id })}
-                  >
-                    <Play className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button size="icon" variant="ghost" className="h-7 w-7" aria-label={`Edit ${agent.name}`} onClick={() => openEdit(agent)}>
-                    <Pencil className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                    aria-label={`Delete ${agent.name}`}
-                    disabled={deleteMutation.isPending}
-                    onClick={() => setPendingDelete(agent)}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
+
+                <div className="mt-3 flex flex-wrap gap-[5px]">
+                  <span className="rounded-[5px] border border-border2 px-2 py-0.5 text-[10px] font-medium leading-[1.6] text-muted-foreground">
+                    {agent.niche || "No niche"}
+                  </span>
+                  <span className="rounded-[5px] bg-tile px-2 py-0.5 text-[10px] font-medium leading-[1.6] text-muted-foreground">
+                    {agent.tone}
+                  </span>
+                  <span className="rounded-[5px] bg-tile px-2 py-0.5 text-[10px] font-medium leading-[1.6] text-muted-foreground">
+                    {agent.aiProvider}
+                  </span>
                 </div>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="flex flex-wrap gap-1">
-                  <Badge variant="outline" className="text-xs">{agent.niche || "No niche"}</Badge>
-                  <Badge variant="secondary" className="text-xs">{agent.tone}</Badge>
-                  <Badge variant="secondary" className="text-xs">{agent.aiProvider}</Badge>
-                </div>
+
                 {agent.topics?.length > 0 && (
-                  <div className="flex flex-wrap gap-1">
+                  <div className="mt-2 flex flex-wrap gap-[5px]">
                     {agent.topics.slice(0, 3).map((t: string) => (
-                      <span key={t} className="text-[10px] bg-muted px-1.5 py-0.5 rounded">{t}</span>
+                      <span
+                        key={t}
+                        className="rounded-[4px] bg-tile px-1.5 py-[1.5px] text-[9.5px] leading-[1.6] text-faint"
+                      >
+                        {t}
+                      </span>
                     ))}
                     {agent.topics.length > 3 && (
-                      <span className="text-[10px] text-muted-foreground">+{agent.topics.length - 3} more</span>
+                      <span className="text-[9.5px] leading-[1.6] text-faint">
+                        +{agent.topics.length - 3} more
+                      </span>
                     )}
                   </div>
                 )}
-                <div className="flex items-center justify-between text-xs text-muted-foreground">
+
+                <div className="mt-3 flex items-center justify-between text-[11px] leading-none text-faint">
                   <span>{agent.postsPerDay} posts/day · {agent.frequency}</span>
                   <span>{agent._count?.runs ?? 0} runs</span>
                 </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground">Active</span>
+
+                <div className="mt-3 flex items-center justify-between border-t border-border pt-3">
+                  <span className="text-[11.5px] leading-none text-muted-foreground">Active</span>
                   <Switch
                     checked={agent.isActive}
                     disabled={toggleMutation.isPending && toggleMutation.variables?.id === agent.id}
                     onCheckedChange={(v) => toggleMutation.mutate({ id: agent.id, isActive: v })}
                   />
                 </div>
-              </CardContent>
-            </Card>
-          ))}
+              </div>
+            );
+          })}
         </div>
       )}
 

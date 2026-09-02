@@ -96,7 +96,7 @@ function OrganizationStep() {
 function ChannelStep() {
   const platforms = [
     { name: "Twitter / X", color: "bg-black dark:bg-white dark:text-black" },
-    { name: "Instagram", color: "bg-gradient-to-br from-purple-500 to-pink-500" },
+    { name: "Instagram", color: "bg-gradient-to-br  to-pink-500" },
     { name: "Facebook", color: "bg-blue-600" },
     { name: "LinkedIn", color: "bg-blue-700" },
     { name: "YouTube", color: "bg-red-600" },

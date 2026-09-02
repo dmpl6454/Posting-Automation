@@ -80,7 +80,7 @@ export default function AdminChannelsPage() {
     {
       header: "Refresh Token",
       cell: (row) => (
-        <span className={`text-sm ${row.hasRefreshToken ? "text-green-600" : "text-gray-400"}`}>
+        <span className={`text-sm ${row.hasRefreshToken ? "text-[#5cb85c]" : "text-faint"}`}>
           {row.hasRefreshToken ? "Yes" : "No"}
         </span>
       ),
@@ -101,7 +101,7 @@ export default function AdminChannelsPage() {
           <ConfirmDialog
             trigger={
               <Button variant="ghost" size="icon" title="Disconnect channel">
-                <Unplug className="h-4 w-4 text-red-500" />
+                <Unplug className="h-4 w-4 text-[#d9695f]" />
               </Button>
             }
             title="Disconnect channel"
@@ -116,8 +116,15 @@ export default function AdminChannelsPage() {
   ];
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Channels</h1>
+    <div className="w-full space-y-5">
+      {/* Admin-console page header: plain bold title + sub (this module does
+          not use the eyebrow/display headline the user-facing pages use). */}
+      <div className="min-w-0">
+        <h1 className="text-[29px] font-bold leading-[1.1] tracking-[-0.01em]">Channels</h1>
+        <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
+          Every connected social account across all workspaces.
+        </p>
+      </div>
       <DataTable
         columns={columns}
         data={(items as ChannelRow[]) ?? []}

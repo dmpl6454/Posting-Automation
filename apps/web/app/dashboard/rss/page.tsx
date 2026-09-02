@@ -33,7 +33,21 @@ import {
   ExternalLink,
   Loader2,
   Clock,
+  Zap,
+  Link2,
+  FileText,
+  AlertTriangle,
 } from "lucide-react";
+
+/**
+ * Design: each feed card's glyph tile takes the next colour from the shared
+ * accent palette (the same one the channel groups use), so a list of feeds is
+ * scannable by colour instead of a column of identical orange squares.
+ */
+const FEED_ACCENTS = [
+  "#C9A356", "#8a9a7e", "#a17a5c", "#6b7d9e",
+  "#b85c5c", "#7e8a9a", "#9a8a5c", "#5c8a7e",
+] as const;
 
 // Fix #44: removed getOrgId() localStorage helper — backend scopes by session
 
@@ -116,17 +130,43 @@ function RssPageInner() {
 
   return (
     <div className="space-y-8">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+      {/* Page header — design pattern: eyebrow, display headline, sub, then a
+          stat cluster and ONE gold primary CTA. */}
+      <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
         <div className="min-w-0">
-          <h1 className="text-2xl font-bold tracking-tight">RSS Feeds</h1>
-          <p className="text-muted-foreground">
+          <span className="eyebrow">RSS Feeds</span>
+          <h1 className="display mt-2.5 text-[30px] leading-[1.1]">
+            Turn feeds into posts.
+          </h1>
+          <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
             Automate content from RSS feeds into social media posts
           </p>
         </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-3">
+          <div className="flex h-9 items-center gap-3.5 rounded-[9px] border border-border bg-card px-4">
+            <div>
+              <div className="text-[17px] font-semibold leading-none">{feeds?.length ?? 0}</div>
+              <div className="mt-0.5 whitespace-nowrap text-[9px] leading-none text-faint">feeds</div>
+            </div>
+            <span className="h-5 w-px bg-border2" />
+            <div>
+              <div className="text-[17px] font-semibold leading-none text-gold">
+                {feeds?.filter((f) => f.isActive).length ?? 0}
+              </div>
+              <div className="mt-0.5 whitespace-nowrap text-[9px] leading-none text-faint">active</div>
+            </div>
+            <span className="h-5 w-px bg-border2" />
+            <div>
+              <div className="text-[17px] font-semibold leading-none">
+                {feeds?.reduce((n, f) => n + (f._count?.entries ?? 0), 0) ?? 0}
+              </div>
+              <div className="mt-0.5 whitespace-nowrap text-[9px] leading-none text-faint">entries</div>
+            </div>
+          </div>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
-            <Button className="shrink-0 gap-2">
-              <Plus className="h-4 w-4" />
+            <Button className="pa-cta-gold h-9 shrink-0 gap-[7px] rounded-[9px] px-3.5 text-[12.5px] font-semibold">
+              <Plus className="h-3.5 w-3.5" />
               Add Feed
             </Button>
           </DialogTrigger>
@@ -246,6 +286,7 @@ function RssPageInner() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+        </div>
       </div>
 
       {/* Feed List */}
@@ -266,11 +307,12 @@ function RssPageInner() {
           </CardContent>
         </Card>
       ) : (
-        <div className="space-y-3">
-          {feeds.map((feed: any) => (
+        <div className="space-y-2.5">
+          {feeds.map((feed: any, i: number) => (
             <FeedCard
               key={feed.id}
               feed={feed}
+              accent={FEED_ACCENTS[i % FEED_ACCENTS.length]!}
               isExpanded={expandedFeed === feed.id}
               onToggleExpand={() =>
                 setExpandedFeed(expandedFeed === feed.id ? null : feed.id)
@@ -292,6 +334,7 @@ function RssPageInner() {
 
 function FeedCard({
   feed,
+  accent,
   isExpanded,
   onToggleExpand,
   onCheckNow,
@@ -299,86 +342,94 @@ function FeedCard({
   isCheckingNow,
 }: {
   feed: any;
+  accent: string;
   isExpanded: boolean;
   onToggleExpand: () => void;
   onCheckNow: () => void;
   onDelete: () => void;
   isCheckingNow: boolean;
 }) {
+  /* Design: the three actions are ONE bordered surface-1 pill of 23px buttons,
+     not three loose ghost buttons — that grouping is what keeps the row from
+     reading as scattered icons. */
+  const actionBtn =
+    "flex h-[23px] w-[23px] items-center justify-center rounded-[6px] text-muted-foreground transition-colors hover:bg-hover hover:text-foreground disabled:opacity-40";
+
   return (
-    <Card>
-      <CardContent className="p-4">
-        <div className="flex items-start gap-3 sm:gap-4">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-orange-100 text-orange-600 dark:bg-orange-950 dark:text-orange-400">
-            <Rss className="h-5 w-5" />
+    <Card className="px-4 py-3.5 shadow-[0_6px_14px_-10px_rgba(0,0,0,.5)] transition-[border-color,transform,box-shadow] hover:-translate-y-px hover:border-[hsl(var(--accent-border))] hover:shadow-[0_10px_20px_-12px_rgba(0,0,0,.6)]">
+      <div>
+        <div className="flex items-start gap-3">
+          {/* 34px tile tinted with this feed's accent (12% fill / 33% border). */}
+          <div
+            className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-[10px] border"
+            style={{ backgroundColor: `${accent}22`, borderColor: `${accent}55` }}
+          >
+            <Rss className="h-[15px] w-[15px]" style={{ color: accent }} />
           </div>
           <div className="min-w-0 flex-1">
-            {/* Row 1: name + action buttons */}
+            {/* Row 1: name + grouped action pill */}
             <div className="flex items-center gap-2">
-              <p className="min-w-0 flex-1 truncate font-medium">{feed.name}</p>
-              <div className="flex shrink-0 items-center gap-0.5">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8"
-                  onClick={onCheckNow}
-                  disabled={isCheckingNow}
-                  title="Check Now"
-                >
-                  <RefreshCw className={`h-4 w-4 ${isCheckingNow ? "animate-spin" : ""}`} />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 text-destructive hover:text-destructive"
+              <p className="min-w-0 flex-1 truncate text-[13px] font-semibold leading-[1.3] tracking-[-0.01em]">
+                {feed.name}
+              </p>
+              <div className="flex shrink-0 items-center gap-px rounded-[8px] border border-border bg-surface1 p-0.5">
+                <button type="button" className={actionBtn} onClick={onCheckNow} disabled={isCheckingNow} title="Check Now">
+                  <RefreshCw className={`h-3 w-3 ${isCheckingNow ? "animate-spin" : ""}`} />
+                </button>
+                <button
+                  type="button"
+                  className={`${actionBtn} hover:text-[#c96b56]`}
                   onClick={onDelete}
                   title="Delete Feed"
                 >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8"
-                  onClick={onToggleExpand}
-                  title={isExpanded ? "Collapse" : "Expand"}
-                >
-                  {isExpanded ? (
-                    <ChevronUp className="h-4 w-4" />
-                  ) : (
-                    <ChevronDown className="h-4 w-4" />
-                  )}
-                </Button>
+                  <Trash2 className="h-3 w-3" />
+                </button>
+                <button type="button" className={actionBtn} onClick={onToggleExpand} title={isExpanded ? "Collapse" : "Expand"}>
+                  {isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                </button>
               </div>
             </div>
 
-            {/* Row 2: status badges */}
-            <div className="mt-1 flex flex-wrap items-center gap-1.5">
-              <Badge variant={feed.isActive ? "default" : "secondary"} className="text-[10px]">
+            {/* Row 2: status, auto-post and the URL — all chips on one line. The
+                URL used to be its own full-width row of plain text. */}
+            <div className="mt-[5px] flex flex-wrap items-center gap-1.5">
+              <span
+                className={`flex shrink-0 items-center rounded-full px-[9px] py-0.5 text-[9.5px] font-semibold leading-[1.6] ${
+                  feed.isActive
+                    ? "border border-[hsl(var(--accent-border))] bg-gold/[0.12] text-gold"
+                    : "bg-tile text-muted-foreground"
+                }`}
+              >
                 {feed.isActive ? "Active" : "Paused"}
-              </Badge>
+              </span>
               {feed.autoPost && (
-                <Badge variant="outline" className="text-[10px]">
+                <span className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-[5px] bg-tile px-[7px] py-[1.5px] text-[9.5px] font-medium leading-[1.6] text-muted-foreground">
+                  <Zap className="h-[9px] w-[9px] text-gold" />
                   Auto-Post
-                </Badge>
+                </span>
               )}
+              <span className="inline-flex max-w-[260px] items-center gap-[5px] overflow-hidden truncate rounded-[5px] border border-border bg-surface1 px-2 py-[1.5px] font-mono text-[10px] leading-[1.6] text-muted-foreground">
+                <Link2 className="h-[9px] w-[9px] shrink-0 text-faint" />
+                {feed.url}
+              </span>
             </div>
 
-            {/* Row 3: url */}
-            <p className="mt-1 truncate text-xs text-muted-foreground">{feed.url}</p>
-
-            {/* Row 4: meta */}
-            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-              <span>{feed._count?.entries ?? 0} entries</span>
-              <span className="flex items-center gap-1">
-                <Clock className="h-3 w-3 shrink-0" />
+            {/* Row 3: meta */}
+            <div className="mt-[7px] flex flex-wrap items-center gap-x-3 gap-y-1 text-[10.5px] leading-[1.4] text-faint">
+              <span className="flex items-center gap-[5px]">
+                <FileText className="h-[11px] w-[11px] shrink-0" />
+                {feed._count?.entries ?? 0} entries
+              </span>
+              <span className="flex items-center gap-[5px]">
+                <Clock className="h-[11px] w-[11px] shrink-0" />
                 {feed.lastCheckedAt
                   ? `Checked ${new Date(feed.lastCheckedAt).toLocaleDateString()}`
                   : "Never checked"}
               </span>
               {feed.lastSyncStatus === "FAILED" && (
-                <span className="text-red-600" title={feed.lastSyncError ?? ""}>
-                  ⚠ Last sync failed{feed.lastSyncError ? `: ${feed.lastSyncError.slice(0, 80)}` : ""}
+                <span className="flex items-center gap-[5px] text-[#e0a458]" title={feed.lastSyncError ?? ""}>
+                  <AlertTriangle className="h-[11px] w-[11px] shrink-0" />
+                  Last sync failed{feed.lastSyncError ? `: ${feed.lastSyncError.slice(0, 80)}` : ""}
                 </span>
               )}
             </div>
@@ -386,7 +437,7 @@ function FeedCard({
         </div>
 
         {isExpanded && <FeedEntries feedId={feed.id} />}
-      </CardContent>
+      </div>
     </Card>
   );
 }

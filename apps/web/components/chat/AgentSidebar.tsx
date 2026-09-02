@@ -55,7 +55,7 @@ export function AgentSidebar({
       {/* Header */}
       <div className="flex items-center justify-between border-b p-4">
         <div className="flex items-center gap-2">
-          <Bot className="h-5 w-5 text-purple-500" />
+          <Bot className="h-5 w-5 text-gold" />
           <h2 className="font-semibold">AI Agents</h2>
         </div>
         <Button
@@ -99,12 +99,12 @@ export function AgentSidebar({
                     className={cn(
                       "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full",
                       thread.agent
-                        ? "bg-purple-100 dark:bg-purple-900/30"
+                        ? "bg-tile dark:bg-tile"
                         : "bg-muted"
                     )}
                   >
                     {thread.agent ? (
-                      <Bot className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+                      <Bot className="h-4 w-4 text-gold dark:text-gold" />
                     ) : (
                       <MessageSquare className="h-4 w-4 text-muted-foreground" />
                     )}

@@ -27,7 +27,6 @@ import {
   Trash2,
   ChevronDown,
   ChevronRight,
-  Users,
   Pencil,
   X,
   Check,
@@ -630,10 +629,13 @@ export default function ChannelsPage() {
       )}
 
       {/* Header */}
-      <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
         <div className="min-w-0">
-          <h1 className="text-2xl font-bold tracking-tight">Channels</h1>
-          <p className="text-muted-foreground">
+          <span className="eyebrow">Channels</span>
+          <h1 className="display mt-2.5 text-[30px] leading-[1.1]">
+            Every account, one place.
+          </h1>
+          <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
             Connect and manage the social media accounts in this workspace
           </p>
         </div>
@@ -653,14 +655,28 @@ export default function ChannelsPage() {
               )}
               Refresh logos
             </Button>
+            {/* Design: a bordered box holding two figures split by a divider. */}
             <div
-              className="text-right"
+              className="flex h-9 flex-none items-center gap-3.5 rounded-[9px] border border-border bg-card px-4"
               title="Counts reflect only the active workspace"
             >
-              <p className="text-2xl font-bold">{totalChannels}</p>
-              <p className="text-xs text-muted-foreground">
-                {activeChannels} active in this workspace
-              </p>
+              <div>
+                <div className="text-[17px] font-semibold leading-none">
+                  {totalChannels}
+                </div>
+                <div className="mt-0.5 whitespace-nowrap text-[9px] leading-none text-faint">
+                  channels
+                </div>
+              </div>
+              <span className="h-5 w-px bg-border2" />
+              <div>
+                <div className="text-[17px] font-semibold leading-none text-gold">
+                  {activeChannels}
+                </div>
+                <div className="mt-0.5 whitespace-nowrap text-[9px] leading-none text-faint">
+                  active
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -764,27 +780,20 @@ export default function ChannelsPage() {
                     className="flex min-w-0 flex-1 items-center gap-2.5 text-left sm:gap-4"
                   >
                   <PlatformIcon platform={platform} size="lg" />
+                  {/* Design: title, then ONE muted meta line —
+                      "{description} · {n} accounts · {n} active" — instead of
+                      pill badges beside the name. */}
                   <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                      <h3 className="text-base font-semibold">
-                        {info?.name ?? platform}
-                      </h3>
-                      <Badge variant="secondary" className="shrink-0 text-xs">
-                        <Users className="mr-1 h-3 w-3" />
-                        {platformChannels.length}{" "}
-                        {platformChannels.length === 1
-                          ? "account"
-                          : "accounts"}
-                      </Badge>
-                      <Badge
-                        variant="outline"
-                        className="shrink-0 text-[10px] text-green-600"
-                      >
-                        {activeCount} active
-                      </Badge>
-                    </div>
-                    <p className="truncate text-sm text-muted-foreground">
+                    <h3 className="text-[13.5px] font-medium leading-[1.2]">
+                      {info?.name ?? platform}
+                    </h3>
+                    <p className="mt-1 truncate text-[12px] leading-[1.4] text-muted-foreground">
                       {info?.description ?? "Social media platform"}
+                      {" · "}
+                      {platformChannels.length}{" "}
+                      {platformChannels.length === 1 ? "account" : "accounts"}
+                      {" · "}
+                      {activeCount} active
                     </p>
                   </div>
 
@@ -1407,7 +1416,7 @@ export default function ChannelsPage() {
 
               {/* Telegram-specific: Detect chats button + picker */}
               {tokenDialogPlatform.features?.chatDetect && (
-                <div className="space-y-2 rounded-md border bg-sky-500/5 p-3">
+                <div className="space-y-2 rounded-md border bg-tile p-3">
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-sm font-medium">Detect chats your bot is in</p>
                     <Button

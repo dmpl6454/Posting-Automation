@@ -120,7 +120,7 @@ export default function AdminOrgsPage() {
           <ConfirmDialog
             trigger={
               <Button variant="ghost" size="icon" title="Delete organization">
-                <Trash2 className="h-4 w-4 text-red-500" />
+                <Trash2 className="h-4 w-4 text-[#d9695f]" />
               </Button>
             }
             title="Delete organization"
@@ -135,8 +135,15 @@ export default function AdminOrgsPage() {
   ];
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Organizations</h1>
+    <div className="w-full space-y-5">
+      {/* Admin-console page header: plain bold title + sub (this module does
+          not use the eyebrow/display headline the user-facing pages use). */}
+      <div className="min-w-0">
+        <h1 className="text-[29px] font-bold leading-[1.1] tracking-[-0.01em]">Organizations</h1>
+        <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
+          Every workspace on the platform, with its plan and usage.
+        </p>
+      </div>
       <DataTable
         columns={columns}
         data={(items as OrgRow[]) ?? []}

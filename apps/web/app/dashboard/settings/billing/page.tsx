@@ -2,11 +2,8 @@
 import { RequireAppAdmin } from "~/components/auth/require-app-admin";
 
 import { trpc } from "~/lib/trpc/client";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
-import { Badge } from "~/components/ui/badge";
 import { Skeleton } from "~/components/ui/skeleton";
-import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { useToast } from "~/hooks/use-toast";
 import { CreditCard, CheckCircle, Zap, Info } from "lucide-react";
 
@@ -31,153 +28,176 @@ function BillingPageInner() {
 
   if (isLoading) {
     return (
-      <div className="w-full space-y-6">
+      <div className="w-full space-y-5">
         <Skeleton className="h-8 w-48" />
-        <Skeleton className="h-32 rounded-xl" />
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {[1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-64 rounded-xl" />)}
+        <Skeleton className="h-[90px] rounded-[14px]" />
+        <div className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-4">
+          {[1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-64 rounded-[14px]" />)}
         </div>
       </div>
     );
   }
 
   return (
-    <div className="w-full space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Billing</h1>
-        <p className="text-muted-foreground">Manage your subscription and billing</p>
+    /* Design stacks sections on 20px, not 24px. */
+    <div className="w-full space-y-5">
+      {/* Page header — design pattern (eyebrow, display headline, sub). */}
+      <div className="min-w-0">
+        <span className="eyebrow">Billing</span>
+        <h1 className="display mt-2.5 text-[30px] leading-[1.1]">
+          Keep the lights on.
+        </h1>
+        <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
+          Manage your subscription and payments
+        </p>
       </div>
 
-      <Alert>
-        <Info className="h-4 w-4" />
-        <AlertTitle>How Billing works</AlertTitle>
-        <AlertDescription>
+      {/* Design: a quiet surface-1 note, not the Alert component's framing. */}
+      <div className="flex items-start gap-3 rounded-[12px] border border-border bg-surface1 px-4 py-3.5">
+        <Info className="mt-px h-[15px] w-[15px] shrink-0 text-muted-foreground" />
+        <p className="text-[12px] leading-[1.65] text-muted-foreground">
+          {/* The no-customer copy used to promise the button would "appear
+              here" once subscribed. It is on screen now (disabled), so that
+              sentence would contradict what the reader is looking at. */}
           {currentPlan?.stripeCustomerId
             ? `Your subscription is managed through Stripe. Click "Manage Billing" to update your card, change plans, or download invoices. Plan changes take effect immediately; downgrades are prorated automatically.`
-            : `Your subscription is managed through Stripe. Choose a paid plan below to start a subscription. Once subscribed, a "Manage Billing" button will appear here to update your card, change plans, or download invoices.`}
-        </AlertDescription>
-      </Alert>
+            : `Your subscription is managed through Stripe. Choose a paid plan below to start a subscription — "Manage Billing" unlocks then, for updating your card, changing plans, or downloading invoices.`}
+        </p>
+      </div>
 
       {/* Current Plan */}
-      <Card>
-        <CardContent className="p-6">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div className="rounded-lg bg-primary/10 p-3">
-                <CreditCard className="h-6 w-6 text-primary" />
-              </div>
-              <div>
-                <p className="text-sm text-muted-foreground">Current Plan</p>
-                <p className="text-2xl font-bold">{currentPlan?.planConfig?.name || "Free"}</p>
-              </div>
-            </div>
-            {currentPlan?.stripeCustomerId && (
-              <Button
-                variant="outline"
-                onClick={() => createPortal.mutate()}
-                disabled={createPortal.isPending}
-              >
-                Manage Billing
-              </Button>
-            )}
+      <div className="flex flex-wrap items-center justify-between gap-4 rounded-[14px] border border-border bg-card p-[22px]">
+        <div className="flex items-center gap-3.5">
+          <div className="flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-[12px] bg-gold/[0.12]">
+            <CreditCard className="h-5 w-5 text-gold" />
           </div>
-        </CardContent>
-      </Card>
+          <div>
+            <p className="text-[11.5px] leading-[1.3] text-muted-foreground">Current Plan</p>
+            <p className="mt-[3px] text-[20px] font-bold leading-[1.2]">
+              {currentPlan?.planConfig?.name || "Free"}
+            </p>
+          </div>
+        </div>
+        {/* The design keeps this button in the card at all times, so the row
+            never changes shape. It only WORKS once the org has a Stripe
+            customer, though — `billing.createPortalSession` opens that
+            customer's portal and there is nothing to open before the first
+            subscription — so without one it renders disabled with the reason,
+            rather than vanishing (the card then looked unfinished) or lying
+            about what it can do. */}
+        <Button
+          variant="outline"
+          className="h-9 shrink-0 rounded-[9px] border-border2 px-[15px] text-[12.5px] font-medium hover:bg-hover disabled:opacity-40"
+          title={
+            currentPlan?.stripeCustomerId
+              ? "Update your card, change plan, or download invoices"
+              : "Available once you start a subscription below"
+          }
+          onClick={() => currentPlan?.stripeCustomerId && createPortal.mutate()}
+          disabled={!currentPlan?.stripeCustomerId || createPortal.isPending}
+        >
+          Manage Billing
+        </Button>
+      </div>
 
       {/* Fix #93: Payment Method (display only — updates via Stripe portal) */}
       {currentPlan?.stripeCustomerId && (
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">Payment Method</CardTitle>
-            <CardDescription>
-              Card on file with Stripe. Click Manage Billing above to update.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {paymentMethod ? (
-              <div className="flex items-center gap-3">
-                <div className="rounded-md border bg-muted px-3 py-1.5 text-xs font-semibold uppercase tracking-wide">
-                  {paymentMethod.brand}
-                </div>
-                <p className="text-sm">
-                  •••• {paymentMethod.last4}
-                  <span className="ml-3 text-muted-foreground">
-                    expires {String(paymentMethod.expMonth).padStart(2, "0")}/
-                    {paymentMethod.expYear}
-                  </span>
-                </p>
-              </div>
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                No card on file. Choose a paid plan below to add one at checkout.
+        <div className="rounded-[14px] border border-border bg-card p-[22px]">
+          <h2 className="text-[14.5px] font-semibold leading-[1.2]">Payment Method</h2>
+          <p className="mt-[5px] text-[12px] leading-[1.5] text-muted-foreground">
+            Card on file with Stripe. Click Manage Billing above to update.
+          </p>
+          {paymentMethod ? (
+            <div className="mt-4 flex items-center gap-3">
+              <span className="rounded-[6px] border border-border2 bg-tile px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                {paymentMethod.brand}
+              </span>
+              <p className="text-[12.5px] leading-none">
+                •••• {paymentMethod.last4}
+                <span className="ml-3 text-muted-foreground">
+                  expires {String(paymentMethod.expMonth).padStart(2, "0")}/
+                  {paymentMethod.expYear}
+                </span>
               </p>
-            )}
-          </CardContent>
-        </Card>
+            </div>
+          ) : (
+            <p className="mt-4 text-[12.5px] leading-[1.5] text-muted-foreground">
+              No card on file. Choose a paid plan below to add one at checkout.
+            </p>
+          )}
+        </div>
       )}
 
       {/* Plans Grid */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-4">
         {plans?.map((plan) => {
           const isCurrent = currentPlan?.plan === plan.type;
           return (
-            <Card
+            <div
               key={plan.type}
-              className={`flex flex-col ${isCurrent ? "border-primary ring-1 ring-primary" : ""}`}
+              className={`flex flex-col rounded-[14px] border bg-card p-5 ${
+                isCurrent ? "border-gold" : "border-border"
+              }`}
             >
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-base">{plan.name}</CardTitle>
-                  {isCurrent && <Badge>Current</Badge>}
-                </div>
-                <div className="mt-1">
-                  <span className="text-3xl font-bold">${plan.priceMonthly}</span>
-                  <span className="text-sm text-muted-foreground">/mo</span>
-                </div>
-              </CardHeader>
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-[14.5px] font-semibold leading-[1.2]">{plan.name}</h2>
+                {isCurrent && (
+                  <span className="pa-gold-glow shrink-0 rounded-full bg-gold px-[9px] py-0.5 text-[10px] font-bold leading-[1.6] text-[hsl(var(--gold-foreground))]">
+                    Current
+                  </span>
+                )}
+              </div>
+              <div className="mt-1.5">
+                <span className="text-[26px] font-bold leading-none">${plan.priceMonthly}</span>
+                <span className="text-[12px] leading-none text-muted-foreground">/mo</span>
+              </div>
               {/* Action sits directly under the price, above the feature list, so
                   the CTA is reachable without reading the whole card. The list
                   below grows to fill, keeping every card the same height and the
                   buttons on one line across the row. */}
-              <CardContent className="flex flex-1 flex-col space-y-4">
-                {isCurrent ? (
-                  <Button variant="outline" className="w-full" disabled>
-                    Current Plan
-                  </Button>
-                ) : plan.priceMonthly > 0 ? (
-                  <Button
-                    className="w-full gap-2"
-                    onClick={() => createCheckout.mutate({ planType: plan.type as any })}
-                    disabled={createCheckout.isPending}
-                  >
-                    <Zap className="h-4 w-4" />
-                    Upgrade
-                  </Button>
-                ) : (
-                  // No action for Free while on a paid plan. Reserve the row with
-                  // a real (hidden) Button rather than a fixed height, so the
-                  // feature lists stay aligned even if the button size token
-                  // changes.
-                  <Button
-                    variant="outline"
-                    className="invisible w-full"
-                    disabled
-                    aria-hidden
-                    tabIndex={-1}
-                  >
-                    &nbsp;
-                  </Button>
-                )}
-                <ul className="flex-1 space-y-2">
-                  {plan.features.map((f) => (
-                    <li key={f} className="flex items-start gap-2 text-sm">
-                      <CheckCircle className="mt-0.5 h-4 w-4 shrink-0 text-green-500" />
-                      <span>{f}</span>
-                    </li>
-                  ))}
-                </ul>
-              </CardContent>
-            </Card>
+              {isCurrent ? (
+                <Button
+                  variant="outline"
+                  className="mt-4 h-[34px] w-full rounded-[8px] border-border2 text-[12.5px] font-semibold text-muted-foreground"
+                  disabled
+                >
+                  Current Plan
+                </Button>
+              ) : plan.priceMonthly > 0 ? (
+                <Button
+                  className="pa-cta-gold mt-4 h-[34px] w-full gap-2 rounded-[8px] text-[12.5px] font-semibold"
+                  onClick={() => createCheckout.mutate({ planType: plan.type as any })}
+                  disabled={createCheckout.isPending}
+                >
+                  <Zap className="h-3.5 w-3.5" />
+                  Upgrade
+                </Button>
+              ) : (
+                // No action for Free while on a paid plan. Reserve the row with
+                // a real (hidden) Button rather than a fixed height, so the
+                // feature lists stay aligned even if the button size token
+                // changes.
+                <Button
+                  variant="outline"
+                  className="invisible mt-4 h-[34px] w-full rounded-[8px]"
+                  disabled
+                  aria-hidden
+                  tabIndex={-1}
+                >
+                  &nbsp;
+                </Button>
+              )}
+              <ul className="mt-3.5 flex flex-1 flex-col gap-2">
+                {plan.features.map((f) => (
+                  <li key={f} className="flex items-start gap-[7px] text-[12px] leading-[1.5] text-muted-foreground">
+                    {/* Literal hex: this project's Tailwind config flattens the
+                        green scale onto the palette's success triplet. */}
+                    <CheckCircle className="mt-0.5 h-[13px] w-[13px] shrink-0 text-[#5cb85c]" />
+                    <span>{f}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           );
         })}
       </div>

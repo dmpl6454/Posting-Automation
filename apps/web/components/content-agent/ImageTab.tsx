@@ -432,7 +432,7 @@ export function ImageTab({ onImageGenerated }: ImageTabProps = {}) {
                 <CardHeader className="pb-3">
                   <div className="flex items-center gap-2">
                     <Image className="h-4 w-4 text-primary" />
-                    <CardTitle className="text-base">Your Image</CardTitle>
+                    <CardTitle>Your Image</CardTitle>
                     <span className="text-xs text-muted-foreground">(optional)</span>
                   </div>
                   <CardDescription>Upload your own photo or pick from your library — AI will generate based on it</CardDescription>
@@ -487,7 +487,7 @@ export function ImageTab({ onImageGenerated }: ImageTabProps = {}) {
               </Card>
 
               <Card>
-                <CardHeader className="pb-3"><CardTitle className="text-base">Prompt</CardTitle><CardDescription>Describe the image you want to create</CardDescription></CardHeader>
+                <CardHeader className="pb-3"><CardTitle>Prompt</CardTitle><CardDescription>Describe the image you want to create</CardDescription></CardHeader>
                 <CardContent className="space-y-3">
                   <Textarea value={generatePrompt} onChange={(e) => { if (e.target.value.length <= PROMPT_MAX_LENGTH) setGeneratePrompt(e.target.value); }} placeholder="Describe the image you want to create..." className="min-h-[140px] resize-none" />
                   <div className="flex justify-end"><span className={`text-xs tabular-nums ${generatePrompt.length >= PROMPT_MAX_LENGTH ? "text-destructive" : "text-muted-foreground"}`}>{generatePrompt.length} / {PROMPT_MAX_LENGTH}</span></div>
@@ -496,7 +496,7 @@ export function ImageTab({ onImageGenerated }: ImageTabProps = {}) {
 
               {/* Provider selector */}
               <Card>
-                <CardHeader className="pb-3"><CardTitle className="text-base">AI Provider</CardTitle></CardHeader>
+                <CardHeader className="pb-3"><CardTitle>AI Provider</CardTitle></CardHeader>
                 <CardContent>
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                     {([
@@ -540,7 +540,7 @@ export function ImageTab({ onImageGenerated }: ImageTabProps = {}) {
               {/* Nano Banana model selector */}
               {(imageProvider === "nano-banana" || imageProvider === "nano-banana-pro") && (
                 <Card>
-                  <CardHeader className="pb-3"><CardTitle className="text-base">Model</CardTitle></CardHeader>
+                  <CardHeader className="pb-3"><CardTitle>Model</CardTitle></CardHeader>
                   <CardContent>
                     <Select value={model} onValueChange={setModel}>
                       <SelectTrigger><SelectValue placeholder="Select model" /></SelectTrigger>
@@ -557,7 +557,7 @@ export function ImageTab({ onImageGenerated }: ImageTabProps = {}) {
               )}
 
               <Card>
-                <CardHeader className="pb-3"><CardTitle className="text-base">Aspect Ratio</CardTitle></CardHeader>
+                <CardHeader className="pb-3"><CardTitle>Aspect Ratio</CardTitle></CardHeader>
                 <CardContent>
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-5">
                     {ASPECT_RATIOS.map((ar) => {
@@ -575,7 +575,7 @@ export function ImageTab({ onImageGenerated }: ImageTabProps = {}) {
               {/* Image size — only for Nano Banana */}
               {(imageProvider === "nano-banana" || imageProvider === "nano-banana-pro") && (
                 <Card>
-                  <CardHeader className="pb-3"><CardTitle className="text-base">Image Size</CardTitle></CardHeader>
+                  <CardHeader className="pb-3"><CardTitle>Image Size</CardTitle></CardHeader>
                   <CardContent>
                     <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                       {IMAGE_SIZES.map((size) => (
@@ -587,7 +587,7 @@ export function ImageTab({ onImageGenerated }: ImageTabProps = {}) {
               )}
 
               <Card>
-                <CardHeader className="pb-3"><CardTitle className="text-base">Attachments</CardTitle><CardDescription>Add a reference design or logo (optional)</CardDescription></CardHeader>
+                <CardHeader className="pb-3"><CardTitle>Attachments</CardTitle><CardDescription>Add a reference design or logo (optional)</CardDescription></CardHeader>
                 <CardContent>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
@@ -637,7 +637,7 @@ export function ImageTab({ onImageGenerated }: ImageTabProps = {}) {
             {/* EDIT TAB */}
             <TabsContent value="edit" className="space-y-4">
               <Card>
-                <CardHeader className="pb-3"><CardTitle className="text-base">Source Image</CardTitle><CardDescription>Upload or drag an image to edit</CardDescription></CardHeader>
+                <CardHeader className="pb-3"><CardTitle>Source Image</CardTitle><CardDescription>Upload or drag an image to edit</CardDescription></CardHeader>
                 <CardContent>
                   {uploadedImage ? (
                     <div className="relative">
@@ -667,7 +667,7 @@ export function ImageTab({ onImageGenerated }: ImageTabProps = {}) {
               </Card>
 
               <Card>
-                <CardHeader className="pb-3"><CardTitle className="text-base">Edit Instructions</CardTitle><CardDescription>Describe the changes you want</CardDescription></CardHeader>
+                <CardHeader className="pb-3"><CardTitle>Edit Instructions</CardTitle><CardDescription>Describe the changes you want</CardDescription></CardHeader>
                 <CardContent className="space-y-3">
                   <Textarea value={editPrompt} onChange={(e) => { if (e.target.value.length <= PROMPT_MAX_LENGTH) setEditPrompt(e.target.value); }} placeholder="Describe the changes you want..." className="min-h-[120px] resize-none" />
                   <div className="flex justify-end"><span className={`text-xs tabular-nums ${editPrompt.length >= PROMPT_MAX_LENGTH ? "text-destructive" : "text-muted-foreground"}`}>{editPrompt.length} / {PROMPT_MAX_LENGTH}</span></div>
@@ -685,7 +685,7 @@ export function ImageTab({ onImageGenerated }: ImageTabProps = {}) {
         {/* Right Column - Preview & Results */}
         <div className="space-y-6">
           <Card className="overflow-hidden">
-            <CardHeader className="pb-3"><CardTitle className="text-base">Preview</CardTitle></CardHeader>
+            <CardHeader className="pb-3"><CardTitle>Preview</CardTitle></CardHeader>
             <CardContent>
               {isGenerating || isEditing ? (
                 <div className="space-y-4"><Skeleton className="aspect-square w-full rounded-lg" /><div className="flex gap-2"><Skeleton className="h-9 flex-1 rounded-md" /><Skeleton className="h-9 flex-1 rounded-md" /></div></div>
@@ -711,7 +711,7 @@ export function ImageTab({ onImageGenerated }: ImageTabProps = {}) {
           {history.length > 0 && (
             <Card>
               <CardHeader className="pb-3">
-                <div className="flex items-center justify-between"><CardTitle className="text-base">Session History</CardTitle><Button variant="ghost" size="sm" onClick={() => setHistory([])} className="gap-1 text-xs text-muted-foreground"><Trash2 className="h-3 w-3" />Clear</Button></div>
+                <div className="flex items-center justify-between"><CardTitle>Session History</CardTitle><Button variant="ghost" size="sm" onClick={() => setHistory([])} className="gap-1 text-xs text-muted-foreground"><Trash2 className="h-3 w-3" />Clear</Button></div>
               </CardHeader>
               <CardContent>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
