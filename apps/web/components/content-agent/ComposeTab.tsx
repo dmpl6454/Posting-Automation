@@ -3,6 +3,7 @@
 import { humanizeError } from "~/lib/errors";
 import { withNormalizedVideoMime } from "~/lib/video-mime";
 import { withPosterHint } from "~/lib/video-poster";
+import { isVideoMediaItem, VIDEO_EXT_RE } from "~/components/previews/preview-media";
 import { superTextConfigSchema, type SuperTextConfig } from "@postautomation/super-text";
 import { buildSuperTextPayload } from "~/lib/super-text-payload";
 import { SuperTextEditor } from "./SuperTextEditor";
@@ -85,12 +86,12 @@ interface ComposeTabProps {
 // Fix #24: sessionStorage key for carrying draft content from GenerateTab / ImageTab
 const COMPOSE_DRAFT_KEY = "compose:draftContent";
 
-// Shared video classifier for postMedia items — the media tile and the Post
-// Preview `mediaKinds` MUST agree on what's a video: a video URL fed into an
-// <img> makes WebKit ingest the ENTIRE blob into memory (+1.57GB measured for
-// a 1.6GB camera file — see components/previews/preview-media.tsx).
-const isVideoMediaItem = (m: { url: string; file?: File }) =>
-  !!(m.file?.type.startsWith("video/") || m.url.includes("video") || /\.(mp4|webm|mov)/.test(m.url));
+// The shared video classifier for postMedia items lives in preview-media.tsx
+// (imported above) so the media tile, the submit gates and the Post Preview
+// `mediaKinds` cannot drift apart again — a local case-sensitive copy of it
+// misclassified uppercase-".MOV" library picks as images, which hid the
+// Thumbnail/Super-text controls AND fed the video URL into <img> (the WebKit
+// whole-file memory ingest, 2026-09-01).
 // Tiles for local videos above this size skip the inline metadata <video> —
 // WebKit does GB-scale opportunistic read bursts on high-bitrate blobs.
 const TILE_VIDEO_PREVIEW_MAX_BYTES = 256 * 1024 * 1024;
@@ -398,7 +399,7 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   const firstVideoUrl = useMemo(() => {
     const videoItem = postMedia.find((m) => {
       const t = m.file?.type ?? "";
-      return t.startsWith("video/") || /\.(mp4|webm|mov|m4v|ogv)(\?|$)/i.test(m.url);
+      return t.startsWith("video/") || VIDEO_EXT_RE.test(m.url);
     });
     return videoItem?.url ?? null;
   }, [postMedia]);
@@ -1356,8 +1357,12 @@ ${content}`;
                   Library
                 </Button>
               </div>
-              {/* Generate Carousel — hidden when YouTube is the target since YT does not support image carousels */}
-              {!hasYouTube && (
+              {/* Generate Carousel — hidden when YouTube is the target (YT does not
+                  support image carousels) AND when a video is attached: the generator
+                  produces image slides, and image-slides-plus-a-video is not a
+                  publishable combination (owner flagged the button's presence beside
+                  an uploaded video as a bug, 2026-09-01). */}
+              {!hasYouTube && !hasVideoAttached && (
               <div className="flex items-center gap-2">
                 <Button
                   variant="outline"

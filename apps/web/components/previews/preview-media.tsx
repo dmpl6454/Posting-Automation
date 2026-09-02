@@ -7,16 +7,54 @@ import { withPosterHint } from "../../lib/video-poster";
 
 export type MediaKind = "image" | "video";
 
-const VIDEO_EXT_RE = /\.(mp4|webm|mov|m4v|ogv)(\?|$)/i;
+export const VIDEO_EXT_RE = /\.(mp4|webm|mov|m4v|ogv)(\?|$)/i;
 
 /**
  * Classify a media URL when the caller didn't supply an explicit kind.
  * Compose passes kinds (it knows the File type); other callers' URLs are
  * S3/remote and carry an extension.
+ *
+ * A caller-supplied kind of "image" is NOT trusted when the URL itself says
+ * video: the two failure directions are wildly asymmetric (rendering an image
+ * through <video> is a cosmetic miss; rendering a video through <img> is the
+ * WebKit whole-file memory ingest described below). A broken classifier in
+ * Compose shipped exactly that — an uppercase ".MOV" library pick passed as
+ * kind "image" — and this override is the backstop that keeps a repeat from
+ * ever reaching <img>.
  */
 export function classifyMediaUrl(url: string, kind?: MediaKind): MediaKind {
-  if (kind) return kind;
-  return VIDEO_EXT_RE.test(url) ? "video" : "image";
+  if (kind === "video") return "video";
+  if (VIDEO_EXT_RE.test(url)) return "video";
+  return kind ?? "image";
+}
+
+/**
+ * Video test for a Compose postMedia item ({url, file?}). Lives HERE so the
+ * media tile, the submit gates, and the preview `mediaKinds` all share ONE
+ * classifier — they MUST agree on what's a video (see PreviewMedia's warning).
+ *
+ * The URL fallback exists for items with no File — Media-Library picks and
+ * restored drafts. S3 keys preserve the original filename's extension CASE
+ * (media.router/`/api/upload` use `fileName.split(".").pop()`, and iPhone
+ * videos are ".MOV"), so the test must be case-insensitive: a case-sensitive
+ * version of this shipped as a broken tile + hidden Thumbnail/Super-text
+ * controls + an <img>-ingests-video Safari memory kill (2026-09-01).
+ *
+ * ⚠️ The bare "video" substring test is a pre-existing LAST-RESORT net, kept
+ * only to preserve prior behavior — do NOT lean on it. Every real path is
+ * already covered by the two tests above it: fresh uploads carry a File MIME
+ * type, and every URL our own upload paths mint ends in `.{ext}`. Unlike the
+ * preview's img/video choice, a FALSE video here is not merely cosmetic — it
+ * would offer Super text on an image, and the burn worker fails the post
+ * rather than publishing an unburned file. It is safe today only because our
+ * S3 keys are `{orgId}/{ts}-{rand}.{ext}` and carry no original filename.
+ */
+export function isVideoMediaItem(m: { url: string; file?: { type: string } }): boolean {
+  return !!(
+    m.file?.type.startsWith("video/") ||
+    VIDEO_EXT_RE.test(m.url) ||
+    m.url.toLowerCase().includes("video")
+  );
 }
 
 /**
