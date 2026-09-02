@@ -19,6 +19,8 @@ export interface PostPreviewProps {
   authorHandle?: string;
   authorAvatar?: string;
   timestamp?: Date;
+  /** Custom video cover (image url) — applied by PreviewMedia on VIDEO renders only. */
+  videoPosterUrl?: string;
 }
 
 function formatTimestamp(date?: Date): string {
@@ -54,6 +56,7 @@ export function FacebookPreview({
   authorName = "Your Name",
   authorAvatar,
   timestamp,
+  videoPosterUrl,
 }: PostPreviewProps) {
   return (
     <Card className="overflow-hidden border border-zinc-200 dark:border-zinc-700">
@@ -100,6 +103,7 @@ export function FacebookPreview({
             {mediaUrls.length === 1 ? (
               <div className="relative aspect-video w-full bg-zinc-100 dark:bg-zinc-800">
                 <PreviewMedia
+                  poster={videoPosterUrl}
                   url={mediaUrls[0]}
                   kind={mediaKinds?.[0]}
                   className="h-full w-full object-cover"
@@ -113,6 +117,7 @@ export function FacebookPreview({
                     className="relative aspect-square bg-zinc-100 dark:bg-zinc-800"
                   >
                     <PreviewMedia
+                      poster={videoPosterUrl}
                       url={url}
                       kind={mediaKinds?.[i]}
                       alt={`Media ${i + 1}`}
@@ -133,6 +138,7 @@ export function FacebookPreview({
                     }`}
                   >
                     <PreviewMedia
+                      poster={videoPosterUrl}
                       url={url}
                       kind={mediaKinds?.[i]}
                       alt={`Media ${i + 1}`}

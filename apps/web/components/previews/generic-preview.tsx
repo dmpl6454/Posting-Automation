@@ -14,6 +14,8 @@ export interface PostPreviewProps {
   authorHandle?: string;
   authorAvatar?: string;
   timestamp?: Date;
+  /** Custom video cover (image url) — applied by PreviewMedia on VIDEO renders only. */
+  videoPosterUrl?: string;
 }
 
 interface GenericPreviewProps extends PostPreviewProps {
@@ -47,6 +49,7 @@ export function GenericPreview({
   authorHandle,
   authorAvatar,
   timestamp,
+  videoPosterUrl,
   platformName = "Platform",
 }: GenericPreviewProps) {
   return (
@@ -101,6 +104,7 @@ export function GenericPreview({
               <div className="relative overflow-hidden rounded-lg border border-zinc-200 bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800">
                 <div className="aspect-video">
                   <PreviewMedia
+                    poster={videoPosterUrl}
                     url={mediaUrls[0]}
                     kind={mediaKinds?.[0]}
                     className="h-full w-full object-cover"
@@ -116,6 +120,7 @@ export function GenericPreview({
                   >
                     <div className="aspect-square">
                       <PreviewMedia
+                        poster={videoPosterUrl}
                         url={url}
                         kind={mediaKinds?.[i]}
                         alt={`Media ${i + 1}`}

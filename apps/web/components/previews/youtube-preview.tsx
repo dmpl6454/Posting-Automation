@@ -39,6 +39,7 @@ export function YouTubePreview({
   authorHandle,
   authorAvatar,
   timestamp,
+  videoPosterUrl,
 }: PostPreviewProps) {
   const hasMedia = mediaUrls && mediaUrls.length > 0;
   const firstMedia = hasMedia ? mediaUrls[0] : null;
@@ -60,10 +61,11 @@ export function YouTubePreview({
             firstMedia.startsWith("blob:") ? (
               // Local blob videos: static placeholder — a real <video> on a
               // multi-GB blob triggers GB-scale read bursts in WebKit.
-              <PreviewMedia url={firstMedia} kind="video" className="h-full w-full object-contain" />
+              <PreviewMedia url={firstMedia} kind="video" poster={videoPosterUrl} className="h-full w-full object-contain" />
             ) : (
               <video
                 src={firstMedia}
+                poster={videoPosterUrl}
                 className="h-full w-full object-contain"
                 controls
                 preload="metadata"
@@ -77,6 +79,7 @@ export function YouTubePreview({
                   misclassified video in a bare <img> is the WebKit whole-file
                   memory ingest. PreviewMedia re-checks the URL and refuses. */}
               <PreviewMedia
+                poster={videoPosterUrl}
                 url={firstMedia}
                 kind="image"
                 alt="Preview"

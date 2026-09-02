@@ -23,6 +23,13 @@ export interface PostPreviewProps {
   authorHandle?: string;
   authorAvatar?: string;
   timestamp?: Date;
+  /**
+   * The post's custom video cover (a processed IMAGE url). Previews hand it to
+   * PreviewMedia, which applies it only when rendering a VIDEO — so the cover
+   * the user set is visible in the preview exactly where it will show on the
+   * platform. One per post, mirroring post.create's videoThumbnail.
+   */
+  videoPosterUrl?: string;
 }
 
 const TWITTER_CHAR_LIMIT = 280;
@@ -56,6 +63,7 @@ export function TwitterPreview({
   authorHandle = "yourhandle",
   authorAvatar,
   timestamp,
+  videoPosterUrl,
 }: PostPreviewProps) {
   const charCount = content.length;
   const isOverLimit = charCount > TWITTER_CHAR_LIMIT;
@@ -152,6 +160,7 @@ export function TwitterPreview({
                     }`}
                   >
                     <PreviewMedia
+                      poster={videoPosterUrl}
                       url={url}
                       kind={mediaKinds?.[i]}
                       alt={`Media ${i + 1}`}

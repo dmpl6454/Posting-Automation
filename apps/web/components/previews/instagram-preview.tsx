@@ -19,6 +19,8 @@ export interface PostPreviewProps {
   authorHandle?: string;
   authorAvatar?: string;
   timestamp?: Date;
+  /** Custom video cover (image url) — applied by PreviewMedia on VIDEO renders only. */
+  videoPosterUrl?: string;
 }
 
 function formatTimestamp(date?: Date): string {
@@ -55,6 +57,7 @@ export function InstagramPreview({
   authorHandle = "yourname",
   authorAvatar,
   timestamp,
+  videoPosterUrl,
 }: PostPreviewProps) {
   const username = authorHandle || authorName.toLowerCase().replace(/\s+/g, "");
 
@@ -88,6 +91,7 @@ export function InstagramPreview({
           {mediaUrls && mediaUrls.length > 0 ? (
             <>
               <PreviewMedia
+                poster={videoPosterUrl}
                 url={mediaUrls[0]}
                 kind={mediaKinds?.[0]}
                 className="h-full w-full object-cover"
