@@ -4,14 +4,31 @@ import { Card, CardContent } from "~/components/ui/card";
 import { Avatar, AvatarImage, AvatarFallback } from "~/components/ui/avatar";
 import { Play, ThumbsUp, ThumbsDown, Share2, Bookmark, MoreHorizontal, AlertCircle } from "lucide-react";
 import type { PostPreviewProps } from "./twitter-preview";
-import { PreviewMedia } from "./preview-media";
+import { PreviewMedia, classifyMediaUrl, type MediaKind } from "./preview-media";
 
 function getInitials(name: string): string {
   return name.split(" ").map((n) => n[0]).join("").toUpperCase().slice(0, 2);
 }
 
-function isVideoUrl(url: string): boolean {
-  return /\.(mp4|webm|mov|m4v|ogv)(\?|$)/i.test(url) || url.startsWith("blob:") || url.includes("video");
+/**
+ * Defers to the shared `classifyMediaUrl` (which overrides a caller-supplied
+ * kind of "image" when the URL says video) and then widens it for this tab
+ * only: YouTube accepts nothing BUT video, so a local `blob:` — which carries
+ * no extension — is treated as video rather than falling through to the
+ * still-image branch below.
+ *
+ * ⚠️ This used to read `firstKind ? firstKind === "video" : isVideoUrl(url)`,
+ * i.e. it trusted a caller's kind absolutely. ComposeTab's broken classifier
+ * labelled uppercase-".MOV" videos as "image" (2026-09-01), so this tab would
+ * have sent that video into the bare <img> below — the WebKit whole-file
+ * memory ingest, reached independently of the tile bug.
+ */
+function isVideoForYouTube(url: string, kind?: MediaKind): boolean {
+  return (
+    classifyMediaUrl(url, kind) === "video" ||
+    url.startsWith("blob:") ||
+    url.toLowerCase().includes("video")
+  );
 }
 
 export function YouTubePreview({
@@ -26,7 +43,7 @@ export function YouTubePreview({
   const hasMedia = mediaUrls && mediaUrls.length > 0;
   const firstMedia = hasMedia ? mediaUrls[0] : null;
   const firstKind = mediaKinds?.[0];
-  const isVideo = firstMedia ? (firstKind ? firstKind === "video" : isVideoUrl(firstMedia)) : false;
+  const isVideo = firstMedia ? isVideoForYouTube(firstMedia, firstKind) : false;
 
   // First line of content is treated as the title (matches the worker which uses
   // payload.metadata?.title || payload.content.slice(0, 100) when publishing)
@@ -54,8 +71,17 @@ export function YouTubePreview({
             )
           ) : firstMedia ? (
             <div className="relative h-full w-full">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={firstMedia} alt="Preview" className="h-full w-full object-cover opacity-60" />
+              {/* Through PreviewMedia, never a bare <img>: this is the
+                  wrong-media-type warning branch, so it is reached precisely
+                  when the media was classified as a still — and a
+                  misclassified video in a bare <img> is the WebKit whole-file
+                  memory ingest. PreviewMedia re-checks the URL and refuses. */}
+              <PreviewMedia
+                url={firstMedia}
+                kind="image"
+                alt="Preview"
+                className="h-full w-full object-cover opacity-60"
+              />
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/50">
                 <AlertCircle className="h-8 w-8 text-yellow-400" />
                 <p className="px-4 text-center text-xs font-medium text-white">

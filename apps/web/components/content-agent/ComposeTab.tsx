@@ -1118,7 +1118,7 @@ ${content}`;
   const hasInstagram = selectedPlatforms.includes("instagram");
   const hasVideoAttached = postMedia.some((m) => {
     const t = m.file?.type ?? "";
-    return t.startsWith("video/") || /\.(mp4|webm|mov|m4v|ogv)(\?|$)/i.test(m.url);
+    return t.startsWith("video/") || VIDEO_EXT_RE.test(m.url);
   });
   const hasImageAttached = postMedia.some((m) => {
     const t = m.file?.type ?? "";
