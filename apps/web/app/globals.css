@@ -3,68 +3,166 @@
 @tailwind utilities;
 
 @layer base {
+  /*
+   * Warm paper palette — ported from the Claude Design project
+   * "PostAutomation UI (dark v2)".
+   *
+   * Light: warm off-white paper (#F6F5F1) on ink (#15150F), accent teal #0F766E.
+   * Dark:  warm charcoal (#0E0E0C) on bone (#F1EDE2), accent gold #C9A356.
+   *
+   * Two rules carry most of the look:
+   *   1. Surfaces are FLAT. Hairline borders do the separating, never shadows.
+   *   2. The filled button is INK, not the accent — `--primary` is the
+   *      foreground colour. The accent is reserved for state (active nav,
+   *      selected chips, focus) so it stays meaningful.
+   *
+   * Kept in HSL-triplet form so every existing `bg-foreground/[0.06]`-style
+   * opacity utility across the dashboard keeps working.
+   */
   :root {
-    /* Apple-inspired neutral palette with warm undertones */
-    --background: 0 0% 99%;
-    --foreground: 240 10% 3.9%;
-    --card: 0 0% 100%;
-    --card-foreground: 240 10% 3.9%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 240 10% 3.9%;
-    --primary: 240 5.9% 10%;
-    --primary-foreground: 0 0% 98%;
-    --secondary: 240 4.8% 95.9%;
-    --secondary-foreground: 240 5.9% 10%;
-    --muted: 240 4.8% 95.9%;
-    --muted-foreground: 240 3.8% 46.1%;
-    --accent: 240 4.8% 95.9%;
-    --accent-foreground: 240 5.9% 10%;
-    --destructive: 0 72.2% 50.6%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 240 5.9% 90%;
-    --input: 240 5.9% 90%;
-    --ring: 240 5.9% 10%;
-    --radius: 0.75rem;
+    --background: 48 21.7% 95.5%;        /* #F6F5F1 */
+    --foreground: 60 16.7% 7.1%;         /* #15150F */
+    --card: 36 100% 99%;                 /* #FFFDFA */
+    --card-foreground: 60 16.7% 7.1%;
+    --popover: 36 100% 99%;
+    --popover-foreground: 60 16.7% 7.1%;
+    --primary: 60 16.7% 7.1%;            /* ink — the filled button */
+    --primary-foreground: 48 21.7% 95.5%;
+    --secondary: 48 11.1% 91.2%;
+    --secondary-foreground: 60 16.7% 7.1%;
+    --muted: 48 11.1% 91.2%;
+    --muted-foreground: 53.3 4.8% 37.1%; /* #63625A */
+    --accent: 48 11.1% 91.2%;            /* neutral hover fill (shadcn) */
+    --accent-foreground: 60 16.7% 7.1%;
+    --destructive: 8 45% 48%;
+    --destructive-foreground: 36 100% 99%;
+    --border: 45 17.6% 86.7%;            /* #E3E0D7 */
+    --input: 44 15.2% 80.6%;             /* #D5D1C6 */
+    --ring: 175.3 77.4% 26.1%;           /* teal */
+    --radius: 0.625rem;                  /* 10px */
 
-    /* Liquid Glass tokens */
-    --glass-bg: rgba(255, 255, 255, 0.72);
-    --glass-border: rgba(255, 255, 255, 0.5);
-    --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.06);
-    --glass-blur: 20px;
-    --surface-elevated: rgba(255, 255, 255, 0.9);
-    --glow-primary: rgba(99, 102, 241, 0.15);
-    --glow-accent: rgba(168, 85, 247, 0.12);
+    /* Surface ladder — sits between `background` and `card` */
+    --surface-1: 60 20% 98%;
+    --surface-2: 36 100% 99%;
+    --border-2: 44 15.2% 80.6%;
+    --faint: 47.1 6.7% 59.2%;            /* #9E9B90 */
+    --tile: 48 11.1% 91.2%;
+    --hover: 60 13% 92.4%;
+
+    /* Brand accent. Named `gold` for continuity with the dark theme, where it
+       is literally gold; in light it resolves to the design's teal. */
+    --accent-gold: 175.3 77.4% 26.1%;    /* #0F766E */
+    --accent-soft: 175.3 77.4% 26.1%;    /* use with /0.08 */
+    --accent-border: 170 25% 72%;
+    /* Accent halo behind a filled accent CTA (`.pa-gold-glow`). */
+    --gold-glow: 0 0 6px rgba(15, 118, 110, 0.22);
+    /* Label colour ON a filled accent CTA (`.pa-cta-gold`). */
+    --gold-foreground: 0 0% 100%;
+
+    /*
+     * Status colours, as HSL TRIPLETS so Tailwind's `green-*` / `red-*` /
+     * `yellow-*` scales can be remapped onto them with alpha (see the
+     * `colors` block in tailwind.config.ts). That remap is what brings ~700
+     * scattered raw-Tailwind status classes across the dashboard onto the
+     * design's palette without editing 50 files.
+     *
+     * These are theme-AWARE: the dark theme wants the light, desaturated tints
+     * the design specifies, while light theme needs a darker ink so the same
+     * `text-red-700`-style class stays legible on paper. Because the variable
+     * flips with the theme, BOTH `text-red-700` and `dark:text-red-400` resolve
+     * correctly in whichever theme they render in.
+     */
+    --pa-success-hsl: 155 32% 36%;       /* #3F7A61 — readable on paper */
+    --pa-danger-hsl: 7 51% 47%;          /* #B4483A */
+    --pa-warning-hsl: 26 90% 37%;        /* #B45309 */
+
+    /* Hex-shaped aliases, kept for `.pa-badge-*` and `bg-[var(--pa-success)]`. */
+    --pa-success: hsl(var(--pa-success-hsl));
+    --pa-danger: hsl(var(--pa-danger-hsl));
+    --pa-warning: hsl(var(--pa-warning-hsl));
+    --pa-live: #16A34A;
+
+    /* Ambient mesh wash */
+    --mesh-1: rgba(21, 21, 15, 0.025);
+    --mesh-2: rgba(21, 21, 15, 0.015);
+
+    /* Legacy aliases — flattened, kept so older components don't break */
+    --glass-bg: hsl(var(--surface-2));
+    --glass-border: hsl(var(--border));
+    --glass-shadow: none;
+    --glass-blur: 0px;
+    --surface-elevated: hsl(var(--surface-2));
+    --glow-primary: transparent;
+    --glow-accent: transparent;
   }
 
+  /*
+   * Dark = the canonical palette of the Claude Design project
+   * (ContentStudio.dc.html, "PostAutomation UI"). Iteration 3 moved the theme
+   * to TRUE BLACK with a deeper, duller gold and NO ambient wash:
+   *
+   *   app-bg #000000 · card #0A0A09 · border #181817 · border-2 #232320
+   *   muted #A8A396 · faint #6A6659 · hover #0D0D0C · tile #0F0F0E
+   *   gold #8A7239 · gold-border #3A2F17 · gold-soft rgba(138,114,57,.12)
+   *
+   * `--surface-1` is deliberately identical to `--background` (both #000000) —
+   * the design separates the sidebar/header from the page with the 1px hairline
+   * border ONLY, never a fill step. Do not "fix" that by lifting surface-1.
+   */
   .dark {
-    --background: 240 10% 3.9%;
-    --foreground: 0 0% 98%;
-    --card: 240 10% 6%;
-    --card-foreground: 0 0% 98%;
-    --popover: 240 10% 6%;
-    --popover-foreground: 0 0% 98%;
-    --primary: 0 0% 98%;
-    --primary-foreground: 240 5.9% 10%;
-    --secondary: 240 3.7% 15.9%;
-    --secondary-foreground: 0 0% 98%;
-    --muted: 240 3.7% 15.9%;
-    --muted-foreground: 240 5% 64.9%;
-    --accent: 240 3.7% 15.9%;
-    --accent-foreground: 0 0% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 240 3.7% 15.9%;
-    --input: 240 3.7% 15.9%;
-    --ring: 240 4.9% 83.9%;
+    --background: 0 0% 0%;               /* #000000 */
+    --foreground: 44 34.9% 91.6%;        /* #F1EDE2 */
+    --card: 60 5.3% 3.7%;                /* #0A0A09 */
+    --card-foreground: 44 34.9% 91.6%;
+    --popover: 60 5.3% 3.7%;
+    --popover-foreground: 44 34.9% 91.6%;
+    --primary: 44 34.9% 91.6%;           /* bone — the filled button */
+    --primary-foreground: 0 0% 0%;
+    --secondary: 60 5.3% 3.7%;           /* #0A0A09 — surface-2 */
+    --secondary-foreground: 44 34.9% 91.6%;
+    --muted: 60 3.4% 5.7%;               /* #0F0F0E — tile */
+    --muted-foreground: 43.3 9.4% 62.4%; /* #A8A396 */
+    --accent: 60 4% 4.9%;                /* #0D0D0C — hover fill (shadcn) */
+    --accent-foreground: 44 34.9% 91.6%;
+    --destructive: 4.9 61.6% 61.2%;      /* #D9695F */
+    --destructive-foreground: 0 0% 0%;
+    --border: 60 2.1% 9.2%;              /* #181817 */
+    --input: 60 4.5% 13.1%;              /* #232320 — border-2 */
+    --ring: 42.2 41.5% 38.2%;            /* gold */
 
-    /* Dark Liquid Glass tokens */
-    --glass-bg: rgba(15, 15, 20, 0.72);
-    --glass-border: rgba(255, 255, 255, 0.08);
-    --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-    --glass-blur: 20px;
-    --surface-elevated: rgba(25, 25, 35, 0.9);
-    --glow-primary: rgba(129, 140, 248, 0.12);
-    --glow-accent: rgba(192, 132, 252, 0.1);
+    --surface-1: 0 0% 0%;                /* #000000 — see note above */
+    --surface-2: 60 5.3% 3.7%;           /* #0A0A09 */
+    --border-2: 60 4.5% 13.1%;           /* #232320 */
+    --faint: 45.9 8.7% 38.2%;            /* #6A6659 */
+    --tile: 60 3.4% 5.7%;                /* #0F0F0E */
+    --hover: 60 4% 4.9%;                 /* #0D0D0C */
+
+    --accent-gold: 42.2 41.5% 38.2%;     /* #8A7239 */
+    --accent-soft: 42.2 41.5% 38.2%;     /* use with /0.12 */
+    --accent-border: 41.1 43.2% 15.9%;   /* #3A2F17 */
+    --gold-glow: 0 0 6px rgba(138, 114, 57, 0.3);
+    --gold-foreground: 37.5 18.2% 8.6%;  /* #1A1712 — the design's on-gold label */
+
+    /*
+     * Status — the design's own hardcoded tints. Light, desaturated, and never
+     * a saturated "web" green/red, which is precisely what made the stock
+     * Tailwind status colours look pasted onto this palette.
+     */
+    --pa-success-hsl: 151 27% 61%;       /* #7FB69B */
+    --pa-danger-hsl: 8 54% 67%;          /* #D98A7E */
+    --pa-warning-hsl: 38 92% 50%;        /* #F59E0B */
+
+    /* The design removed the ambient wash entirely (mesh-1/2 = fully transparent). */
+    --mesh-1: rgba(0, 0, 0, 0);
+    --mesh-2: rgba(0, 0, 0, 0);
+
+    --glass-bg: hsl(var(--surface-2));
+    --glass-border: hsl(var(--border));
+    --glass-shadow: none;
+    --glass-blur: 0px;
+    --surface-elevated: hsl(var(--surface-2));
+    --glow-primary: transparent;
+    --glow-accent: transparent;
   }
 }
 
@@ -79,9 +177,38 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
+  /*
+   * Headings are light and tight by default (the design sets `font-weight:400`
+   * on h1–h3). The one big headline per screen opts into `.display` for the
+   * 700 / -0.03em treatment — the design's `.serif` class.
+   */
   h1, h2, h3, h4, h5, h6 {
-    letter-spacing: -0.025em;
-    font-weight: 600;
+    letter-spacing: -0.01em;
+    font-weight: 500;
+  }
+
+  .display {
+    font-weight: 700;
+    letter-spacing: -0.03em;
+  }
+
+  /* Small uppercase eyebrow above a page title */
+  .eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.625rem;
+    font-size: 9px;
+    font-weight: 500;
+    line-height: 1;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    color: hsl(var(--muted-foreground));
+  }
+  .eyebrow::before {
+    content: "";
+    width: 18px;
+    height: 1px;
+    background: hsl(var(--border-2));
   }
 
   /*
@@ -114,77 +241,230 @@
 }
 
 @layer components {
-  /* Liquid Glass card */
-  .glass {
-    background: var(--glass-bg);
-    backdrop-filter: blur(var(--glass-blur));
-    -webkit-backdrop-filter: blur(var(--glass-blur));
-    border: 1px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
+  /* ------------------------------------------------------------------
+     Design primitives. Everything here is flat: 1px hairline + 10px radius.
+     ------------------------------------------------------------------ */
+
+  /* Uppercase micro-label — section headings, stat names. */
+  .pa-label {
+    font-size: 10px;
+    font-weight: 500;
+    line-height: 1;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: hsl(var(--muted-foreground));
   }
 
-  .glass-subtle {
-    background: var(--glass-bg);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    border: 1px solid var(--glass-border);
+  /* Section heading with the hairline rule beneath it. */
+  .pa-section-head {
+    margin-bottom: 12px;
+    padding-bottom: 9px;
+    border-bottom: 1px solid hsl(var(--border));
   }
 
-  /* Elevated surface */
+  /* Rows sharing one bordered container, divided by hairlines. */
+  .pa-list {
+    overflow: hidden;
+    border: 1px solid hsl(var(--border));
+    border-radius: 10px;
+    background: hsl(var(--surface-2));
+  }
+  .pa-list > * + * {
+    border-top: 1px solid hsl(var(--border));
+  }
+
+  /*
+   * Metric grid — ONE bordered container whose cells are split by vertical
+   * hairlines, rather than N separate cards. This is the single biggest
+   * visual difference from the old glass stat tiles.
+   */
+  .pa-grid {
+    display: grid;
+    overflow: hidden;
+    border: 1px solid hsl(var(--border));
+    border-radius: 10px;
+    background: hsl(var(--surface-2));
+  }
+  .pa-grid > * + * {
+    border-left: 1px solid hsl(var(--border));
+  }
+  /* Below md the grid folds to 2-up, so the dividers have to rewrap. */
+  @media (max-width: 767px) {
+    .pa-grid > * + * {
+      border-left: 0;
+    }
+    .pa-grid > *:nth-child(even) {
+      border-left: 1px solid hsl(var(--border));
+    }
+    .pa-grid > *:nth-child(n + 3) {
+      border-top: 1px solid hsl(var(--border));
+    }
+  }
+
+  /* Soft accent tile behind an icon. */
+  .pa-icon-tile {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    height: 34px;
+    width: 34px;
+    border-radius: 10px;
+    background: hsl(var(--tile));
+    color: hsl(var(--accent-gold));
+  }
+
+  /* 32px bordered icon button — the top bar's control shape. */
+  .pa-icon-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    flex: none;
+    border: 1px solid hsl(var(--border));
+    border-radius: 9px;
+    color: hsl(var(--muted-foreground));
+    transition: all 0.15s;
+  }
+  .pa-icon-btn:hover {
+    border-color: hsl(var(--accent-border));
+    background: hsl(var(--hover));
+  }
+
+  /* 24px rounded box around a sidebar nav icon; ringed in accent when active. */
+  .pa-nav-icon {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 7px;
+    border: 1px solid transparent;
+    transition: all 0.15s;
+  }
+  .pa-nav-icon-active {
+    background: hsl(var(--accent-gold) / 0.12);
+    border-color: hsl(var(--accent-border));
+  }
+
+  /* Pill chip — channel pickers, filters. */
+  .pa-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    white-space: nowrap;
+    border: 1px solid hsl(var(--border-2));
+    border-radius: 999px;
+    background: hsl(var(--surface-2));
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1;
+    transition: all 0.15s;
+  }
+  .pa-chip-on {
+    border-color: hsl(var(--accent-border));
+    background: hsl(var(--accent-gold) / 0.08);
+  }
+
+  /* Status badge. */
+  .pa-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex: none;
+    border: 1px solid hsl(var(--border-2));
+    border-radius: 999px;
+    background: hsl(var(--tile));
+    padding: 2px 8px;
+    font-size: 10px;
+    font-weight: 500;
+    line-height: 1.5;
+  }
+  .pa-badge-success {
+    border-color: rgba(127, 182, 155, 0.32);
+    background: rgba(127, 182, 155, 0.12);
+    color: var(--pa-success);
+  }
+  .pa-badge-danger {
+    border-color: rgba(231, 154, 142, 0.32);
+    background: rgba(231, 154, 142, 0.12);
+    color: var(--pa-danger);
+  }
+  .pa-badge-warning {
+    border-color: rgba(245, 158, 11, 0.5);
+    background: rgba(245, 158, 11, 0.1);
+    color: var(--pa-warning);
+  }
+
+  /* Thin progress track — the weekly queue bars. */
+  .pa-track {
+    height: 5px;
+    border-radius: 3px;
+    background: hsl(var(--tile));
+    overflow: hidden;
+  }
+  .pa-track > span {
+    display: block;
+    height: 100%;
+    border-radius: 3px;
+    background: hsl(var(--border-2));
+  }
+
+  /*
+   * Legacy class names, remapped. Older pages still reference these; rather
+   * than touch every file at once they now resolve to the flat warm language,
+   * so nothing looks out of place. Prefer the `.pa-*` classes in new work.
+   */
+  .glass,
+  .glass-subtle,
   .surface-elevated {
-    background: var(--surface-elevated);
-    box-shadow:
-      0 1px 2px rgba(0, 0, 0, 0.04),
-      0 4px 16px rgba(0, 0, 0, 0.04);
+    background: hsl(var(--surface-2));
+    border: 1px solid hsl(var(--border));
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
 
-  /* Ambient glow effect */
   .glow {
     position: relative;
   }
   .glow::before {
-    content: "";
-    position: absolute;
-    inset: -1px;
-    border-radius: inherit;
-    background: linear-gradient(135deg, var(--glow-primary), var(--glow-accent));
-    opacity: 0;
-    transition: opacity 0.4s ease;
-    z-index: -1;
-    filter: blur(12px);
-  }
-  .glow:hover::before {
-    opacity: 1;
+    content: none;
   }
 
-  /* Premium gradient text */
+  /* Was an indigo→violet gradient fill; now simply the display treatment. */
   .text-gradient {
-    background: linear-gradient(135deg, #1e1b4b 0%, #4f46e5 50%, #7c3aed 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
+    background: none;
+    -webkit-text-fill-color: currentColor;
+    color: hsl(var(--foreground));
+    font-weight: 700;
+    letter-spacing: -0.03em;
   }
   .dark .text-gradient {
-    background: linear-gradient(135deg, #c7d2fe 0%, #818cf8 50%, #a78bfa 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
+    background: none;
+    -webkit-text-fill-color: currentColor;
+    color: hsl(var(--foreground));
   }
 
-  /* Mesh gradient backgrounds */
-  .mesh-gradient {
-    background:
-      radial-gradient(at 27% 37%, rgba(99, 102, 241, 0.08) 0px, transparent 50%),
-      radial-gradient(at 97% 21%, rgba(168, 85, 247, 0.06) 0px, transparent 50%),
-      radial-gradient(at 52% 99%, rgba(236, 72, 153, 0.05) 0px, transparent 50%),
-      radial-gradient(at 10% 29%, rgba(34, 211, 238, 0.04) 0px, transparent 50%);
+  /*
+   * Ambient mesh wash. The design applies this to the whole app frame:
+   * one accent pool top-left, one neutral pool top-right. Much quieter than
+   * the previous four-colour indigo/violet/pink/cyan mesh.
+   */
+  .mesh-gradient,
+  .mesh {
+    background-image:
+      radial-gradient(ellipse at 20% -6%, var(--mesh-1) 0, transparent 55%),
+      radial-gradient(ellipse at 96% 8%, var(--mesh-2) 0, transparent 45%);
   }
-  .dark .mesh-gradient {
-    background:
-      radial-gradient(at 27% 37%, rgba(99, 102, 241, 0.06) 0px, transparent 50%),
-      radial-gradient(at 97% 21%, rgba(168, 85, 247, 0.04) 0px, transparent 50%),
-      radial-gradient(at 52% 99%, rgba(236, 72, 153, 0.03) 0px, transparent 50%),
-      radial-gradient(at 10% 29%, rgba(34, 211, 238, 0.02) 0px, transparent 50%);
+
+  /* Accent-tinted panel — the "Create with AI" surface and active pills */
+  .accent-panel {
+    border: 1px solid hsl(var(--accent-border));
+    background: hsl(var(--accent-gold) / 0.12);
   }
 
   /* Smooth animations */
@@ -214,10 +494,60 @@ html {
   scroll-behavior: smooth;
 }
 
-/* Selection color */
+/* Selection — the brand accent at low opacity */
 ::selection {
-  background: rgba(99, 102, 241, 0.2);
+  background: hsl(var(--accent-gold) / 0.22);
   color: inherit;
+}
+
+/*
+ * Slim scrollbar, matching the design's `.scroll`.
+ *
+ * ⚠️ The design hangs this off an opt-in `.scroll` class and then puts that
+ * class on ELEVEN containers — the sidebar nav, the main column, every inner
+ * list and every horizontal table. This app never applied it to a single one,
+ * so every scroll area rendered the browser's default chrome-grey bar.
+ *
+ * Rather than chase eleven containers (and miss the twelfth someone adds next
+ * week), the slim bar is the app-wide DEFAULT here. `.scroll` is kept as an
+ * alias so design markup pasted in still reads correctly.
+ *
+ * Opt-OUT still wins: `.scrollbar-hide` and Tailwind's
+ * `[&::-webkit-scrollbar]:hidden` are class-specificity (0,1,0) against this
+ * rule's (0,0,0), so the tab rows that deliberately hide their bar keep doing
+ * so. Firefox's `scrollbar-width` follows the same ordering.
+ */
+/*
+ * ⚠️ The standard `scrollbar-width`/`scrollbar-color` pair must NOT be set for
+ * Chromium. Setting either opts that engine into standard scrollbar sizing,
+ * where `thin` is a fixed ~10px and silently WINS over the 8px below — measured:
+ * the gutter came out 10px, not the design's 8. So the standard properties are
+ * fenced behind a query only engines WITHOUT the webkit pseudo-element (i.e.
+ * Firefox) can match; Chromium takes the 8px webkit path, exactly like the
+ * design does.
+ */
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border-2)) transparent;
+  }
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+/* Set explicitly: defining a ::-webkit-scrollbar at all switches Chromium to
+   custom-scrollbar mode, where the track would otherwise paint light grey and
+   read as a seam down the edge of a black page. */
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: hsl(var(--border-2));
+  border-radius: 8px;
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 @layer utilities {
@@ -227,5 +557,50 @@ html {
   }
   .scrollbar-hide::-webkit-scrollbar {
     display: none;
+  }
+
+  /*
+   * ⚠️ These two live in `utilities`, NOT `components`, and that placement is
+   * LOAD-BEARING. Tailwind emits `components` BEFORE `utilities`, so while
+   * `.pa-cta-gold` sat in the components layer it LOST every specificity tie to
+   * the `bg-primary` / `text-primary-foreground` utilities that `<Button>`'s
+   * default variant always emits. Measured in the browser: every "gold" CTA in
+   * the app (Create Design, Add Feed, Create Link, Sync Now, Upload, New Query…)
+   * computed to `rgb(241,237,226)` — the BONE fill — so the design's single
+   * accent CTA per page did not exist anywhere. Do not move them back.
+   *
+   * Halo behind a filled accent CTA. The design puts `box-shadow: var(--gold-glow)`
+   * on every gold-filled button/badge; this is that, as one opt-in class so the
+   * value stays in the palette instead of being re-typed per component.
+   */
+  .pa-gold-glow {
+    box-shadow: var(--gold-glow);
+  }
+
+  /*
+   * The design's PRIMARY page CTA — the one gold-filled button in a page header
+   * ("Create Design", "Add Feed", "Create Link", "New Agent", "Sync Now"…).
+   *
+   * The hierarchy is deliberate and worth keeping straight, because the app had
+   * drifted to using the bone fill for everything:
+   *   header primary   → THIS (gold fill, near-black label, accent halo)
+   *   in-card action   → `bg-foreground text-background` (the bone fill)
+   *   tertiary         → `bg-surface2` + `border-border2`
+   */
+  .pa-cta-gold {
+    background: hsl(var(--accent-gold));
+    color: hsl(var(--gold-foreground));
+    box-shadow: var(--gold-glow);
+    transition: filter 0.15s ease, transform 0.15s ease;
+  }
+  .pa-cta-gold:hover:not(:disabled) {
+    background: hsl(var(--accent-gold));
+    color: hsl(var(--gold-foreground));
+    filter: brightness(1.1);
+    transform: translateY(-1px);
+  }
+  /* Keep the near-black label legible on the gold fill for nested icons/spans. */
+  .pa-cta-gold svg {
+    color: hsl(var(--gold-foreground));
   }
 }

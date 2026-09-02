@@ -667,7 +667,7 @@ function NewsGridPageInner() {
           <div className="space-y-5">
             <Card>
               <CardHeader className="pb-3">
-                <CardTitle className="text-base">News Input</CardTitle>
+                <CardTitle>News Input</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-1.5">
@@ -805,7 +805,7 @@ function NewsGridPageInner() {
           <Card className="h-fit">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
-                <CardTitle className="text-base">
+                <CardTitle>
                   Channels
                   {selectedChannelIds.size > 0 && (
                     <Badge className="ml-2" variant="secondary">{selectedChannelIds.size} selected</Badge>

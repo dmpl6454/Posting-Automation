@@ -1,9 +1,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
-import { Badge } from "~/components/ui/badge";
 import { Input } from "~/components/ui/input";
 import {
   Search,
@@ -657,37 +655,53 @@ const routers: RouterDoc[] = [
 // Helper Components
 // ---------------------------------------------------------------------------
 
+/* Design tokens for this page. Literal hex throughout: this project's Tailwind
+   config flattens the blue/green/emerald/red scales onto the palette's status
+   triplets, so `bg-blue-50 text-blue-700` renders the label the same colour as
+   its background. */
+const METHOD_COLOR: Record<string, string> = {
+  GET: "#5b9bd5",
+  POST: "#5cb85c",
+  DELETE: "#d9695f",
+};
+const CARD_TITLE = "text-[14.5px] font-semibold leading-[1.2]";
+const CARD_SUB = "text-[12px] leading-[1.5] text-muted-foreground";
+const FIELD_38 =
+  "h-[38px] rounded-[8px] border-border2 bg-background px-3 text-[12.5px]";
+const OUTLINE_BTN =
+  "h-[38px] shrink-0 gap-1.5 rounded-[8px] border-border2 px-[15px] text-[12.5px] font-medium hover:bg-hover";
+
+/** The design's fixed-width method pill. */
+function MethodPill({ method }: { method: string }) {
+  const c = METHOD_COLOR[method] ?? "#8a8578";
+  return (
+    <span
+      className="w-[52px] shrink-0 rounded-[5px] py-0.5 text-center font-mono text-[10px] font-bold leading-[1.6]"
+      style={{ background: `${c}26`, color: c }}
+    >
+      {method}
+    </span>
+  );
+}
+
 function JsonBlock({ data }: { data: unknown }) {
   const json = JSON.stringify(data, null, 2);
   return (
-    <pre className="overflow-x-auto rounded-md bg-slate-950 p-3 text-xs text-green-400 font-mono leading-relaxed">
+    <pre className="overflow-x-auto rounded-[8px] border border-border2 bg-surface1 p-3 font-mono text-[11.5px] leading-relaxed text-[#5cb85c]">
       <code>{json}</code>
     </pre>
   );
 }
 
 function AuthBadge({ auth }: { auth: string }) {
-  if (auth === "public") {
-    return (
-      <Badge variant="outline" className="text-xs gap-1 shrink-0">
-        <Globe className="h-3 w-3" />
-        Public
-      </Badge>
-    );
-  }
-  if (auth === "session+org") {
-    return (
-      <Badge variant="secondary" className="text-xs gap-1 shrink-0">
-        <Lock className="h-3 w-3" />
-        Session + Org
-      </Badge>
-    );
-  }
+  const label =
+    auth === "public" ? "Public" : auth === "session+org" ? "Session + Org" : "Session";
+  const Icon = auth === "public" ? Globe : Lock;
   return (
-    <Badge variant="secondary" className="text-xs gap-1 shrink-0">
-      <Lock className="h-3 w-3" />
-      Session
-    </Badge>
+    <span className="flex shrink-0 items-center gap-1 rounded-[5px] border border-border2 px-2 py-px text-[10px] font-medium leading-[1.6] text-muted-foreground">
+      <Icon className="h-3 w-3" />
+      {label}
+    </span>
   );
 }
 
@@ -704,65 +718,69 @@ function ProcedureCard({
   onToggle: () => void;
 }) {
   return (
-    <div className="border rounded-lg">
+    /* The design's endpoint row: one line of
+       [method pill] [path] [description], no chevron and no auth badge.
+       The row still opens the parameter/example detail this app has and the
+       mockup does not, so the DEFAULT state matches the design exactly and the
+       extra depth is one click away rather than deleted. */
+    <div className="rounded-[9px] border border-border2">
       <button
-        className="flex w-full items-center gap-3 p-4 text-left hover:bg-muted/50 transition-colors"
+        className="flex w-full items-center gap-3 px-3 py-[9px] text-left transition-colors hover:bg-hover"
         onClick={onToggle}
       >
-        {expanded ? (
-          <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-        ) : (
-          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-        )}
-        <div className="flex items-center gap-2 flex-1 min-w-0">
-          <Badge
-            variant={procedure.type === "query" ? "outline" : "default"}
-            className={`text-xs shrink-0 ${procedure.type === "query" ? "bg-blue-50 text-blue-700 border-blue-200" : "bg-emerald-50 text-emerald-700 border-emerald-200"}`}
-          >
-            {procedure.type === "query" ? "GET" : "POST"}
-          </Badge>
-          <code className="text-sm font-mono font-medium truncate">
-            {routerName}.{procedure.name}
-          </code>
-        </div>
-        <AuthBadge auth={procedure.auth} />
+        <MethodPill method={procedure.type === "query" ? "GET" : "POST"} />
+        <code className="shrink-0 font-mono text-[12px] font-medium leading-[1.3]">
+          {routerName}.{procedure.name}
+        </code>
+        <span className="min-w-0 flex-1 truncate text-[11.5px] leading-[1.4] text-muted-foreground">
+          {procedure.description}
+        </span>
+        {/* No chevron in the resting state — the design's row is just
+            pill / path / description. */}
+        {expanded && <ChevronDown className="h-3.5 w-3.5 shrink-0 text-faint" />}
       </button>
 
       {expanded && (
-        <div className="border-t px-4 pb-4 pt-3 space-y-3">
-          <p className="text-sm text-muted-foreground">{procedure.description}</p>
-
-          <div className="text-xs font-mono text-muted-foreground bg-muted/50 rounded px-3 py-1.5">
-            {procedure.type === "query" ? "GET" : "POST"}{" "}
-            /api/trpc/{routerName}.{procedure.name}
+        <div className="space-y-3 border-t border-border2 px-3 pb-3.5 pt-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="min-w-0 flex-1 rounded-[6px] bg-tile px-3 py-1.5 font-mono text-[11.5px] text-muted-foreground">
+              {procedure.type === "query" ? "GET" : "POST"}{" "}
+              /api/trpc/{routerName}.{procedure.name}
+            </div>
+            <AuthBadge auth={procedure.auth} />
           </div>
 
           {procedure.input && Object.keys(procedure.input).length > 0 && (
             <div>
-              <h4 className="text-sm font-medium mb-2">Input Parameters</h4>
-              <div className="rounded-md border">
-                <table className="w-full text-sm">
+              <h4 className="mb-2 text-[12px] font-semibold leading-none">Input Parameters</h4>
+              <div className="overflow-hidden rounded-[8px] border border-border2">
+                <table className="w-full">
                   <thead>
-                    <tr className="border-b bg-muted/30">
-                      <th className="px-3 py-2 text-left font-medium">Field</th>
-                      <th className="px-3 py-2 text-left font-medium">Type</th>
-                      <th className="px-3 py-2 text-left font-medium">Required</th>
-                      <th className="px-3 py-2 text-left font-medium">Details</th>
+                    <tr className="border-b border-border2 bg-tile">
+                      <th className="px-3 py-2 text-left text-[11px] font-semibold">Field</th>
+                      <th className="px-3 py-2 text-left text-[11px] font-semibold">Type</th>
+                      <th className="px-3 py-2 text-left text-[11px] font-semibold">Required</th>
+                      <th className="px-3 py-2 text-left text-[11px] font-semibold">Details</th>
                     </tr>
                   </thead>
                   <tbody>
                     {Object.entries(procedure.input).map(([field, doc]) => (
-                      <tr key={field} className="border-b last:border-0">
-                        <td className="px-3 py-2 font-mono text-xs">{field}</td>
-                        <td className="px-3 py-2 text-xs text-muted-foreground">{doc.type}</td>
-                        <td className="px-3 py-2 text-xs">
+                      <tr key={field} className="border-b border-border2 last:border-0">
+                        <td className="px-3 py-2 font-mono text-[11px]">{field}</td>
+                        <td className="px-3 py-2 text-[11px] text-muted-foreground">{doc.type}</td>
+                        <td className="px-3 py-2 text-[11px]">
                           {doc.required || procedure.inputRequired?.includes(field) ? (
-                            <Badge variant="destructive" className="text-[10px] px-1.5 py-0">required</Badge>
+                            <span
+                              className="rounded-[5px] px-1.5 py-px text-[10px] font-semibold leading-[1.6]"
+                              style={{ background: "rgba(201,107,86,0.15)", color: "#c96b56" }}
+                            >
+                              required
+                            </span>
                           ) : (
-                            <span className="text-muted-foreground">optional</span>
+                            <span className="text-faint">optional</span>
                           )}
                         </td>
-                        <td className="px-3 py-2 text-xs text-muted-foreground">
+                        <td className="px-3 py-2 text-[11px] text-muted-foreground">
                           {doc.enum ? `Enum: ${doc.enum.join(", ")}` : ""}
                           {doc.default !== undefined ? ` Default: ${String(doc.default)}` : ""}
                           {doc.description ? ` ${doc.description}` : ""}
@@ -777,14 +795,14 @@ function ProcedureCard({
 
           {procedure.exampleInput && (
             <div>
-              <h4 className="text-sm font-medium mb-1">Example Input</h4>
+              <h4 className="mb-1.5 text-[12px] font-semibold leading-none">Example Input</h4>
               <JsonBlock data={procedure.exampleInput} />
             </div>
           )}
 
           {procedure.exampleOutput && (
             <div>
-              <h4 className="text-sm font-medium mb-1">Example Output</h4>
+              <h4 className="mb-1.5 text-[12px] font-semibold leading-none">Example Output</h4>
               <JsonBlock data={procedure.exampleOutput} />
             </div>
           )}
@@ -799,8 +817,9 @@ function ProcedureCard({
 // ---------------------------------------------------------------------------
 export default function ApiDocsPage() {
   const [searchQuery, setSearchQuery] = useState("");
-  const [expandedRouters, setExpandedRouters] = useState<Set<string>>(new Set());
-  // Fix #81: per-procedure expanded state, keyed by "routerName.procedureName"
+  // Router groups are always open now (the design lists their endpoints
+  // inline), so only per-procedure detail has expanded state. Keyed by
+  // "routerName.procedureName" — Fix #81.
   const [expandedProcs, setExpandedProcs] = useState<Set<string>>(new Set());
 
   const toggleProc = (key: string) => {
@@ -830,31 +849,6 @@ export default function ApiDocsPage() {
       })
       .filter(Boolean) as RouterDoc[];
   }, [searchQuery]);
-
-  const toggleRouter = (name: string) => {
-    setExpandedRouters((prev) => {
-      const next = new Set(prev);
-      if (next.has(name)) {
-        next.delete(name);
-      } else {
-        next.add(name);
-      }
-      return next;
-    });
-  };
-
-  const expandAll = () => {
-    // Fix #81: expand both router sections AND individual procedures
-    setExpandedRouters(new Set(routers.map((r) => r.name)));
-    const allProcs = new Set<string>();
-    routers.forEach((r) => r.procedures.forEach((p) => allProcs.add(`${r.name}.${p.name}`)));
-    setExpandedProcs(allProcs);
-  };
-
-  const collapseAll = () => {
-    setExpandedRouters(new Set());
-    setExpandedProcs(new Set());
-  };
 
   const handleDownloadSpec = async () => {
     try {
@@ -886,124 +880,103 @@ export default function ApiDocsPage() {
   const totalProcedures = routers.reduce((sum, r) => sum + r.procedures.length, 0);
 
   return (
-    <div className="space-y-6">
+    /* Design stacks sections on 20px, not 24px. */
+    <div className="w-full space-y-5">
       {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <Code2 className="h-6 w-6" />
-            API Documentation
+        {/* Page header — eyebrow / display title / subtitle (design restyle).
+            The live router/procedure counts stay in the subtitle: the design's
+            static tagline should not displace real data about the workspace. */}
+        <div className="min-w-0">
+          <span className="eyebrow">API Docs</span>
+          {/* The design's h1 carries no icon. */}
+          <h1 className="display mt-2.5 text-[30px] leading-[1.1]">
+            Everything the API can do.
           </h1>
-          <p className="text-muted-foreground mt-1">
-            {routers.length} routers, {totalProcedures} procedures
+          <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
+            Reference for building on top of your workspace data — {routers.length} routers,{" "}
+            {totalProcedures} procedures
           </p>
         </div>
-        <Button variant="outline" onClick={handleDownloadSpec} className="w-full sm:w-auto">
-          <FileJson className="mr-2 h-4 w-4" />
+        <Button variant="outline" onClick={handleDownloadSpec} className={`${OUTLINE_BTN} w-full sm:w-auto`}>
+          <FileJson className="h-[13px] w-[13px]" />
           Download OpenAPI JSON
         </Button>
       </div>
 
-      {/* Info card */}
-      <Card>
-        <CardContent className="pt-6">
-          <div className="grid gap-4 sm:grid-cols-3">
-            <div>
-              <h3 className="text-sm font-medium">Base URL</h3>
-              <code className="mt-1 block text-xs font-mono text-muted-foreground bg-muted rounded px-2 py-1">
-                /api/trpc/&#123;router&#125;.&#123;procedure&#125;
-              </code>
-            </div>
-            <div>
-              <h3 className="text-sm font-medium">Authentication</h3>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Session cookie (NextAuth) + x-organization-id header for org endpoints
-              </p>
-            </div>
-            <div>
-              <h3 className="text-sm font-medium">Transport</h3>
-              <p className="mt-1 text-xs text-muted-foreground">
-                tRPC over HTTP. Queries = GET, Mutations = POST. Data serialized with superjson.
-              </p>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Search and controls */}
-      <div className="flex items-center gap-3">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="Search routers or procedures..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-10"
-          />
-        </div>
-        <Button variant="outline" size="sm" onClick={expandAll}>
-          Expand All
-        </Button>
-        <Button variant="outline" size="sm" onClick={collapseAll}>
-          Collapse All
-        </Button>
+      {/* Search. The design has no control row at all, but 51 procedures need
+          a filter, so it is kept as a single quiet field rather than a block.
+          Expand/Collapse All are gone: the groups no longer collapse. */}
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 h-[15px] w-[15px] -translate-y-1/2 text-muted-foreground" />
+        <Input
+          placeholder="Search routers or procedures..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className={`${FIELD_38} pl-9`}
+        />
       </div>
 
       {/* Router sections */}
-      <div className="space-y-4">
+      <div className="flex flex-col gap-3.5">
         {filteredRouters.length === 0 ? (
-          <Card>
-            <CardContent className="flex flex-col items-center py-12">
-              <Search className="h-10 w-10 text-muted-foreground/30 mb-2" />
-              <p className="text-muted-foreground">No results found for &quot;{searchQuery}&quot;</p>
-            </CardContent>
-          </Card>
+          <div className="flex flex-col items-center rounded-[14px] border border-border bg-card py-12">
+            <Search className="h-8 w-8 text-tile" />
+            <p className="mt-2.5 text-[12.5px] text-muted-foreground">
+              No results found for &quot;{searchQuery}&quot;
+            </p>
+          </div>
         ) : (
-          filteredRouters.map((router) => {
-            const isExpanded = expandedRouters.has(router.name) || searchQuery.trim() !== "";
-            return (
-              <Card key={router.name}>
-                <CardHeader
-                  className="cursor-pointer hover:bg-muted/30 transition-colors"
-                  onClick={() => toggleRouter(router.name)}
-                >
-                  <div className="flex items-center gap-3">
-                    {isExpanded ? (
-                      <ChevronDown className="h-5 w-5 shrink-0 text-muted-foreground" />
-                    ) : (
-                      <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground" />
-                    )}
-                    <div className="flex-1">
-                      <CardTitle className="text-lg">
-                        {router.name}
-                        <Badge variant="outline" className="ml-2 text-xs">
-                          {router.procedures.length} endpoints
-                        </Badge>
-                      </CardTitle>
-                      <CardDescription className="mt-1">{router.description}</CardDescription>
-                    </div>
-                  </div>
-                </CardHeader>
-                {isExpanded && (
-                  <CardContent className="space-y-2 pt-0">
-                    {router.procedures.map((proc) => {
-                      const procKey = `${router.name}.${proc.name}`;
-                      return (
-                        <ProcedureCard
-                          key={proc.name}
-                          procedure={proc}
-                          routerName={router.name}
-                          expanded={expandedProcs.has(procKey)}
-                          onToggle={() => toggleProc(procKey)}
-                        />
-                      );
-                    })}
-                  </CardContent>
-                )}
-              </Card>
-            );
-          })
+          /* The design lists every group's endpoints inline — no accordion, no
+             chevron, no endpoint-count chip. Collapsing 13 routers into 13
+             empty headers is what made this page read as a stack of labels
+             rather than a reference. */
+          filteredRouters.map((router) => (
+            <div key={router.name} className="rounded-[14px] border border-border bg-card p-5">
+              <h2 className={CARD_TITLE}>{router.name}</h2>
+              <p className={`mt-[5px] ${CARD_SUB}`}>{router.description}</p>
+              <div className="mt-3.5 flex flex-col gap-2">
+                {router.procedures.map((proc) => {
+                  const procKey = `${router.name}.${proc.name}`;
+                  return (
+                    <ProcedureCard
+                      key={proc.name}
+                      procedure={proc}
+                      routerName={router.name}
+                      expanded={expandedProcs.has(procKey)}
+                      onToggle={() => toggleProc(procKey)}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          ))
         )}
+      </div>
+
+      {/* The design has no info block at the top of this page. This reference
+          is real and specific to this workspace's API, so it moves to the foot
+          of the page rather than being deleted — it no longer pushes the
+          endpoint list below the fold. */}
+      <div className="grid gap-4 rounded-[12px] border border-border bg-surface1 px-4 py-3.5 sm:grid-cols-3">
+        <div>
+          <h3 className="text-[12px] font-semibold leading-none">Base URL</h3>
+          <code className="mt-1.5 block rounded-[6px] bg-tile px-2 py-1 font-mono text-[11.5px] text-muted-foreground">
+            /api/trpc/&#123;router&#125;.&#123;procedure&#125;
+          </code>
+        </div>
+        <div>
+          <h3 className="text-[12px] font-semibold leading-none">Authentication</h3>
+          <p className="mt-1.5 text-[11.5px] leading-[1.5] text-muted-foreground">
+            Session cookie (NextAuth) + x-organization-id header for org endpoints
+          </p>
+        </div>
+        <div>
+          <h3 className="text-[12px] font-semibold leading-none">Transport</h3>
+          <p className="mt-1.5 text-[11.5px] leading-[1.5] text-muted-foreground">
+            tRPC over HTTP. Queries = GET, Mutations = POST. Data serialized with superjson.
+          </p>
+        </div>
       </div>
     </div>
   );

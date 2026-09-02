@@ -153,14 +153,17 @@ export default function MediaPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
         <div className="min-w-0">
-          <h1 className="text-2xl font-bold tracking-tight">Media Library</h1>
-          <p className="text-muted-foreground">
-            Upload images &amp; videos, then attach them to any post
+          <span className="eyebrow">Media</span>
+          <h1 className="display mt-2.5 text-[30px] leading-[1.1]">
+            Every asset, one library.
+          </h1>
+          <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
             {allItems.length > 0 && (
-              <span className="ml-1">({allItems.length}{hasNextPage ? "+" : ""} files)</span>
+              <span>{allItems.length}{hasNextPage ? "+" : ""} files · </span>
             )}
+            Upload images &amp; videos, then attach them to any post
           </p>
         </div>
         <input
@@ -177,8 +180,12 @@ export default function MediaPage() {
               {uploadProgress.name} — {uploadProgress.percent}%
             </span>
           )}
-          <Button onClick={() => fileInputRef.current?.click()} disabled={isUploading}>
-            {isUploading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
+          <Button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isUploading}
+            className="pa-cta-gold h-9 rounded-[9px] px-4 text-[12.5px] font-semibold"
+          >
+            {isUploading ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Upload className="mr-2 h-3.5 w-3.5" />}
             {isUploading ? "Uploading..." : "Upload"}
           </Button>
         </div>

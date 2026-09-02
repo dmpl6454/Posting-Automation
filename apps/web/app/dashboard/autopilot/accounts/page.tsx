@@ -3,13 +3,6 @@
 import { useState } from "react";
 import { trpc } from "~/lib/trpc/client";
 import { Button } from "~/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "~/components/ui/card";
-import { Badge } from "~/components/ui/badge";
 import { Skeleton } from "~/components/ui/skeleton";
 import {
   Dialog,
@@ -30,6 +23,22 @@ import {
   UserPlus,
   X,
 } from "lucide-react";
+
+/**
+ * Design: each group card takes one hue from the palette's group ramp, cycling
+ * by position — the same ramp the Agents, Channels, RSS and Short Links cards
+ * use, so the workspace reads as one system.
+ */
+const GROUP_ACCENTS = [
+  "#C9A356",
+  "#8a9a7e",
+  "#a17a5c",
+  "#6b7d9e",
+  "#b85c5c",
+  "#7e8a9a",
+  "#9a8a5c",
+  "#5c8a7e",
+] as const;
 
 export default function AccountGroupsPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -131,28 +140,24 @@ export default function AccountGroupsPage() {
   return (
     <div className="space-y-4">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <span className="text-sm text-muted-foreground">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <span className="text-[12.5px] leading-none text-muted-foreground">
           {groups.length} group{groups.length !== 1 ? "s" : ""}
         </span>
-        <Button className="gap-2" onClick={() => setDialogOpen(true)}>
-          <Plus className="h-4 w-4" />
+        <Button
+          className="pa-cta-gold h-[34px] gap-[7px] rounded-[9px] px-3.5 text-[12.5px] font-semibold"
+          onClick={() => setDialogOpen(true)}
+        >
+          <Plus className="h-[13px] w-[13px]" />
           New Group
         </Button>
       </div>
 
       {/* Loading */}
       {isLoading ? (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
           {Array.from({ length: 3 }).map((_, i) => (
-            <Card key={i}>
-              <CardHeader>
-                <Skeleton className="h-5 w-32" />
-              </CardHeader>
-              <CardContent>
-                <Skeleton className="h-20 w-full" />
-              </CardContent>
-            </Card>
+            <Skeleton key={i} className="h-[200px] w-full rounded-[14px]" />
           ))}
         </div>
       ) : groups.length === 0 ? (
@@ -164,102 +169,116 @@ export default function AccountGroupsPage() {
           </p>
         </div>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {groups.map((group: any) => (
-            <Card key={group.id}>
-              <CardHeader className="flex flex-row items-start justify-between pb-2">
-                <CardTitle className="text-base">{group.name}</CardTitle>
-                <div className="flex gap-1">
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    className="h-8 w-8 text-muted-foreground hover:text-primary"
-                    onClick={() => {
-                      setSelectedGroupId(group.id);
-                      setSelectedAgentIds([]);
-                      setAddAgentsDialogOpen(true);
-                    }}
-                  >
-                    <UserPlus className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                    disabled={deleteMutation.isPending}
-                    onClick={() => { if (confirm(`Delete group "${group.name}"? This cannot be undone.`)) deleteMutation.mutate({ id: group.id } as any); }}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {/* Agents list */}
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Users className="h-3.5 w-3.5" />
-                    {group.agents?.length ?? 0} agent
-                    {(group.agents?.length ?? 0) !== 1 ? "s" : ""}
-                  </div>
-                  {group.agents?.length > 0 && (
-                    <div className="flex flex-wrap gap-1 mt-1">
-                      {group.agents.map((agent: any) => (
-                        <Badge
-                          key={agent.id}
-                          variant="outline"
-                          className="text-[10px] px-1.5 py-0 gap-1"
-                        >
-                          {agent.name}
-                          <button
-                            className="ml-0.5 hover:text-destructive disabled:opacity-50"
-                            disabled={removeAgentMutation.isPending && (removeAgentMutation.variables as any)?.agentId === agent.id}
-                            onClick={() =>
-                              removeAgentMutation.mutate({ agentId: agent.id } as any)
-                            }
-                          >
-                            {removeAgentMutation.isPending && (removeAgentMutation.variables as any)?.agentId === agent.id
-                              ? <Loader2 className="h-2.5 w-2.5 animate-spin" />
-                              : <X className="h-2.5 w-2.5" />}
-                          </button>
-                        </Badge>
-                      ))}
+        <div className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
+          {groups.map((group: any, idx: number) => {
+            const accent = GROUP_ACCENTS[idx % GROUP_ACCENTS.length]!;
+            return (
+              <div
+                key={group.id}
+                className="rounded-[14px] border border-border bg-card p-[18px] shadow-[0_8px_18px_-12px_rgba(0,0,0,.5)]"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-[9px]">
+                    <div
+                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] border"
+                      style={{ background: `${accent}22`, borderColor: `${accent}55` }}
+                    >
+                      <Users className="h-[13px] w-[13px]" style={{ color: accent }} />
                     </div>
+                    <p className="truncate text-[13.5px] font-semibold leading-[1.3]">
+                      {group.name}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center">
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-6 w-6 rounded-[6px] text-muted-foreground hover:bg-hover hover:text-foreground"
+                      aria-label={`Add agents to ${group.name}`}
+                      onClick={() => {
+                        setSelectedGroupId(group.id);
+                        setSelectedAgentIds([]);
+                        setAddAgentsDialogOpen(true);
+                      }}
+                    >
+                      <UserPlus className="h-3 w-3" />
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-6 w-6 rounded-[6px] text-faint hover:bg-hover hover:text-[#c96b56]"
+                      aria-label={`Delete ${group.name}`}
+                      disabled={deleteMutation.isPending}
+                      onClick={() => { if (confirm(`Delete group "${group.name}"? This cannot be undone.`)) deleteMutation.mutate({ id: group.id } as any); }}
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Agent chips */}
+                <div className="mt-3 flex flex-wrap gap-[5px]">
+                  {(group.agents?.length ?? 0) === 0 ? (
+                    <span className="text-[10px] leading-[1.6] text-faint">No agents yet</span>
+                  ) : (
+                    group.agents.map((agent: any) => (
+                      <span
+                        key={agent.id}
+                        className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-[5px] border border-border2 px-2 py-[1.5px] text-[10px] font-medium leading-[1.6] text-muted-foreground"
+                      >
+                        {agent.name}
+                        <button
+                          className="ml-0.5 hover:text-[#c96b56] disabled:opacity-50"
+                          aria-label={`Remove ${agent.name}`}
+                          disabled={removeAgentMutation.isPending && (removeAgentMutation.variables as any)?.agentId === agent.id}
+                          onClick={() =>
+                            removeAgentMutation.mutate({ agentId: agent.id } as any)
+                          }
+                        >
+                          {removeAgentMutation.isPending && (removeAgentMutation.variables as any)?.agentId === agent.id
+                            ? <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                            : <X className="h-2.5 w-2.5" />}
+                        </button>
+                      </span>
+                    ))
                   )}
                 </div>
 
                 {group.topics?.length > 0 && (
-                  <div className="flex flex-wrap gap-1">
-                    {group.topics.map((topic: string, idx: number) => (
-                      <Badge
-                        key={idx}
-                        variant="secondary"
-                        className="text-[10px] px-1.5 py-0"
+                  <div className="mt-2 flex flex-wrap gap-[5px]">
+                    {group.topics.map((topic: string, i: number) => (
+                      <span
+                        key={i}
+                        className="rounded-[4px] bg-tile px-1.5 py-[1.5px] text-[9.5px] leading-[1.6] text-faint"
                       >
                         {topic}
-                      </Badge>
+                      </span>
                     ))}
                   </div>
                 )}
 
-                <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <div className="mt-3 flex items-center justify-between text-[11px] leading-none text-faint">
                   <span>{group.postsPerDay ?? 3} posts/day</span>
-                  <span>
-                    Threshold: {group.sensitivityThreshold ?? "MEDIUM"}
-                  </span>
+                  <span>Threshold: {group.sensitivityThreshold ?? "MEDIUM"}</span>
                 </div>
 
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-muted-foreground">Auto-approve</span>
-                  <Badge
-                    variant={group.skipReviewGate ? "default" : "outline"}
-                    className="text-[10px]"
+                <div className="mt-3 flex items-center justify-between border-t border-border pt-3">
+                  <span className="text-[11.5px] leading-none text-muted-foreground">
+                    Auto-approve
+                  </span>
+                  <span
+                    className={`rounded-full px-[9px] py-0.5 text-[9.5px] font-semibold leading-[1.6] ${
+                      group.skipReviewGate
+                        ? "border border-[hsl(var(--accent-border))] bg-gold/[0.12] text-gold"
+                        : "bg-tile text-muted-foreground"
+                    }`}
                   >
                     {group.skipReviewGate ? "On" : "Off"}
-                  </Badge>
+                  </span>
                 </div>
-              </CardContent>
-            </Card>
-          ))}
+              </div>
+            );
+          })}
         </div>
       )}
 

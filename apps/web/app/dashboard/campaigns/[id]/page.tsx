@@ -47,7 +47,7 @@ import { formatDistanceToNow } from "date-fns";
 const influencerStatusColors: Record<string, string> = {
   discovered: "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300",
   shortlisted: "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300",
-  contacted: "bg-violet-100 text-violet-700 dark:bg-violet-900 dark:text-violet-300",
+  contacted: "bg-tile text-gold dark:bg-tile dark:text-gold",
   responded: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300",
   engaged: "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300",
   rejected: "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300",
@@ -362,7 +362,7 @@ export default function CampaignDetailPage() {
             <div className="space-y-3">
               {relatedInfluencers.map((inf) => (
                 <div key={inf.id} className="group flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-border/30 bg-background/40 p-3">
-                  <div className="h-9 w-9 rounded-full bg-gradient-to-br from-violet-500 to-pink-500 flex items-center justify-center text-white text-xs font-bold shrink-0">
+                  <div className="h-9 w-9 rounded-full bg-gold flex items-center justify-center text-xs font-bold text-primary-foreground shrink-0">
                     {inf.name.charAt(0).toUpperCase()}
                   </div>
                   <div className="flex-1 min-w-0 basis-40">

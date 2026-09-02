@@ -52,6 +52,7 @@ import {
   Trash2,
   ChevronDown,
   ChevronRight,
+  Eye,
   X,
   UploadCloud,
   Crop,
@@ -108,7 +109,7 @@ const FORMAT_OPTIONS = [
 const THEMES = [
   { id: "dark" as const, label: "Dark", color: "bg-zinc-900" },
   { id: "light" as const, label: "Light", color: "bg-zinc-100" },
-  { id: "gradient" as const, label: "Gradient", color: "bg-gradient-to-r from-indigo-900 to-purple-900" },
+  { id: "gradient" as const, label: "Gradient", color: "bg-tile" },
 ];
 
 // T7: a pasted aesthetic-ref URL looks like a social/post PAGE (not a direct
@@ -141,7 +142,7 @@ function ImageEngineChip({ engines, label = "Image created by" }: { engines: str
   const names = engines.map((e) => (e === "openai" ? "OpenAI (GPT Image)" : "Google Gemini (Nano Banana)"));
   return (
     <div className="mt-1.5 inline-flex w-fit items-center gap-1.5 rounded-full bg-muted px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
-      <Sparkles className="h-3 w-3 text-purple-500" />
+      <Sparkles className="h-3 w-3 text-gold" />
       {label} {names.join(" + ")}
     </div>
   );
@@ -1014,19 +1015,13 @@ export function RepurposeTab() {
 
   return (
     <div className="w-full space-y-6">
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <RefreshCw className="h-5 w-5 text-purple-500" />
-            Repurpose Content
-          </CardTitle>
-          <CardDescription>
-            {sourceMode === "text"
-              ? "Paste text to generate platform-optimised captions"
-              : "Paste a URL to create social media posts, carousels, or reels"}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-5">
+      {/* Design: this tab is a STACK of cards on the app background — Source,
+          Output Format, Look & feel, Target Platforms — not one long panel. The
+          intro line sits above the stack; the source-mode tabs are a real
+          control so they stay, and each tab renders its own card set. */}
+      {/* No intro line here — the Content Studio page already renders
+          "Paste a URL — AI turns it into captions and media you can post."
+          above the tab body, and a second copy read as a duplicate. */}
           {/* Source Mode Tabs */}
           <Tabs value={sourceMode} onValueChange={(v) => setSourceMode(v as "url" | "text")}>
             <TabsList className="grid h-auto w-full grid-cols-2">
@@ -1040,24 +1035,33 @@ export function RepurposeTab() {
               </TabsTrigger>
             </TabsList>
 
-            <TabsContent value="url" className="space-y-4 mt-4">
-              <div className="space-y-1.5">
-                <Label>URL</Label>
-                <div className="flex gap-2">
+            <TabsContent value="url" className="mt-4 space-y-4">
+              <Card>
+                <CardContent className="space-y-4 p-6">
+              <div className="flex items-center gap-2">
+                <RefreshCw className="h-[15px] w-[15px] shrink-0 text-gold" />
+                <h2 className="text-[15px] font-medium leading-[1.2]">Source</h2>
+              </div>
+              {/* Design: 11.5px/500 field label, a 38px field on the app
+                  background with the subtle border-2, and a surface-2 Preview
+                  button of the same height carrying a 13px eye glyph. */}
+              <div className="space-y-2">
+                <Label className="text-[11.5px] font-medium leading-none">URL</Label>
+                <div className="flex items-center gap-2">
                   <Input
                     type="url"
                     value={url}
                     onChange={(e) => { setUrl(e.target.value); setExtractedPreview(null); }}
                     placeholder="https://example.com/article, youtube.com/watch?v=..., x.com/post/..."
-                    className="min-w-0 flex-1"
+                    className="h-[38px] min-w-0 flex-1 rounded-[8px] border-border2 bg-background px-3 text-[12.5px]"
                   />
                   <Button
                     variant="outline"
                     onClick={handleExtractPreview}
                     disabled={!url || extractMutation.isPending}
-                    className="shrink-0 gap-1.5"
+                    className="h-[38px] shrink-0 gap-1.5 rounded-[8px] border-border2 bg-surface2 px-[14px] text-[12px] font-medium"
                   >
-                    {extractMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Globe className="h-4 w-4" />}
+                    {extractMutation.isPending ? <Loader2 className="h-[13px] w-[13px] animate-spin" /> : <Eye className="h-[13px] w-[13px]" />}
                     <span>Preview</span>
                   </Button>
                 </div>
@@ -1082,34 +1086,58 @@ export function RepurposeTab() {
                 </div>
               )}
 
+                </CardContent>
+              </Card>
+
               {/* Output Format */}
-              <div className="space-y-2">
-                <Label>Output Format</Label>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <Card>
+                <CardContent className="space-y-3 p-6">
+                {/* Design: a two-column grid of left-aligned tiles — 14px glyph,
+                    12.5px/600 label and an inline badge on one row, description
+                    beneath. Selection is the gold-soft fill + gold border, not a
+                    primary ring. */}
+                <Label className="text-[15px] font-medium leading-[1.2]">Output Format</Label>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   {FORMAT_OPTIONS.map(({ id, label, icon: Icon, desc, ...rest }) => (
                     <button
                       key={id}
                       disabled={(rest as any).disabled}
                       title={(rest as any).disabled ? "Temporarily unavailable (billing)" : undefined}
                       onClick={() => { if (!(rest as any).disabled) setFormat(id); }}
-                      className={`relative flex flex-col items-center gap-1.5 rounded-lg border p-3 text-center transition-all ${
+                      className={`min-w-0 rounded-[10px] border p-[13px] text-left transition-all ${
                         format === id
-                          ? "border-primary bg-primary/5 ring-1 ring-primary"
-                          : "border-border hover:border-primary/50"
-                      } ${(rest as any).disabled ? "opacity-40 cursor-not-allowed" : ""}`}
+                          ? "border-[hsl(var(--accent-border))] bg-gold/[0.12]"
+                          : "border-border bg-background hover:border-[hsl(var(--accent-border))]"
+                      } ${(rest as any).disabled ? "cursor-not-allowed opacity-50" : ""}`}
                     >
-                      {"badge" in rest && (rest as any).badge && (
-                        <span className="absolute -top-1.5 -right-1.5 rounded-full bg-gradient-to-r from-purple-600 to-pink-500 px-1.5 py-0.5 text-[9px] font-bold text-white shadow-sm">
-                          {(rest as any).badge}
-                        </span>
-                      )}
-                      <Icon className={`h-5 w-5 ${format === id ? "text-primary" : "text-muted-foreground"}`} />
-                      <span className="text-xs font-medium">{label}</span>
-                      <span className="text-[10px] text-muted-foreground">{desc}</span>
+                      <div className="flex items-center gap-2">
+                        <Icon className={`h-3.5 w-3.5 shrink-0 ${format === id ? "text-gold" : "text-muted-foreground"}`} />
+                        <span className="whitespace-nowrap text-[12.5px] font-semibold leading-none">{label}</span>
+                        {"badge" in rest && (rest as any).badge && (
+                          <span
+                            className={`rounded-[5px] px-1.5 py-0.5 text-[8.5px] font-bold uppercase leading-[1.4] tracking-[0.08em] ${
+                              (rest as any).badge === "NEW"
+                                ? "bg-gold text-[hsl(var(--gold-foreground))] pa-gold-glow"
+                                : "bg-tile text-muted-foreground"
+                            }`}
+                          >
+                            {(rest as any).badge}
+                          </span>
+                        )}
+                      </div>
+                      <p className="mt-[7px] text-[11px] leading-[1.5] text-muted-foreground">{desc}</p>
                     </button>
                   ))}
                 </div>
-              </div>
+                </CardContent>
+              </Card>
+
+              {/* Design: everything that shapes how the post LOOKS lives in one
+                  "Look & feel" card — the image toggle, style, brand and slide
+                  controls that used to run together in a single long column. */}
+              <Card>
+                <CardContent className="space-y-4 p-6">
+              <h2 className="text-[15px] font-medium leading-[1.2]">Look &amp; feel</h2>
 
               {/* D2/D10: Real⇄AI image toggle + per-slot "your image" picker. The
                   toggle governs whether the AI invents a photo for any slot with no
@@ -1165,8 +1193,8 @@ export function RepurposeTab() {
                             </div>
                           </div>
                         )}
-                        <Label className="text-sm font-medium">Your images (optional)</Label>
-                        <p className="text-xs text-muted-foreground">
+                        <Label className="text-[11.5px] font-medium leading-none text-muted-foreground">Your images (optional)</Label>
+                        <p className="text-[11px] leading-[1.45] text-muted-foreground">
                           {format === "postcard"
                             ? "Assign your own photos to grid slots — empty slots use article images or AI."
                             : "Assign your own photo to a slot — it overrides AI/article for that slot only."}
@@ -1265,7 +1293,7 @@ export function RepurposeTab() {
                        closest one (and the user can change it). ── */}
                   <div className="space-y-2">
                     <div className="flex items-center gap-2">
-                      <Label>Creative style</Label>
+                      <Label className="text-[11.5px] font-medium leading-none text-muted-foreground">Creative style</Label>
                       {styleAutoSuggested && aestheticRefUrl && (
                         <span className="text-[10px] text-primary">Suggested from your reference</span>
                       )}
@@ -1285,7 +1313,11 @@ export function RepurposeTab() {
                             // Manual pick = explicit choice — drop the "suggested" badge.
                             setStyleAutoSuggested(false);
                           }}
-                          className={`rounded-lg border px-3 py-2 text-xs font-medium ${creativeStyle === s.id ? "border-primary bg-primary/10" : "border-border"}`}
+                          className={`rounded-[9px] border px-3 py-2.5 text-[11.5px] leading-none transition-all ${
+                            creativeStyle === s.id
+                              ? "border-[hsl(var(--accent-border))] bg-gold/[0.12] font-semibold text-gold"
+                              : "border-border font-medium text-muted-foreground hover:text-foreground"
+                          }`}
                         >
                           {s.label}
                         </button>
@@ -1607,42 +1639,49 @@ export function RepurposeTab() {
                     )}
                   </div>
 
+                  {/* Design: Brand color and Brand name sit SIDE BY SIDE as two
+                      stacked label+38px-field cells, instead of two inline rows
+                      with the label wedged against the input. */}
+                  <div className="grid gap-3 pt-1 sm:grid-cols-2">
                   {/* Brand accent color (optional) */}
-                  <div className="flex items-center gap-2 pt-1">
-                    <Label className="text-xs" htmlFor="accent-color">Brand color (optional)</Label>
-                    <input
-                      id="accent-color"
-                      type="color"
-                      value={accentColor || "#0052cc"}
-                      onChange={(e) => setAccentColor(e.target.value)}
-                      className="h-8 w-10 cursor-pointer rounded border border-border bg-background p-0.5"
-                    />
-                    <Input
-                      value={accentColor}
-                      onChange={(e) => setAccentColor(e.target.value)}
-                      placeholder="#0052cc"
-                      className="h-8 w-28 text-xs"
-                    />
-                    {accentColor && (
-                      <button
-                        type="button"
-                        onClick={() => setAccentColor("")}
-                        className="text-[10px] text-muted-foreground hover:underline"
-                      >
-                        Clear
-                      </button>
-                    )}
+                  <div className="min-w-0 space-y-2">
+                    <Label className="text-[11.5px] font-medium leading-none text-muted-foreground" htmlFor="accent-color">Brand color</Label>
+                    <div className="flex h-[38px] items-center gap-[9px] rounded-[8px] border border-border2 bg-background px-[11px]">
+                      <input
+                        id="accent-color"
+                        type="color"
+                        value={accentColor || "#0052cc"}
+                        onChange={(e) => setAccentColor(e.target.value)}
+                        className="h-[14px] w-[14px] shrink-0 cursor-pointer rounded-[4px] border-0 bg-transparent p-0"
+                      />
+                      <Input
+                        value={accentColor}
+                        onChange={(e) => setAccentColor(e.target.value)}
+                        placeholder="#0052cc"
+                        className="h-auto min-w-0 flex-1 border-0 bg-transparent p-0 text-[12px] text-muted-foreground focus-visible:ring-0"
+                      />
+                      {accentColor && (
+                        <button
+                          type="button"
+                          onClick={() => setAccentColor("")}
+                          className="shrink-0 text-[10px] text-muted-foreground hover:underline"
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   {/* ── Brand name on card (optional) — Feature 2 ── */}
-                  <div className="flex items-center gap-2 pt-1">
-                    <Label className="text-xs" htmlFor="brand-name-input">Brand name on card</Label>
+                  <div className="min-w-0 space-y-2">
+                    <Label className="text-[11.5px] font-medium leading-none text-muted-foreground" htmlFor="brand-name-input">Brand name on card</Label>
+                    <div className="flex items-center gap-2">
                     <Input
                       id="brand-name-input"
                       value={brandNameInput}
                       onChange={(e) => setBrandNameInput(e.target.value)}
                       placeholder="e.g. Dashmani Media"
-                      className="h-8 flex-1 text-xs"
+                      className="h-[38px] min-w-0 flex-1 rounded-[8px] border-border2 bg-background px-[11px] text-[12px]"
                     />
                     {brandNameInput.trim() && (
                       <button
@@ -1669,6 +1708,8 @@ export function RepurposeTab() {
                         Clear
                       </button>
                     )}
+                    </div>
+                  </div>
                   </div>
 
                   {/* ── Style reference (optional) ── ONE consolidated block (T6):
@@ -1869,8 +1910,8 @@ export function RepurposeTab() {
 
               {/* Veo3 AI Video info */}
               {format === "ai_video" && (
-                <div className="rounded-lg border border-purple-300 bg-purple-50/50 p-3 dark:border-purple-800 dark:bg-purple-950/30">
-                  <p className="text-xs font-semibold text-purple-700 dark:text-purple-300">🎬 Veo3 Ultra — AI-Generated Cinematic Video</p>
+                <div className="rounded-lg border border-[hsl(var(--accent-border))] bg-tile p-3 dark:border-[hsl(var(--accent-border))] dark:bg-tile">
+                  <p className="text-xs font-semibold text-gold dark:text-gold">🎬 Veo3 Ultra — AI-Generated Cinematic Video</p>
                   <p className="mt-1 text-[11px] text-muted-foreground">
                     Generates a real AI video with text slides, relevant background visuals, smooth transitions, and background music.
                     Each key point becomes a scene with cinematic B-roll footage. Takes 1-3 minutes to generate.
@@ -1913,7 +1954,7 @@ export function RepurposeTab() {
 
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <Mic className="h-4 w-4 text-purple-500" />
+                      <Mic className="h-4 w-4 text-gold" />
                       <div>
                         <p className="text-sm font-medium">Voice-Over</p>
                         <p className="text-[10px] text-muted-foreground">AI narration of the article</p>
@@ -1953,56 +1994,82 @@ export function RepurposeTab() {
                   </div>
                 </div>
               )}
+                </CardContent>
+              </Card>
             </TabsContent>
 
-            <TabsContent value="text" className="space-y-4 mt-4">
-              <div className="space-y-1.5">
-                <Label>Source Content</Label>
-                <Textarea
-                  value={originalContent}
-                  onChange={(e) => setOriginalContent(e.target.value)}
-                  placeholder="Paste your blog post, article, newsletter, or any content here..."
-                  className="min-h-[200px] resize-y"
-                />
-                <p className="text-xs text-muted-foreground">{originalContent.length} characters</p>
-              </div>
+            <TabsContent value="text" className="mt-4">
+              <Card>
+                <CardContent className="space-y-4 p-6">
+                  <div className="flex items-center gap-2">
+                    <RefreshCw className="h-[15px] w-[15px] shrink-0 text-gold" />
+                    <h2 className="text-[15px] font-medium leading-[1.2]">Source</h2>
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-[11.5px] font-medium leading-none">Source Content</Label>
+                    <Textarea
+                      value={originalContent}
+                      onChange={(e) => setOriginalContent(e.target.value)}
+                      placeholder="Paste your blog post, article, newsletter, or any content here..."
+                      className="min-h-[200px] resize-y rounded-[8px] border-border2 bg-background px-[13px] py-3 text-[12.5px] leading-[1.6]"
+                    />
+                    <p className="text-[11px] leading-none text-muted-foreground">{originalContent.length} characters</p>
+                  </div>
+                </CardContent>
+              </Card>
             </TabsContent>
           </Tabs>
 
+          {/* Design: Target Platforms — channels, provider and the CTA — is its
+              own card at the bottom of the stack. */}
+          <Card>
+            <CardContent className="space-y-4 p-6">
+
           {/* Target Platforms */}
           <div className="space-y-2">
-            <Label>Target Platforms</Label>
-            <div className="flex flex-wrap gap-2">
+            {/* Design chip: 8px radius, 7px/12px padding, 11.5px — selected is a
+                gold-soft fill with a gold border and gold text; unselected is a
+                borderless tile. */}
+            {/* The selection count rides on the heading row instead of sitting
+                on its own line under the chips — one less stray line of text
+                between two chip grids. */}
+            <div className="flex items-baseline justify-between gap-3">
+              <Label className="text-[15px] font-medium leading-[1.2]">Target Platforms</Label>
+              <span className="shrink-0 text-[11px] leading-none text-muted-foreground">
+                {selectedPlatforms.length} selected
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
               {ALL_PLATFORMS.map((platform) => (
                 <button
                   key={platform}
                   onClick={() => togglePlatform(platform)}
-                  className={`rounded-full border px-3 py-1 text-xs font-medium transition-all ${
+                  className={`whitespace-nowrap rounded-[8px] border px-3 py-[7px] text-[11.5px] leading-none transition-all ${
                     selectedPlatforms.includes(platform)
-                      ? "border-primary bg-primary text-primary-foreground"
-                      : "border-border bg-background text-muted-foreground hover:border-primary/50"
+                      ? "border-[hsl(var(--accent-border))] bg-gold/[0.12] font-semibold text-gold"
+                      : "border-transparent bg-tile font-medium text-muted-foreground hover:text-foreground"
                   }`}
                 >
                   {platform.charAt(0) + platform.slice(1).toLowerCase()}
                 </button>
               ))}
             </div>
-            <p className="text-xs text-muted-foreground">
-              {selectedPlatforms.length} platform{selectedPlatforms.length !== 1 ? "s" : ""} selected
-            </p>
           </div>
 
           {/* Publish to Channels */}
           {activeChannels.length > 0 && (
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <Label>Publish to Channels</Label>
-                <div className="flex items-center gap-2">
+                <Label className="text-[11.5px] font-medium leading-none text-muted-foreground">Publish to Channels</Label>
+                <div className="flex items-center gap-3">
+                  <span className="text-[11px] leading-none text-muted-foreground">
+                    {selectedChannelIds.length} selected
+                  </span>
                   <button
                     onClick={() => setSelectedChannelIds(
                       selectedChannelIds.length === activeChannels.length ? [] : activeChannels.map((c: any) => c.id)
                     )}
-                    className="text-[10px] text-primary hover:underline"
+                    className="text-[11px] leading-none text-gold hover:underline"
                   >
                     {selectedChannelIds.length === activeChannels.length ? "Deselect All" : "Select All"}
                   </button>
@@ -2013,64 +2080,78 @@ export function RepurposeTab() {
                   placeholder="Search channels..."
                   value={channelSearch}
                   onChange={(e) => setChannelSearch(e.target.value)}
-                  className="h-8 text-xs"
+                  className="h-[38px] rounded-[8px] border-border2 bg-background px-3 text-[12.5px]"
                 />
               )}
-              <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto">
+              {/* ONE line: channel chips stay on a single row and the row scrolls
+                  sideways when there are more than fit (this account can carry
+                  100+ channels). Scrollbar hidden so it still reads as a strip;
+                  `shrink-0` on each chip stops long names being squeezed. */}
+              <div className="flex flex-nowrap gap-2 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                 {filteredChannels.map((channel: any) => (
                   <button
                     key={channel.id}
                     onClick={() => setSelectedChannelIds((prev) =>
                       prev.includes(channel.id) ? prev.filter((id) => id !== channel.id) : [...prev, channel.id]
                     )}
-                    className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium transition-all ${
+                    className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[8px] border px-3 py-[7px] text-[11.5px] leading-none transition-all ${
                       selectedChannelIds.includes(channel.id)
-                        ? "border-primary bg-primary text-primary-foreground"
-                        : "border-border bg-background text-muted-foreground hover:border-primary/50"
+                        ? "border-[hsl(var(--accent-border))] bg-gold/[0.12] font-semibold text-gold"
+                        : "border-transparent bg-tile font-medium text-muted-foreground hover:text-foreground"
                     }`}
                   >
                     {channel.avatar && (
                       <img src={channel.avatar} alt="" className="h-4 w-4 rounded-full object-cover" />
                     )}
                     <span>{channel.name}</span>
-                    <Badge variant="secondary" className="text-[9px] px-1 py-0">
-                      {channel.platform.charAt(0) + channel.platform.slice(1).toLowerCase()}
-                    </Badge>
+                    {/* A flat 9.5px caption rather than the Badge component —
+                        the badge's own padding and radius made every channel
+                        chip taller than the platform chips above it. */}
+                    <span className="text-[9.5px] uppercase leading-none tracking-[0.06em] text-faint">
+                      {channel.platform.toLowerCase()}
+                    </span>
                   </button>
                 ))}
                 {filteredChannels.length === 0 && channelSearch && (
-                  <p className="text-xs text-muted-foreground py-2">No channels match &ldquo;{channelSearch}&rdquo;</p>
+                  <p className="py-2 text-[11px] text-muted-foreground">No channels match &ldquo;{channelSearch}&rdquo;</p>
                 )}
               </div>
-              <p className="text-xs text-muted-foreground">
-                {selectedChannelIds.length} channel{selectedChannelIds.length !== 1 ? "s" : ""} selected for publishing
-              </p>
             </div>
           )}
 
           {/* AI Text Provider — governs captions/headline/hook ONLY. Images are
               created by a separate image engine (Gemini → OpenAI fallback) that
               this control does NOT select; that's surfaced in the result card. */}
-          <div className="w-64 space-y-1.5">
-            <Label>AI Text Provider</Label>
-            <Select value={provider} onValueChange={(v) => setProvider(v as typeof providers[number])}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {(Object.entries(PROVIDER_LABELS) as [typeof providers[number], string][]).map(([value, label]) => {
-                  const configured = aiConfig ? (aiConfig as Record<string, boolean>)[value] !== false : true;
-                  return (
-                    <SelectItem key={value} value={value} disabled={!configured}>
-                      <span className="flex items-center gap-2">
-                        {label}
-                        {!configured && <span className="text-[10px] text-muted-foreground">Not configured</span>}
-                      </span>
-                    </SelectItem>
-                  );
-                })}
-              </SelectContent>
-            </Select>
+          {/* Design: the provider is a grid of tiles, not a dropdown — 9px radius,
+              10px/8px padding, centred 11px/600 label over a 9.5px "Not
+              configured" note. Same single-select state as before. */}
+          <div className="space-y-2">
+            <Label className="text-[11.5px] font-medium leading-none text-muted-foreground">AI Text Provider</Label>
+            <div className="grid grid-cols-2 gap-2 lg:grid-cols-3">
+              {(Object.entries(PROVIDER_LABELS) as [typeof providers[number], string][]).map(([value, label]) => {
+                const configured = aiConfig ? (aiConfig as Record<string, boolean>)[value] !== false : true;
+                const active = provider === value;
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    disabled={!configured}
+                    title={configured ? undefined : "Not configured — API key missing"}
+                    onClick={() => { if (configured) setProvider(value); }}
+                    className={`flex min-w-0 flex-col items-center gap-[3px] rounded-[9px] border px-2 py-2.5 transition-all ${
+                      active
+                        ? "border-[hsl(var(--accent-border))] bg-gold/[0.12] text-gold"
+                        : "border-border bg-background text-muted-foreground hover:text-foreground"
+                    } ${configured ? "" : "cursor-not-allowed opacity-50"}`}
+                  >
+                    <span className="max-w-full truncate text-[11px] font-semibold leading-[1.2]">{label}</span>
+                    {!configured && (
+                      <span className="text-[9.5px] leading-[1.2] text-faint">Not configured</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
             <p className="text-[11px] leading-snug text-muted-foreground">
               Writes captions &amp; headlines. Images are created by our image
               engine (Gemini, with OpenAI fallback) — not this setting.
@@ -2085,13 +2166,14 @@ export function RepurposeTab() {
               selectedPlatforms.length === 0 ||
               isLoading
             }
-            className="w-full gap-2"
-            size="lg"
+            /* Design CTA: the bone `--fg` fill on app-bg text, 40px tall at 9px
+               radius — not the primary button, and not the gold CTA. */
+            className="h-10 w-full gap-[7px] rounded-[9px] bg-foreground text-[12.5px] font-semibold text-background hover:bg-foreground/90"
           >
             {isLoading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : (
-              <Sparkles className="h-4 w-4" />
+              <RefreshCw className="h-3.5 w-3.5" />
             )}
             {isLoading
               ? sourceMode === "text"
@@ -2102,8 +2184,8 @@ export function RepurposeTab() {
                 : `Repurpose as ${FORMAT_OPTIONS.find((f) => f.id === format)?.label || "Static Post"}`}
           </Button>
 
-        </CardContent>
-      </Card>
+            </CardContent>
+          </Card>
 
       {/* Activity Log */}
       {progressSteps.length > 0 && (
@@ -2175,7 +2257,7 @@ export function RepurposeTab() {
           {results.mediaFailed && results.mediaUrls.length === 0 && (
             <Card className="border-destructive/50 bg-destructive/5">
               <CardHeader className="pb-2">
-                <CardTitle className="text-base flex items-center gap-2 text-destructive">
+                <CardTitle className="flex items-center gap-2 text-destructive">
                   <AlertTriangle className="h-4 w-4" />
                   {results.format === "reel" || results.format === "ai_video" || results.format === "seedance_video" ? "Video" : results.format === "carousel" ? "Carousel" : "Image"} could not be generated
                 </CardTitle>
@@ -2190,8 +2272,8 @@ export function RepurposeTab() {
           {results.mediaUrls.length > 0 && (
             <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-base flex items-center gap-2">
-                  {results.format === "ai_video" || results.format === "seedance_video" ? <Video className="h-4 w-4 text-purple-500" /> : results.format === "reel" ? <Film className="h-4 w-4 text-purple-500" /> : results.mediaUrls.length > 1 ? <Layers className="h-4 w-4 text-blue-500" /> : <Image className="h-4 w-4 text-green-500" />}
+                <CardTitle className="flex items-center gap-2">
+                  {results.format === "ai_video" || results.format === "seedance_video" ? <Video className="h-4 w-4 text-gold" /> : results.format === "reel" ? <Film className="h-4 w-4 text-gold" /> : results.mediaUrls.length > 1 ? <Layers className="h-4 w-4 text-blue-500" /> : <Image className="h-4 w-4 text-green-500" />}
                   Generated {results.format === "ai_video" ? "AI Video (Veo3)" : results.format === "seedance_video" ? "AI Video (Seedance 2.0)" : results.format === "reel" ? "Reel Video" : results.mediaUrls.length > 1 ? `Carousel (${results.mediaUrls.length} slides)` : "Static Post"}
                 </CardTitle>
                 <CardDescription>

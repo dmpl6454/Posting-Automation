@@ -23,12 +23,15 @@ export default async function AdminLayout({
   }
 
   return (
-    // The admin console is a light-only design (AdminShell/AdminHeader use
-    // hardcoded bg-white/bg-gray-50 with no dark: variants). Pin it to the
-    // light theme so theme-aware text (text-foreground, Badge variant="outline",
-    // bare table cells) stays visible even when the OS is in dark mode —
-    // otherwise near-white text renders on the light surfaces (invisible rows).
-    <Providers forcedTheme="light">
+    // The admin console follows the app theme (the design shows it dark).
+    //
+    // It was previously pinned to light because AdminShell/AdminHeader painted
+    // hardcoded bg-white / bg-gray-50 with no dark: variants, so theme-aware
+    // text turned near-white on those light surfaces and rows went invisible.
+    // Those two surfaces now use bg-card / bg-background, so the pin is no
+    // longer needed. ⚠️ If you add a hardcoded light surface here again, it
+    // will be unreadable in dark mode — use the theme tokens.
+    <Providers>
       <ImpersonationBanner />
       <AdminShell>{children}</AdminShell>
     </Providers>

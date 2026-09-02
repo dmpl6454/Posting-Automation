@@ -111,7 +111,7 @@ export default function AdminTeamDetailPage() {
       {/* Add member */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Add a member</CardTitle>
+          <CardTitle>Add a member</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <p className="text-sm text-muted-foreground">
@@ -175,12 +175,12 @@ export default function AdminTeamDetailPage() {
       {/* Members */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Members</CardTitle>
+          <CardTitle>Members</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           {restrictedCount > 0 && (
-            <div className="flex gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
-              <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+            <div className="flex gap-2 rounded-md border border-[rgba(224,184,74,0.4)] bg-[rgba(224,184,74,0.1)] p-3 text-[12.5px]">
+              <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-[#e0b84a]" />
               <p>
                 {restrictedCount} member
                 {restrictedCount === 1 ? " has" : "s have"} the app role{" "}
@@ -257,7 +257,7 @@ export default function AdminTeamDetailPage() {
                         ) : (
                           <Badge
                             variant="outline"
-                            className="border-amber-500/50 text-amber-700"
+                            className="border-[rgba(224,184,74,0.5)] text-[#e0b84a]"
                           >
                             user
                           </Badge>
@@ -317,7 +317,7 @@ export default function AdminTeamDetailPage() {
       {team && team.channelsByPlatform.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">
+            <CardTitle>
               Shared channels ({channelCount})
             </CardTitle>
           </CardHeader>

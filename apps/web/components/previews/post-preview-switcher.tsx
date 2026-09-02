@@ -96,12 +96,20 @@ export function PostPreviewSwitcher({
   return (
     <div className="space-y-3">
       <Tabs value={activePlatform} onValueChange={setActivePlatform}>
-        {/* Full-width, wrapping tab bar — tabs flow onto a second line on narrow
-            screens instead of forcing a horizontal scroll, and the muted bar
-            never overflows its container. */}
-        <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1">
+        {/* ONE line: the pills never wrap. They stay on a single row and the row
+            scrolls horizontally if the panel is too narrow for all of them —
+            the scrollbar itself is hidden so the bar still reads as a clean
+            strip. `flex-none` keeps each pill at its natural width so a long
+            label ("X / Twitter") can't be squeezed. */}
+        {/* Design: rounded pills — accent fill when active, hairline border
+            when not. `bg-transparent` clears the TabsList's own muted bar. */}
+        <TabsList className="flex h-auto w-full flex-nowrap justify-start gap-1 overflow-x-auto bg-transparent p-0 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {availablePlatforms.map((p) => (
-            <TabsTrigger key={p} value={p} className="text-xs">
+            <TabsTrigger
+              key={p}
+              value={p}
+              className="flex-none whitespace-nowrap rounded-full border border-border2 px-[11px] py-[7px] text-[11px] font-medium leading-none text-muted-foreground transition-all data-[state=active]:border-gold data-[state=active]:bg-gold data-[state=active]:font-semibold data-[state=active]:text-[hsl(var(--gold-foreground))] data-[state=active]:shadow-none"
+            >
               {getPlatformLabel(p)}
             </TabsTrigger>
           ))}

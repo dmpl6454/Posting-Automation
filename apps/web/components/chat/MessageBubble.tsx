@@ -101,7 +101,7 @@ export function MessageBubble({ message, onExecuteAction, isExecuting, executedA
           "flex h-8 w-8 shrink-0 items-center justify-center rounded-full",
           isUser
             ? "bg-primary text-primary-foreground"
-            : "bg-purple-100 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400"
+            : "bg-tile text-gold dark:bg-tile dark:text-gold"
         )}
       >
         {isUser ? <User className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
@@ -153,7 +153,7 @@ export function MessageBubble({ message, onExecuteAction, isExecuting, executedA
               <button
                 onClick={() => onExecuteAction?.(action)}
                 disabled={isExecuting || isActionExecuted}
-                className="rounded-lg bg-purple-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-purple-700 disabled:opacity-50"
+                className="rounded-lg bg-foreground px-4 py-2 text-sm font-medium text-background transition-colors hover:opacity-[0.88] disabled:opacity-50"
               >
                 {isExecuting ? "Creating..." : "✓ Create this agent"}
               </button>
@@ -209,7 +209,7 @@ export function MessageBubble({ message, onExecuteAction, isExecuting, executedA
               <button
                 onClick={() => onExecuteAction?.(action)}
                 disabled={isExecuting || isActionExecuted}
-                className="rounded-lg bg-purple-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-purple-700 disabled:opacity-50"
+                className="rounded-lg bg-foreground px-4 py-2 text-sm font-medium text-background transition-colors hover:opacity-[0.88] disabled:opacity-50"
               >
                 {isExecuting
                   ? "Working..."

@@ -102,7 +102,7 @@ function WebhookDeliveryPageInner() {
       {/* Webhook Details */}
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-base">
+          <CardTitle className="flex items-center gap-2">
             <Webhook className="h-5 w-5" />
             Webhook Details
           </CardTitle>
@@ -150,7 +150,7 @@ function WebhookDeliveryPageInner() {
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
             <div>
-              <CardTitle className="text-base">Delivery History</CardTitle>
+              <CardTitle>Delivery History</CardTitle>
               <CardDescription>
                 {deliveriesData?.total ?? 0} total deliveries
               </CardDescription>

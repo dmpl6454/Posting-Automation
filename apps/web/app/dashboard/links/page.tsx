@@ -35,6 +35,16 @@ import {
 
 // Fix #46: removed localStorage getOrgId() — backend scopes by session
 
+/**
+ * Design: each card's glyph tile takes the next colour from the shared accent
+ * palette, so a list of links is scannable by colour instead of a column of
+ * identical blue squares. Same palette the RSS feed cards use.
+ */
+const LINK_ACCENTS = [
+  "#C9A356", "#8a9a7e", "#a17a5c", "#6b7d9e",
+  "#b85c5c", "#7e8a9a", "#9a8a5c", "#5c8a7e",
+] as const;
+
 function getBaseUrl(): string {
   if (typeof window !== "undefined") {
     return window.location.origin;
@@ -96,17 +106,35 @@ function LinksPageInner() {
 
   return (
     <div className="space-y-8">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+      {/* Page header — design pattern (see the RSS page for the same shape). */}
+      <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
         <div className="min-w-0">
-          <h1 className="text-2xl font-bold tracking-tight">Short Links</h1>
-          <p className="text-muted-foreground">
+          <span className="eyebrow">Short Links</span>
+          <h1 className="display mt-2.5 text-[30px] leading-[1.1]">
+            Shrink, share, track.
+          </h1>
+          <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
             Create short links and track click analytics
           </p>
         </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-3">
+          <div className="flex h-9 items-center gap-3.5 rounded-[9px] border border-border bg-card px-4">
+            <div>
+              <div className="text-[17px] font-semibold leading-none">{data?.links?.length ?? 0}</div>
+              <div className="mt-0.5 whitespace-nowrap text-[9px] leading-none text-faint">links</div>
+            </div>
+            <span className="h-5 w-px bg-border2" />
+            <div>
+              <div className="text-[17px] font-semibold leading-none text-gold">
+                {data?.links?.reduce((n, l) => n + (l.clicks ?? 0), 0) ?? 0}
+              </div>
+              <div className="mt-0.5 whitespace-nowrap text-[9px] leading-none text-faint">clicks</div>
+            </div>
+          </div>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
-            <Button className="shrink-0 gap-2">
-              <Plus className="h-4 w-4" />
+            <Button className="pa-cta-gold h-9 shrink-0 gap-[7px] rounded-[9px] px-3.5 text-[12.5px] font-semibold">
+              <Plus className="h-3.5 w-3.5" />
               Create Link
             </Button>
           </DialogTrigger>
@@ -151,6 +179,7 @@ function LinksPageInner() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+        </div>
       </div>
 
       {/* Links List */}
@@ -171,80 +200,90 @@ function LinksPageInner() {
           </CardContent>
         </Card>
       ) : (
-        <div className="space-y-3">
-          {data.links.map((link: any) => (
-            <Card key={link.id}>
-              <CardContent className="p-4">
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-blue-100 text-blue-600 dark:bg-blue-950 dark:text-blue-400">
-                    <Link2 className="h-5 w-5" />
+        <div className="space-y-2.5">
+          {data.links.map((link: any, i: number) => {
+            const accent = LINK_ACCENTS[i % LINK_ACCENTS.length]!;
+            /* Design: the three actions form ONE bordered surface-1 pill of 26px
+               buttons, not three loose ghost buttons. */
+            const actionBtn =
+              "flex h-[26px] w-[26px] items-center justify-center rounded-[6px] text-muted-foreground transition-colors hover:bg-hover hover:text-foreground";
+            return (
+              <Card
+                key={link.id}
+                className="px-4 py-3.5 shadow-[0_6px_14px_-10px_rgba(0,0,0,.5)] transition-colors hover:border-[hsl(var(--accent-border))]"
+              >
+                <div className="flex flex-wrap items-center gap-[14px]">
+                  {/* 34px tile tinted with this link's accent, like the RSS cards. */}
+                  <div
+                    className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-[10px] border"
+                    style={{ backgroundColor: `${accent}22`, borderColor: `${accent}55` }}
+                  >
+                    <Link2 className="h-[15px] w-[15px]" style={{ color: accent }} />
                   </div>
-                  <div className="min-w-0 flex-1 basis-40">
-                    <div className="flex items-center gap-2">
-                      <code className="truncate rounded bg-muted px-1.5 py-0.5 text-sm font-medium">
+                  <div className="min-w-[220px] flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="rounded-[5px] bg-tile px-2 py-0.5 font-mono text-[12px] font-semibold leading-[1.6]">
                         /s/{link.code}
-                      </code>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-6 w-6"
+                      </span>
+                      <button
+                        type="button"
+                        className="flex h-[23px] w-[23px] items-center justify-center rounded-[6px] transition-colors hover:bg-hover"
                         onClick={() => copyShortUrl(link.code, link.id)}
                         title="Copy short URL"
                       >
                         {copiedId === link.id ? (
-                          <Check className="h-3.5 w-3.5 text-green-600" />
+                          <Check className="h-3 w-3 text-gold" />
                         ) : (
-                          <Copy className="h-3.5 w-3.5" />
+                          <Copy className="h-3 w-3 text-muted-foreground" />
                         )}
-                      </Button>
+                      </button>
                     </div>
-                    <p className="truncate text-xs text-muted-foreground">
+                    <p className="mt-[5px] max-w-[420px] truncate text-[11.5px] leading-[1.4] text-muted-foreground">
                       {link.originalUrl}
                     </p>
                   </div>
-                  <div className="flex shrink-0 items-center gap-3">
+                  <div className="flex shrink-0 items-center gap-4">
                     <div className="text-right">
-                      <div className="flex items-center justify-end gap-1 whitespace-nowrap text-sm font-medium">
-                        <MousePointerClick className="h-3.5 w-3.5 text-muted-foreground" />
+                      <div className="flex items-center justify-end gap-[5px] whitespace-nowrap text-[12.5px] font-semibold leading-none">
+                        <MousePointerClick className="h-[11px] w-[11px] text-muted-foreground" />
                         {link.clicks} clicks
                       </div>
-                      <p className="text-[10px] text-muted-foreground">
+                      <p className="mt-1 whitespace-nowrap text-[10px] leading-none text-faint">
                         Created {new Date(link.createdAt).toLocaleDateString()}
                       </p>
                     </div>
-                    <div className="flex items-center gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
+                    <div className="flex items-center gap-px rounded-[8px] border border-border bg-surface1 p-0.5">
+                      <button
+                        type="button"
+                        className={`${actionBtn} ${statsLinkId === link.id ? "text-gold" : ""}`}
                         onClick={() =>
                           setStatsLinkId(statsLinkId === link.id ? null : link.id)
                         }
                         title="View Stats"
                       >
-                        <BarChart3 className="h-4 w-4" />
-                      </Button>
+                        <BarChart3 className="h-[13px] w-[13px]" />
+                      </button>
                       {isHttpUrl(link.originalUrl) ? (
                         <a
                           href={link.originalUrl}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                          className={actionBtn}
+                          title="Open"
                         >
-                          <ExternalLink className="h-4 w-4" />
+                          <ExternalLink className="h-[13px] w-[13px]" />
                         </a>
                       ) : (
                         <span
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-red-400"
+                          className="flex h-[26px] w-[26px] items-center justify-center rounded-[6px] text-[#c96b56]"
                           title="Unsafe URL scheme"
                         >
-                          <ExternalLink className="h-4 w-4" />
+                          <ExternalLink className="h-[13px] w-[13px]" />
                         </span>
                       )}
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-destructive hover:text-destructive"
+                      <button
+                        type="button"
+                        className={`${actionBtn} hover:text-[#c96b56]`}
                         onClick={() => {
                           if (confirm("Delete this short link?")) {
                             deleteLink.mutate({ id: link.id });
@@ -252,16 +291,16 @@ function LinksPageInner() {
                         }}
                         title="Delete"
                       >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                        <Trash2 className="h-[13px] w-[13px]" />
+                      </button>
                     </div>
                   </div>
                 </div>
 
                 {statsLinkId === link.id && <LinkStats linkId={link.id} />}
-              </CardContent>
-            </Card>
-          ))}
+              </Card>
+            );
+          })}
         </div>
       )}
     </div>
@@ -352,7 +391,7 @@ function LinkStats({ linkId }: { linkId: string }) {
           {data.clicksByHour.map((h) => (
             <div
               key={h.hour}
-              className="flex-1 rounded-t bg-purple-500"
+              className="flex-1 rounded-t bg-tile"
               style={{ height: `${Math.max((h.count / maxHour) * 40, 2)}px` }}
               title={`${h.hour}:00 — ${h.count} clicks`}
             />

@@ -33,7 +33,6 @@ import {
   Eye,
   ImagePlus,
   X,
-  Paintbrush,
   Upload,
   FolderOpen,
   Search,
@@ -82,6 +81,13 @@ interface ComposeTabProps {
    * is always visible — undefined behaves as active.
    */
   isActive?: boolean;
+  /**
+   * Monotonic counter bumped by the page header's "Create Design" button. The
+   * design puts that CTA in the page header (not inside the compose column), so
+   * the header owns the click and this opens the MediaEditor here. Any increase
+   * opens the editor; the initial 0/undefined never does.
+   */
+  openDesignSignal?: number;
 }
 
 // Fix #24: sessionStorage key for carrying draft content from GenerateTab / ImageTab
@@ -96,6 +102,24 @@ const COMPOSE_DRAFT_KEY = "compose:draftContent";
 // Tiles for local videos above this size skip the inline metadata <video> —
 // WebKit does GB-scale opportunistic read bursts on high-bitrate blobs.
 const TILE_VIDEO_PREVIEW_MAX_BYTES = 256 * 1024 * 1024;
+
+/*
+ * The tile's hover-reveal control strip (Edit / Thumbnail / Super text).
+ * ONE base so the three cannot drift apart visually — they stack on the same
+ * tile edge, so a difference in height or type size reads as a rendering bug.
+ * The `[@media(hover:hover)]` gating is load-bearing: it keeps the controls
+ * permanently visible on touch devices while desktop stays hover-reveal.
+ */
+const TILE_STRIP =
+  "absolute left-0 right-0 py-0.5 text-center text-[10px] leading-[1.6] tracking-[0.02em] opacity-100 transition-opacity [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100";
+// Control carries no value yet — a quiet scrim over the media.
+const TILE_STRIP_IDLE = "bg-black/55 font-medium text-white";
+/*
+ * Control HAS a value. The design's active fill is the gold accent, NOT
+ * `bg-primary` — primary is the bone surface fill here, so an "on" strip
+ * painted with it reads as off (the same trap `.pa-cta-gold` exists for).
+ */
+const TILE_STRIP_SET = "bg-gold font-semibold text-[hsl(var(--gold-foreground))]";
 
 // Module-scope FIFO semaphore bounding CONCURRENT FILE uploads (spans the
 // image + video pickers and survives re-renders). Each multipart upload
@@ -122,7 +146,7 @@ function releaseUploadSlot(): void {
   fileUploadWaiters.shift()?.();
 }
 
-export function ComposeTab({ initialContent, initialImage, initialImageMediaId, initialMediaIds, initialMediaUrls, onPostCreated, externalMediaToAdd, onExternalMediaConsumed, isActive }: ComposeTabProps) {
+export function ComposeTab({ initialContent, initialImage, initialImageMediaId, initialMediaIds, initialMediaUrls, onPostCreated, externalMediaToAdd, onExternalMediaConsumed, isActive, openDesignSignal }: ComposeTabProps) {
   const router = useRouter();
   const { toast } = useToast();
   const [content, setContent] = useState(initialContent || "");
@@ -689,6 +713,17 @@ ${content}`;
     setEditorOpen(true);
   };
 
+  /**
+   * The page header's "Create Design" CTA. Keyed on the signal value ONLY — not
+   * on `handleOpenEditor`, which is a fresh closure every render and would
+   * re-open the editor on any re-render (the ActivityPanel SSE-storm dep rule).
+   */
+  useEffect(() => {
+    if (!openDesignSignal) return;
+    setEditingImageIndex(null);
+    setEditorOpen(true);
+  }, [openDesignSignal]);
+
   const handleEditorApply = async (blobUrl: string) => {
     // Convert blob URL to File
     const resp = await fetch(blobUrl);
@@ -1169,8 +1204,10 @@ ${content}`;
   return (
     <div className="w-full space-y-6">
       <div className="grid min-w-0 gap-6 xl:grid-cols-[1fr,400px]">
-        {/* Left column - Editor */}
-        <div className="min-w-0 space-y-6">
+        {/* Left column - Editor.
+            `gap:16px` between cards, per the design's compose column (line 192)
+            — `space-y-6` (24px) spread the stack noticeably looser. */}
+        <div className="min-w-0 space-y-4">
           {editorOpen ? (
             <MediaEditor
               initialImage={editingImageIndex !== null ? postMedia[editingImageIndex]?.url : undefined}
@@ -1180,23 +1217,17 @@ ${content}`;
             />
           ) : (
           <>
-          {/* Create Design Button */}
-          <Button
-            variant="outline"
-            onClick={() => handleOpenEditor()}
-            className="w-full gap-2"
-          >
-            <Paintbrush className="h-4 w-4" />
-            Create Design
-          </Button>
-
-          {/* Create with AI */}
-          <Card className="border-purple-200 bg-gradient-to-r from-purple-50/50 to-blue-50/50 dark:border-purple-900 dark:from-purple-950/20 dark:to-blue-950/20">
+          {/* Create with AI — the design's first compose card. Plain `--card`
+              surface on a `--border` hairline: the pre-restyle blue gradient
+              (which also carried a bare `dark:` no-op class) is gone, and
+              "Create Design" now lives only in the page header, which drives
+              the editor through `openDesignSignal`. */}
+          <Card>
             <CardHeader className="pb-3">
               <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
                 <div className="flex min-w-0 items-center gap-2">
-                  <Sparkles className="h-4 w-4 shrink-0 text-purple-500" />
-                  <CardTitle className="text-base">Create with AI</CardTitle>
+                  <Sparkles className="h-4 w-4 shrink-0 text-gold" />
+                  <CardTitle>Create with AI</CardTitle>
                 </div>
                 {aiConfig?.anyConfigured && (
                   <span className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground">
@@ -1224,7 +1255,9 @@ ${content}`;
                 <Button
                   onClick={handleCreateWithAI}
                   disabled={!aiPrompt.trim() || isCreatingWithAI || !aiConfig?.anyConfigured}
-                  className="shrink-0 gap-1.5 bg-purple-600 hover:bg-purple-700"
+                  /* Design line 207: this Generate is GOLD, not the bone fill —
+                     it is the accent action of the accent card. */
+                  className="pa-cta-gold h-[38px] shrink-0 gap-1.5"
                   title={!aiConfig?.anyConfigured ? "No AI provider configured — add an API key to enable" : undefined}
                 >
                   {isCreatingWithAI ? (
@@ -1242,7 +1275,7 @@ ${content}`;
           <Card>
             <CardHeader className="pb-3">
               <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2">
-                <CardTitle className="text-base">Content</CardTitle>
+                <CardTitle>Content</CardTitle>
                 <div className="flex items-center gap-2">
                   {aiConfig?.anyConfigured && (
                     <span className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground">
@@ -1260,7 +1293,7 @@ ${content}`;
                     {isGenerating ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     ) : (
-                      <Sparkles className={`h-3.5 w-3.5 ${aiConfig?.anyConfigured ? "text-purple-500" : "text-muted-foreground"}`} />
+                      <Sparkles className={`h-3.5 w-3.5 ${aiConfig?.anyConfigured ? "text-gold" : "text-muted-foreground"}`} />
                     )}
                     {isGenerating ? "Enhancing..." : "Enhance with AI"}
                   </Button>
@@ -1319,7 +1352,7 @@ ${content}`;
           {/* Media Attachments */}
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-base">Media</CardTitle>
+              <CardTitle>Media</CardTitle>
               <CardDescription>
                 {hasYouTube ? "YouTube requires a video upload (MP4, WebM, or MOV)" : "Attach images or videos to your post"}
               </CardDescription>
@@ -1485,7 +1518,7 @@ ${content}`;
                           <button
                             type="button"
                             onClick={() => handleOpenEditor(idx)}
-                            className="absolute bottom-0 left-0 right-0 bg-black/50 py-0.5 text-center text-[10px] text-white opacity-100 [@media(hover:hover)]:opacity-0 transition-opacity [@media(hover:hover)]:group-hover:opacity-100"
+                            className={`${TILE_STRIP} ${TILE_STRIP_IDLE} bottom-0`}
                           >
                             Edit
                           </button>
@@ -1497,23 +1530,28 @@ ${content}`;
                           <button
                             type="button"
                             onClick={() => setSuperTextEditIndex(idx)}
-                            className={`absolute bottom-0 left-0 right-0 py-0.5 text-center text-[10px] text-white opacity-100 transition-opacity [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 ${
-                              item.superText ? "bg-primary/80 font-semibold" : "bg-black/50"
+                            className={`${TILE_STRIP} bottom-0 ${
+                              item.superText ? TILE_STRIP_SET : TILE_STRIP_IDLE
                             }`}
                           >
                             {item.superText ? "Super text ✓" : "Super text"}
                           </button>
                         )}
-                        {/* Custom cover — videos only, sits above the Super text
-                            control. Same [@media(hover:hover)] gating so it stays
-                            tappable on touch and desktop is unchanged. */}
+                        {/* Custom cover — videos only, stacked directly above the
+                            Super text control. `bottom-5` is exactly one strip
+                            height (10px text × 1.6 leading + 2×2px padding), so
+                            the two sit flush; it must track TILE_STRIP's metrics.
+                            ONE fill class is emitted — busy / set / idle are
+                            mutually exclusive, because two competing `bg-*`
+                            utilities resolve by stylesheet order, not by their
+                            order in this string. */}
                         {isVideo && (
                           <label
-                            className={`absolute bottom-[18px] left-0 right-0 py-0.5 text-center text-[10px] text-white opacity-100 transition-opacity [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 ${
+                            className={`${TILE_STRIP} bottom-5 ${
                               item.uploading || item.thumbnailUploading
-                                ? "cursor-wait bg-black/70"
-                                : "cursor-pointer"
-                            } ${item.thumbnail ? "bg-primary/80 font-semibold" : "bg-black/50"}`}
+                                ? "cursor-wait bg-black/70 font-medium text-white"
+                                : `cursor-pointer ${item.thumbnail ? TILE_STRIP_SET : TILE_STRIP_IDLE}`
+                            }`}
                             title="Upload a custom cover image (Instagram Reels, Facebook and YouTube). Any image works — large ones are resized and fitted to the video automatically."
                           >
                             {item.thumbnailUploading
@@ -1559,7 +1597,7 @@ ${content}`;
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <div>
-                  <CardTitle className="text-base">Select Channels</CardTitle>
+                  <CardTitle>Select Channels</CardTitle>
                   <CardDescription>Search and pick channels to publish to</CardDescription>
                 </div>
                 {selectedChannels.length > 0 && (
@@ -1879,7 +1917,7 @@ ${content}`;
           {(hasYouTube && hasVideoAttached) || (hasInstagram && hasVideoAttached) ? (
             <Card>
               <CardHeader className="pb-3">
-                <CardTitle className="text-base">Post Format</CardTitle>
+                <CardTitle>Post Format</CardTitle>
                 <CardDescription>Choose how this video will be posted per platform</CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
@@ -1934,7 +1972,7 @@ ${content}`;
           {/* Schedule */}
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-base">Schedule</CardTitle>
+              <CardTitle>Schedule</CardTitle>
               <CardDescription>Set a date and time for publishing</CardDescription>
             </CardHeader>
             <CardContent>
@@ -1968,7 +2006,7 @@ ${content}`;
           {selectedChannels.length > 1 && (
             <Card>
               <CardHeader className="pb-3">
-                <CardTitle className="text-base">Captions</CardTitle>
+                <CardTitle>Captions</CardTitle>
                 <CardDescription>
                   Write one distinct AI caption for each of your {selectedChannels.length} selected channels
                 </CardDescription>
@@ -2081,9 +2119,19 @@ ${content}`;
 
         {/* Right column - Preview Panel */}
         <div className="min-w-0 space-y-4 xl:sticky xl:top-6 xl:self-start">
-          <div className="flex items-center gap-2">
-            <Eye className="h-4 w-4 text-muted-foreground" />
-            <h2 className="text-sm font-semibold text-foreground">Post Preview</h2>
+          {/* Design: accent eye, title, and the platform count as an uppercase
+              micro-label on the right. */}
+          <div className="flex items-center gap-2.5">
+            <Eye className="h-[15px] w-[15px] flex-none text-gold" />
+            <h2 className="min-w-0 flex-1 text-[12.5px] font-semibold leading-[1.2] text-foreground">
+              Post Preview
+            </h2>
+            {selectedPlatforms.length > 0 && (
+              <span className="flex-none text-[9px] font-medium uppercase leading-none tracking-[0.16em] text-muted-foreground">
+                {selectedPlatforms.length}{" "}
+                {selectedPlatforms.length === 1 ? "platform" : "platforms"}
+              </span>
+            )}
           </div>
           <PostPreviewSwitcher
             content={content}

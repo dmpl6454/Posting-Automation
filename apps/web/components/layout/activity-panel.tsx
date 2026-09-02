@@ -17,6 +17,7 @@ import {
   RefreshCw,
   ChevronRight,
   ChevronLeft,
+  X,
   Sparkles,
   AlertTriangle,
   Globe,
@@ -84,9 +85,34 @@ const FEED_FILTERS: { key: FeedFilter; label: string }[] = [
   { key: "error", label: "Errors" },
 ];
 
-export function ActivityPanel() {
-  const [expanded, setExpanded] = useState(false);
+export interface ActivityCounts {
+  pending: number;
+  error: number;
+}
+
+interface ActivityPanelProps {
+  /** Design restyle: the panel is now opened from the header's activity button. */
+  open?: boolean;
+  onClose?: () => void;
+  /**
+   * Reports the unfiltered pending/error counts up so the header button can
+   * show its alert dot.
+   *
+   * ⚠️ Deliberately a callback rather than a shared hook: this component owns
+   * the notification SSE connection, and a second consumer running the same
+   * effect would open a SECOND EventSource per tab — the connection-storm class
+   * documented on the effect below.
+   */
+  onCountsChange?: (counts: ActivityCounts) => void;
+}
+
+export function ActivityPanel({ open = false, onClose, onCountsChange }: ActivityPanelProps) {
   const [feedFilter, setFeedFilter] = useState<FeedFilter>("all");
+  // Held in a ref so the counts effect can depend on the NUMBERS alone — an
+  // inline parent callback has a new identity every render and would make the
+  // effect fire on each one.
+  const onCountsChangeRef = useRef(onCountsChange);
+  onCountsChangeRef.current = onCountsChange;
   const [, setTick] = useState(0);
   useEffect(() => {
     const id = setInterval(() => setTick((t) => t + 1), 30_000);
@@ -214,36 +240,23 @@ export function ActivityPanel() {
   const pendingCount = fullFeed.filter((a) => a.status === "pending").length;
   const errorCount = fullFeed.filter((a) => a.status === "error").length;
 
+  // Deps are NUMBERS, so this fires only when a count actually changes — no
+  // render loop even though the parent re-renders on the state it sets.
+  useEffect(() => {
+    onCountsChangeRef.current?.({ pending: pendingCount, error: errorCount });
+  }, [pendingCount, errorCount]);
+
   const feed =
     feedFilter === "all" ? fullFeed : fullFeed.filter((a) => a.status === feedFilter);
 
   return (
-    <div
-      className={cn(
-        // Desktop-only rail. On < lg the activity feed is reached via the header
-        // NotificationBell (same notification source), so it's hidden here to
-        // avoid stealing horizontal space from <main> on phones/tablets.
-        "hidden flex-col border-l border-border/40 bg-card/30 backdrop-blur-sm transition-all duration-300 ease-in-out lg:flex",
-        expanded ? "w-[300px]" : "w-10"
-      )}
-    >
-      {/* Toggle button */}
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="flex h-14 items-center justify-center border-b border-border/40 hover:bg-muted/50 transition-colors relative"
-        title="Activity Feed"
-      >
-        <Activity className="h-4 w-4" />
-        {!expanded && (pendingCount > 0 || errorCount > 0) && (
-          <span className={cn(
-            "absolute top-2.5 right-1.5 h-2 w-2 rounded-full animate-pulse",
-            errorCount > 0 ? "bg-red-500" : "bg-yellow-500"
-          )} />
-        )}
-      </button>
-
-      {expanded && (
-        <>
+    <>
+      {/* Design restyle: a fixed overlay panel opened from the header's activity
+          button, sitting under the 56px header — it no longer occupies a
+          permanent rail beside <main>. Stays MOUNTED when closed so the SSE
+          connection and the counts feeding the header dot keep running. */}
+      {open && (
+        <aside className="fixed bottom-0 right-0 top-14 z-40 hidden w-[300px] flex-col border-l border-border bg-surface1 shadow-[-12px_0_32px_-12px_rgba(0,0,0,.6)] lg:flex">
           {/* Header */}
           <div className="flex items-center justify-between px-3 py-2 border-b border-border/40">
             <div className="flex items-center gap-1.5">
@@ -255,9 +268,15 @@ export function ActivityPanel() {
                 <Badge variant="destructive" className="h-4 px-1 text-[9px]">{errorCount} errors</Badge>
               )}
             </div>
-            <Button variant="ghost" size="icon" className="h-5 w-5" onClick={handleRefresh} disabled={isRefreshing} title="Refresh activity">
-              <RefreshCw className={`h-3 w-3 ${isRefreshing ? "animate-spin" : ""}`} />
-            </Button>
+            <div className="flex items-center gap-0.5">
+              <Button variant="ghost" size="icon" className="h-5 w-5" onClick={handleRefresh} disabled={isRefreshing} title="Refresh activity">
+                <RefreshCw className={`h-3 w-3 ${isRefreshing ? "animate-spin" : ""}`} />
+              </Button>
+              <Button variant="ghost" size="icon" className="h-5 w-5" onClick={onClose} title="Close activity panel">
+                <X className="h-3 w-3" />
+                <span className="sr-only">Close activity panel</span>
+              </Button>
+            </div>
           </div>
 
           {/* Status filter chips */}
@@ -366,8 +385,8 @@ export function ActivityPanel() {
               })}
             </div>
           </div>
-        </>
+        </aside>
       )}
-    </div>
+    </>
   );
 }

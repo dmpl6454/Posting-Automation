@@ -14,7 +14,6 @@ import {
   Check,
   RefreshCw,
   Loader2,
-  Monitor,
   Globe,
   Server,
   Zap,
@@ -114,28 +113,54 @@ export default function MonitoringPage() {
   const s = stats.data;
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 p-4">
+    /* Full width, like every other dashboard page. This one was the only route
+       capped at `mx-auto max-w-5xl` (1024px) with its own `p-4` on top of the
+       layout's padding, so it rendered as a narrow centred column while Team,
+       Insights, Approvals and the rest ran edge to edge — and error stack
+       traces, the widest content in the app, had the least room. */
+    <div className="w-full space-y-5">
       {/* Header */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-xl font-bold flex items-center gap-2">
-            <Monitor className="h-5 w-5 text-blue-500" />
-            Error Monitoring
+      <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
+        <div className="min-w-0">
+          <span className="eyebrow">Monitoring</span>
+          <h1 className="display mt-2.5 text-[30px] leading-[1.1]">
+            Nothing gets past you.
           </h1>
-          <p className="text-xs text-muted-foreground">Track bugs and issues across frontend, API, and workers</p>
+          <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
+            Track errors across frontend, API, and workers
+          </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={handleRefresh} disabled={isRefreshing} className="flex-1 sm:flex-none">
-            <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${isRefreshing ? "animate-spin" : ""}`} />
+        <div className="flex items-center gap-2.5">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleRefresh}
+            disabled={isRefreshing}
+            className="h-9 flex-1 gap-1.5 rounded-[9px] border-border2 px-3.5 text-[12px] font-medium hover:bg-hover sm:flex-none"
+          >
+            <RefreshCw className={`h-[13px] w-[13px] ${isRefreshing ? "animate-spin" : ""}`} />
             {isRefreshing ? "Refreshing…" : "Refresh"}
           </Button>
-          <Button size="sm" onClick={handleCopyForClaude} disabled={claudeReport.isFetching} className="flex-1 sm:flex-none">
+          {/* Design: this is the page's one primary CTA, so it takes the accent
+              fill. `.pa-cta-gold` resolves `hsl(var(--accent-gold))`, which is
+              exactly the variable the Settings accent picker writes — so the
+              button follows whatever accent the user chooses, instead of the
+              fixed bone fill it had. */}
+          <Button
+            size="sm"
+            onClick={handleCopyForClaude}
+            disabled={claudeReport.isFetching}
+            className="pa-cta-gold h-9 flex-1 gap-1.5 rounded-[9px] px-3.5 text-[12px] font-semibold sm:flex-none"
+          >
             {claudeReport.isFetching ? (
-              <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+              <Loader2 className="h-[13px] w-[13px] animate-spin" />
             ) : copied ? (
-              <Check className="h-3.5 w-3.5 mr-1.5 text-green-400" />
+              /* No green tint here: `.pa-cta-gold svg` pins nested icons to the
+                 on-accent label colour, so a `text-green-*` class would be dead
+                 markup — and green on the accent fill would barely read anyway. */
+              <Check className="h-[13px] w-[13px]" />
             ) : (
-              <Copy className="h-3.5 w-3.5 mr-1.5" />
+              <Copy className="h-[13px] w-[13px]" />
             )}
             <span className="sm:hidden">Copy Report</span>
             <span className="hidden sm:inline">Copy Report for Claude</span>
@@ -205,7 +230,11 @@ export default function MonitoringPage() {
             <TabsTrigger value="auto-healer">Auto-Heal</TabsTrigger>
           </TabsList>
         </Tabs>
-        <div className="flex flex-wrap items-center gap-2">
+        {/* Pushed to the right edge: the tab row selects WHAT you are looking
+            at, these two act ON it. Sitting flush against the tabs read as a
+            seventh and eighth tab. `ml-auto` only from `sm` up — below that the
+            parent is a column and there is no free space to push into. */}
+        <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
         <Button
           variant={resolved ? "default" : "outline"}
           size="sm"

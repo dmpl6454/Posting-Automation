@@ -4,20 +4,12 @@ import { RequireAppAdmin } from "~/components/auth/require-app-admin";
 import { useState } from "react";
 import { trpc } from "~/lib/trpc/client";
 import { Button } from "~/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "~/components/ui/card";
-import { Badge } from "~/components/ui/badge";
 import { Switch } from "~/components/ui/switch";
 import { Skeleton } from "~/components/ui/skeleton";
 import { ScrollableTabRow } from "~/components/ui/scrollable-tab-row";
 import { Input } from "~/components/ui/input";
 import { Textarea } from "~/components/ui/textarea";
 import { Label } from "~/components/ui/label";
-import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import {
   Dialog,
   DialogContent,
@@ -28,8 +20,6 @@ import {
 import {
   Target,
   Plus,
-  Eye,
-  TrendingUp,
   Users,
   Hash,
   ExternalLink,
@@ -44,32 +34,58 @@ import {
   Instagram,
   Facebook,
   Linkedin,
-  ArrowLeft,
   UserPlus,
   Mail,
   Star,
-  Filter,
   Info,
 } from "lucide-react";
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
 
-const influencerStatusColors: Record<string, string> = {
-  discovered: "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300",
-  shortlisted: "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300",
-  contacted: "bg-violet-100 text-violet-700 dark:bg-violet-900 dark:text-violet-300",
-  responded: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300",
-  engaged: "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300",
-  rejected: "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300",
+/**
+ * Design: influencer status is a tinted pill. Literal hex — this project's
+ * Tailwind config FLATTENS the blue-adjacent, green, amber and red scales onto
+ * the palette's status triplets, so `bg-amber-100 text-amber-700` renders the
+ * label the same colour as its own background.
+ */
+const INF_STATUS_STYLE: Record<string, string> = {
+  discovered: "bg-[rgba(91,155,213,0.15)] text-[#5b9bd5]",
+  shortlisted: "bg-[rgba(224,184,74,0.15)] text-[#e0b84a]",
+  contacted: "bg-tile text-gold",
+  responded: "bg-[rgba(92,184,92,0.15)] text-[#5cb85c]",
+  engaged: "bg-[rgba(92,184,92,0.15)] text-[#5cb85c]",
+  rejected: "bg-tile text-muted-foreground",
 };
 
-const platformIcons: Record<string, React.ReactNode> = {
-  TWITTER: <Twitter className="h-3.5 w-3.5" />,
-  INSTAGRAM: <Instagram className="h-3.5 w-3.5" />,
-  FACEBOOK: <Facebook className="h-3.5 w-3.5" />,
-  LINKEDIN: <Linkedin className="h-3.5 w-3.5" />,
-  TIKTOK: <Globe className="h-3.5 w-3.5" />,
-};
+/** The design's compact count — "84.0K followers", "1.2K avg engagement". */
+function formatCompact(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(Math.round(n));
+}
+
+/** Platform glyph at the design's two sizes — 13px in feeds, 9px in chips. */
+function platformIcon(platform: string, cls: string) {
+  const Icon =
+    platform === "TWITTER" ? Twitter
+    : platform === "INSTAGRAM" ? Instagram
+    : platform === "FACEBOOK" ? Facebook
+    : platform === "LINKEDIN" ? Linkedin
+    : Globe;
+  return <Icon className={cls} />;
+}
+
+/** Shared pill classes for the segmented sub-tab row. */
+const SUBTAB_BASE =
+  "flex-1 shrink-0 whitespace-nowrap rounded-[8px] px-1 py-2 text-center text-[11px] leading-[1.3] transition-colors";
+const SUBTAB_ON =
+  "pa-gold-glow bg-gold font-semibold text-[hsl(var(--gold-foreground))]";
+const SUBTAB_OFF =
+  "font-medium text-muted-foreground hover:bg-hover hover:text-foreground";
+
+/** The design's one gold CTA, right-aligned under the sub-tab row. */
+const TAB_CTA =
+  "pa-cta-gold h-[34px] gap-[7px] rounded-[9px] px-3.5 text-[12.5px] font-semibold";
 
 type Tab = "campaigns" | "brands" | "content" | "influencers";
 
@@ -175,28 +191,112 @@ function CampaignsPageInner() {
   const totalBrands = brands?.length ?? 0;
   const totalInfluencers = infStats?.total ?? 0;
 
-  const tabs: { key: Tab; label: string; count?: number }[] = [
-    { key: "campaigns", label: "Campaigns", count: totalCampaigns },
-    { key: "brands", label: "Brand Trackers", count: totalBrands },
-    { key: "content", label: "Content Feed", count: content?.length },
-    { key: "influencers", label: "Influencers", count: totalInfluencers },
+  /* Design: the sub-tabs are label-only. The per-tab counts the app used to
+     append are already the four stat cards directly above this row, so the
+     pills repeated a number the reader had just seen. */
+  const tabs: { key: Tab; label: string }[] = [
+    { key: "campaigns", label: "Campaigns" },
+    { key: "brands", label: "Brand Trackers" },
+    { key: "content", label: "Content Feed" },
+    { key: "influencers", label: "Influencers" },
   ];
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="text-2xl font-semibold tracking-tight">Campaigns</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Monitor brands and competitors for new content, and discover influencers. Monitoring fetches their recent posts every ~6 hours. Campaigns don&apos;t schedule your own posts.
-          </p>
-        </div>
+    /* Design stacks sections on 20px, not 24px. */
+    <div className="space-y-5">
+      {/* Header — design: eyebrow, display headline, sub. The page CTA does NOT
+          live here; each tab carries its own, right-aligned under the sub-tab
+          row, so the button always names what the visible tab creates. */}
+      <div className="min-w-0">
+        <span className="eyebrow">Campaigns</span>
+        <h1 className="display mt-2.5 text-[30px] leading-[1.1]">
+          Watch the market move.
+        </h1>
+        <p className="mt-2 max-w-[640px] text-[13px] leading-relaxed text-muted-foreground">
+          Monitor brands and competitors for new content, and discover influencers. Monitoring fetches their recent posts every ~6 hours. Campaigns don&apos;t schedule your own posts.
+        </p>
+      </div>
+      {/* Design: a quiet surface-1 note, not the Alert component's framing. */}
+      <div className="flex items-start gap-3 rounded-[12px] border border-border bg-surface1 px-4 py-3.5">
+        <Info className="mt-px h-[15px] w-[15px] shrink-0 text-muted-foreground" />
+        <p className="text-[12px] leading-[1.65] text-muted-foreground">
+          <b className="text-foreground">How Campaigns work:</b> track brands you want to follow,
+          the influencers around them, and the content they release. Use Brand Trackers to add a
+          brand; the system surfaces relevant posts in Content Feed. This is a monitoring tool for
+          external brands — separate from your own posting, Approvals, and Brand Outreach.
+        </p>
+      </div>
+
+      {/* Overview Stats — design: 3px accent rail + tinted 28px icon tile, a
+          26px value and a 10.5px sub-line. Literal hex, because this project's
+          Tailwind config flattens the blue/green/amber scales onto the
+          palette's status triplets (a named shade would render each icon the
+          same colour as its own tile). */}
+      <div className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-4">
+        {[
+          { title: "Campaigns", value: totalCampaigns, sub: `${monitoringCampaigns} monitoring on`, icon: Target, color: "hsl(var(--accent-gold))", tint: "hsl(var(--accent-gold) / 0.12)" },
+          { title: "Brands Tracked", value: totalBrands, sub: "monitoring content", icon: Search, color: "#5b9bd5", tint: "rgba(91,155,213,0.12)" },
+          { title: "Content Found", value: content?.length ?? 0, sub: "from all brands", icon: Globe, color: "#5cb85c", tint: "rgba(92,184,92,0.12)" },
+          { title: "Influencers", value: totalInfluencers, sub: `${infStats?.shortlisted ?? 0} shortlisted`, icon: Users, color: "#e0b84a", tint: "rgba(224,184,74,0.12)" },
+        ].map((stat) => (
+          <div
+            key={stat.title}
+            className="relative overflow-hidden rounded-[14px] border border-border bg-card p-[18px] shadow-[0_8px_18px_-12px_rgba(0,0,0,.5)]"
+          >
+            <span className="absolute left-0 top-0 h-full w-[3px]" style={{ background: stat.color }} />
+            <div className="flex items-center justify-between gap-2.5">
+              <span className="whitespace-nowrap text-[11px] font-medium leading-[1.3] text-muted-foreground">
+                {stat.title}
+              </span>
+              <div
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px]"
+                style={{ background: stat.tint }}
+              >
+                <stat.icon className="h-[13px] w-[13px] shrink-0" style={{ color: stat.color }} />
+              </div>
+            </div>
+            {campaignsLoading ? (
+              <Skeleton className="mt-2.5 h-[26px] w-20" />
+            ) : (
+              <>
+                <div className="mt-2.5 text-[26px] font-bold leading-none tracking-[-0.01em]">
+                  {stat.value}
+                </div>
+                <div className="mt-[5px] text-[10.5px] leading-[1.3] text-faint">{stat.sub}</div>
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* Sub-tabs — design: one segmented pill row on a surface-1 track, gold
+          fill + halo on the active pill (the app had an underline row). Below
+          `sm` it stays a scrollable row so every tab is reachable on a phone. */}
+      <ScrollableTabRow
+        role="tablist"
+        className="gap-1 rounded-[11px] border border-border bg-surface1 p-1 sm:grid sm:grid-cols-4 sm:overflow-visible"
+      >
+        {tabs.map((tab) => (
+          <button
+            key={tab.key}
+            role="tab"
+            aria-selected={activeTab === tab.key}
+            onClick={() => setActiveTab(tab.key)}
+            className={`${SUBTAB_BASE} ${activeTab === tab.key ? SUBTAB_ON : SUBTAB_OFF}`}
+          >
+            <span className="block truncate">{tab.label}</span>
+          </button>
+        ))}
+      </ScrollableTabRow>
+
+      {/* Per-tab CTA, right-aligned under the sub-tabs (Content Feed has none —
+          it is a read-only feed). */}
+      <div className="flex justify-end">
         <div className="flex shrink-0 gap-2">
           {activeTab === "campaigns" && (
             <Dialog open={campaignDialogOpen} onOpenChange={setCampaignDialogOpen}>
               <DialogTrigger asChild>
-                <Button><Plus className="mr-2 h-4 w-4" />New Campaign</Button>
+                <Button className={TAB_CTA}><Plus className="h-[13px] w-[13px]" />New Campaign</Button>
               </DialogTrigger>
               <DialogContent className="max-w-lg">
                 <DialogHeader><DialogTitle>Create Campaign</DialogTitle></DialogHeader>
@@ -234,7 +334,7 @@ function CampaignsPageInner() {
           {activeTab === "brands" && (
             <Dialog open={brandDialogOpen} onOpenChange={setBrandDialogOpen}>
               <DialogTrigger asChild>
-                <Button><Plus className="mr-2 h-4 w-4" />Track Brand</Button>
+                <Button className={TAB_CTA}><Plus className="h-[13px] w-[13px]" />Track Brand</Button>
               </DialogTrigger>
               <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
                 <DialogHeader><DialogTitle>Track New Brand</DialogTitle></DialogHeader>
@@ -296,7 +396,7 @@ function CampaignsPageInner() {
           {activeTab === "influencers" && (
             <Dialog open={influencerDialogOpen} onOpenChange={setInfluencerDialogOpen}>
               <DialogTrigger asChild>
-                <Button><UserPlus className="mr-2 h-4 w-4" />Add Influencer</Button>
+                <Button className={TAB_CTA}><UserPlus className="h-[13px] w-[13px]" />Add Influencer</Button>
               </DialogTrigger>
               <DialogContent className="max-w-lg">
                 <DialogHeader><DialogTitle>Add Influencer Manually</DialogTitle></DialogHeader>
@@ -340,115 +440,60 @@ function CampaignsPageInner() {
         </div>
       </div>
 
-      <Alert>
-        <Info className="h-4 w-4" />
-        <AlertTitle>How Campaigns work</AlertTitle>
-        <AlertDescription>
-          Track brands you want to follow, the influencers around them, and the content they release.
-          Use the Brands tab to add a brand; the system surfaces relevant posts in the Content tab.
-          This is a <strong>monitoring tool for external brands</strong> — it&apos;s separate from your own posting, Approvals, and Brand Outreach.
-        </AlertDescription>
-      </Alert>
-
-      {/* Overview Stats */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {[
-          { title: "Campaigns", value: totalCampaigns, sub: `${monitoringCampaigns} monitoring on`, icon: Target, color: "text-violet-500" },
-          { title: "Brands Tracked", value: totalBrands, sub: "monitoring content", icon: Search, color: "text-blue-500" },
-          { title: "Content Found", value: content?.length ?? 0, sub: "from all brands", icon: Globe, color: "text-emerald-500" },
-          { title: "Influencers", value: totalInfluencers, sub: `${infStats?.shortlisted ?? 0} shortlisted`, icon: Users, color: "text-amber-500" },
-        ].map((stat) => (
-          <Card key={stat.title}>
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">{stat.title}</CardTitle>
-              <stat.icon className={`h-4 w-4 ${stat.color}`} />
-            </CardHeader>
-            <CardContent>
-              {campaignsLoading ? <Skeleton className="h-8 w-20" /> : (
-                <>
-                  <p className="text-2xl font-bold">{stat.value}</p>
-                  <p className="text-xs text-muted-foreground">{stat.sub}</p>
-                </>
-              )}
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-
-      {/* Tabs */}
-      <ScrollableTabRow role="tablist" className="-mb-px border-b border-border/50">
-        {tabs.map((tab) => (
-          <button
-            key={tab.key}
-            role="tab"
-            aria-selected={activeTab === tab.key}
-            onClick={() => setActiveTab(tab.key)}
-            className={`shrink-0 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
-              activeTab === tab.key
-                ? "border-primary text-foreground"
-                : "border-transparent text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            {tab.label}
-            {tab.count !== undefined && (
-              <span className="ml-1.5 text-xs text-muted-foreground">({tab.count})</span>
-            )}
-          </button>
-        ))}
-      </ScrollableTabRow>
-
       {/* Tab Content */}
       {activeTab === "campaigns" && (
-        <div className="space-y-3">
+        <div className="flex flex-col gap-2.5">
           {campaignsLoading ? (
-            [1, 2, 3].map((i) => <Skeleton key={i} className="h-24 rounded-2xl" />)
+            [1, 2, 3].map((i) => <Skeleton key={i} className="h-[126px] rounded-[14px]" />)
           ) : campaigns && campaigns.length > 0 ? (
             campaigns.map((campaign) => (
-              <div key={campaign.id} className="group rounded-2xl border border-border/40 bg-card/50 p-5 transition-all hover:border-border/60 hover:shadow-md">
-                <div className="flex items-start justify-between">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-3">
-                      <Link href={`/dashboard/campaigns/${campaign.id}`} className="text-base font-semibold hover:underline">
+              <div key={campaign.id} className="rounded-[14px] border border-border bg-card p-[18px] shadow-[0_8px_18px_-12px_rgba(0,0,0,.5)] transition-colors hover:border-border2">
+                <div className="flex flex-wrap items-start justify-between gap-3.5">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-[9px]">
+                      <Link href={`/dashboard/campaigns/${campaign.id}`} className="text-[14px] font-semibold leading-[1.3] hover:underline">
                         {campaign.name}
                       </Link>
                       {campaign.totalTrackers > 0 && (
-                        <Badge
-                          className={`text-[10px] ${campaign.monitoring ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300" : "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400"}`}
+                        <span
+                          className={`shrink-0 rounded-full px-[9px] py-0.5 text-[9.5px] font-semibold leading-[1.6] ${
+                            campaign.monitoring ? "bg-[rgba(92,184,92,0.15)] text-[#5cb85c]" : "bg-tile text-muted-foreground"
+                          }`}
                         >
                           {campaign.monitoring ? `Monitoring ${campaign.activeTrackers}/${campaign.totalTrackers}` : "Monitoring off"}
-                        </Badge>
+                        </span>
                       )}
                     </div>
                     {campaign.description && (
-                      <p className="mt-1 text-sm text-muted-foreground line-clamp-1">{campaign.description}</p>
+                      <p className="mt-1.5 line-clamp-1 text-[12.5px] leading-[1.5] text-muted-foreground">{campaign.description}</p>
                     )}
-                    <div className="mt-3 flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
+                    <div className="mt-2.5 flex flex-wrap items-center gap-x-3.5 gap-y-1.5 text-[11px] leading-none text-faint">
                       {campaign.hashtags.length > 0 && (
-                        <span className="flex items-center gap-1">
-                          <Hash className="h-3 w-3" />
+                        <span className="flex items-center gap-[5px]">
+                          <Hash className="h-[11px] w-[11px]" />
                           {campaign.hashtags.slice(0, 3).join(", ")}
                           {campaign.hashtags.length > 3 && ` +${campaign.hashtags.length - 3}`}
                         </span>
                       )}
-                      <span className="flex items-center gap-1">
-                        <Search className="h-3 w-3" />
+                      <span className="flex items-center gap-[5px]">
+                        <Search className="h-[11px] w-[11px]" />
                         {campaign._count.brandTrackers} {campaign._count.brandTrackers === 1 ? "brand" : "brands"} tracked
                       </span>
-                      <span className="flex items-center gap-1">
-                        <Calendar className="h-3 w-3" />
+                      <span className="flex items-center gap-[5px]">
+                        <Calendar className="h-[11px] w-[11px]" />
                         Created {formatDistanceToNow(new Date(campaign.createdAt), { addSuffix: true })}
                       </span>
                     </div>
                   </div>
-                  <div className="ml-4 flex items-center gap-3">
+                  <div className="flex shrink-0 items-center gap-3">
                     {/* Monitoring toggle — flips isActive on ALL this campaign's brand
                         trackers, which is exactly what the brand-content-sync cron reads.
                         Disabled (with explanation) when there are no brands to monitor. */}
                     <div
-                      className="flex items-center gap-2"
+                      className="flex items-center gap-3"
                       title={campaign.totalTrackers === 0 ? "Add a brand to monitor" : campaign.monitoring ? "Monitoring on — fetching new content ~6h" : "Monitoring off"}
                     >
-                      <span className="text-xs text-muted-foreground hidden sm:inline">Monitoring</span>
+                      <span className="text-[11px] leading-none text-muted-foreground">Monitoring</span>
                       <Switch
                         checked={campaign.monitoring}
                         disabled={campaign.totalTrackers === 0 || setMonitoring.isPending}
@@ -459,8 +504,8 @@ function CampaignsPageInner() {
                     {(() => {
                       const deleting = deleteCampaign.isPending && deleteCampaign.variables?.id === campaign.id;
                       return (
-                        <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive opacity-0 group-hover:opacity-100 transition-opacity" disabled={deleting} onClick={() => { if (confirm("Delete this campaign?")) deleteCampaign.mutate({ id: campaign.id }); }}>
-                          {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                        <Button size="icon" variant="ghost" className="h-[26px] w-[26px] rounded-[6px] text-faint hover:bg-hover hover:text-[#c96b56]" aria-label={`Delete ${campaign.name}`} disabled={deleting} onClick={() => { if (confirm("Delete this campaign?")) deleteCampaign.mutate({ id: campaign.id }); }}>
+                          {deleting ? <Loader2 className="h-[13px] w-[13px] animate-spin" /> : <Trash2 className="h-[13px] w-[13px]" />}
                         </Button>
                       );
                     })()}
@@ -469,155 +514,154 @@ function CampaignsPageInner() {
               </div>
             ))
           ) : (
-            <Card>
-              <CardContent className="flex flex-col items-center justify-center py-12 text-center">
-                <Target className="h-12 w-12 text-muted-foreground/30 mb-4" />
-                <h3 className="text-lg font-semibold">No campaigns yet</h3>
-                <p className="mt-1 text-sm text-muted-foreground max-w-sm">
-                  Create a campaign to group the brands and influencers you want to monitor.
-                </p>
-              </CardContent>
-            </Card>
+            <div className="flex flex-col items-center justify-center rounded-[14px] border border-border bg-card px-4 py-12 text-center">
+              <Target className="mb-4 h-12 w-12 text-muted-foreground/30" />
+              <h3 className="text-[15px] font-semibold">No campaigns yet</h3>
+              <p className="mt-1 max-w-sm text-[12.5px] leading-[1.5] text-muted-foreground">
+                Create a campaign to group the brands and influencers you want to monitor.
+              </p>
+            </div>
           )}
         </div>
       )}
 
       {activeTab === "brands" && (
-        <div className="space-y-3">
+        <div className="flex flex-col gap-2.5">
           {brandsLoading ? (
-            [1, 2, 3].map((i) => <Skeleton key={i} className="h-28 rounded-2xl" />)
+            [1, 2, 3].map((i) => <Skeleton key={i} className="h-[150px] rounded-[14px]" />)
           ) : brands && brands.length > 0 ? (
-            brands.map((brand) => (
-              <div key={brand.id} className="group rounded-2xl border border-border/40 bg-card/50 p-5 transition-all hover:border-border/60 hover:shadow-md">
-                <div className="flex items-start justify-between">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-3">
-                      <h3 className="text-base font-semibold">{brand.brandName}</h3>
-                      <Badge className={brand.isActive ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300" : "bg-gray-100 text-gray-500"}>
-                        {brand.isActive ? "Active" : "Paused"}
-                      </Badge>
-                      <span className="text-xs text-muted-foreground">
-                        {brand._count.contentItems} {brand._count.contentItems === 1 ? "content item" : "content items"}
-                      </span>
+            brands.map((brand) => {
+              /* Design: one chip per configured handle, built from a list so a
+                 brand with two handles and one with six render identically. */
+              const handles: { icon: typeof Twitter; label: string }[] = [];
+              if (brand.twitterHandle) handles.push({ icon: Twitter, label: brand.twitterHandle });
+              if (brand.instagramHandle) handles.push({ icon: Instagram, label: brand.instagramHandle });
+              if (brand.facebookPageId) handles.push({ icon: Facebook, label: brand.facebookPageId });
+              if (brand.linkedinHandle) handles.push({ icon: Linkedin, label: brand.linkedinHandle });
+              if (brand.tiktokHandle) handles.push({ icon: Globe, label: brand.tiktokHandle });
+              if (brand.websiteUrl) handles.push({ icon: ExternalLink, label: "Website" });
+              const syncing = updateBrand.isPending && updateBrand.variables?.id === brand.id;
+              const removing = deleteBrand.isPending && deleteBrand.variables?.id === brand.id;
+              return (
+                <div key={brand.id} className="rounded-[14px] border border-border bg-card p-[18px] shadow-[0_8px_18px_-12px_rgba(0,0,0,.5)] transition-colors hover:border-border2">
+                  <div className="flex flex-wrap items-start justify-between gap-3.5">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-[9px]">
+                        <p className="text-[14px] font-semibold leading-[1.3]">{brand.brandName}</p>
+                        <span
+                          className={`shrink-0 rounded-full px-[9px] py-0.5 text-[9.5px] font-semibold leading-[1.6] ${
+                            brand.isActive ? "bg-[rgba(92,184,92,0.15)] text-[#5cb85c]" : "bg-tile text-muted-foreground"
+                          }`}
+                        >
+                          {brand.isActive ? "Active" : "Paused"}
+                        </span>
+                        <span className="text-[11px] leading-none text-faint">
+                          {brand._count.contentItems} {brand._count.contentItems === 1 ? "content item" : "content items"}
+                        </span>
+                      </div>
+                      {brand.description && (
+                        <p className="mt-1.5 line-clamp-1 text-[12.5px] leading-[1.5] text-muted-foreground">{brand.description}</p>
+                      )}
+                      {handles.length > 0 && (
+                        <div className="mt-2.5 flex flex-wrap gap-[7px]">
+                          {handles.map((h) => (
+                            <span
+                              key={h.label}
+                              className="flex items-center gap-[5px] rounded-[6px] border border-border2 px-[9px] py-0.5 text-[10.5px] font-medium leading-[1.6] text-muted-foreground"
+                            >
+                              <h.icon className="h-2.5 w-2.5" />
+                              {h.label}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {brand.lastSyncAt && (
+                        <p className="mt-2.5 text-[10.5px] leading-none text-faint">
+                          Last synced {formatDistanceToNow(new Date(brand.lastSyncAt), { addSuffix: true })}
+                        </p>
+                      )}
                     </div>
-                    {brand.description && (
-                      <p className="mt-1 text-sm text-muted-foreground line-clamp-1">{brand.description}</p>
-                    )}
-                    <div className="mt-3 flex flex-wrap items-center gap-3">
-                      {brand.twitterHandle && (
-                        <Badge variant="outline" className="text-xs gap-1">
-                          <Twitter className="h-3 w-3" /> {brand.twitterHandle}
-                        </Badge>
-                      )}
-                      {brand.instagramHandle && (
-                        <Badge variant="outline" className="text-xs gap-1">
-                          <Instagram className="h-3 w-3" /> {brand.instagramHandle}
-                        </Badge>
-                      )}
-                      {brand.facebookPageId && (
-                        <Badge variant="outline" className="text-xs gap-1">
-                          <Facebook className="h-3 w-3" /> {brand.facebookPageId}
-                        </Badge>
-                      )}
-                      {brand.linkedinHandle && (
-                        <Badge variant="outline" className="text-xs gap-1">
-                          <Linkedin className="h-3 w-3" /> {brand.linkedinHandle}
-                        </Badge>
-                      )}
-                      {brand.tiktokHandle && (
-                        <Badge variant="outline" className="text-xs gap-1">
-                          <Globe className="h-3 w-3" /> {brand.tiktokHandle}
-                        </Badge>
-                      )}
-                      {brand.websiteUrl && (
-                        <Badge variant="outline" className="text-xs gap-1">
-                          <ExternalLink className="h-3 w-3" /> Website
-                        </Badge>
-                      )}
+                    {/* Design groups the two row actions into one bordered pill on
+                        surface-1, rather than two loose hover-only ghost buttons. */}
+                    <div className="flex shrink-0 items-center rounded-[8px] border border-border bg-surface1 p-0.5">
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-[26px] w-[26px] rounded-[6px] text-muted-foreground hover:bg-hover hover:text-foreground"
+                        title={brand.isActive ? "Pause syncing" : "Resume syncing"}
+                        aria-label={brand.isActive ? `Pause ${brand.brandName}` : `Resume ${brand.brandName}`}
+                        disabled={syncing}
+                        onClick={() => updateBrand.mutate({ id: brand.id, isActive: !brand.isActive })}
+                      >
+                        {syncing ? <Loader2 className="h-[13px] w-[13px] animate-spin" /> : brand.isActive ? <Pause className="h-[13px] w-[13px]" /> : <Play className="h-[13px] w-[13px]" />}
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-[26px] w-[26px] rounded-[6px] text-faint hover:bg-hover hover:text-[#c96b56]"
+                        aria-label={`Delete ${brand.brandName}`}
+                        disabled={removing}
+                        onClick={() => { if (confirm(`Delete brand tracker "${brand.brandName}"?`)) deleteBrand.mutate({ id: brand.id }); }}
+                      >
+                        {removing ? <Loader2 className="h-[13px] w-[13px] animate-spin" /> : <Trash2 className="h-[13px] w-[13px]" />}
+                      </Button>
                     </div>
-                    {brand.lastSyncAt && (
-                      <p className="mt-2 text-[10px] text-muted-foreground">
-                        Last synced {formatDistanceToNow(new Date(brand.lastSyncAt), { addSuffix: true })}
-                      </p>
-                    )}
-                  </div>
-                  <div className="ml-4 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                    {(() => {
-                      const syncing = updateBrand.isPending && updateBrand.variables?.id === brand.id;
-                      const removing = deleteBrand.isPending && deleteBrand.variables?.id === brand.id;
-                      return (
-                        <>
-                          {brand.isActive ? (
-                            <Button size="icon" variant="ghost" className="h-8 w-8" title="Pause syncing" disabled={syncing} onClick={() => updateBrand.mutate({ id: brand.id, isActive: false })}>
-                              {syncing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Pause className="h-3.5 w-3.5" />}
-                            </Button>
-                          ) : (
-                            <Button size="icon" variant="ghost" className="h-8 w-8" title="Resume syncing" disabled={syncing} onClick={() => updateBrand.mutate({ id: brand.id, isActive: true })}>
-                              {syncing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
-                            </Button>
-                          )}
-                          <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" disabled={removing} onClick={() => { if (confirm(`Delete brand tracker "${brand.brandName}"?`)) deleteBrand.mutate({ id: brand.id }); }}>
-                            {removing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-                          </Button>
-                        </>
-                      );
-                    })()}
                   </div>
                 </div>
-              </div>
-            ))
+              );
+            })
           ) : (
-            <Card>
-              <CardContent className="flex flex-col items-center justify-center py-12 text-center">
-                <Search className="h-12 w-12 text-muted-foreground/30 mb-4" />
-                <h3 className="text-lg font-semibold">No brands tracked yet</h3>
-                <p className="mt-1 text-sm text-muted-foreground max-w-sm">
-                  Add brands with their social media handles to start monitoring their content releases.
-                </p>
-              </CardContent>
-            </Card>
+            <div className="flex flex-col items-center justify-center rounded-[14px] border border-border bg-card px-4 py-12 text-center">
+              <Search className="mb-4 h-12 w-12 text-muted-foreground/30" />
+              <h3 className="text-[15px] font-semibold">No brands tracked yet</h3>
+              <p className="mt-1 max-w-sm text-[12.5px] leading-[1.5] text-muted-foreground">
+                Add brands with their social media handles to start monitoring their content releases.
+              </p>
+            </div>
           )}
         </div>
       )}
 
       {activeTab === "content" && (
-        <div className="space-y-3">
+        <div className="flex flex-col gap-2.5">
           {contentLoading ? (
-            [1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-20 rounded-2xl" />)
+            [1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-[118px] rounded-[12px]" />)
           ) : content && content.length > 0 ? (
             content.map((item) => (
-              <div key={item.id} className="rounded-2xl border border-border/40 bg-card/50 p-4 transition-all hover:border-border/60 hover:shadow-sm">
+              <div key={item.id} className="rounded-[12px] border border-border bg-card p-4 transition-colors hover:border-border2">
                 <div className="flex items-start gap-3">
                   {item.mediaUrl && (
-                    <img src={item.mediaUrl} alt="" className="h-14 w-14 rounded-lg object-cover shrink-0" />
+                    <img src={item.mediaUrl} alt="" className="h-14 w-14 shrink-0 rounded-[10px] object-cover" />
                   )}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      {platformIcons[item.platform] || <Globe className="h-3.5 w-3.5" />}
-                      <span className="text-xs font-medium">{item.brandTracker?.brandName}</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="shrink-0 text-muted-foreground">
+                        {platformIcon(item.platform, "h-[13px] w-[13px]")}
+                      </span>
+                      <span className="text-[12px] font-semibold leading-none">{item.brandTracker?.brandName}</span>
                       {item.authorHandle && (
-                        <span className="text-xs text-muted-foreground">{item.authorHandle}</span>
+                        <span className="truncate text-[11px] leading-none text-muted-foreground">{item.authorHandle}</span>
                       )}
-                      <span className="text-[10px] text-muted-foreground ml-auto">
+                      <span className="ml-auto shrink-0 text-[10.5px] leading-none text-faint">
                         {formatDistanceToNow(new Date(item.publishedAt), { addSuffix: true })}
                       </span>
                     </div>
-                    <p className="text-sm line-clamp-2">{item.content}</p>
-                    <div className="mt-2 flex items-center gap-4 text-xs text-muted-foreground">
-                      <span>{item.likes.toLocaleString()} likes</span>
-                      <span>{item.comments.toLocaleString()} comments</span>
-                      <span>{item.shares.toLocaleString()} shares</span>
-                      {item.views > 0 && <span>{item.views.toLocaleString()} views</span>}
+                    <p className="mt-[9px] line-clamp-2 text-[12.5px] leading-[1.55]">{item.content}</p>
+                    <div className="mt-[9px] flex flex-wrap items-center gap-x-3.5 gap-y-1.5 text-[11px] leading-none text-muted-foreground">
+                      <span>{formatCompact(item.likes)} likes</span>
+                      <span>{formatCompact(item.comments)} comments</span>
+                      <span>{formatCompact(item.shares)} shares</span>
+                      {item.views > 0 && <span>{formatCompact(item.views)} views</span>}
                       {item.contentUrl && (
-                        <a href={item.contentUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-blue-600 hover:underline ml-auto">
-                          <ExternalLink className="h-3 w-3" /> View
+                        <a href={item.contentUrl} target="_blank" rel="noopener noreferrer" className="ml-auto flex items-center gap-1 text-gold hover:underline">
+                          <ExternalLink className="h-[11px] w-[11px]" /> View
                         </a>
                       )}
                     </div>
                     {item.hashtags.length > 0 && (
-                      <div className="mt-1 flex flex-wrap gap-1">
+                      <div className="mt-1.5 flex flex-wrap gap-1.5">
                         {item.hashtags.slice(0, 5).map((tag) => (
-                          <span key={tag} className="text-[10px] text-blue-600">#{tag}</span>
+                          <span key={tag} className="text-[10.5px] leading-[1.6] text-gold">#{tag}</span>
                         ))}
                       </div>
                     )}
@@ -626,15 +670,13 @@ function CampaignsPageInner() {
               </div>
             ))
           ) : (
-            <Card>
-              <CardContent className="flex flex-col items-center justify-center py-12 text-center">
-                <Globe className="h-12 w-12 text-muted-foreground/30 mb-4" />
-                <h3 className="text-lg font-semibold">No content found yet</h3>
-                <p className="mt-1 text-sm text-muted-foreground max-w-sm">
-                  Content from tracked brands will appear here after the next sync cycle.
-                </p>
-              </CardContent>
-            </Card>
+            <div className="flex flex-col items-center justify-center rounded-[12px] border border-border bg-card px-4 py-12 text-center">
+              <Globe className="mb-4 h-12 w-12 text-muted-foreground/30" />
+              <h3 className="text-[15px] font-semibold">No content found yet</h3>
+              <p className="mt-1 max-w-sm text-[12.5px] leading-[1.5] text-muted-foreground">
+                Content from tracked brands will appear here after the next sync cycle.
+              </p>
+            </div>
           )}
         </div>
       )}
@@ -643,96 +685,105 @@ function CampaignsPageInner() {
         <div className="space-y-4">
           {/* Influencer funnel stats */}
           {infStats && (
-            <div className="grid gap-3 sm:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               {[
-                { label: "Discovered", value: infStats.total, color: "text-blue-500" },
-                { label: "Shortlisted", value: infStats.shortlisted, color: "text-amber-500" },
-                { label: "Contacted", value: infStats.contacted, color: "text-violet-500" },
-                { label: "Responded", value: infStats.responded, color: "text-emerald-500" },
+                { label: "Discovered", value: infStats.total, color: "#5b9bd5" },
+                { label: "Shortlisted", value: infStats.shortlisted, color: "#e0b84a" },
+                { label: "Contacted", value: infStats.contacted, color: "hsl(var(--accent-gold))" },
+                { label: "Responded", value: infStats.responded, color: "#5cb85c" },
               ].map((s) => (
-                <div key={s.label} className="rounded-xl border border-border/40 bg-card/50 p-3 text-center">
-                  <p className={`text-xl font-bold ${s.color}`}>{s.value}</p>
-                  <p className="text-xs text-muted-foreground">{s.label}</p>
+                <div key={s.label} className="rounded-[12px] border border-border bg-card p-3.5 text-center">
+                  <div className="text-[20px] font-bold leading-none" style={{ color: s.color }}>
+                    {s.value}
+                  </div>
+                  <div className="mt-[5px] text-[11px] leading-none text-muted-foreground">{s.label}</div>
                 </div>
               ))}
             </div>
           )}
 
-          <div className="space-y-3">
+          <div className="flex flex-col gap-2.5">
             {influencersLoading ? (
-              [1, 2, 3].map((i) => <Skeleton key={i} className="h-20 rounded-2xl" />)
+              [1, 2, 3].map((i) => <Skeleton key={i} className="h-[86px] rounded-[14px]" />)
             ) : influencers && influencers.length > 0 ? (
-              influencers.map((inf) => (
-                <div key={inf.id} className="group rounded-2xl border border-border/40 bg-card/50 p-4 transition-all hover:border-border/60 hover:shadow-sm">
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
-                    <div className="h-10 w-10 rounded-full bg-gradient-to-br from-violet-500 to-pink-500 flex items-center justify-center text-white text-sm font-bold shrink-0">
+              influencers.map((inf) => {
+                const updating = updateInfluencer.isPending && updateInfluencer.variables?.id === inf.id;
+                const removing = deleteInfluencer.isPending && deleteInfluencer.variables?.id === inf.id;
+                /* Design: one "advance to the next stage" button, whose label and
+                   glyph come from the influencer's CURRENT status. The app had
+                   three near-identical buttons behind three conditionals. */
+                const nextStep =
+                  inf.status === "discovered" ? { to: "shortlisted", label: "Shortlist", Icon: Star }
+                  : inf.status === "shortlisted" ? { to: "contacted", label: "Mark Contacted", Icon: Mail }
+                  : inf.status === "contacted" ? { to: "responded", label: "Responded", Icon: Star }
+                  : null;
+                return (
+                  <div key={inf.id} className="flex flex-wrap items-center gap-3.5 rounded-[14px] border border-border bg-card p-4 shadow-[0_6px_14px_-10px_rgba(0,0,0,.4)] transition-colors hover:border-border2">
+                    {/* Design: influencer initial sits in a solid accent disc with
+                        near-black initials — not the old pink gradient (which had
+                        no `from-` stop, so it faded out of transparency). */}
+                    <div className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full bg-gold text-[14px] font-bold leading-none text-[hsl(var(--gold-foreground))]">
                       {inf.name.charAt(0).toUpperCase()}
                     </div>
-                    <div className="flex-1 min-w-0 basis-40">
-                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                        <h4 className="truncate text-sm font-semibold">{inf.name}</h4>
-                        <Badge className={`shrink-0 text-[10px] ${influencerStatusColors[inf.status] ?? ""}`}>
-                          {inf.status}
-                        </Badge>
-                        <Badge variant="outline" className="shrink-0 text-[10px] gap-1">
-                          {platformIcons[inf.platform] || <Globe className="h-3 w-3" />}
+                    <div className="min-w-[220px] flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="truncate text-[13.5px] font-semibold leading-[1.3]">{inf.name}</span>
+                        <span className={`shrink-0 rounded-full px-[9px] py-0.5 text-[9.5px] font-semibold leading-[1.6] ${INF_STATUS_STYLE[inf.status] ?? "bg-tile text-muted-foreground"}`}>
+                          {inf.status.charAt(0).toUpperCase() + inf.status.slice(1)}
+                        </span>
+                        <span className="flex shrink-0 items-center gap-1 rounded-[5px] border border-border2 px-2 py-[1.5px] text-[9.5px] font-medium leading-[1.6] text-muted-foreground">
+                          {platformIcon(inf.platform, "h-[9px] w-[9px]")}
                           {inf.platform}
-                        </Badge>
+                        </span>
                       </div>
-                      <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1 text-xs text-muted-foreground">
-                        <span className="truncate max-w-full">@{inf.handle}</span>
-                        <span className="whitespace-nowrap">{inf.followers.toLocaleString()} followers</span>
-                        <span className="whitespace-nowrap">{inf.avgEngagement.toFixed(0)} avg engagement</span>
-                        {inf.niche && <span className="truncate text-blue-600">{inf.niche}</span>}
+                      <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] leading-none text-faint">
+                        <span className="truncate">@{inf.handle}</span>
+                        <span className="whitespace-nowrap">{formatCompact(inf.followers)} followers</span>
+                        <span className="whitespace-nowrap">{formatCompact(inf.avgEngagement)} avg engagement</span>
+                        {inf.niche && <span className="truncate text-muted-foreground">{inf.niche}</span>}
                         {inf.relevanceScore > 0 && (
-                          <span className="flex shrink-0 items-center gap-0.5">
-                            <Star className="h-3 w-3 text-amber-500" />
+                          <span className="flex shrink-0 items-center gap-[3px]">
+                            <Star className="h-2.5 w-2.5 text-gold" />
                             {inf.relevanceScore.toFixed(0)}
                           </span>
                         )}
                       </div>
                     </div>
-                    <div className="flex shrink-0 items-center gap-1 opacity-100 transition-opacity [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100">
-                      {(() => {
-                        const updating = updateInfluencer.isPending && updateInfluencer.variables?.id === inf.id;
-                        const removing = deleteInfluencer.isPending && deleteInfluencer.variables?.id === inf.id;
-                        return (
-                          <>
-                            {inf.status === "discovered" && (
-                              <Button size="sm" variant="outline" className="h-7 text-xs" disabled={updating} onClick={() => updateInfluencer.mutate({ id: inf.id, status: "shortlisted" })}>
-                                {updating && <Loader2 className="mr-1 h-3 w-3 animate-spin" />} Shortlist
-                              </Button>
-                            )}
-                            {inf.status === "shortlisted" && (
-                              <Button size="sm" variant="outline" className="h-7 text-xs" disabled={updating} onClick={() => updateInfluencer.mutate({ id: inf.id, status: "contacted" })}>
-                                {updating ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Mail className="mr-1 h-3 w-3" />} Mark Contacted
-                              </Button>
-                            )}
-                            {inf.status === "contacted" && (
-                              <Button size="sm" variant="outline" className="h-7 text-xs" disabled={updating} onClick={() => updateInfluencer.mutate({ id: inf.id, status: "responded" })}>
-                                {updating && <Loader2 className="mr-1 h-3 w-3 animate-spin" />} Responded
-                              </Button>
-                            )}
-                            <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive" disabled={removing} onClick={() => { if (confirm(`Remove influencer "${inf.name}"?`)) deleteInfluencer.mutate({ id: inf.id }); }}>
-                              {removing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
-                            </Button>
-                          </>
-                        );
-                      })()}
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      {nextStep && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-[29px] gap-1.5 rounded-[8px] border-border2 bg-surface2 px-3 text-[11.5px] font-medium hover:bg-hover"
+                          disabled={updating}
+                          onClick={() => updateInfluencer.mutate({ id: inf.id, status: nextStep.to })}
+                        >
+                          {updating ? <Loader2 className="h-3 w-3 animate-spin" /> : <nextStep.Icon className="h-3 w-3" />}
+                          {nextStep.label}
+                        </Button>
+                      )}
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-[27px] w-[27px] rounded-[6px] text-faint hover:bg-hover hover:text-[#c96b56]"
+                        aria-label={`Remove ${inf.name}`}
+                        disabled={removing}
+                        onClick={() => { if (confirm(`Remove influencer "${inf.name}"?`)) deleteInfluencer.mutate({ id: inf.id }); }}
+                      >
+                        {removing ? <Loader2 className="h-[13px] w-[13px] animate-spin" /> : <Trash2 className="h-[13px] w-[13px]" />}
+                      </Button>
                     </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             ) : (
-              <Card>
-                <CardContent className="flex flex-col items-center justify-center py-12 text-center">
-                  <Users className="h-12 w-12 text-muted-foreground/30 mb-4" />
-                  <h3 className="text-lg font-semibold">No influencers discovered yet</h3>
-                  <p className="mt-1 text-sm text-muted-foreground max-w-sm">
-                    Influencers are auto-discovered from high-engagement brand content, or you can add them manually.
-                  </p>
-                </CardContent>
-              </Card>
+              <div className="flex flex-col items-center justify-center rounded-[14px] border border-border bg-card px-4 py-12 text-center">
+                <Users className="mb-4 h-12 w-12 text-muted-foreground/30" />
+                <h3 className="text-[15px] font-semibold">No influencers discovered yet</h3>
+                <p className="mt-1 max-w-sm text-[12.5px] leading-[1.5] text-muted-foreground">
+                  Influencers are auto-discovered from high-engagement brand content, or you can add them manually.
+                </p>
+              </div>
             )}
           </div>
         </div>

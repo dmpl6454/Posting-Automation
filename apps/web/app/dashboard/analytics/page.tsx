@@ -4,20 +4,16 @@ import { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { ReportsTab } from "~/components/analytics/ReportsTab";
+import { PlatformPerformanceRadar } from "~/components/analytics/PlatformPerformanceRadar";
 import { ChannelAvatar } from "~/components/channel-avatar";
 import { trpc } from "~/lib/trpc/client";
 import { useToast } from "~/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "~/components/ui/card";
 import { Skeleton } from "~/components/ui/skeleton";
-import { Badge } from "~/components/ui/badge";
 import {
-  BarChart3, TrendingUp, CheckCircle, XCircle, Eye, Heart, MessageCircle,
-  Share, MousePointerClick, Users, Percent, Calendar, RefreshCw, AlertTriangle, PlayCircle,
+  BarChart3, TrendingUp, CheckCircle, XCircle, Heart, MessageCircle,
+  Share, Users, Percent, Calendar, RefreshCw, AlertTriangle, PlayCircle,
 } from "lucide-react";
-import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
-  PieChart, Pie, Cell,
-} from "recharts";
 import { format, subDays } from "date-fns";
 import {
   metricCellValue,
@@ -56,31 +52,45 @@ const PLATFORM_COLORS: Record<string, string> = {
   DEFAULT: "#8B5CF6",
 };
 
-function getPlatformColor(platform: string) {
-  return PLATFORM_COLORS[platform] ?? PLATFORM_COLORS.DEFAULT;
+/** The design's donut palette, assigned by slice rank (largest share first). */
+const DONUT_PALETTE = [
+  "#38bdf8", "#ec4899", "#a78bfa", "#4ade80",
+  "#fb923c", "#C9A356", "#f87171", "#2dd4bf",
+] as const;
+
+function getPlatformColor(platform: string): string {
+  // Literal fallback, not PLATFORM_COLORS.DEFAULT: under noUncheckedIndexedAccess
+  // the indexed read is `string | undefined`, so the map can't guarantee a colour.
+  return PLATFORM_COLORS[platform] ?? "#8B5CF6";
 }
 
-// Recharts tooltips default to WHITE bg + series-colored text — unreadable in
-// dark mode and against the dataviz rule that text wears text tokens. These
-// styles pin tooltip chrome + text to theme tokens (identity comes from the
-// swatch recharts already renders beside each item).
-const TOOLTIP_CONTENT_STYLE = {
-  fontSize: 12,
-  borderRadius: 8,
-  backgroundColor: "hsl(var(--card))",
-  border: "1px solid hsl(var(--border))",
-  color: "hsl(var(--card-foreground))",
-} as const;
-const TOOLTIP_ITEM_STYLE = { color: "hsl(var(--card-foreground))" } as const;
-const TOOLTIP_LABEL_STYLE = { color: "hsl(var(--muted-foreground))" } as const;
 
-function DateRangePicker({
+/** Design: platform names as people write them. The raw enum ("TWITTER") is
+ *  right for the table's platform tag, but the donut legend reads as prose. */
+const PLATFORM_DISPLAY: Record<string, string> = {
+  TWITTER: "X (Twitter)",
+  LINKEDIN: "LinkedIn",
+  YOUTUBE: "YouTube",
+  TIKTOK: "TikTok",
+  DEVTO: "DEV.to",
+};
+
+function platformDisplayName(platform: string): string {
+  return (
+    PLATFORM_DISPLAY[platform] ??
+    platform.charAt(0) + platform.slice(1).toLowerCase()
+  );
+}
+
+/* The mockup's header carries only the three range presets beside Sync Now.
+   Our custom from/to inputs are a real control we can't drop, so they get
+   their own line underneath instead of squeezing the headline column — that
+   squeeze is what wrapped "Reach, likes, comments…" onto two lines. */
+function RangePresets({
   from,
-  to,
   onChange,
 }: {
   from: string;
-  to: string;
   onChange: (from: string, to: string) => void;
 }) {
   const presets = [
@@ -90,7 +100,7 @@ function DateRangePicker({
   ];
 
   return (
-    <div className="flex items-center gap-2 flex-wrap">
+    <div className="flex items-center gap-1.5">
       {presets.map((p) => {
         const pFrom = subDays(new Date(), p.days).toISOString();
         const pTo = new Date().toISOString();
@@ -99,17 +109,31 @@ function DateRangePicker({
           <button
             key={p.label}
             onClick={() => onChange(pFrom, pTo)}
-            className={`rounded-md px-3 py-1.5 text-xs font-medium border transition-colors ${
+            className={`whitespace-nowrap rounded-[8px] border px-3 py-[7px] text-[11.5px] leading-none transition-all ${
               active
-                ? "bg-primary text-primary-foreground border-primary"
-                : "bg-background text-muted-foreground border-border hover:border-primary/50"
+                ? "border-[hsl(var(--accent-border))] bg-gold/[0.12] font-semibold text-gold"
+                : "border-transparent bg-tile font-medium text-muted-foreground hover:text-foreground"
             }`}
           >
             {p.label}
           </button>
         );
       })}
-      <div className="flex items-center gap-1.5 ml-1">
+    </div>
+  );
+}
+
+function CustomRange({
+  from,
+  to,
+  onChange,
+}: {
+  from: string;
+  to: string;
+  onChange: (from: string, to: string) => void;
+}) {
+  return (
+    <div className="flex items-center gap-1.5">
         <Calendar className="h-3.5 w-3.5 text-muted-foreground" />
         <input
           type="date"
@@ -117,16 +141,15 @@ function DateRangePicker({
           // Parse the date input as UTC midnight, not local — otherwise a UTC+5:30
           // user's "today" shifts a day and posts drop out (audit fix 2026-06-06).
           onChange={(e) => onChange(e.target.value ? new Date(`${e.target.value}T00:00:00.000Z`).toISOString() : from, to)}
-          className="text-xs border rounded-md px-2 py-1 bg-background"
+          className="rounded-[8px] border border-border2 bg-background px-2 py-[5px] text-[11px] text-muted-foreground"
         />
         <span className="text-xs text-muted-foreground">–</span>
         <input
           type="date"
           value={to.slice(0, 10)}
           onChange={(e) => onChange(from, e.target.value ? new Date(`${e.target.value}T23:59:59.999Z`).toISOString() : to)}
-          className="text-xs border rounded-md px-2 py-1 bg-background"
+          className="rounded-[8px] border border-border2 bg-background px-2 py-[5px] text-[11px] text-muted-foreground"
         />
-      </div>
     </div>
   );
 }
@@ -135,6 +158,10 @@ function InsightsAnalyticsView() {
   const [from, setFrom] = useState(() => subDays(new Date(), 30).toISOString());
   const [to, setTo] = useState(() => new Date().toISOString());
   const [syncing, setSyncing] = useState(false);
+  /* The mockup's header carries ONLY the three presets and Sync Now. Our custom
+     from/to range is a real capability we can't drop, so it hides behind a
+     calendar chip: at rest the header is the mockup's, one click reveals it. */
+  const [showCustomRange, setShowCustomRange] = useState(false);
   const { toast } = useToast();
 
   const dateInput = { from, to };
@@ -240,26 +267,26 @@ function InsightsAnalyticsView() {
     // number on this page (impressions, likes, reach) is per DELIVERY, so the
     // deliveries card is the one that reconciles with the table.
     {
-      name: "Posts Created",
+      name: "Total Posts",
       value: overview?.totalPosts ?? 0,
       icon: BarChart3,
-      color: "text-blue-600 bg-blue-100 dark:text-blue-400 dark:bg-blue-950",
+      color: "bg-[rgba(59,130,246,0.12)] text-[#60a5fa]",
       sub: overview && overview.published > overview.totalPosts
         ? `sent to ${overview.published} channel${overview.published === 1 ? "" : "s"}`
         : undefined,
       title: "Posts you composed in this date range. A post sent to several channels still counts once here.",
     },
     {
-      name: "Channel Deliveries",
+      name: "Published Targets",
       value: overview?.published ?? 0,
       icon: CheckCircle,
-      color: "text-green-600 bg-green-100 dark:text-green-400 dark:bg-green-950",
+      color: "bg-[rgba(34,197,94,0.12)] text-[#4ade80]",
       sub: overview
         ? `from ${overview.totalPosts} post${overview.totalPosts === 1 ? "" : "s"}`
         : undefined,
-      title: "Successful deliveries — one per channel a post reached. A post sent to 2 channels counts twice, which is why this can exceed Posts Created.",
+      title: "Successful deliveries — one per channel a post reached. A post sent to 2 channels counts twice, which is why this can exceed Total Posts.",
     },
-    { name: "Failed", value: overview?.failed ?? 0, icon: XCircle, color: "text-red-600 bg-red-100 dark:text-red-400 dark:bg-red-950" },
+    { name: "Failed", value: overview?.failed ?? 0, icon: XCircle, color: "bg-[rgba(239,68,68,0.12)] text-[#f87171]" },
     // "Total Reach: 0" is actively misleading on an org whose platforms can't
     // report reach at all — swap in a metric that CAN be populated.
     // ⚠️ NOT "Total Reach": this is a sum of per-post reach, so it double-counts
@@ -272,12 +299,12 @@ function InsightsAnalyticsView() {
     // qualified views) and wrong outright on Twitter/LinkedIn (genuine
     // impressions, no view count). Now each label names the field it sums.
     ...(statReportable("reach")
-      ? [{ name: "Reach (summed)", value: engagement?.reach ?? 0, icon: TrendingUp, color: "text-purple-600 bg-purple-100 dark:text-purple-400 dark:bg-purple-950", format: true }]
+      ? [{ name: "Reach (summed)", value: engagement?.reach ?? 0, icon: TrendingUp, color: "bg-gold/[0.12] text-gold", format: true }]
       : statReportable("views")
-        ? [{ name: "Total Views", value: engagement?.views ?? 0, icon: TrendingUp, color: "text-purple-600 bg-purple-100 dark:text-purple-400 dark:bg-purple-950", format: true }]
+        ? [{ name: "Total Views", value: engagement?.views ?? 0, icon: TrendingUp, color: "bg-gold/[0.12] text-gold", format: true }]
         : statReportable("impressions")
-          ? [{ name: "Total Impressions", value: engagement?.impressions ?? 0, icon: TrendingUp, color: "text-purple-600 bg-purple-100 dark:text-purple-400 dark:bg-purple-950", format: true }]
-          : [{ name: "Total Engagement", value: (engagement?.likes ?? 0) + (engagement?.comments ?? 0) + (engagement?.shares ?? 0), icon: TrendingUp, color: "text-purple-600 bg-purple-100 dark:text-purple-400 dark:bg-purple-950", format: true }]),
+          ? [{ name: "Total Impressions", value: engagement?.impressions ?? 0, icon: TrendingUp, color: "bg-gold/[0.12] text-gold", format: true }]
+          : [{ name: "Total Engagement", value: (engagement?.likes ?? 0) + (engagement?.comments ?? 0) + (engagement?.shares ?? 0), icon: TrendingUp, color: "bg-gold/[0.12] text-gold", format: true }]),
   ];
 
   // Only tile metrics that SOME connected platform can actually report. A metric
@@ -293,20 +320,18 @@ function InsightsAnalyticsView() {
   // per-capture capability, not by a hardcoded platform assumption.
   const reportable = new Set(engagement?.reportableMetrics ?? []);
   const canReport = (key: string) => reportable.size === 0 || reportable.has(key as any);
+  /*
+   * The design's Engagement Breakdown is exactly four tiles — Views, Likes,
+   * Comments, Shares — in a 2x2, with Engagement Rate as the block beneath.
+   * Impressions, Clicks and a summed-Reach tile were dropped to match it (owner
+   * decision). None of that data is lost: every one of them is still a column in
+   * Channel Performance, and Reach also has its own stat card at the top.
+   */
   const engagementMetrics = [
-    { key: "impressions", label: "Impressions", value: engagement?.impressions ?? 0, icon: Eye, color: "text-blue-500" },
-    // Distinct from Impressions — see the CHANNEL_METRIC_COLUMNS note. For the
-    // five platforms with no impressions metric this tile REPLACES that one.
-    { key: "views", label: "Views", value: engagement?.views ?? 0, icon: PlayCircle, color: "text-sky-500" },
-    { key: "likes", label: "Likes", value: engagement?.likes ?? 0, icon: Heart, color: "text-red-500" },
-    { key: "comments", label: "Comments", value: engagement?.comments ?? 0, icon: MessageCircle, color: "text-green-500" },
-    { key: "shares", label: "Shares", value: engagement?.shares ?? 0, icon: Share, color: "text-purple-500" },
-    { key: "clicks", label: "Clicks", value: engagement?.clicks ?? 0, icon: MousePointerClick, color: "text-orange-500" },
-    // ⚠️ "summed" is load-bearing, not decoration. Reach is distinct PEOPLE per
-    // POST, so adding it across posts counts the same person once per post they
-    // saw. Calling this bare "Reach" would state an audience size we do not have
-    // (a deduplicated figure needs the page-level edge, which has no code path).
-    { key: "reach", label: "Reach (summed per post)", value: engagement?.reach ?? 0, icon: Users, color: "text-cyan-500" },
+    { key: "views", label: "Views", value: engagement?.views ?? 0, icon: PlayCircle, color: "text-[#38bdf8]" },
+    { key: "likes", label: "Likes", value: engagement?.likes ?? 0, icon: Heart, color: "text-[#f87171]" },
+    { key: "comments", label: "Comments", value: engagement?.comments ?? 0, icon: MessageCircle, color: "text-[#4ade80]" },
+    { key: "shares", label: "Shares", value: engagement?.shares ?? 0, icon: Share, color: "text-gold" },
   ].filter((m) => canReport(m.key));
 
   // Compress chart data if more than 30 points
@@ -430,25 +455,52 @@ function InsightsAnalyticsView() {
   return (
     <div className="space-y-8">
       {/* Header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Insights</h1>
-          <p className="text-muted-foreground">See how your posts perform — reach, likes, comments &amp; shares across your channels</p>
+      <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
+        <div className="min-w-0">
+          <span className="eyebrow">Insights</span>
+          <h1 className="display mt-2.5 text-[30px] leading-[1.1]">
+            See what&apos;s working.
+          </h1>
+          <p className="mt-2 text-[13px] leading-[1.55] text-muted-foreground">
+            Reach, likes, comments, and shares across your channels
+          </p>
         </div>
-        <div className="flex items-center gap-3 flex-wrap">
-          <DateRangePicker
+        <div className="flex shrink-0 flex-col gap-2 sm:items-end">
+          <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+          <RangePresets
             from={from}
-            to={to}
             onChange={(f, t) => { setFrom(f); setTo(t); }}
           />
           <button
+            type="button"
+            aria-pressed={showCustomRange}
+            aria-label="Custom date range"
+            title="Custom date range"
+            onClick={() => setShowCustomRange((v) => !v)}
+            className={`flex items-center rounded-[8px] border px-2.5 py-[7px] leading-none transition-all ${
+              showCustomRange
+                ? "border-[hsl(var(--accent-border))] bg-gold/[0.12] text-gold"
+                : "border-transparent bg-tile text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <Calendar className="h-3.5 w-3.5" />
+          </button>
+          <button
             onClick={() => { setSyncing(true); triggerSync.mutate(); }}
             disabled={syncing}
-            className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-60 transition-colors"
+            className="pa-cta-gold flex h-9 items-center gap-[7px] rounded-[9px] px-3.5 text-[12px] font-semibold disabled:opacity-60"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${syncing ? "animate-spin" : ""}`} />
             {syncing ? "Syncing…" : "Sync Now"}
           </button>
+          </div>
+          {showCustomRange && (
+            <CustomRange
+              from={from}
+              to={to}
+              onChange={(f, t) => { setFrom(f); setTo(t); }}
+            />
+          )}
         </div>
       </div>
 
@@ -458,18 +510,21 @@ function InsightsAnalyticsView() {
           until their owner reconnects once. Without this, a dead/under-scoped
           token is indistinguishable from genuinely zero engagement. */}
       {health && (health.needsReconnectCount > 0 || health.expiringSoonCount > 0) && (
-        <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-4">
+        /* Design: the notice is a surface-1 card in the gold accent, not an
+           amber alert box — amber is off-palette here and read as a third
+           colour on a page that only uses gold + status tints. */
+        <div className="rounded-[12px] border border-border bg-surface1 px-4 py-3.5">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div className="flex gap-3">
-              <AlertTriangle className="h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400" />
+            <div className="flex gap-2.5">
+              <AlertTriangle className="h-[15px] w-[15px] shrink-0 text-gold" />
               <div className="min-w-0">
                 {health.needsReconnectCount > 0 ? (
                   <>
-                    <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
+                    <p className="text-[12.5px] font-medium leading-[1.3] text-gold">
                       {health.needsReconnectCount} channel{health.needsReconnectCount === 1 ? "" : "s"} need
                       {health.needsReconnectCount === 1 ? "s" : ""} reconnecting to report Insights
                     </p>
-                    <p className="mt-1 text-xs text-amber-800/90 dark:text-amber-300/90">
+                    <p className="mt-2 text-[11.5px] leading-[1.5] text-muted-foreground">
                       The platform is refusing to return metrics for{" "}
                       {health.needsReconnectCount === 1 ? "this channel" : "these channels"}. Posting
                       still works; only metrics are affected.
@@ -491,7 +546,7 @@ function InsightsAnalyticsView() {
                         "reconnect" without saying "and tick this one" is the exact
                         advice that failed the owner repeatedly. */}
                     {grantAffected.length > 0 && (
-                      <p className="mt-1.5 text-xs font-medium text-amber-900 dark:text-amber-200">
+                      <p className="mt-1.5 text-[11.5px] font-medium leading-[1.5] text-gold">
                         {grantAffected.length === health.needsReconnectCount
                           ? grantAffected.length === 1
                             ? "This channel was"
@@ -515,11 +570,11 @@ function InsightsAnalyticsView() {
                         it — only the owner reconnecting resets it. So warning ahead of
                         the deadline is the only thing that actually prevents the
                         outage, which is why this gets a banner of its own. */}
-                    <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
+                    <p className="text-[12.5px] font-medium leading-[1.3] text-gold">
                       {health.expiringSoonCount} channel{health.expiringSoonCount === 1 ? "" : "s"} will stop
                       reporting Insights soon
                     </p>
-                    <p className="mt-1 text-xs text-amber-800/90 dark:text-amber-300/90">
+                    <p className="mt-2 text-[11.5px] leading-[1.5] text-muted-foreground">
                       Meta closes a 90-day data-access window per connection. Reconnect before it
                       lapses to keep metrics flowing — a background refresh cannot extend it. Posting
                       is unaffected either way.
@@ -527,7 +582,7 @@ function InsightsAnalyticsView() {
                   </>
                 )}
                 {health.channels.length > 0 && (
-                  <p className="mt-1.5 truncate text-xs text-amber-800/70 dark:text-amber-300/70">
+                  <p className="mt-1.5 truncate text-[11px] leading-none text-faint">
                     {health.channels
                       .slice(0, 6)
                       .map((c) =>
@@ -544,7 +599,7 @@ function InsightsAnalyticsView() {
             </div>
             <Link
               href="/dashboard/channels"
-              className="shrink-0 self-start rounded-md bg-amber-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-amber-700"
+              className="flex h-7 shrink-0 items-center self-start whitespace-nowrap rounded-[8px] bg-gold px-3 text-[11px] font-semibold text-[hsl(var(--gold-foreground))] transition-opacity hover:opacity-90"
             >
               Reconnect channels
             </Link>
@@ -569,24 +624,28 @@ function InsightsAnalyticsView() {
         {overviewLoading || engagementLoading
           ? [1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-24 rounded-xl" />)
           : stats.map((stat) => (
+              /* Design: 18px padding, a 38px/10px-radius tinted icon tile, then
+                 label 11.5px muted → value 20px/600 → optional 10.5px faint sub.
+                 Every line truncates so a long label ("Published Targets")
+                 can't push the card to two rows and break the grid rhythm. */
               <Card key={stat.name}>
-                <CardContent className="p-6">
-                  <div className="flex items-center gap-4">
-                    <div className={`rounded-lg p-2.5 ${stat.color}`}>
-                      <stat.icon className="h-5 w-5" />
-                    </div>
-                    <div>
-                      {/* title explains cards whose counts legitimately differ
-                          (Posts Created vs Channel Deliveries) — reported as a bug
-                          when the labels left the reader to guess. */}
-                      <p className="text-sm text-muted-foreground" title={stat.title}>{stat.name}</p>
-                      <p className="text-2xl font-bold">
-                        {stat.format ? formatNumber(stat.value) : stat.value}
-                      </p>
-                      {stat.sub && (
-                        <p className="text-xs text-muted-foreground">{stat.sub}</p>
-                      )}
-                    </div>
+                <CardContent className="flex items-center gap-3.5 p-[18px]">
+                  <div className={`flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-[10px] ${stat.color}`}>
+                    <stat.icon className="h-[17px] w-[17px]" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    {/* title explains cards whose counts legitimately differ
+                        (Total Posts vs Published Targets) — reported as a bug
+                        when the labels left the reader to guess. */}
+                    <p className="truncate text-[11.5px] leading-[1.3] text-muted-foreground" title={stat.title}>
+                      {stat.name}
+                    </p>
+                    <p className="mt-1 truncate text-[20px] font-semibold leading-none">
+                      {stat.format ? formatNumber(stat.value) : stat.value}
+                    </p>
+                    {stat.sub && (
+                      <p className="mt-0.5 truncate text-[10.5px] leading-[1.3] text-faint">{stat.sub}</p>
+                    )}
                   </div>
                 </CardContent>
               </Card>
@@ -596,7 +655,7 @@ function InsightsAnalyticsView() {
       {/* Posts Over Time Chart */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Posts Over Time</CardTitle>
+          <CardTitle>Posts Over Time</CardTitle>
           {/*
             Population: app-published posts (PostTarget rows) — the SAME population
             as Channel Performance and the engagement tiles since 2026-08-19, so the
@@ -617,32 +676,64 @@ function InsightsAnalyticsView() {
           {chartLoading ? (
             <Skeleton className="h-56 w-full rounded-lg" />
           ) : chartData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={220}>
-              {/* Fix #36: changed left margin from -20 to 8 to prevent tooltip clipping */}
-              <BarChart data={chartData} margin={{ top: 4, right: 8, left: 8, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                <XAxis
-                  dataKey="label"
-                  tick={{ fontSize: 11 }}
-                  interval="preserveStartEnd"
-                  minTickGap={24}
-                  tickMargin={8}
-                  className="text-muted-foreground"
-                />
-                <YAxis tick={{ fontSize: 11 }} allowDecimals={false} className="text-muted-foreground" />
-                {/* Fix #36: allowEscapeViewBox + wrapperStyle prevent clipping at narrow widths */}
-                <Tooltip
-                  contentStyle={TOOLTIP_CONTENT_STYLE}
-                  itemStyle={TOOLTIP_ITEM_STYLE}
-                  labelStyle={TOOLTIP_LABEL_STYLE}
-                  wrapperStyle={{ zIndex: 50 }}
-                  allowEscapeViewBox={{ x: true, y: true }}
-                  formatter={(v: number) => [v, "Posts"]}
-                  labelFormatter={(l) => `Date: ${l}`}
-                />
-                <Bar dataKey="posts" fill="#6366F1" radius={[4, 4, 0, 0]} maxBarSize={40} />
-              </BarChart>
-            </ResponsiveContainer>
+            /* Design: this chart is plain CSS in the mockup, not a chart library —
+               a 170px flex row of gold bars on a hairline baseline, each bar's
+               OPACITY scaled with its value (0.55 → 1.0) and the peak day labelled
+               in gold above its bar. recharts could not reproduce the per-bar
+               opacity ramp or that label without fighting it, and its own axis
+               furniture is what kept pulling the layout away from the mockup.
+               Hover text comes from the native `title`, exactly as the mockup does. */
+            (() => {
+              const peak = Math.max(...chartData.map((d) => d.posts), 0);
+              // 4px rather than the mockup's 6px: its window is 14 days, ours is
+              // 30, so the tighter gutter buys each bar back the width it loses
+              // to twice as many bars.
+              const gap = "4px";
+              // The mockup's window is 14 days, so every bar is labelled. Our
+              // default range is 30, where 31 labels collide into an unreadable
+              // smear — so show every Nth and keep the mockup's label DENSITY
+              // rather than its literal one-per-bar rule.
+              const labelEvery = Math.max(1, Math.ceil(chartData.length / 14));
+              return (
+                <div>
+                  <div
+                    className="flex items-end border-b border-border"
+                    style={{ height: 170, gap, marginTop: 26 }}
+                  >
+                    {chartData.map((d) => (
+                      <div
+                        key={d.date}
+                        className="relative flex h-full min-w-0 flex-1 flex-col items-center justify-end"
+                        title={`${d.label} — ${d.posts} post${d.posts === 1 ? "" : "s"}`}
+                      >
+                        {peak > 0 && d.posts === peak && (
+                          <span className="absolute top-0 -translate-y-4 text-[10px] font-semibold leading-none text-gold">
+                            {d.posts}
+                          </span>
+                        )}
+                        <div
+                          className="w-full rounded-t-[4px] bg-gold transition-opacity"
+                          style={{
+                            opacity: peak > 0 ? 0.55 + 0.45 * (d.posts / peak) : 0.55,
+                            height: peak > 0 ? Math.max(6, Math.round((d.posts / peak) * 150)) : 6,
+                          }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-2 flex" style={{ gap }}>
+                    {chartData.map((d, i) => (
+                      <span
+                        key={d.date}
+                        className="min-w-0 flex-1 overflow-visible whitespace-nowrap text-center text-[9px] leading-none text-faint"
+                      >
+                        {i % labelEvery === 0 || i === chartData.length - 1 ? d.label : ""}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()
           ) : (
             <div className="flex h-56 items-center justify-center rounded-lg border border-dashed">
               <div className="text-center">
@@ -679,7 +770,7 @@ function InsightsAnalyticsView() {
         {/* Engagement Metrics */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Engagement Breakdown</CardTitle>
+            <CardTitle>Engagement Breakdown</CardTitle>
             <CardDescription>Interactions across published content</CardDescription>
           </CardHeader>
           <CardContent>
@@ -689,14 +780,17 @@ function InsightsAnalyticsView() {
               </div>
             ) : (
               <>
-                <div className="grid grid-cols-2 gap-3">
+                {/* Design: icon + label share the top row, the number sits
+                    underneath at 20px — not icon-beside-a-stacked-pair, which
+                    left the figures visually smaller than the stat cards. */}
+                <div className="grid grid-cols-2 gap-2.5">
                   {engagementMetrics.map((metric) => (
-                    <div key={metric.label} className="flex items-center gap-3 rounded-lg border p-3">
-                      <metric.icon className={`h-5 w-5 shrink-0 ${metric.color}`} />
-                      <div>
-                        <p className="text-xs text-muted-foreground">{metric.label}</p>
-                        <p className="text-lg font-semibold">{formatNumber(metric.value)}</p>
+                    <div key={metric.label} className="min-w-0 rounded-[10px] border border-border p-3.5">
+                      <div className="flex items-center gap-2">
+                        <metric.icon className={`h-[15px] w-[15px] shrink-0 ${metric.color}`} />
+                        <span className="truncate text-[12px] leading-none text-muted-foreground">{metric.label}</span>
                       </div>
+                      <p className="mt-2 truncate text-[20px] font-semibold leading-none">{formatNumber(metric.value)}</p>
                     </div>
                   ))}
                 </div>
@@ -706,10 +800,15 @@ function InsightsAnalyticsView() {
                     Instagram/Facebook sync at publish + checkpoints.
                   </p>
                 )}
-                <div className="mt-3 flex items-center gap-3 rounded-lg border border-primary/20 bg-primary/5 p-3">
-                  <Percent className="h-5 w-5 text-primary" />
+                {/* Design: the rate gets its own full-width surface-1 block in
+                    gold — it is the summary figure, so it reads apart from the
+                    four raw-count tiles above it. */}
+                <div className="mt-2.5 rounded-[10px] border border-border bg-surface1 p-3.5">
+                  <div className="flex items-center gap-2">
+                    <Percent className="h-[15px] w-[15px] shrink-0 text-gold" />
+                    <span className="text-[12px] leading-none text-muted-foreground">Engagement Rate</span>
+                  </div>
                   <div>
-                    <p className="text-xs text-muted-foreground">Engagement Rate</p>
                     {(() => {
                       // This tile used to coalesce a null/impossible rate to
                       // 0 and print "0.00%" — the least honest surface of the
@@ -722,8 +821,8 @@ function InsightsAnalyticsView() {
                       });
                       return (
                         <p
-                          className={`text-lg font-semibold ${
-                            cell.text === null ? "text-muted-foreground" : "text-primary"
+                          className={`mt-2 text-[20px] font-semibold leading-none ${
+                            cell.text === null ? "text-muted-foreground" : "text-gold"
                           }`}
                           title={cell.title}
                         >
@@ -746,7 +845,7 @@ function InsightsAnalyticsView() {
         {/* Platform Breakdown Pie */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Platform Breakdown</CardTitle>
+            <CardTitle>Platform Breakdown</CardTitle>
             {/* Same narrower population as Posts Over Time — app-published only.
                 "targets" was already an app-published-only concept (a PostTarget
                 row), but the label never said so. */}
@@ -756,72 +855,65 @@ function InsightsAnalyticsView() {
             {breakdownLoading ? (
               <Skeleton className="h-56 w-full rounded-lg" />
             ) : platformBreakdown && platformBreakdown.length > 0 ? (
-              <div>
-                {/* Plot area is legend-free (the legend lives below as HTML), so
-                    the 220px container is all donut — nothing overlaps or clips. */}
-                <div className="relative">
-                  <ResponsiveContainer width="100%" height={220}>
-                    <PieChart>
-                      <Pie
-                        data={platformBreakdown}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={55}
-                        outerRadius={85}
-                        paddingAngle={3}
-                        dataKey="count"
-                        nameKey="platform"
+              /* Design: the donut is a CSS conic-gradient — a 150px disc with a
+                 96px card-coloured hole — not a chart component. That is what
+                 gives it segments which TOUCH (recharts' paddingAngle cut visible
+                 wedges into the ring) at exactly the mockup's diameter. Colours
+                 come from the design's own palette assigned BY RANK, not from
+                 each platform's brand colour: four of our platforms are blue, so
+                 brand colours produced an unreadable all-blue ring. */
+              (() => {
+                const ranked = [...platformBreakdown].sort((a, b) => b.count - a.count);
+                let acc = 0;
+                const slices = ranked.map((entry, i) => {
+                  const color = DONUT_PALETTE[i % DONUT_PALETTE.length]!;
+                  const start = acc;
+                  acc += platformTotal > 0 ? (entry.count / platformTotal) * 360 : 0;
+                  return { ...entry, color, stop: `${color} ${start}deg ${acc}deg` };
+                });
+                return (
+                  <div>
+                    <div className="mt-5 flex justify-center">
+                      <div
+                        className="flex h-[150px] w-[150px] items-center justify-center rounded-full"
+                        style={{ background: `conic-gradient(${slices.map((s) => s.stop).join(", ")})` }}
                       >
-                        {platformBreakdown.map((entry) => (
-                          <Cell
-                            key={entry.platform}
-                            fill={getPlatformColor(entry.platform)}
+                        {/* Total published targets in the hole. "Published" alone
+                            invited comparison with the table's wider post count;
+                            "Sent by you" names the narrower population. */}
+                        <div className="flex h-24 w-24 flex-col items-center justify-center rounded-full bg-card">
+                          <p className="text-[20px] font-semibold leading-none">{formatNumber(platformTotal)}</p>
+                          <p className="mt-[3px] text-[8.5px] font-medium uppercase leading-none tracking-[0.08em] text-faint">
+                            Sent by you
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                    {/* Two-column legend, right-aligned percentages — but capped to
+                        roughly the donut's own width and centred under it. Left to
+                        fill the card, each cell stretched to ~340px and threw the
+                        percentage far from the name it belongs to, which is what
+                        made the legend read as two unrelated columns of numbers. */}
+                    <ul className="mx-auto mt-5 grid max-w-[330px] grid-cols-2 gap-x-4 gap-y-[9px]">
+                      {slices.map((entry) => (
+                        <li key={entry.platform} className="flex min-w-0 items-center gap-[7px]">
+                          <span
+                            aria-hidden
+                            className="h-2 w-2 shrink-0 rounded-[2px]"
+                            style={{ backgroundColor: entry.color }}
                           />
-                        ))}
-                      </Pie>
-                      <Tooltip
-                        formatter={(v: number, name) => [
-                          // "targets" is internal jargon AND ambiguous against the
-                          // table's wider "Posts" count — name the population.
-                          `${v} sent by you`,
-                          name,
-                        ]}
-                        contentStyle={TOOLTIP_CONTENT_STYLE}
-                        itemStyle={TOOLTIP_ITEM_STYLE}
-                        labelStyle={TOOLTIP_LABEL_STYLE}
-                      />
-                    </PieChart>
-                  </ResponsiveContainer>
-                  {/* Total published targets centered in the donut hole.
-                      "Published" alone invited the reader to compare this with the
-                      channel's real post count in the table below, which counts a
-                      wider population. "Sent by you" names the narrower one. */}
-                  <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-                    <p className="text-2xl font-bold leading-none">{formatNumber(platformTotal)}</p>
-                    <p className="mt-1 text-[10px] uppercase tracking-wide text-muted-foreground">
-                      Sent by you
-                    </p>
+                          <span className="min-w-0 flex-1 truncate text-[11.5px] font-medium leading-none">
+                            {platformDisplayName(entry.platform)}
+                          </span>
+                          <span className="shrink-0 text-[11px] leading-none text-faint">
+                            {platformTotal > 0 ? `${Math.round((entry.count / platformTotal) * 100)}%` : "0%"}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
                   </div>
-                </div>
-                {/* Contained legend: identity dot carries the platform color;
-                    the text itself wears foreground/muted tokens (readable in
-                    both themes), never the series color. */}
-                <ul className="mt-4 flex flex-wrap justify-center gap-x-4 gap-y-1.5">
-                  {platformBreakdown.map((entry) => (
-                    <li key={entry.platform} className="flex items-center gap-1.5 text-xs">
-                      <span
-                        aria-hidden
-                        className="h-2.5 w-2.5 shrink-0 rounded-sm"
-                        style={{ backgroundColor: getPlatformColor(entry.platform) }}
-                      />
-                      <span className="font-medium text-foreground">{entry.platform}</span>
-                      <span className="text-muted-foreground">
-                        {platformTotal > 0 ? `${Math.round((entry.count / platformTotal) * 100)}%` : "0%"}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
+                );
+              })()
             ) : (
               <div className="flex h-56 items-center justify-center rounded-lg border border-dashed">
                 <div className="text-center">
@@ -834,11 +926,45 @@ function InsightsAnalyticsView() {
         </Card>
       </div>
 
+      {/* Platform Performance — the design's five-axis radar. Reads the SAME
+          perChannelStats rows the table below uses, so the two can never
+          disagree; no new query. */}
+      {channelStats && channelStats.length > 0 && (
+        <Card className="shadow-[0_8px_18px_-12px_rgba(0,0,0,.5)]">
+          <CardHeader>
+            <CardTitle>Platform Performance</CardTitle>
+            <CardDescription>
+              Five metrics normalized to 0–100 per channel so they&rsquo;re comparable on one
+              chart. Click a channel below to show or hide it.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <PlatformPerformanceRadar
+              platformLabel={platformDisplayName}
+              channels={channelStats.map((ch: any) => ({
+                id: ch.id,
+                name: ch.name,
+                platform: ch.platform,
+                color: getPlatformColor(ch.platform),
+                unavailable: ch.unavailable ?? [],
+                postCount: ch.postCount ?? 0,
+                impressions: ch.impressions ?? 0,
+                likes: ch.likes ?? 0,
+                comments: ch.comments ?? 0,
+                shares: ch.shares ?? 0,
+                clicks: ch.clicks ?? 0,
+                engagementRate: ch.engagementRate ?? null,
+              }))}
+            />
+          </CardContent>
+        </Card>
+      )}
+
       {/* Per-Channel Stats Table */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Channel Performance</CardTitle>
-          <CardDescription>Metrics per connected channel</CardDescription>
+          <CardTitle>Channel Performance</CardTitle>
+          <CardDescription>Metrics per connected channel for the selected range</CardDescription>
           {/* Per-platform view. The container is ALWAYS mounted (min-h) so the
               table never shifts down once the platform list resolves. */}
           <div className="mt-2 flex min-h-[28px] flex-wrap items-center gap-1.5">
@@ -848,10 +974,10 @@ function InsightsAnalyticsView() {
                   type="button"
                   aria-pressed={platformFilter === undefined}
                   onClick={() => setPlatformView(null)}
-                  className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                  className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-[8px] border px-3 py-[7px] text-[11.5px] leading-none transition-all ${
                     platformFilter === undefined
-                      ? "border-primary bg-primary/10"
-                      : "hover:bg-muted/50"
+                      ? "border-[hsl(var(--accent-border))] bg-gold/[0.12] font-semibold text-gold"
+                      : "border-transparent bg-tile font-medium text-muted-foreground hover:text-foreground"
                   }`}
                 >
                   All
@@ -866,8 +992,10 @@ function InsightsAnalyticsView() {
                       aria-label={`Show only ${p} channels`}
                       // Clicking the active pill clears back to All.
                       onClick={() => setPlatformView(active ? null : p)}
-                      className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium capitalize transition-colors ${
-                        active ? "border-primary bg-primary/10" : "hover:bg-muted/50"
+                      className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-[8px] border px-3 py-[7px] text-[11.5px] capitalize leading-none transition-all ${
+                        active
+                          ? "border-[hsl(var(--accent-border))] bg-gold/[0.12] font-semibold text-gold"
+                          : "border-transparent bg-tile font-medium text-muted-foreground hover:text-foreground"
                       }`}
                     >
                       {p.toLowerCase()}
@@ -884,7 +1012,7 @@ function InsightsAnalyticsView() {
               answers "Nothing to sync" — the banner and the button contradicting
               each other. See insights-empty-state.ts. */}
           {emptyState === "no_app_posts" && (
-            <div className="m-4 mb-0 rounded-md bg-blue-500/10 px-3 py-2 text-xs text-blue-700 dark:text-blue-400">
+            <div className="m-4 mb-0 rounded-[10px] border border-border bg-surface1 px-3.5 py-2.5 text-[11.5px] leading-[1.5] text-muted-foreground">
               These channels haven&rsquo;t received any posts through PostAutomation yet. Insights
               measures posts sent from PostAutomation — anything you posted directly on the
               platform isn&rsquo;t counted here. Publish from Content Studio and metrics will
@@ -895,7 +1023,7 @@ function InsightsAnalyticsView() {
               the message above, which is why they are separate states: telling these
               users they haven't published would be flatly false. */}
           {emptyState === "no_app_posts_in_range" && (
-            <div className="m-4 mb-0 rounded-md bg-blue-500/10 px-3 py-2 text-xs text-blue-700 dark:text-blue-400">
+            <div className="m-4 mb-0 rounded-[10px] border border-border bg-surface1 px-3.5 py-2.5 text-[11.5px] leading-[1.5] text-muted-foreground">
               No posts were published through PostAutomation in this date range, but this
               workspace has <strong>{overview?.publishedAllTime}</strong> in total — try{" "}
               <strong>90 days</strong> or a wider custom range to see them. Posts you made
@@ -905,14 +1033,14 @@ function InsightsAnalyticsView() {
           {/* Captured, and genuinely zero. Suggesting a refresh here would blame a
               pending sync for a settled fact — the exact falsehood this replaced. */}
           {emptyState === "zero_engagement" && (
-            <div className="m-4 mb-0 rounded-md bg-blue-500/10 px-3 py-2 text-xs text-blue-700 dark:text-blue-400">
+            <div className="m-4 mb-0 rounded-[10px] border border-border bg-surface1 px-3.5 py-2.5 text-[11.5px] leading-[1.5] text-muted-foreground">
               Metrics have been collected for these posts and the platforms are reporting no
               engagement yet — this isn&rsquo;t a sync delay, so there&rsquo;s nothing to
               refresh. New posts usually take a few hours to accumulate views.
             </div>
           )}
           {emptyState === "no_metrics_yet" && (
-            <div className="m-4 mb-0 rounded-md bg-blue-500/10 px-3 py-2 text-xs text-blue-700 dark:text-blue-400">
+            <div className="m-4 mb-0 rounded-[10px] border border-border bg-surface1 px-3.5 py-2.5 text-[11.5px] leading-[1.5] text-muted-foreground">
               Your channels are connected, but no engagement data has synced yet. Metrics appear
               after a sync cycle — try “Sync Now” above, or check back later.
               {health && health.needsReconnectCount > 0
@@ -926,10 +1054,10 @@ function InsightsAnalyticsView() {
             </div>
           ) : channelStats && channelStats.length > 0 ? (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full whitespace-nowrap text-[12.5px]">
                 <thead>
-                  <tr className="border-b bg-muted/40">
-                    <th className="px-4 py-3 text-left font-medium text-muted-foreground">Channel</th>
+                  <tr className="border-b border-border bg-surface1">
+                    <th className="px-4 py-[11px] text-left text-[10.5px] font-medium leading-none text-muted-foreground">Channel</th>
                     {/* The header follows the POPULATION, in both directions.
                         "Posts" (bare) was correct only while direct posts were ingested;
                         with Insights covering app-published posts it would over-claim —
@@ -938,26 +1066,26 @@ function InsightsAnalyticsView() {
                         invites exactly the "your numbers are wrong" report that the
                         earlier rename was meant to settle. */}
                     <th
-                      className="px-4 py-3 text-right font-medium text-muted-foreground"
+                      className="px-4 py-[11px] text-right text-[10.5px] font-medium leading-none text-muted-foreground"
                       title={
                         includesDirectPosts
                           ? `Posts on this channel within the selected date range — those sent through PostAutomation plus those posted directly on the platform (Facebook/Instagram, from ${directFloorLabel ?? "the coverage start date"}).`
                           : "Posts sent to this channel through PostAutomation within the selected date range. Posts you made directly on the platform aren't counted, so the platform's own total may be higher."
                       }
                     >
-                      {includesDirectPosts ? "Posts" : "Posts sent"}
+                      Posts
                     </th>
                     {channelColumns.map((c) => (
                       <th
                         key={c.key}
-                        className="px-4 py-3 text-right font-medium text-muted-foreground"
+                        className="px-4 py-[11px] text-right text-[10.5px] font-medium leading-none text-muted-foreground"
                         title={c.key === "likes" ? likeHeader.tooltip : undefined}
                       >
                         {c.key === "likes" ? likeHeader.label : c.label}
                       </th>
                     ))}
                     {channelColumns.some((c) => c.key === "impressions" || c.key === "views") && (
-                      <th className="px-4 py-3 text-right font-medium text-muted-foreground">Eng. Rate</th>
+                      <th className="px-4 py-[11px] text-right text-[10.5px] font-medium leading-none text-muted-foreground">Eng. Rate</th>
                     )}
                   </tr>
                 </thead>
@@ -969,70 +1097,68 @@ function InsightsAnalyticsView() {
                         idx % 2 === 0 ? "" : "bg-muted/10"
                       }`}
                     >
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2.5">
+                      <td className="px-4 py-[11px]">
+                        {/* Design: 28px initials/avatar circle, the channel name at
+                            12.5px/500, and everything else — platform, handle,
+                            lifecycle, the reconnect hint — as one 9.5px line
+                            beneath it. The platform is plain text in its brand
+                            colour, not a bordered Badge; three stacked pills made
+                            every row taller than the mockup's 11px cell padding. */}
+                        <div className="flex items-center gap-[9px]">
                           <ChannelAvatar avatar={ch.avatar} name={ch.name} className="h-7 w-7 shrink-0" />
-                          <div>
-                            <p className="font-medium leading-none">{ch.name}</p>
-                            {ch.username && (
-                              <p className="text-xs text-muted-foreground mt-0.5">@{ch.username}</p>
-                            )}
+                          <div className="min-w-0">
+                            <p className="whitespace-nowrap text-[12.5px] font-medium leading-[1.3]">{ch.name}</p>
+                            <div className="mt-0.5 flex items-center gap-[5px] text-[9.5px] leading-[1.4]">
+                              <span style={{ color: getPlatformColor(ch.platform) }}>{ch.platform}</span>
+                              {ch.username && <span className="text-faint">@{ch.username}</span>}
+                              {/* Lifecycle note. History from paused/disconnected
+                                  channels now counts toward totals (a post that was
+                                  published and earned engagement is a historical
+                                  fact), so the row must say why it's still here. */}
+                              {ch.channelStatus === "disconnected" && (
+                                <span
+                                  className="text-muted-foreground"
+                                  title="This channel was disconnected. Its past posts still count here; reconnect it to resume collecting new metrics."
+                                >
+                                  Disconnected
+                                </span>
+                              )}
+                              {ch.channelStatus === "paused" && (
+                                <span
+                                  className="text-muted-foreground"
+                                  title="This channel is paused. Its past posts still count here."
+                                >
+                                  Paused
+                                </span>
+                              )}
+                              {/* Per-channel reconnect hint: this row's "—"s are a
+                                  token problem, not an absence of engagement. */}
+                              {ch.insightsHealth?.status === "needs_reconnect" && (
+                                <Link
+                                  href="/dashboard/channels"
+                                  title={
+                                    ch.insightsHealth.missingScopes?.length
+                                      ? `Reconnect to grant: ${ch.insightsHealth.missingScopes.join(", ")}`
+                                      : "The platform rejected this channel's access token. Reconnect to restore Insights."
+                                  }
+                                  className="inline-flex items-center gap-0.5 text-gold hover:underline"
+                                >
+                                  <AlertTriangle className="h-[9px] w-[9px]" />
+                                  Reconnect
+                                </Link>
+                              )}
+                            </div>
                           </div>
-                          <Badge
-                            variant="outline"
-                            className="ml-1 text-[10px] px-1.5 py-0"
-                            style={{ borderColor: getPlatformColor(ch.platform), color: getPlatformColor(ch.platform) }}
-                          >
-                            {ch.platform}
-                          </Badge>
-                          {/* Lifecycle badge. History from paused/disconnected
-                              channels now counts toward totals (a post that was
-                              published and earned engagement is a historical
-                              fact), so the row must say why it's still here. */}
-                          {ch.channelStatus === "disconnected" && (
-                            <Badge
-                              variant="outline"
-                              className="ml-1 px-1.5 py-0 text-[10px] text-muted-foreground"
-                              title="This channel was disconnected. Its past posts still count here; reconnect it to resume collecting new metrics."
-                            >
-                              Disconnected
-                            </Badge>
-                          )}
-                          {ch.channelStatus === "paused" && (
-                            <Badge
-                              variant="outline"
-                              className="ml-1 px-1.5 py-0 text-[10px] text-muted-foreground"
-                              title="This channel is paused. Its past posts still count here."
-                            >
-                              Paused
-                            </Badge>
-                          )}
-                          {/* Per-channel reconnect hint: this row's "—"s are a
-                              token problem, not an absence of engagement. */}
-                          {ch.insightsHealth?.status === "needs_reconnect" && (
-                            <Link
-                              href="/dashboard/channels"
-                              title={
-                                ch.insightsHealth.missingScopes?.length
-                                  ? `Reconnect to grant: ${ch.insightsHealth.missingScopes.join(", ")}`
-                                  : "The platform rejected this channel's access token. Reconnect to restore Insights."
-                              }
-                              className="ml-1 inline-flex items-center gap-1 rounded border border-amber-500/50 bg-amber-500/10 px-1.5 py-0 text-[10px] font-medium text-amber-700 hover:bg-amber-500/20 dark:text-amber-400"
-                            >
-                              <AlertTriangle className="h-2.5 w-2.5" />
-                              Reconnect
-                            </Link>
-                          )}
                         </div>
                       </td>
-                      <td className="px-4 py-3 text-right font-medium">{ch.postCount}</td>
+                      <td className="px-4 py-[11px] text-right text-muted-foreground">{ch.postCount}</td>
                       {channelColumns.map((c) => (
-                        <td key={c.key} className="px-4 py-3 text-right">
+                        <td key={c.key} className="px-4 py-[11px] text-right">
                           {metricCell(c.key, (ch as any)[c.valueKey] as number, ch)}
                         </td>
                       ))}
                       {channelColumns.some((c) => c.key === "impressions" || c.key === "views") && (
-                        <td className="px-4 py-3 text-right">
+                        <td className="px-4 py-[11px] text-right">
                           {/* Engagement rate is engagement ÷ impressions, so it is
                               only as honest as its denominator AND its base. It is
                               now pooled over ONLY the posts that reported
@@ -1067,15 +1193,11 @@ function InsightsAnalyticsView() {
                             }
                             return (
                               <span title={cell.title}>
-                                <span
-                                  className={`font-medium ${
-                                    ch.engagementRate! > 3
-                                      ? "text-green-600 dark:text-green-400"
-                                      : ch.engagementRate! > 1
-                                      ? "text-yellow-600 dark:text-yellow-400"
-                                      : "text-muted-foreground"
-                                  }`}
-                                >
+                                {/* Design: one gold semibold figure. The old
+                                    green/yellow/grey traffic light implied a
+                                    universal "good rate" threshold that doesn't
+                                    exist across platforms. */}
+                                <span className="font-semibold text-gold">
                                   {cell.text}
                                 </span>
                                 {cell.basis && (
@@ -1175,7 +1297,7 @@ function InsightsAnalyticsView() {
       {(groupStats?.groupCount ?? 0) > 0 && !platformFilter && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Group Performance</CardTitle>
+            <CardTitle>Group Performance</CardTitle>
             <CardDescription>Metrics summed per channel group</CardDescription>
           </CardHeader>
           <CardContent className="p-0">
@@ -1185,19 +1307,19 @@ function InsightsAnalyticsView() {
               </div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+                <table className="w-full whitespace-nowrap text-[12.5px]">
                   <thead>
-                    <tr className="border-b bg-muted/40">
-                      <th className="px-4 py-3 text-left font-medium text-muted-foreground">Group</th>
-                      <th className="px-4 py-3 text-right font-medium text-muted-foreground">Channels</th>
-                      <th className="px-4 py-3 text-right font-medium text-muted-foreground">Publishes</th>
+                    <tr className="border-b border-border bg-surface1">
+                      <th className="px-4 py-[11px] text-left text-[10.5px] font-medium leading-none text-muted-foreground">Group</th>
+                      <th className="px-4 py-[11px] text-right text-[10.5px] font-medium leading-none text-muted-foreground">Channels</th>
+                      <th className="px-4 py-[11px] text-right text-[10.5px] font-medium leading-none text-muted-foreground">Publishes</th>
                       {groupColumns.map((c) => (
-                        <th key={c.key} className="px-4 py-3 text-right font-medium text-muted-foreground">
+                        <th key={c.key} className="px-4 py-[11px] text-right text-[10.5px] font-medium leading-none text-muted-foreground">
                           {c.label}
                         </th>
                       ))}
                       {groupColumns.some((c) => c.key === "impressions" || c.key === "views") && (
-                        <th className="px-4 py-3 text-right font-medium text-muted-foreground">Eng. %</th>
+                        <th className="px-4 py-[11px] text-right text-[10.5px] font-medium leading-none text-muted-foreground">Eng. %</th>
                       )}
                     </tr>
                   </thead>
@@ -1209,7 +1331,7 @@ function InsightsAnalyticsView() {
                           idx % 2 === 0 ? "" : "bg-muted/10"
                         }`}
                       >
-                        <td className="px-4 py-3">
+                        <td className="px-4 py-[11px]">
                           <div className="flex items-center gap-2">
                             <span
                               className="h-2.5 w-2.5 shrink-0 rounded-full"
@@ -1218,17 +1340,17 @@ function InsightsAnalyticsView() {
                             <span className="font-medium">{g.name}</span>
                           </div>
                         </td>
-                        <td className="px-4 py-3 text-right">{g.channelCount}</td>
-                        <td className="px-4 py-3 text-right font-medium">{g.posts}</td>
+                        <td className="px-4 py-[11px] text-right">{g.channelCount}</td>
+                        <td className="px-4 py-[11px] text-right text-muted-foreground">{g.posts}</td>
                         {/* Same honesty gate as Channel Performance: a metric no
                             member channel can report renders "—", never a fake 0. */}
                         {groupColumns.map((c) => (
-                          <td key={c.key} className="px-4 py-3 text-right">
+                          <td key={c.key} className="px-4 py-[11px] text-right">
                             {metricCell(c.key, (g as any)[c.valueKey] as number, g as MetricRowMeta)}
                           </td>
                         ))}
                         {groupColumns.some((c) => c.key === "impressions" || c.key === "views") && (
-                          <td className="px-4 py-3 text-right">
+                          <td className="px-4 py-[11px] text-right">
                             {/* Gated on the same base rule as the per-channel rate:
                                 with no impressioned post there is no denominator,
                                 so "0.00%" would misread as "no engagement". */}
@@ -1327,23 +1449,27 @@ export default function InsightsPage() {
         <InsightsTabDeepLink onTab={setTab} />
       </Suspense>
 
-      <div className="flex w-fit rounded-lg border p-0.5">
-        <button
-          onClick={() => setTab("insights")}
-          className={`rounded-md px-4 py-1.5 text-sm font-medium transition-colors ${
-            tab === "insights" ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          Insights
-        </button>
-        <button
-          onClick={() => setTab("reports")}
-          className={`rounded-md px-4 py-1.5 text-sm font-medium transition-colors ${
-            tab === "reports" ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          Reports
-        </button>
+      {/* Design: a surface-1 pill rail (4px pad, 10px radius) whose ACTIVE tab is
+          a gold chip with the gold glow — not the bone/foreground fill it used to
+          be, which read as a different control from every other active state on
+          the page. */}
+      <div className="flex w-fit items-center gap-1 rounded-[10px] border border-border bg-surface1 p-1">
+        {([
+          { id: "insights", label: "Insights" },
+          { id: "reports", label: "Reports" },
+        ] as const).map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className={`whitespace-nowrap rounded-[8px] px-[18px] py-2 text-center text-[12.5px] leading-none transition-colors ${
+              tab === t.id
+                ? "pa-gold-glow bg-gold font-semibold text-[hsl(var(--gold-foreground))]"
+                : "font-medium text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
       </div>
 
       {tab === "insights" ? <InsightsAnalyticsView /> : <ReportsTab />}

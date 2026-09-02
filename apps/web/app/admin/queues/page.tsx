@@ -109,7 +109,7 @@ export default function AdminQueuesPage() {
               deleteJob.mutate({ queueName: row.queueName, jobId: row.id })
             }
           >
-            <Trash2 className="h-4 w-4 text-red-500" />
+            <Trash2 className="h-4 w-4 text-[#d9695f]" />
           </Button>
         </div>
       ),
@@ -117,8 +117,15 @@ export default function AdminQueuesPage() {
   ];
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Queues</h1>
+    <div className="w-full space-y-5">
+      {/* Admin-console page header: plain bold title + sub (this module does
+          not use the eyebrow/display headline the user-facing pages use). */}
+      <div className="min-w-0">
+        <h1 className="text-[29px] font-bold leading-[1.1] tracking-[-0.01em]">Queues</h1>
+        <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
+          What the background workers are processing right now.
+        </p>
+      </div>
 
       {statsLoading ? (
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
@@ -133,19 +140,19 @@ export default function AdminQueuesPage() {
               <CardContent className="p-4">
                 <p className="mb-2 font-mono text-xs font-semibold">{name}</p>
                 {counts.error ? (
-                  <p className="text-xs text-red-500">{counts.error}</p>
+                  <p className="text-[11px] text-[#d9695f]">{counts.error}</p>
                 ) : (
                   <div className="grid grid-cols-2 gap-1 text-xs">
-                    <span className="text-yellow-600">
+                    <span className="text-[#e0b84a]">
                       {counts.waiting ?? 0} waiting
                     </span>
-                    <span className="text-blue-600">
+                    <span className="text-[#5b9bd5]">
                       {counts.active ?? 0} active
                     </span>
-                    <span className="text-green-600">
+                    <span className="text-[#5cb85c]">
                       {counts.completed ?? 0} done
                     </span>
-                    <span className="text-red-600">
+                    <span className="text-[#d9695f]">
                       {counts.failed ?? 0} failed
                     </span>
                   </div>

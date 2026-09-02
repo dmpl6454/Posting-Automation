@@ -8,6 +8,8 @@ import {
   ImagePlus,
   Layers,
   PenLine,
+  CalendarDays,
+  Palette,
 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "~/components/ui/tabs";
 import { GenerateTab } from "~/components/content-agent/GenerateTab";
@@ -48,30 +50,95 @@ function ContentStudioInner() {
   // ?view=calendar deep-links (legacy /dashboard/calendar) open the calendar view
   const [showCalendar, setShowCalendar] = useState(searchParams.get("view") === "calendar");
   const [pendingMedia, setPendingMedia] = useState<{ dataUrl: string } | null>(null);
+  /* Bumped by the header "Create Design" CTA — ComposeTab opens the MediaEditor
+     on any increase. The design puts this button in the page header, so the
+     header owns the click rather than duplicating it inside the compose column. */
+  const [openDesignSignal, setOpenDesignSignal] = useState(0);
+
+  /** Header "Create Design": land on Compose, then open the design editor. */
+  const handleCreateDesign = () => {
+    setShowCalendar(false);
+    setActiveTab("compose");
+    setOpenDesignSignal((n) => n + 1);
+  };
 
   return (
-    <div className="w-full space-y-4">
-        {/* Header */}
-        <div>
-          <h1 className="text-xl font-bold tracking-tight">Content Studio</h1>
-          <p className="text-xs text-muted-foreground">
-            Create, schedule, and manage all your social media content
-          </p>
+    /* Outer padding comes from DashboardShell (p-4 sm:p-6 lg:p-8) — only the
+       bottom breathing room is set here. Full width by design: no max-width
+       cap, so the page fills the shell on wide screens. */
+    <div className="w-full pb-6">
+        {/* ── Page header — eyebrow, display title, actions (design restyle) ── */}
+        <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <span className="eyebrow">Content Studio</span>
+            <h1 className="display mt-2.5 text-[30px] leading-[1.1]">
+              Create, schedule, publish.
+            </h1>
+            <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
+              Create, schedule, and manage all your social media content
+            </p>
+          </div>
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            {/* One authoritative calendar TOGGLE, per the design's calToggle —
+                its label and active fill both flip. Previously this only ever
+                switched the calendar ON, so there was no way back from the
+                header and a second toggle had to be duplicated further down. */}
+            <Button
+              variant="outline"
+              aria-pressed={showCalendar}
+              className={
+                showCalendar
+                  ? "h-9 gap-[7px] rounded-[9px] border-[hsl(var(--accent-border))] bg-gold/[0.12] px-3.5 text-[12.5px] font-semibold text-gold hover:bg-gold/20 hover:text-gold"
+                  : "h-9 gap-[7px] rounded-[9px] border-border bg-surface2 px-3.5 text-[12.5px] font-medium hover:border-border2 hover:bg-hover"
+              }
+              onClick={() => setShowCalendar((v) => !v)}
+            >
+              <CalendarDays className="h-3.5 w-3.5 shrink-0" />
+              {showCalendar ? "Hide Calendar" : "Calendar"}
+            </Button>
+            <Button
+              className="pa-cta-gold h-9 gap-[7px] rounded-[9px] px-3.5 text-[12.5px] font-semibold"
+              onClick={handleCreateDesign}
+            >
+              <Palette className="h-3.5 w-3.5 shrink-0" />
+              Create Design
+            </Button>
+          </div>
         </div>
 
-        {/* ── Unified Tabs ── */}
-        <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid h-auto w-full grid-cols-2 gap-1 sm:h-9 sm:grid-cols-4 sm:gap-0">
+        {/* ── Calendar view. In the design the calendar REPLACES the studio
+            (its `showCalendar` and `showPosts` are mutually exclusive) and sits
+            directly under the header rather than below the tab content. ── */}
+        {showCalendar && (
+          <div className="mt-6">
+            <CalendarTab />
+          </div>
+        )}
+
+        {/* ── Unified Tabs (the design's `showPosts` branch).
+            HIDDEN rather than unmounted while the calendar is open: ComposeTab
+            is forceMount precisely so an in-flight multi-GB upload survives, and
+            unmounting this subtree would abort it. ── */}
+        <Tabs
+          value={activeTab}
+          onValueChange={setActiveTab}
+          className={showCalendar ? "hidden" : "mt-6"}
+        >
+          <TabsList className="grid h-auto w-full grid-cols-2 gap-1 rounded-[11px] border border-border bg-surface1 p-1 sm:grid-cols-4">
             {tabs.map(({ id, label, icon: Icon }) => (
-              <TabsTrigger key={id} value={id} className="w-full gap-1.5 py-1.5 text-xs">
-                <Icon className="h-3.5 w-3.5 shrink-0" />
+              <TabsTrigger
+                key={id}
+                value={id}
+                className="group w-full gap-[7px] rounded-lg py-2 text-[12.5px] font-medium text-muted-foreground data-[state=active]:bg-tile data-[state=active]:font-semibold data-[state=active]:text-foreground data-[state=active]:shadow-[inset_0_0_0_1px_hsl(var(--border-2))]"
+              >
+                <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-colors group-data-[state=active]:text-gold" />
                 <span>{label}</span>
               </TabsTrigger>
             ))}
           </TabsList>
 
           {/* Layman helper — what the active tab does (audit clarity 2026-06-06) */}
-          <p className="mt-2 text-xs text-muted-foreground">
+          <p className="mt-2.5 text-xs leading-relaxed text-muted-foreground">
             {activeTab === "compose" && "Write a post, attach media, pick channels, and schedule or publish."}
             {activeTab === "create" && "Let AI draft captions or generate an image for your post."}
             {activeTab === "repurpose" && "Paste a URL — AI turns it into captions and media you can post."}
@@ -92,6 +159,7 @@ function ContentStudioInner() {
               initialImageMediaId={composeMediaId}
               initialMediaIds={composeMediaIds.length > 0 ? composeMediaIds : undefined}
               initialMediaUrls={composeMediaUrls.length > 0 ? composeMediaUrls : undefined}
+              openDesignSignal={openDesignSignal}
               onPostCreated={() => setPostCreated((n) => n + 1)}
               externalMediaToAdd={pendingMedia}
               onExternalMediaConsumed={() => setPendingMedia(null)}
@@ -129,34 +197,20 @@ function ContentStudioInner() {
           </TabsContent>
         </Tabs>
 
-        {/* ── Posts & Calendar toggle ── */}
-        <div className="flex items-center gap-2">
-          <Button
-            variant={!showCalendar ? "default" : "outline"}
-            size="sm"
-            onClick={() => setShowCalendar(false)}
-          >
-            Recent Posts
-          </Button>
-          <Button
-            variant={showCalendar ? "default" : "outline"}
-            size="sm"
-            onClick={() => setShowCalendar(true)}
-          >
-            Calendar
-          </Button>
-        </div>
-
-        {!showCalendar ? (
-          <PostsTab
-            key={postCreated}
-            onSwitchTab={(tab) => {
-              if (tab === "calendar") setShowCalendar(true);
-              else setActiveTab(tab);
-            }}
-          />
-        ) : (
-          <CalendarTab />
+        {/* ── Recent posts. The design drops this list from Content Studio, but
+            it is the only route to drafts / scheduled / failed / archived posts,
+            so it stays — the duplicate "Recent Posts ⇄ Calendar" switch that
+            used to sit here is gone now that the header toggle is authoritative. ── */}
+        {!showCalendar && (
+          <div className="mt-8">
+            <PostsTab
+              key={postCreated}
+              onSwitchTab={(tab) => {
+                if (tab === "calendar") setShowCalendar(true);
+                else setActiveTab(tab);
+              }}
+            />
+          </div>
         )}
     </div>
   );

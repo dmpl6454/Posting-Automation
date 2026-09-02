@@ -13,6 +13,7 @@ import {
 import { Input } from "~/components/ui/input";
 import { Button } from "~/components/ui/button";
 import { Skeleton } from "~/components/ui/skeleton";
+import { cn } from "~/lib/utils";
 
 export interface Column<T> {
   header: string;
@@ -41,66 +42,87 @@ export function DataTable<T extends { id: string }>({
   isLoading,
 }: DataTableProps<T>) {
   return (
-    <div className="space-y-4">
+    /* Design geometry: a 38px search field, then one r14 card holding the
+       table. Header row sits on the tile fill at 11px/600 uppercase-weight,
+       body rows are 12.5px on 1px border-border separators. */
+    <div className="space-y-3.5">
       {onSearch && (
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Search className="absolute left-3 top-1/2 h-[15px] w-[15px] -translate-y-1/2 text-muted-foreground" />
           <Input
             placeholder={searchPlaceholder}
             onChange={(e) => onSearch(e.target.value)}
-            className="pl-9"
+            className="h-[38px] rounded-[8px] border-border2 bg-background pl-9 text-[12.5px]"
           />
         </div>
       )}
 
-      <div className="rounded-md border">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              {columns.map((col) => (
-                <TableHead key={col.header} className={col.className}>
-                  {col.header}
-                </TableHead>
-              ))}
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {isLoading && data.length === 0 ? (
-              Array.from({ length: 5 }).map((_, i) => (
-                <TableRow key={`skeleton-${i}`}>
-                  {columns.map((col) => (
-                    <TableCell key={col.header}>
-                      <Skeleton className="h-4 w-full" />
-                    </TableCell>
-                  ))}
-                </TableRow>
-              ))
-            ) : data.length === 0 ? (
-              <TableRow>
-                <TableCell
-                  colSpan={columns.length}
-                  className="h-24 text-center text-muted-foreground"
-                >
-                  No results found.
-                </TableCell>
+      <div className="overflow-hidden rounded-[14px] border border-border bg-card">
+        <div className="max-w-full overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow className="border-b border-border hover:bg-transparent">
+                {columns.map((col) => (
+                  <TableHead
+                    key={col.header}
+                    className={cn(
+                      // Design: uppercase, letter-spaced column labels.
+                      "h-auto whitespace-nowrap bg-tile px-5 py-3.5 text-[11px] font-medium uppercase leading-none tracking-[0.07em] text-muted-foreground",
+                      col.className
+                    )}
+                  >
+                    {col.header}
+                  </TableHead>
+                ))}
               </TableRow>
-            ) : (
-              data.map((row) => (
-                <TableRow key={row.id}>
-                  {columns.map((col) => (
-                    <TableCell key={col.header} className={col.className}>
-                      {col.cell
-                        ? col.cell(row)
-                        : col.accessorKey
-                          ? String(row[col.accessorKey] ?? "")
-                          : null}
-                    </TableCell>
-                  ))}
+            </TableHeader>
+            <TableBody>
+              {isLoading && data.length === 0 ? (
+                Array.from({ length: 5 }).map((_, i) => (
+                  <TableRow key={`skeleton-${i}`} className="border-b border-border">
+                    {columns.map((col) => (
+                      <TableCell key={col.header} className="px-5 py-3.5">
+                        <Skeleton className="h-4 w-full rounded-[6px]" />
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                ))
+              ) : data.length === 0 ? (
+                <TableRow className="hover:bg-transparent">
+                  <TableCell
+                    colSpan={columns.length}
+                    className="h-24 text-center text-[12.5px] text-muted-foreground"
+                  >
+                    No results found.
+                  </TableCell>
                 </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
+              ) : (
+                data.map((row) => (
+                  <TableRow
+                    key={row.id}
+                    className="border-b border-border last:border-b-0 hover:bg-hover"
+                  >
+                    {columns.map((col) => (
+                      <TableCell
+                        key={col.header}
+                        className={cn(
+                          "px-5 py-3.5 text-[12.5px] leading-[1.4]",
+                          col.className
+                        )}
+                      >
+                        {col.cell
+                          ? col.cell(row)
+                          : col.accessorKey
+                            ? String(row[col.accessorKey] ?? "")
+                            : null}
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </div>
       </div>
 
       {hasMore && (
@@ -109,6 +131,7 @@ export function DataTable<T extends { id: string }>({
             variant="outline"
             onClick={onLoadMore}
             disabled={isLoading}
+            className="h-9 rounded-[8px] border-border2 px-[15px] text-[12px] font-medium hover:bg-hover"
           >
             {isLoading ? "Loading..." : "Load more"}
           </Button>

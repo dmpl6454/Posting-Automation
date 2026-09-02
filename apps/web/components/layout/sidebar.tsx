@@ -191,18 +191,18 @@ export function Sidebar({ open, onClose }: SidebarProps) {
 
   const sidebarContent = (
     <>
-      {/* Logo */}
+      {/* Logo — design restyle: uppercase wordmark with wide tracking */}
       <div className="flex h-16 items-center justify-between px-5">
         <Link href="/dashboard" className="flex items-center gap-2.5">
           <NextImage
             src="/logo.png"
             alt="PostAutomation"
-            width={28}
-            height={28}
-            className="h-7 w-7"
+            width={26}
+            height={26}
+            className="h-[26px] w-[26px] rounded-md"
           />
-          <span className="text-[15px] font-semibold tracking-tight">
-            PostAutomation
+          <span className="text-[12px] font-semibold uppercase leading-none tracking-[0.16em]">
+            Postautomation
           </span>
         </Link>
         <Button
@@ -217,14 +217,17 @@ export function Sidebar({ open, onClose }: SidebarProps) {
       </div>
 
       {/* Organization Switcher */}
-      <div className="mx-3 mb-1 rounded-xl border border-border/40 bg-background/30 p-1.5">
+      <div className="mx-3 mb-1 rounded-lg border border-border bg-surface2 p-1.5">
         <OrgSwitcher />
       </div>
 
       {/* Navigation */}
       <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 py-4">
-        <div className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
-          Main
+        <div className="mb-2.5 flex items-center gap-2.5 px-3">
+          <span className="text-[9px] font-medium uppercase leading-none tracking-[0.2em] text-muted-foreground">
+            Main
+          </span>
+          <span className="h-px flex-1 bg-border" />
         </div>
         {visible(navigation).map((item) => {
           // Fix #4: avoid double-highlight — Settings parent should not match
@@ -241,32 +244,44 @@ export function Sidebar({ open, onClose }: SidebarProps) {
               href={locked ? "/dashboard/settings/billing" : item.href}
               onClick={handleNavClick}
               className={cn(
-                "group flex items-center gap-3 rounded-xl px-3 py-2 text-[13px] font-medium transition-all",
+                "group flex items-center gap-[11px] rounded-lg px-3 py-[7px] text-[12.5px] transition-all",
                 isActive && !locked
-                  ? "bg-foreground/[0.06] text-foreground shadow-sm"
+                  ? "bg-tile font-medium text-foreground"
                   : locked
-                  ? "text-muted-foreground/50 hover:bg-foreground/[0.04] hover:text-muted-foreground"
-                  : "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground"
+                  ? "font-normal text-muted-foreground/50 hover:bg-hover hover:text-muted-foreground"
+                  : "font-normal text-muted-foreground hover:bg-hover hover:text-foreground"
               )}
             >
-              <item.icon
+              <span
                 className={cn(
-                  "h-4 w-4 transition-colors",
-                  isActive && !locked
-                    ? "text-foreground"
-                    : "text-muted-foreground/70 group-hover:text-foreground"
+                  "pa-nav-icon",
+                  isActive && !locked && "pa-nav-icon-active"
                 )}
-              />
+              >
+                <item.icon
+                  className={cn(
+                    "h-4 w-4 shrink-0 transition-colors",
+                    isActive && !locked
+                      ? "text-foreground"
+                      : "text-muted-foreground/70 group-hover:text-foreground"
+                  )}
+                />
+              </span>
               <span className="flex-1">{item.name}</span>
-              {locked && (
+              {locked ? (
                 <Lock className="h-3 w-3 shrink-0 text-muted-foreground/40" />
-              )}
+              ) : isActive ? (
+                <span className="h-[5px] w-[5px] shrink-0 rounded-full bg-gold" />
+              ) : null}
             </Link>
           );
         })}
 
-        <div className="mb-2 mt-6 px-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
-          Settings
+        <div className="mb-2.5 mt-6 flex items-center gap-2.5 px-3">
+          <span className="text-[9px] font-medium uppercase leading-none tracking-[0.2em] text-muted-foreground">
+            Settings
+          </span>
+          <span className="h-px flex-1 bg-border" />
         </div>
         {visible(settingsNav).map((item) => {
           // Settings sub-pages: exact match only to prevent double-highlight
@@ -277,21 +292,26 @@ export function Sidebar({ open, onClose }: SidebarProps) {
               href={item.href}
               onClick={handleNavClick}
               className={cn(
-                "group flex items-center gap-3 rounded-xl px-3 py-2 text-[13px] font-medium transition-all",
+                "group flex items-center gap-[11px] rounded-lg px-3 py-[7px] text-[12.5px] transition-all",
                 isActive
-                  ? "bg-foreground/[0.06] text-foreground shadow-sm"
-                  : "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground"
+                  ? "bg-tile font-medium text-foreground"
+                  : "font-normal text-muted-foreground hover:bg-hover hover:text-foreground"
               )}
             >
-              <item.icon
-                className={cn(
-                  "h-4 w-4 transition-colors",
-                  isActive
-                    ? "text-foreground"
-                    : "text-muted-foreground/70 group-hover:text-foreground"
-                )}
-              />
-              {item.name}
+              <span className={cn("pa-nav-icon", isActive && "pa-nav-icon-active")}>
+                <item.icon
+                  className={cn(
+                    "h-4 w-4 shrink-0 transition-colors",
+                    isActive
+                      ? "text-foreground"
+                      : "text-muted-foreground/70 group-hover:text-foreground"
+                  )}
+                />
+              </span>
+              <span className="flex-1">{item.name}</span>
+              {isActive && (
+                <span className="h-[5px] w-[5px] shrink-0 rounded-full bg-gold" />
+              )}
             </Link>
           );
         })}
@@ -299,10 +319,10 @@ export function Sidebar({ open, onClose }: SidebarProps) {
 
       <UpdateAvailableNotice />
       {/* Version footer */}
-      <div className="border-t border-border/40 px-4 py-2">
+      <div className="border-t border-border px-4 py-2">
         <Link
           href="/dashboard/settings/versions"
-          className="flex items-center gap-1.5 text-[11px] text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+          className="flex items-center gap-1.5 text-[11px] text-faint transition-colors hover:text-muted-foreground"
         >
           <GitBranch className="h-3 w-3" />
           v{process.env.NEXT_PUBLIC_APP_VERSION || "1.0.0-dev"}
@@ -314,7 +334,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
   return (
     <>
       {/* Desktop sidebar */}
-      <aside className="hidden h-full w-[260px] flex-col border-r border-border/40 bg-card/50 backdrop-blur-xl lg:flex">
+      <aside className="hidden h-full w-[260px] flex-col border-r border-border bg-surface1 lg:flex">
         {sidebarContent}
       </aside>
 

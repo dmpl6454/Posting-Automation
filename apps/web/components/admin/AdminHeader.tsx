@@ -2,7 +2,6 @@
 
 import { usePathname } from "next/navigation";
 import { Menu } from "lucide-react";
-import { Badge } from "~/components/ui/badge";
 
 interface AdminHeaderProps {
   onMenuClick?: () => void;
@@ -12,6 +11,8 @@ const pageTitleMap: Record<string, string> = {
   "/admin": "Overview",
   "/admin/users": "Users",
   "/admin/orgs": "Organizations",
+  // Teams was missing, so /admin/teams fell through to the generic "Admin".
+  "/admin/teams": "Teams",
   "/admin/posts": "Posts",
   "/admin/channels": "Channels",
   "/admin/agents": "Agents",
@@ -31,20 +32,23 @@ export function AdminHeader({ onMenuClick }: AdminHeaderProps) {
     "Admin";
 
   return (
-    <header className="flex h-14 items-center justify-between border-b bg-white px-4 sm:px-6">
+    /* Design: a 56px surface-1 bar, 24px gutters, 17px/600 title, and the
+       SUPER ADMIN chip in the design's red at 12% on a 40% border — not the
+       shadcn Badge's light `bg-red-50`, which was a white pill on a dark bar. */
+    <header className="flex h-14 items-center justify-between border-b border-border bg-surface1 px-4 sm:px-6">
       <div className="flex items-center gap-2">
         <button
           onClick={onMenuClick}
-          className="rounded-md p-1.5 text-gray-600 hover:bg-gray-100 lg:hidden"
+          className="rounded-[7px] p-1.5 text-muted-foreground hover:bg-hover hover:text-foreground lg:hidden"
           aria-label="Open menu"
         >
           <Menu className="h-5 w-5" />
         </button>
-        <h1 className="text-lg font-semibold">{title}</h1>
+        <h1 className="text-[17px] font-semibold leading-none">{title}</h1>
       </div>
-      <Badge className="bg-red-50 text-red-700 hover:bg-red-50">
+      <span className="whitespace-nowrap rounded-[6px] border border-[rgba(217,105,95,0.4)] bg-[rgba(217,105,95,0.12)] px-[11px] py-[3px] text-[11px] font-bold leading-[1.8] tracking-[0.03em] text-[#d9695f]">
         SUPER ADMIN
-      </Badge>
+      </span>
     </header>
   );
 }

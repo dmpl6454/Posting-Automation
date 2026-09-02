@@ -15,8 +15,8 @@ export default function NotFound() {
       <div className="pointer-events-none absolute inset-0 mesh-gradient" />
 
       {/* Floating orbs for depth */}
-      <div className="pointer-events-none absolute -left-32 -top-32 h-96 w-96 rounded-full bg-indigo-500/[0.07] blur-3xl" />
-      <div className="pointer-events-none absolute -bottom-32 -right-32 h-96 w-96 rounded-full bg-purple-500/[0.06] blur-3xl" />
+      <div className="pointer-events-none absolute -left-32 -top-32 h-96 w-96 rounded-full bg-tile blur-3xl" />
+      <div className="pointer-events-none absolute -bottom-32 -right-32 h-96 w-96 rounded-full bg-tile blur-3xl" />
 
       {/* Logo */}
       <Link
