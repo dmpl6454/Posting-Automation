@@ -1796,24 +1796,38 @@ ${content}`;
                     );
                   })()}
 
-                  {/* Selected channels as chips */}
+                  {/* Selected channels as chips.
+                      Capped and scrollable: this account runs 110+ channels, and
+                      selecting them all made the chip block 991px tall (measured),
+                      pushing Schedule and Publish far below the fold on the app's
+                      primary workflow. Same failure as the Insights radar legend —
+                      a list that scales with channel count must never set the
+                      height of the card that contains the controls. */}
                   {selectedChannels.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5">
+                    <div className="flex max-h-40 flex-wrap gap-1.5 overflow-y-auto">
                       {selectedChannels.map((id) => {
                         const ch = channels?.find((c: any) => c.id === id) as any;
                         if (!ch) return null;
                         return (
                           <span
                             key={id}
-                            className="inline-flex items-center gap-1.5 rounded-full border bg-primary/5 px-2.5 py-1 text-xs font-medium"
+                            /* `title` carries the full name, because the label
+                               below truncates. */
+                            title={ch.name}
+                            className="inline-flex max-w-full items-center gap-1.5 rounded-full border bg-primary/5 px-2.5 py-1 text-xs font-medium"
                           >
                             <ChannelAvatar
                               avatar={ch.avatar}
                               name={ch.name}
-                              className="h-4 w-4"
+                              className="h-4 w-4 shrink-0"
                               fallbackClassName="text-[8px]"
                             />
-                            {ch.name}
+                            {/* Truncated: platform display names run long (YouTube
+                                allows 100 chars, Facebook Pages 75+). Measured
+                                untruncated in a 554px card: a 60-char name made a
+                                472px chip, and 120 chars made an 880px one that
+                                overflowed the card horizontally. */}
+                            <span className="max-w-[160px] truncate">{ch.name}</span>
                             <button
                               type="button"
                               onClick={() => setSelectedChannels(prev => prev.filter(i => i !== id))}
