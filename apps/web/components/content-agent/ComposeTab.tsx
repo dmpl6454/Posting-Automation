@@ -1796,9 +1796,15 @@ ${content}`;
                     );
                   })()}
 
-                  {/* Selected channels as chips */}
+                  {/* Selected channels as chips.
+                      Capped and scrollable: this account runs 110+ channels, and
+                      selecting them all made the chip block 991px tall (measured),
+                      pushing Schedule and Publish far below the fold on the app's
+                      primary workflow. Same failure as the Insights radar legend —
+                      a list that scales with channel count must never set the
+                      height of the card that contains the controls. */}
                   {selectedChannels.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5">
+                    <div className="flex max-h-40 flex-wrap gap-1.5 overflow-y-auto">
                       {selectedChannels.map((id) => {
                         const ch = channels?.find((c: any) => c.id === id) as any;
                         if (!ch) return null;
