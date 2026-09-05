@@ -1,0 +1,15 @@
+# Xcode build output (xcodebuild -derivedDataPath build)
+build/
+DerivedData/
+
+# Per-user Xcode state — never meaningful to share
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcworkspace/xcuserdata/
+xcuserdata/
+
+# Test results
+*.xcresult
+
+# macOS
+.DS_Store

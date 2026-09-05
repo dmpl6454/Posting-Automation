@@ -1,0 +1,100 @@
+# XcodeGen spec for the PostAutomation iOS companion app.
+#
+# Regenerate the .xcodeproj (never hand-edit project.pbxproj):
+#   cd apps/ios/PostAutomation && xcodegen generate
+#
+# Build for the simulator without signing:
+#   xcodebuild -project PostAutomation.xcodeproj -scheme PostAutomation \
+#     -destination 'platform=iOS Simulator,name=iPhone 17' build \
+#     CODE_SIGNING_ALLOWED=NO
+#
+# The app talks to the LIVE tRPC API at https://postautomation.co.in using the
+# same NextAuth cookie session the web app uses — no backend changes required.
+# See Sources/Core/TRPCClient.swift and Sources/Core/AuthService.swift.
+name: PostAutomation
+
+options:
+  bundleIdPrefix: co.in.postautomation
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    # Language mode 5 on the Swift 6.x toolchain — avoids strict-concurrency
+    # errors in view code while keeping @Observable / async-await available.
+    SWIFT_VERSION: "5.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    TARGETED_DEVICE_FAMILY: "1"
+    # Simulator-only for now; no team/identity needed. Set DEVELOPMENT_TEAM and
+    # drop these when building for a physical device or TestFlight.
+    CODE_SIGN_IDENTITY: ""
+    CODE_SIGNING_REQUIRED: "NO"
+    CODE_SIGNING_ALLOWED: "NO"
+
+targets:
+  PostAutomation:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleDisplayName: PostAutomation
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        ITSAppUsesNonExemptEncryption: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: co.in.postautomation.ios
+        GENERATE_INFOPLIST_FILE: "NO"
+        SWIFT_EMIT_LOC_STRINGS: "YES"
+
+  PostAutomationTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: PostAutomation
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: co.in.postautomation.ios.tests
+        GENERATE_INFOPLIST_FILE: "YES"
+
+  # XCUITest — drives the real app in the simulator. LoginUITests hits the live
+  # auth endpoint with fake credentials (one harmless failed login per run).
+  PostAutomationUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: PostAutomation
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: co.in.postautomation.ios.uitests
+        GENERATE_INFOPLIST_FILE: "YES"
+        TEST_TARGET_NAME: PostAutomation
+
+schemes:
+  PostAutomation:
+    build:
+      targets:
+        PostAutomation: all
+        PostAutomationTests: [test]
+        PostAutomationUITests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - PostAutomationTests
+        - PostAutomationUITests
