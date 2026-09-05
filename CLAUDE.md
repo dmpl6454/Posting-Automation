@@ -30,6 +30,7 @@ Guidance for Claude Code when working in this repo.
 apps/
   web/           @postautomation/web — Next.js app
   worker/        @postautomation/worker — BullMQ worker
+  ios/           Native SwiftUI companion app (NOT a pnpm workspace — see below)
 packages/
   ai/            AI provider abstraction (OpenAI, Anthropic, Gemini, etc.)
   api/           Shared API layer
@@ -43,6 +44,86 @@ docker/          Dockerfiles (web, worker, migrate) + nginx config
 scripts/         deploy.sh, server-setup.sh
 .github/workflows/  CI/CD (deploy to Linode)
 ```
+
+## 📱 iOS companion app (2026-09-05, `apps/ios/PostAutomation`) — read before touching it or the auth/tRPC contract it depends on
+
+Native **SwiftUI** client (iOS 17+) for the platform. Ships **ZERO backend
+changes**: it authenticates through the existing NextAuth *credentials* provider
+and calls the same tRPC procedures the web app does. Full detail:
+[apps/ios/PostAutomation/README.md](apps/ios/PostAutomation/README.md).
+
+- **⚠️ NOT a pnpm workspace.** `pnpm-workspace.yaml` globs `apps/*`, but the
+  directory has **no `package.json`**, so pnpm and Turbo skip it entirely. `pnpm
+  install` / `pnpm build` / `pnpm test` are unaffected — the app is built with
+  `xcodebuild`, never with Turbo. **Do NOT add a `package.json`** unless you
+  genuinely want it in the JS graph (it would join every `turbo run` pipeline).
+- **⚠️ Never hand-edit `PostAutomation.xcodeproj`.** It is GENERATED from
+  [project.yml](apps/ios/PostAutomation/project.yml) by `xcodegen generate`
+  (Homebrew: `brew install xcodegen`). Adding a source file needs no project
+  edit — the target globs the `Sources/` directory — but adding a *target* or
+  changing build settings means editing `project.yml` and regenerating. The
+  generated `.pbxproj` IS committed so a fresh clone can build without xcodegen.
+- **Auth is a cookie flow, not a token flow** ([AuthService.swift](apps/ios/PostAutomation/Sources/Core/AuthService.swift)),
+  mirroring the web login form exactly: `GET /api/auth/csrf` →
+  `POST /api/auth/callback/credentials` (form-encoded `csrfToken, email,
+  password, loginType=email, json=true`). The resulting
+  `__Secure-authjs.session-token` lives in the shared `HTTPCookieStorage`, which
+  `URLSession` replays on every tRPC call and persists across launches.
+  - **⚠️ It deliberately refuses to follow 3xx** (`NoRedirectDelegate`) so the
+    `?error=CredentialsSignin` outcome can be read from `Location` / the JSON
+    `url`. Auth.js returns **HTTP 200 for a FAILED login** when `json=true` — a
+    naive `if response.ok { signedIn = true }` would treat every wrong password
+    as success. `parseCallbackOutcome` therefore requires the session cookie to
+    have actually landed before reporting success; it is pure and unit-tested.
+  - **⚠️ Base URL MUST be `.co.in`** ([APIConfig.swift](apps/ios/PostAutomation/Sources/Core/APIConfig.swift)).
+    `postautomation.in` 301-redirects, and the session cookie is scoped to the
+    canonical host — pointing at `.in` drops the cookie and every call 401s.
+  - Google sign-in is NOT wired (needs `ASWebAuthenticationSession` + a mobile
+    redirect URI registered in Cloud Console). A Google-only user must set a
+    password on the web first; the login screen says so.
+- **tRPC wire format** ([TRPCClient.swift](apps/ios/PostAutomation/Sources/Core/TRPCClient.swift)):
+  the router uses the **superjson** transformer, so every payload is wrapped —
+  query `GET /api/trpc/<proc>?input={"json":{…}}`, mutation `POST` with body
+  `{"json":{…}}`, success `{"result":{"data":{"json":…}}}`, error
+  `{"error":{"json":{message,code,data:{code,httpStatus,path}}}}`. Forgetting the
+  `json` wrapper is the #1 way to get a confusing 400 from a valid-looking call.
+  - Non-JSON bodies (nginx's HTML 429/502/504 pages) become a typed `.http`
+    error instead of a decode crash — the same `"Unexpected token '<'"` class of
+    failure the web client hit (see the Edge reliability section).
+  - `x-organization-id` is sent explicitly from `user.me.memberships[0]`, which
+    matches the server's own OWNER-first/oldest-first default ordering.
+- **⚠️ `Platform` is a String wrapper, NOT a Swift enum** ([Models.swift](apps/ios/PostAutomation/Sources/Models/Models.swift)).
+  A new `SocialPlatform` added server-side would make `channel.list` **undecodable
+  for every existing installed build** if this were an enum — an unknown case is a
+  hard decoding failure, and shipped apps cannot be hotfixed. Same reasoning is
+  why Prisma `Json` (`metadata`, `contentVariants`) and any BigInt column are
+  deliberately NOT modelled. `Decodable` ignores undeclared keys, so **additive**
+  server changes are always safe; only renames/removals of the fields listed in
+  `Models.swift` / `User.swift` break the app.
+- **Build + test headlessly** (no Xcode GUI, no signing — simulator only):
+  ```bash
+  cd apps/ios/PostAutomation && xcodegen generate
+  xcodebuild -project PostAutomation.xcodeproj -scheme PostAutomation \
+    -destination 'platform=iOS Simulator,name=iPhone 17' \
+    -derivedDataPath build build CODE_SIGNING_ALLOWED=NO
+  xcodebuild test -project PostAutomation.xcodeproj -scheme PostAutomation \
+    -destination 'platform=iOS Simulator,name=iPhone 17' \
+    -derivedDataPath build CODE_SIGNING_ALLOWED=NO
+  ```
+  A machine with no iOS runtime installed needs `xcodebuild -downloadPlatform iOS`
+  first (several GB). Verified green on iPhone 17 / iOS 26.5, Xcode 26.6.
+- **Tests: 13 XCTest + 2 XCUITest, all green.** The unit tests decode **verbatim
+  production envelopes** (captured from real `postautomation.co.in` responses), so
+  they fail if the wire contract drifts. **⚠️ `UITests/LoginUITests` hits the LIVE
+  auth endpoint** — it performs exactly ONE deliberately-failed sign-in per run
+  using IETF-reserved `example.invalid` credentials (never real ones) to prove the
+  whole CSRF → callback → error → UI path. It is not a mock; running the suite in
+  CI would put that traffic on production.
+- **`--reset-session` launch argument** clears cookies at startup so UI tests
+  always begin signed out regardless of a persisted session from manual use.
+- Not yet built: Google sign-in, media attachments in Compose (needs the
+  presigned-multipart flow), org switcher (data is already loaded), push
+  notifications for publish results.
 
 ## Local setup
 
