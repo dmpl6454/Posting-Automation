@@ -1,4 +1,4 @@
-FROM node:20-alpine AS base
+FROM node:25-alpine AS base
 RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
 # Runtime: chromium for puppeteer + native libs for the `canvas` npm package
 # (cairo / pango / jpeg / giflib / pixman / librsvg). Build tools (python3,
