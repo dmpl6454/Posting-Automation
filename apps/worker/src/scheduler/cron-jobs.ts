@@ -6,6 +6,9 @@ import {
   fetchMetaTokenWindow,
   readFacebookAppHealth,
   drainFbDeprecationCache,
+  isMetaPlatform,
+  resolveMetaCredentials,
+  listAllMetaApps,
 } from "@postautomation/social";
 import { runAutoHealerWithLogging } from "../workers/auto-healer.worker";
 import { runCelebrityDetectors } from "../workers/celebrity-detect.worker";
@@ -130,16 +133,16 @@ const DATA_ACCESS_BACKFILL_MAX_TOKENS = 40;
 const DATA_ACCESS_RECHECK_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
 
 export async function scheduleMetaDataAccessBackfill() {
-  const clientId = process.env.FACEBOOK_CLIENT_ID || process.env.INSTAGRAM_CLIENT_ID;
-  const clientSecret = process.env.FACEBOOK_CLIENT_SECRET || process.env.INSTAGRAM_CLIENT_SECRET;
-  if (!clientId || !clientSecret) return;
-
+  // `debug_token` authenticates with an APP token (`{id}|{secret}`), so each
+  // channel must be probed with the credentials of the app that minted ITS
+  // token — probing an app-B token with app A's app-token returns a useless
+  // "invalid" verdict that would then be cached for the whole cooldown week.
   const candidates = await prisma.channel.findMany({
     where: { isActive: true, platform: { in: ["FACEBOOK", "INSTAGRAM"] as any } },
     // Freshest first: a recently connected/updated channel is the one most likely
     // to still have a live token and therefore a real deadline worth recording.
     orderBy: { updatedAt: "desc" },
-    select: { id: true, accessToken: true, metadata: true, platform: true },
+    select: { id: true, accessToken: true, metadata: true, platform: true, metaAppId: true },
   });
 
   const cooldownCutoff = Date.now() - DATA_ACCESS_RECHECK_COOLDOWN_MS;
@@ -162,22 +165,51 @@ export async function scheduleMetaDataAccessBackfill() {
     return true;
   });
 
-  // Group by token so one debug_token call serves every channel sharing it.
-  const byToken = new Map<string, string[]>();
+  // Group by (platform, app, token) so one debug_token call serves every
+  // channel sharing it. The app and platform are part of the key because they
+  // select WHICH app-token authenticates the probe — grouping on the token
+  // alone would probe some channels with the wrong app's credentials.
+  //
+  // NUL-joined: a plain separator like ":" could collide if any component ever
+  // contained one, silently merging two groups.
+  const SEP = " ";
+  const byToken = new Map<
+    string,
+    { token: string; platform: string; metaAppId: string | null; channelIds: string[] }
+  >();
   for (const c of needing) {
-    const list = byToken.get(c.accessToken) ?? [];
-    list.push(c.id);
-    byToken.set(c.accessToken, list);
+    const key = `${c.platform}${SEP}${c.metaAppId ?? ""}${SEP}${c.accessToken}`;
+    const entry = byToken.get(key) ?? {
+      token: c.accessToken,
+      platform: String(c.platform),
+      metaAppId: c.metaAppId ?? null,
+      channelIds: [],
+    };
+    entry.channelIds.push(c.id);
+    byToken.set(key, entry);
   }
 
   const metaById = new Map(candidates.map((c) => [c.id, metaOf(c)]));
   let calls = 0;
   let stamped = 0;
   let unavailable = 0;
-  for (const [token, channelIds] of byToken) {
+  for (const [, group] of byToken) {
     if (calls >= DATA_ACCESS_BACKFILL_MAX_TOKENS) break;
+    const { token, channelIds } = group;
+
+    const creds = isMetaPlatform(group.platform)
+      ? resolveMetaCredentials(group.platform, group.metaAppId)
+      : null;
+    if (!creds) {
+      // Unconfigured app — skip WITHOUT consuming the call budget and WITHOUT
+      // stamping a checkedAt, so these channels are retried immediately once
+      // the app is configured rather than sitting out the cooldown week.
+      continue;
+    }
     calls++;
-    const window = await fetchMetaTokenWindow(token, clientId, clientSecret).catch(() => null);
+    const window = await fetchMetaTokenWindow(token, creds.clientId, creds.clientSecret).catch(
+      () => null
+    );
     const checkedAt = new Date().toISOString();
     // Stamp the ATTEMPT even on failure — that is what makes the cooldown work.
     const stamp = window?.dataAccessExpiresAt
@@ -1263,24 +1295,34 @@ export async function purgeOldErrorLogs(): Promise<number> {
 const FB_HEALTH_WARN_THRESHOLD = 60;
 const FB_HEALTH_CRIT_THRESHOLD = 80;
 
+/**
+ * Probes EVERY configured Meta app, not just the legacy one.
+ *
+ * Rate-limit quota is per app, so an app whose usage is not read is an app
+ * whose throttling arrives with no warning. Cost is one lightweight call per
+ * app per tick; each probe is billed to its OWN app, so they cannot starve one
+ * another.
+ */
 export async function runFacebookHealthCheck() {
-  const appId = process.env.FACEBOOK_CLIENT_ID;
-  const appSecret = process.env.FACEBOOK_CLIENT_SECRET;
-  if (!appId || !appSecret) return;
+  for (const app of listAllMetaApps()) {
+    await checkOneFacebookApp(app.appId, app.clientSecret);
+  }
+}
 
+async function checkOneFacebookApp(appId: string, appSecret: string) {
   const reading = await readFacebookAppHealth(appId, appSecret).catch((err) => {
     // Reading itself failed (timeout / auth). This is worth logging but
     // NOT alerting — a transient failure to READ the health isn't the
     // same as unhealthy. If it persists, it will keep showing up in worker
     // logs and eventually get spotted.
-    console.warn(`[Cron:FbHealth] health probe failed: ${err?.message}`);
+    console.warn(`[Cron:FbHealth] health probe failed for app ${appId}: ${err?.message}`);
     return null;
   });
   if (!reading) return;
 
   const { maxUsage, callCount, totalCpuTime, totalTime } = reading;
   console.log(
-    `[Cron:FbHealth] usage=${maxUsage}% ` +
+    `[Cron:FbHealth] app=${appId} usage=${maxUsage}% ` +
       `(calls=${callCount}, cpu=${totalCpuTime}, time=${totalTime})`
   );
 
@@ -1295,8 +1337,8 @@ export async function runFacebookHealthCheck() {
   const fingerprint = `fb-app-usage-${severity}-${appId}`;
   const message =
     severity === "critical"
-      ? `Facebook app usage at ${maxUsage}% — throttling imminent, publishes may slow or fail`
-      : `Facebook app usage at ${maxUsage}% — approaching quota, monitor closely`;
+      ? `Facebook app ${appId} usage at ${maxUsage}% — throttling imminent, publishes may slow or fail`
+      : `Facebook app ${appId} usage at ${maxUsage}% — approaching quota, monitor closely`;
 
   try {
     const existing = await prisma.errorLog.findFirst({

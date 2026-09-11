@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import crypto from "crypto";
+import { verifyMetaWebhookSignature } from "@postautomation/social";
 import { enqueueFacebookFeedAnalytics } from "@postautomation/api/src/lib/fb-webhook-analytics";
 
 export const dynamic = "force-dynamic";
@@ -26,7 +26,15 @@ export const runtime = "nodejs";
  */
 
 const VERIFY_TOKEN = process.env.FACEBOOK_WEBHOOK_VERIFY_TOKEN;
-const APP_SECRET = process.env.FACEBOOK_CLIENT_SECRET;
+
+/**
+ * Largest webhook body we will hash. Meta's event payloads are a few KB; nginx
+ * exempts /api/webhooks/ from rate limiting on the grounds that "verifying HMAC
+ * makes unauthenticated abuse a cheap 401", but the body is read BEFORE
+ * verification and we now hash it once per configured app. Capping the body
+ * keeps that justification true.
+ */
+const MAX_WEBHOOK_BODY_BYTES = 1_000_000;
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
@@ -55,25 +63,35 @@ export async function POST(req: Request) {
   const rawBody = await req.text();
   const signature = req.headers.get("x-hub-signature-256") || "";
 
-  if (!APP_SECRET) {
-    console.error("[fb-webhook] FACEBOOK_CLIENT_SECRET not configured");
-    return NextResponse.json({ error: "Not configured" }, { status: 500 });
+  if (Buffer.byteLength(rawBody, "utf8") > MAX_WEBHOOK_BODY_BYTES) {
+    console.warn("[fb-webhook] Body over cap — rejected before hashing");
+    return NextResponse.json({ error: "Payload too large" }, { status: 413 });
   }
 
-  // SECURITY: verify HMAC-SHA256 signature. Without this anyone can forge
-  // webhook events against our public endpoint.
-  const expected = "sha256=" + crypto
-    .createHmac("sha256", APP_SECRET)
-    .update(rawBody)
-    .digest("hex");
+  // SECURITY: verify HMAC-SHA256 against EVERY configured Meta app. Without
+  // this anyone can forge webhook events against our public endpoint.
+  //
+  // The comparison lives in @postautomation/social so both webhook routes share
+  // one implementation. It replaces an inline guard that compared JS STRING
+  // length before calling timingSafeEqual (which compares BYTE length) — a
+  // multi-byte UTF-8 character in the header slipped past that check and made
+  // timingSafeEqual THROW, turning any anonymous request into a 500 on an
+  // endpoint nginx deliberately does not rate-limit.
+  const verified = verifyMetaWebhookSignature(rawBody, signature);
 
-  if (
-    signature.length !== expected.length ||
-    !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
-  ) {
-    console.warn(`[fb-webhook] Invalid signature`);
+  if (!verified.ok) {
+    if (verified.reason === "not_configured") {
+      console.error("[fb-webhook] No Meta app secret configured");
+      return NextResponse.json({ error: "Not configured" }, { status: 500 });
+    }
+    console.warn(`[fb-webhook] Invalid signature (${verified.reason})`);
     return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
   }
+
+  // Which app signed this. Events are only trusted for channels belonging to
+  // that app — holding app B's secret must not authenticate events about app
+  // A's Pages.
+  const signingAppId = verified.appId;
 
   let payload: any;
   try {
@@ -85,14 +103,14 @@ export async function POST(req: Request) {
   // Ack fast, process asynchronously. Errors during processing are logged
   // but do not affect the ack — Meta disables subscriptions on repeated
   // non-2xx, so the ack ordering matters.
-  processEventsInBackground(payload).catch((err) => {
+  processEventsInBackground(payload, signingAppId).catch((err) => {
     console.error(`[fb-webhook] Background processing error:`, err);
   });
 
   return NextResponse.json({ ok: true });
 }
 
-async function processEventsInBackground(payload: any): Promise<void> {
+async function processEventsInBackground(payload: any, signingAppId: string): Promise<void> {
   if (payload.object !== "page") {
     console.log(`[fb-webhook] Ignoring non-page event (object=${payload.object})`);
     return;
@@ -113,6 +131,7 @@ async function processEventsInBackground(payload: any): Promise<void> {
             fbPostId,
             item: change.value?.item,
             verb: change.value?.verb,
+            signingAppId,
           });
 
           if (queued) {

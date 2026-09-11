@@ -1,6 +1,10 @@
 import { Worker, type Job, UnrecoverableError } from "bullmq";
 import { prisma } from "@postautomation/db";
-import { getSocialProvider, isAmbiguousPublishError } from "@postautomation/social";
+import {
+  getSocialProvider,
+  isAmbiguousPublishError,
+  resolvePlatformCredentials,
+} from "@postautomation/social";
 import { QUEUE_NAMES, postPublishQueue, analyticsSyncQueue, type PostPublishJobData, createRedisConnection } from "@postautomation/queue";
 import IORedis from "ioredis";
 import { buildPublishEmail, buildPublishReportCsv } from "../lib/publish-email";
@@ -382,8 +386,12 @@ export function createPostPublishWorker() {
         if (expiresAt < fiveMinutesFromNow) {
           console.log(`[PostPublish] Token for channel ${channelId} expiring soon, attempting refresh`);
           try {
-            const clientId = process.env[`${platform}_CLIENT_ID`] || "";
-            const clientSecret = process.env[`${platform}_CLIENT_SECRET`] || "";
+            // Meta tokens can only be refreshed by the app that minted them —
+            // resolve from channel.metaAppId (NULL = legacy pair). Non-Meta
+            // platforms keep the identical env read.
+            const creds = resolvePlatformCredentials(platform, channel.metaAppId);
+            const clientId = creds?.clientId || "";
+            const clientSecret = creds?.clientSecret || "";
             if (clientId && clientSecret) {
               const refreshed = await provider.refreshAccessToken(
                 channel.refreshToken!,
@@ -820,8 +828,11 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
           // Force token refresh and retry once
           console.log(`[PostPublish] Token expired — forcing refresh for channel ${channelId}`);
           try {
-            const clientId = process.env[`${platform}_CLIENT_ID`] || "";
-            const clientSecret = process.env[`${platform}_CLIENT_SECRET`] || "";
+            // Same rule as the pre-publish refresh above: a Meta token is
+            // refreshable only by the app that minted it.
+            const creds = resolvePlatformCredentials(platform, channel.metaAppId);
+            const clientId = creds?.clientId || "";
+            const clientSecret = creds?.clientSecret || "";
             if (clientId && clientSecret && channel.refreshToken) {
               const refreshed = await provider.refreshAccessToken(
                 channel.refreshToken,

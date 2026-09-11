@@ -2,7 +2,13 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
 import { avatarCacheQueue } from "@postautomation/queue";
-import { getSocialProvider, getSupportedPlatforms, signState } from "@postautomation/social";
+import {
+  getSocialProvider,
+  getSupportedPlatforms,
+  signState,
+  isMetaPlatform,
+  resolveMetaCredentials,
+} from "@postautomation/social";
 import { resolveChannelErrorsOnReconnect, DISCONNECTED_TOKEN } from "@postautomation/db";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 import { evaluateChannelInsightsStatus } from "../lib/insights-health";
@@ -105,7 +111,15 @@ export const channelRouter = createRouter({
    * CLIENT_ID/SECRET env vars. For token platforms, returns the field spec
    * the dialog should render.
    */
-  platformAuthInfo: orgProcedure.query(() => {
+  platformAuthInfo: orgProcedure.query(async ({ ctx }) => {
+    // Meta platforms are "configured" only if the app THIS ORG connects
+    // through is configured — an org pinned to an app whose credentials are
+    // missing must show "Setup required", not a Connect button that throws.
+    const org = await ctx.prisma.organization.findUnique({
+      where: { id: ctx.organizationId },
+      select: { metaAppId: true },
+    });
+
     return getSupportedPlatforms().map((platform) => {
       const provider = getSocialProvider(platform);
       const platformKey = String(platform);
@@ -126,10 +140,14 @@ export const channelRouter = createRouter({
         };
       }
 
-      // Default: OAuth platform — check that env vars are set.
-      const clientId = process.env[`${platformKey}_CLIENT_ID`];
-      const clientSecret = process.env[`${platformKey}_CLIENT_SECRET`];
-      const configured = Boolean(clientId && clientSecret);
+      // Default: OAuth platform — check that env vars are set. Meta platforms
+      // resolve through the registry so the answer reflects the org's app;
+      // every other platform keeps the plain env read unchanged.
+      const configured = isMetaPlatform(platformKey)
+        ? resolveMetaCredentials(platformKey, org?.metaAppId) !== null
+        : Boolean(
+            process.env[`${platformKey}_CLIENT_ID`] && process.env[`${platformKey}_CLIENT_SECRET`]
+          );
       return {
         platform,
         displayName: provider.displayName,
@@ -182,14 +200,39 @@ export const channelRouter = createRouter({
         });
       }
 
-      const signedState = signState({
-        organizationId: ctx.organizationId,
-        userId,
-      });
-
       const platformEnvPrefix = input.platform.toUpperCase();
-      const clientId = process.env[`${platformEnvPrefix}_CLIENT_ID`];
-      const clientSecret = process.env[`${platformEnvPrefix}_CLIENT_SECRET`];
+
+      // ── Meta app selection (FACEBOOK/INSTAGRAM only) ───────────────────────
+      // Which Meta app this org connects through. NULL org setting = the
+      // legacy app, i.e. byte-identical to the pre-multi-app behaviour. Every
+      // OTHER platform keeps the exact `${PREFIX}_CLIENT_ID` read below.
+      let clientId: string | undefined;
+      let clientSecret: string | undefined;
+      let metaAppId: string | undefined;
+
+      if (isMetaPlatform(platformEnvPrefix)) {
+        const org = await ctx.prisma.organization.findUnique({
+          where: { id: ctx.organizationId },
+          select: { metaAppId: true },
+        });
+        const creds = resolveMetaCredentials(platformEnvPrefix, org?.metaAppId);
+        if (!creds) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: org?.metaAppId
+              ? `This workspace is pinned to Meta app ${org.metaAppId}, which is not configured on this server. Contact support.`
+              : `${input.platform} is not configured by the administrator. Please contact support.`,
+          });
+        }
+        clientId = creds.clientId;
+        clientSecret = creds.clientSecret;
+        // Pin the RESOLVED app into the signed state so the callback exchanges
+        // the code against this exact app — never a re-derived value.
+        metaAppId = creds.appId;
+      } else {
+        clientId = process.env[`${platformEnvPrefix}_CLIENT_ID`];
+        clientSecret = process.env[`${platformEnvPrefix}_CLIENT_SECRET`];
+      }
 
       // Fix #19: surface missing env vars before attempting OAuth redirect
       if (!clientId || !clientSecret) {
@@ -198,6 +241,12 @@ export const channelRouter = createRouter({
           message: `${input.platform} is not configured by the administrator. Please contact support.`,
         });
       }
+
+      const signedState = signState({
+        organizationId: ctx.organizationId,
+        userId,
+        metaAppId,
+      });
 
       const config = {
         clientId,

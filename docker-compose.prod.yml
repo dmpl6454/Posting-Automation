@@ -166,6 +166,18 @@ services:
       LINKEDIN_CLIENT_SECRET: ${LINKEDIN_CLIENT_SECRET}
       INSTAGRAM_CLIENT_ID: ${INSTAGRAM_CLIENT_ID}
       INSTAGRAM_CLIENT_SECRET: ${INSTAGRAM_CLIENT_SECRET}
+      # ─── Additional Meta apps (multi-app support) ────────────────────────
+      # A Meta token is bound to the app that minted it, so a second app needs
+      # its own credentials here. An app registers ONLY when BOTH halves are
+      # non-empty (see packages/social/src/utils/meta-app-registry.ts) — this
+      # `environment:` map is an explicit ALLOWLIST, so a key set in .env.prod
+      # but omitted here arrives as "" and the app silently does not register.
+      # Web AND worker both need these: web runs OAuth + webhooks, worker runs
+      # token refresh + analytics.
+      META_APP_2_ID: ${META_APP_2_ID}
+      META_APP_2_SECRET: ${META_APP_2_SECRET}
+      META_APP_3_ID: ${META_APP_3_ID}
+      META_APP_3_SECRET: ${META_APP_3_SECRET}
       YOUTUBE_CLIENT_ID: ${YOUTUBE_CLIENT_ID}
       YOUTUBE_CLIENT_SECRET: ${YOUTUBE_CLIENT_SECRET}
       SNAPCHAT_CLIENT_ID: ${SNAPCHAT_CLIENT_ID}
@@ -225,6 +237,18 @@ services:
       LINKEDIN_CLIENT_SECRET: ${LINKEDIN_CLIENT_SECRET}
       INSTAGRAM_CLIENT_ID: ${INSTAGRAM_CLIENT_ID}
       INSTAGRAM_CLIENT_SECRET: ${INSTAGRAM_CLIENT_SECRET}
+      # ─── Additional Meta apps (multi-app support) ────────────────────────
+      # A Meta token is bound to the app that minted it, so a second app needs
+      # its own credentials here. An app registers ONLY when BOTH halves are
+      # non-empty (see packages/social/src/utils/meta-app-registry.ts) — this
+      # `environment:` map is an explicit ALLOWLIST, so a key set in .env.prod
+      # but omitted here arrives as "" and the app silently does not register.
+      # Web AND worker both need these: web runs OAuth + webhooks, worker runs
+      # token refresh + analytics.
+      META_APP_2_ID: ${META_APP_2_ID}
+      META_APP_2_SECRET: ${META_APP_2_SECRET}
+      META_APP_3_ID: ${META_APP_3_ID}
+      META_APP_3_SECRET: ${META_APP_3_SECRET}
       YOUTUBE_CLIENT_ID: ${YOUTUBE_CLIENT_ID}
       YOUTUBE_CLIENT_SECRET: ${YOUTUBE_CLIENT_SECRET}
       SNAPCHAT_CLIENT_ID: ${SNAPCHAT_CLIENT_ID}

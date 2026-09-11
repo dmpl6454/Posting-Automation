@@ -2,7 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, superAdminProcedure } from "../../trpc";
 import { createAuditLog, AUDIT_ACTIONS } from "../../lib/audit";
-import { getSocialProvider } from "@postautomation/social";
+import { getSocialProvider, resolvePlatformCredentials } from "@postautomation/social";
 import type { SocialPlatform } from "@postautomation/db";
 
 export const adminChannelsRouter = createRouter({
@@ -92,15 +92,20 @@ export const adminChannelsRouter = createRouter({
       }
 
       const platformKey = channel.platform.toUpperCase();
-      const clientId = process.env[`${platformKey}_CLIENT_ID`];
-      const clientSecret = process.env[`${platformKey}_CLIENT_SECRET`];
+      // Meta channels resolve through the app that minted the token
+      // (channel.metaAppId; NULL = the legacy pair). Refreshing with a
+      // different app's secret cannot succeed.
+      const creds = resolvePlatformCredentials(platformKey, channel.metaAppId);
 
-      if (!clientId || !clientSecret) {
+      if (!creds) {
         return {
           success: false,
-          message: `Missing ${platformKey} credentials in environment`,
+          message: channel.metaAppId
+            ? `Channel is on Meta app ${channel.metaAppId}, which is not configured in this environment`
+            : `Missing ${platformKey} credentials in environment`,
         };
       }
+      const { clientId, clientSecret } = creds;
 
       const provider = getSocialProvider(channel.platform as SocialPlatform);
       const tokens = await provider.refreshAccessToken(channel.refreshToken, {

@@ -143,7 +143,29 @@ export async function markChannelsMissingFromGrant(
   platform: string,
   grantedPlatformIds: string[],
   platformLabel: string,
-  now: Date = new Date()
+  now: Date = new Date(),
+  /**
+   * Restricts candidates to channels belonging to the app this consent used.
+   *
+   * ⚠️ REQUIRED for Meta platforms. An app-B consent can never include an
+   * app-A Page, so without this every app-A channel in the org gets stamped
+   * "not included in the most recent connection — reconnect and tick it" — a
+   * remedy that is false and impossible to act on. That is exactly the
+   * perpetual-reconnect-banner incident of 2026-08-12, at ~1,338-channel
+   * scale.
+   *
+   * The narrowing this function already does (only re-stamping channels
+   * ALREADY marked needs_reconnect) does not save us: during an app migration
+   * it is NORMAL for every channel on the old app to be needs_reconnect,
+   * because Meta invalidates stored tokens on app/scope changes. The collision
+   * becomes the common case rather than the edge case.
+   *
+   * ⚠️ The filter must be applied in the QUERY, not after `take`. With
+   * `take: MAX_ORPHANS_PER_CONNECT` and no deterministic ordering, filtering
+   * afterwards lets the other app's rows consume the cap and push this app's
+   * genuine orphans out of the result entirely.
+   */
+  appScope?: Record<string, unknown>
 ): Promise<number> {
   if (grantedPlatformIds.length === 0) return 0;
 
@@ -154,6 +176,7 @@ export async function markChannelsMissingFromGrant(
       isActive: true,
       disconnectedAt: null,
       platformId: { notIn: grantedPlatformIds },
+      ...(appScope ?? {}),
     },
     select: { id: true, platformId: true, metadata: true },
     take: MAX_ORPHANS_PER_CONNECT,

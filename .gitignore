@@ -13,6 +13,11 @@ out/
 .env.local
 .env.*.local
 .env.production
+# ⚠️ The REAL production secrets file on the server is `.env.prod` —
+# `.env.production` is only a symlink to it (see CLAUDE.md deploy quirk #1).
+# Without this line a `git add -A` run on the box commits every production
+# secret, and quirk #6's recovery procedure writes straight into it.
+.env.prod
 
 # IDE
 .vscode/

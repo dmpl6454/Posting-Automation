@@ -325,6 +325,88 @@ The `platformAuthInfo` tRPC query tells the UI which type each platform is and w
   - **🐛→✅ IG (a REAL CODE BUG on top of the prerequisite — misleading error; FIXED on branch `fix/connect-flow-and-bulk-delete-2026-07-17`):** the callback called `provider.getProfile(tokens)` at [route.ts:187](apps/web/app/api/oauth/callback/%5Bprovider%5D/route.ts#L187) for EVERY platform BEFORE the IG-specific branch. For IG, `getProfile` → `getInstagramBusinessAccountId` ([instagram.provider.ts:333-360](packages/social/src/providers/instagram.provider.ts#L333)) **THROWS** `"No Instagram Business Account found…"` (line 357) when the user has no linked IG-Business → hits the OUTER catch → generic `oauth_failed`, so the clean `getAllInstagramAccounts`→`[]`→`ig_no_business_account` guard ([route.ts:258-266](apps/web/app/api/oauth/callback/%5Bprovider%5D/route.ts#L258)) was **DEAD CODE for personal-IG users**. **FIX (2026-07-17):** (A) `getProfile` is now SKIPPED for `INSTAGRAM` (`const profile = platform === "INSTAGRAM" ? {id:"",name:""} : await provider.getProfile(tokens)`) — the IG branch never reads `profile` (builds channels from `getAllInstagramAccounts`), so the clean `ig_no_business_account` message now surfaces (also drops a duplicate `me/accounts` round-trip); (B) defense-in-depth: the outer catch remaps `/No Instagram Business Account|Instagram Professional account/i` → `ig_no_business_account`. FB is unaffected (its `getProfile` succeeds for a page-less user, so it doesn't pre-empt `fb_no_pages`). ⚠️ Do NOT re-add an unconditional `getProfile` before the IG branch. Tests: [instagram-connect-errors.test.ts](packages/social/src/__tests__/instagram-connect-errors.test.ts) (getProfile throws the matchable msg; getAllInstagramAccounts returns []). Prerequisite unchanged (user needs a Professional/Business IG linked to an admin'd Page) — the bug was only the label.
 - **🐛→✅ CHANNEL BULK-DELETE >100 (verified + FIXED 2026-07-17, same branch) — was "Array must contain at most 100 element(s)".** `channel.bulkDisconnect` input is `z.array(z.string()).min(1).max(100)` ([channel.router.ts:392](packages/api/src/routers/channel.router.ts#L392)); the UI used to send the FULL selection uncapped `mutate({channelIds:[...selectedIds]})`. **FIX:** [channels/page.tsx](apps/web/app/dashboard/channels/page.tsx) now chunks client-side into ≤100-id batches via `runBulkDelete()` (`mutateAsync` in a loop over `BULK_DELETE_BATCH=100`, sums `deleted`, surfaces partial-progress on error), driven by a new `isBulkDeleting` state (spans the whole loop, unlike per-call `.isPending`). Server `.max(100)` kept as a guardrail. Do NOT revert to `.mutate({channelIds:[...selectedIds]})`. This account accrued 110+ channels (autopilot/test: filmiimemes, creatorspaparazzi, priyanshu123321123).
 
+## 🔀 TWO Meta apps — per-org selection (2026-09-11, branch `feat/meta-multi-app`)
+
+A Meta access token is **bound to the app that minted it**, so the moment a second Meta app
+exists every `process.env.FACEBOOK_CLIENT_SECRET` read becomes a coin flip. Resolution now
+happens in exactly ONE place: [meta-app-registry.ts](packages/social/src/utils/meta-app-registry.ts).
+
+| | |
+|---|---|
+| **App A** (live, 9 perms approved) | `298449321694397` — `FACEBOOK_*` / `INSTAGRAM_*` env pairs |
+| **App B** (awaiting App Review) | `259982148841906` — `META_APP_2_ID` / `META_APP_2_SECRET` |
+
+- **`Channel.metaAppId String?`** records which app minted that row's token. **NULL = the legacy
+  app**, so all ~1,338 pre-existing rows are byte-identical and there is **no backfill**.
+- **`Organization.metaAppId String?`** selects which app an org's **NEW** connects use. Set it
+  with `admin.orgs.setMetaApp` (**`superAdminProcedure`** — deliberately NOT `adminOrgProcedure`,
+  because `requireAppAdmin` early-returns under `RBAC_DISABLED=true`, and impersonation clears
+  `isSuperAdmin` but **not** `appRole`).
+- **⛔ There is deliberately NO global `META_APP_DEFAULT_ID`.** `getDefaultScopes` is keyed on
+  PLATFORM, not app, and app B holds **zero** approved scopes — a global flip would make every
+  org's users complete OAuth and then silently fail to publish. Per-org keeps the blast radius to
+  one workspace you chose. **This is also what makes App Review possible at all**: you pin only
+  the reviewer's workspace to app B, its test-call gate fills, and the other 1,338 channels never
+  notice.
+
+### Invariants — each of these was a real defect caught before merge
+
+- **🔴 App A is TWO credential pairs, not one.** `FACEBOOK_CLIENT_ID/SECRET` and
+  `INSTAGRAM_CLIENT_ID/SECRET` are four distinct env keys; they hold the same value today but
+  every consumer reads its OWN platform's pair. `resolveMetaCredentials` therefore takes a
+  **platform**. Collapsing them into one "app A" entry silently repoints Instagram the day they
+  diverge.
+- **🔴 The signed OAuth state carries `metaAppId`** ([oauth-helper.ts](packages/social/src/utils/oauth-helper.ts)).
+  Authorize and callback are separate requests up to the 10-minute TTL apart; re-deriving the app
+  in the callback exchanges the code against the wrong app whenever anything changed in between —
+  and Meta **burns the single-use code**. Absent ⇒ legacy app (states signed by the previous build
+  are still in flight for 10 minutes after a deploy).
+- **🔴 `metaAppId` is written in BOTH the `create` AND `update` branch of every Meta upsert.** The
+  upsert key is `(organizationId, platform, platformId)`, so reconnecting under a different app
+  UPDATES the row. Stamping only on `create` leaves a row claiming app A while holding an app-B
+  token — **strictly worse than not having the column**. Writing app A back needs an explicit
+  `null`; Prisma omits `undefined` keys from an UPDATE.
+- **🔴 `markChannelsMissingFromGrant` is app-scoped** via `metaAppChannelScope`
+  ([meta-app-scope.ts](packages/api/src/lib/meta-app-scope.ts)). An app-B consent can never include
+  an app-A Page, so without the scope every app-A channel gets stamped "reconnect me" — the
+  perpetual-banner incident of 2026-08-12 at ~1,338-channel scale. The filter must be in the
+  **QUERY**: `take: 300` runs before any post-hoc filtering and would let the other app's rows
+  consume the cap.
+- **🔴 The scope is an explicit `OR`, never `{ metaAppId: { in: [id, null] } }`.** In SQL
+  `x IN (NULL,'a')` never matches a NULL row, so an `in` silently excludes every legacy channel.
+  `metaAppChannelScope` **throws** on an empty/undefined appId, because Prisma reads
+  `where: { metaAppId: undefined }` as NO FILTER — widening instead of narrowing, and tsc cannot
+  catch it.
+- **Fail CLOSED on `""`.** `docker-compose.prod.yml` uses an explicit `environment:` allowlist, so
+  a key in `.env.prod` but missing from compose arrives as an empty string. An app registers ONLY
+  when BOTH halves are non-empty — `crypto.createHmac("sha256","")` yields a valid,
+  attacker-computable digest, so an empty secret reaching the webhook verifier is an **auth
+  bypass**, not a disabled feature. `META_APP_2_*`/`META_APP_3_*` are plumbed for **web AND worker**.
+- **Never fall back to another app.** An unknown/unconfigured app resolves to `null` and surfaces
+  as `platform_not_configured`; publishing with the wrong app's secret is worse than a clean error.
+  The resolver **never throws** (it runs inside the publish worker's retry path).
+- Registry lookups use an **array `find`**, never `id in obj` (`in` matches `__proto__`).
+
+### Two pre-existing bugs fixed in the same change
+
+1. **🔴 `.env.prod` was NOT gitignored.** `.gitignore` covered `.env`/`.env.production` but the
+   REAL production secrets file is `.env.prod` (the symlink target). One `git add -A` on the box
+   would have committed every secret. Verified nothing was ever committed.
+2. **🔴 Any anonymous caller could 500 both webhook routes.** The old guard compared
+   `signature.length` (a **JS string**, UTF-16 code units) then called `timingSafeEqual` (which
+   compares **bytes**) — a 71-char header carrying one 2-byte UTF-8 character passed the guard at
+   72 bytes and threw `ERR_CRYPTO_TIMING_SAFE_EQUAL_LENGTH` out of the route, on an endpoint nginx
+   deliberately exempts from rate limiting. Now structural: a strict
+   `/^sha256=([a-f0-9]{64})$/` decoded to a fixed 32-byte buffer, so the throw is unreachable by
+   construction. Verifier is shared — [meta-webhook-signature.ts](packages/social/src/utils/meta-webhook-signature.ts) —
+   tries every configured app's secret without short-circuiting, and **returns which app matched**
+   so `enqueueFacebookFeedAnalytics` can scope the lookup (app B's secret must not authenticate
+   events about app A's Pages). Bodies are capped at 1MB before hashing.
+
+Tests: [meta-app-registry.test.ts](packages/social/src/__tests__/meta-app-registry.test.ts) (37),
+[meta-app-scope.test.ts](packages/api/src/__tests__/meta-app-scope.test.ts) (15),
+[oauth-state-meta-app.test.ts](packages/social/src/__tests__/oauth-state-meta-app.test.ts) (6).
+
 ## NewsGrid Bot — HIDDEN FROM UI 2026-06-23 (code intact, not deleted)
 
 NewsGrid Bot is a manual, on-demand multi-channel news-card publisher: type a headline (+ optional celeb/event/location), pick channels, and it fans out one AI-generated branded card **per channel** (per-channel logo/template/tone via `updateChannelProfile`/`assignLogoToChannel`), with per-channel approve + schedule, then `bulkPublish`. Backend: [packages/api/src/routers/newsgrid.router.ts](packages/api/src/routers/newsgrid.router.ts) (`generate`, `bulkPublish`, `prefillFromHeadline`, `updateChannelProfile`, `getLogos`/`assignLogoToChannel`/`deleteLogo`, `channelsWithProfiles`). UI pages: [apps/web/app/dashboard/newsgrid/page.tsx](apps/web/app/dashboard/newsgrid/page.tsx) + `/logos`. Renders via the legacy `generateStaticNewsCreativeImage` + the 8 news templates (`cinematic`/`breaking_news`/`paparazzi_stamp`/…) in [news-image-generator.ts](packages/ai/src/tools/news-image-generator.ts).
