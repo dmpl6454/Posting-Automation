@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import crypto from "crypto";
+import { verifyMetaWebhookSignature } from "@postautomation/social";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -34,7 +34,9 @@ export const runtime = "nodejs";
  */
 
 const VERIFY_TOKEN = process.env.FACEBOOK_WEBHOOK_VERIFY_TOKEN;
-const APP_SECRET = process.env.FACEBOOK_CLIENT_SECRET;
+
+/** See the identical cap in the Facebook webhook route. */
+const MAX_WEBHOOK_BODY_BYTES = 1_000_000;
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
@@ -63,24 +65,23 @@ export async function POST(req: Request) {
   const rawBody = await req.text();
   const signature = req.headers.get("x-hub-signature-256") || "";
 
-  if (!APP_SECRET) {
-    console.error("[ig-webhook] FACEBOOK_CLIENT_SECRET not configured");
-    return NextResponse.json({ error: "Not configured" }, { status: 500 });
+  if (Buffer.byteLength(rawBody, "utf8") > MAX_WEBHOOK_BODY_BYTES) {
+    console.warn("[ig-webhook] Body over cap — rejected before hashing");
+    return NextResponse.json({ error: "Payload too large" }, { status: 413 });
   }
 
-  // SECURITY: verify HMAC-SHA256 signature. Same secret (App Secret) works
-  // for both FB and IG webhook topics — Meta signs all events for a given
-  // app with the same key regardless of topic.
-  const expected = "sha256=" + crypto
-    .createHmac("sha256", APP_SECRET)
-    .update(rawBody)
-    .digest("hex");
+  // SECURITY: verify HMAC-SHA256 against every configured Meta app. Meta signs
+  // all events for a given app with that app's secret regardless of topic, so
+  // FB and IG share one verifier — see meta-webhook-signature.ts for the
+  // string-length-vs-byte-length bug this replaces.
+  const verified = verifyMetaWebhookSignature(rawBody, signature);
 
-  if (
-    signature.length !== expected.length ||
-    !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
-  ) {
-    console.warn(`[ig-webhook] Invalid signature`);
+  if (!verified.ok) {
+    if (verified.reason === "not_configured") {
+      console.error("[ig-webhook] No Meta app secret configured");
+      return NextResponse.json({ error: "Not configured" }, { status: 500 });
+    }
+    console.warn(`[ig-webhook] Invalid signature (${verified.reason})`);
     return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
   }
 

@@ -1,5 +1,6 @@
 import { analyticsSyncQueue } from "@postautomation/queue";
 import { prisma } from "@postautomation/db";
+import { metaAppChannelScope } from "./meta-app-scope";
 
 /**
  * Best-effort enqueue of an analytics-sync job triggered by a Facebook Page
@@ -25,8 +26,14 @@ export async function enqueueFacebookFeedAnalytics(params: {
   fbPostId: string;
   item?: string;
   verb?: string;
+  /**
+   * The Meta app whose secret actually signed this delivery. REQUIRED — it
+   * scopes the lookup so a holder of one app's secret cannot trigger work
+   * against another app's Pages. See metaAppChannelScope.
+   */
+  signingAppId: string;
 }): Promise<{ queued: boolean; reason?: string }> {
-  const { pageId, fbPostId } = params;
+  const { pageId, fbPostId, signingAppId } = params;
   try {
     const target = await prisma.postTarget.findFirst({
       where: {
@@ -34,6 +41,7 @@ export async function enqueueFacebookFeedAnalytics(params: {
         channel: {
           platform: "FACEBOOK",
           platformId: pageId,
+          ...metaAppChannelScope("FACEBOOK", signingAppId),
         },
       },
       select: { id: true, channelId: true, publishedId: true },

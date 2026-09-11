@@ -124,6 +124,21 @@ model Organization {
   plan                 PlanType  @default(FREE)
   planExpiresAt        DateTime?
 
+  /// Which Meta OAuth app NEW Facebook/Instagram connections in this org use.
+  /// NULL (the default, and every pre-existing org) = the legacy app.
+  ///
+  /// There is deliberately NO global "default Meta app" env switch. Scopes are
+  /// keyed on PLATFORM, not app (see getDefaultScopes), so pointing an org at
+  /// an app that has not yet won Advanced Access lets its users complete OAuth
+  /// and then silently fail to publish. Per-org means that blast radius is one
+  /// workspace you chose, which is what makes both App Review (route only the
+  /// reviewer's workspace to the new app) and later load-splitting safe.
+  ///
+  /// ⚠️ Changing this does NOT migrate existing channels — their tokens stay
+  /// bound to the app that minted them (Channel.metaAppId). It only affects
+  /// the next connect.
+  metaAppId            String?
+
   members        OrganizationMember[]
   invites        OrganizationInvite[]
   channels       Channel[]
@@ -239,6 +254,32 @@ model Channel {
   /// duplicate-channel proliferation that disconnect→reconnect used to cause.
   disconnectedAt DateTime?
 
+  /// Which Meta (Facebook/Instagram) OAuth app minted `accessToken`.
+  ///
+  /// ⚠️ A Meta token is bound to the app that issued it, so this column is part
+  /// of the credential tuple — never write a Meta token without also writing
+  /// the app that produced it, in BOTH the create AND update branches of an
+  /// upsert. The upsert key is (organizationId, platform, platformId), so a
+  /// reconnect under a different app UPDATES an existing row; stamping this
+  /// only on create would leave a row claiming app A while holding an app-B
+  /// token, and every later resolution (refresh, debug_token, webhook secret)
+  /// would be silently wrong with no error to notice.
+  ///
+  /// NULL means the LEGACY app — the credentials in FACEBOOK_CLIENT_ID /
+  /// INSTAGRAM_CLIENT_ID. Every row predating multi-app support is NULL, and
+  /// the legacy path is byte-identical to the old behaviour, so no backfill is
+  /// needed. Resolution happens in exactly one place:
+  /// packages/social/src/utils/meta-app-registry.ts.
+  ///
+  /// ⚠️ To move a row back to the legacy app you must write an explicit `null`
+  /// — Prisma omits `undefined` keys from the UPDATE, so `metaAppId: undefined`
+  /// silently leaves the previous app stamped.
+  ///
+  /// Deliberately NOT part of the unique key: the same Page connected under a
+  /// different app is the SAME channel, and adding this to the key would
+  /// duplicate rows and orphan their post history.
+  metaAppId      String?
+
   organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   postTargets    PostTarget[]
   channelGroups  ChannelGroup[] @relation("ChannelGroupMembers")
@@ -251,6 +292,9 @@ model Channel {
   @@index([organizationId])
   /// Partial-ish lookup for "live channels" queries (the common path).
   @@index([organizationId, disconnectedAt])
+  /// Per-app sweeps: webhook scoping, orphaned-grant filtering, and "which
+  /// channels are on app B" operator queries.
+  @@index([platform, metaAppId])
 }
 
 /// A post that exists ON THE PLATFORM, whether or not we published it.

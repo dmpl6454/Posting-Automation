@@ -28,6 +28,22 @@ export interface OAuthStatePayload {
   organizationId: string;
   userId: string;
   codeVerifier?: string; // PKCE — kept server-side, not in URL
+  /**
+   * Which Meta app built the authorize URL (Facebook/Instagram only).
+   *
+   * ⚠️ The callback MUST exchange the code against THIS app, not against a
+   * freshly re-read org row or env default. Authorize and callback are separate
+   * HTTP requests up to STATE_TTL_MS apart; if the org's app changed in
+   * between — a deploy, an admin edit, two tabs straddling the change — a
+   * re-derived value exchanges the code against the wrong app. Meta rejects it,
+   * the single-use code is burnt, and the user gets a generic `oauth_failed`
+   * with nothing to debug from.
+   *
+   * OPTIONAL and never defaulted. States signed before this field existed stay
+   * in flight for up to STATE_TTL_MS after a deploy and arrive without it;
+   * absent MUST mean the legacy app, which is what those flows actually used.
+   */
+  metaAppId?: string;
   nonce: string;
   iat: number;
   exp: number;
@@ -37,6 +53,7 @@ export function signState(input: {
   organizationId: string;
   userId: string;
   codeVerifier?: string;
+  metaAppId?: string;
 }): string {
   const key = getSigningKey();
   const now = Date.now();
@@ -44,6 +61,7 @@ export function signState(input: {
     organizationId: input.organizationId,
     userId: input.userId,
     codeVerifier: input.codeVerifier,
+    metaAppId: input.metaAppId,
     nonce: crypto.randomBytes(16).toString("hex"),
     iat: now,
     exp: now + STATE_TTL_MS,

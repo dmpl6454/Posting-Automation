@@ -28,6 +28,26 @@ export { validateMediaForPlatform } from "./utils/media-validator";
 // real reason Meta insights die every ~3 months. See meta-data-access.ts.
 export { fetchMetaTokenWindow, type MetaTokenWindow } from "./utils/meta-data-access";
 export { isFacebookVideoLike } from "./utils/fb-video-like";
+// Multi-Meta-app support. A Meta token is bound to the app that minted it, so
+// `Channel.metaAppId` (NULL = the legacy FACEBOOK_/INSTAGRAM_ pair) selects the
+// credentials for every downstream call. See meta-app-registry.ts.
+export {
+  resolveMetaCredentials,
+  legacyMetaCredentials,
+  isMetaPlatform,
+  resolvePlatformCredentials,
+  listAllMetaApps,
+  listExtraMetaApps,
+  listMetaWebhookSecrets,
+  hasMultipleMetaApps,
+  isKnownMetaAppId,
+  type MetaAppCredentials,
+  type MetaPlatform,
+} from "./utils/meta-app-registry";
+export {
+  verifyMetaWebhookSignature,
+  type MetaWebhookVerification,
+} from "./utils/meta-webhook-signature";
 // FB app-usage health check — reads x-app-usage header from a lightweight
 // call so a monitoring cron can alert before we hit the quota wall.
 export { readFacebookAppHealth, type FbAppHealthReading } from "./utils/fb-app-health";

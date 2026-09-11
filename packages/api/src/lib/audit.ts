@@ -103,6 +103,13 @@ export const AUDIT_ACTIONS = {
   // Admin
   ADMIN_USER_SUPERADMIN_TOGGLED: "admin.user.superadmin_toggled",
   ADMIN_USER_APPROLE_CHANGED: "admin.user.approle_changed",
+  /**
+   * Which Meta app an org's NEW Facebook/Instagram connections use. Audited
+   * because it silently changes which Meta app a workspace's future channels
+   * are bound to — and pointing an org at an app that has not won Advanced
+   * Access lets its users connect and then fail to publish.
+   */
+  ADMIN_ORG_META_APP_CHANGED: "admin.org.meta_app_changed",
   ADMIN_USER_BANNED: "admin.user.banned",
   ADMIN_USER_UNBANNED: "admin.user.unbanned",
   ADMIN_USER_DELETED: "admin.user.deleted",

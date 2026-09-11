@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
 import { prisma, encryptToken, resolveChannelErrorsOnReconnect } from "@postautomation/db";
-import { getSocialProvider, FacebookProvider, InstagramProvider, LinkedInProvider, verifyState, fetchMetaTokenWindow } from "@postautomation/social";
+import { getSocialProvider, FacebookProvider, InstagramProvider, LinkedInProvider, verifyState, fetchMetaTokenWindow, isMetaPlatform, resolveMetaCredentials } from "@postautomation/social";
 // Deep import via @postautomation/api (a declared, transpiled web dependency):
 // apps/web has no direct dep on @postautomation/queue, so the api package
 // bridges the avatar-cache enqueue.
 import { enqueueAvatarCacheJobs } from "@postautomation/api/src/lib/avatar-cache";
 import { markChannelsMissingFromGrant } from "@postautomation/api/src/lib/orphaned-grant";
+import { metaAppChannelScope } from "@postautomation/api/src/lib/meta-app-scope";
 import { auth } from "~/lib/auth";
 
 /**
@@ -22,7 +23,9 @@ async function correctOrphanedGrantVerdicts(
   organizationId: string,
   platform: string,
   grantedPlatformIds: string[],
-  platformLabel: string
+  platformLabel: string,
+  /** The Meta app this consent ran under — scopes the sweep. See below. */
+  signingAppId: string
 ): Promise<void> {
   try {
     const n = await markChannelsMissingFromGrant(
@@ -30,7 +33,12 @@ async function correctOrphanedGrantVerdicts(
       organizationId,
       platform,
       grantedPlatformIds,
-      platformLabel
+      platformLabel,
+      undefined,
+      // ⚠️ Without this scope an app-B consent stamps "reconnect me" on every
+      // app-A channel in the org — a false, un-actionable remedy, and the
+      // perpetual-banner bug all over again.
+      isMetaPlatform(platform) ? metaAppChannelScope(platform, signingAppId) : undefined
     );
     if (n > 0) {
       console.info(
@@ -210,7 +218,17 @@ export async function GET(
   try {
     // SECURITY: verify the signed state. Throws on tampered or expired state.
     const statePayload = verifyState(state);
-    const { organizationId, userId: stateUserId, codeVerifier } = statePayload;
+    const {
+      organizationId,
+      userId: stateUserId,
+      codeVerifier,
+      // ⚠️ Which Meta app built the authorize URL. MUST come from the signed
+      // state, never be re-derived here: authorize and callback are separate
+      // requests up to the state TTL apart, and re-reading the org row or an
+      // env default would exchange the code against the wrong app the moment
+      // anything changed in between — burning the single-use code.
+      metaAppId: stateMetaAppId,
+    } = statePayload;
 
     // SECURITY: enforce session + membership match.
     const sessionCheck = await assertSessionMatchesState(organizationId, stateUserId);
@@ -223,8 +241,38 @@ export async function GET(
     const provider = getSocialProvider(platform as any);
 
     const envPrefix = platform;
-    const oauthClientId = process.env[`${envPrefix}_CLIENT_ID`];
-    const oauthClientSecret = process.env[`${envPrefix}_CLIENT_SECRET`];
+
+    // Meta platforms resolve credentials from the app pinned in the signed
+    // state; every other platform keeps the plain env read. An absent
+    // stateMetaAppId means the LEGACY app — which is correct both for states
+    // signed before this field existed (still in flight for up to the state
+    // TTL after a deploy) and for orgs that were never repointed.
+    //
+    // Deliberately NO fallback to another app when resolution fails: exchanging
+    // a code with the wrong app's secret is worse than a clean
+    // `platform_not_configured`.
+    const metaCreds = isMetaPlatform(envPrefix)
+      ? resolveMetaCredentials(envPrefix, stateMetaAppId)
+      : null;
+
+    const oauthClientId = isMetaPlatform(envPrefix)
+      ? metaCreds?.clientId
+      : process.env[`${envPrefix}_CLIENT_ID`];
+    const oauthClientSecret = isMetaPlatform(envPrefix)
+      ? metaCreds?.clientSecret
+      : process.env[`${envPrefix}_CLIENT_SECRET`];
+
+    /**
+     * The app that minted the tokens below — stamped onto every Channel row
+     * written by this callback. `null` for the legacy app so pre-existing rows
+     * and new legacy rows are indistinguishable.
+     *
+     * ⚠️ Must be `null`, never `undefined`: Prisma omits undefined keys from an
+     * UPDATE, so `undefined` would silently leave a previously-stamped app in
+     * place when a channel moves back to the legacy app.
+     */
+    const channelMetaAppId: string | null =
+      metaCreds && !metaCreds.legacy ? metaCreds.appId : null;
 
     // Fix #19: guard against missing env vars in OAuth callback
     if (!oauthClientId || !oauthClientSecret) {
@@ -313,6 +361,15 @@ export async function GET(
             update: {
               accessToken: page.accessToken,
               refreshToken: page.accessToken, // Page tokens don't expire if user token is long-lived
+              // ⚠️ Part of the credential tuple — MUST be written alongside the
+              // token in BOTH branches. This upsert keys on
+              // (organizationId, platform, platformId), so reconnecting an
+              // existing Page under a different app UPDATES this row. Stamping
+              // the app only on `create` would leave the row claiming its old
+              // app while holding the new app's token, and every later
+              // resolution (refresh, debug_token, webhook secret) would be
+              // silently wrong.
+              metaAppId: channelMetaAppId,
               tokenExpiresAt: null,
               scopes: tokens.scopes || [],
               name: page.name,
@@ -335,6 +392,7 @@ export async function GET(
               avatar: page.avatar || null,
               accessToken: page.accessToken,
               refreshToken: page.accessToken,
+              metaAppId: channelMetaAppId,
               tokenExpiresAt: null,
               scopes: tokens.scopes || [],
               // SECURITY: encrypt the long-lived user token at rest in metadata
@@ -356,7 +414,11 @@ export async function GET(
           organizationId,
           "FACEBOOK",
           pages.map((p) => p.id),
-          "Facebook"
+          "Facebook",
+          // The resolved app id — NOT channelMetaAppId, which is null for the
+          // legacy app. The scope helper needs the real id so it can expand
+          // the legacy case to "metaAppId IS NULL OR = <legacy id>".
+          metaCreds!.appId
         );
       }
 
@@ -392,6 +454,12 @@ export async function GET(
           update: {
             accessToken: tokens.accessToken,
             refreshToken: tokens.refreshToken || null,
+            // ⚠️ Same rule as the Facebook upsert, and the consequence here is
+            // worse: IG stores the raw USER token, so a wrong-app resolution
+            // feeds an app-B user token into app A's fb_exchange_token refresh.
+            // That failure reads like the 90-day data-access cliff rather than
+            // an app mismatch, which is a long debugging detour.
+            metaAppId: channelMetaAppId,
             tokenExpiresAt: tokens.expiresAt || null,
             scopes: tokens.scopes || [],
             name: ig.name,
@@ -412,6 +480,7 @@ export async function GET(
             avatar: ig.avatar || null,
             accessToken: tokens.accessToken,
             refreshToken: tokens.refreshToken || null,
+            metaAppId: channelMetaAppId,
             tokenExpiresAt: tokens.expiresAt || null,
             scopes: tokens.scopes || [],
             metadata: { igUserId: ig.id, ...metaWindowMeta },
@@ -428,7 +497,8 @@ export async function GET(
         organizationId,
         "INSTAGRAM",
         igAccounts.map((a) => a.id),
-        "Instagram"
+        "Instagram",
+        metaCreds!.appId
       );
 
       return NextResponse.redirect(

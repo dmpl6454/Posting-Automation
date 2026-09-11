@@ -1,6 +1,6 @@
 import { Worker, type Job } from "bullmq";
 import { prisma } from "@postautomation/db";
-import { getSocialProvider } from "@postautomation/social";
+import { getSocialProvider, isMetaPlatform, resolveMetaCredentials } from "@postautomation/social";
 import { QUEUE_NAMES, type TokenRefreshJobData, createRedisConnection } from "@postautomation/queue";
 
 export function createTokenRefreshWorker() {
@@ -21,9 +21,30 @@ export function createTokenRefreshWorker() {
 
       const provider = getSocialProvider(platform as any);
       const platformEnvPrefix = platform.toUpperCase();
+
+      // A Meta token can only be refreshed by the app that minted it, so
+      // resolve from the CHANNEL's app rather than from ambient env. NULL
+      // metaAppId ⇒ the legacy pair, byte-identical to the old read. Every
+      // non-Meta platform keeps the exact `${PREFIX}_CLIENT_ID` lookup.
+      const metaCreds = isMetaPlatform(platformEnvPrefix)
+        ? resolveMetaCredentials(platformEnvPrefix, channel.metaAppId)
+        : null;
+
+      if (isMetaPlatform(platformEnvPrefix) && !metaCreds) {
+        // Refusing is correct: refreshing with another app's secret cannot
+        // succeed, and silently trying would bury a config error in a
+        // token-expiry-shaped failure.
+        console.error(
+          `[TokenRefresh] Channel ${channelId} is on Meta app ${channel.metaAppId ?? "(legacy)"}, ` +
+            `which is not configured on this server — skipping refresh`
+        );
+        return;
+      }
+
       const config = {
-        clientId: process.env[`${platformEnvPrefix}_CLIENT_ID`] || "",
-        clientSecret: process.env[`${platformEnvPrefix}_CLIENT_SECRET`] || "",
+        clientId: metaCreds?.clientId ?? process.env[`${platformEnvPrefix}_CLIENT_ID`] ?? "",
+        clientSecret:
+          metaCreds?.clientSecret ?? process.env[`${platformEnvPrefix}_CLIENT_SECRET`] ?? "",
         callbackUrl: `${process.env.APP_URL}/api/oauth/callback/${platform.toLowerCase()}`,
         scopes: [],
       };
