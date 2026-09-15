@@ -277,9 +277,17 @@ const MEDIA_REQUIRED_LABEL: Record<string, string> = {
  * Human-readable FAILED reason for a post that hit the media-required wall in the
  * worker (no media attached and AI auto-generation didn't produce an image).
  * Used by the worker's `media_required` error branch.
+ *
+ * ⚠️ A STORY gets its own copy. The worker deliberately skips AI auto-generation
+ * for STORY targets (a story is the user's own media), so "enable AI image
+ * generation" is a remedy that can never work there. The non-story string is
+ * unchanged byte for byte.
  */
-export function mediaRequiredReason(platform: string): string {
+export function mediaRequiredReason(platform: string, opts: { isStory?: boolean } = {}): string {
   const label = MEDIA_REQUIRED_LABEL[platform] ?? platform;
+  if (opts.isStory) {
+    return `This ${label} story has no image or video attached. Attach an image or video to the post and retry.`;
+  }
   return `${label} requires an image or video; none was attached and AI generation is off or unavailable. Attach media (or enable AI image generation) and retry.`;
 }
 

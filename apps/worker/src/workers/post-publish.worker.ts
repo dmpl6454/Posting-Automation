@@ -715,7 +715,7 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
           mediaUrls.length === 0 &&
           mediaRequiredPlatforms.includes(platform)
         ) {
-          const reason = mediaRequiredReason(platform);
+          const reason = mediaRequiredReason(platform, { isStory: isStoryTarget });
           await markTargetFailed(prisma, postTargetId, reason);
           throw new UnrecoverableError(reason);
         }
@@ -932,7 +932,7 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
           // guard would then skip it as a duplicate and orphan it at PUBLISHING.
           // Mark FAILED here with a clear human reason so the user knows to attach
           // media or enable AI image generation.
-          const reason = mediaRequiredReason(platform);
+          const reason = mediaRequiredReason(platform, { isStory: isStoryTarget });
           await markTargetFailed(prisma, postTargetId, reason);
           throw new UnrecoverableError(reason);
         } else if (errType === "content_too_large") {

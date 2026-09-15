@@ -64,6 +64,35 @@ describe("mediaRequiredReason", () => {
   it("falls back to the raw platform for an unmapped platform", () => {
     expect(mediaRequiredReason("THREADS")).toContain("THREADS");
   });
+
+  it("keeps the non-story reason byte-identical", () => {
+    expect(mediaRequiredReason("INSTAGRAM")).toBe(
+      "Instagram requires an image or video; none was attached and AI generation is off or unavailable. Attach media (or enable AI image generation) and retry."
+    );
+    expect(mediaRequiredReason("INSTAGRAM", { isStory: false })).toBe(mediaRequiredReason("INSTAGRAM"));
+  });
+
+  it("never advises AI image generation for a STORY — the worker never generates one", () => {
+    // post-publish.worker.ts skips AI auto-generation for STORY targets on
+    // purpose (a story is the user's own media), so the generic remedy
+    // "enable AI image generation" could never work and would mislead.
+    const msg = mediaRequiredReason("INSTAGRAM", { isStory: true });
+    expect(msg).toContain("Instagram story");
+    expect(msg.toLowerCase()).toContain("attach");
+    expect(msg.toLowerCase()).not.toMatch(/\bai\b/);
+    expect(msg.toLowerCase()).not.toContain("generat");
+  });
+
+  it("the worker passes the story flag at BOTH media-required call sites", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    // Comments stripped so an explanatory note quoting the old call cannot satisfy or fail this.
+    const src = readFileSync(join(__dirname, "../workers/post-publish.worker.ts"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+    expect(src.match(/mediaRequiredReason\(platform, \{ isStory: isStoryTarget \}\)/g)).toHaveLength(2);
+    expect(src).not.toMatch(/mediaRequiredReason\(platform\)/);
+  });
 });
 
 describe("terminalizeStuckClaim", () => {

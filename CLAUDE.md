@@ -852,6 +852,10 @@ user's story never goes out. Instead:
 - **No AI auto-image for a STORY.** The worker's media-required auto-generation is skipped: a
   story is the user's own media, and inventing one is the product publishing content nobody
   asked for. Media-less ⇒ the provider's own clear error.
+  ⚠️ That is also why `mediaRequiredReason(platform, { isStory })` has its own STORY copy: the
+  generic "enable AI image generation" remedy can never work for a story. Both worker call sites
+  pass `isStoryTarget`; the non-story string is byte-identical (test-locked in
+  [publish-recovery.test.ts](apps/worker/src/lib/publish-recovery.test.ts)).
 - **A private/non-existent tagged account fails container creation for every channel at once.**
   It is PRE-write (duplicate-safe) and now surfaces as an actionable message naming the tags.
 - **`post.update` CARRIES `format`** onto recreated targets. It used to select only `channelId`
@@ -946,9 +950,13 @@ Tests: [instagram-story.test.ts](packages/social/src/__tests__/instagram-story.t
 [story-ui-contract.test.ts](apps/web/lib/story-ui-contract.test.ts) (25).
 Design: [docs/superpowers/specs/2026-09-15-instagram-stories-design.md](docs/superpowers/specs/2026-09-15-instagram-stories-design.md).
 
-⚠️ **NOT yet verified against a live Instagram account.** Implemented and unit-tested against
-the documented contract; no story has been published from this branch, and the local Docker
-daemon was unresponsive so the browser walk-through did not run.
+**Deployed to prod 2026-09-15** (PR #186, `b08f029`). Before merge the story analytics exclusion
+was run against real Postgres (rolled-back transaction): null-format rows kept, a fresh story kept,
+a 30h story dropped, and `IS DISTINCT FROM 'STORY'` valid on the enum column — while the rejected
+bare `NOT` form really did drop a 5-day null-format row.
+
+⚠️ **NOT yet verified against a live Instagram account.** No story has been published through prod
+yet and no browser walk-through has run. The first real story publish is the remaining proof.
 
 ## 🖼️ Custom uploaded THUMBNAILS for reels/videos (2026-09-01) — read before touching a video publish path
 
