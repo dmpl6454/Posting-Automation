@@ -44,8 +44,21 @@ export type StoryMediaKind = "IMAGE" | "VIDEO";
 export interface StoryContainerCheckpoint {
   /** Meta container id (`creation_id`). */
   id: string;
-  /** ISO timestamp of container creation — the floor for identifying the media. */
+  /**
+   * TRUE creation time. Used ONLY for the container's AGE (the 24h lifetime).
+   *
+   * ⚠️ Must never be back-dated: an early value makes an old container read as
+   * expired minutes before the story made from it actually expires — and
+   * "expired" is the one verdict that permits creating a second container.
+   */
   createdAt: string;
+  /**
+   * Deliberately BACK-DATED floor for identifying the story on `/stories`, so a
+   * story's own Meta timestamp can never sort before it. Opposite safety
+   * direction from `createdAt`, which is why they are two fields. Absent on
+   * checkpoints written before the split ⇒ fall back to `createdAt`.
+   */
+  windowStart?: string;
   kind: StoryMediaKind;
 }
 
@@ -183,11 +196,12 @@ export function readStoryContainerCheckpoint(
 ): StoryContainerCheckpoint | null {
   const raw = (metadata as { igStoryContainer?: unknown } | null | undefined)?.igStoryContainer;
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const { id, createdAt, kind } = raw as Record<string, unknown>;
+  const { id, createdAt, windowStart, kind } = raw as Record<string, unknown>;
   if (typeof id !== "string" || !id) return null;
   if (typeof createdAt !== "string" || Number.isNaN(new Date(createdAt).getTime())) return null;
   if (kind !== "IMAGE" && kind !== "VIDEO") return null;
-  return { id, createdAt, kind };
+  const validWindow = typeof windowStart === "string" && !Number.isNaN(new Date(windowStart).getTime());
+  return { id, createdAt, ...(validWindow ? { windowStart: windowStart as string } : {}), kind };
 }
 
 export type ContainerDisposition =

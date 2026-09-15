@@ -787,11 +787,13 @@ ${content}`;
         description: `${removed} non-Instagram channel${removed === 1 ? "" : "s"} removed — stories publish only to Instagram.`,
       });
     }
-    // The platform pills are hidden in story mode, so a filter left over from
-    // Post mode would be unclearable and could empty the list entirely.
-    setPlatformFilter(null);
-    // A story displays no caption, so per-channel caption generation is moot.
-    setUniqueCaptions(false);
+    // ⚠️ Deliberately NOT resetting platformFilter or uniqueCaptions here. Both
+    // are already neutralised wherever story mode reads them (the list uses
+    // `isStoryMode ? null : platformFilter`; the payload and the captions card
+    // both check `!isStoryMode`). Resetting them only destroyed the user's
+    // Post-mode choices on the way back — and because this line sat after the
+    // `!channels` early return, the same click did it or not depending on
+    // whether the channel query had resolved.
   };
 
   const commitMentionInput = () => {
@@ -2473,9 +2475,11 @@ ${content}`;
               {isUploading ? "Uploading..." : isStoryMode ? "Publish story" : "Publish Now"}
             </Button>
           </div>
-          {youtubeBlockReason && (
+          {/* The disabled buttons explain themselves only through `title`, which a
+              touch device never shows — so the same predicate is rendered here. */}
+          {(youtubeBlockReason || storyBlock) && (
             <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-300">
-              {youtubeBlockReason}
+              {youtubeBlockReason ?? storyBlock}
             </div>
           )}
           </>

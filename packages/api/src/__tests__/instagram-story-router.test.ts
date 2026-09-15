@@ -76,15 +76,21 @@ describe("post.update — a story stays a story", () => {
     expect(postRouter).toMatch(/format: formatForReplacedTarget\(channelId, existing\.targets, isStoryPost\) as any/);
   });
 
-  it("detects a story by EITHER marker — the mode block or an existing STORY target", () => {
-    // The per-channel picker route predates story mode and writes no marker.
-    expect(postRouter).toMatch(
-      /isStoryModeMetadata\(existing\.metadata\) \|\| existing\.targets\.some\(\(t\) => t\.format === "STORY"\)/
-    );
+  it("keys story rules on the story-MODE marker ONLY, never on a STORY target", () => {
+    // A per-channel picker post (IG set to Story beside a Facebook Page) carries
+    // STORY targets without being a story post. Treating it as one blocked every
+    // Retry and every channel edit, with no way out.
+    expect(postRouter).toMatch(/const isStoryPost = isStoryModeMetadata\(existing\.metadata\);/);
+    expect(postRouter).not.toMatch(/isStoryModeMetadata\(existing\.metadata\) \|\| existing\.targets\.some/);
+    expect(postRouter).toMatch(/if \(isStoryModeMetadata\(post\.metadata\)\) \{/);
+    expect(postRouter).not.toMatch(/isStoryModeMetadata\(post\.metadata\) \|\| post\.targets\.some/);
   });
 
-  it("re-checks Instagram-only channels on the Add-channel path", () => {
-    expect(postRouter).toMatch(/if \(isStoryPost\) \{\s*const storyError = validateStoryPost/);
+  it("validates a story on EITHER route — channel replacement OR scheduling", () => {
+    // It used to be nested under channelIds, so scheduling a media-less story
+    // draft from the post page passed and failed minutes later.
+    expect(postRouter).toMatch(/if \(isStoryPost && \(channelIds \|\| effectiveScheduledAt\)\) \{/);
+    expect(postRouter).toMatch(/scheduling: !!effectiveScheduledAt/);
   });
 
   it("allows empty content on a story but keeps the rule for everything else", () => {
@@ -112,5 +118,27 @@ describe("analytics — expired stories are not measured", () => {
     // IS DISTINCT FROM, never <> — nearly every legacy target has format NULL.
     expect(analyticsRouter).toMatch(/pt\.format IS DISTINCT FROM 'STORY'/);
     expect(analyticsRouter).toMatch(/\$\{storyAtAgeFilter\}/);
+  });
+});
+
+describe("bulk.bulkSchedule — a story without exactly one media is skipped, not armed", () => {
+  // ⚠️ Comments stripped: the router's header doc quotes `status: "SCHEDULED"`
+  // ABOVE the procedure, so a raw indexOf finds the documentation, not the write.
+  const bulkRouter = readFileSync(join(ROOT, "packages/api/src/routers/bulk.router.ts"), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+
+  it("checks the story-MODE marker and the media count before flipping anything", () => {
+    expect(bulkRouter).toMatch(/isStoryModeMetadata\(post\.metadata\) && post\._count\.mediaAttachments !== 1/);
+    const procedure = bulkRouter.indexOf("bulkSchedule: orgProcedure");
+    const guard = bulkRouter.indexOf("isStoryModeMetadata(post.metadata)", procedure);
+    const flip = bulkRouter.indexOf('status: "SCHEDULED"', procedure);
+    expect(procedure).toBeGreaterThan(-1);
+    expect(guard).toBeGreaterThan(procedure);
+    expect(guard).toBeLessThan(flip);
+  });
+
+  it("reports how many were skipped instead of skipping silently", () => {
+    expect(bulkRouter).toMatch(/return \{ scheduled, skippedStories \}/);
   });
 });

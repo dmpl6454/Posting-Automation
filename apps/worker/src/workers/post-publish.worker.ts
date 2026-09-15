@@ -564,8 +564,14 @@ export function createPostPublishWorker() {
        * incident reached from a new direction.
        *
        * Written to BOTH the row (survives this job) and the in-memory metadata (so
-       * a later attempt inside THIS job sees it). Best-effort by contract: a
-       * checkpoint write must never fail a publish that can still succeed.
+       * a later attempt inside THIS job sees it).
+       *
+       * ⚠️ RETHROWS. It is tempting to swallow this as best-effort, but the
+       * checkpoint is the ONLY thing standing between a lost DB write and a
+       * SECOND live story, and the two writes share this client and this
+       * database — so they fail together exactly when it matters. Nothing has
+       * been sent to Instagram at this point, so aborting here cannot duplicate;
+       * it costs one orphaned container that Meta expires in 24h.
        */
       const onCheckpoint = async (patch: Record<string, unknown>) => {
         Object.assign(providerMetadata, patch);
@@ -582,6 +588,7 @@ export function createPostPublishWorker() {
           });
         } catch (err: any) {
           console.warn(`[PostPublish] checkpoint write failed for target ${postTargetId}: ${err?.message}`);
+          throw err;
         }
       };
 

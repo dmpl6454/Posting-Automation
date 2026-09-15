@@ -14,6 +14,7 @@ describe("normalizeStoryMentions", () => {
     expect(normalizeStoryMentions([" @NatGeo ", "natgeo", "nasa"])).toEqual({
       mentions: ["NatGeo", "nasa"],
       invalid: [],
+      dropped: 0,
     });
   });
 
@@ -21,18 +22,22 @@ describe("normalizeStoryMentions", () => {
     expect(normalizeStoryMentions(["ok", "not ok", "bad-dash", "a".repeat(31)])).toEqual({
       mentions: ["ok"],
       invalid: ["not ok", "bad-dash", "a".repeat(31)],
+      dropped: 0,
     });
   });
 
-  it("reports the overflow past STORY_MAX_MENTIONS rather than truncating quietly", () => {
-    const many = Array.from({ length: STORY_MAX_MENTIONS + 1 }, (_, i) => `u${i}`);
+  it("counts the overflow as DROPPED — a valid 21st username is not 'invalid'", () => {
+    // Reporting it as invalid printed "These aren't valid Instagram usernames"
+    // over perfectly well-formed names.
+    const many = Array.from({ length: STORY_MAX_MENTIONS + 3 }, (_, i) => `u${i}`);
     const r = normalizeStoryMentions(many);
     expect(r.mentions).toHaveLength(STORY_MAX_MENTIONS);
-    expect(r.invalid).toEqual([`u${STORY_MAX_MENTIONS}`]);
+    expect(r.invalid).toEqual([]);
+    expect(r.dropped).toBe(3);
   });
 
   it("ignores blank entries", () => {
-    expect(normalizeStoryMentions(["", "  ", "ok"])).toEqual({ mentions: ["ok"], invalid: [] });
+    expect(normalizeStoryMentions(["", "  ", "ok"])).toEqual({ mentions: ["ok"], invalid: [], dropped: 0 });
   });
 });
 
@@ -136,13 +141,15 @@ describe("formatForReplacedTarget", () => {
     expect(formatForReplacedTarget("c", existing, false)).toBe("REEL");
   });
 
-  it("gives a NEW channel STORY on a story post, and nothing otherwise", () => {
+  it("gives a NEW channel STORY on a story-MODE post, and nothing otherwise", () => {
     expect(formatForReplacedTarget("new", existing, true)).toBe("STORY");
     expect(formatForReplacedTarget("new", existing, false)).toBeNull();
   });
 
-  it("repairs a kept channel that lost its format on an earlier edit of a story post", () => {
-    expect(formatForReplacedTarget("b", existing, true)).toBe("STORY");
+  it("NEVER promotes a kept channel's null format — that would turn a Reel into a Story", () => {
+    // On a picker post, channel B left at the default (Reel) has format null.
+    // Adding another channel must not silently republish B as a 24h story.
+    expect(formatForReplacedTarget("b", existing, true)).toBeNull();
     expect(formatForReplacedTarget("b", existing, false)).toBeNull();
   });
 });

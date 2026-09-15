@@ -16,8 +16,11 @@ export interface SocialPostPayload {
    * worker merges the patch into `PostTarget.metadata` and into the in-memory
    * provider metadata.
    *
-   * Best-effort by contract: the provider must never fail a publish because the
-   * checkpoint could not be stored, and every other provider ignores it.
+   * ⚠️ NOT best-effort. The implementation must REJECT if the fact could not be
+   * stored, and the provider must let that rejection abort the publish. For a
+   * story the checkpoint is the ONLY duplicate guard, so continuing without it
+   * risks a second live story — whereas failing here is completely safe, because
+   * nothing has been sent to the platform yet. Every other provider ignores it.
    */
   onCheckpoint?: (patch: Record<string, unknown>) => void | Promise<void>;
 }

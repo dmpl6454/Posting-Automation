@@ -169,3 +169,21 @@ describe("self-review fixes", () => {
     expect(compose).not.toMatch(/PlatformIcon platform="INSTAGRAM" size="sm"/);
   });
 });
+
+describe("diff-review fixes", () => {
+  it("does NOT reset the Post-mode platform filter or captions toggle on the mode switch", () => {
+    // The render already ignores both in story mode. Resetting them only
+    // destroyed state — and did so or not depending on channel-query timing.
+    const handler = compose.slice(
+      compose.indexOf("const switchPostType ="),
+      compose.indexOf("const commitMentionInput =")
+    );
+    expect(handler).not.toMatch(/setPlatformFilter\(/);
+    expect(handler).not.toMatch(/setUniqueCaptions\(/);
+  });
+
+  it("renders the story blocker VISIBLY, not only as a title tooltip", () => {
+    expect(compose).toMatch(/\{\(youtubeBlockReason \|\| storyBlock\) && \(/);
+    expect(compose).toMatch(/\{youtubeBlockReason \?\? storyBlock\}/);
+  });
+});

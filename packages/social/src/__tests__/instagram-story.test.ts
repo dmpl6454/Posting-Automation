@@ -146,6 +146,13 @@ describe("readStoryContainerCheckpoint", () => {
     expect(readStoryContainerCheckpoint({ igStoryContainer: good })).toEqual(good);
   });
 
+  it("keeps a valid windowStart and drops a malformed one", () => {
+    expect(
+      readStoryContainerCheckpoint({ igStoryContainer: { ...good, windowStart: "2026-09-15T09:58:00.000Z" } })
+    ).toEqual({ ...good, windowStart: "2026-09-15T09:58:00.000Z" });
+    expect(readStoryContainerCheckpoint({ igStoryContainer: { ...good, windowStart: "nope" } })).toEqual(good);
+  });
+
   it("returns null for anything malformed rather than throwing", () => {
     for (const bad of [
       undefined,

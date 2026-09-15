@@ -19,9 +19,15 @@ export const storyInputSchema = z.object({
 });
 export type StoryInput = z.infer<typeof storyInputSchema>;
 
-export function normalizeStoryMentions(raw: string[]): { mentions: string[]; invalid: string[] } {
+/**
+ * `invalid` = entries that fail the username rule. `dropped` = well-formed
+ * entries past the cap. Kept apart so a valid username is never reported as
+ * "not a valid Instagram username" just because it was the 21st.
+ */
+export function normalizeStoryMentions(raw: string[]): { mentions: string[]; invalid: string[]; dropped: number } {
   const mentions: string[] = [];
   const invalid: string[] = [];
+  let dropped = 0;
   const seen = new Set<string>();
   for (const item of raw) {
     const username = item.trim().replace(/^@/, "");
@@ -33,13 +39,13 @@ export function normalizeStoryMentions(raw: string[]): { mentions: string[]; inv
     const key = username.toLowerCase();
     if (seen.has(key)) continue;
     if (mentions.length >= STORY_MAX_MENTIONS) {
-      invalid.push(item.trim());
+      dropped++;
       continue;
     }
     seen.add(key);
     mentions.push(username);
   }
-  return { mentions, invalid };
+  return { mentions, invalid, dropped };
 }
 
 /**
@@ -132,15 +138,22 @@ export function sanitizeFormatByChannelId(
  * ⚠️ `post.update` used to drop `format` for EVERY target: it selected only
  * `channelId` and recreated rows with `channelId` + `status`. So adding one
  * channel from the post detail page silently re-targeted a Story as a REEL
- * (the provider's default when no format is present). Kept channels keep what
- * they had; new channels inherit STORY on a story post and nothing otherwise.
+ * (the provider's default when no format is present).
+ *
+ * A KEPT channel keeps EXACTLY what it had — never an inferred upgrade. A null
+ * there is the user's choice (the picker's default is Reel), and promoting it to
+ * STORY would silently turn a Reel into a 24-hour story. Only a NEW channel gets
+ * a default, and only on a story-MODE post, where every target is STORY anyway.
+ *
+ * @param isStoryModePost the `metadata.instagramStory` marker — NOT "some target
+ *   happens to be STORY", which is also true of per-channel picker posts.
  */
 export function formatForReplacedTarget(
   channelId: string,
   existingTargets: Array<{ channelId: string; format: string | null }>,
-  isStoryPost: boolean
+  isStoryModePost: boolean
 ): string | null {
   const kept = existingTargets.find((t) => t.channelId === channelId);
-  if (kept) return kept.format ?? (isStoryPost ? "STORY" : null);
-  return isStoryPost ? "STORY" : null;
+  if (kept) return kept.format;
+  return isStoryModePost ? "STORY" : null;
 }

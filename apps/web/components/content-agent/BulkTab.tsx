@@ -88,7 +88,15 @@ function BulkScheduleSection() {
     onSuccess: (result) => {
       toast({
         title: "Scheduled",
-        description: `${result.scheduled} post(s) scheduled successfully.`,
+        description:
+          `${result.scheduled} post(s) scheduled successfully.` +
+          // A story needs exactly one image or video; those are skipped, not
+          // silently scheduled to fail.
+          ((result as { skippedStories?: number }).skippedStories
+            ? ` ${(result as { skippedStories?: number }).skippedStories} Instagram stor${
+                (result as { skippedStories?: number }).skippedStories === 1 ? "y was" : "ies were"
+              } skipped — a story needs exactly one image or video.`
+            : ""),
       });
       setSelectedIds(new Set());
       setScheduledAt("");

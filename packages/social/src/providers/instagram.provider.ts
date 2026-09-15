@@ -262,18 +262,14 @@ export class InstagramProvider extends SocialProvider {
     const checkpoint = readStoryContainerCheckpoint(payload.metadata);
     if (checkpoint && checkpoint.kind === kind) {
       const disposition = await this.readContainerDisposition(tokens, checkpoint.id, checkpoint.createdAt);
+      // ⚠️ `windowStart`, not `createdAt`: identification needs the back-dated
+      // window so a story's own Meta timestamp cannot sort before it.
+      const resumeWindow = new Date(checkpoint.windowStart ?? checkpoint.createdAt);
       if (disposition === "published") {
         console.warn(
           `[Instagram] story container ${checkpoint.id} is already PUBLISHED on ${igUserId} — adopting it instead of publishing again`
         );
-        return this.identifyPublishedStory(
-          tokens,
-          igUserId,
-          new Date(checkpoint.createdAt),
-          kind,
-          channelUsername,
-          checkpoint.id
-        );
+        return this.identifyPublishedStory(tokens, igUserId, resumeWindow, kind, channelUsername, checkpoint.id);
       }
       if (disposition === "reusable") {
         console.warn(
@@ -288,7 +284,7 @@ export class InstagramProvider extends SocialProvider {
         return this.publishContainer(tokens, igUserId, checkpoint.id, payload.content, {
           mediaKind: kind,
           channelUsername,
-          containerCreatedAt: new Date(checkpoint.createdAt),
+          containerCreatedAt: resumeWindow,
         });
       }
       // "dead" — the container errored or expired, so a fresh one is safe.
@@ -341,15 +337,34 @@ export class InstagramProvider extends SocialProvider {
       throw err;
     }
 
-    // Checkpoint BEFORE publishing — this is the whole point. Best-effort by
-    // contract: losing the checkpoint must not fail a publish that can still
-    // succeed, it only costs the retry its resume information.
+    // Checkpoint BEFORE publishing — this is the whole point, and it is NOT
+    // best-effort.
+    //
+    // ⚠️ A failure here must ABORT, not warn. This record is the only thing that
+    // lets a later attempt discover container C1 instead of creating C2, so
+    // publishing without it means a lost DB write downstream (same client, same
+    // database, correlated failure) leaves a live story no retry can ever find —
+    // and the retry then posts a second one. Aborting costs one orphaned
+    // container that Meta expires in 24h, and cannot duplicate anything, because
+    // nothing has been sent to Instagram yet.
+    //
+    // `createdAt` is the TRUE creation time (used for the container's age);
+    // `windowStart` is the deliberately back-dated identification window. They
+    // must stay separate — see readContainerDisposition.
     try {
       await payload.onCheckpoint?.({
-        igStoryContainer: { id: containerId, createdAt: containerCreatedAt.toISOString(), kind },
+        igStoryContainer: {
+          id: containerId,
+          createdAt: new Date().toISOString(),
+          windowStart: containerCreatedAt.toISOString(),
+          kind,
+        },
       });
     } catch (err) {
-      console.warn(`[Instagram] story container checkpoint failed for ${containerId}: ${(err as Error).message}`);
+      throw new Error(
+        `Could not record the Instagram story container ${containerId} — refusing to publish a story that a retry could not find. ` +
+          `Nothing was sent to Instagram. Cause: ${(err as Error)?.message}`
+      );
     }
 
     await this.waitForMediaReady(

@@ -127,8 +127,18 @@ describe("Instagram story containers", () => {
     // The container id is checkpointed BEFORE publishing — that is what makes a
     // retry resumable instead of duplicating.
     expect(checkpoints).toEqual([
-      { igStoryContainer: { id: "container-1", createdAt: expect.any(String), kind: "IMAGE" } },
+      {
+        igStoryContainer: {
+          id: "container-1",
+          createdAt: expect.any(String),
+          windowStart: expect.any(String),
+          kind: "IMAGE",
+        },
+      },
     ]);
+    // createdAt is the TRUE creation time; windowStart is deliberately earlier.
+    const cp = checkpoints[0].igStoryContainer;
+    expect(new Date(cp.windowStart).getTime()).toBeLessThan(new Date(cp.createdAt).getTime());
   });
 
   it("image story without mentions sends no user_tags key at all", async () => {
@@ -264,6 +274,77 @@ describe("Instagram story containers", () => {
         }
       )
     ).rejects.toThrow(/@ghostuser.*public/s);
+  });
+});
+
+describe("Instagram story checkpoint is FATAL pre-write, never best-effort", () => {
+  it("aborts BEFORE publishing when the container id cannot be recorded", async () => {
+    // The checkpoint is the only thing that lets a retry find this container. If
+    // it is lost and the PUBLISHED write downstream fails too (same client, same
+    // database), a retry would post a second live story. Aborting here is safe:
+    // nothing has been sent to Instagram yet.
+    const calls = happyGraph();
+    instantSleep();
+
+    await expect(
+      new InstagramProvider().publishPost(
+        { accessToken: "t" },
+        {
+          content: "",
+          mediaUrls: ["https://cdn.example.com/a.jpg"],
+          mediaTypes: ["image/jpeg"],
+          metadata: { igUserId: IG_USER, format: "STORY", instagramStory: { mentions: [] } },
+          onCheckpoint: async () => {
+            throw new Error("connection pool exhausted");
+          },
+        }
+      )
+    ).rejects.toThrow(/Could not record the Instagram story container container-1.*Nothing was sent to Instagram/s);
+
+    expect(calls.some((c) => c.url.includes("media_publish"))).toBe(false);
+  });
+
+  it("identifies a resumed story using windowStart, not the true creation time", async () => {
+    // The story's own Meta timestamp can precede the recorded createdAt; the
+    // back-dated window is what guarantees it is not filtered out.
+    const createdAt = new Date(Date.now() - 60_000);
+    const windowStart = new Date(createdAt.getTime() - 120_000);
+    const storyTimestamp = new Date(createdAt.getTime() - 30_000); // between the two
+
+    mockGraph((url) => {
+      if (url.includes("/container-1?fields=status_code")) return { ok: true, body: { status_code: "PUBLISHED" } };
+      if (url.includes(`/${IG_USER}/stories`)) {
+        return {
+          ok: true,
+          body: { data: [{ id: "4242", timestamp: storyTimestamp.toISOString(), media_type: "IMAGE" }] },
+        };
+      }
+      return { ok: true, body: {} };
+    });
+    instantSleep();
+
+    const res = await new InstagramProvider().publishPost(
+      { accessToken: "t" },
+      {
+        content: "",
+        mediaUrls: ["https://cdn.example.com/a.jpg"],
+        mediaTypes: ["image/jpeg"],
+        metadata: {
+          igUserId: IG_USER,
+          format: "STORY",
+          channelUsername: "acct",
+          igStoryContainer: {
+            id: "container-1",
+            createdAt: createdAt.toISOString(),
+            windowStart: windowStart.toISOString(),
+            kind: "IMAGE",
+          },
+        },
+      }
+    );
+    // With createdAt as the floor this story would have been excluded and the
+    // result reported as unresolved.
+    expect(res.platformPostId).toBe("4242");
   });
 });
 

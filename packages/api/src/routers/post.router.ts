@@ -183,7 +183,13 @@ export const postRouter = createRouter({
             code: "BAD_REQUEST",
             message:
               `These aren't valid Instagram usernames: ${norm.invalid.join(", ")}. ` +
-              `Use letters, numbers, dots or underscores (max 30 characters), up to ${20} people.`,
+              `Use letters, numbers, dots or underscores (max 30 characters).`,
+          });
+        }
+        if (norm.dropped > 0) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `You can tag up to 20 people on a story — remove ${norm.dropped}.`,
           });
         }
         storyMentions = norm.mentions;
@@ -587,11 +593,16 @@ export const postRouter = createRouter({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot edit published posts" });
       }
 
-      // Is this an Instagram Story post? Either marker counts: the story-mode
-      // block written by post.create, or a target already carrying STORY (the
-      // per-channel picker route, which predates story mode).
-      const isStoryPost =
-        isStoryModeMetadata(existing.metadata) || existing.targets.some((t) => t.format === "STORY");
+      // Is this a story-MODE post? Keyed on the marker ONLY.
+      //
+      // ⚠️ Deliberately NOT `|| targets.some(format === "STORY")`. The per-channel
+      // Reel/Story picker predates story mode and produces STORY targets on
+      // otherwise-ordinary posts — e.g. one Instagram channel set to Story beside
+      // a Facebook Page. Applying story rules to that post blocked every Retry
+      // ("Stories can only be published to Instagram channels. Remove: <FB page>")
+      // and every channel edit, with no way out. The provider already draws the
+      // same line (isStoryModePost vs isStoryFormat).
+      const isStoryPost = isStoryModeMetadata(existing.metadata);
 
       if (!isStoryPost && input.content !== undefined && input.content.trim().length === 0) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Content is required." });
@@ -614,17 +625,6 @@ export const postRouter = createRouter({
         if (ownedChannels.length !== new Set(channelIds).size) {
           throw new TRPCError({ code: "FORBIDDEN", message: "Some selected channels are no longer available. Please re-select your channels and try again." });
         }
-        // A story stays a story: Instagram-only channels, one media. Checked here
-        // as well as in create because the post detail page's "Add channel" is a
-        // second, one-click route into the same target rows.
-        if (isStoryPost) {
-          const storyError = validateStoryPost({
-            channels: ownedChannels,
-            mediaCount: existing._count.mediaAttachments,
-            scheduling: !!(input.scheduledAt !== undefined ? input.scheduledAt : existing.scheduledAt),
-          });
-          if (storyError) throw new TRPCError({ code: "BAD_REQUEST", message: storyError });
-        }
       }
 
       // Full-coverage media-required guard (closes the create-only gap): if this
@@ -635,6 +635,32 @@ export const postRouter = createRouter({
       // default (aiImages defaults true). Runs AFTER the channel IDOR check.
       const effectiveScheduledAt =
         input.scheduledAt !== undefined ? input.scheduledAt : existing.scheduledAt;
+
+      // A story stays a story. Runs on EITHER route that could break it — a
+      // channel replacement (the post detail page's one-click "Add channel") or
+      // an update that leaves the post scheduled.
+      //
+      // ⚠️ Not nested under `channelIds`. It used to be, so scheduling a
+      // media-less story draft from the post page sailed through; the media
+      // backstop (assertMediaForPlatforms) is dormant because aiImages defaults
+      // true, and the worker refuses to invent an image for a story — so the post
+      // was reported scheduled and failed minutes later.
+      if (isStoryPost && (channelIds || effectiveScheduledAt)) {
+        const storyChannels = await ctx.prisma.channel.findMany({
+          where: {
+            id: { in: channelIds ?? existing.targets.map((t) => t.channelId) },
+            organizationId: ctx.organizationId,
+          },
+          select: { id: true, platform: true, name: true },
+        });
+        const storyError = validateStoryPost({
+          channels: storyChannels,
+          mediaCount: existing._count.mediaAttachments,
+          scheduling: !!effectiveScheduledAt,
+        });
+        if (storyError) throw new TRPCError({ code: "BAD_REQUEST", message: storyError });
+      }
+
       if (effectiveScheduledAt) {
         const effectiveChannelIds = channelIds ?? existing.targets.map((t) => t.channelId);
         await assertMediaForPlatforms(ctx.prisma as any, ctx.organizationId, effectiveChannelIds, {
@@ -815,7 +841,10 @@ export const postRouter = createRouter({
       // A story needs exactly one image or video. The publish worker is still the
       // backstop (it refuses to invent an AI image for a story), but an upfront
       // message beats a target that fails minutes later.
-      if (isStoryModeMetadata(post.metadata) || post.targets.some((t) => t.format === "STORY")) {
+      // Story-MODE posts only — see the note in post.update. A per-channel picker
+      // post (one IG target set to Story beside other platforms) must stay
+      // retryable.
+      if (isStoryModeMetadata(post.metadata)) {
         const storyError = validateStoryPost({
           channels: post.targets.map((t) => ({
             id: t.channelId,

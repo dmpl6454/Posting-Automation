@@ -819,6 +819,17 @@ user's story never goes out. Instead:
 - `SocialPostPayload.onCheckpoint` (additive; only the IG story path calls it) persists the
   container id into `PostTarget.metadata` **BEFORE** publishing. The worker writes it to the row
   AND mutates `providerMetadata` in place, so a later attempt inside the SAME job sees it too.
+- 🔴 **The checkpoint is FATAL, never best-effort.** The worker's closure RETHROWS and
+  `publishStory` aborts before `media_publish` if it could not be stored. It first shipped as
+  best-effort, which silently defeated the whole guard: the checkpoint write and the later
+  `PUBLISHED` write share one Prisma client and one database, so they fail TOGETHER — leaving a
+  live story no retry can find, and the retry then posts a second one. Aborting at the checkpoint
+  is completely safe (nothing has been sent to Instagram); it costs one orphaned container.
+- ⚠️ The checkpoint stores **two timestamps with opposite safety directions**: `createdAt` is the
+  TRUE creation time and drives the container's 24h AGE; `windowStart` is deliberately
+  back-dated and drives story IDENTIFICATION. Using one back-dated value for both made a live
+  story's container read "expired" minutes early — and expired is the one verdict that permits a
+  second container.
 - On any retry `publishStory` asks Meta about THAT container: **`PUBLISHED`** ⇒ the story is
   live, identify it; anything usable ⇒ **re-publish the same `creation_id`** (single-use, so it
   cannot duplicate); only `ERROR`/`EXPIRED` earns a fresh container.
@@ -846,7 +857,22 @@ user's story never goes out. Instead:
 - **`post.update` CARRIES `format`** onto recreated targets. It used to select only `channelId`
   and recreate with `channelId + status`, so the post detail page's one-click "Add channel"
   silently republished a Story as a **REEL** (the provider's default). Pre-existing bug, fixed
-  here. New channels inherit STORY on a story post.
+  here. ⚠️ A KEPT target keeps **exactly** what it had — a null is the user's Reel, and
+  promoting it to STORY would silently turn a Reel into a 24-hour story. Only a NEW channel on a
+  story-MODE post gets STORY.
+- 🔴 **Server story rules key on the story-MODE marker ONLY** — never on
+  `targets.some(format === "STORY")`. `post.update`, `post.publishNow` and `bulk.bulkSchedule`
+  all use `isStoryModeMetadata`. It first shipped with the OR, and a per-channel picker post (one
+  Instagram channel set to Story beside a Facebook Page) then failed every Retry and every
+  channel edit with "Stories can only be published to Instagram channels. Remove: <FB page>" —
+  permanently, since the post page cannot remove channels. The provider already drew this line
+  (`isStoryModePost` vs `isStoryFormat`); the API now agrees with it.
+- A story is validated wherever it can be armed: `post.update` runs the check on channel
+  replacement **or** whenever the update leaves the post scheduled (it was nested under
+  `channelIds`, so scheduling a media-less story draft passed); `bulk.bulkSchedule` **skips and
+  counts** a story without exactly one media (returns `skippedStories`, surfaced in the toast)
+  instead of arming it to fail. `assertMediaForPlatforms` cannot cover this — it short-circuits
+  on the default `aiImages: true`, and the worker never generates an image for a story.
 - **`sanitizeFormatByChannelId`** filters the per-channel picker map at `post.create`. That map
   has ONE setter and is never pruned, so *attach video → pick Story → remove video → attach
   image → Publish* would have posted an image STORY from a normal post. Entries are DROPPED
@@ -891,7 +917,11 @@ user's story never goes out. Instead:
   members; a group with none renders no pill.
 - ⚠️ The platform filter is **IGNORED, not reset**, in story mode. The pills that clear it are
   hidden, so a leftover filter would empty the list unrecoverably — and resetting it would throw
-  away the user's Post-mode filter when they switch back.
+  away the user's Post-mode filter when they switch back. The mode-switch handler resets
+  **neither** it nor the unique-captions toggle (it first did both, after a `!channels` early
+  return, so the same click did or didn't depending on query timing).
+- The story blocker is rendered in the amber banner, not only in the buttons' `title` — a touch
+  device never shows a tooltip, so both buttons were disabled with no visible reason.
 - Hidden AND kept out of the payload: the per-channel Post Format card, unique captions, the
   carousel generator, "Create with AI", the AI image panel, the video cover. A cover already set
   in Post mode is **not even displayed** — showing it would promise something the publish drops.
@@ -906,14 +936,14 @@ user's story never goes out. Instead:
   "Instagram story", never a blank title. The post detail "Add channel" row offers Instagram
   channels only on a story post.
 
-Tests: [instagram-story.test.ts](packages/social/src/__tests__/instagram-story.test.ts) (20),
-[instagram-story-publish.test.ts](packages/social/src/__tests__/instagram-story-publish.test.ts) (18),
+Tests: [instagram-story.test.ts](packages/social/src/__tests__/instagram-story.test.ts) (21),
+[instagram-story-publish.test.ts](packages/social/src/__tests__/instagram-story-publish.test.ts) (20),
 [instagram-story-analytics.test.ts](packages/social/src/__tests__/instagram-story-analytics.test.ts) (6),
 [story-analytics.test.ts](packages/queue/src/__tests__/story-analytics.test.ts) (8),
 [instagram-story-create.test.ts](packages/api/src/__tests__/instagram-story-create.test.ts) (19),
-[instagram-story-router.test.ts](packages/api/src/__tests__/instagram-story-router.test.ts) (17),
+[instagram-story-router.test.ts](packages/api/src/__tests__/instagram-story-router.test.ts) (19),
 [instagram-story.test.ts](apps/web/lib/instagram-story.test.ts) (13),
-[story-ui-contract.test.ts](apps/web/lib/story-ui-contract.test.ts) (23).
+[story-ui-contract.test.ts](apps/web/lib/story-ui-contract.test.ts) (25).
 Design: [docs/superpowers/specs/2026-09-15-instagram-stories-design.md](docs/superpowers/specs/2026-09-15-instagram-stories-design.md).
 
 ⚠️ **NOT yet verified against a live Instagram account.** Implemented and unit-tested against
