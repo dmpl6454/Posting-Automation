@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
-import { analyticsSyncQueue, externalPostSyncQueue } from "@postautomation/queue";
+import { analyticsSyncQueue, externalPostSyncQueue, excludeExpiredStoriesWhere } from "@postautomation/queue";
 import { groupChannelsIntoAccounts } from "../lib/sync-accounts";
 import { externalPostFloor, externalPostFloorLabel } from "../lib/external-post-floor";
 import { insightsIncludeExternalPosts } from "../lib/insights-population";
@@ -555,6 +555,15 @@ async function fetchPostReportRows(
       ? `AND pt."publishedAt" >= $2`
       : `AND pt."publishedAt" <= $2`;
 
+  // An Instagram STORY only ever has a 24h checkpoint — it stops existing after
+  // that, so 7d/15d/30d checkpoints are never enqueued for one. Listing stories
+  // in those windows would print a permanent all-"—" row that reads exactly like
+  // a MISSED capture, which is the "a cap rendering as data" shape this codebase
+  // treats as a bug. `IS DISTINCT FROM` (not `<>`) so NULL formats — nearly every
+  // legacy target — are kept.
+  const storyAtAgeFilter =
+    mode === "at_age" && window !== "24h" ? `AND pt.format IS DISTINCT FROM 'STORY'` : "";
+
   // Snapshot selector: latest overall vs latest tagged at-age checkpoint.
   const snapshotFilter =
     mode === "current"
@@ -692,6 +701,7 @@ async function fetchPostReportRows(
        AND pt.status::text = 'PUBLISHED'
        AND pt."publishedAt" IS NOT NULL
        ${publishedAtFilter}
+       ${storyAtAgeFilter}
        ${platformFilterApp}
      ${externalUnion}
      ) combined
@@ -1533,6 +1543,11 @@ export const analyticsRouter = createRouter({
         status: "PUBLISHED",
         publishedId: { not: null },
         publishedAt: { gte: since },
+        // An Instagram story and its insights are gone 24h after publish. Without
+        // this, one "Sync Now" click enqueues a guaranteed-failing job for every
+        // expired story in the org — the same rule the worker's crons apply, from
+        // the same shared fragment so the two containers cannot disagree.
+        ...excludeExpiredStoriesWhere(new Date()),
         channel: {
           organizationId: ctx.organizationId,
           isActive: true,

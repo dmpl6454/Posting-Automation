@@ -4,6 +4,14 @@ import { createRouter, orgProcedure } from "../trpc";
 import { postPublishQueue, captionFanoutQueue, superTextQueue, enqueueScheduledPublishJobs, buildPublishNowJobId } from "@postautomation/queue";
 import { superTextMapSchema } from "@postautomation/super-text";
 import { planSuperText, superTextJobId, type SuperTextPlan } from "../lib/super-text";
+import {
+  storyInputSchema,
+  normalizeStoryMentions,
+  validateStoryPost,
+  isStoryModeMetadata,
+  sanitizeFormatByChannelId,
+  formatForReplacedTarget,
+} from "../lib/instagram-story";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import crypto from "crypto";
@@ -105,7 +113,10 @@ export const postRouter = createRouter({
   create: orgProcedure
     .input(
       z.object({
-        content: z.string().min(1),
+        // ⚠️ Not `.min(1)`. An Instagram STORY displays no caption, so its note is
+        // optional; every other post still requires content, enforced below so the
+        // message stays friendly instead of a raw zod string.
+        content: z.string(),
         contentVariants: z.record(z.string()).optional(),
         // Empty is allowed for channel-less DRAFTS (save now, pick channels
         // later on the post page). Scheduling still requires ≥1 channel —
@@ -129,6 +140,11 @@ export const postRouter = createRouter({
         // false / single-channel keeps today's shared-caption path untouched.
         uniqueCaptions: z.boolean().default(false),
         formatByChannelId: z.record(z.enum(["FEED", "REEL", "STORY", "SHORT", "VIDEO", "CAROUSEL"])).optional(),
+        // Instagram Story mode (2026-09-15). Its PRESENCE is what makes this a
+        // story post: every target is forced to format STORY, channels must all be
+        // Instagram, exactly one media is required to publish, and the mentions
+        // become `user_tags` on the STORIES container.
+        story: storyInputSchema.optional(),
         metadata: z.object({
           title: z.string().optional(),
           tags: z.array(z.string()).optional(),
@@ -153,6 +169,26 @@ export const postRouter = createRouter({
       // Enforce plan limit for posts per month
       await enforcePlanLimit(ctx.organizationId, "postsPerMonth", ctx.isSuperAdmin);
 
+      // Story mode. `content` is optional ONLY here — Instagram shows no caption
+      // on a story, so the note may be blank. Everything else keeps the old rule.
+      const isStory = !!input.story;
+      if (!isStory && input.content.trim().length === 0) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Content is required." });
+      }
+      let storyMentions: string[] = [];
+      if (input.story) {
+        const norm = normalizeStoryMentions(input.story.mentions);
+        if (norm.invalid.length > 0) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              `These aren't valid Instagram usernames: ${norm.invalid.join(", ")}. ` +
+              `Use letters, numbers, dots or underscores (max 30 characters), up to ${20} people.`,
+          });
+        }
+        storyMentions = norm.mentions;
+      }
+
       // Reject past scheduled dates (allow up to 60s in the past for clock skew)
       if (input.scheduledAt) {
         const scheduled = new Date(input.scheduledAt);
@@ -173,7 +209,7 @@ export const postRouter = createRouter({
         // post targeting it could never publish (the error copy below already
         // names this case).
         where: { id: { in: input.channelIds }, organizationId: ctx.organizationId, disconnectedAt: null },
-        select: { id: true, platform: true },
+        select: { id: true, platform: true, name: true },
       });
       if (ownedChannels.length !== new Set(input.channelIds).size) {
         // Identify which requested IDs are invalid (deleted, or belong to another
@@ -190,9 +226,23 @@ export const postRouter = createRouter({
         });
       }
 
+      // Story rules: Instagram-only channels, exactly one media to publish.
+      // Runs AFTER the ownership check so a foreign id is never named back.
+      if (isStory) {
+        const storyError = validateStoryPost({
+          channels: ownedChannels,
+          mediaCount: input.mediaIds?.length ?? 0,
+          scheduling: !!input.scheduledAt,
+        });
+        if (storyError) throw new TRPCError({ code: "BAD_REQUEST", message: storyError });
+      }
+
       // Reject any mediaId that doesn't belong to this organization.
       // Mirrors the channel ownership guard above — prevents a user from
       // attaching another org's Media row to their post (cross-org IDOR).
+      // Whether this post carries a video. Only meaningful alongside channels —
+      // it gates the per-channel format map (see sanitizeFormatByChannelId).
+      let hasVideoMedia = false;
       if (input.mediaIds?.length) {
         await assertMediaOwned(ctx.prisma as any, ctx.organizationId, input.mediaIds);
         // Early platform-constraint validation (owner-approved 2026-07-21):
@@ -205,6 +255,7 @@ export const postRouter = createRouter({
             where: { id: { in: input.mediaIds } },
             select: { fileName: true, fileType: true, fileSize: true, metadata: true },
           });
+          hasVideoMedia = mediaRows.some((r) => r.fileType.startsWith("video/"));
           const constraintError = validateVideoAgainstPlatforms(
             mediaRows.map((r) => ({ ...r, fileSize: Number(r.fileSize) })),
             [...new Set(ownedChannels.map((c) => c.platform as string))]
@@ -230,7 +281,9 @@ export const postRouter = createRouter({
       // per-channel captions; the worker flips DRAFT→SCHEDULED when done (or
       // degraded). Quota unchanged: 1 post = 1 unit regardless of caption count.
       const captionFanout = planCaptionFanout({
-        uniqueCaptions: input.uniqueCaptions,
+        // A story shows no caption, so per-channel caption generation would spend
+        // AI calls on text nobody ever sees.
+        uniqueCaptions: isStory ? false : input.uniqueCaptions,
         channelCount: input.channelIds.length,
         scheduledAt: input.scheduledAt ?? null,
       });
@@ -275,7 +328,12 @@ export const postRouter = createRouter({
       // fails the ENTIRE reel publish. An actionable error here beats a FAILED
       // target discovered minutes later.
       let videoThumbnail: { mediaId: string; url: string } | null = null;
-      const thumbMediaId = (input.metadata as any)?.videoThumbnail?.mediaId as string | undefined;
+      // Never for a story: Meta rejects `cover_url` on a STORIES container and
+      // that fails the whole publish. The provider gates on it too; this keeps a
+      // cover the user set in Post mode out of the row entirely.
+      const thumbMediaId = isStory
+        ? undefined
+        : ((input.metadata as any)?.videoThumbnail?.mediaId as string | undefined);
       if (thumbMediaId) {
         // Same org-scope guard the chat action path uses — a foreign mediaId must
         // never become a URL we hand to a platform.
@@ -332,10 +390,17 @@ export const postRouter = createRouter({
               // Stripped and replaced by the server-resolved reference below, so
               // the DB never carries a client-supplied URL.
               videoThumbnail: _rawThumb,
+              // ⚠️ Stripped too. `metadata` is `.passthrough()`, so without this a
+              // client could write the story marker directly and skip EVERY story
+              // check above (Instagram-only channels, one media, mention
+              // validation) while still being treated as a story downstream. The
+              // only writer is the `story` input below.
+              instagramStory: _rawStory,
               ...rest
             } = (input.metadata ?? {}) as Record<string, unknown>;
             const out: Record<string, unknown> = { ...rest };
             if (videoThumbnail) out.videoThumbnail = videoThumbnail;
+            if (isStory) out.instagramStory = { mentions: storyMentions };
             if (captionFanout.enabled) {
               out.captionFanout = {
                 requested: true,
@@ -353,11 +418,19 @@ export const postRouter = createRouter({
             return (Object.keys(out).length > 0 ? out : undefined) as any;
           })(),
           targets: {
-            create: input.channelIds.map((channelId) => ({
-              channelId,
-              status,
-              format: (input.formatByChannelId?.[channelId] ?? null) as any,
-            })),
+            create: (() => {
+              // Story mode forces STORY on every target. Otherwise the per-channel
+              // picker value survives only if it can be true — see
+              // sanitizeFormatByChannelId for the stale-picker trap it closes.
+              const formats = isStory
+                ? undefined
+                : sanitizeFormatByChannelId(input.formatByChannelId, ownedChannels, hasVideoMedia);
+              return input.channelIds.map((channelId) => ({
+                channelId,
+                status,
+                format: (isStory ? "STORY" : (formats?.[channelId] ?? null)) as any,
+              }));
+            })(),
           },
           ...(input.mediaIds?.length && {
             mediaAttachments: {
@@ -480,7 +553,11 @@ export const postRouter = createRouter({
     .input(
       z.object({
         id: z.string(),
-        content: z.string().min(1).optional(),
+        // ⚠️ Not `.min(1)`. A story's note may legitimately be empty, and the post
+        // detail page's Save sends `content` with every edit — so a min(1) here
+        // made a note-less story impossible to reschedule, retag or unschedule.
+        // The "Content is required" rule is re-applied below for non-story posts.
+        content: z.string().optional(),
         contentVariants: z.record(z.string()).optional(),
         scheduledAt: z.string().datetime().nullable().optional(),
         tags: z.array(z.string()).optional(),
@@ -498,13 +575,26 @@ export const postRouter = createRouter({
       const existing = await ctx.prisma.post.findFirst({
         where: { id: input.id, organizationId: ctx.organizationId },
         include: {
-          targets: { select: { channelId: true } },
+          // `format` is selected because channel replacement RECREATES targets:
+          // without it every target came back with format NULL, which silently
+          // republished an Instagram Story as a Reel (the provider's default).
+          targets: { select: { channelId: true, format: true } },
           _count: { select: { mediaAttachments: true } },
         },
       });
       if (!existing) throw new TRPCError({ code: "NOT_FOUND" });
       if (existing.status === "PUBLISHED" || existing.status === "PUBLISHING") {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot edit published posts" });
+      }
+
+      // Is this an Instagram Story post? Either marker counts: the story-mode
+      // block written by post.create, or a target already carrying STORY (the
+      // per-channel picker route, which predates story mode).
+      const isStoryPost =
+        isStoryModeMetadata(existing.metadata) || existing.targets.some((t) => t.format === "STORY");
+
+      if (!isStoryPost && input.content !== undefined && input.content.trim().length === 0) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Content is required." });
       }
 
       // `aiImages` is a guard input, not a Post column — keep it out of `data`.
@@ -519,10 +609,21 @@ export const postRouter = createRouter({
         }
         const ownedChannels = await ctx.prisma.channel.findMany({
           where: { id: { in: channelIds }, organizationId: ctx.organizationId, disconnectedAt: null },
-          select: { id: true },
+          select: { id: true, platform: true, name: true },
         });
         if (ownedChannels.length !== new Set(channelIds).size) {
           throw new TRPCError({ code: "FORBIDDEN", message: "Some selected channels are no longer available. Please re-select your channels and try again." });
+        }
+        // A story stays a story: Instagram-only channels, one media. Checked here
+        // as well as in create because the post detail page's "Add channel" is a
+        // second, one-click route into the same target rows.
+        if (isStoryPost) {
+          const storyError = validateStoryPost({
+            channels: ownedChannels,
+            mediaCount: existing._count.mediaAttachments,
+            scheduling: !!(input.scheduledAt !== undefined ? input.scheduledAt : existing.scheduledAt),
+          });
+          if (storyError) throw new TRPCError({ code: "BAD_REQUEST", message: storyError });
         }
       }
 
@@ -559,6 +660,10 @@ export const postRouter = createRouter({
               create: channelIds.map((channelId) => ({
                 channelId,
                 status: existing.status,
+                // ⚠️ Carry the format. Recreating targets with channelId+status
+                // alone dropped it for EVERY target, so adding one channel from
+                // the post detail page silently turned a Story into a Reel.
+                format: formatForReplacedTarget(channelId, existing.targets, isStoryPost) as any,
               })),
             },
           }),
@@ -700,9 +805,28 @@ export const postRouter = createRouter({
     .mutation(async ({ ctx, input }) => {
       const post = await ctx.prisma.post.findFirst({
         where: { id: input.id, organizationId: ctx.organizationId },
-        include: { targets: { include: { channel: true } } },
+        include: {
+          targets: { include: { channel: true } },
+          _count: { select: { mediaAttachments: true } },
+        },
       });
       if (!post) throw new TRPCError({ code: "NOT_FOUND" });
+
+      // A story needs exactly one image or video. The publish worker is still the
+      // backstop (it refuses to invent an AI image for a story), but an upfront
+      // message beats a target that fails minutes later.
+      if (isStoryModeMetadata(post.metadata) || post.targets.some((t) => t.format === "STORY")) {
+        const storyError = validateStoryPost({
+          channels: post.targets.map((t) => ({
+            id: t.channelId,
+            platform: t.channel.platform,
+            name: t.channel.name,
+          })),
+          mediaCount: post._count.mediaAttachments,
+          scheduling: true,
+        });
+        if (storyError) throw new TRPCError({ code: "BAD_REQUEST", message: storyError });
+      }
 
       // Super text: refuse to publish while the burn is still in flight —
       // otherwise this path would push the ORIGINAL, un-burned video and the
