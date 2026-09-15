@@ -90,10 +90,11 @@ async function reportProgress(postTargetId: string, percent: number): Promise<vo
 
 // ── Email report after all targets complete ────────────────────────────
 // Redesign 2026-07-17 (owner decision): sent to the POST CREATOR only (was:
-// every org OWNER/ADMIN — noisy). Per-channel rows with channel name/handle,
-// UTC+IST timestamps, and the platform post URL. Template lives in
-// ../lib/publish-email.ts (pure + unit-tested, HTML-escaped — the old inline
-// template interpolated user content raw).
+// every org OWNER/ADMIN — noisy). Since 2026-09-15 the body is the live post
+// links only, one per line; platform, channel, handle and UTC+IST time ride in
+// the attached CSV. Template lives in ../lib/publish-email.ts (pure +
+// unit-tested, HTML-escaped — the old inline template interpolated user
+// content raw).
 async function sendPublishReportEmail(
   organizationId: string,
   postId: string,
@@ -102,6 +103,7 @@ async function sendPublishReportEmail(
     status: string;
     publishedUrl: string | null;
     publishedAt: Date | null;
+    ambiguousAt: Date | null;
     channel: { platform: string; name: string; username: string | null };
   }[]
 ) {
@@ -143,6 +145,8 @@ async function sendPublishReportEmail(
         status: t.status,
         publishedUrl: t.publishedUrl,
         publishedAt: t.publishedAt,
+        // Outcome unknown (may already be live) — the email must not call it failed.
+        ambiguous: t.ambiguousAt != null,
       })),
     };
     const { subject, html, text } = buildPublishEmail(emailInput);
