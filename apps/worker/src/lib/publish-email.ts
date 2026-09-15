@@ -1,5 +1,5 @@
 /**
- * Publish-notification email builder (redesign 2026-07-17).
+ * Publish-notification email builder (redesign 2026-07-17; links-only body 2026-09-15).
  *
  * PURE — no prisma/nodemailer — so the template is unit-testable
  * (publish-email.test.ts, run via root vitest). The worker's
@@ -7,10 +7,13 @@
  * decision 2026-07-17; previously every org OWNER/ADMIN was emailed) and
  * hands the data here.
  *
- * SECURITY: the old inline template interpolated post content and platform
- * URLs into HTML RAW. Post content is user-controlled → every dynamic value
- * now goes through escapeHtml, and URLs must be http(s) or they render as
- * plain text (no javascript: hrefs).
+ * BODY (owner ask 2026-09-15): the live post links only, one per line — no
+ * platform, channel or timestamp — so they can be copied by hand or read by a
+ * script. That per-channel detail still ships, unchanged, in the attached CSV
+ * (buildPublishReportCsv below).
+ *
+ * SECURITY: every dynamic value goes through escapeHtml, and a URL must be
+ * http(s) to be listed or linked at all (no javascript: hrefs).
  */
 
 export interface PublishEmailTarget {
@@ -20,6 +23,11 @@ export interface PublishEmailTarget {
   status: string; // "PUBLISHED" | "FAILED" | ...
   publishedUrl: string | null;
   publishedAt: Date | string | null;
+  /**
+   * The publish outcome is UNKNOWN (PostTarget.ambiguousAt is set): stored as
+   * FAILED, but the post may already be live. Absent = a definite outcome.
+   */
+  ambiguous?: boolean;
 }
 
 export interface PublishEmailInput {
@@ -80,69 +88,78 @@ export function buildPublishEmail(input: PublishEmailInput): {
 
   const dashboardUrl = `${appUrl}/dashboard/posts/${postId}`;
 
-  const row = (t: PublishEmailTarget) => {
-    const ok = t.status === "PUBLISHED";
-    const href = safeHref(t.publishedUrl);
-    const channelLabel = `${escapeHtml(t.channelName)}${t.channelUsername ? ` <span style="color:#a1a1aa;">@${escapeHtml(t.channelUsername)}</span>` : ""}`;
-    return `<tr>
-      <td style="padding:8px 12px;border-bottom:1px solid #e4e4e7;white-space:nowrap;">${ok ? "✅" : "❌"} ${escapeHtml(t.platform)}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #e4e4e7;">${channelLabel}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #e4e4e7;font-size:12px;color:#52525b;white-space:nowrap;">${escapeHtml(fmtWhen(t.publishedAt))}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #e4e4e7;">
-        ${
-          ok
-            ? href
-              ? // Anchor stays clickable; the raw URL is ALSO shown as copyable
-                // text below it (owner ask 2026-07-18 — recipients need to see
-                // and copy the actual link, not just "View post").
-                `<a href="${escapeHtml(href)}" style="color:#2563eb;text-decoration:none;">View post</a><div style="font-size:11px;color:#a1a1aa;word-break:break-all;">${escapeHtml(href)}</div>`
-              : `<a href="${escapeHtml(dashboardUrl)}" style="color:#2563eb;text-decoration:none;">Open in dashboard</a>`
-            : '<span style="color:#991b1b;">failed</span>'
-        }
-      </td>
-    </tr>`;
-  };
+  // A target parked with an UNKNOWN outcome is stored as FAILED but may already
+  // be live. Calling it "failed" is what invites a Retry — the 2026-08-18
+  // duplicate-post incident — so it is counted on its own.
+  const unconfirmed = failed.filter((t) => t.ambiguous === true).length;
+  const definitelyFailed = failed.length - unconfirmed;
+
+  const heading =
+    published.length === targets.length
+      ? "Your post is live"
+      : published.length > 0
+        ? "Your post partially published"
+        : unconfirmed > 0
+          ? "Your post may not have published — check before retrying"
+          : "Your post could not be published";
+
+  // Only real post URLs go in the list. The dashboard link is kept OUT of it,
+  // so anything reading "the block of URLs" gets post links and nothing else.
+  // ⚠️ safeHref only checks the prefix, and some providers return a URL verbatim
+  // from a server the channel owner runs (self-hosted WordPress, a Mastodon
+  // instance). A URL containing whitespace, a control character or a line
+  // separator could split one link into several lines of the text part, so it is
+  // not listed and counts toward the "no public link" note instead. A valid URL
+  // never contains these raw — they are percent-encoded. Checked HERE, not in
+  // safeHref, because the CSV must not change.
+  const hasUnsafeChar = (u: string) =>
+    [...u].some((ch) => {
+      const c = ch.codePointAt(0) ?? 0;
+      return c <= 0x20 || c === 0x7f || c === 0x85 || c === 0xa0 || c === 0x2028 || c === 0x2029 || /\s/.test(ch);
+    });
+  const links = published
+    .map((t) => safeHref(t.publishedUrl))
+    .filter((u): u is string => u !== null && !hasUnsafeChar(u));
+  const unlinked = published.length - links.length;
+
+  // A failed channel has no link, so without these lines a partial failure
+  // would just look like a shorter list.
+  const notes: string[] = [];
+  if (definitelyFailed > 0) {
+    notes.push(`${definitelyFailed} channel${definitelyFailed === 1 ? "" : "s"} failed to publish.`);
+  }
+  if (unconfirmed > 0) {
+    notes.push(
+      `${unconfirmed} channel${unconfirmed === 1 ? "" : "s"} could not be confirmed and may already be live — check before retrying.`
+    );
+  }
+  if (unlinked > 0) {
+    notes.push(`${unlinked} published post${unlinked === 1 ? " has" : "s have"} no public link.`);
+  }
+
+  const linkHtml = links
+    .map(
+      (u) =>
+        `<div style="margin:0 0 6px;"><a href="${escapeHtml(u)}" style="color:#2563eb;text-decoration:none;word-break:break-all;">${escapeHtml(u)}</a></div>`
+    )
+    .join("");
 
   const html = `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
-<body style="margin:0;padding:0;background-color:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
-  <div style="max-width:600px;margin:40px auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.1);">
-    <div style="background:#18181b;padding:24px 32px;">
-      <h1 style="margin:0;color:#fff;font-size:20px;font-weight:600;">PostAutomation</h1>
-    </div>
-    <div style="padding:32px;">
-      <h2 style="margin:0 0 8px;font-size:18px;color:#18181b;">${published.length === targets.length ? "Your post is live" : published.length > 0 ? "Your post partially published" : "Your post could not be published"}</h2>
-      <p style="color:#3f3f46;line-height:1.6;margin:0 0 4px;"><strong>${escapeHtml(postContent.slice(0, 140))}${postContent.length > 140 ? "…" : ""}</strong></p>
-      <p style="color:#71717a;font-size:13px;margin:0 0 20px;">${published.length} published${failed.length ? `, ${failed.length} failed` : ""} · ${targets.length} channel${targets.length === 1 ? "" : "s"}</p>
-      <table style="width:100%;border-collapse:collapse;border:1px solid #e4e4e7;border-radius:6px;overflow:hidden;">
-        <thead>
-          <tr style="background:#f4f4f5;">
-            <th style="padding:10px 12px;text-align:left;font-size:13px;color:#71717a;font-weight:500;">Platform</th>
-            <th style="padding:10px 12px;text-align:left;font-size:13px;color:#71717a;font-weight:500;">Channel</th>
-            <th style="padding:10px 12px;text-align:left;font-size:13px;color:#71717a;font-weight:500;">Published at</th>
-            <th style="padding:10px 12px;text-align:left;font-size:13px;color:#71717a;font-weight:500;">Link</th>
-          </tr>
-        </thead>
-        <tbody>${targets.map(row).join("")}</tbody>
-      </table>
-      <div style="text-align:center;margin:24px 0 0;">
-        <a href="${escapeHtml(dashboardUrl)}" style="display:inline-block;background:#18181b;color:#fff;padding:12px 32px;border-radius:6px;text-decoration:none;font-weight:500;">View in Dashboard</a>
-      </div>
-    </div>
-    <div style="padding:16px 32px;background:#f4f4f5;text-align:center;font-size:12px;color:#71717a;">
-      <p style="margin:0;">&copy; ${new Date().getFullYear()} PostAutomation. All rights reserved.</p>
-    </div>
+<body style="margin:0;padding:24px 16px;background-color:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#18181b;">
+  <div style="max-width:600px;margin:0 auto;">
+    <p style="margin:0 0 16px;font-size:16px;font-weight:600;">${heading}</p>
+    ${links.length > 0 ? `<div style="font-size:14px;line-height:1.5;">${linkHtml}</div>` : ""}
+    ${notes.map((n) => `<p style="margin:16px 0 0;font-size:13px;color:#52525b;">${escapeHtml(n)}</p>`).join("")}
+    <p style="margin:24px 0 0;font-size:13px;color:#71717a;">Dashboard: <a href="${escapeHtml(dashboardUrl)}" style="color:#71717a;">${escapeHtml(dashboardUrl)}</a></p>
   </div>
 </body></html>`;
 
   const text = [
-    subject,
+    heading,
     "",
-    ...targets.map(
-      (t) =>
-        `${t.status === "PUBLISHED" ? "[OK]" : "[FAILED]"} ${t.platform} · ${t.channelName}${t.channelUsername ? ` (@${t.channelUsername})` : ""} · ${fmtWhen(t.publishedAt)} · ${safeHref(t.publishedUrl) ?? dashboardUrl}`
-    ),
-    "",
+    ...(links.length > 0 ? [...links, ""] : []),
+    ...(notes.length > 0 ? [...notes, ""] : []),
     `Dashboard: ${dashboardUrl}`,
   ].join("\n");
 
@@ -187,12 +204,13 @@ function csvIst(d: Date | string | null): string {
 }
 
 /**
- * Spreadsheet-ready report of the same per-channel rows the email shows.
- * Attached to the publish email as a .csv so recipients get the links with
- * structure (platform, channel, url, …) in one click — Gmail opens it straight
- * into Google Sheets, Outlook into Excel. PURE like buildPublishEmail.
- * URL column mirrors the email's Link cell: live post URL when http(s), else
- * the dashboard fallback (never a javascript:/data: value — safeHref-gated).
+ * Spreadsheet-ready per-channel report, attached to the publish email as a
+ * .csv. Since 2026-09-15 the email body carries only the links, so this is
+ * where platform, channel, handle, status and time live — Gmail opens it
+ * straight into Google Sheets, Outlook into Excel. PURE like buildPublishEmail.
+ * URL column: the live post URL when http(s), else the dashboard fallback
+ * (never a javascript:/data: value — safeHref-gated). Output is locked
+ * byte-for-byte by publish-email.test.ts.
  */
 export function buildPublishReportCsv(input: PublishEmailInput): string {
   const { postId, appUrl, targets } = input;
