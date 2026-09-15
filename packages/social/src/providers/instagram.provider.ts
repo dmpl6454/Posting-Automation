@@ -1,6 +1,19 @@
 import type { SocialPlatform } from "@postautomation/db";
 import { SocialProvider } from "../abstract/social.abstract";
 import { resolveVideoThumbnailUrl, supportsInstagramCover } from "../utils/video-thumbnail";
+import {
+  isStoryFormat,
+  isStoryModePost,
+  buildStoryUserTags,
+  readStoryMentions,
+  storyPermalinkFallback,
+  storyTrayUrl,
+  pickStoryCandidate,
+  readStoryContainerCheckpoint,
+  classifyContainerStatus,
+  isUserTagRejection,
+  type StoryMediaKind,
+} from "../utils/instagram-story";
 import type {
   SocialPostPayload,
   SocialPostResult,
@@ -52,6 +65,14 @@ const VIDEO_READY_TIMEOUT_MS = Math.max(
 
 /** See reconcileSettleMs — tunable with IG_RECONCILE_SETTLE_MS. */
 const RECONCILE_SETTLE_MS = reconcileSettleMs("IG_RECONCILE_SETTLE_MS");
+
+/**
+ * How long a media container remains publishable (Meta: containers expire after
+ * 24 hours). Used ONLY to bound the story-container resume: past this age an
+ * unreadable container can no longer have produced a live story, so creating a
+ * fresh one is safe rather than a duplicate risk.
+ */
+const STORY_CONTAINER_TTL_MS = 24 * 60 * 60 * 1000;
 
 export class InstagramProvider extends SocialProvider {
   readonly platform: SocialPlatform = "INSTAGRAM";
@@ -129,7 +150,16 @@ export class InstagramProvider extends SocialProvider {
   async publishPost(tokens: OAuthTokens, payload: SocialPostPayload): Promise<SocialPostResult> {
     const igUserId = (payload.metadata?.igUserId as string) || (await this.getInstagramBusinessAccountId(tokens));
 
+    // Story mode (2026-09-15) promises "one image or video". The per-channel
+    // Reel/Story picker also yields format STORY, and that PRE-EXISTING path
+    // must keep publishing a carousel for multiple media — so the refusal is
+    // keyed on the story-MODE marker, never on the format alone.
     if (payload.mediaUrls && payload.mediaUrls.length > 1) {
+      if (isStoryModePost(payload.metadata)) {
+        throw new Error(
+          `An Instagram story takes exactly one image or video — this post has ${payload.mediaUrls.length} attachments.`
+        );
+      }
       return this.publishCarouselPost(tokens, payload, igUserId);
     }
 
@@ -142,6 +172,13 @@ export class InstagramProvider extends SocialProvider {
     // Detect if this is a video
     const isVideo = /\.(mp4|mov|avi|mkv|webm)$/i.test(mediaUrl) ||
       (payload.mediaTypes?.[0] ?? "").startsWith("video/");
+
+    // Stories take a separate, container-checkpointed path: they carry no caption
+    // to reconcile on, so a lost acknowledgement is recovered from the CONTAINER
+    // rather than by listing the account. See publishStory.
+    if (isStoryFormat(payload.metadata)) {
+      return this.publishStory(tokens, igUserId, payload, mediaUrl, isVideo);
+    }
 
     // Step 1: Create a media container (image_url for images, video_url for videos)
     const containerParams: Record<string, string> = {
@@ -190,6 +227,224 @@ export class InstagramProvider extends SocialProvider {
 
     // Step 2: Publish the container
     return this.publishContainer(tokens, igUserId, containerId, payload.content);
+  }
+
+  /**
+   * Publish ONE image or video as an Instagram Story.
+   *
+   * ── Why this is not just "the normal path with media_type=STORIES" ──────────
+   * Every other publish here recovers a lost `media_publish` acknowledgement by
+   * listing the account and matching the CAPTION. A story has no caption, and
+   * `GET /{ig-user}/media` does not list stories at all. Matching "a story
+   * appeared recently" instead would adopt one the user posted from their phone,
+   * or one published by the SAME IG account connected to another organization —
+   * recording a foreign id as ours while the user's story never goes out.
+   *
+   * So the CONTAINER is the identity. A container is single-use and its
+   * `status_code` turns `PUBLISHED` once `media_publish` consumes it, so:
+   *   - the id is checkpointed the moment the container exists, BEFORE publishing;
+   *   - any later attempt asks Meta about THAT container first;
+   *   - `PUBLISHED` ⇒ the story is live, so we identify it instead of writing;
+   *   - anything usable ⇒ publish the SAME container (cannot duplicate);
+   *   - only an explicitly dead container earns a fresh one.
+   */
+  private async publishStory(
+    tokens: OAuthTokens,
+    igUserId: string,
+    payload: SocialPostPayload,
+    mediaUrl: string,
+    isVideo: boolean
+  ): Promise<SocialPostResult> {
+    const kind: StoryMediaKind = isVideo ? "VIDEO" : "IMAGE";
+    const channelUsername = payload.metadata?.channelUsername;
+
+    // ── Resume from a checkpointed container, if this is a retry ──────────────
+    const checkpoint = readStoryContainerCheckpoint(payload.metadata);
+    if (checkpoint && checkpoint.kind === kind) {
+      const disposition = await this.readContainerDisposition(tokens, checkpoint.id, checkpoint.createdAt);
+      if (disposition === "published") {
+        console.warn(
+          `[Instagram] story container ${checkpoint.id} is already PUBLISHED on ${igUserId} — adopting it instead of publishing again`
+        );
+        return this.identifyPublishedStory(
+          tokens,
+          igUserId,
+          new Date(checkpoint.createdAt),
+          kind,
+          channelUsername,
+          checkpoint.id
+        );
+      }
+      if (disposition === "reusable") {
+        console.warn(
+          `[Instagram] reusing story container ${checkpoint.id} for ${igUserId} — a second container would be a second story`
+        );
+        await this.waitForMediaReady(
+          tokens,
+          checkpoint.id,
+          isVideo ? VIDEO_READY_TIMEOUT_MS : 30000,
+          isVideo ? 5000 : 2000
+        );
+        return this.publishContainer(tokens, igUserId, checkpoint.id, payload.content, {
+          mediaKind: kind,
+          channelUsername,
+          containerCreatedAt: new Date(checkpoint.createdAt),
+        });
+      }
+      // "dead" — the container errored or expired, so a fresh one is safe.
+    }
+
+    // ── Create the container ──────────────────────────────────────────────────
+    // Anchor the identification window BEFORE the container exists, so a story
+    // created from it can never sort before this timestamp.
+    const containerCreatedAt = new Date(Date.now() - RECONCILE_SKEW_MS);
+
+    const containerParams: Record<string, unknown> = {
+      // Meta ignores `caption` on a story. It is sent anyway so the request keeps
+      // the shape the pre-existing video-story path has always used; an empty
+      // note is simply an empty string.
+      caption: payload.content,
+      media_type: "STORIES",
+      ...(isVideo ? { video_url: mediaUrl } : { image_url: mediaUrl }),
+    };
+
+    // ⚠️ NO cover_url: Meta rejects it on a STORIES container and that fails the
+    // WHOLE publish (supportsInstagramCover already refuses STORIES; stories also
+    // do not support collaborators or alt_text).
+    const userTags = buildStoryUserTags(payload.metadata);
+    if (userTags) containerParams["user_tags"] = userTags;
+
+    let containerId: string;
+    try {
+      containerId = await this.createMediaContainer(tokens, igUserId, containerParams);
+    } catch (err) {
+      // A private / non-existent tagged account fails container creation for every
+      // selected channel at once, and the generic "container creation failed" text
+      // sends the operator looking for a media problem. This is PRE-write, so it
+      // is duplicate-safe — the remedy is to drop the tag.
+      if (userTags && isUserTagRejection((err as { body?: unknown })?.body)) {
+        const tagged = readStoryMentions(payload.metadata).map((u) => `@${u}`).join(", ");
+        throw new Error(
+          `Instagram rejected a tagged account (${tagged}). Tagged accounts must be public and exist. ` +
+            `Remove the tag and try again. Platform error: ${(err as Error).message}`
+        );
+      }
+      throw err;
+    }
+
+    // Checkpoint BEFORE publishing — this is the whole point. Best-effort by
+    // contract: losing the checkpoint must not fail a publish that can still
+    // succeed, it only costs the retry its resume information.
+    try {
+      await payload.onCheckpoint?.({
+        igStoryContainer: { id: containerId, createdAt: containerCreatedAt.toISOString(), kind },
+      });
+    } catch (err) {
+      console.warn(`[Instagram] story container checkpoint failed for ${containerId}: ${(err as Error).message}`);
+    }
+
+    await this.waitForMediaReady(
+      tokens,
+      containerId,
+      isVideo ? VIDEO_READY_TIMEOUT_MS : 30000,
+      isVideo ? 5000 : 2000
+    );
+
+    return this.publishContainer(tokens, igUserId, containerId, payload.content, {
+      mediaKind: kind,
+      channelUsername,
+      containerCreatedAt,
+    });
+  }
+
+  /**
+   * What happened to a previously-created story container?
+   *
+   * ⚠️ An UNREADABLE status THROWS rather than assuming anything. "Create another
+   * container" is the one irreversible option here, so it is never taken on a
+   * guess — a dead token or a Graph outage fails this read AND would fail the
+   * creation anyway, and the ordinary retry path covers both.
+   *
+   * The single exception is a container older than Meta's 24h container lifetime:
+   * it can no longer be published, and any story made from it has itself expired,
+   * so a fresh container is bounded and safe.
+   */
+  private async readContainerDisposition(
+    tokens: OAuthTokens,
+    containerId: string,
+    createdAtIso: string
+  ): Promise<"published" | "reusable" | "dead"> {
+    const res = await fetchT(
+      `${this.graphBaseUrl}/${this.apiVersion}/${containerId}?fields=status_code&access_token=${tokens.accessToken}`
+    );
+    const data: any = await res.json().catch(() => ({}));
+
+    if (!res.ok) {
+      const ageMs = Date.now() - new Date(createdAtIso).getTime();
+      if (Number.isFinite(ageMs) && ageMs > STORY_CONTAINER_TTL_MS) {
+        console.warn(
+          `[Instagram] story container ${containerId} unreadable and older than ${STORY_CONTAINER_TTL_MS / 3_600_000}h — treating as expired`
+        );
+        return "dead";
+      }
+      throw new Error(
+        `Instagram could not report the status of story container ${containerId} ` +
+          `(${JSON.stringify(data?.error ?? data).slice(0, 200)}) — refusing to create a second container`
+      );
+    }
+
+    return classifyContainerStatus(data?.status_code);
+  }
+
+  /**
+   * Name the story a PUBLISHED container produced.
+   *
+   * ⚠️ Identification only. It runs after the container has already proved the
+   * story exists — using it to decide WHETHER a story published is exactly the
+   * foreign-adoption bug this design avoids.
+   *
+   * When the media cannot be named (listing unreadable, or several stories in the
+   * window), the result is still PUBLISHED: the container id stands in for the
+   * media id and the URL points at the account's story tray. A post that is
+   * genuinely live must never be reported as failed.
+   */
+  private async identifyPublishedStory(
+    tokens: OAuthTokens,
+    igUserId: string,
+    since: Date,
+    kind: StoryMediaKind,
+    channelUsername: unknown,
+    containerId: string
+  ): Promise<SocialPostResult> {
+    const unresolved = (why: string): SocialPostResult => {
+      console.warn(`[Instagram] story from container ${containerId} is live but could not be identified (${why})`);
+      return {
+        platformPostId: containerId,
+        url: storyTrayUrl(channelUsername),
+        metadata: { storyMediaUnresolved: true, storyContainerId: containerId },
+      };
+    };
+
+    let data: any;
+    try {
+      const res = await fetchT(
+        `${this.graphBaseUrl}/${this.apiVersion}/${igUserId}/stories` +
+          `?fields=id,timestamp,media_type,permalink&access_token=${tokens.accessToken}`
+      );
+      data = await res.json().catch(() => ({}));
+      if (!res.ok) return unresolved(`stories listing failed: ${JSON.stringify(data?.error ?? data).slice(0, 160)}`);
+    } catch (err) {
+      return unresolved(`stories listing threw: ${(err as Error).message}`);
+    }
+
+    const picked = pickStoryCandidate(Array.isArray(data?.data) ? data.data : [], since, kind);
+    if (picked.outcome === "match") {
+      return {
+        platformPostId: picked.story.id,
+        url: picked.story.permalink ?? storyPermalinkFallback(channelUsername, picked.story.id),
+      };
+    }
+    return unresolved(picked.outcome === "many" ? `${picked.count} candidate stories` : "no candidate story listed");
   }
 
   /**
@@ -679,7 +934,11 @@ export class InstagramProvider extends SocialProvider {
   private async createMediaContainer(
     tokens: OAuthTokens,
     igUserId: string,
-    params: Record<string, string>
+    // `unknown` (not `string`) because a STORIES container carries `user_tags` as
+    // a real JSON array of objects — the same transport shape the carousel path
+    // already uses for `children`. Serialization is unchanged for string-only
+    // params, so every pre-existing request body is byte-identical.
+    params: Record<string, unknown>
   ): Promise<string> {
     const res = await fetch(
       `${this.graphBaseUrl}/${this.apiVersion}/${igUserId}/media`,
@@ -694,7 +953,15 @@ export class InstagramProvider extends SocialProvider {
     );
 
     const data: any = await res.json();
-    if (!res.ok) throw new Error(`Instagram media container creation failed: ${JSON.stringify(data)}`);
+    if (!res.ok) {
+      // The parsed body rides along so a caller can classify the failure (e.g. a
+      // rejected story user_tag) without re-parsing the message string.
+      const err = new Error(`Instagram media container creation failed: ${JSON.stringify(data)}`) as Error & {
+        body?: unknown;
+      };
+      err.body = data;
+      throw err;
+    }
 
     return data.id;
   }
@@ -705,12 +972,17 @@ export class InstagramProvider extends SocialProvider {
    * `caption` is passed for RECONCILIATION ONLY — it is never re-sent to Meta. It
    * is how a post Instagram already created is recognised on the account when the
    * publish call's own response is lost.
+   *
+   * `story` (2026-09-15) switches that recovery to the CONTAINER: a story has no
+   * caption to match on, and `/media` never lists stories. Null ⇒ byte-identical
+   * to the pre-story behaviour.
    */
   private async publishContainer(
     tokens: OAuthTokens,
     igUserId: string,
     containerId: string,
-    caption: string
+    caption: string,
+    story: { mediaKind: StoryMediaKind; channelUsername: unknown; containerCreatedAt: Date } | null = null
   ): Promise<SocialPostResult> {
     // Anchor the reconciliation window BEFORE the first write attempt.
     const windowStart = new Date(Date.now() - RECONCILE_SKEW_MS);
@@ -750,7 +1022,7 @@ export class InstagramProvider extends SocialProvider {
         // ⚠️ The write was DISPATCHED and its outcome never came back. Replaying
         // it is precisely how the 2026-08-13 duplicates were produced, so stop
         // writing and go look at the account instead.
-        return this.resolveUnknownPublish(tokens, igUserId, caption, windowStart, netErr);
+        return this.resolveUnknownPublish(tokens, igUserId, caption, windowStart, netErr, story, containerId);
       }
 
       try {
@@ -758,7 +1030,7 @@ export class InstagramProvider extends SocialProvider {
       } catch (parseErr) {
         // A body we cannot read (a proxy's HTML 502, a truncated response) says
         // NOTHING about whether Meta created the post.
-        return this.resolveUnknownPublish(tokens, igUserId, caption, windowStart, parseErr);
+        return this.resolveUnknownPublish(tokens, igUserId, caption, windowStart, parseErr, story, containerId);
       }
       if (res.ok) break;
 
@@ -788,25 +1060,32 @@ export class InstagramProvider extends SocialProvider {
         // retry. (Re-running publishPost is NOT safe: it mints a NEW container,
         // which is a new post. That is the layer the incident retried at.)
         if (!isLastAttempt) {
-          const quick = await this.findPublishedMatch(tokens, igUserId, caption, windowStart, true).catch(() => null);
+          // For a story the CONTAINER is the evidence: if media_publish already
+          // consumed it, the story is live and re-publishing would be a duplicate.
+          const quick = story
+            ? await this.adoptIfContainerPublished(tokens, igUserId, containerId, story).catch(() => null)
+            : await this.findPublishedMatch(tokens, igUserId, caption, windowStart, true).catch(() => null);
           if (quick) return quick;
           await new Promise((r) => setTimeout(r, 3000 * (attempt + 1)));
           continue;
         }
-        return this.resolveUnknownPublish(tokens, igUserId, caption, windowStart, failure);
+        return this.resolveUnknownPublish(tokens, igUserId, caption, windowStart, failure, story, containerId);
       }
 
       // Definite error — but only trustworthy if NO earlier attempt was ambiguous.
       if (sawIndeterminate) {
-        return this.resolveUnknownPublish(tokens, igUserId, caption, windowStart, failure);
+        return this.resolveUnknownPublish(tokens, igUserId, caption, windowStart, failure, story, containerId);
       }
 
       throw failure;
     }
 
     // media_publish returns a numeric media ID, not a shortcode.
-    // Fetch the permalink field to get the real post URL.
-    let url = `https://www.instagram.com/p/${data.id}`;
+    // Fetch the permalink field to get the real post URL. `/p/{id}` is a 404 for
+    // a story, so that branch falls back to the account's /stories/ path.
+    let url = story
+      ? storyPermalinkFallback(story.channelUsername, String(data.id))
+      : `https://www.instagram.com/p/${data.id}`;
     try {
       const permalinkRes = await fetch(
         `${this.graphBaseUrl}/${this.apiVersion}/${data.id}?fields=permalink&access_token=${tokens.accessToken}`
@@ -839,14 +1118,22 @@ export class InstagramProvider extends SocialProvider {
     igUserId: string,
     caption: string,
     since: Date,
-    cause: unknown
+    cause: unknown,
+    story: { mediaKind: StoryMediaKind; channelUsername: unknown; containerCreatedAt: Date } | null = null,
+    containerId?: string
   ): Promise<SocialPostResult> {
     // Let Instagram index before asking.
     if (RECONCILE_SETTLE_MS > 0) {
       await new Promise((r) => setTimeout(r, RECONCILE_SETTLE_MS));
     }
 
-    const match = await this.findPublishedMatch(tokens, igUserId, caption, since, true).catch((e) => {
+    const match = await (story && containerId
+      ? // A story is recognised by its CONTAINER, never by "a story appeared
+        // recently" — that would adopt one posted from the phone, or one belonging
+        // to another organization that shares this IG account.
+        this.adoptIfContainerPublished(tokens, igUserId, containerId, story)
+      : this.findPublishedMatch(tokens, igUserId, caption, since, true)
+    ).catch((e) => {
       console.warn(`[Instagram] reconciliation read failed for ${igUserId}: ${(e as Error)?.message}`);
       return null;
     });
@@ -859,10 +1146,42 @@ export class InstagramProvider extends SocialProvider {
 
     const detail = cause instanceof Error ? cause.message : String(cause);
     throw new AmbiguousPublishError(
-      "Instagram did not confirm this post and it may already be live on the account. " +
-        "Nothing was re-sent, so there is no duplicate — open the account to check, then " +
-        `use "It didn't publish" if you need to try again. Platform error: ${detail}`,
+      story
+        ? "Instagram did not confirm this story and it may already be live on the account. " +
+          "Nothing was re-sent, so there is no duplicate, and the media container was kept — " +
+          `a retry reuses it rather than posting a second story. Platform error: ${detail}`
+        : "Instagram did not confirm this post and it may already be live on the account. " +
+          "Nothing was re-sent, so there is no duplicate — open the account to check, then " +
+          `use "It didn't publish" if you need to try again. Platform error: ${detail}`,
       { platform: "INSTAGRAM", cause }
+    );
+  }
+
+  /**
+   * Story recovery inside the publish loop: did `media_publish` already consume
+   * this container? Returns the adopted story when it did, null when the
+   * container is still unpublished, and THROWS when the status cannot be read
+   * (the three outcomes stay distinct, exactly as for the feed path).
+   */
+  private async adoptIfContainerPublished(
+    tokens: OAuthTokens,
+    igUserId: string,
+    containerId: string,
+    story: { mediaKind: StoryMediaKind; channelUsername: unknown; containerCreatedAt: Date }
+  ): Promise<SocialPostResult | null> {
+    const disposition = await this.readContainerDisposition(
+      tokens,
+      containerId,
+      story.containerCreatedAt.toISOString()
+    );
+    if (disposition !== "published") return null;
+    return this.identifyPublishedStory(
+      tokens,
+      igUserId,
+      story.containerCreatedAt,
+      story.mediaKind,
+      story.channelUsername,
+      containerId
     );
   }
 
@@ -942,6 +1261,12 @@ export class InstagramProvider extends SocialProvider {
     payload: SocialPostPayload,
     since: Date
   ): Promise<SocialPostResult | null> {
+    // Stories own their idempotency in `publishStory`, via the checkpointed
+    // container. This caption-matching pre-flight cannot serve them: `/media`
+    // does not list stories, and matching by recency instead would adopt a story
+    // posted from the phone or one belonging to another org that shares this IG
+    // account. Returning null here is not a gap — it defers to a stronger check.
+    if (isStoryFormat(payload.metadata)) return null;
     const igUserId =
       (payload.metadata?.igUserId as string) || (await this.getInstagramBusinessAccountId(tokens));
     // PRE-write: an empty listing means "not published", so publishing must proceed.
