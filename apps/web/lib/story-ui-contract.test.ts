@@ -58,7 +58,7 @@ describe("a story can only reach Instagram", () => {
 
   it("prunes non-Instagram picks on the mode switch AND when channels resolve", () => {
     // The switch handler cannot cover a restored draft: channels load after it.
-    expect(compose).toMatch(/pruneSelectionForStory\(selectedChannels, \(\(channels as any\[\]\) \?\? \[\]\)\)/);
+    expect(compose).toMatch(/pruneSelectionForStory\(selectedChannels, channels as any\[\]\)/);
     expect(compose).toMatch(/pruneSelectionForStory\(reconciled, channels as any\[\]\)/);
     expect(compose).toMatch(/\}, \[channels, postType\]\)/);
   });
@@ -146,5 +146,26 @@ describe("story preview", () => {
     expect(compose).toMatch(/<InstagramStoryPreview/);
     // The pinned switcher literal survives in the Post-mode branch.
     expect(compose).toMatch(/videoPosterUrl=\{postMedia\.find\(\(m\) => m\.thumbnail\)\?\.thumbnail\?\.url\}/);
+  });
+});
+
+describe("self-review fixes", () => {
+  it("never prunes the selection against an UNLOADED channel list", () => {
+    // Clicking Story before channel.list resolves would otherwise wipe every
+    // pick and toast that it removed them.
+    expect(compose).toMatch(
+      /if \(next !== "story"\) return;[\s\S]{0,400}?if \(!channels\) return;[\s\S]{0,120}?pruneSelectionForStory\(selectedChannels, channels as any\[\]\)/
+    );
+  });
+
+  it("blocks a two-attachment story on the DRAFT button too", () => {
+    // The server refuses it outright; the button must not offer the click.
+    expect(compose).toMatch(/isStoryMode \? \(postMedia\.length === 0 && !content\) \|\| postMedia\.length > 1 : !content/);
+  });
+
+  it("does not put a fixed-size PlatformIcon inside the post-type tab", () => {
+    // PlatformIcon hardcodes an h-8 w-8 container; a className override resolves
+    // by stylesheet order, not string order (the competing-utilities trap).
+    expect(compose).not.toMatch(/PlatformIcon platform="INSTAGRAM" size="sm"/);
   });
 });

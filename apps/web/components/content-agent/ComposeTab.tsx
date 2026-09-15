@@ -774,7 +774,12 @@ ${content}`;
     if (next === postType) return;
     setPostType(next);
     if (next !== "story") return;
-    const { next: pruned, removed } = pruneSelectionForStory(selectedChannels, ((channels as any[]) ?? []));
+    // ⚠️ Only prune against a LOADED list. With `channels` still undefined the
+    // helper sees zero Instagram ids and would wipe the whole selection — then
+    // toast that it removed them. The [channels, postType] effect below prunes
+    // for real once the query resolves.
+    if (!channels) return;
+    const { next: pruned, removed } = pruneSelectionForStory(selectedChannels, channels as any[]);
     if (removed > 0) {
       setSelectedChannels(pruned);
       toast({
@@ -1371,7 +1376,6 @@ ${content}`;
                       : "text-muted-foreground hover:text-foreground"
                   }`}
                 >
-                  {t === "story" && <PlatformIcon platform="INSTAGRAM" size="sm" className="h-4 w-4" />}
                   {t === "post" ? "Post" : "Story"}
                 </button>
               ))}
@@ -2432,9 +2436,10 @@ ${content}`;
                   setIsUploading(false);
                 }
               }}
-              // A story's note is optional, so a draft needs media OR a note.
+              // A story's note is optional, so a draft needs media OR a note —
+              // but never two attachments, which the server refuses outright.
               disabled={
-                (isStoryMode ? postMedia.length === 0 && !content : !content) ||
+                (isStoryMode ? (postMedia.length === 0 && !content) || postMedia.length > 1 : !content) ||
                 createPost.isPending ||
                 isUploading
               }
