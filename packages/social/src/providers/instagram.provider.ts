@@ -292,6 +292,15 @@ export class InstagramProvider extends SocialProvider {
         });
       }
       // "dead" — the container errored or expired, so a fresh one is safe.
+    } else if (checkpoint) {
+      // Anomalous: a checkpoint for the OTHER media kind. Not reachable today —
+      // a post's media cannot change after creation (post.update does not touch
+      // attachments) — but if it ever becomes reachable, creating a fresh
+      // container while an old one may have published is a duplicate, so say so
+      // loudly rather than failing silently.
+      console.warn(
+        `[Instagram] story checkpoint for ${checkpoint.id} is ${checkpoint.kind} but this publish is ${kind} — ignoring it and creating a new container`
+      );
     }
 
     // ── Create the container ──────────────────────────────────────────────────
