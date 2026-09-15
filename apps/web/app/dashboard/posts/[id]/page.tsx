@@ -150,7 +150,14 @@ export default function PostDetailPage() {
   const { data: allChannels } = trpc.channel.list.useQuery(undefined, { enabled: isEditable });
   const [addingChannelId, setAddingChannelId] = useState<string | null>(null);
   const targetedChannelIds = new Set((post?.targets ?? []).map((t: any) => t.channelId));
-  const addableChannels = (allChannels ?? []).filter((c: any) => !targetedChannelIds.has(c.id));
+  // A story post only accepts Instagram channels — the server enforces it, and
+  // offering a Facebook "Add" button here would be a click that can only fail.
+  const isStoryPost =
+    !!(post?.metadata as { instagramStory?: unknown } | null)?.instagramStory ||
+    ((post?.targets ?? []) as any[]).some((t: any) => t.format === "STORY");
+  const addableChannels = (allChannels ?? []).filter(
+    (c: any) => !targetedChannelIds.has(c.id) && (!isStoryPost || c.platform === "INSTAGRAM")
+  );
 
   const handleAddChannel = (channelId: string) => {
     setAddingChannelId(channelId);
@@ -448,7 +455,13 @@ export default function PostDetailPage() {
             </>
           ) : (
             <div className="whitespace-pre-wrap rounded-lg bg-muted/50 p-4 text-sm leading-relaxed">
-              {post.content}
+              {/* A story's note is optional and Instagram never displays it, so an
+                  empty one must read as "no note", not as a blank panel. */}
+              {post.content || (
+                <span className="italic text-muted-foreground">
+                  {isStoryPost ? "No note — Instagram doesn't display a caption on a story." : "No content"}
+                </span>
+              )}
             </div>
           )}
         </CardContent>
@@ -503,6 +516,14 @@ export default function PostDetailPage() {
                         <Badge variant="outline" className="text-[10px]">
                           {target.channel.platform}
                         </Badge>
+                        {/* A story is a different product from a feed post and
+                            disappears after 24 hours — say so wherever the post
+                            is reviewed, not just where it was composed. */}
+                        {target.format === "STORY" && (
+                          <Badge variant="secondary" className="text-[10px]">
+                            Story
+                          </Badge>
+                        )}
                         {target.channel.username && (
                           <span className="truncate text-xs text-muted-foreground">
                             @{target.channel.username}

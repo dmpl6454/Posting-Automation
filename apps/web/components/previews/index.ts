@@ -5,4 +5,6 @@ export { InstagramPreview } from "./instagram-preview";
 export { YouTubePreview } from "./youtube-preview";
 export { GenericPreview } from "./generic-preview";
 export { PostPreviewSwitcher } from "./post-preview-switcher";
+export { InstagramStoryPreview } from "./instagram-story-preview";
 export type { PostPreviewProps } from "./twitter-preview";
+export type { InstagramStoryPreviewProps } from "./instagram-story-preview";

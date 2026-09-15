@@ -20,6 +20,17 @@ export interface ActiveTask {
      * provider stays package-agnostic — ComposeTab re-validates it on restore).
      */
     media?: { url: string; mediaId?: string; superText?: unknown }[];
+    /**
+     * Compose's post type (2026-09-15). ABSENT ⇒ "post", so every draft written by
+     * an earlier build restores exactly as it did before.
+     */
+    postType?: "post" | "story";
+    /**
+     * Instagram Story mentions (usernames, no `@`). Kept as `string[]` but
+     * re-validated on restore — one malformed username reaching post.create
+     * rejects the whole post.
+     */
+    storyMentions?: string[];
   };
   createdAt: number;
 }
