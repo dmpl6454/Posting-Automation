@@ -780,8 +780,13 @@ export class InstagramProvider extends SocialProvider {
     // all-or-nothing, this guarantees a newly-added type-specific metric can
     // NEVER cost us the base metrics if Meta rejects it for some media type.
     // Descends only on failure, so the happy path stays a single call.
+    const isStoryMedia = productType === "STORY";
     if (!(await readInsights(preferredSet))) {
-      if (preferredSet !== BASE_SET) {
+      // ⚠️ A STORY skips the BASE_SET rung. BASE_SET carries `saved,likes,comments`,
+      // which Meta supports for FEED/REELS ONLY — for a story that call is a
+      // guaranteed #100, so the rung can only ever cost a wasted round-trip on a
+      // path that is already failing.
+      if (preferredSet !== BASE_SET && !isStoryMedia) {
         if (!(await readInsights(BASE_SET))) await readInsights("reach");
       } else {
         await readInsights("reach");
@@ -851,6 +856,14 @@ export class InstagramProvider extends SocialProvider {
         views: present.has("views"),
         reach: present.has("reach"),
         shares: present.has("shares"),
+        // A STORY has no like or comment surface — Meta lists both insight
+        // metrics for FEED/REELS only, and `like_count`/`comments_count` on the
+        // media node are not meaningful for one. They must be declared FALSE
+        // rather than omitted: an omitted key reads as AVAILABLE, which would
+        // print a confident "0 likes / 0 comments" on every story row and feed
+        // that 0 into channel sums. Omitted for every other product type, so
+        // FEED/REELS captures are byte-identical.
+        ...(isStoryMedia ? { likes: false, comments: false, saved: false } : {}),
       },
       ...(degraded ? { degraded } : {}),
     };

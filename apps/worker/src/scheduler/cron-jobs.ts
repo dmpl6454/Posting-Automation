@@ -12,7 +12,7 @@ import {
 } from "@postautomation/social";
 import { runAutoHealerWithLogging } from "../workers/auto-healer.worker";
 import { runCelebrityDetectors } from "../workers/celebrity-detect.worker";
-import { enqueueScheduledPublishJobs } from "@postautomation/queue";
+import { enqueueScheduledPublishJobs, excludeExpiredStoriesWhere, shouldReconcileCheckpoints } from "@postautomation/queue";
 import { HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE } from "../lib/publish-recovery";
 
 /**
@@ -291,6 +291,9 @@ export async function scheduleAnalyticsSync() {
       status: "PUBLISHED",
       publishedId: { not: null },
       publishedAt: { gte: sevenDaysAgo },
+      // An Instagram story is gone 24h after publish, and so are its insights —
+      // measuring it after that is wasted quota that also manufactures failures.
+      ...excludeExpiredStoriesWhere(new Date()),
       channel: {
         isActive: true,
         platform: { not: "FACEBOOK" }, // FB excluded — restores quota
@@ -350,6 +353,9 @@ export async function scheduleLongTailAnalyticsSync() {
       status: "PUBLISHED",
       publishedId: { not: null },
       publishedAt: { gte: ninetyDaysAgo, lt: sevenDaysAgo },
+      // Every story in a 7–90 day window has expired, so this excludes them all —
+      // stated through the same shared fragment so the two passes cannot drift.
+      ...excludeExpiredStoriesWhere(new Date(now)),
       channel: {
         isActive: true,
         platform: { not: "FACEBOOK" }, // FB excluded — restores quota
@@ -589,6 +595,7 @@ export async function reconcileAtAgeCheckpoints() {
       publishedId: true,
       channelId: true,
       publishedAt: true,
+      format: true,
       channel: { select: { platform: true } },
     },
   });
@@ -607,6 +614,9 @@ export async function reconcileAtAgeCheckpoints() {
   let queued = 0;
   for (const target of targets) {
     if (!target.publishedId || !target.publishedAt) continue;
+    // A story's checkpoint can only ever be "missing" because the story expired —
+    // re-enqueuing it would fail identically every day until the 45d floor.
+    if (!shouldReconcileCheckpoints(target.format)) continue;
     const age = now - target.publishedAt.getTime();
 
     for (const [windowTag, windowMs] of Object.entries(AT_AGE_CHECKPOINTS)) {
