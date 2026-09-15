@@ -773,6 +773,153 @@ limit.** Probed against production Graph with real decrypted tokens:
   **0 of 400** active FB channels carried `insightsHealth.status === "ok"`, yet **3 of 3** FB pages
   probed directly answered fine. Do not trust a stale health verdict as evidence a token is dead.
 
+## 📸 INSTAGRAM STORIES from Content Studio (2026-09-15) — read before touching the story path or `PostTarget.format`
+
+Compose has a first-class **Post | Story** switch. Story mode publishes ONE image or video
+as an Instagram Story to many Instagram accounts at once, with `@mention` tags. **Absent a
+story, every touched path evaluates to its pre-feature branch** — locked by byte-identity
+assertions on the serialized container body.
+
+### Representation — no schema change
+
+| where | value |
+|---|---|
+| `PostTarget.format = "STORY"` | forced on EVERY target of a story post; the worker already forwards it as `metadata.format` |
+| `Post.metadata.instagramStory = { mentions: string[] }` | the story-MODE marker. Written ONLY by the `story` input |
+| `PostTarget.metadata.igStoryContainer = { id, createdAt, kind }` | the media container checkpoint (below) |
+| `post.create` input `story: { mentions }` | its PRESENCE is what makes the post a story |
+
+⚠️ **`format === "STORY"` and story MODE are DIFFERENT questions.** The pre-existing
+per-channel Reel/Story picker (videos only) also yields `format: "STORY"` with **no**
+`instagramStory` marker. Publish/analytics behaviour keys on the FORMAT (so picker-stories
+get the same, better treatment); the "exactly one media" refusal keys on the **MODE**, because
+that picker has always published a carousel for multiple media and must keep doing so.
+`isStoryFormat` vs `isStoryModePost` in [instagram-story.ts](packages/social/src/utils/instagram-story.ts).
+
+### Meta contract (docs fetched 2026-09-15)
+
+- `POST /{ig-user}/media` with **`media_type=STORIES`** + `image_url` OR `video_url`.
+- **`user_tags=[{username}]` works on image AND video stories** — "Required for user tagging in
+  images, videos, and stories"; `x`/`y` are optional for stories. Sticker-less mentions are
+  explicitly supported; **link/poll/location stickers are NOT publishable** via the API.
+- ⚠️ **NOT supported on a STORIES container: `cover_url`, `collaborators`, `alt_text`.** A
+  `cover_url` there 400s container creation and fails the WHOLE publish.
+- Stories **expire after 24h**, and so do their insights.
+- ⚠️ **`GET /{ig-user}/media` does NOT list stories** — `GET /{ig-user}/stories` does.
+- Image story: JPEG ≤8MB, 9:16. Video story: MP4/MOV, **3–60s**, ≤100MB.
+
+### 🔴 The CONTAINER is a story's identity — never the caption, never the listing
+
+A story has **no caption to reconcile on**, so the feed path's `findPublishedMatch` cannot
+serve it. The tempting substitute — "exactly one story appeared in the window, adopt it" — is
+**wrong and was rejected**: these accounts post stories constantly from the phone, and the same
+IG account is connected to several orgs, so that rule records a FOREIGN story id as ours and the
+user's story never goes out. Instead:
+
+- `SocialPostPayload.onCheckpoint` (additive; only the IG story path calls it) persists the
+  container id into `PostTarget.metadata` **BEFORE** publishing. The worker writes it to the row
+  AND mutates `providerMetadata` in place, so a later attempt inside the SAME job sees it too.
+- On any retry `publishStory` asks Meta about THAT container: **`PUBLISHED`** ⇒ the story is
+  live, identify it; anything usable ⇒ **re-publish the same `creation_id`** (single-use, so it
+  cannot duplicate); only `ERROR`/`EXPIRED` earns a fresh container.
+- ⚠️ **An UNREADABLE container status THROWS.** Creating a second container is the one
+  irreversible option, so it is never taken on a guess. The lone exception is a container past
+  the 24h lifetime, which bounds the retry instead of wedging it forever.
+- ⚠️ `classifyContainerStatus` maps an **unknown** status to `reusable`, never `dead` —
+  asymmetric on purpose.
+- `/stories` is consulted **only to NAME** a story the container already proved exists. Zero or
+  several candidates ⇒ still **PUBLISHED**, with the container id standing in for the media id
+  and the account's story-tray URL (`metadata.storyMediaUnresolved`). A post that is genuinely
+  live must never be reported failed.
+- `findExistingPost` returns **null** for stories — it defers to the stronger container check.
+- The published URL is `https://www.instagram.com/stories/{username}/{id}/`. **`/p/{id}` is a
+  404 for a story.** The worker adds `channelUsername` to provider metadata **only** when
+  `format === "STORY"`.
+
+### Other invariants
+
+- **No AI auto-image for a STORY.** The worker's media-required auto-generation is skipped: a
+  story is the user's own media, and inventing one is the product publishing content nobody
+  asked for. Media-less ⇒ the provider's own clear error.
+- **A private/non-existent tagged account fails container creation for every channel at once.**
+  It is PRE-write (duplicate-safe) and now surfaces as an actionable message naming the tags.
+- **`post.update` CARRIES `format`** onto recreated targets. It used to select only `channelId`
+  and recreate with `channelId + status`, so the post detail page's one-click "Add channel"
+  silently republished a Story as a **REEL** (the provider's default). Pre-existing bug, fixed
+  here. New channels inherit STORY on a story post.
+- **`sanitizeFormatByChannelId`** filters the per-channel picker map at `post.create`. That map
+  has ONE setter and is never pruned, so *attach video → pick Story → remove video → attach
+  image → Publish* would have posted an image STORY from a normal post. Entries are DROPPED
+  (the user never asked for that format), never rejected.
+- **`metadata.instagramStory` is STRIPPED from the client passthrough.** `metadata` is
+  `.passthrough()`, so without that a client could write the marker directly and skip every
+  story check.
+- **`content` may be empty** for a story on create AND update (Instagram displays no caption).
+  `post.update` had `min(1)`, which made a note-less story impossible to reschedule.
+
+### Analytics — a story lives 24 hours
+
+- ONE at-age checkpoint, at **23h, tagged `24h`**. ⚠️ A flat 24h delay is measured from
+  *enqueue*, so it always lands AFTER expiry — the capture fails, and at-age jobs rethrow
+  (one-shot), burning all three attempts for nothing.
+- `reconcileAtAgeCheckpoints` **skips STORY entirely**: an overdue story checkpoint is
+  post-expiry by definition and would re-enqueue daily until the 45-day floor.
+- **`excludeExpiredStoriesWhere`** ([story-analytics.ts](packages/queue/src/story-analytics.ts))
+  is used by `scheduleAnalyticsSync`, `scheduleLongTailAnalyticsSync` **and**
+  `analytics.triggerSync` — it lives in `packages/queue` for the same reason
+  `insights-population.ts` does: both containers must agree.
+  ⚠️ It states the NULL branch **explicitly**. `NOT: { format: "STORY", ... }` over a nullable
+  enum is a NULL TRAP — nearly every existing target has `format IS NULL`, and a NOT over a
+  NULL comparison yields NULL, which drops the row. That one predicate would have silently
+  removed EVERY legacy target from both analytics passes, and tsc cannot see it.
+- Reports `at_age` hides stories in the 7d/15d/30d windows (`pt.format IS DISTINCT FROM
+  'STORY'` — **not `<>`**, which would drop NULL formats). A story has no checkpoint there, so
+  it would render a permanent all-"—" row indistinguishable from a missed capture.
+- **STORY captures declare `likes`/`comments`/`saved` UNAVAILABLE.** Meta lists those insight
+  metrics for FEED/REELS only. An OMITTED key reads as *available* at every consumer, which
+  would print a confident fake "0 likes" on every story row.
+- The STORY metric ladder does **not** descend to `BASE_SET` — it carries `saved,likes,comments`,
+  a certain `#100` for a story.
+- ⚠️ **Meta `#10 "Not enough viewers for the media to show insights"` is a QUIET STORY, not a
+  missing scope.** It is in `MISSING_SCOPE_CODES`, so every small account's stories would have
+  raised a false "reconnect this channel" banner. `diagnoseMetaError` now returns no degradation
+  for that message specifically.
+
+### Compose UI
+
+- Story mode shows only **Instagram** channels; Groups pills union only their **active Instagram**
+  members; a group with none renders no pill.
+- ⚠️ The platform filter is **IGNORED, not reset**, in story mode. The pills that clear it are
+  hidden, so a leftover filter would empty the list unrecoverably — and resetting it would throw
+  away the user's Post-mode filter when they switch back.
+- Hidden AND kept out of the payload: the per-channel Post Format card, unique captions, the
+  carousel generator, "Create with AI", the AI image panel, the video cover. A cover already set
+  in Post mode is **not even displayed** — showing it would promise something the publish drops.
+- `youtubeBlockReason` is silenced in story mode (a story cannot target YouTube).
+- Restored draft mentions are re-validated **entry by entry** — ⚠️ never by re-running the
+  typed-input splitter over a joined string, which turns one stored `"bad name"` into two
+  valid-looking mentions that tag the wrong accounts.
+- The preview is a dedicated 9:16 `InstagramStoryPreview`, rendered **instead of**
+  `PostPreviewSwitcher`, so the five `PostPreviewProps` copies and the switcher's explicit prop
+  rebuild are untouched. Media goes through `PreviewMedia`; **no `poster`** is passed.
+- Story badge on post-detail target rows and the Posts list; an empty note renders as
+  "Instagram story", never a blank title. The post detail "Add channel" row offers Instagram
+  channels only on a story post.
+
+Tests: [instagram-story.test.ts](packages/social/src/__tests__/instagram-story.test.ts) (20),
+[instagram-story-publish.test.ts](packages/social/src/__tests__/instagram-story-publish.test.ts) (18),
+[instagram-story-analytics.test.ts](packages/social/src/__tests__/instagram-story-analytics.test.ts) (6),
+[story-analytics.test.ts](packages/queue/src/__tests__/story-analytics.test.ts) (8),
+[instagram-story-create.test.ts](packages/api/src/__tests__/instagram-story-create.test.ts) (19),
+[instagram-story-router.test.ts](packages/api/src/__tests__/instagram-story-router.test.ts) (17),
+[instagram-story.test.ts](apps/web/lib/instagram-story.test.ts) (13),
+[story-ui-contract.test.ts](apps/web/lib/story-ui-contract.test.ts) (23).
+Design: [docs/superpowers/specs/2026-09-15-instagram-stories-design.md](docs/superpowers/specs/2026-09-15-instagram-stories-design.md).
+
+⚠️ **NOT yet verified against a live Instagram account.** Implemented and unit-tested against
+the documented contract; no story has been published from this branch, and the local Docker
+daemon was unresponsive so the browser walk-through did not run.
+
 ## 🖼️ Custom uploaded THUMBNAILS for reels/videos (2026-09-01) — read before touching a video publish path
 
 Users upload a cover image per video on the Compose tile; it is applied wherever the
