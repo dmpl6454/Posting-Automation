@@ -17,5 +17,14 @@ export {
   insightsIncludeExternalPosts,
   resolveIncludeExternalPosts,
 } from "./insights-population";
+export {
+  STORY_LIFETIME_MS,
+  STORY_CHECKPOINT_DELAY_MS,
+  AT_AGE_WINDOWS,
+  isStoryTargetFormat,
+  atAgeWindowsForFormat,
+  shouldReconcileCheckpoints,
+  excludeExpiredStoriesWhere,
+} from "./story-analytics";
 export { buildScheduledPublishJobs, enqueueScheduledPublishJobs } from "./schedule-publish";
 export type { SchedulablePublishTarget, ScheduledPublishArgs, ScheduledPublishJobSpec } from "./schedule-publish";

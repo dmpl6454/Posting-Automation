@@ -5,6 +5,24 @@ export interface SocialPostPayload {
   metadata?: Record<string, unknown>;
   /** Optional progress callback — called with 0–100 during media upload phases */
   onProgress?: (percent: number) => void | Promise<void>;
+  /**
+   * Persist a fact the provider learned BEFORE it finished publishing, so a
+   * retry — at any layer — can pick up where this attempt left off.
+   *
+   * Introduced for Instagram stories (2026-09-15), which have no caption to
+   * reconcile on: the provider records the media container id here the moment it
+   * is created, and a later attempt asks Meta what happened to THAT container
+   * instead of creating a second one (the 2026-08-18 duplicate-post class). The
+   * worker merges the patch into `PostTarget.metadata` and into the in-memory
+   * provider metadata.
+   *
+   * ⚠️ NOT best-effort. The implementation must REJECT if the fact could not be
+   * stored, and the provider must let that rejection abort the publish. For a
+   * story the checkpoint is the ONLY duplicate guard, so continuing without it
+   * risks a second live story — whereas failing here is completely safe, because
+   * nothing has been sent to the platform yet. Every other provider ignores it.
+   */
+  onCheckpoint?: (patch: Record<string, unknown>) => void | Promise<void>;
 }
 
 export interface SocialPostResult {

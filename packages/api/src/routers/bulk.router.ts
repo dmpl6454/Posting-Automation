@@ -12,6 +12,7 @@ import { createRouter, orgProcedure } from "../trpc";
 import { prisma } from "@postautomation/db";
 import { TRPCError } from "@trpc/server";
 import Papa from "papaparse";
+import { isStoryModeMetadata } from "../lib/instagram-story";
 
 export const bulkRouter = createRouter({
   /**
@@ -50,12 +51,26 @@ export const bulkRouter = createRouter({
       }
 
       let scheduled = 0;
+      let skippedStories = 0;
 
       for (const item of input.items) {
         const post = await prisma.post.findFirst({
           where: { id: item.postId, organizationId },
+          include: { _count: { select: { mediaAttachments: true } } },
         });
         if (!post) continue;
+
+        // An Instagram Story needs exactly ONE image or video. Story drafts may be
+        // saved media-less (the user attaches later), and this tab lists every
+        // DRAFT — so without this, a story with nothing to publish would be flipped
+        // to SCHEDULED and reaped FAILED minutes later, after the toast had said
+        // "scheduled successfully" (the exact shape of the bulkSchedule bug fixed
+        // 2026-07-27). The worker refuses to invent an image for a story, so
+        // nothing downstream fills the gap. Skipped and COUNTED, never silent.
+        if (isStoryModeMetadata(post.metadata) && post._count.mediaAttachments !== 1) {
+          skippedStories++;
+          continue;
+        }
 
         await prisma.post.update({
           where: { id: item.postId },
@@ -81,7 +96,7 @@ export const bulkRouter = createRouter({
         scheduled++;
       }
 
-      return { scheduled };
+      return { scheduled, skippedStories };
     }),
 
   /**

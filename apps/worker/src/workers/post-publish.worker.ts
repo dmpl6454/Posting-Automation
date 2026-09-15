@@ -10,7 +10,7 @@ import IORedis from "ioredis";
 import { buildPublishEmail, buildPublishReportCsv } from "../lib/publish-email";
 import { planFacebookAnalyticsId, earlyVideoSyncDelayMs } from "../lib/fb-video-post-id";
 import { markTargetFailed, markTargetAmbiguous, buildPublishClaimWhere, routePublishError, shouldPreflightReconcile, buildPublishNotifications, mediaRequiredReason, terminalizeStuckClaim, isSeedNoise, isStaleScheduleJob, isHeavyPublish, planHeavyDefer, HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE } from "../lib/publish-recovery";
-import { PRIORITY_RETRY, mediaOptimizeQueue } from "@postautomation/queue";
+import { PRIORITY_RETRY, mediaOptimizeQueue, atAgeWindowsForFormat } from "@postautomation/queue";
 import { planOptimizeGate, choosePublishUrl } from "../lib/media-optimize";
 import { buildSnapshotMetadata } from "../lib/snapshot-metadata";
 
@@ -540,11 +540,56 @@ export function createPostPublishWorker() {
 
       // Build merged provider metadata: post intent → target overrides → format → channel IDs (wins)
       const channelMetadata = (channel.metadata ?? {}) as Record<string, unknown>;
+      const isStoryTarget = postTarget.format === "STORY";
       const providerMetadata: Record<string, unknown> = {
         ...((postTarget.post.metadata as object) || {}),
         ...((postTarget.metadata as object) || {}),
         ...(postTarget.format ? { format: postTarget.format } : {}),
+        // Stories only: the provider builds the /stories/{username}/{id}/ URL when
+        // Meta returns no permalink (`/p/{id}` is a 404 for a story). Gated on the
+        // format so every non-story provider payload is byte-identical.
+        ...(isStoryTarget && channel.username ? { channelUsername: channel.username } : {}),
         ...channelMetadata, // pageId/igUserId/logo_path MUST win — kept last
+      };
+
+      /**
+       * Persist a fact the provider learned mid-publish (see
+       * SocialPostPayload.onCheckpoint).
+       *
+       * Instagram stories use it for the media container id: written BEFORE the
+       * story is published, so a retry — BullMQ attempt, the 30s cron, or a human
+       * clicking Retry — asks Meta what happened to THAT container rather than
+       * creating a second one. Without it, a publish that succeeded but whose DB
+       * write was lost would produce a duplicate story, which is the 2026-08-18
+       * incident reached from a new direction.
+       *
+       * Written to BOTH the row (survives this job) and the in-memory metadata (so
+       * a later attempt inside THIS job sees it).
+       *
+       * ⚠️ RETHROWS. It is tempting to swallow this as best-effort, but the
+       * checkpoint is the ONLY thing standing between a lost DB write and a
+       * SECOND live story, and the two writes share this client and this
+       * database — so they fail together exactly when it matters. Nothing has
+       * been sent to Instagram at this point, so aborting here cannot duplicate;
+       * it costs one orphaned container that Meta expires in 24h.
+       */
+      const onCheckpoint = async (patch: Record<string, unknown>) => {
+        Object.assign(providerMetadata, patch);
+        try {
+          // Re-read so a concurrent writer's keys are preserved — the same merge
+          // discipline the channel-metadata writers use.
+          const fresh = await prisma.postTarget.findUnique({
+            where: { id: postTargetId },
+            select: { metadata: true },
+          });
+          await prisma.postTarget.update({
+            where: { id: postTargetId },
+            data: { metadata: { ...((fresh?.metadata as object) ?? {}), ...patch } as any },
+          });
+        } catch (err: any) {
+          console.warn(`[PostPublish] checkpoint write failed for target ${postTargetId}: ${err?.message}`);
+          throw err;
+        }
       };
 
       // Auto-add channel logo watermark + optional text overlay on videos
@@ -605,9 +650,14 @@ export function createPostPublishWorker() {
         }
       }
 
-      // Auto-generate AI image for media-required platforms (Instagram, Facebook) if no media attached
+      // Auto-generate AI image for media-required platforms (Instagram, Facebook) if no media attached.
+      //
+      // ⚠️ NEVER for a STORY. A story is the user's own photo or clip — silently
+      // publishing a generated image to their story would be the product inventing
+      // content nobody asked for. Without media the provider fails with its own
+      // clear "requires at least one image or video" message instead.
       const mediaRequiredPlatforms = ["INSTAGRAM", "FACEBOOK"];
-      if (mediaUrls.length === 0 && mediaRequiredPlatforms.includes(platform)) {
+      if (mediaUrls.length === 0 && mediaRequiredPlatforms.includes(platform) && !isStoryTarget) {
         console.log(`[PostPublish] No media for ${platform} — auto-generating AI image...`);
         try {
           const { generateImage } = await import("@postautomation/ai");
@@ -738,7 +788,7 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
         let lastErr: any;
         for (let attempt = 1; attempt <= 3 && !result; attempt++) {
           try {
-            result = await provider.publishPost(tokens, { content: publishContent, mediaUrls, mediaTypes, metadata: providerMetadata, onProgress });
+            result = await provider.publishPost(tokens, { content: publishContent, mediaUrls, mediaTypes, metadata: providerMetadata, onProgress, onCheckpoint });
             lastErr = null;
             break;
           } catch (e: any) {
@@ -849,7 +899,11 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
               // Retry immediately with fresh token
               result = await provider.publishPost(
                 { accessToken: refreshed.accessToken, refreshToken: refreshed.refreshToken ?? channel.refreshToken ?? undefined },
-                { content: publishContent, mediaUrls, mediaTypes, metadata: providerMetadata, onProgress: (percent: number) => reportProgress(postTargetId, percent) }
+                // ⚠️ onCheckpoint here too: this is a SECOND publishPost call, and
+                // for a story the first one may already have created a container.
+                // providerMetadata was mutated in place by the first checkpoint, so
+                // this call resumes from it rather than creating a duplicate.
+                { content: publishContent, mediaUrls, mediaTypes, metadata: providerMetadata, onProgress: (percent: number) => reportProgress(postTargetId, percent), onCheckpoint }
               );
               console.log(`[PostPublish] Retry with fresh token succeeded`);
             } else {
@@ -886,7 +940,7 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
           const aggressiveContent = truncateForPlatform(publishContent, platform);
           console.log(`[PostPublish] Content too large — retrying with aggressive truncation`);
           try {
-            result = await provider.publishPost(tokens, { content: aggressiveContent.slice(0, Math.floor(aggressiveContent.length * 0.7)), mediaUrls, mediaTypes, metadata: providerMetadata });
+            result = await provider.publishPost(tokens, { content: aggressiveContent.slice(0, Math.floor(aggressiveContent.length * 0.7)), mediaUrls, mediaTypes, metadata: providerMetadata, onCheckpoint });
           } catch (truncateRetryErr: any) {
             // Same hazard as the token-refresh branch above: this is a SECOND
             // publish call, so it can produce its own ambiguity.
@@ -1003,14 +1057,11 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
       // 6-hourly cron for quota reasons — 4 one-shot calls per post are negligible).
       // jobId dedupes BullMQ retries of this publish job. Best-effort: a Redis
       // hiccup must never fail an already-published post.
+      // A STORY gets ONE checkpoint, an hour before Instagram withdraws it (the
+      // job's delay is measured from enqueue, so a flat 24h always lands after
+      // expiry). Every other format keeps all four, with identical delays.
       if (result.platformPostId) {
-        const AT_AGE_WINDOWS: Record<string, number> = {
-          "24h": 86_400_000,
-          "7d": 604_800_000,
-          "15d": 1_296_000_000,
-          "30d": 2_592_000_000,
-        };
-        for (const [windowTag, delay] of Object.entries(AT_AGE_WINDOWS)) {
+        for (const [windowTag, delay] of atAgeWindowsForFormat(postTarget.format)) {
           try {
             await analyticsSyncQueue.add(
               "at-age-snapshot",

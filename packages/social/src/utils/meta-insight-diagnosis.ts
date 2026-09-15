@@ -121,6 +121,16 @@ export function diagnoseMetaError(err: MetaErrorLike | undefined | null): Analyt
     };
   }
 
+  // ⚠️ Meta returns #10 for a STORY with fewer than 5 viewers: "(#10) Not enough
+  // viewers for the media to show insights". That is a property of the STORY, not
+  // of the token — every small account's stories would otherwise raise a
+  // `needs_reconnect` banner telling the owner to reconnect a perfectly healthy
+  // channel for data no permission can produce. Checked BEFORE the generic #10
+  // branch, which has no way to tell the two apart.
+  if (code === 10 && /not enough viewers/i.test(message)) {
+    return undefined;
+  }
+
   if (MISSING_SCOPE_CODES.has(code)) {
     const missingScopes = extractMissingScopes(message);
     return {

@@ -52,6 +52,17 @@ import {
   filterByPlatform,
   computeSelectAll,
 } from "~/lib/channel-platform-filter";
+import {
+  type PostType,
+  storySelectableChannels,
+  pruneSelectionForStory,
+  groupSelectableIds,
+  addMentions,
+  sanitizeRestoredMentions,
+  storyBlockReason,
+  STORY_MAX_MENTIONS,
+} from "~/lib/instagram-story";
+import { InstagramStoryPreview } from "~/components/previews/instagram-story-preview";
 
 const MediaEditor = dynamic(
   () => import("~/components/media-editor/MediaEditor").then((m) => ({ default: m.MediaEditor })),
@@ -188,6 +199,14 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   const [platformFilter, setPlatformFilter] = useState<string | null>(null);
   const [formatByChannelId, setFormatByChannelId] = useState<Record<string, "FEED" | "REEL" | "STORY" | "SHORT" | "VIDEO" | "CAROUSEL">>({});
   const [ytMetadata, setYtMetadata] = useState<{ title?: string; privacyStatus?: "public" | "unlisted" | "private" }>({});
+  // Instagram Story mode (2026-09-15). "story" publishes ONE image or video as a
+  // STORY, to Instagram channels only, and can tag people. Every branch below
+  // that reads `isStoryMode` is the pre-feature code when it is false.
+  const [postType, setPostType] = useState<PostType>("post");
+  const isStoryMode = postType === "story";
+  const [storyMentions, setStoryMentions] = useState<string[]>([]);
+  const [storyMentionInput, setStoryMentionInput] = useState("");
+  const [storyMentionError, setStoryMentionError] = useState<string | null>(null);
   const channelSectionRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
@@ -248,6 +267,15 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
     if (saved.draft.channels?.length && selectedChannels.length === 0) {
       setSelectedChannels(saved.draft.channels);
     }
+    // Story mode + mentions. Absent ⇒ Post mode, so a draft from an older build
+    // restores exactly as before. The mentions are re-validated rather than
+    // trusted: one malformed username reaching post.create rejects the WHOLE
+    // post, the same failure shape the superText/cover restores guard against.
+    // Pruning the channel list to Instagram is left to the effect below, which
+    // also covers the (common) case of the channel query resolving after this.
+    if (saved.draft.postType === "story") setPostType("story");
+    const restoredMentions = sanitizeRestoredMentions(saved.draft.storyMentions);
+    if (restoredMentions.length > 0) setStoryMentions(restoredMentions);
     // Restore attachments that are losslessly restorable (Media-row id or a
     // non-blob URL). Never resurrect blob: tiles (their File died with the old
     // page) and never pre-empt deep-link media (carousel/initialImage flow).
@@ -329,17 +357,27 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
     () => JSON.stringify(postMedia.map((m) => [m.url, m.mediaId ?? null, m.superText ?? null, m.thumbnail?.mediaId ?? null])),
     [postMedia]
   );
+  // Mentions change only on an explicit edit, so a string signature is enough to
+  // key the persist effect without reintroducing an identity-keyed dependency.
+  const storyMentionsSignature = storyMentions.join(",");
   useEffect(() => {
-    if (content.trim().length > 0 || selectedChannels.length > 0 || postMedia.length > 0) {
+    if (
+      content.trim().length > 0 ||
+      selectedChannels.length > 0 ||
+      postMedia.length > 0 ||
+      storyMentions.length > 0
+    ) {
       addTask({
         id: TASK_ID,
         type: "compose",
-        label: "Composing post",
-        description: content.slice(0, 60) || "New post",
+        label: isStoryMode ? "Composing story" : "Composing post",
+        description: content.slice(0, 60) || (isStoryMode ? "New Instagram story" : "New post"),
         href: "/dashboard/content-agent?tab=compose",
         draft: {
           content,
           channels: selectedChannels,
+          postType,
+          storyMentions,
           mediaUrls: postMedia.map((m) => m.url),
           // Only losslessly-restorable items (library picks, AI images,
           // completed uploads) — blob-only tiles can't survive a remount.
@@ -358,9 +396,9 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
       removeTask(TASK_ID);
     }
     // postMedia is read in the body but deliberately keyed via its persisted
-    // signature — see the comment above draftMediaSignature.
+    // signature — see the comment above draftMediaSignature. Same for mentions.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [content, selectedChannels, draftMediaSignature]);
+  }, [content, selectedChannels, draftMediaSignature, postType, storyMentionsSignature]);
 
   useEffect(() => {
     if (initialContent) setContent(initialContent);
@@ -411,14 +449,24 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   // request with "One or more channels do not belong to this organization."
   // Drop any selected ID that isn't in the current channel list so only real,
   // owned channels are ever submitted.
+  // ⚠️ Also keyed on postType. This is the ONLY place that sees channels arriving
+  // AFTER a draft restore, so it is where a story's Instagram-only rule has to be
+  // enforced for anything the mode-switch handler never touched: a restored
+  // draft, a group cache that lags a platform change, or hand-edited storage.
+  // Without it a Facebook id stays selected while the picker shows only
+  // Instagram, and post.create rejects the whole thing AFTER the media upload.
   useEffect(() => {
     if (!channels) return;
     const liveIds = new Set((channels as any[]).map((c) => c.id));
     setSelectedChannels((prev) => {
       const reconciled = prev.filter((id) => liveIds.has(id));
-      return reconciled.length === prev.length ? prev : reconciled;
+      if (postType !== "story") {
+        return reconciled.length === prev.length ? prev : reconciled;
+      }
+      const { next } = pruneSelectionForStory(reconciled, channels as any[]);
+      return next.length === prev.length ? prev : next;
     });
-  }, [channels]);
+  }, [channels, postType]);
 
   // Measure the first attached video's aspect ratio so we can warn about
   // non-vertical Shorts before publishing.
@@ -573,6 +621,12 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
       setScheduledAt("");
       setUniqueCaptions(false);
       setPostMedia([]);
+      // Mentions are per-story. Carrying them over would silently re-tag the
+      // previous story's people on the next one. The MODE is kept deliberately:
+      // someone posting a story usually has another to post.
+      setStoryMentions([]);
+      setStoryMentionInput("");
+      setStoryMentionError(null);
       removeTask(TASK_ID);
       onPostCreated?.();
       // Open the post's detail page so the live upload/publish progress and final
@@ -706,6 +760,54 @@ ${content}`;
       // (lib/trpc/react.tsx). Do NOT toast here too — it would double-toast.
     }
     setIsGeneratingCarousel(false);
+  };
+
+  /**
+   * Switch between a normal post and an Instagram story.
+   *
+   * Going INTO story mode prunes non-Instagram picks and says how many went —
+   * silently dropping a channel the user chose is the kind of quiet loss this
+   * compose screen has been bitten by before. Going back to Post mode keeps the
+   * (Instagram) selection: nothing about it is invalid for a normal post.
+   */
+  const switchPostType = (next: PostType) => {
+    if (next === postType) return;
+    setPostType(next);
+    if (next !== "story") return;
+    // ⚠️ Only prune against a LOADED list. With `channels` still undefined the
+    // helper sees zero Instagram ids and would wipe the whole selection — then
+    // toast that it removed them. The [channels, postType] effect below prunes
+    // for real once the query resolves.
+    if (!channels) return;
+    const { next: pruned, removed } = pruneSelectionForStory(selectedChannels, channels as any[]);
+    if (removed > 0) {
+      setSelectedChannels(pruned);
+      toast({
+        title: "Switched to Story",
+        description: `${removed} non-Instagram channel${removed === 1 ? "" : "s"} removed — stories publish only to Instagram.`,
+      });
+    }
+    // ⚠️ Deliberately NOT resetting platformFilter or uniqueCaptions here. Both
+    // are already neutralised wherever story mode reads them (the list uses
+    // `isStoryMode ? null : platformFilter`; the payload and the captions card
+    // both check `!isStoryMode`). Resetting them only destroyed the user's
+    // Post-mode choices on the way back — and because this line sat after the
+    // `!channels` early return, the same click did it or not depending on
+    // whether the channel query had resolved.
+  };
+
+  const commitMentionInput = () => {
+    if (!storyMentionInput.trim()) return;
+    const { mentions, invalid, dropped } = addMentions(storyMentions, storyMentionInput);
+    setStoryMentions(mentions);
+    setStoryMentionInput("");
+    setStoryMentionError(
+      invalid.length > 0
+        ? `Not a valid Instagram username: ${invalid.join(", ")}`
+        : dropped > 0
+          ? `You can tag up to ${STORY_MAX_MENTIONS} people.`
+          : null
+    );
   };
 
   const handleOpenEditor = (imageIndex?: number) => {
@@ -1087,10 +1189,14 @@ ${content}`;
   };
 
   const handleSubmit = async (publishNow: boolean) => {
-    if (!content || selectedChannels.length === 0) {
+    // A story carries no visible caption, so its note is optional — but it still
+    // needs somewhere to go.
+    if ((!isStoryMode && !content) || selectedChannels.length === 0) {
       toast({
         title: "Missing required fields",
-        description: "Please add content and select at least one channel.",
+        description: isStoryMode
+          ? "Select at least one Instagram channel."
+          : "Please add content and select at least one channel.",
         variant: "destructive",
       });
       return;
@@ -1102,6 +1208,13 @@ ${content}`;
       return;
     }
 
+    if (storyBlock) {
+      toast({ title: "Story not ready", description: storyBlock, variant: "destructive" });
+      return;
+    }
+
+    // Only meaningful in Post mode — `youtubeBlockReason` is null in story mode
+    // (a story cannot target YouTube at all).
     if (youtubeBlockReason) {
       toast({ title: "Cannot publish to YouTube", description: youtubeBlockReason, variant: "destructive" });
       return;
@@ -1132,21 +1245,32 @@ ${content}`;
             ? new Date(scheduledAt).toISOString()
             : undefined,
         // PR-5: only sent on the schedule/publish path (draft-save keeps it off).
-        ...(uniqueCaptions && selectedChannels.length > 1 && { uniqueCaptions: true }),
+        // Never for a story — it displays no caption to vary.
+        ...(!isStoryMode && uniqueCaptions && selectedChannels.length > 1 && { uniqueCaptions: true }),
         ...(mediaIds.length > 0 && { mediaIds }),
-        ...(Object.keys(formatByChannelId).length > 0 && { formatByChannelId }),
+        // The per-channel picker is a Post-mode control, and its map is never
+        // pruned. The server forces STORY on every story target anyway; not
+        // sending it keeps a stale REEL/SHORT out of the story payload entirely.
+        ...(!isStoryMode && Object.keys(formatByChannelId).length > 0 && { formatByChannelId }),
+        ...(isStoryMode && { story: { mentions: storyMentions } }),
         ...(() => {
           // ONE cover per post: the platforms each have exactly one (a reel
           // cover, a Facebook video thumbnail, a YouTube thumbnail), and keying
           // by mediaId would break anyway — super-text/optimize repoint the
           // attachment to a DERIVED Media row before publish. Take the first
           // video that has one.
+          //
+          // A story takes NEITHER: Meta rejects cover_url on a STORIES container,
+          // and YouTube metadata is meaningless. Super text still applies — it is
+          // burned into the video before anything publishes.
           const cover = postMedia.find((m) => m.thumbnail)?.thumbnail;
-          const md = {
-            ...ytMetadata,
-            ...(Object.keys(superTextByMediaId).length > 0 ? { superText: superTextByMediaId } : {}),
-            ...(cover ? { videoThumbnail: { mediaId: cover.mediaId } } : {}),
-          };
+          const md = isStoryMode
+            ? { ...(Object.keys(superTextByMediaId).length > 0 ? { superText: superTextByMediaId } : {}) }
+            : {
+                ...ytMetadata,
+                ...(Object.keys(superTextByMediaId).length > 0 ? { superText: superTextByMediaId } : {}),
+                ...(cover ? { videoThumbnail: { mediaId: cover.mediaId } } : {}),
+              };
           return Object.keys(md).length > 0 ? { metadata: md } : {};
         })(),
       });
@@ -1171,7 +1295,11 @@ ${content}`;
     : [];
 
   // YouTube only accepts video uploads — gate the UI to prevent invalid combinations.
-  const hasYouTube = selectedPlatforms.includes("youtube");
+  // ⚠️ `false` in story mode. A story can only target Instagram, so any YouTube id
+  // still sitting in the selection is stale state the prune effect is about to
+  // clear — surfacing "YouTube requires a video" there would name a platform the
+  // user cannot even see in the picker.
+  const hasYouTube = !isStoryMode && selectedPlatforms.includes("youtube");
   const hasInstagram = selectedPlatforms.includes("instagram");
   const hasVideoAttached = postMedia.some((m) => {
     const t = m.file?.type ?? "";
@@ -1201,6 +1329,16 @@ ${content}`;
           : null
     : null;
 
+  // Why the story cannot be submitted yet, or null. One predicate feeds the
+  // submit handler AND both buttons' disabled/title, so they cannot disagree.
+  const storyBlock = isStoryMode
+    ? storyBlockReason({
+        mediaCount: postMedia.length,
+        selectedCount: selectedChannels.length,
+        uploading: mediaBusy,
+      })
+    : null;
+
   return (
     <div className="w-full space-y-6">
       <div className="grid min-w-0 gap-6 xl:grid-cols-[1fr,400px]">
@@ -1216,6 +1354,42 @@ ${content}`;
               onPreviewUpdate={setEditorPreview}
             />
           ) : (
+          <>
+          {/* Post type. A story is a different product from a feed post — one
+              image or video, Instagram only, gone in 24 hours — so it gets a
+              first-class switch rather than being buried in a per-channel
+              format picker that only appears once a video is attached. */}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <div
+              role="tablist"
+              aria-label="Post type"
+              className="inline-flex flex-none rounded-lg border bg-muted/40 p-1"
+            >
+              {(["post", "story"] as PostType[]).map((t) => (
+                <button
+                  key={t}
+                  role="tab"
+                  type="button"
+                  aria-selected={postType === t}
+                  onClick={() => switchPostType(t)}
+                  className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
+                    postType === t
+                      ? "bg-background shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {t === "post" ? "Post" : "Story"}
+                </button>
+              ))}
+            </div>
+            {isStoryMode && (
+              <p className="min-w-0 text-[11px] leading-snug text-muted-foreground">
+                Instagram Story · one image or video · Instagram channels only · disappears after 24 hours
+              </p>
+            )}
+          </div>
+
+          {!isStoryMode && (
           <>
           {/* Create with AI — the design's first compose card. Plain `--card`
               surface on a `--border` hairline: the pre-restyle blue gradient
@@ -1270,18 +1444,21 @@ ${content}`;
               </div>
             </CardContent>
           </Card>
+          </>
+          )}
 
           {/* Content Editor */}
           <Card>
             <CardHeader className="pb-3">
               <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2">
-                <CardTitle>Content</CardTitle>
+                <CardTitle>{isStoryMode ? "Note (optional)" : "Content"}</CardTitle>
                 <div className="flex items-center gap-2">
-                  {aiConfig?.anyConfigured && (
+                  {!isStoryMode && aiConfig?.anyConfigured && (
                     <span className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground">
                       via {aiConfig.anthropic ? "Claude" : aiConfig.openai ? "GPT-4" : "Gemini"}
                     </span>
                   )}
+                  {!isStoryMode && (
                   <Button
                     variant="outline"
                     size="sm"
@@ -1297,15 +1474,25 @@ ${content}`;
                     )}
                     {isGenerating ? "Enhancing..." : "Enhance with AI"}
                   </Button>
+                  )}
                 </div>
               </div>
+              {isStoryMode && (
+                <CardDescription>
+                  Instagram doesn&apos;t display a caption on a story. This note is kept with the post for your records.
+                </CardDescription>
+              )}
             </CardHeader>
             <CardContent className="space-y-3">
               <Textarea
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
-                placeholder="Write your post here, or use 'Create with AI' above to generate content..."
-                className="min-h-[200px] resize-none"
+                placeholder={
+                  isStoryMode
+                    ? "Optional note for your own records — it is not shown on the story."
+                    : "Write your post here, or use 'Create with AI' above to generate content..."
+                }
+                className={isStoryMode ? "min-h-[90px] resize-none" : "min-h-[200px] resize-none"}
               />
               <div className="flex items-center justify-end text-xs">
                 <span className="tabular-nums text-muted-foreground">
@@ -1315,8 +1502,10 @@ ${content}`;
             </CardContent>
           </Card>
 
-          {/* AI Image Generation — link to Image tab */}
-          {/* AI Image Generation */}
+          {/* AI Image Generation — Post mode only. A story is the user's own
+              photo or clip; the publish worker refuses to generate one for a
+              story, so offering the generator here would be a dead end. */}
+          {!isStoryMode && (
           <ImageGenerationPanel
             postContent={content}
             onAddToPost={async (imageDataUrl) => {
@@ -1348,16 +1537,30 @@ ${content}`;
               }
             }}
           />
+          )}
 
           {/* Media Attachments */}
           <Card>
             <CardHeader className="pb-3">
               <CardTitle>Media</CardTitle>
               <CardDescription>
-                {hasYouTube ? "YouTube requires a video upload (MP4, WebM, or MOV)" : "Attach images or videos to your post"}
+                {isStoryMode
+                  ? "One image or video · 9:16 recommended · image up to 8MB, video 3–60s up to 100MB"
+                  : hasYouTube
+                    ? "YouTube requires a video upload (MP4, WebM, or MOV)"
+                    : "Attach images or videos to your post"}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
+              {isStoryMode && postMedia.length > 1 && (
+                <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-200">
+                  <AlertCircle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+                  <span>
+                    A story takes exactly one image or video. Remove {postMedia.length - 1} attachment
+                    {postMedia.length - 1 === 1 ? "" : "s"}, or switch back to Post.
+                  </span>
+                </div>
+              )}
               {hasYouTube && (
                 <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300">
                   <Video className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
@@ -1371,7 +1574,9 @@ ${content}`;
                   ref={fileInputRef}
                   type="file"
                   accept="image/*"
-                  multiple
+                  // A story takes exactly one — don't invite a multi-pick that the
+                  // warning above then asks the user to undo.
+                  multiple={!isStoryMode}
                   className="hidden"
                   onChange={handleFileUpload}
                 />
@@ -1417,7 +1622,7 @@ ${content}`;
                   produces image slides, and image-slides-plus-a-video is not a
                   publishable combination (owner flagged the button's presence beside
                   an uploaded video as a bug, 2026-09-01). */}
-              {!hasYouTube && !hasVideoAttached && (
+              {!hasYouTube && !hasVideoAttached && !isStoryMode && (
               <div className="flex items-center gap-2">
                 <Button
                   variant="outline"
@@ -1473,7 +1678,11 @@ ${content}`;
                                 the owner reported never being able to SEE the
                                 processed result (crop included). thumbnail.url is
                                 always an image, so <img> is correct here. */}
-                            {item.thumbnail ? (
+                            {/* ⚠️ `!isStoryMode`: Meta rejects cover_url on a
+                                STORIES container, so a cover set in Post mode is
+                                NOT sent for a story. Showing it here would
+                                promise a cover the publish silently drops. */}
+                            {item.thumbnail && !isStoryMode ? (
                               // eslint-disable-next-line @next/next/no-img-element
                               <img
                                 src={item.thumbnail.url}
@@ -1493,7 +1702,7 @@ ${content}`;
                             {/* With a cover showing, the full scrim + centered
                                 film icon would hide the very image the user asked
                                 to see — shrink it to a corner badge instead. */}
-                            {item.thumbnail && !item.uploading ? (
+                            {item.thumbnail && !isStoryMode && !item.uploading ? (
                               <span
                                 className="absolute right-1 top-1 rounded bg-black/60 p-0.5"
                                 title="Video — showing its custom cover"
@@ -1517,7 +1726,7 @@ ${content}`;
                             {/* Remove ONLY the cover (top-left; the tile's own X
                                 sits top-right). Keyed on the tile URL like every
                                 other cover write — never the array index. */}
-                            {item.thumbnail && !item.thumbnailUploading && (
+                            {item.thumbnail && !isStoryMode && !item.thumbnailUploading && (
                               <button
                                 type="button"
                                 onClick={() => {
@@ -1590,7 +1799,10 @@ ${content}`;
                             mutually exclusive, because two competing `bg-*`
                             utilities resolve by stylesheet order, not by their
                             order in this string. */}
-                        {isVideo && (
+                        {/* ⚠️ Hidden for a story: a custom cover is a Reels
+                            feature and Meta rejects it on a STORIES container,
+                            so offering the control would be a dead end. */}
+                        {isVideo && !isStoryMode && (
                           <label
                             className={`${TILE_STRIP} bottom-5 ${
                               item.uploading || item.thumbnailUploading
@@ -1643,7 +1855,11 @@ ${content}`;
               <div className="flex items-center justify-between">
                 <div>
                   <CardTitle>Select Channels</CardTitle>
-                  <CardDescription>Search and pick channels to publish to</CardDescription>
+                  <CardDescription>
+                    {isStoryMode
+                      ? "Stories publish only to Instagram accounts"
+                      : "Search and pick channels to publish to"}
+                  </CardDescription>
                 </div>
                 {selectedChannels.length > 0 && (
                   <Badge variant="secondary">{selectedChannels.length} selected</Badge>
@@ -1677,12 +1893,14 @@ ${content}`;
                     const liveIds = new Set<string>(
                       ((channels as any[]) ?? []).map((c: any) => c.id as string)
                     );
+                    // In story mode a group contributes only its Instagram
+                    // members, so one click can never pull a Facebook Page into a
+                    // story — and a group with none shows no pill at all rather
+                    // than one that does nothing.
                     const groupsWithActive = ((channelGroups as any[]) ?? [])
                       .map((group: any) => ({
                         ...group,
-                        activeIds: ((group.channels ?? []) as any[])
-                          .filter((c: any) => c.isActive && liveIds.has(c.id))
-                          .map((c: any) => c.id as string),
+                        activeIds: groupSelectableIds(group, liveIds, postType),
                       }))
                       .filter((group: any) => group.activeIds.length > 0);
                     if (groupsWithActive.length === 0) return null;
@@ -1752,8 +1970,9 @@ ${content}`;
                   {(() => {
                     const counts = platformCounts((channels as any[]) ?? []);
                     // Nothing to filter with a single platform — don't add chrome
-                    // that can only ever be a no-op.
-                    if (counts.length < 2) return null;
+                    // that can only ever be a no-op. Hidden in story mode too:
+                    // the list is already Instagram-only there.
+                    if (isStoryMode || counts.length < 2) return null;
                     const totalCount = ((channels as any[]) ?? []).length;
                     return (
                       <div className="flex min-w-0 flex-wrap items-center gap-1.5">
@@ -1855,7 +2074,14 @@ ${content}`;
                     // Platform filter is applied BEFORE the text search, so the
                     // visible list (and therefore Select all) can never include a
                     // channel from a platform the user filtered out.
-                    const platformScoped = filterByPlatform((channels as any[]) ?? [], platformFilter);
+                    // ⚠️ In story mode `platformFilter` is IGNORED, not reset. The
+                    // pills that clear it are hidden, so a filter left over from
+                    // Post mode would intersect with the Instagram-only list and
+                    // could empty it with no way to recover — while resetting it
+                    // would throw away the user's Post-mode filter when they
+                    // switch back.
+                    const modeScoped = storySelectableChannels((channels as any[]) ?? [], postType);
+                    const platformScoped = filterByPlatform(modeScoped, isStoryMode ? null : platformFilter);
                     const allFiltered = platformScoped.filter((channel: any) => {
                       const matchesSearch =
                         !channelSearch ||
@@ -1884,8 +2110,8 @@ ${content}`;
                       <>
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <span className="text-xs text-muted-foreground">
-                          {sorted.length} channel{sorted.length === 1 ? "" : "s"}
-                          {platformFilter ? ` · ${platformFilter}` : ""}
+                          {sorted.length} {isStoryMode ? "Instagram " : ""}channel{sorted.length === 1 ? "" : "s"}
+                          {!isStoryMode && platformFilter ? ` · ${platformFilter}` : ""}
                           {selectedVisibleCount > 0 ? ` · ${selectedVisibleCount} selected` : ""}
                         </span>
                         <Button
@@ -1906,7 +2132,11 @@ ${content}`;
                       </div>
                       <div className="max-h-48 overflow-y-auto rounded-md border bg-background shadow-sm">
                         {sorted.length === 0 ? (
-                          <p className="p-3 text-center text-xs text-muted-foreground">No channels found</p>
+                          <p className="p-3 text-center text-xs text-muted-foreground">
+                            {isStoryMode && !channelSearch
+                              ? "No Instagram accounts connected — connect one on the Channels page"
+                              : "No channels found"}
+                          </p>
                         ) : (
                           sorted.map((channel: any) => {
                             const isSelected = selectedChannels.includes(channel.id);
@@ -1958,8 +2188,81 @@ ${content}`;
             </CardContent>
           </Card>
 
-          {/* Post Format — shown when YouTube or Instagram+video channels are selected */}
-          {(hasYouTube && hasVideoAttached) || (hasInstagram && hasVideoAttached) ? (
+          {/* Tag people — story only. Meta supports sticker-less @mentions on a
+              story via `user_tags`; link/poll/location stickers are not
+              publishable through the API at all. */}
+          {isStoryMode && (
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle>Tag people</CardTitle>
+                <CardDescription>
+                  Mention Instagram accounts on this story. They must be public, and Instagram notifies them.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {storyMentions.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {storyMentions.map((u) => (
+                      <span
+                        key={u}
+                        className="inline-flex items-center gap-1 rounded-full border bg-primary/5 px-2.5 py-1 text-xs font-medium"
+                      >
+                        @{u}
+                        <button
+                          type="button"
+                          aria-label={`Remove @${u}`}
+                          onClick={() => setStoryMentions((prev) => prev.filter((x) => x !== u))}
+                          className="ml-0.5 rounded-full p-0.5 hover:bg-destructive/10"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <Input
+                  value={storyMentionInput}
+                  onChange={(e) => {
+                    setStoryMentionInput(e.target.value);
+                    if (storyMentionError) setStoryMentionError(null);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === "," ) {
+                      e.preventDefault();
+                      commitMentionInput();
+                    }
+                  }}
+                  // Commit on blur so a typed name is never silently lost by
+                  // clicking straight through to Publish.
+                  onBlur={commitMentionInput}
+                  placeholder={
+                    storyMentions.length >= STORY_MAX_MENTIONS
+                      ? `You can tag up to ${STORY_MAX_MENTIONS} people`
+                      : "@username — press Enter to add"
+                  }
+                  disabled={storyMentions.length >= STORY_MAX_MENTIONS}
+                  aria-label="Instagram username to tag"
+                  className="h-9 text-sm"
+                />
+                <div className="flex items-center justify-between gap-2 text-[11px]">
+                  {storyMentionError ? (
+                    <span className="min-w-0 text-destructive">{storyMentionError}</span>
+                  ) : (
+                    <span className="min-w-0 text-muted-foreground">
+                      Added as mentions, without a sticker.
+                    </span>
+                  )}
+                  <span className="flex-none tabular-nums text-muted-foreground">
+                    {storyMentions.length}/{STORY_MAX_MENTIONS}
+                  </span>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Post Format — shown when YouTube or Instagram+video channels are selected.
+              Never in story mode: the server forces STORY on every target there. */}
+          {!isStoryMode && ((hasYouTube && hasVideoAttached) || (hasInstagram && hasVideoAttached)) ? (
             <Card>
               <CardHeader className="pb-3">
                 <CardTitle>Post Format</CardTitle>
@@ -2047,8 +2350,9 @@ ${content}`;
             </CardContent>
           </Card>
 
-          {/* Unique captions (PR-5) — shown only when >1 channel is selected */}
-          {selectedChannels.length > 1 && (
+          {/* Unique captions (PR-5) — shown only when >1 channel is selected.
+              Never in story mode: a story displays no caption to vary. */}
+          {!isStoryMode && selectedChannels.length > 1 && (
             <Card>
               <CardHeader className="pb-3">
                 <CardTitle>Captions</CardTitle>
@@ -2101,14 +2405,26 @@ ${content}`;
                     content,
                     channelIds: selectedChannels.length > 0 ? selectedChannels : [],
                     ...(mediaIds.length > 0 && { mediaIds }),
+                    // ⚠️ The draft must carry the story marker too. Without it the
+                    // server stores an ordinary post, and scheduling that draft
+                    // later would publish a FEED post to the account — the exact
+                    // "never post a normal post to this channel" rule this mode
+                    // exists to keep.
+                    ...(isStoryMode && { story: { mentions: storyMentions } }),
                     ...(() => {
                       const cover = postMedia.find((m) => m.thumbnail)?.thumbnail;
-                      const md = {
-                        ...(Object.keys(superTextByMediaId).length > 0
-                          ? { superText: superTextByMediaId }
-                          : {}),
-                        ...(cover ? { videoThumbnail: { mediaId: cover.mediaId } } : {}),
-                      };
+                      const md = isStoryMode
+                        ? {
+                            ...(Object.keys(superTextByMediaId).length > 0
+                              ? { superText: superTextByMediaId }
+                              : {}),
+                          }
+                        : {
+                            ...(Object.keys(superTextByMediaId).length > 0
+                              ? { superText: superTextByMediaId }
+                              : {}),
+                            ...(cover ? { videoThumbnail: { mediaId: cover.mediaId } } : {}),
+                          };
                       return Object.keys(md).length > 0 ? { metadata: md } : {};
                     })(),
                   });
@@ -2122,7 +2438,13 @@ ${content}`;
                   setIsUploading(false);
                 }
               }}
-              disabled={!content || createPost.isPending || isUploading}
+              // A story's note is optional, so a draft needs media OR a note —
+              // but never two attachments, which the server refuses outright.
+              disabled={
+                (isStoryMode ? (postMedia.length === 0 && !content) || postMedia.length > 1 : !content) ||
+                createPost.isPending ||
+                isUploading
+              }
             >
               <Save className="mr-2 h-4 w-4" />
               Save as Draft
@@ -2132,30 +2454,32 @@ ${content}`;
               className="w-full sm:w-auto"
               onClick={() => handleSubmit(false)}
               disabled={
-                !content || selectedChannels.length === 0 || !scheduledAt || createPost.isPending || isUploading || !!youtubeBlockReason
+                (!isStoryMode && !content) || selectedChannels.length === 0 || !scheduledAt || createPost.isPending || isUploading || !!youtubeBlockReason || !!storyBlock
               }
-              title={youtubeBlockReason ?? undefined}
+              title={youtubeBlockReason ?? storyBlock ?? undefined}
             >
               <Clock className="mr-2 h-4 w-4" />
-              Schedule
+              {isStoryMode ? "Schedule story" : "Schedule"}
             </Button>
             <Button
               className="w-full sm:w-auto"
               onClick={() => handleSubmit(true)}
-              disabled={!content || selectedChannels.length === 0 || createPost.isPending || isUploading || !!youtubeBlockReason}
-              title={youtubeBlockReason ?? undefined}
+              disabled={(!isStoryMode && !content) || selectedChannels.length === 0 || createPost.isPending || isUploading || !!youtubeBlockReason || !!storyBlock}
+              title={youtubeBlockReason ?? storyBlock ?? undefined}
             >
               {(createPost.isPending || isUploading) ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : (
                 <Send className="mr-2 h-4 w-4" />
               )}
-              {isUploading ? "Uploading..." : "Publish Now"}
+              {isUploading ? "Uploading..." : isStoryMode ? "Publish story" : "Publish Now"}
             </Button>
           </div>
-          {youtubeBlockReason && (
+          {/* The disabled buttons explain themselves only through `title`, which a
+              touch device never shows — so the same predicate is rendered here. */}
+          {(youtubeBlockReason || storyBlock) && (
             <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-300">
-              {youtubeBlockReason}
+              {youtubeBlockReason ?? storyBlock}
             </div>
           )}
           </>
@@ -2169,15 +2493,30 @@ ${content}`;
           <div className="flex items-center gap-2.5">
             <Eye className="h-[15px] w-[15px] flex-none text-gold" />
             <h2 className="min-w-0 flex-1 text-[12.5px] font-semibold leading-[1.2] text-foreground">
-              Post Preview
+              {isStoryMode ? "Story Preview" : "Post Preview"}
             </h2>
-            {selectedPlatforms.length > 0 && (
+            {!isStoryMode && selectedPlatforms.length > 0 && (
               <span className="flex-none text-[9px] font-medium uppercase leading-none tracking-[0.16em] text-muted-foreground">
                 {selectedPlatforms.length}{" "}
                 {selectedPlatforms.length === 1 ? "platform" : "platforms"}
               </span>
             )}
           </div>
+          {isStoryMode ? (
+            // A story is a full-bleed 9:16 frame, not a feed card — showing it as
+            // one would misrepresent what publishes. Rendered INSTEAD of the
+            // switcher so the five PostPreviewProps copies and the switcher's
+            // explicit prop rebuild stay untouched.
+            <InstagramStoryPreview
+              mediaUrl={postMedia[0]?.url}
+              mediaKind={postMedia[0] ? (isVideoMediaItem(postMedia[0]) ? "video" : "image") : undefined}
+              mentions={storyMentions}
+              accounts={((channels as any[]) ?? [])
+                .filter((c: any) => selectedChannels.includes(c.id))
+                .map((c: any) => ({ name: c.name, username: c.username, avatar: c.avatar }))}
+              note={content}
+            />
+          ) : (
           <PostPreviewSwitcher
             content={content}
             mediaUrls={editorOpen && editorPreview ? [editorPreview] : postMedia.length > 0 ? postMedia.map(m => m.url) : undefined}
@@ -2188,7 +2527,8 @@ ${content}`;
             // cover), so what the preview shows is what actually publishes.
             videoPosterUrl={postMedia.find((m) => m.thumbnail)?.thumbnail?.url}
           />
-          {!content && selectedPlatforms.length === 0 && (
+          )}
+          {!isStoryMode && !content && selectedPlatforms.length === 0 && (
             <p className="text-center text-xs text-muted-foreground">
               Start typing and select channels to see platform previews
             </p>

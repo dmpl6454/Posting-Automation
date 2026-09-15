@@ -208,9 +208,19 @@ export function PostsTab({ onSwitchTab }: PostsTabProps) {
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-[13px] font-semibold leading-[1.35]">
-                    {post.content.slice(0, 100)}
+                    {/* A story's note is optional, so the title must not be blank. */}
+                    {post.content.slice(0, 100) ||
+                      (post.targets.some((t: any) => t.format === "STORY")
+                        ? "Instagram story"
+                        : "Untitled post")}
                   </p>
                   <p className="mt-1 truncate text-[11px] leading-none text-muted-foreground">
+                    {post.targets.some((t: any) => t.format === "STORY") && (
+                      <>
+                        <span className="font-semibold text-foreground">Story</span>
+                        <span className="px-1.5 text-faint">·</span>
+                      </>
+                    )}
                     {post.targets.length} channel{post.targets.length !== 1 ? "s" : ""}
                     {post.scheduledAt && (
                       <>
