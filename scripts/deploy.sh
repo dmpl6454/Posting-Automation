@@ -20,6 +20,19 @@ DOMAIN="postautomation.co.in"
 EMAIL="admin@postautomation.co.in"
 COMPOSE_FILE="docker-compose.prod.yml"
 ENV_FILE=".env.production"
+# Seconds a replaced worker gets to finish in-flight publishes (2026-09-16).
+# MUST match `stop_grace_period: 5m` on the worker in docker-compose.prod.yml.
+# Passed EXPLICITLY on every worker recreate because, on recreate, Compose stops
+# the OLD container with the stop timeout it was CREATED with — not the new
+# file's stop_grace_period (verified locally: a container created without a
+# grace was SIGKILLed even though the new file said 60s; `--timeout 60` let it
+# drain). So a worker created WITHOUT the grace — e.g. by a rollback to an
+# older commit — would otherwise be killed at Docker's 10s default on the next
+# deploy, exactly like the 2026-09-15 incident.
+# ⚠️ `update` runs the copy of this script that was on disk BEFORE its own
+# `git pull` (git replaces the file; bash keeps reading the old one), so this
+# flag first applies on the deploy AFTER the one that ships it.
+WORKER_STOP_TIMEOUT=300
 
 # Colors
 RED='\033[0;31m'
@@ -194,7 +207,7 @@ cmd_deploy() {
   log "Restarting services..."
   docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --no-deps web
   sleep 5
-  docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --no-deps worker
+  docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --no-deps --timeout "$WORKER_STOP_TIMEOUT" worker
   docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --no-deps nginx
 
   # Cap Docker build-cache / stale-image growth. Every deploy leaves the previous
@@ -374,7 +387,7 @@ cmd_rollback() {
   log "Restarting services..."
   docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --no-deps web
   sleep 5
-  docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --no-deps worker
+  docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --no-deps --timeout "$WORKER_STOP_TIMEOUT" worker
   docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --no-deps nginx
 
   # Go back to main branch

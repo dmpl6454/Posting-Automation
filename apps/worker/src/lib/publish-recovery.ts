@@ -134,6 +134,234 @@ export function routePublishError(err: unknown): PublishErrorRoute {
   return "classify";
 }
 
+/**
+ * Message classification for the publish worker's catch chain (and its
+ * `on("failed")` user-message mapping).
+ *
+ * Moved here from post-publish.worker.ts on 2026-09-16 so it can be unit-tested
+ * without importing the worker module (which opens a Redis connection at load).
+ * Every pattern below is unchanged, except the new first line.
+ */
+export type PublishErrorType =
+  | "rate_limit"
+  | "token_expired"
+  | "permission"
+  | "content_too_large"
+  | "media_required"
+  | "unknown";
+
+export function classifyError(errMsg: string): PublishErrorType {
+  const msg = errMsg.toLowerCase();
+  // ⚠️ MUST stay first. "Validation failed: …" is OUR OWN pre-publish verdict,
+  // never a platform response — yet the base validator's "Too many media
+  // attachments. Instagram allows max 10." matched "too many" below, so an
+  // 11-image post (2026-09-16) was reported as "Platform rate limit hit. Will
+  // retry automatically." for a post that can never publish as it stands.
+  if (msg.trimStart().startsWith("validation failed")) return "unknown";
+  if (msg.includes("limit how often") || msg.includes("rate limit") || msg.includes("too many") || msg.includes("code\":368") || msg.includes("code\":32")) return "rate_limit";
+  if (msg.includes("token") && (msg.includes("expired") || msg.includes("invalid")) || msg.includes("code\":190") || msg.includes("401")) return "token_expired";
+  if (msg.includes("permission") || msg.includes("code\":10") || msg.includes("403")) return "permission";
+  if (msg.includes("reduce the amount") || msg.includes("too long") || msg.includes("too large") || msg.includes("content is too")) return "content_too_large";
+  if (msg.includes("requires at least one image") || msg.includes("media required")) return "media_required";
+  return "unknown";
+}
+
+/**
+ * Is this a DEFINITE authentication failure — the credential is dead, and
+ * retrying the job cannot help until the user reconnects the channel?
+ *
+ * WHY (2026-09-16). A dead Instagram token (Graph 190/460, "session has been
+ * invalidated") failed attempt 1, the forced token refresh failed the same way,
+ * and the worker threw a PLAIN Error — so BullMQ retried. The retry's duplicate
+ * pre-flight then tried to LIST the account with that same dead token, could
+ * not, and parked the target as "may already have gone live": a false
+ * ambiguity, measured on 73 targets since 2026-09-14. Nothing had been
+ * published, and the operator was sent to check for a post that never existed.
+ *
+ * ⚠️ Deliberately NARROW and asymmetric. A positive auth marker is required AND
+ * any hint of a network/timeout/5xx problem vetoes it: those can be transient,
+ * and calling a transient failure "definite" would stop a retry that might have
+ * succeeded. Calling a definite failure "not definite" only costs the old
+ * behaviour, so every doubt resolves to false.
+ */
+const DEFINITE_AUTH_FAILURE_RE =
+  /invalid_grant|"code"\s*:\s*190|OAuthException|session has been invalidated|Error validating access token|has been revoked|unauthorized_client|invalid_client|invalid_token/i;
+const TRANSIENT_FAILURE_RE =
+  /fetch failed|ETIMEDOUT|ECONNRESET|ENOTFOUND|EAI_AGAIN|socket hang up|aborted|timed? ?out|\b5\d\d\b/i;
+
+export function isDefiniteAuthFailure(message: string | null | undefined): boolean {
+  if (!message) return false;
+  return DEFINITE_AUTH_FAILURE_RE.test(message) && !TRANSIENT_FAILURE_RE.test(message);
+}
+
+/**
+ * Per-job progress flags shared between the publish processor and its wrapper
+ * (post-publish.worker.ts, 2026-09-16).
+ *
+ *   claimed    — this job moved the target to PUBLISHING (atomic claim won).
+ *   dispatched — the job reached the publish `try` (pre-flight reconciliation /
+ *                first provider.publishPost). From here on, the platform may
+ *                hold the post, so ONLY the publish catch branches may write a
+ *                terminal state.
+ */
+export interface PublishJobState {
+  claimed: boolean;
+  dispatched: boolean;
+}
+
+/** errorMessage is TEXT, but a runaway provider message has no business in a UI toast. */
+const RELEASE_MESSAGE_MAX_CHARS = 1000;
+
+/**
+ * Release a claim whose job threw BEFORE anything was sent to the platform.
+ *
+ * WHY (2026-09-16). A post with 11 images (Instagram allows 10) threw
+ * "Validation failed" AFTER the atomic claim and BEFORE the publish `try`, so
+ * nothing ever wrote a terminal state: all 60 targets sat at PUBLISHING for
+ * 30-56 minutes. The BullMQ retry then lost the claim (the target was
+ * PUBLISHING) and completed silently as a "duplicate".
+ *
+ * FAILED is the right resting place here: nothing reached the platform, so the
+ * target must stay re-claimable, and BullMQ's normal retry takes over —
+ * together with the duplicate pre-flight, which runs because the target now
+ * carries an errorMessage and worker.on("failed") increments retryCount.
+ *
+ * ⚠️ CONDITIONAL on status PUBLISHING: a site that already wrote its own
+ * terminal state (markTargetFailed with an actionable reason, a SCHEDULED
+ * defer) keeps it. NEVER THROWS — the caller rethrows the ORIGINAL error, and a
+ * bookkeeping failure must not replace it.
+ */
+export async function releaseClaimAfterPrePublishError(
+  prisma: {
+    postTarget: {
+      updateMany: (args: {
+        where: { id: string; status: "PUBLISHING" };
+        data: { status: "FAILED"; errorMessage: string };
+      }) => Promise<{ count: number }>;
+    };
+  },
+  postTargetId: string,
+  err: unknown,
+): Promise<void> {
+  const raw =
+    (err as { message?: unknown } | null)?.message ?? (err == null ? "" : String(err));
+  const message =
+    (typeof raw === "string" ? raw : String(raw)).trim().slice(0, RELEASE_MESSAGE_MAX_CHARS) ||
+    "Publishing failed before anything was sent to the platform — please retry.";
+  try {
+    const res = await prisma.postTarget.updateMany({
+      where: { id: postTargetId, status: "PUBLISHING" },
+      data: { status: "FAILED", errorMessage: message },
+    });
+    if (res.count > 0) {
+      console.warn(
+        `[PostPublish] target ${postTargetId} released PUBLISHING → FAILED after a pre-publish error (nothing was sent): ${message}`,
+      );
+    }
+  } catch (e: any) {
+    console.error(`[PostPublish] failed to release claim for ${postTargetId}:`, e?.message);
+  }
+}
+
+/**
+ * Written to a target whose claim was left behind by a job that is no longer
+ * running (deploy SIGKILL, crash, or an unreleased pre-publish throw).
+ *
+ * ⚠️ Must classify as "unknown" (locked by a test) so worker.on("failed")
+ * keeps it verbatim instead of swapping in "rate limit"/"reconnect" copy.
+ */
+export const ORPHANED_CLAIM_MESSAGE =
+  "A previous publish attempt was interrupted before it finished; retrying after first checking whether it already went live (where the platform supports that check).";
+
+export type ClaimMissDecision = "terminalize" | "recover-orphan" | "skip";
+
+/**
+ * What to do when the atomic claim matched nothing (claim.count === 0).
+ *
+ *   "terminalize"    — FINAL attempt: exactly the pre-existing
+ *                      terminalizeStuckClaim path, unchanged.
+ *   "recover-orphan" — the target is PUBLISHING with no platform id and NO
+ *                      other job is working on it: its holder died (the
+ *                      2026-09-15 deploy killed 10 in-flight publishes) or
+ *                      threw without releasing. The worker releases it
+ *                      (conditionally) and fails this attempt so BullMQ
+ *                      retries — and the retry runs the duplicate pre-flight
+ *                      before any re-publish, because the dead holder may have
+ *                      published.
+ *   "skip"           — anything else: already PUBLISHED/FAILED/SCHEDULED, has a
+ *                      publishedId, another job holds it, or the holder check
+ *                      did not run.
+ *
+ * `otherActiveJobs` is `null` when the holder check was not (or could not be)
+ * performed. ⚠️ null ⇒ "skip": recovery requires POSITIVE evidence that nobody
+ * holds the claim, since releasing a live claim invites a concurrent publish.
+ */
+export function decideClaimMiss(opts: {
+  isFinalAttempt: boolean;
+  status: string | null;
+  hasPublishedId: boolean;
+  otherActiveJobs: number | null;
+}): ClaimMissDecision {
+  if (terminalizeStuckClaim({ claimCount: 0, isFinalAttempt: opts.isFinalAttempt })) return "terminalize";
+  if (opts.status !== "PUBLISHING" || opts.hasPublishedId) return "skip";
+  if (opts.otherActiveJobs === null || opts.otherActiveJobs > 0) return "skip";
+  return "recover-orphan";
+}
+
+/**
+ * How many OTHER jobs are working on this target, counted from BullMQ's active
+ * list (all workers, Redis-wide) plus this process's own in-flight claims.
+ *
+ * The local count matters: if a job's lock lapses, BullMQ's stalled checker can
+ * re-run the SAME job id while the first run is still publishing. Filtering the
+ * active list by job id hides that first run, so the process-local registry is
+ * what keeps it from being mistaken for an orphan.
+ *
+ * `activeJobs` entries may be undefined (Job.fromId returns undefined for a job
+ * removed between the range read and the hash read).
+ */
+export function countOtherActiveJobsForTarget(
+  activeJobs: ReadonlyArray<{ id?: string | null; data?: { postTargetId?: unknown } | null } | null | undefined>,
+  selfJobId: string | null | undefined,
+  postTargetId: string,
+  localHolders = 0,
+): number {
+  let n = 0;
+  for (const j of activeJobs) {
+    if (!j) continue;
+    if (selfJobId != null && j.id === selfJobId) continue;
+    if (j.data?.postTargetId === postTargetId) n++;
+  }
+  return n + Math.max(0, localHolders);
+}
+
+/**
+ * One grep-able line per successful publish (2026-09-16) so queue wait and run
+ * time can be measured from logs instead of inferred. Fields whose inputs are
+ * missing are OMITTED rather than printed as NaN.
+ *
+ *   queueWaitMs    — processedOn − (timestamp + delay): time ready-but-waiting.
+ *   runMs          — now − processedOn: this attempt's processing time.
+ *   sinceEnqueueMs — now − timestamp: end-to-end, including any delay/stagger.
+ */
+export function formatPublishTiming(opts: {
+  postTargetId: string;
+  platform: string;
+  timestamp?: number | null;
+  processedOn?: number | null;
+  delay?: number | null;
+  now: number;
+}): string {
+  const parts = [`[PublishTiming] target=${opts.postTargetId} platform=${opts.platform}`];
+  const { timestamp, processedOn } = opts;
+  const hasTs = typeof timestamp === "number" && Number.isFinite(timestamp);
+  const hasProc = typeof processedOn === "number" && Number.isFinite(processedOn);
+  if (hasTs && hasProc) parts.push(`queueWaitMs=${processedOn - (timestamp + (opts.delay || 0))}`);
+  if (hasProc) parts.push(`runMs=${opts.now - processedOn}`);
+  if (hasTs) parts.push(`sinceEnqueueMs=${opts.now - timestamp}`);
+  return parts.join(" ");
+}
+
 export function shouldPreflightReconcile(opts: {
   /** BullMQ attempt counter — per JOB, so it resets on every new job. */
   attemptsMade: number;

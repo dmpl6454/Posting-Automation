@@ -200,6 +200,11 @@ export async function runAutoHealer(): Promise<HealerResult> {
   result.scanned = failedPosts.length;
 
   if (failedPosts.length === 0) {
+    // Step 5 is about PUBLISH targets, not autopilot posts, so it must not
+    // depend on there being failed autopilot posts. This early return used to
+    // skip it on nearly every cycle (2026-09-16). Steps 3-4 keep their old
+    // behaviour and are still skipped here.
+    await reapStuckPublishingTargets();
     return result;
   }
 
@@ -298,12 +303,39 @@ export async function runAutoHealer(): Promise<HealerResult> {
     }
   }
 
-  // 5. Reap stuck PUBLISHING posts (post targets stuck in PUBLISHING > 30min).
-  // Do NOT re-queue: the publish worker's claim guard only transitions
-  // SCHEDULED/FAILED/DRAFT → PUBLISHING, so a re-queued job on a PUBLISHING
-  // target is silently skipped (claim.count === 0) and never rescues anything.
-  // The target is orphaned, so mark it FAILED with an actionable message instead.
-  const now = new Date();
+  // 5. Reap stuck PUBLISHING post targets.
+  await reapStuckPublishingTargets();
+
+  return result;
+}
+
+/** How many stuck targets one healer cycle may reap (oldest first). */
+const REAP_BATCH_SIZE = 100;
+export const STUCK_PUBLISHING_MESSAGE = "Publishing stuck for over 30 minutes — please retry";
+
+/**
+ * Reap PostTargets stuck in PUBLISHING for more than 30 minutes.
+ *
+ * Do NOT re-queue: the publish worker's claim guard only transitions
+ * SCHEDULED/FAILED/DRAFT → PUBLISHING, so a re-queued job on a PUBLISHING
+ * target is silently skipped (claim.count === 0) and never rescues anything.
+ * The target is orphaned, so mark it FAILED with an actionable message instead.
+ *
+ * 2026-09-16 hardening:
+ *   - runs on EVERY cycle (it used to be skipped whenever there were no failed
+ *     autopilot posts — i.e. almost always);
+ *   - oldest first, 100 per cycle (was an unordered 20), so a large backlog
+ *     like the 60-target orphan of 2026-09-16 clears in one cycle;
+ *   - the write is CONDITIONAL on the row still being PUBLISHING and still
+ *     stale, so a target whose job finished between the read and the write is
+ *     never clobbered back to FAILED;
+ *   - it increments retryCount. The job that held this claim may have
+ *     published before it died, and retryCount > 0 is what makes a later human
+ *     Retry run the duplicate pre-flight. errorMessage alone is not durable:
+ *     post.publishNow clears it. (The 2026-09-15 deploy victims were reaped
+ *     with retryCount 0, so a Retry would have skipped that check.)
+ */
+export async function reapStuckPublishingTargets(now: Date = new Date()): Promise<number> {
   const thirtyMinAgo = new Date(now.getTime() - 30 * 60 * 1000);
   const stuckPublishing = await prisma.postTarget.findMany({
     where: {
@@ -315,26 +347,33 @@ export async function runAutoHealer(): Promise<HealerResult> {
       status: true,
       updatedAt: true,
     },
-    take: 20,
+    orderBy: { updatedAt: "asc" },
+    take: REAP_BATCH_SIZE,
   });
 
+  let reaped = 0;
   if (stuckPublishing.length > 0) {
     console.log(`[AutoHealer] Found ${stuckPublishing.length} stuck PUBLISHING post targets, marking FAILED`);
     for (const target of stuckPublishing) {
       if (!shouldReapPublishing(target, now)) continue;
       try {
-        await prisma.postTarget.update({
-          where: { id: target.id },
+        const res = await prisma.postTarget.updateMany({
+          where: {
+            id: target.id,
+            status: "PUBLISHING",
+            updatedAt: { lt: thirtyMinAgo },
+          },
           data: {
             status: "FAILED",
-            errorMessage: "Publishing stuck for over 30 minutes — please retry",
+            errorMessage: STUCK_PUBLISHING_MESSAGE,
+            retryCount: { increment: 1 },
           },
         });
+        reaped += res.count;
       } catch {}
     }
   }
-
-  return result;
+  return reaped;
 }
 
 // ---------------------------------------------------------------------------

@@ -4,12 +4,16 @@ import {
   mediaRequiredReason,
   terminalizeStuckClaim,
   isStaleScheduleJob,
+  classifyError,
+  decideClaimMiss,
 } from "../../lib/publish-recovery";
 
-/** Mirror of the worker's classifyError media_required branch (worker line 199). */
+/**
+ * The worker's own classifier (moved to publish-recovery on 2026-09-16, so this
+ * no longer needs a hand-copied mirror that could drift).
+ */
 function classifyMediaError(msg: string): boolean {
-  const m = msg.toLowerCase();
-  return m.includes("requires at least one image") || m.includes("media required");
+  return classifyError(msg) === "media_required";
 }
 
 describe("media-required publish path", () => {
@@ -55,6 +59,23 @@ describe("final-attempt orphan terminalization", () => {
 
   it("does NOT force FAILED on a non-final no-op claim", () => {
     expect(terminalizeStuckClaim({ claimCount: 0, isFinalAttempt: false })).toBe(false);
+  });
+
+  it("a non-final no-op claim on an ORPHAN is released for a retry instead of skipped (2026-09-16)", () => {
+    // Before 2026-09-16 every non-final no-op claim was skipped silently, so a
+    // target whose holder died (deploy SIGKILL) or threw without releasing sat
+    // at PUBLISHING until the 30-min reaper. It is still never TERMINALIZED
+    // early — it is released and retried, with the duplicate pre-flight.
+    expect(
+      decideClaimMiss({ isFinalAttempt: false, status: "PUBLISHING", hasPublishedId: false, otherActiveJobs: 0 })
+    ).toBe("recover-orphan");
+    // A live holder, or an already-finished target, is still skipped exactly as before.
+    expect(
+      decideClaimMiss({ isFinalAttempt: false, status: "PUBLISHING", hasPublishedId: false, otherActiveJobs: 1 })
+    ).toBe("skip");
+    expect(
+      decideClaimMiss({ isFinalAttempt: false, status: "PUBLISHED", hasPublishedId: true, otherActiveJobs: null })
+    ).toBe("skip");
   });
 
   it("does NOT force FAILED when the claim succeeded", () => {

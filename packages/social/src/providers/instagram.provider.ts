@@ -74,6 +74,116 @@ const RECONCILE_SETTLE_MS = reconcileSettleMs("IG_RECONCILE_SETTLE_MS");
  */
 const STORY_CONTAINER_TTL_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * Read timeout for ONE container-status GET inside waitForMediaReady (2026-09-16).
+ *
+ * The poll used to be an unbounded `fetch`, so a single hung read could hold a
+ * publish-worker slot until the job itself died. A short bound is correct here
+ * — unlike the upload/publish fetches fetch-timeout.ts warns about — because
+ * this is a tiny metadata READ (`?fields=status_code,status`), not a media
+ * transfer, and it runs BEFORE media_publish: nothing it does can create a post,
+ * so abandoning a slow read and polling again is always duplicate-safe.
+ */
+const POLL_READ_TIMEOUT_MS = 15_000;
+
+/**
+ * Unreadable status polls tolerated IN A ROW before giving up. A blip (a proxy
+ * 502, a slow read, Meta's `code: 2`) should not fail a 4-minute reel wait, but a
+ * poll that never reads should not silently burn the whole budget either.
+ */
+const MAX_CONSECUTIVE_POLL_READ_FAILURES = 3;
+
+/**
+ * Graph codes meaning the token itself is unusable. Mirrors TOKEN_INVALID_CODES
+ * in utils/meta-insight-diagnosis.ts (not exported from there).
+ */
+const POLL_TOKEN_INVALID_CODES = new Set([190, 102, 463, 467]);
+
+/**
+ * Should a Graph error body returned by a container-status poll end the wait
+ * NOW? A dead token (190/102/463/467) or a container that no longer exists
+ * (#24, or #100 with subcode 33 "object does not exist") can never turn into
+ * FINISHED, so polling on only delayed the inevitable by the full budget — up to
+ * 4 minutes per target on 2026-09-16's measured dead-token fan-outs — before a
+ * generic "did not finish" error that hid the real cause.
+ */
+function isFatalStatusPollError(error: { code?: unknown; error_subcode?: unknown }): boolean {
+  const code = Number(error?.code);
+  if (POLL_TOKEN_INVALID_CODES.has(code)) return true;
+  if (code === 24) return true;
+  return code === 100 && Number(error?.error_subcode) === 33;
+}
+
+/**
+ * A NEUTRAL description of why a status poll could not be read.
+ *
+ * ⚠️ Raw transport text ("fetch failed", "The operation was aborted due to
+ * timeout", ETIMEDOUT, ECONNRESET) must never reach the thrown message. Those
+ * are the shapes isIndeterminatePublishError and the worker's inner retry loop
+ * read as "a write was dispatched and its outcome is unknown" — and this error
+ * is PRE-write by construction, so it must classify as a definite failure.
+ */
+function describePollReadFailure(err: unknown, fallback: string): string {
+  const name = (err as { name?: unknown } | null)?.name;
+  if (name === "TimeoutError" || name === "AbortError") {
+    return `no response within ${Math.round(POLL_READ_TIMEOUT_MS / 1000)}s`;
+  }
+  return fallback;
+}
+
+/**
+ * Carousel children created + awaited at once (2026-09-16). Each child is a
+ * pre-write container, so parallelism cannot publish anything; 3 keeps the
+ * per-account Graph traffic modest while cutting a 10-slide carousel's
+ * sequential create→wait chain to roughly a third.
+ */
+const CAROUSEL_CHILD_CONCURRENCY = 3;
+
+/**
+ * Run `task` over `items` with at most `limit` in flight, returning results in
+ * INPUT order regardless of completion order.
+ *
+ * Failure contract:
+ *   - once any task has failed, no NEW task is started (the sequential loop this
+ *     replaced stopped at the first failure too — no point minting containers
+ *     for a carousel that can no longer be built);
+ *   - every task already STARTED is awaited before rejecting, so nothing is left
+ *     running unobserved after the caller has moved on;
+ *   - the rejection is the error of the LOWEST failing index, which is the error
+ *     the sequential loop would have thrown. (Unstarted tasks all have higher
+ *     indices than any started one, so not starting them cannot change it.)
+ */
+async function mapInOrderWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  task: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  const failures: Array<{ index: number; error: unknown }> = [];
+  let next = 0;
+
+  const runLane = async (): Promise<void> => {
+    while (next < items.length && failures.length === 0) {
+      const index = next++;
+      try {
+        results[index] = await task(items[index]!, index);
+      } catch (error) {
+        failures.push({ index, error });
+      }
+    }
+  };
+
+  // Lanes never reject (each task's error is captured above), so this resolves
+  // only once every started task has settled.
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, runLane));
+
+  if (failures.length > 0) {
+    failures.sort((a, b) => a.index - b.index);
+    throw failures[0]!.error;
+  }
+  return results;
+}
+
 export class InstagramProvider extends SocialProvider {
   readonly platform: SocialPlatform = "INSTAGRAM";
   readonly displayName = "Instagram";
@@ -478,6 +588,19 @@ export class InstagramProvider extends SocialProvider {
    * Treats a still-IN_PROGRESS / missing status_code as "keep waiting" (the
    * status field can lag right after container creation), only failing on an
    * explicit ERROR/EXPIRED or after the timeout budget is exhausted.
+   *
+   * ── Fail-fast rules (2026-09-16) ───────────────────────────────────────────
+   * This runs BEFORE media_publish, so nothing it does can publish anything —
+   * every throw here is pre-write and duplicate-safe.
+   *   - A dead token or a vanished container ends the wait on the FIRST such
+   *     read. Before, a `{"error":{"code":190}}` body carried no status_code, so
+   *     it was polled for the full budget (4 min for a reel) and then reported as
+   *     a generic "did not finish". The error is re-thrown as JSON so the worker's
+   *     classifier still sees the literal `"code":190`.
+   *   - A transient read failure (thrown fetch incl. the read timeout, an
+   *     unparseable body, any other Graph error body) is tolerated up to
+   *     MAX_CONSECUTIVE_POLL_READ_FAILURES in a row, and still consumes an
+   *     attempt. Before, the first thrown fetch or non-JSON body escaped raw.
    */
   private async waitForMediaReady(
     tokens: OAuthTokens,
@@ -487,21 +610,70 @@ export class InstagramProvider extends SocialProvider {
   ): Promise<void> {
     const maxAttempts = Math.ceil(maxWaitMs / pollInterval);
     const startedAt = Date.now();
+    // Reset by every poll that returns a readable status, so scattered blips
+    // across a long reel wait never add up to a failure.
+    let consecutiveReadFailures = 0;
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       await new Promise((r) => setTimeout(r, pollInterval));
 
-      const res = await fetch(
-        `${this.graphBaseUrl}/${this.apiVersion}/${containerId}?fields=status_code,status&access_token=${tokens.accessToken}`
-      );
-      const data: any = await res.json();
+      let res: Response | undefined;
+      let data: any;
+      let readFailure: string | null = null;
+      try {
+        // Plain fetch + its own short signal, not fetchT: fetchT is documented as
+        // connect-path only. See POLL_READ_TIMEOUT_MS for why a bound is right
+        // for this particular read.
+        res = await fetch(
+          `${this.graphBaseUrl}/${this.apiVersion}/${containerId}?fields=status_code,status&access_token=${tokens.accessToken}`,
+          { signal: AbortSignal.timeout(POLL_READ_TIMEOUT_MS) }
+        );
+        data = await res.json();
+      } catch (readErr) {
+        readFailure = describePollReadFailure(readErr, res ? "unreadable response body" : "read error");
+      }
+
+      // Classified OUTSIDE the try so the fatal throw below is never swallowed
+      // as a "read error" by the catch above.
+      if (!readFailure) {
+        const graphError = data?.error;
+        if (graphError) {
+          if (isFatalStatusPollError(graphError)) {
+            throw new Error(`Instagram media status check failed: ${JSON.stringify(graphError)}`);
+          }
+          // Only the numeric code — Meta's free text stays out of the message.
+          const code = Number(graphError.code);
+          readFailure = `graph error code ${Number.isFinite(code) ? code : "unknown"}`;
+        } else if (!data || typeof data !== "object") {
+          readFailure = "empty response body";
+        } else if (res && !res.ok && data.status_code === undefined) {
+          readFailure = `HTTP ${res.status ?? "error"}`;
+        }
+      }
+
+      if (readFailure) {
+        consecutiveReadFailures++;
+        if (consecutiveReadFailures > MAX_CONSECUTIVE_POLL_READ_FAILURES) {
+          // ⚠️ Keep this message free of transport wording — see
+          // describePollReadFailure. It must read as a DEFINITE, pre-write failure.
+          throw new Error(
+            `Instagram media status could not be read (${consecutiveReadFailures} consecutive errors): ${readFailure}`
+          );
+        }
+        console.warn(
+          `[Instagram] status poll for container ${containerId} unreadable (${readFailure}) — ` +
+            `${consecutiveReadFailures}/${MAX_CONSECUTIVE_POLL_READ_FAILURES} tolerated, still waiting`
+        );
+        continue;
+      }
+      consecutiveReadFailures = 0;
 
       // FINISHED = ready to publish; PUBLISHED = already published (defensive).
       if (data.status_code === "FINISHED" || data.status_code === "PUBLISHED") return;
       if (data.status_code === "ERROR" || data.status_code === "EXPIRED") {
         throw new Error(`Instagram media processing failed: ${data.status || data.status_code}`);
       }
-      // IN_PROGRESS, an unknown status, or a transient read error → keep polling.
+      // IN_PROGRESS or an unknown status → keep polling.
     }
 
     // Report ACTUAL elapsed, not the budget: each iteration sleeps `pollInterval`
@@ -1326,45 +1498,56 @@ export class InstagramProvider extends SocialProvider {
 
     // Step 1: Create individual item containers (children of the carousel)
     // Video children require video_url + media_type=VIDEO and must wait for processing.
-    const childContainerIds: string[] = [];
-    for (let i = 0; i < mediaUrls.length; i++) {
-      const url = mediaUrls[i]!;
-      const mime = mediaTypes[i] ?? "";
-      const isChildVideo = mime.startsWith("video/") || /\.(mp4|mov|avi|mkv|webm)(\?|$)/i.test(url);
+    //
+    // Bounded-parallel since 2026-09-16 (was strictly one child at a time, so a
+    // 10-slide carousel waited out ten create→FINISHED cycles back to back).
+    // Safe because a child is only a container — nothing is published until
+    // publishContainer below. `childContainerIds` stays in INPUT order whatever
+    // order the children finish in, because that array IS the slide order.
+    const childContainerIds = await mapInOrderWithConcurrency(
+      mediaUrls,
+      CAROUSEL_CHILD_CONCURRENCY,
+      async (url, i): Promise<string> => {
+        const mime = mediaTypes[i] ?? "";
+        const isChildVideo = mime.startsWith("video/") || /\.(mp4|mov|avi|mkv|webm)(\?|$)/i.test(url);
 
-      const childParams: Record<string, unknown> = { is_carousel_item: true, access_token: tokens.accessToken };
-      if (isChildVideo) {
-        childParams["video_url"] = url;
-        childParams["media_type"] = "VIDEO";
-      } else {
-        childParams["image_url"] = url;
-      }
-
-      const res = await fetch(
-        `${this.graphBaseUrl}/${this.apiVersion}/${igUserId}/media`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(childParams),
+        const childParams: Record<string, unknown> = { is_carousel_item: true, access_token: tokens.accessToken };
+        if (isChildVideo) {
+          childParams["video_url"] = url;
+          childParams["media_type"] = "VIDEO";
+        } else {
+          childParams["image_url"] = url;
         }
-      );
 
-      const data: any = await res.json();
-      if (!res.ok) throw new Error(`Instagram carousel item upload failed: ${JSON.stringify(data)}`);
-      const childId: string = data.id;
+        const res = await fetch(
+          `${this.graphBaseUrl}/${this.apiVersion}/${igUserId}/media`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(childParams),
+          }
+        );
 
-      // Every child container must be FINISHED before the carousel container can
-      // be created — images included (not just videos). Use the short image
-      // budget for images, the long one for videos.
-      await this.waitForMediaReady(
-        tokens,
-        childId,
-        isChildVideo ? 90000 : 30000,
-        isChildVideo ? 5000 : 2000,
-      );
+        const data: any = await res.json();
+        if (!res.ok) throw new Error(`Instagram carousel item upload failed: ${JSON.stringify(data)}`);
+        const childId: string = data.id;
 
-      childContainerIds.push(childId);
-    }
+        // Every child container must be FINISHED before the carousel container can
+        // be created — images included (not just videos). Use the short image
+        // budget for images, the long one for videos. The video budget is the
+        // same VIDEO_READY_TIMEOUT_MS the single-video path uses: the old
+        // hard-coded 90s is exactly what the 2026-08-07 reel incident proved too
+        // short for Instagram's length-scaled transcode.
+        await this.waitForMediaReady(
+          tokens,
+          childId,
+          isChildVideo ? VIDEO_READY_TIMEOUT_MS : 30000,
+          isChildVideo ? 5000 : 2000,
+        );
+
+        return childId;
+      }
+    );
 
     // Step 2: Create the carousel container
     const carouselRes = await fetch(

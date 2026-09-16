@@ -1,5 +1,17 @@
-import { describe, it, expect, vi } from "vitest";
-import { markTargetFailed, shouldReapPublishing, mediaRequiredReason, terminalizeStuckClaim } from "./publish-recovery";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import {
+  markTargetFailed,
+  shouldReapPublishing,
+  mediaRequiredReason,
+  terminalizeStuckClaim,
+  classifyError,
+  isDefiniteAuthFailure,
+  releaseClaimAfterPrePublishError,
+  decideClaimMiss,
+  countOtherActiveJobsForTarget,
+  ORPHANED_CLAIM_MESSAGE,
+  formatPublishTiming,
+} from "./publish-recovery";
 
 describe("shouldReapPublishing", () => {
   const now = new Date("2026-06-10T12:00:00.000Z");
@@ -123,5 +135,244 @@ describe("watchdog reap invariant", () => {
     const justFailed = new Date(now.getTime() - 31 * 60 * 1000);
     // FAILED is terminal — the reaper's status:PUBLISHING filter excludes it.
     expect(shouldReapPublishing({ status: "FAILED", updatedAt: justFailed }, now)).toBe(false);
+  });
+});
+
+describe("classifyError (moved from the worker, 2026-09-16)", () => {
+  it("treats our own 'Validation failed' verdict as unknown — never a platform rate limit", () => {
+    // The exact message an 11-image Instagram post produced. "too many" used to
+    // route it to rate_limit ("Platform rate limit hit. Will retry automatically.").
+    expect(classifyError("Validation failed: Too many media attachments. Instagram allows max 10.")).toBe("unknown");
+    expect(classifyError("VALIDATION FAILED: token expired (401)")).toBe("unknown");
+    expect(classifyError("  validation failed: Content is too long")).toBe("unknown");
+  });
+
+  it("keeps every other classification exactly as before", () => {
+    const cases: Array<[string, ReturnType<typeof classifyError>]> = [
+      ["We limit how often you can post", "rate_limit"],
+      ["Facebook rate limit reached", "rate_limit"],
+      ["Too many requests", "rate_limit"],
+      ['{"error":{"code":368}}', "rate_limit"],
+      ['{"errors":[{"code":32}]}', "rate_limit"],
+      ["Access token has expired", "token_expired"],
+      ["invalid token", "token_expired"],
+      ['{"error":{"code":190}}', "token_expired"],
+      ["HTTP 401", "token_expired"],
+      ["Token expired and refresh failed: fetch failed. Reconnect this channel in Settings.", "token_expired"],
+      ["Missing permission pages_manage_posts", "permission"],
+      ['{"error":{"code":10}}', "permission"],
+      ["HTTP 403 Forbidden", "permission"],
+      ["Please reduce the amount of data", "content_too_large"],
+      ["Caption too long", "content_too_large"],
+      ["File too large", "content_too_large"],
+      ["Instagram requires at least one image or video to publish a post.", "media_required"],
+      ["media required", "media_required"],
+      ["boom", "unknown"],
+      ["", "unknown"],
+    ];
+    for (const [msg, expected] of cases) expect(classifyError(msg), msg).toBe(expected);
+  });
+
+  it("keeps the orphaned-claim message verbatim (unknown) so the failed handler does not rewrite it", () => {
+    expect(classifyError(ORPHANED_CLAIM_MESSAGE)).toBe("unknown");
+  });
+
+  it("the worker no longer defines its own copy", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const src = readFileSync(join(__dirname, "../workers/post-publish.worker.ts"), "utf8");
+    expect(src).not.toMatch(/function classifyError\(/);
+    expect(src).toMatch(/\bclassifyError,/);
+  });
+});
+
+describe("isDefiniteAuthFailure", () => {
+  it("recognises the exact production dead-session string", () => {
+    expect(
+      isDefiniteAuthFailure(
+        'Instagram long-lived token exchange failed: {"error":{"message":"Error validating access token: The session has been invalidated because the user changed their password or Facebook has changed the session for security reasons.","type":"OAuthException","code":190,"error_subcode":460}}'
+      )
+    ).toBe(true);
+  });
+
+  it("recognises other definite credential failures", () => {
+    for (const m of [
+      '{"error":"invalid_grant","error_description":"Token has been expired or revoked."}',
+      '{"error":{"code" : 190}}',
+      "OAuthException: whatever",
+      "The access token has been revoked",
+      "unauthorized_client",
+      "invalid_client",
+      '{"error":"invalid_token"}',
+    ]) {
+      expect(isDefiniteAuthFailure(m), m).toBe(true);
+    }
+  });
+
+  it("is false for transient / network / upstream failures", () => {
+    for (const m of [
+      "fetch failed",
+      "Request timed out",
+      "HTTP 503 upstream",
+      "The operation was aborted due to timeout",
+      "connect ETIMEDOUT 157.240.1.1:443",
+      "read ECONNRESET",
+      "getaddrinfo ENOTFOUND graph.facebook.com",
+      "getaddrinfo EAI_AGAIN graph.facebook.com",
+      "socket hang up",
+    ]) {
+      expect(isDefiniteAuthFailure(m), m).toBe(false);
+    }
+  });
+
+  it("a transient hint VETOES an auth marker — doubt resolves to 'retry'", () => {
+    expect(isDefiniteAuthFailure('OAuthException {"code":190} (HTTP 500)')).toBe(false);
+    expect(isDefiniteAuthFailure("invalid_grant after request timeout")).toBe(false);
+    expect(isDefiniteAuthFailure("Error validating access token: fetch failed")).toBe(false);
+  });
+
+  it("is false for ordinary errors and empty input", () => {
+    expect(isDefiniteAuthFailure("HTTP 401 Unauthorized")).toBe(false); // no definite marker
+    expect(isDefiniteAuthFailure("Access token has expired")).toBe(false);
+    expect(isDefiniteAuthFailure("boom")).toBe(false);
+    expect(isDefiniteAuthFailure("")).toBe(false);
+    expect(isDefiniteAuthFailure(null)).toBe(false);
+    expect(isDefiniteAuthFailure(undefined)).toBe(false);
+  });
+});
+
+describe("releaseClaimAfterPrePublishError", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("conditionally moves PUBLISHING → FAILED with the error's message", async () => {
+    const updateMany = vi.fn(async () => ({ count: 1 }));
+    await releaseClaimAfterPrePublishError({ postTarget: { updateMany } }, "t1", new Error("db connection lost"));
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { id: "t1", status: "PUBLISHING" },
+      data: { status: "FAILED", errorMessage: "db connection lost" },
+    });
+  });
+
+  it("trims the message and caps it at 1000 characters", async () => {
+    const updateMany = vi.fn(async (_a: any) => ({ count: 1 }));
+    await releaseClaimAfterPrePublishError({ postTarget: { updateMany } }, "t1", new Error(`  ${"x".repeat(5000)}  `));
+    const msg = (updateMany.mock.calls[0]![0] as any).data.errorMessage as string;
+    expect(msg).toBe("x".repeat(1000));
+  });
+
+  it("handles non-Error throwables and empty messages", async () => {
+    const updateMany = vi.fn(async (_a: any) => ({ count: 1 }));
+    await releaseClaimAfterPrePublishError({ postTarget: { updateMany } }, "t1", "string thrown");
+    await releaseClaimAfterPrePublishError({ postTarget: { updateMany } }, "t1", new Error("   "));
+    await releaseClaimAfterPrePublishError({ postTarget: { updateMany } }, "t1", undefined);
+    const msgs = updateMany.mock.calls.map((c: any[]) => c[0].data.errorMessage);
+    expect(msgs[0]).toBe("string thrown");
+    expect(msgs[1]).toMatch(/before anything was sent/);
+    expect(msgs[2]).toMatch(/before anything was sent/);
+  });
+
+  it("is a harmless no-op when another branch already wrote a terminal state", async () => {
+    const updateMany = vi.fn(async () => ({ count: 0 }));
+    await expect(
+      releaseClaimAfterPrePublishError({ postTarget: { updateMany } }, "t1", new Error("x"))
+    ).resolves.toBeUndefined();
+  });
+
+  it("never throws — the caller must rethrow the ORIGINAL error", async () => {
+    const updateMany = vi.fn(async () => {
+      throw new Error("db down");
+    });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(
+      releaseClaimAfterPrePublishError({ postTarget: { updateMany } }, "t1", new Error("x"))
+    ).resolves.toBeUndefined();
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("decideClaimMiss", () => {
+  const orphan = { isFinalAttempt: false, status: "PUBLISHING", hasPublishedId: false, otherActiveJobs: 0 };
+
+  it("final attempt → terminalize, exactly like terminalizeStuckClaim, whatever else is true", () => {
+    for (const status of ["PUBLISHING", "PUBLISHED", "FAILED", null]) {
+      expect(decideClaimMiss({ ...orphan, isFinalAttempt: true, status, otherActiveJobs: 3 })).toBe("terminalize");
+    }
+    expect(terminalizeStuckClaim({ claimCount: 0, isFinalAttempt: true })).toBe(true);
+  });
+
+  it("recovers a PUBLISHING target with no platform id that nobody else is working on", () => {
+    expect(decideClaimMiss(orphan)).toBe("recover-orphan");
+  });
+
+  it("skips when another job holds it", () => {
+    expect(decideClaimMiss({ ...orphan, otherActiveJobs: 1 })).toBe("skip");
+  });
+
+  it("skips when the holder check did not run (null) — recovery needs positive evidence", () => {
+    expect(decideClaimMiss({ ...orphan, otherActiveJobs: null })).toBe("skip");
+  });
+
+  it("skips anything that is not an id-less PUBLISHING row", () => {
+    for (const status of ["PUBLISHED", "FAILED", "SCHEDULED", "DRAFT", null]) {
+      expect(decideClaimMiss({ ...orphan, status }), String(status)).toBe("skip");
+    }
+    expect(decideClaimMiss({ ...orphan, hasPublishedId: true })).toBe("skip");
+  });
+});
+
+describe("countOtherActiveJobsForTarget", () => {
+  const active = [
+    { id: "self", data: { postTargetId: "t1" } },
+    { id: "a", data: { postTargetId: "t1" } },
+    { id: "b", data: { postTargetId: "t2" } },
+    undefined,
+    null,
+    { id: "c", data: null },
+    { id: "d" },
+  ];
+
+  it("counts other jobs on the same target, excluding this job and missing entries", () => {
+    expect(countOtherActiveJobsForTarget(active, "self", "t1")).toBe(1);
+    expect(countOtherActiveJobsForTarget(active, "self", "t2")).toBe(1);
+    expect(countOtherActiveJobsForTarget(active, "self", "t3")).toBe(0);
+  });
+
+  it("adds this process's own in-flight holders (a re-run of the same job id is invisible otherwise)", () => {
+    expect(countOtherActiveJobsForTarget([{ id: "self", data: { postTargetId: "t1" } }], "self", "t1")).toBe(0);
+    expect(countOtherActiveJobsForTarget([{ id: "self", data: { postTargetId: "t1" } }], "self", "t1", 1)).toBe(1);
+    expect(countOtherActiveJobsForTarget([], "self", "t1", -3)).toBe(0);
+  });
+
+  it("does not exclude anything when this job has no id", () => {
+    expect(countOtherActiveJobsForTarget(active, undefined, "t1")).toBe(2);
+  });
+});
+
+describe("formatPublishTiming", () => {
+  it("prints all three durations", () => {
+    expect(
+      formatPublishTiming({ postTargetId: "t1", platform: "INSTAGRAM", timestamp: 1_000, processedOn: 31_000, delay: 20_000, now: 41_000 })
+    ).toBe("[PublishTiming] target=t1 platform=INSTAGRAM queueWaitMs=10000 runMs=10000 sinceEnqueueMs=40000");
+  });
+
+  it("treats a missing delay as 0", () => {
+    expect(formatPublishTiming({ postTargetId: "t1", platform: "X", timestamp: 1_000, processedOn: 3_000, now: 4_000 })).toBe(
+      "[PublishTiming] target=t1 platform=X queueWaitMs=2000 runMs=1000 sinceEnqueueMs=3000"
+    );
+  });
+
+  it("omits fields whose inputs are missing instead of printing NaN", () => {
+    expect(formatPublishTiming({ postTargetId: "t1", platform: "X", timestamp: 1_000, now: 4_000 })).toBe(
+      "[PublishTiming] target=t1 platform=X sinceEnqueueMs=3000"
+    );
+    expect(formatPublishTiming({ postTargetId: "t1", platform: "X", processedOn: 2_000, timestamp: null, now: 4_000 })).toBe(
+      "[PublishTiming] target=t1 platform=X runMs=2000"
+    );
+    expect(formatPublishTiming({ postTargetId: "t1", platform: "X", now: 4_000 })).toBe("[PublishTiming] target=t1 platform=X");
   });
 });

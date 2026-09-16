@@ -50,7 +50,119 @@ describe("video: padding rides inside the existing encode", () => {
 
   it("stays inert for every non-story publish", () => {
     expect(overlay).toMatch(/storyCanvas = false,/);
-    expect(overlay).toMatch(/if \(!text && !logoUrl && !channelName && !storyCanvas\) return videoUrl;/);
+    // `normalize` (2026-09-16) joins the nothing-to-do guard: a caller that
+    // requests none of these still gets its url back untouched.
+    expect(overlay).toMatch(
+      /if \(!text && !logoUrl && !channelName && !storyCanvas && !normalize\) return videoUrl;/
+    );
+    expect(overlay).toMatch(/normalize = false,/);
+  });
+
+  it("every encode call site carries the story flag — none can publish a story unpadded", () => {
+    // Two encode paths since 2026-09-16 (legacy watermark + shared normalize).
+    const calls = worker.match(/processVideoOverlay\(mediaUrls\[i\]!, \{[\s\S]*?\}\);/g) ?? [];
+    expect(calls.length).toBe(2);
+    for (const call of calls) expect(call).toMatch(/storyCanvas: publishesAsStory,/);
+    expect(worker.match(/storyCanvas: publishesAsStory/g)?.length).toBe(2);
+  });
+
+  it("a normalize-only call with nothing drawn still produces an output stream", () => {
+    // A normalize-only call with no canvas still needs an output stream.
+    expect(overlay).toMatch(/\} else if \(normalize\) \{[\s\S]*?\[0:v\]null\[vout\]/);
+  });
+});
+
+describe("watermark removal (owner decision 2026-09-16)", () => {
+  it("the watermark switch is the fail-closed VIDEO_WATERMARK_ENABLED helper", () => {
+    expect(worker).toMatch(/const watermarkOn = isVideoWatermarkEnabled\(\);/);
+  });
+
+  it("the Logo Library lookup only runs when the watermark will be drawn", () => {
+    expect(worker).toMatch(
+      /if \(watermarkOn\) \{\s*try \{\s*const logoMedia = await prisma\.media\.findFirst\(\{\s*where: \{[^}]*category: "logo"/
+    );
+    // …and it is the ONLY logo lookup in the worker, so nothing runs it ungated.
+    expect(worker.match(/category: "logo"/g)?.length).toBe(1);
+    // The logo_path fallback sits inside the same gate, before the per-media loop.
+    const gate = worker.indexOf("if (watermarkOn) {");
+    const fallback = worker.indexOf("logoUrl = (channelMetadata?.logo_path as string) || null;");
+    const loop = worker.indexOf("const overlayText = (postTarget.post.metadata as any)?.videoOverlayText");
+    expect(gate).toBeGreaterThan(-1);
+    expect(fallback).toBeGreaterThan(gate);
+    expect(fallback).toBeLessThan(loop);
+  });
+
+  it("channel name and logo are passed ONLY on the watermark path", () => {
+    const watermark = worker.match(
+      /else if \(plan === "watermark"\) \{[\s\S]*?(processVideoOverlay\(mediaUrls\[i\]!, \{[\s\S]*?\}\);)/
+    );
+    expect(watermark).not.toBeNull();
+    expect(watermark![1]).toMatch(/logoUrl,/);
+    expect(watermark![1]).toMatch(/channelName: channel\.name,/);
+    // One and only one place burns the channel name into a video.
+    expect(worker.match(/channelName: channel\.name/g)?.length).toBe(1);
+
+    const normalize = (worker.match(/processVideoOverlay\(mediaUrls\[i\]!, \{[\s\S]*?\}\);/g) ?? []).find((c) =>
+      c.includes("normalize: true")
+    );
+    expect(normalize).toBeDefined();
+    // Any per-channel input would route the call to the per-target path.
+    expect(normalize).toMatch(/logoUrl: null,/);
+    expect(normalize).toMatch(/channelName: undefined,/);
+    expect(normalize).not.toMatch(/channel\.name/);
+    expect(normalize).not.toMatch(/logoPosition|logoSize/);
+  });
+
+  it("the plan is computed per video from the rendition flag, the story flag and the size cap", () => {
+    expect(worker).toMatch(
+      /const mediaIsRendition = postTarget\.post\.mediaAttachments\.map\(\(m, i\) => mediaUrls\[i\] !== m\.media\.url\);/
+    );
+    // Captured before any step rewrites mediaUrls.
+    expect(worker.indexOf("const mediaIsRendition")).toBeLessThan(worker.indexOf("mediaUrls = processed;"));
+    expect(worker).toMatch(
+      /planMetaVideoPrep\(\{\s*watermarkOn,\s*hasOverlayText: !!overlayText,\s*publishesAsStory,\s*isRendition: mediaIsRendition\[i\] === true,\s*tooBig: tooBigForOverlay,\s*\}\)/
+    );
+  });
+
+  it("a rendition skip returns the url unchanged, so the story warning's url-identity signal still holds", () => {
+    expect(worker).toMatch(/else if \(plan === "skip-rendition"\) \{[\s\S]*?processed\.push\(mediaUrls\[i\]!\);/);
+    expect(worker).toMatch(/processed\[i\] === mediaUrls\[i\]/);
+  });
+
+  it("logs the prep time per target", () => {
+    expect(worker).toMatch(/video prep \$\{Date\.now\(\) - videoPrepStartedAt\}ms plan=/);
+  });
+
+  it("the overlay routes channel-less calls to the shared, cached path", () => {
+    expect(overlay).toMatch(/if \(!logoUrl && !channelName\) \{\s*return runSharedMetaReady\(/);
+    // Legacy per-target artifacts keep their one-off key; the shared path uses
+    // the deterministic key and only falls back to a one-off key when the
+    // output cannot be verified.
+    expect(overlay).toMatch(/const key = `videos\/overlay_\$\{id\}\.mp4`;/);
+    expect(overlay).toMatch(/const storage = planMetaReadyStorage\(inputSec, outputSec\);/);
+    expect(overlay).toMatch(/if \(storage === "reject"\) \{\s*throw new Error/);
+  });
+
+  it("the shared path verifies the download length before an artifact can be cached", () => {
+    expect(overlay).toMatch(/downloadVideo\(videoUrl, inputPath, o\.maxBytes, true\)/);
+    expect(overlay).toMatch(/if \(written !== len\) \{\s*throw new Error/);
+  });
+
+  it("the shared path never treats a failed HeadObject as a cache hit", () => {
+    expect(overlay).toMatch(/catch \(err: any\) \{[\s\S]*?return false;\s*\}\s*\}/);
+  });
+
+  it("a cache hit must also be young enough to outlive the MinIO lifecycle rule", () => {
+    // The hit is decided by the tested pure predicate (size AND age), fed the
+    // object's real LastModified — never by ContentLength alone.
+    expect(overlay).toMatch(/isReusableMetaReadyArtifact\(\{\s*contentLength: head\.ContentLength,\s*lastModified: head\.LastModified,\s*now: Date\.now\(\),\s*\}\)/);
+    expect(overlay).toMatch(/return reusable;/);
+    expect(overlay).not.toMatch(/return \(head\.ContentLength \?\? 0\) > 0;/);
+  });
+
+  it("the in-flight entry is cleared on success AND failure, without an unhandled rejection", () => {
+    expect(overlay).toMatch(/run\.then\(settle, settle\);/);
+    expect(overlay).not.toMatch(/run\.finally\(/);
   });
 });
 
