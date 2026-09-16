@@ -2681,18 +2681,121 @@ than degrading gradually.
   that hid how close the containers were to finishing. It also states the video is still
   processing on Instagram's side, **not rejected**.
 - **Kill switch `VIDEO_OVERLAY_ENABLED=false`** (`isVideoOverlayEnabled()`, checked before the
-  semaphore). The overlay is the ONLY reason a publish re-encodes video at all; disabling it
-  makes IG/FB pull the optimized rendition straight from S3 at **zero CPU**. Egress is
-  ~unchanged (fixed overlay ≈ optimizer size) — the win is eliminating the encode entirely.
-- ⚠️ The overlay ALWAYS runs for IG/FB videos ≤250MB: it early-returns only when text, logo AND
-  `channelName` are all absent, and the worker always passes `channel.name`. So "no logo
-  configured" does **not** mean "no re-encode" — it means a text watermark instead.
+  semaphore) disables ALL publish-time IG/FB video re-encoding — ⚠️ including the story 9:16
+  canvas and the Meta-ready normalization. Since 2026-09-16 it is plumbed in compose.
+- ~~The overlay ALWAYS runs for IG/FB videos ≤250MB~~ — **superseded 2026-09-16**: the
+  per-channel watermark is OFF by default (`VIDEO_WATERMARK_ENABLED`, fail-closed) and the
+  encode is once per VIDEO, not per channel. See the next section.
 
 Tests: [video-overlay.test.ts](apps/worker/src/lib/video-overlay.test.ts) (rate-control guard
 verified FAILING against the pre-fix args; the pre-existing shell-injection assertions still
 pass). The pure argv builder was split out precisely so this guard runs in ms — importing
 `video-overlay.ts` drags `@postautomation/ai` → langchain → langsmith and the test could not
 execute at all.
+
+## ⚡ IG/FB publish speed — watermark removed, one encode per video (2026-09-16, PR #190) — read before touching video prep, the claim-miss path, the reaper or worker shutdown
+
+**Measured before (prod, 60 days):** IG video fan-outs (~53 channels) took p50 **535s** / p90 935s /
+max 1906s per channel; **240s of the median** (p90 659s) was waiting in the per-CHANNEL watermark
+encode (FIFO semaphore of 2). Image fan-outs had ~0s of processing on top of the stagger — for them
+the 10s stagger IS the latency. 28.7 GB of never-deleted `videos/overlay_*` copies sat in MinIO.
+
+### Video prep ([meta-video-prep.ts](apps/worker/src/lib/meta-video-prep.ts), [video-overlay.ts](apps/worker/src/lib/video-overlay.ts))
+- **Per-channel watermark OFF by default** (owner decision). `VIDEO_WATERMARK_ENABLED=true`
+  (fail-CLOSED `=== "true"`) restores the legacy per-target encode exactly, including its
+  ORIGINAL-size gate.
+- `planMetaVideoPrep` per video: `skip-too-big` → `watermark` → `skip-rendition` (an optimize
+  rendition is already H.264/yuv420p/AAC/+faststart/≤8Mbps → **zero encode**; never for stories or
+  overlay text) → `normalize`.
+- `normalize` = ONE shared encode per (source URL, text, story canvas), with the **same argv** as the
+  old overlay (rate control, yuv420p, +faststart — the old overlay was silently normalizing
+  moov-at-end/yuv444p originals, so dropping the encode entirely was NOT safe). Stored at a
+  deterministic `videos/metaready/<sha256>.mp4`; in-flight promise dedupe; HeadObject cache.
+  - ⚠️ An artifact is cached only after a **download-length check** and the **98% duration rule**;
+    an unmeasurable source (browser WebM) is stored under a one-off `videos/overlay_` key and never
+    shared. A truncated shared artifact would be served to every later target and post.
+  - ⚠️ **Reuse-age guard:** a cached artifact is a hit only if younger than
+    `META_READY_REUSE_MAX_AGE_MS` (5 days). MinIO lifecycle rules (added 2026-09-16, provisioned
+    idempotently by `ensure_minio_lifecycle` in [deploy.sh](scripts/deploy.sh)): `videos/overlay_`
+    **3 days**, `videos/metaready/` **7 days**. The metaready rule MUST stay ≥ reuse age + 2 days, or
+    the scanner can delete a file between our HeadObject and Meta's download.
+  - Bump `META_READY_ARGS_VERSION` whenever the normalize argv/filter changes.
+- The size cap uses the file actually being prepared (`metadata.optimize.size` when a rendition is
+  sent), so a small rendition of a >250MB original still gets the story canvas.
+- Every unpadded story logs `story 9:16 canvas NOT applied`, including when prep THROWS.
+
+### Orphans, retries and the reaper ([publish-recovery.ts](apps/worker/src/lib/publish-recovery.ts), [post-publish.worker.ts](apps/worker/src/workers/post-publish.worker.ts), [auto-healer.worker.ts](apps/worker/src/workers/auto-healer.worker.ts))
+- **Pre-publish claim guard:** the processor is wrapped; a throw after the atomic claim but BEFORE
+  `state.dispatched` (set as the first statement of the publish `try`) releases the target to
+  FAILED (conditional on PUBLISHING) and BullMQ retries. Validation and optimize failures are
+  terminal (`markTargetFailed` + `UnrecoverableError`) with the real reason — an 11-image IG post
+  (max 10) had orphaned 60 targets for 30–56 min. `classifyError` (moved to publish-recovery) no
+  longer reads "Validation failed … too many" as a rate limit.
+- **🔴 Unheld orphans are PARKED, never auto-republished — on every platform and attempt.**
+  `decideClaimMiss` → `park-orphan` (FAILED + `ambiguousAt`, "Needs check") only on POSITIVE
+  evidence that no job holds the target: BullMQ `getActive()` (excluding self) **plus**
+  [local-claims.ts](apps/worker/src/lib/local-claims.ts) (a lapsed-lock re-run of the SAME job id is
+  invisible in the active list). No evidence (Redis error) or a live holder ⇒ skip. Two review
+  rounds found every automatic-recovery variant duplicating: platforms with no `findExistingPost`,
+  IG story-format carousels (no checkpoint, pre-flight returns null), final attempts announced as
+  definite failures. **Do NOT reintroduce an auto-retry branch.**
+- The **reaper** (every auto-healer cycle, oldest first, 100/cycle) uses the same rule
+  (`decideReap`): skips targets a running job holds, reaps nothing if the active list can't be read,
+  parks the rest (conditional write + `retryCount++`).
+- **Dead token:** in the `token_expired` branch, if the refresh did not succeed and EITHER the
+  original error or the refresh error is a definite auth failure (`isDefiniteAuthFailure`: real
+  credential codes 190/102/463/467, invalid_grant, "session has been invalidated"…; a bare
+  `OAuthException` is NOT evidence; `is_transient`/codes 1/2/4/17/32/341/613/800xx veto) ⇒
+  `UnrecoverableError` "reconnect", not a retry into a false "may already be live" park (73 of those
+  since 2026-09-14).
+- Defers (optimize wait, heavy slot) write SCHEDULED **before** re-adding the job.
+
+### Instagram poll + carousel ([instagram.provider.ts](packages/social/src/providers/instagram.provider.ts))
+- Status GET bounded at 15s. Dead-token (190/102/463/467) or vanished-container (24, 100/33) bodies
+  end the wait on the first read with classifier-friendly wording (a raw `"code":100` body matched the
+  worker's `code":10` PERMISSION pattern). Transient/throttle bodies are waited out uncounted; other
+  unreadable reads are tolerated 3 in a row. All pre-`media_publish`, so duplicate-safe.
+- Carousel children are created 3 at a time, order preserved; video children use the 240s budget.
+
+### Shutdown & deploy
+- Worker `stop_grace_period: 5m`; [shutdown.ts](apps/worker/src/lib/shutdown.ts) drains up to
+  `WORKER_SHUTDOWN_TIMEOUT_MS` (270s), then waits (remaining budget) for BullMQ `failed`-listener
+  bookkeeping tracked in [background-tasks.ts](apps/worker/src/lib/background-tasks.ts) — BullMQ does
+  not await those listeners (post status, report email, super-text failure, caption fan-out valve).
+  media-optimize and repurpose-video are closed but NOT awaited (long jobs; stalled re-run as before).
+- ⚠️ **No `init: true`.** Under tini, pnpm's SIGTERM forwarder is `process.once`, so a second SIGTERM
+  killed pnpm and every in-flight publish. pnpm as PID 1 ignores it (verified with a live in-flight
+  job). Trade-off: Chromium helper zombies are not reaped between deploys (pre-existing).
+- `deploy.sh` recreates the worker with `--timeout 300` (a container keeps the stop timeout it was
+  CREATED with). deploy.yml has a `concurrency` group. ⚠️ A deploy may now wait up to ~5 min at the
+  worker step while in-flight publishes finish.
+- Newly plumbed compose keys (all `""` ⇒ default): `VIDEO_WATERMARK_ENABLED`, `VIDEO_OVERLAY_*`,
+  `PUBLISH_CONCURRENCY`, `PUBLISH_LIMITER_MAX`, `IG_VIDEO_READY_TIMEOUT_MS`,
+  `WORKER_SHUTDOWN_TIMEOUT_MS`, and `PUBLISH_STAGGER_INSTAGRAM_MS`/`_FACEBOOK_MS` (web AND worker).
+
+### Verified live (2026-09-16, deploy 8e66b5a)
+- Deploy succeeded; worker `StopTimeout=300`, no init, all new keys delivered (`VIDEO_WATERMARK_ENABLED=false`).
+- **Prod smoke (no publish):** a 34 MB / 19.6s original — two concurrent callers ⇒ **one** encode in
+  22.3s (duration 19.567s → 19.573s, output 14 MB), next caller a **cache hit in 11 ms**, public URL
+  200 `video/mp4`. For a 53-channel post that replaces ~53 queued encodes (2 at a time).
+- MinIO lifecycle rules applied by hand for this first deploy (it ran the OLD deploy.sh): `videos/`
+  dropped **27 GiB / 821 objects → 4 GiB / 417** within minutes; prod disk 57% → 42%.
+- Clean-image test: SIGTERM reaches node through pnpm (PID 1); with a publish in flight a SECOND
+  SIGTERM was ignored and the drain exited 0.
+- ⏳ Real post timings still to be measured on the next organic IG/FB video fan-out — compare
+  against the "Measured before" numbers above (per-target `[PublishTiming]` and
+  `video prep … plan=` log lines now make this a grep).
+
+### Decided against (and why)
+- **Lowering the 10s Meta stagger** — owner kept it (tunable per platform, clamped 1–60s). Meta's
+  documented limits are per account/Page and prod had **zero** rate-limit/368 errors in 60 days, but
+  the spam classifiers are undisclosed. For a 53-channel post the stagger alone is ~9 min.
+- **An in-process same-post dispatch pacer** — it slept while holding a worker slot, so one large
+  "Publish now" stalled every org. publishNow already sends 10 concurrent Meta publishes routinely.
+
+Tests (all new or extended): meta-video-prep, story-fit-wiring, post-publish-claim-guard (drives the
+real processor), publish-recovery, auto-healer-reaper, shutdown, background-tasks, local-claims,
+instagram-media-ready, instagram-carousel-parallel, publish-stagger.
 
 ## Publish notification email — creator-only (2026-07-17, PR #123)
 
