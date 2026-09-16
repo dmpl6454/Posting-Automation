@@ -410,14 +410,16 @@ describe("InstagramProvider — status poll fail-fast (2026-09-16)", () => {
     expect(publishCalls()).toHaveLength(1);
   });
 
-  it("a transient run that outlasts the budget ends with the ordinary budget message", async () => {
+  it("a transient run that outlasts the budget says so — not that the media is still processing", async () => {
     mockFetch.mockResolvedValueOnce(jsonRes({ id: "container-1" }));
     mockFetch.mockResolvedValue(transientBody());
 
     const caught = new InstagramProvider().publishPost(tokens, imagePayload()).catch((e) => e);
     await vi.runAllTimersAsync();
     const err = await caught;
-    expect(err.message).toMatch(/did not finish within .*budget 30s/);
+    expect(err.message).toMatch(/^Instagram did not report the media status within \d+s \(budget 30s; Meta kept replying with Graph code 2\)$/);
+    expect(err.message).not.toMatch(/still processing|rate limit|too many/i);
+    expect(isIndeterminatePublishError(err)).toBe(false);
     expect(statusCalls()).toHaveLength(15);
     expect(publishCalls()).toHaveLength(0);
   });

@@ -61,20 +61,17 @@ describe("final-attempt orphan terminalization", () => {
     expect(terminalizeStuckClaim({ claimCount: 0, isFinalAttempt: false })).toBe(false);
   });
 
-  it("a non-final no-op claim on an ORPHAN is released for a retry instead of skipped (2026-09-16)", () => {
+  it("a no-op claim on an unheld ORPHAN is parked for a person, never re-published automatically (2026-09-16)", () => {
     // Before 2026-09-16 every non-final no-op claim was skipped silently, so a
-    // target whose holder died (deploy SIGKILL) or threw without releasing sat
-    // at PUBLISHING until the 30-min reaper. It is still never TERMINALIZED
-    // early — it is released and retried, with the duplicate pre-flight —
-    // but ONLY where that pre-flight exists; elsewhere it is parked.
-    const orphan = { isFinalAttempt: false, status: "PUBLISHING", hasPublishedId: false, otherActiveJobs: 0 };
-    expect(decideClaimMiss({ ...orphan, providerSupportsReconcile: true })).toBe("recover-orphan");
-    expect(decideClaimMiss({ ...orphan, providerSupportsReconcile: false })).toBe("park-orphan");
-    // A live holder, or an already-finished target, is still skipped exactly as before.
-    expect(decideClaimMiss({ ...orphan, otherActiveJobs: 1, providerSupportsReconcile: true })).toBe("skip");
-    expect(
-      decideClaimMiss({ isFinalAttempt: false, status: "PUBLISHED", hasPublishedId: true, otherActiveJobs: null, providerSupportsReconcile: true })
-    ).toBe("skip");
+    // target whose holder died (deploy SIGKILL) sat at PUBLISHING until the
+    // 30-min reaper made it re-claimable. Its outcome is unknown, so it is now
+    // parked as ambiguous — on every platform and attempt.
+    const orphan = { status: "PUBLISHING", hasPublishedId: false, otherActiveJobs: 0 };
+    expect(decideClaimMiss(orphan)).toBe("park-orphan");
+    // A live holder, a failed holder check, or an already-finished target is skipped.
+    expect(decideClaimMiss({ ...orphan, otherActiveJobs: 1 })).toBe("skip");
+    expect(decideClaimMiss({ ...orphan, otherActiveJobs: null })).toBe("skip");
+    expect(decideClaimMiss({ status: "PUBLISHED", hasPublishedId: true, otherActiveJobs: null })).toBe("skip");
   });
 
   it("does NOT force FAILED when the claim succeeded", () => {

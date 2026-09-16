@@ -4,7 +4,6 @@ import {
   autopilotScheduleQueue,
   postPublishQueue,
 } from "@postautomation/queue";
-import { getSocialProvider } from "@postautomation/social";
 import { S3Client, HeadBucketCommand } from "@aws-sdk/client-s3";
 import IORedis from "ioredis";
 import { shouldReapPublishing, decideReap, ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE } from "../lib/publish-recovery";
@@ -314,7 +313,6 @@ export async function runAutoHealer(): Promise<HealerResult> {
 
 /** How many stuck targets one healer cycle may reap (oldest first). */
 const REAP_BATCH_SIZE = 100;
-export const STUCK_PUBLISHING_MESSAGE = "Publishing stuck for over 30 minutes — please retry";
 
 /**
  * Reap PostTargets stuck in PUBLISHING for more than 30 minutes.
@@ -330,9 +328,9 @@ export const STUCK_PUBLISHING_MESSAGE = "Publishing stuck for over 30 minutes �
  *   - LIVENESS: a target that a running publish job still holds (BullMQ's
  *     active list, or this process's own claims) is never reaped, and nothing
  *     is reaped when the active list cannot be read;
- *   - an unheld target on a platform with NO duplicate check (anything but
- *     Instagram/Facebook) is parked as ambiguous instead of plain FAILED — its
- *     dead holder may already have published;
+ *   - an unheld target is PARKED as ambiguous (FAILED + ambiguousAt, shown as
+ *     "Needs check") instead of re-armed — its dead holder may already have
+ *     published, and every automatic recovery variant was shown to duplicate;
  *   - oldest first, 100 per cycle (was an unordered 20), so a large backlog
  *     like the 60-target orphan of 2026-09-16 clears in one cycle;
  *   - the write is CONDITIONAL on the row still being PUBLISHING and still
@@ -355,7 +353,6 @@ export async function reapStuckPublishingTargets(now: Date = new Date()): Promis
       id: true,
       status: true,
       updatedAt: true,
-      channel: { select: { platform: true } },
     },
     orderBy: { updatedAt: "asc" },
     take: REAP_BATCH_SIZE,
@@ -387,41 +384,25 @@ export async function reapStuckPublishingTargets(now: Date = new Date()): Promis
   console.log(`[AutoHealer] Found ${stuckPublishing.length} stuck PUBLISHING post targets (${heldTargets.size} publish job(s) active)`);
   for (const target of stuckPublishing) {
     if (!shouldReapPublishing(target, now)) continue;
-    let providerSupportsReconcile = false;
-    try {
-      providerSupportsReconcile =
-        typeof getSocialProvider(target.channel.platform as any).findExistingPost === "function";
-    } catch {
-      providerSupportsReconcile = false;
-    }
     const decision = decideReap({
       heldByActiveJob: heldTargets.has(target.id) || localClaimCount(target.id) > 0,
-      providerSupportsReconcile,
     });
     if (decision === "skip") {
       console.log(`[AutoHealer] target ${target.id} is still held by a running publish job — not reaping`);
       continue;
     }
-    const staleRow = { id: target.id, status: "PUBLISHING" as const, updatedAt: { lt: thirtyMinAgo } };
     try {
+      // Parked, not re-armed: the dead holder may already have published, so a
+      // person checks first ("Needs check" → "It didn't publish").
       const res = await prisma.postTarget.updateMany({
-        where: staleRow,
-        data:
-          decision === "fail-retryable"
-            ? {
-                status: "FAILED",
-                errorMessage: STUCK_PUBLISHING_MESSAGE,
-                retryCount: { increment: 1 },
-              }
-            : {
-                // No duplicate check exists for this platform and the dead
-                // holder may already have published: a person checks first.
-                status: "FAILED",
-                errorMessage: ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE,
-                ambiguousAt: now,
-                ambiguousReason: ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE,
-                retryCount: { increment: 1 },
-              },
+        where: { id: target.id, status: "PUBLISHING", updatedAt: { lt: thirtyMinAgo } },
+        data: {
+          status: "FAILED",
+          errorMessage: ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE,
+          ambiguousAt: now,
+          ambiguousReason: ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE,
+          retryCount: { increment: 1 },
+        },
       });
       reaped += res.count;
     } catch {}

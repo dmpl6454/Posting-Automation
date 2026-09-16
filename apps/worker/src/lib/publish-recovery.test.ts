@@ -10,9 +10,7 @@ import {
   decideClaimMiss,
   decideReap,
   ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE,
-  FINAL_ATTEMPT_ORPHAN_MESSAGE,
   countOtherActiveJobsForTarget,
-  ORPHANED_CLAIM_MESSAGE,
   formatPublishTiming,
 } from "./publish-recovery";
 
@@ -177,7 +175,7 @@ describe("classifyError (moved from the worker, 2026-09-16)", () => {
   });
 
   it("keeps the orphaned-claim message verbatim (unknown) so the failed handler does not rewrite it", () => {
-    expect(classifyError(ORPHANED_CLAIM_MESSAGE)).toBe("unknown");
+    expect(classifyError(ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE)).toBe("unknown");
   });
 
   it("the worker no longer defines its own copy", async () => {
@@ -318,65 +316,39 @@ describe("releaseClaimAfterPrePublishError", () => {
   });
 });
 
-describe("decideClaimMiss", () => {
-  const orphan = {
-    isFinalAttempt: false,
-    status: "PUBLISHING",
-    hasPublishedId: false,
-    otherActiveJobs: 0,
-    providerSupportsReconcile: true,
-  };
+describe("decideClaimMiss — park unheld orphans, never auto-republish", () => {
+  const orphan = { status: "PUBLISHING", hasPublishedId: false, otherActiveJobs: 0 };
 
-  it("recovers an unheld, id-less PUBLISHING target when the platform can check for an existing post", () => {
-    expect(decideClaimMiss(orphan)).toBe("recover-orphan");
+  it("parks an unheld, id-less PUBLISHING target", () => {
+    expect(decideClaimMiss(orphan)).toBe("park-orphan");
   });
 
-  it("PARKS the same orphan when the platform cannot check — never an automatic re-publish (critical review finding)", () => {
-    expect(decideClaimMiss({ ...orphan, providerSupportsReconcile: false })).toBe("park-orphan");
-    expect(decideClaimMiss({ ...orphan, providerSupportsReconcile: false, isFinalAttempt: true })).toBe("park-orphan");
-  });
-
-  it("final attempt on an unheld orphan of a checkable platform → terminalize", () => {
-    expect(decideClaimMiss({ ...orphan, isFinalAttempt: true })).toBe("terminalize");
-    expect(terminalizeStuckClaim({ claimCount: 0, isFinalAttempt: true })).toBe(true);
-  });
-
-  it("skips when another job holds it — on the FINAL attempt too (review finding)", () => {
+  it("skips when another job holds it", () => {
     expect(decideClaimMiss({ ...orphan, otherActiveJobs: 1 })).toBe("skip");
-    expect(decideClaimMiss({ ...orphan, otherActiveJobs: 2, isFinalAttempt: true })).toBe("skip");
-    expect(decideClaimMiss({ ...orphan, otherActiveJobs: 1, providerSupportsReconcile: false })).toBe("skip");
+    expect(decideClaimMiss({ ...orphan, otherActiveJobs: 3 })).toBe("skip");
   });
 
-  it("when the holder check did not run (null): skip, except the final attempt keeps the legacy terminalize", () => {
+  it("skips when the holder check did not run (null) — parking needs positive evidence", () => {
     expect(decideClaimMiss({ ...orphan, otherActiveJobs: null })).toBe("skip");
-    expect(decideClaimMiss({ ...orphan, otherActiveJobs: null, providerSupportsReconcile: false })).toBe("skip");
-    expect(decideClaimMiss({ ...orphan, otherActiveJobs: null, isFinalAttempt: true })).toBe("terminalize");
   });
 
-  it("skips anything that is not an id-less PUBLISHING row, final attempt or not", () => {
-    for (const isFinalAttempt of [false, true]) {
-      for (const status of ["PUBLISHED", "FAILED", "SCHEDULED", "DRAFT", null]) {
-        expect(decideClaimMiss({ ...orphan, isFinalAttempt, status }), `${status} final=${isFinalAttempt}`).toBe("skip");
-      }
-      expect(decideClaimMiss({ ...orphan, isFinalAttempt, hasPublishedId: true })).toBe("skip");
+  it("skips anything that is not an id-less PUBLISHING row", () => {
+    for (const status of ["PUBLISHED", "FAILED", "SCHEDULED", "DRAFT", null]) {
+      expect(decideClaimMiss({ ...orphan, status }), String(status)).toBe("skip");
     }
+    expect(decideClaimMiss({ ...orphan, hasPublishedId: true })).toBe("skip");
   });
 
-  it("the park and final-attempt messages keep their text through worker.on('failed')", () => {
+  it("the park message keeps its text through worker.on('failed')", () => {
     expect(classifyError(ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE)).toBe("unknown");
-    expect(classifyError(FINAL_ATTEMPT_ORPHAN_MESSAGE)).toBe("unknown");
+    expect(isDefiniteAuthFailure(ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE)).toBe(false);
   });
 });
 
 describe("decideReap", () => {
-  it("never reaps a target a running job still holds", () => {
-    expect(decideReap({ heldByActiveJob: true, providerSupportsReconcile: true })).toBe("skip");
-    expect(decideReap({ heldByActiveJob: true, providerSupportsReconcile: false })).toBe("skip");
-  });
-
-  it("fails an unheld target retryably where a duplicate check exists, parks it otherwise", () => {
-    expect(decideReap({ heldByActiveJob: false, providerSupportsReconcile: true })).toBe("fail-retryable");
-    expect(decideReap({ heldByActiveJob: false, providerSupportsReconcile: false })).toBe("park");
+  it("never reaps a target a running job still holds; parks every unheld one", () => {
+    expect(decideReap({ heldByActiveJob: true })).toBe("skip");
+    expect(decideReap({ heldByActiveJob: false })).toBe("park");
   });
 });
 

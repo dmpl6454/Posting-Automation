@@ -182,6 +182,40 @@ VEOF
 }
 
 # ── Normal deployment ─────────────────────────────────────────────
+# MinIO lifecycle rules for throwaway publish-time video copies (2026-09-16).
+# Idempotent and best-effort (a failure never fails a deploy):
+#   videos/overlay_   → 3 days. Per-channel watermark copies (only made when
+#                       VIDEO_WATERMARK_ENABLED=true) and unverifiable normalize
+#                       encodes; Meta pulls them within minutes (Facebook's
+#                       file_url within hours). 28.7GB had piled up by 2026-09-16.
+#   videos/metaready/ → 7 days. Shared normalize encodes, one per source video.
+# ⚠️ The metaready rule MUST stay at least 2 days longer than
+# META_READY_REUSE_MAX_AGE_MS (5 days, apps/worker/src/lib/meta-video-prep.ts):
+# the worker hands a cached copy to Meta only while it is younger than that, so
+# the lifecycle scanner can never delete a file Meta is about to download.
+ensure_minio_lifecycle() {
+  local bucket
+  bucket=$(grep -E '^S3_BUCKET=' "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"' || true)
+  bucket=${bucket:-postautomation-media}
+  local rules
+  if ! rules=$(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T minio sh -c \
+      "mc alias set local http://localhost:9000 \"\$MINIO_ROOT_USER\" \"\$MINIO_ROOT_PASSWORD\" >/dev/null 2>&1 && mc ilm rule ls local/$bucket 2>&1" 2>&1); then
+    rules=""
+  fi
+  local prefix days
+  for spec in "videos/overlay_:3" "videos/metaready/:7"; do
+    prefix=${spec%%:*}
+    days=${spec##*:}
+    if printf '%s' "$rules" | grep -qF "$prefix"; then
+      continue
+    fi
+    log "Adding MinIO lifecycle rule: expire $prefix after $days days"
+    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T minio sh -c \
+      "mc alias set local http://localhost:9000 \"\$MINIO_ROOT_USER\" \"\$MINIO_ROOT_PASSWORD\" >/dev/null 2>&1 && mc ilm rule add --prefix '$prefix' --expire-days $days local/$bucket" \
+      >/dev/null 2>&1 || warn "MinIO lifecycle rule for $prefix failed (non-fatal)"
+  done
+}
+
 cmd_deploy() {
   log "Deploying PostAutomation..."
   check_prereqs
@@ -220,6 +254,8 @@ cmd_deploy() {
   log "Pruning Docker build cache (keep 20GB) and dangling images..."
   docker builder prune -f --keep-storage 20GB >/dev/null 2>&1 || warn "builder prune failed (non-fatal)"
   docker image prune -f >/dev/null 2>&1 || warn "image prune failed (non-fatal)"
+
+  ensure_minio_lifecycle
 
   # Save version info + tag in git
   save_version

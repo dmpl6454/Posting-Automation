@@ -175,7 +175,11 @@ describe("watermark removal (owner decision 2026-09-16)", () => {
   });
 
   it("the size cap looks at the file actually being prepared (a small rendition of a >250MB original still gets the story canvas)", () => {
-    expect(worker).toMatch(/const tooBigForOverlay = \(mediaPrepSizes\[i\] \?\? 0\) > OVERLAY_MAX_BYTES;/);
+    // Watermark-free plans gate on the prepared file; the watermark rollback
+    // keeps its original gate on the ORIGINAL's size (review round 2).
+    expect(worker).toMatch(
+      /const tooBigForOverlay = watermarkOn\s*\?\s*\(mediaSizes\[i\] \?\? 0\) > OVERLAY_MAX_BYTES\s*:\s*\(mediaPrepSizes\[i\] \?\? 0\) > OVERLAY_MAX_BYTES;/
+    );
     expect(worker).toMatch(/if \(!mediaIsRendition\[i\]\) return Number\(m\.media\.fileSize \?\? 0\);/);
     expect(worker).toMatch(/\?\.optimize\?\.size/);
   });

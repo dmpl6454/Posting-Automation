@@ -185,9 +185,6 @@ vi.mock("@postautomation/queue", () => ({
   PRIORITY_RETRY: 10,
   createRedisConnection: () => ({}),
   atAgeWindowsForFormat: () => [],
-  // 0 ⇒ the same-post dispatch pacer never waits in these tests (its own
-  // spacing rules are covered in lib/dispatch-pacer.test.ts).
-  resolvePlatformStaggerMs: () => 0,
   postPublishQueue: h.queue.postPublishQueue,
   analyticsSyncQueue: h.queue.analyticsSyncQueue,
   mediaOptimizeQueue: h.queue.mediaOptimizeQueue,
@@ -204,7 +201,7 @@ vi.mock("@postautomation/social", async (importOriginal) => {
 
 import { UnrecoverableError } from "bullmq";
 import { createPostPublishWorker } from "../workers/post-publish.worker";
-import { ORPHANED_CLAIM_MESSAGE, ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE, FINAL_ATTEMPT_ORPHAN_MESSAGE, OPTIMIZE_WAIT_MESSAGE } from "../lib/publish-recovery";
+import { ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE, OPTIMIZE_WAIT_MESSAGE } from "../lib/publish-recovery";
 import { awaitBackgroundTasks, pendingBackgroundTaskCount } from "../lib/background-tasks";
 
 const { s, rows, tick, prisma, queue } = h;
@@ -459,12 +456,22 @@ describe("pre-publish claim guard (Worker wrapper)", () => {
   });
 });
 
-describe("claim-miss orphan recovery", () => {
+describe("claim-miss orphan handling — park, never auto-republish", () => {
   beforeEach(() => {
     s.provider = realProvider("INSTAGRAM", {});
   });
 
-  it("releases a PUBLISHING target that no job holds and fails this attempt so BullMQ retries", async () => {
+  function expectParked(err: any) {
+    expect(err).toBeInstanceOf(UnrecoverableError);
+    expect(err.message).toBe(ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE);
+    const row = rows.get("t1")!;
+    expect(row.status).toBe("FAILED");
+    expect(row.ambiguousAt).toBeInstanceOf(Date);
+    expect(row.ambiguousReason).toBe(ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE);
+    expect(row.errorMessage).toBe(ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE);
+  }
+
+  it("parks a PUBLISHING target that no job holds (Instagram), conditionally, without publishing", async () => {
     seedTarget("t1", { status: "PUBLISHING" });
     queue.postPublishQueue.getActive.mockResolvedValue([
       { id: "job-1", data: { postTargetId: "t1" } }, // this job itself
@@ -472,51 +479,65 @@ describe("claim-miss orphan recovery", () => {
       undefined, // Job.fromId can return undefined
     ]);
 
-    const err = await runExpectingError(makeJob());
+    expectParked(await runExpectingError(makeJob()));
 
-    expect(err).not.toBeInstanceOf(UnrecoverableError);
-    expect(err.message).toBe(ORPHANED_CLAIM_MESSAGE);
-    expect(rows.get("t1")).toMatchObject({ status: "FAILED", errorMessage: ORPHANED_CLAIM_MESSAGE });
-    const release = nonClaimUpdateManyCalls();
-    expect(release).toHaveLength(1);
-    expect(release[0]![0].where).toMatchObject({ id: "t1", status: "PUBLISHING", publishedId: null });
-    expect(release[0]![0].where.updatedAt).toBeInstanceOf(Date);
+    const writes = nonClaimUpdateManyCalls();
+    expect(writes).toHaveLength(1);
+    expect(writes[0]![0].where).toMatchObject({ id: "t1", status: "PUBLISHING", publishedId: null });
+    expect(writes[0]![0].where.updatedAt).toBeInstanceOf(Date);
     expect(s.provider.publishPost).not.toHaveBeenCalled();
+    expect(s.provider.findExistingPost).not.toHaveBeenCalled();
   });
 
-  it("…and the retry adopts the post the dead holder had already published (no second publish)", async () => {
+  it("a parked target can never be claimed again by any retry — nothing is published twice", async () => {
     seedTarget("t1", { status: "PUBLISHING" });
     const err = await runExpectingError(makeJob());
+    expectParked(err);
 
-    // BullMQ's failed handler keeps the message verbatim and bumps retryCount.
+    // worker.on("failed") keeps the message verbatim and does not clear the stamp.
     await s.handlers.failed!({ ...makeJob(), attemptsMade: 1 }, err);
-    expect(rows.get("t1")).toMatchObject({ status: "FAILED", errorMessage: ORPHANED_CLAIM_MESSAGE, retryCount: 1 });
+    await awaitBackgroundTasks(1_000);
+    expect(rows.get("t1")).toMatchObject({ status: "FAILED", errorMessage: ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE });
+    expect(rows.get("t1")!.ambiguousAt).toBeInstanceOf(Date);
 
-    s.provider.findExistingPost.mockResolvedValue({ platformPostId: "ig-live", url: "https://instagram.com/p/live" });
-    await s.processor!(makeJob({ attemptsMade: 1 }));
-
-    expect(s.provider.findExistingPost).toHaveBeenCalledTimes(1);
+    await expect(s.processor!(makeJob({ id: "job-9", attemptsMade: 1 }))).resolves.toBeUndefined();
     expect(s.provider.publishPost).not.toHaveBeenCalled();
-    expect(rows.get("t1")).toMatchObject({ status: "PUBLISHED", publishedId: "ig-live" });
   });
 
-  it("skips when another active job holds the target", async () => {
+  it.each([
+    ["TWITTER (no duplicate check)", "TWITTER", { findExistingPost: undefined }],
+    ["INSTAGRAM story-format carousel", "INSTAGRAM", {}],
+    ["FACEBOOK", "FACEBOOK", {}],
+  ])("parks on %s too — the policy does not depend on the platform", async (_l, platform, over) => {
+    s.provider = realProvider(platform as string, over as Record<string, unknown>);
+    seedChannel(platform as string);
+    seedTarget("t1", { status: "PUBLISHING", format: platform === "INSTAGRAM" ? "STORY" : null });
+    expectParked(await runExpectingError(makeJob({ data: { ...makeJob().data, platform } })));
+    expect(s.provider.publishPost).not.toHaveBeenCalled();
+  });
+
+  it("parks on the FINAL attempt too — never announced as a definite failure (review round 2)", async () => {
     seedTarget("t1", { status: "PUBLISHING" });
-    queue.postPublishQueue.getActive.mockResolvedValue([{ id: "job-2", data: { postTargetId: "t1" } }]);
+    expectParked(await runExpectingError(makeJob({ attemptsMade: 2 })));
+  });
 
-    await expect(s.processor!(makeJob())).resolves.toBeUndefined();
-
-    expect(rows.get("t1")!.status).toBe("PUBLISHING");
+  it("skips when another active job holds the target — on the final attempt too", async () => {
+    for (const attemptsMade of [0, 2]) {
+      seedTarget("t1", { status: "PUBLISHING" });
+      queue.postPublishQueue.getActive.mockResolvedValue([{ id: "job-2", data: { postTargetId: "t1" } }]);
+      await expect(s.processor!(makeJob({ attemptsMade }))).resolves.toBeUndefined();
+      expect(rows.get("t1")!.status).toBe("PUBLISHING");
+    }
     expect(nonClaimUpdateManyCalls()).toHaveLength(0);
   });
 
-  it("falls back to the old skip when the active-job lookup fails", async () => {
-    seedTarget("t1", { status: "PUBLISHING" });
-    queue.postPublishQueue.getActive.mockRejectedValue(new Error("Redis connection lost"));
-
-    await expect(s.processor!(makeJob())).resolves.toBeUndefined();
-
-    expect(rows.get("t1")!.status).toBe("PUBLISHING");
+  it("skips (no write) when the active-job lookup fails — on the final attempt too", async () => {
+    for (const attemptsMade of [0, 2]) {
+      seedTarget("t1", { status: "PUBLISHING" });
+      queue.postPublishQueue.getActive.mockRejectedValue(new Error("Redis connection lost"));
+      await expect(s.processor!(makeJob({ attemptsMade }))).resolves.toBeUndefined();
+      expect(rows.get("t1")!.status).toBe("PUBLISHING");
+    }
     expect(nonClaimUpdateManyCalls()).toHaveLength(0);
   });
 
@@ -525,13 +546,13 @@ describe("claim-miss orphan recovery", () => {
     await expect(s.processor!(makeJob())).resolves.toBeUndefined();
 
     seedTarget("t1", { status: "PUBLISHING", publishedId: "ig-1" });
-    await expect(s.processor!(makeJob())).resolves.toBeUndefined();
+    await expect(s.processor!(makeJob({ attemptsMade: 2 }))).resolves.toBeUndefined();
 
     expect(queue.postPublishQueue.getActive).not.toHaveBeenCalled();
     expect(nonClaimUpdateManyCalls()).toHaveLength(0);
   });
 
-  it("skips when the row changed between the read and the release (conditional on updatedAt)", async () => {
+  it("skips when the row changed between the read and the park (conditional on updatedAt)", async () => {
     const row = seedTarget("t1", { status: "PUBLISHING" });
     s.staleRead = { ...row, updatedAt: new Date(row.updatedAt.getTime() - 60_000) };
 
@@ -539,78 +560,7 @@ describe("claim-miss orphan recovery", () => {
 
     expect(nonClaimUpdateManyCalls()).toHaveLength(1); // attempted…
     expect(rows.get("t1")!.status).toBe("PUBLISHING"); // …but matched nothing
-  });
-
-  it("final attempt on an unheld Instagram orphan: terminal + retryable, finalized through on('failed')", async () => {
-    seedTarget("t1", { status: "PUBLISHING" });
-
-    const err = await runExpectingError(makeJob({ attemptsMade: 2 }));
-
-    // UnrecoverableError so worker.on("failed") finalizes it (and increments
-    // retryCount, which makes a later human Retry run the duplicate pre-flight).
-    expect(err).toBeInstanceOf(UnrecoverableError);
-    expect(err.message).toBe(FINAL_ATTEMPT_ORPHAN_MESSAGE);
-    expect(rows.get("t1")).toMatchObject({
-      status: "FAILED",
-      errorMessage: FINAL_ATTEMPT_ORPHAN_MESSAGE,
-      ambiguousAt: null,
-    });
-    expect(queue.postPublishQueue.getActive).toHaveBeenCalled();
-    expect(s.provider.publishPost).not.toHaveBeenCalled();
-  });
-
-  it("final attempt NEVER terminalizes a target another live job is publishing (adversarial review)", async () => {
-    seedTarget("t1", { status: "PUBLISHING" });
-    queue.postPublishQueue.getActive.mockResolvedValue([{ id: "job-2", data: { postTargetId: "t1" } }]);
-
-    await expect(s.processor!(makeJob({ attemptsMade: 2 }))).resolves.toBeUndefined();
-
-    expect(rows.get("t1")!.status).toBe("PUBLISHING");
-    expect(nonClaimUpdateManyCalls()).toHaveLength(0);
-  });
-
-  it("final attempt keeps the legacy terminalize when the holder check itself cannot run", async () => {
-    seedTarget("t1", { status: "PUBLISHING" });
-    queue.postPublishQueue.getActive.mockRejectedValue(new Error("Redis connection lost"));
-
-    const err = await runExpectingError(makeJob({ attemptsMade: 2 }));
-
-    expect(err).toBeInstanceOf(UnrecoverableError);
-    expect(rows.get("t1")).toMatchObject({ status: "FAILED", errorMessage: FINAL_ATTEMPT_ORPHAN_MESSAGE });
-  });
-
-  it("an orphan on a platform with NO duplicate check is parked for a person — never re-published automatically", async () => {
-    // TWITTER-shaped provider: no findExistingPost, so nothing could tell
-    // whether the dead holder had already posted it.
-    s.provider = realProvider("TWITTER", { findExistingPost: undefined });
-    seedChannel("TWITTER");
-    seedTarget("t1", { status: "PUBLISHING" });
-    const job = makeJob({ data: { ...makeJob().data, platform: "TWITTER" } });
-
-    const err = await runExpectingError(job);
-
-    expect(err).toBeInstanceOf(UnrecoverableError);
-    expect(err.message).toBe(ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE);
-    const row = rows.get("t1")!;
-    expect(row.status).toBe("FAILED");
-    expect(row.ambiguousAt).toBeInstanceOf(Date);
-    expect(row.ambiguousReason).toBe(ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE);
-
-    // No retry layer can claim it again, so nothing publishes it twice.
-    await expect(s.processor!(makeJob({ id: "job-9", data: job.data }))).resolves.toBeUndefined();
-    expect(s.provider.publishPost).not.toHaveBeenCalled();
-    expect(rows.get("t1")!.status).toBe("FAILED");
-  });
-
-  it("the same platform is parked on the FINAL attempt too", async () => {
-    s.provider = realProvider("TWITTER", { findExistingPost: undefined });
-    seedChannel("TWITTER");
-    seedTarget("t1", { status: "PUBLISHING" });
-
-    const err = await runExpectingError(makeJob({ attemptsMade: 2, data: { ...makeJob().data, platform: "TWITTER" } }));
-
-    expect(err.message).toBe(ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE);
-    expect(rows.get("t1")!.ambiguousAt).toBeInstanceOf(Date);
+    expect(rows.get("t1")!.ambiguousAt).toBeNull();
   });
 
   it("never treats a still-running copy of the SAME job id (lapsed lock) as an orphan", async () => {
@@ -626,6 +576,7 @@ describe("claim-miss orphan recovery", () => {
     // BullMQ re-runs job-1 (stalled checker) while the first run is still publishing.
     queue.postPublishQueue.getActive.mockResolvedValue([{ id: "job-1", data: { postTargetId: "t1" } }]);
     await expect(s.processor!(makeJob())).resolves.toBeUndefined();
+    await expect(s.processor!(makeJob({ attemptsMade: 2 }))).resolves.toBeUndefined();
     expect(rows.get("t1")!.status).toBe("PUBLISHING");
     expect(nonClaimUpdateManyCalls()).toHaveLength(0);
 
@@ -633,10 +584,9 @@ describe("claim-miss orphan recovery", () => {
     await first;
     expect(rows.get("t1")).toMatchObject({ status: "PUBLISHED", publishedId: "ig-1" });
 
-    // The local claim was released: a genuine orphan on the same target is recoverable again.
+    // The local claim was released: a genuine orphan on the same target is parked again.
     seedTarget("t1", { status: "PUBLISHING" });
-    const err = await runExpectingError(makeJob());
-    expect(err.message).toBe(ORPHANED_CLAIM_MESSAGE);
+    expectParked(await runExpectingError(makeJob()));
   });
 });
 
@@ -660,10 +610,30 @@ describe("dead token fails fast instead of retrying into a false ambiguity", () 
     expect(refreshAccessToken).toHaveBeenCalledTimes(1);
   });
 
-  it("refresh failed with a NETWORK error → plain Error (BullMQ may retry)", async () => {
+  it("a definite ORIGINAL 190 stays terminal even when the refresh call itself hits a network error or a Meta blip (review round 2)", async () => {
+    for (const refreshError of [
+      "fetch failed",
+      'Instagram long-lived token exchange failed: {"error":{"message":"(#4) Application request limit reached","type":"OAuthException","is_transient":true,"code":4}}',
+    ]) {
+      s.provider = realProvider("INSTAGRAM", {
+        publishPost: vi.fn(async () => {
+          throw new Error(IG_PUBLISH_190);
+        }),
+        refreshAccessToken: vi.fn(async () => {
+          throw new Error(refreshError);
+        }),
+      });
+      seedTarget("t1");
+      const err = await runExpectingError(makeJob());
+      expect(err, refreshError).toBeInstanceOf(UnrecoverableError);
+      expect(rows.get("t1")).toMatchObject({ status: "FAILED", ambiguousAt: null });
+    }
+  });
+
+  it("an indefinite original error + a NETWORK refresh failure → plain Error (BullMQ may retry)", async () => {
     s.provider = realProvider("INSTAGRAM", {
       publishPost: vi.fn(async () => {
-        throw new Error(IG_PUBLISH_190);
+        throw new Error("Instagram publish failed: HTTP 401 token expired");
       }),
       refreshAccessToken: vi.fn(async () => {
         throw new Error("fetch failed");
@@ -836,14 +806,13 @@ describe("wiring — the ordering the behaviour above depends on", () => {
     );
   });
 
-  it("every orphan write is conditional on the exact row it inspected", async () => {
+  it("the orphan park is conditional on the exact row it inspected, and there is no auto-retry branch", async () => {
     const src = await workerSource();
     expect(src).toMatch(
-      /\{ id: postTargetId, status: "PUBLISHING" as const, publishedId: null, updatedAt: current\.updatedAt \}/
+      /where: \{ id: postTargetId, status: "PUBLISHING", publishedId: null, updatedAt: current\.updatedAt \}/
     );
-    // All three claim-miss writes go through that filter.
-    expect(src.match(/where: sameRow,/g)).toHaveLength(3);
-    expect(src.match(/throw new Error\(ORPHANED_CLAIM_MESSAGE\)/g)).toHaveLength(1);
+    expect(src).toMatch(/throw new UnrecoverableError\(ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE\)/);
+    expect(src).not.toMatch(/recover-orphan|ORPHANED_CLAIM_MESSAGE\b|FINAL_ATTEMPT_ORPHAN_MESSAGE/);
   });
 
   it("the failed listener is tracked so a graceful drain waits for its bookkeeping", async () => {
@@ -862,24 +831,23 @@ describe("wiring — the ordering the behaviour above depends on", () => {
     expect(pendingBackgroundTaskCount()).toBe(0);
   });
 
-  it("paces same-post Meta dispatches just before the publish try", async () => {
+  it("there is NO in-process dispatch pacing: a sleeping job would hold a worker slot (review round 2)", async () => {
     const src = await workerSource();
-    const pace = src.indexOf("dispatchPacer.waitTurn(`${postTarget.postId}:${platform}`, resolvePlatformStaggerMs(platform))");
-    const tryStart = src.indexOf("state.dispatched = true;");
-    const validation = src.indexOf("const validationReason = ");
-    expect(pace).toBeGreaterThan(validation);
-    expect(pace).toBeLessThan(tryStart);
-    expect(src).toMatch(/const PACED_DISPATCH_PLATFORMS = new Set\(\["INSTAGRAM", "FACEBOOK"\]\);/);
+    expect(src).not.toMatch(/dispatchPacer|waitTurn/);
   });
 
   it("the dead-token fast-fail keeps the ambiguity check first and only applies when the refresh did not succeed", async () => {
     const src = await workerSource();
     const tokenBranch = src.slice(src.indexOf('if (errType === "token_expired")'), src.indexOf('} else if (errType === "media_required")'));
     const ambiguous = tokenBranch.indexOf("isAmbiguousPublishError(refreshRetryErr)");
-    const fastFail = tokenBranch.indexOf("isDefiniteAuthFailure(authEvidence)");
+    const fastFail = tokenBranch.indexOf("isDefiniteAuthFailure(errMsg)");
     expect(ambiguous).toBeGreaterThan(-1);
     expect(fastFail).toBeGreaterThan(ambiguous);
-    expect(tokenBranch).toMatch(/if \(!refreshSucceeded && isDefiniteAuthFailure\(authEvidence\)\)/);
+    // Either the original error or the refresh error may carry the definite signal.
+    expect(tokenBranch).toMatch(
+      /isDefiniteAuthFailure\(errMsg\) \|\|\s*\(refreshAttempted && isDefiniteAuthFailure\(refreshRetryErr\?\.message\)\)/
+    );
+    expect(tokenBranch).toMatch(/if \(!refreshSucceeded && definitelyDead\)/);
     expect(tokenBranch).toMatch(/refreshSucceeded = true;/);
   });
 });

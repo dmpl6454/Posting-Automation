@@ -641,6 +641,10 @@ export class InstagramProvider extends SocialProvider {
     // Reset by every poll that returns a readable status, so scattered blips
     // across a long reel wait never add up to a failure.
     let consecutiveReadFailures = 0;
+    // Graph code of the last wait-out (transient/rate-limit) reply, cleared by
+    // any readable status — so a budget that ran out on throttle replies says
+    // so instead of claiming the media "is still processing".
+    let lastWaitOutCode: number | null = null;
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       await new Promise((r) => setTimeout(r, pollInterval));
@@ -669,6 +673,7 @@ export class InstagramProvider extends SocialProvider {
           const fatal = fatalStatusPollMessage(graphError);
           if (fatal) throw new Error(fatal);
           if (isWaitOutStatusPollError(graphError)) {
+            lastWaitOutCode = Number(graphError.code);
             // Keep waiting (consumes an attempt, not the failure allowance).
             console.warn(
               `[Instagram] status poll for container ${containerId} got a transient/rate-limit body ` +
@@ -702,6 +707,7 @@ export class InstagramProvider extends SocialProvider {
         continue;
       }
       consecutiveReadFailures = 0;
+      lastWaitOutCode = null;
 
       // FINISHED = ready to publish; PUBLISHED = already published (defensive).
       if (data.status_code === "FINISHED" || data.status_code === "PUBLISHED") return;
@@ -717,6 +723,16 @@ export class InstagramProvider extends SocialProvider {
     // 90s cutoff when the real waits were longer — hiding how close these
     // containers were to finishing.
     const waitedSec = Math.round((Date.now() - startedAt) / 1000);
+    if (lastWaitOutCode !== null) {
+      // The status was never readable at the end — Meta kept answering with a
+      // transient/throttle reply. Pre-write, definite; worded without the
+      // classifier's rate-limit phrases so it takes the ordinary failure +
+      // BullMQ retry path, exactly as a budget timeout always has.
+      throw new Error(
+        `Instagram did not report the media status within ${waitedSec}s ` +
+          `(budget ${Math.round(maxWaitMs / 1000)}s; Meta kept replying with Graph code ${lastWaitOutCode})`
+      );
+    }
     throw new Error(
       `Instagram media processing did not finish within ${waitedSec}s ` +
         `(budget ${Math.round(maxWaitMs / 1000)}s) — the video is still processing on Instagram's side, not rejected`

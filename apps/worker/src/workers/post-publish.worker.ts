@@ -11,9 +11,8 @@ import { buildPublishEmail, buildPublishReportCsv } from "../lib/publish-email";
 import { planFacebookAnalyticsId, earlyVideoSyncDelayMs } from "../lib/fb-video-post-id";
 import { addLocalClaim, releaseLocalClaim, localClaimCount } from "../lib/local-claims";
 import { trackBackgroundTask } from "../lib/background-tasks";
-import { createDispatchPacer } from "../lib/dispatch-pacer";
-import { markTargetFailed, markTargetAmbiguous, buildPublishClaimWhere, routePublishError, shouldPreflightReconcile, buildPublishNotifications, mediaRequiredReason, isSeedNoise, isStaleScheduleJob, isHeavyPublish, planHeavyDefer, HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE, classifyError, isDefiniteAuthFailure, releaseClaimAfterPrePublishError, decideClaimMiss, countOtherActiveJobsForTarget, ORPHANED_CLAIM_MESSAGE, ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE, FINAL_ATTEMPT_ORPHAN_MESSAGE, formatPublishTiming, type PublishJobState } from "../lib/publish-recovery";
-import { PRIORITY_RETRY, mediaOptimizeQueue, atAgeWindowsForFormat, resolvePlatformStaggerMs } from "@postautomation/queue";
+import { markTargetFailed, markTargetAmbiguous, buildPublishClaimWhere, routePublishError, shouldPreflightReconcile, buildPublishNotifications, mediaRequiredReason, isSeedNoise, isStaleScheduleJob, isHeavyPublish, planHeavyDefer, HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE, classifyError, isDefiniteAuthFailure, releaseClaimAfterPrePublishError, decideClaimMiss, countOtherActiveJobsForTarget, ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE, formatPublishTiming, type PublishJobState } from "../lib/publish-recovery";
+import { PRIORITY_RETRY, mediaOptimizeQueue, atAgeWindowsForFormat } from "@postautomation/queue";
 import { planOptimizeGate, choosePublishUrl } from "../lib/media-optimize";
 import { buildSnapshotMetadata } from "../lib/snapshot-metadata";
 
@@ -75,11 +74,6 @@ let heavyActive = 0;
 // Process-local claim registry: ../lib/local-claims (shared with the
 // stuck-PUBLISHING reaper in auto-healer.worker.ts).
 
-// Same-post Meta dispatch pacing (2026-09-16) — see lib/dispatch-pacer.ts. The
-// shared normalize encode releases every target that waited on it in the same
-// tick; this restores the per-platform spacing between their publish calls.
-const dispatchPacer = createDispatchPacer();
-const PACED_DISPATCH_PLATFORMS = new Set(["INSTAGRAM", "FACEBOOK"]);
 
 // Redis pub/sub publisher for upload progress SSE
 const progressPublisher = new IORedis(process.env.REDIS_URL || "redis://localhost:6379", {
@@ -321,35 +315,28 @@ export function createPostPublishWorker() {
         // ── Claim-miss handling (reworked 2026-09-16) ────────────────────────
         // A target left at PUBLISHING by a job that is no longer running (the
         // 2026-09-15 deploy SIGKILLed 10 in-flight publishes) used to be
-        // skipped here and sat for 30 min until the reaper. It is now handled
-        // on POSITIVE evidence that no job holds it (BullMQ's active list plus
-        // this process's own claims) — see decideClaimMiss:
-        //   - another holder exists → skip (that job owns the terminal write),
-        //     on the final attempt too;
-        //   - Instagram/Facebook → release and retry through the duplicate
-        //     pre-flight (non-final) or fail it retryably (final);
-        //   - any other platform → the dead holder may already have published
-        //     and nothing can check, so park it as ambiguous for a person
-        //     rather than risk an automatic duplicate.
-        // Every write is conditional on the exact row inspected, and any error
-        // in the check falls back to a skip (the reaper is the backstop).
-        const isFinalAttempt = (job.attemptsMade + 1) >= (job.opts?.attempts ?? 1);
-        let outcome: "skip" | "retry" | "terminal" = "skip";
-        let terminalMessage = "";
+        // skipped here and sat for 30 min until the reaper, which then made it
+        // re-claimable — and a Retry re-published a post that may already have
+        // gone live. Now, on POSITIVE evidence that no job holds it (BullMQ's
+        // active list plus this process's own claims — see decideClaimMiss),
+        // it is PARKED as ambiguous: FAILED + ambiguousAt, unclaimable by every
+        // retry layer, shown to the operator as "Needs check".
+        //
+        // ⚠️ Never auto-retried, on ANY platform. Two review rounds found
+        // automatic recovery re-publishing unknown-outcome posts: platforms
+        // with no "already live?" check, IG story-format carousels (no
+        // checkpoint, pre-flight returns null), and final attempts announced as
+        // definite failures. The holder may have dispatched; only a person can
+        // tell. Anything uncertain (no evidence, or a live holder) is a skip —
+        // the liveness-aware reaper is the backstop.
+        let parked = false;
         try {
           const current = await prisma.postTarget.findUnique({
             where: { id: postTargetId },
             select: { status: true, publishedId: true, updatedAt: true },
           });
           let otherActiveJobs: number | null = null;
-          let providerSupportsReconcile = false;
           if (current && current.status === "PUBLISHING" && !current.publishedId) {
-            try {
-              providerSupportsReconcile =
-                typeof getSocialProvider(platform as any).findExistingPost === "function";
-            } catch {
-              providerSupportsReconcile = false;
-            }
             try {
               const active = await postPublishQueue.getActive();
               otherActiveJobs = countOtherActiveJobsForTarget(
@@ -364,27 +351,16 @@ export function createPostPublishWorker() {
             }
           }
           const decision = decideClaimMiss({
-            isFinalAttempt,
             status: current?.status ?? null,
             hasPublishedId: !!current?.publishedId,
             otherActiveJobs,
-            providerSupportsReconcile,
           });
-          // ⚠️ Conditional on the exact row we inspected: any write since (a
-          // finishing holder, a progress tick, a platform id) bumps updatedAt
-          // and makes each write below a no-op.
-          const sameRow = current
-            ? { id: postTargetId, status: "PUBLISHING" as const, publishedId: null, updatedAt: current.updatedAt }
-            : null;
-          if (decision === "recover-orphan" && sameRow) {
-            const released = await prisma.postTarget.updateMany({
-              where: sameRow,
-              data: { status: "FAILED", errorMessage: ORPHANED_CLAIM_MESSAGE },
-            });
-            if (released.count === 1) outcome = "retry";
-          } else if (decision === "park-orphan" && sameRow) {
-            const parked = await prisma.postTarget.updateMany({
-              where: sameRow,
+          if (decision === "park-orphan" && current) {
+            // ⚠️ Conditional on the exact row we inspected: any write since (a
+            // finishing holder, a progress tick, a platform id) bumps
+            // updatedAt and makes this a no-op.
+            const res = await prisma.postTarget.updateMany({
+              where: { id: postTargetId, status: "PUBLISHING", publishedId: null, updatedAt: current.updatedAt },
               data: {
                 status: "FAILED",
                 errorMessage: ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE,
@@ -392,33 +368,18 @@ export function createPostPublishWorker() {
                 ambiguousReason: ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE,
               },
             });
-            if (parked.count === 1) {
-              outcome = "terminal";
-              terminalMessage = ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE;
-            }
-          } else if (decision === "terminalize" && sameRow) {
-            const failed = await prisma.postTarget.updateMany({
-              where: sameRow,
-              data: { status: "FAILED", errorMessage: FINAL_ATTEMPT_ORPHAN_MESSAGE },
-            });
-            if (failed.count === 1) {
-              outcome = "terminal";
-              terminalMessage = FINAL_ATTEMPT_ORPHAN_MESSAGE;
-            }
+            parked = res.count === 1;
           }
         } catch (recoverErr: any) {
           console.warn(`[PostPublish] orphan-claim check failed for ${postTargetId} — skipping: ${recoverErr?.message}`);
         }
-        if (outcome === "retry") {
-          console.warn(`[PostPublish] target ${postTargetId} was orphaned at PUBLISHING (no job holds it) — released to FAILED; failing job ${job.id} so BullMQ retries with the duplicate pre-flight`);
-          throw new Error(ORPHANED_CLAIM_MESSAGE);
-        }
-        if (outcome === "terminal") {
-          // UnrecoverableError so worker.on("failed") finalizes the target,
-          // increments retryCount (a later human Retry then runs the duplicate
-          // pre-flight where one exists), notifies, and settles the parent post.
-          console.warn(`[PostPublish] target ${postTargetId} orphaned at PUBLISHING (no job holds it) — marked terminal (job ${job.id}): ${terminalMessage}`);
-          throw new UnrecoverableError(terminalMessage);
+        if (parked) {
+          // UnrecoverableError so worker.on("failed") finalizes it (message,
+          // retryCount, notification, parent post). The row is already
+          // unclaimable, so its unconditional status write cannot race a new
+          // claimer.
+          console.warn(`[PostPublish] target ${postTargetId} orphaned at PUBLISHING (no job holds it) — parked as ambiguous (job ${job.id})`);
+          throw new UnrecoverableError(ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE);
         }
         console.warn(`[PostPublish] target ${postTargetId} already claimed or published — skipping duplicate job ${job.id}`);
         return;
@@ -775,7 +736,13 @@ export function createPostPublishWorker() {
             // to /tmp, re-encodes it, and re-uploads — untenable for multi-GB
             // Shorts/Reels (disk + CPU + wall-clock). Post the creator's
             // original video as-is instead of failing or stalling.
-            const tooBigForOverlay = (mediaPrepSizes[i] ?? 0) > OVERLAY_MAX_BYTES;
+            // The watermark (rollback) path keeps its original gate — the
+            // ORIGINAL's size — so re-enabling it restores the old behaviour
+            // exactly (review round 2). The watermark-free plans look at the
+            // file actually being prepared.
+            const tooBigForOverlay = watermarkOn
+              ? (mediaSizes[i] ?? 0) > OVERLAY_MAX_BYTES
+              : (mediaPrepSizes[i] ?? 0) > OVERLAY_MAX_BYTES;
             const plan = planMetaVideoPrep({
               watermarkOn,
               hasOverlayText: !!overlayText,
@@ -988,17 +955,6 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
         const validationReason = `Validation failed: ${errors.join(", ")}`;
         await markTargetFailed(prisma, postTargetId, validationReason);
         throw new UnrecoverableError(validationReason);
-      }
-
-      // Re-impose the same-platform spacing between this post's publish calls
-      // (a no-op when the enqueue stagger already spaced them). Still before
-      // dispatch: nothing has been sent, so the pre-publish claim guard covers
-      // any throw here.
-      if (PACED_DISPATCH_PLATFORMS.has(platform)) {
-        const pacedMs = await dispatchPacer.waitTurn(`${postTarget.postId}:${platform}`, resolvePlatformStaggerMs(platform));
-        if (pacedMs > 0) {
-          console.log(`[PostPublish] target ${postTargetId} (${platform}) paced ${pacedMs}ms to keep same-post spacing`);
-        }
       }
 
       let result;
@@ -1222,8 +1178,14 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
             // published, so terminal FAILED with the reconnect message is the
             // truth. If the refresh SUCCEEDED and the re-publish failed, or the
             // evidence is not definite, behaviour is unchanged (plain Error).
-            const authEvidence = refreshAttempted ? refreshRetryErr?.message : errMsg;
-            if (!refreshSucceeded && isDefiniteAuthFailure(authEvidence)) {
+            // Either the ORIGINAL publish error or the refresh error may carry the
+            // definite signal: a dead token's forced refresh can itself come
+            // back as a Meta blip or throttle (review round 2), which must not
+            // turn a definite 190 back into a retry → false "may be live" park.
+            const definitelyDead =
+              isDefiniteAuthFailure(errMsg) ||
+              (refreshAttempted && isDefiniteAuthFailure(refreshRetryErr?.message));
+            if (!refreshSucceeded && definitelyDead) {
               console.warn(`[PostPublish] target ${postTargetId}: ${platform} credential is dead — failing without retry (reconnect required)`);
               throw new UnrecoverableError(tokenErrMsg);
             }
