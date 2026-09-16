@@ -121,6 +121,13 @@ services:
       # decides what is ingested, the web container renders "included from …".
       # Only has any effect while INSIGHTS_INCLUDE_EXTERNAL_POSTS=true.
       EXTERNAL_POST_FLOOR: ${EXTERNAL_POST_FLOOR:-}
+      # Same-platform publish spacing overrides (ms, clamped 1000-60000; empty =
+      # the built-in 10s Meta default). post.create/post.update compute the
+      # delayed-job spacing HERE at save time, and the worker's 30s cron computes
+      # it again — MUST match the worker's values or a setting only half applies.
+      # See packages/queue/src/publish-stagger.ts (2026-09-16).
+      PUBLISH_STAGGER_INSTAGRAM_MS: ${PUBLISH_STAGGER_INSTAGRAM_MS:-}
+      PUBLISH_STAGGER_FACEBOOK_MS: ${PUBLISH_STAGGER_FACEBOOK_MS:-}
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
       S3_ENDPOINT: http://minio:9000
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
@@ -212,6 +219,28 @@ services:
       context: .
       dockerfile: docker/Dockerfile.worker
     restart: unless-stopped
+    # Graceful stop (2026-09-16). The 2026-09-15 deploy killed 10 in-flight
+    # Instagram publishes: Docker's default stop grace is 10s, an IG reel
+    # publish takes 80-120s, and the SIGKILLed targets then sat orphaned at
+    # PUBLISHING for 30 min before the watchdog reaped them. On SIGTERM the
+    # worker stops taking jobs and lets in-flight ones finish, exiting on its
+    # own after WORKER_SHUTDOWN_TIMEOUT_MS (default 270s — kept below this
+    # grace). A deploy therefore waits up to ~5 min at the worker step; the
+    # replacement container starts once this one has stopped, and nothing is
+    # lost in between (jobs wait in Redis).
+    # ⚠️ A container keeps the stop timeout it was CREATED with: on recreate,
+    # Compose stops the old worker with ITS timeout, not this value. That is
+    # why scripts/deploy.sh also passes `--timeout 300` (WORKER_STOP_TIMEOUT)
+    # — keep the two in step.
+    # ⚠️ Deliberately NO `init: true`. With tini as PID 1, pnpm becomes an
+    # ordinary process whose SIGTERM forwarder is registered with
+    # process.once(): a SECOND SIGTERM (an operator's `docker stop` during the
+    # drain, an overlapping deploy) then kills pnpm, tini exits, and every
+    # in-flight publish is SIGKILLed. As PID 1, pnpm keeps the kernel's init
+    # protection, so the second signal is ignored and the drain continues.
+    # Verified in the worker image (2026-09-16): SIGTERM reaches node through
+    # pnpm → tsx, the drain runs, the process exits 0.
+    stop_grace_period: 5m
     environment:
       NODE_ENV: production
       DATABASE_URL: postgresql://${POSTGRES_USER:-postautomation}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-postautomation}
@@ -335,6 +364,39 @@ services:
       # auto-resolve instead of asking the operator to check by hand.
       IG_RECONCILE_SETTLE_MS: ${IG_RECONCILE_SETTLE_MS:-8000}
       FB_RECONCILE_SETTLE_MS: ${FB_RECONCILE_SETTLE_MS:-8000}
+      # ─── Publish speed / video re-encoding (2026-09-16) ────────────────
+      # Same allowlist warning as above: each key below is read ONLY if it is
+      # named here. An empty value (`${KEY:-}`) means "use the code default" —
+      # every reader treats "" exactly like unset.
+      # Opt-in per-channel watermark (channel name / logo burned into IG/FB
+      # videos). OFF by default per owner decision 2026-09-16 — the per-TARGET
+      # encode it needs was the main source of IG video fan-out latency.
+      # Fail-CLOSED in code (=== "true").
+      VIDEO_WATERMARK_ENABLED: ${VIDEO_WATERMARK_ENABLED:-false}
+      # MASTER kill switch for ALL IG/FB video re-encoding, including the story
+      # 9:16 canvas. Fail-OPEN in code (!== "false"): anything but "false" keeps
+      # re-encoding available, so the default is spelled out as true here.
+      VIDEO_OVERLAY_ENABLED: ${VIDEO_OVERLAY_ENABLED:-true}
+      # ffmpeg overlay slots (default 2) and threads per encode (default 2).
+      # Keep CONCURRENCY x THREADS below the 4 cores of the prod box.
+      VIDEO_OVERLAY_CONCURRENCY: ${VIDEO_OVERLAY_CONCURRENCY:-}
+      VIDEO_OVERLAY_THREADS: ${VIDEO_OVERLAY_THREADS:-}
+      # Videos above this many MB skip the IG/FB re-encode entirely (default 250).
+      VIDEO_OVERLAY_MAX_MB: ${VIDEO_OVERLAY_MAX_MB:-}
+      # Publish worker concurrency (default 10) and job starts per 5s (default 10).
+      PUBLISH_CONCURRENCY: ${PUBLISH_CONCURRENCY:-}
+      PUBLISH_LIMITER_MAX: ${PUBLISH_LIMITER_MAX:-}
+      # How long to poll an Instagram video container before giving up
+      # (default 240000, floor 30000).
+      IG_VIDEO_READY_TIMEOUT_MS: ${IG_VIDEO_READY_TIMEOUT_MS:-}
+      # Same-platform publish spacing overrides (ms, clamped 1000-60000; empty =
+      # the built-in 10s Meta default). MUST match the web service's values —
+      # web computes the spacing at save time, this container in the 30s cron.
+      PUBLISH_STAGGER_INSTAGRAM_MS: ${PUBLISH_STAGGER_INSTAGRAM_MS:-}
+      PUBLISH_STAGGER_FACEBOOK_MS: ${PUBLISH_STAGGER_FACEBOOK_MS:-}
+      # Drain budget on SIGTERM (default 270000). Keep it BELOW
+      # stop_grace_period above, or Docker's SIGKILL lands first.
+      WORKER_SHUTDOWN_TIMEOUT_MS: ${WORKER_SHUTDOWN_TIMEOUT_MS:-}
     depends_on:
       postgres:
         condition: service_healthy

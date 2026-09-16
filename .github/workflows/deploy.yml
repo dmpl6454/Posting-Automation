@@ -4,6 +4,13 @@ on:
   push:
     branches: [main]
 
+# Never run two deploys at once (2026-09-16): the worker now drains for up to
+# 5 minutes on stop, and a second run's compose would stop the still-draining
+# container again. Queued, not cancelled — every merge still deploys.
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest

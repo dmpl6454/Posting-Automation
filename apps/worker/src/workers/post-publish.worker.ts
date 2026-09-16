@@ -9,7 +9,9 @@ import { QUEUE_NAMES, postPublishQueue, analyticsSyncQueue, type PostPublishJobD
 import IORedis from "ioredis";
 import { buildPublishEmail, buildPublishReportCsv } from "../lib/publish-email";
 import { planFacebookAnalyticsId, earlyVideoSyncDelayMs } from "../lib/fb-video-post-id";
-import { markTargetFailed, markTargetAmbiguous, buildPublishClaimWhere, routePublishError, shouldPreflightReconcile, buildPublishNotifications, mediaRequiredReason, terminalizeStuckClaim, isSeedNoise, isStaleScheduleJob, isHeavyPublish, planHeavyDefer, HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE } from "../lib/publish-recovery";
+import { addLocalClaim, releaseLocalClaim, localClaimCount } from "../lib/local-claims";
+import { trackBackgroundTask } from "../lib/background-tasks";
+import { markTargetFailed, markTargetAmbiguous, buildPublishClaimWhere, routePublishError, shouldPreflightReconcile, buildPublishNotifications, mediaRequiredReason, isSeedNoise, isStaleScheduleJob, isHeavyPublish, planHeavyDefer, HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE, classifyError, isDefiniteAuthFailure, releaseClaimAfterPrePublishError, decideClaimMiss, countOtherActiveJobsForTarget, ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE, formatPublishTiming, type PublishJobState } from "../lib/publish-recovery";
 import { PRIORITY_RETRY, mediaOptimizeQueue, atAgeWindowsForFormat } from "@postautomation/queue";
 import { planOptimizeGate, choosePublishUrl } from "../lib/media-optimize";
 import { buildSnapshotMetadata } from "../lib/snapshot-metadata";
@@ -68,6 +70,10 @@ const HEAVY_MEDIA_CONCURRENCY = Math.min(
 const HEAVY_MEDIA_THRESHOLD_BYTES = envInt("HEAVY_MEDIA_THRESHOLD_MB", 300, 1, 4096) * 1024 * 1024;
 const HEAVY_STREAM_PLATFORMS = new Set(["YOUTUBE", "TWITTER", "LINKEDIN"]);
 let heavyActive = 0;
+
+// Process-local claim registry: ../lib/local-claims (shared with the
+// stuck-PUBLISHING reaper in auto-healer.worker.ts).
+
 
 // Redis pub/sub publisher for upload progress SSE
 const progressPublisher = new IORedis(process.env.REDIS_URL || "redis://localhost:6379", {
@@ -251,15 +257,8 @@ const PLATFORM_CHAR_LIMITS: Record<string, number> = {
 };
 
 // ── Error classification ────────────────────────────────────────────────
-function classifyError(errMsg: string): "rate_limit" | "token_expired" | "permission" | "content_too_large" | "media_required" | "unknown" {
-  const msg = errMsg.toLowerCase();
-  if (msg.includes("limit how often") || msg.includes("rate limit") || msg.includes("too many") || msg.includes("code\":368") || msg.includes("code\":32")) return "rate_limit";
-  if (msg.includes("token") && (msg.includes("expired") || msg.includes("invalid")) || msg.includes("code\":190") || msg.includes("401")) return "token_expired";
-  if (msg.includes("permission") || msg.includes("code\":10") || msg.includes("403")) return "permission";
-  if (msg.includes("reduce the amount") || msg.includes("too long") || msg.includes("too large") || msg.includes("content is too")) return "content_too_large";
-  if (msg.includes("requires at least one image") || msg.includes("media required")) return "media_required";
-  return "unknown";
-}
+// classifyError lives in ../lib/publish-recovery (moved 2026-09-16 so it is
+// unit-testable without importing this module, which opens Redis at load).
 
 // ── Auto-truncate content for platform ──────────────────────────────────
 function truncateForPlatform(content: string, platform: string): string {
@@ -272,9 +271,12 @@ function truncateForPlatform(content: string, platform: string): string {
 }
 
 export function createPostPublishWorker() {
-  const worker = new Worker<PostPublishJobData>(
-    QUEUE_NAMES.POST_PUBLISH,
-    async (job: Job<PostPublishJobData>) => {
+  // The publish processor. Named (2026-09-16) so the Worker below can wrap it
+  // in the pre-publish claim guard. ⚠️ Its body is deliberately left at its
+  // ORIGINAL indentation (two spaces deeper than this declaration) so the
+  // ~900-line function did not have to be re-indented — a re-indent would bury
+  // the real changes in whitespace noise on the most sensitive file we have.
+  const processPublishJob = async (job: Job<PostPublishJobData>, state: PublishJobState) => {
       const { postTargetId, channelId, platform } = job.data;
       console.log(`[PostPublish] Processing job ${job.id} for target ${postTargetId} (attempt ${job.attemptsMade + 1})`);
 
@@ -309,32 +311,83 @@ export function createPostPublishWorker() {
       if (claim.count === 0) {
         // The claim guard only transitions SCHEDULED/FAILED/DRAFT → PUBLISHING.
         // count===0 means the target is already PUBLISHING/PUBLISHED or gone.
-        // On a NON-final attempt we skip (a later attempt or the original job may
-        // still finish). On the FINAL attempt a no-op claim means a previous
-        // attempt left it orphaned at PUBLISHING — terminalize it now so it can't
-        // sit "in progress" forever (the 30-min watchdog is the slow backstop).
-        const isFinalAttempt = (job.attemptsMade + 1) >= (job.opts?.attempts ?? 1);
-        if (terminalizeStuckClaim({ claimCount: claim.count, isFinalAttempt })) {
-          const stuck = await prisma.postTarget.findUnique({
+        //
+        // ── Claim-miss handling (reworked 2026-09-16) ────────────────────────
+        // A target left at PUBLISHING by a job that is no longer running (the
+        // 2026-09-15 deploy SIGKILLed 10 in-flight publishes) used to be
+        // skipped here and sat for 30 min until the reaper, which then made it
+        // re-claimable — and a Retry re-published a post that may already have
+        // gone live. Now, on POSITIVE evidence that no job holds it (BullMQ's
+        // active list plus this process's own claims — see decideClaimMiss),
+        // it is PARKED as ambiguous: FAILED + ambiguousAt, unclaimable by every
+        // retry layer, shown to the operator as "Needs check".
+        //
+        // ⚠️ Never auto-retried, on ANY platform. Two review rounds found
+        // automatic recovery re-publishing unknown-outcome posts: platforms
+        // with no "already live?" check, IG story-format carousels (no
+        // checkpoint, pre-flight returns null), and final attempts announced as
+        // definite failures. The holder may have dispatched; only a person can
+        // tell. Anything uncertain (no evidence, or a live holder) is a skip —
+        // the liveness-aware reaper is the backstop.
+        let parked = false;
+        try {
+          const current = await prisma.postTarget.findUnique({
             where: { id: postTargetId },
-            select: { status: true, publishedId: true },
+            select: { status: true, publishedId: true, updatedAt: true },
           });
-          // Only terminalize a target genuinely orphaned at PUBLISHING with no
-          // platform id — never clobber a PUBLISHED row or one that has a
-          // publishedId (the publishedId short-circuit will mark it PUBLISHED).
-          if (stuck && stuck.status === "PUBLISHING" && !stuck.publishedId) {
-            await markTargetFailed(
-              prisma,
-              postTargetId,
-              "Publishing did not complete after all retries — please retry.",
-            );
-            console.warn(`[PostPublish] target ${postTargetId} orphaned at PUBLISHING on final attempt — marked FAILED (job ${job.id})`);
+          let otherActiveJobs: number | null = null;
+          if (current && current.status === "PUBLISHING" && !current.publishedId) {
+            try {
+              const active = await postPublishQueue.getActive();
+              otherActiveJobs = countOtherActiveJobsForTarget(
+                active as Array<{ id?: string | null; data?: { postTargetId?: unknown } | null } | undefined>,
+                job.id,
+                postTargetId,
+                localClaimCount(postTargetId),
+              );
+            } catch (activeErr: any) {
+              console.warn(`[PostPublish] active-job lookup failed for ${postTargetId}: ${activeErr?.message}`);
+              otherActiveJobs = null;
+            }
           }
-        } else {
-          console.warn(`[PostPublish] target ${postTargetId} already claimed or published — skipping duplicate job ${job.id}`);
+          const decision = decideClaimMiss({
+            status: current?.status ?? null,
+            hasPublishedId: !!current?.publishedId,
+            otherActiveJobs,
+          });
+          if (decision === "park-orphan" && current) {
+            // ⚠️ Conditional on the exact row we inspected: any write since (a
+            // finishing holder, a progress tick, a platform id) bumps
+            // updatedAt and makes this a no-op.
+            const res = await prisma.postTarget.updateMany({
+              where: { id: postTargetId, status: "PUBLISHING", publishedId: null, updatedAt: current.updatedAt },
+              data: {
+                status: "FAILED",
+                errorMessage: ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE,
+                ambiguousAt: new Date(),
+                ambiguousReason: ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE,
+              },
+            });
+            parked = res.count === 1;
+          }
+        } catch (recoverErr: any) {
+          console.warn(`[PostPublish] orphan-claim check failed for ${postTargetId} — skipping: ${recoverErr?.message}`);
         }
+        if (parked) {
+          // UnrecoverableError so worker.on("failed") finalizes it (message,
+          // retryCount, notification, parent post). The row is already
+          // unclaimable, so its unconditional status write cannot race a new
+          // claimer.
+          console.warn(`[PostPublish] target ${postTargetId} orphaned at PUBLISHING (no job holds it) — parked as ambiguous (job ${job.id})`);
+          throw new UnrecoverableError(ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE);
+        }
+        console.warn(`[PostPublish] target ${postTargetId} already claimed or published — skipping duplicate job ${job.id}`);
         return;
       }
+      // This job now owns the claim. Recorded for the pre-publish guard in the
+      // Worker wrapper and for the orphan check above.
+      state.claimed = true;
+      addLocalClaim(postTargetId);
 
       // 2. Get channel and post data — scope channel to the job's org (defense-in-depth)
       const [channel, postTarget] = await Promise.all([
@@ -452,7 +505,11 @@ export function createPostPublishWorker() {
       }));
       const optimizeGate = planOptimizeGate({ platform, media: gateMedia, now: Date.now() });
       if (optimizeGate.action === "fail") {
-        throw new Error(optimizeGate.message);
+        // Deterministic (the rendition failed, or its wait ceiling passed) —
+        // retrying this job cannot change it. Terminal with the REAL reason; a
+        // plain throw here used to orphan the target at PUBLISHING (2026-09-16).
+        await markTargetFailed(prisma, postTargetId, optimizeGate.message);
+        throw new UnrecoverableError(optimizeGate.message);
       }
       if (optimizeGate.action === "wait") {
         // Self-heal: (re)enqueue the rendition job (jobId dedupes with the
@@ -479,17 +536,22 @@ export function createPostPublishWorker() {
         console.log(
           `[PostPublish] Waiting for media optimization (${optimizeGate.mediaId}) — deferring ${postTargetId} ${Math.round(optimizeDelayMs / 1000)}s`
         );
-        await postPublishQueue.add(`retry-optimize-${postTargetId}-${Date.now()}`, job.data, {
-          delay: optimizeDelayMs,
-          priority: PRIORITY_RETRY,
-          attempts: 3,
-          backoff: { type: "exponential", delay: 60_000 },
-        });
+        // ⚠️ RELEASE THE CLAIM FIRST, then enqueue (2026-09-16). The old order
+        // (add, then update) left the target at PUBLISHING whenever the update
+        // failed — and the delayed job then lost the claim and skipped it. Now a
+        // failed add simply propagates: the target is already SCHEDULED, so
+        // BullMQ's retry of THIS job can claim it again.
         await prisma.postTarget.update({
           where: { id: postTargetId },
           // OPTIMIZE_WAIT_MESSAGE is a watchdog keep-alive marker like
           // HEAVY_SLOT_WAIT_MESSAGE — defer-parked targets stay live.
           data: { status: "SCHEDULED", errorMessage: OPTIMIZE_WAIT_MESSAGE },
+        });
+        await postPublishQueue.add(`retry-optimize-${postTargetId}-${Date.now()}`, job.data, {
+          delay: optimizeDelayMs,
+          priority: PRIORITY_RETRY,
+          attempts: 3,
+          backoff: { type: "exponential", delay: 60_000 },
         });
         return;
       }
@@ -501,6 +563,26 @@ export function createPostPublishWorker() {
           metadata: (m.media as { metadata?: unknown }).metadata,
         })
       );
+      // choosePublishUrl returns either the original url or the media-optimize
+      // rendition (H.264 + yuv420p + AAC + +faststart, ≤8Mbps). The video-prep
+      // step below publishes a rendition as-is instead of re-encoding it
+      // (2026-09-16). Computed HERE, while mediaUrls is still index-aligned
+      // with the attachments and untouched by any later step.
+      const mediaIsRendition = postTarget.post.mediaAttachments.map((m, i) => mediaUrls[i] !== m.media.url);
+      // Size of the file that video prep would actually download and encode:
+      // the rendition when one is being sent (its size is recorded by
+      // media-optimize), else the original. Checking the ORIGINAL's size here
+      // made a >250MB original skip the story 9:16 canvas even though the
+      // file being published was a small rendition (adversarial review,
+      // 2026-09-16). The encode's own Content-Length cap still guards a
+      // rendition that turns out to be large.
+      const mediaPrepSizes = postTarget.post.mediaAttachments.map((m, i) => {
+        if (!mediaIsRendition[i]) return Number(m.media.fileSize ?? 0);
+        const renditionSize = Number(
+          ((m.media as { metadata?: unknown }).metadata as { optimize?: { size?: unknown } } | null)?.optimize?.size
+        );
+        return Number.isFinite(renditionSize) && renditionSize > 0 ? renditionSize : Number(m.media.fileSize ?? 0);
+      });
       const mediaTypes = postTarget.post.mediaAttachments.map((m) => m.media.fileType);
       // Number(): fileSize is a Prisma BigInt (Phase 4) — safe up to 2^53,
       // far beyond any real file; keeps the gate math plain-number.
@@ -522,12 +604,8 @@ export function createPostPublishWorker() {
         console.log(
           `[PostPublish] Heavy-upload slots busy (${heavyActive}/${HEAVY_MEDIA_CONCURRENCY}) — deferring ${postTargetId} ${Math.round(delayMs / 1000)}s`
         );
-        await postPublishQueue.add(`retry-heavyslot-${postTargetId}-${Date.now()}`, job.data, {
-          delay: delayMs,
-          priority: PRIORITY_RETRY,
-          attempts: 3,
-          backoff: { type: "exponential", delay: 60_000 },
-        });
+        // Release the claim FIRST, then enqueue — same reasoning as the
+        // optimize-wait defer above (2026-09-16).
         await prisma.postTarget.update({
           where: { id: postTargetId },
           // HEAVY_SLOT_WAIT_MESSAGE is ALSO the watchdog's keep-alive marker —
@@ -535,6 +613,12 @@ export function createPostPublishWorker() {
           // (its PRIORITY_RETRY re-queue can legitimately starve behind the
           // fast lane); the 12h hard ceiling stays the terminal backstop.
           data: { status: "SCHEDULED", errorMessage: HEAVY_SLOT_WAIT_MESSAGE },
+        });
+        await postPublishQueue.add(`retry-heavyslot-${postTargetId}-${Date.now()}`, job.data, {
+          delay: delayMs,
+          priority: PRIORITY_RETRY,
+          attempts: 3,
+          backoff: { type: "exponential", delay: 60_000 },
         });
         return;
       }
@@ -604,37 +688,83 @@ export function createPostPublishWorker() {
         }
       };
 
-      // Auto-add channel logo watermark + optional text overlay on videos
+      // Meta-ready video prep for IG/FB (2026-09-16). Measured on prod: a
+      // ~53-channel IG video fan-out waited p50 240s / p90 659s per target in
+      // the per-TARGET watermark encode (FIFO semaphore of 2). The owner
+      // removed the per-channel watermark, so each video now takes one plan
+      // from meta-video-prep.ts: the media-optimize rendition publishes as-is,
+      // an original gets ONE shared, cached normalize encode for the whole
+      // fan-out, and VIDEO_WATERMARK_ENABLED=true restores the legacy
+      // per-target watermark exactly as it was.
       const hasVideo = mediaTypes.some((t) => t?.startsWith("video/"));
       if (hasVideo && ["INSTAGRAM", "FACEBOOK"].includes(platform)) {
+        const videoPrepStartedAt = Date.now();
+        const videoPrepPlans: string[] = [];
         try {
           const { processVideoOverlay } = await import("../lib/video-overlay");
+          const { isVideoWatermarkEnabled, planMetaVideoPrep } = await import("../lib/meta-video-prep");
+          const watermarkOn = isVideoWatermarkEnabled();
 
-          // Resolve channel logo from Logo Library
+          // Resolve channel logo from Logo Library — only when the watermark
+          // will actually be drawn; otherwise it is a wasted query per target.
           let logoUrl: string | null = null;
-          try {
-            const logoMedia = await prisma.media.findFirst({
-              where: { organizationId: postTarget.post.organizationId, category: "logo", channelId },
-              select: { url: true },
-            });
-            if (logoMedia) logoUrl = logoMedia.url;
-          } catch { /* no logo */ }
+          if (watermarkOn) {
+            try {
+              const logoMedia = await prisma.media.findFirst({
+                where: { organizationId: postTarget.post.organizationId, category: "logo", channelId },
+                select: { url: true },
+              });
+              if (logoMedia) logoUrl = logoMedia.url;
+            } catch { /* no logo */ }
 
-          // Fallback: check channel metadata for logo_path
-          if (!logoUrl) {
-            logoUrl = (channelMetadata?.logo_path as string) || null;
+            // Fallback: check channel metadata for logo_path
+            if (!logoUrl) {
+              logoUrl = (channelMetadata?.logo_path as string) || null;
+            }
           }
 
           const overlayText = (postTarget.post.metadata as any)?.videoOverlayText as string | undefined;
 
           const processed: string[] = [];
+          let renditionSkipLogged = false;
           for (let i = 0; i < mediaUrls.length; i++) {
-            // Skip the ffmpeg watermark pass on large videos: it downloads the
-            // whole file to /tmp, re-encodes it, and re-uploads — untenable for
-            // multi-GB Shorts/Reels (disk + CPU + wall-clock). Post the
-            // creator's original video as-is instead of failing or stalling.
-            const tooBigForOverlay = (mediaSizes[i] ?? 0) > OVERLAY_MAX_BYTES;
-            if (mediaTypes[i]?.startsWith("video/") && !tooBigForOverlay) {
+            if (!mediaTypes[i]?.startsWith("video/")) {
+              processed.push(mediaUrls[i]!);
+              continue;
+            }
+            // Skip the ffmpeg pass on large videos: it downloads the whole file
+            // to /tmp, re-encodes it, and re-uploads — untenable for multi-GB
+            // Shorts/Reels (disk + CPU + wall-clock). Post the creator's
+            // original video as-is instead of failing or stalling.
+            // The watermark (rollback) path keeps its original gate — the
+            // ORIGINAL's size — so re-enabling it restores the old behaviour
+            // exactly (review round 2). The watermark-free plans look at the
+            // file actually being prepared.
+            const tooBigForOverlay = watermarkOn
+              ? (mediaSizes[i] ?? 0) > OVERLAY_MAX_BYTES
+              : (mediaPrepSizes[i] ?? 0) > OVERLAY_MAX_BYTES;
+            const plan = planMetaVideoPrep({
+              watermarkOn,
+              hasOverlayText: !!overlayText,
+              publishesAsStory,
+              isRendition: mediaIsRendition[i] === true,
+              tooBig: tooBigForOverlay,
+            });
+            videoPrepPlans.push(plan);
+
+            if (plan === "skip-too-big") {
+              console.log(`[PostPublish] Skipping video prep on large video ${i + 1} (${Math.round((mediaPrepSizes[i] ?? 0) / 1024 / 1024)}MB > ${OVERLAY_MAX_BYTES / 1024 / 1024}MB) — posting it as-is`);
+              processed.push(mediaUrls[i]!);
+            } else if (plan === "skip-rendition") {
+              // Already H.264 + yuv420p + AAC + +faststart — the same shape the
+              // normalize encode would produce, and the shape IG/FB already
+              // publish directly for >250MB originals.
+              if (!renditionSkipLogged) {
+                console.log(`[PostPublish] target ${postTargetId}: rendition already Meta-normalized — no re-encode`);
+                renditionSkipLogged = true;
+              }
+              processed.push(mediaUrls[i]!);
+            } else if (plan === "watermark") {
               console.log(`[PostPublish] Processing video ${i + 1}: logo=${logoUrl ? "yes" : "name"}, text=${overlayText ? "yes" : "no"}`);
               const newUrl = await processVideoOverlay(mediaUrls[i]!, {
                 text: overlayText,
@@ -654,10 +784,24 @@ export function createPostPublishWorker() {
               });
               processed.push(newUrl);
             } else {
-              if (mediaTypes[i]?.startsWith("video/") && tooBigForOverlay) {
-                console.log(`[PostPublish] Skipping watermark on large video ${i + 1} (${Math.round((mediaSizes[i] ?? 0) / 1024 / 1024)}MB > ${OVERLAY_MAX_BYTES / 1024 / 1024}MB) — posting original`);
-              }
-              processed.push(mediaUrls[i]!);
+              // "normalize": NO per-channel input, so processVideoOverlay writes
+              // one deterministic, verified artifact that every target of this
+              // fan-out (and every retry) reuses.
+              console.log(`[PostPublish] target ${postTargetId}: normalizing video ${i + 1} (shared), text=${overlayText ? "yes" : "no"}, story=${publishesAsStory ? "yes" : "no"}`);
+              const newUrl = await processVideoOverlay(mediaUrls[i]!, {
+                text: overlayText,
+                textPosition: "bottom",
+                textFontSize: 42,
+                // ⚠️ Keep these empty: any per-channel input sends the call down
+                // the per-target path and brings back one encode per channel.
+                logoUrl: null,
+                channelName: undefined,
+                // The story canvas rides inside this one encode, as above.
+                storyCanvas: publishesAsStory,
+                normalize: true,
+                maxBytes: OVERLAY_MAX_BYTES,
+              });
+              processed.push(newUrl);
             }
           }
           // ⚠️ The story canvas rides INSIDE this pass, so wherever the pass is
@@ -679,7 +823,20 @@ export function createPostPublishWorker() {
           mediaUrls = processed;
         } catch (e) {
           console.warn(`[PostPublish] Video overlay failed, posting without:`, (e as Error).message);
+          // The canvas warning above lives inside the try, so a THROWN prep
+          // (short download, truncated encode, S3 error) never reached it —
+          // yet the story still publishes unpadded. Keep the promise that every
+          // unpadded story logs this line.
+          if (publishesAsStory) {
+            console.warn(
+              `[PostPublish] story 9:16 canvas NOT applied to video for target ${postTargetId} (${platform}) — ` +
+                `video prep failed (${(e as Error).message}); publishing the original`
+            );
+          }
         }
+        console.log(
+          `[PostPublish] target ${postTargetId} (${platform}) video prep ${Date.now() - videoPrepStartedAt}ms plan=${videoPrepPlans.join(",") || "none"}`
+        );
       } else if (publishesAsStory && hasVideo) {
         console.warn(
           `[PostPublish] story 9:16 canvas NOT applied to video for target ${postTargetId} (${platform}) — ` +
@@ -791,12 +948,22 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
           await markTargetFailed(prisma, postTargetId, reason);
           throw new UnrecoverableError(reason);
         }
-        throw new Error(`Validation failed: ${errors.join(", ")}`);
+        // Validation is deterministic for this input (e.g. 11 images where
+        // Instagram allows 10) — a retry fails identically. Terminal with the
+        // real reason. The old plain throw orphaned all 60 targets of such a
+        // post at PUBLISHING for 30-56 min (2026-09-16).
+        const validationReason = `Validation failed: ${errors.join(", ")}`;
+        await markTargetFailed(prisma, postTargetId, validationReason);
+        throw new UnrecoverableError(validationReason);
       }
 
       let result;
       if (isHeavy) heavyActive++;
       try {
+        // ⚠️ From HERE the platform may end up holding this post (pre-flight
+        // adoption, publishPost), so the Worker wrapper must no longer release
+        // the claim — the catch branches below own every terminal write.
+        state.dispatched = true;
         console.log(`[PostPublish] Publishing to ${platform} via ${provider.displayName} (mediaUrls: ${mediaUrls.length})`);
 
         // Build progress callback — only meaningful for media-heavy platforms (YouTube etc.)
@@ -949,6 +1116,10 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
         if (errType === "token_expired") {
           // Force token refresh and retry once
           console.log(`[PostPublish] Token expired — forcing refresh for channel ${channelId}`);
+          // Which step failed decides whether a retry could ever help (see the
+          // catch below, 2026-09-16).
+          let refreshAttempted = false;
+          let refreshSucceeded = false;
           try {
             // Same rule as the pre-publish refresh above: a Meta token is
             // refreshable only by the app that minted it.
@@ -956,10 +1127,12 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
             const clientId = creds?.clientId || "";
             const clientSecret = creds?.clientSecret || "";
             if (clientId && clientSecret && channel.refreshToken) {
+              refreshAttempted = true;
               const refreshed = await provider.refreshAccessToken(
                 channel.refreshToken,
                 { clientId, clientSecret, callbackUrl: `${process.env.APP_URL || ""}/api/oauth/callback/${platform.toLowerCase()}`, scopes: [] }
               );
+              refreshSucceeded = true;
               await prisma.channel.update({
                 where: { id: channelId },
                 data: {
@@ -996,6 +1169,26 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
             // and it's orphaned at PUBLISHING forever. Mirrors the generic else branch below.
             const tokenErrMsg = `Token expired and refresh failed: ${refreshRetryErr.message}. Reconnect this channel in Settings.`;
             await markTargetFailed(prisma, postTargetId, tokenErrMsg);
+            // ── Dead credential ⇒ stop retrying (2026-09-16) ─────────────────
+            // When the REFRESH itself failed (or none was possible) with a
+            // definite auth error, the next attempt would fail identically — and
+            // worse, its duplicate pre-flight cannot list the account with that
+            // dead token, so it parked the target as "may already have gone
+            // live" (73 false ambiguities since 2026-09-14). Nothing was
+            // published, so terminal FAILED with the reconnect message is the
+            // truth. If the refresh SUCCEEDED and the re-publish failed, or the
+            // evidence is not definite, behaviour is unchanged (plain Error).
+            // Either the ORIGINAL publish error or the refresh error may carry the
+            // definite signal: a dead token's forced refresh can itself come
+            // back as a Meta blip or throttle (review round 2), which must not
+            // turn a definite 190 back into a retry → false "may be live" park.
+            const definitelyDead =
+              isDefiniteAuthFailure(errMsg) ||
+              (refreshAttempted && isDefiniteAuthFailure(refreshRetryErr?.message));
+            if (!refreshSucceeded && definitelyDead) {
+              console.warn(`[PostPublish] target ${postTargetId}: ${platform} credential is dead — failing without retry (reconnect required)`);
+              throw new UnrecoverableError(tokenErrMsg);
+            }
             throw new Error(tokenErrMsg);
           }
         } else if (errType === "media_required") {
@@ -1232,8 +1425,46 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
         console.warn(`[PostPublish] Post aggregation step failed for ${postTargetId}: ${aggregateErr.message}`);
       }
 
+      console.log(
+        formatPublishTiming({
+          postTargetId,
+          platform,
+          timestamp: job.timestamp,
+          processedOn: job.processedOn,
+          delay: job.opts?.delay,
+          now: Date.now(),
+        })
+      );
       console.log(`[PostPublish] Successfully published ${postTargetId} to ${platform}`);
       return result;
+  };
+
+  const worker = new Worker<PostPublishJobData>(
+    QUEUE_NAMES.POST_PUBLISH,
+    // ── Pre-publish claim guard (2026-09-16) ────────────────────────────────
+    // Anything that throws AFTER this job won the atomic claim but BEFORE the
+    // publish `try` (validation, a DB blip, a provider lookup, a failed defer
+    // write) used to leave the target at PUBLISHING with nothing to finish it:
+    // an 11-image post orphaned all 60 targets for 30-56 min, and the BullMQ
+    // retry lost the claim and completed silently as a "duplicate".
+    //
+    // Nothing reached the platform before `dispatched`, so releasing to FAILED
+    // (re-claimable) is safe and lets BullMQ's normal retry — plus the
+    // duplicate pre-flight — take over. ⚠️ From `dispatched` on, the platform
+    // may hold the post, and ONLY the publish catch branches may write a
+    // terminal state; releasing there could re-publish a live post.
+    async (job: Job<PostPublishJobData>) => {
+      const state: PublishJobState = { claimed: false, dispatched: false };
+      try {
+        return await processPublishJob(job, state);
+      } catch (err) {
+        if (state.claimed && !state.dispatched) {
+          await releaseClaimAfterPrePublishError(prisma, job.data.postTargetId, err);
+        }
+        throw err;
+      } finally {
+        if (state.claimed) releaseLocalClaim(job.data.postTargetId);
+      }
     },
     {
       connection: createRedisConnection(),
@@ -1246,7 +1477,11 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
     }
   );
 
-  worker.on("failed", async (job, err) => {
+  // Tracked (2026-09-16): BullMQ never awaits this async listener, so the
+  // graceful drain waits for it explicitly (lib/background-tasks.ts) —
+  // otherwise a job that fails DURING shutdown loses its terminal write,
+  // notification and publish email when the process exits.
+  const handleFailedJob = async (job: Job<PostPublishJobData> | undefined, err: Error) => {
     if (!job) return;
     try {
       // ⚠️ Route before classifying, for the same reason as the publish catch: an
@@ -1375,6 +1610,9 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
       // Never let the failed handler itself crash the worker
       console.error(`[PostPublish] Unhandled error in failed handler for job ${job.id}:`, handlerErr?.message);
     }
+  };
+  worker.on("failed", (job, err) => {
+    trackBackgroundTask(handleFailedJob(job, err));
   });
 
   worker.on("completed", (job) => {

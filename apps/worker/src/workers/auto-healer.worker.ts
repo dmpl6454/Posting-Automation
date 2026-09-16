@@ -2,10 +2,12 @@ import { prisma } from "@postautomation/db";
 import {
   contentGenerateQueue,
   autopilotScheduleQueue,
+  postPublishQueue,
 } from "@postautomation/queue";
 import { S3Client, HeadBucketCommand } from "@aws-sdk/client-s3";
 import IORedis from "ioredis";
-import { shouldReapPublishing } from "../lib/publish-recovery";
+import { shouldReapPublishing, decideReap, ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE } from "../lib/publish-recovery";
+import { localClaimCount } from "../lib/local-claims";
 
 // ---------------------------------------------------------------------------
 // Error classification
@@ -200,6 +202,11 @@ export async function runAutoHealer(): Promise<HealerResult> {
   result.scanned = failedPosts.length;
 
   if (failedPosts.length === 0) {
+    // Step 5 is about PUBLISH targets, not autopilot posts, so it must not
+    // depend on there being failed autopilot posts. This early return used to
+    // skip it on nearly every cycle (2026-09-16). Steps 3-4 keep their old
+    // behaviour and are still skipped here.
+    await reapStuckPublishingTargets();
     return result;
   }
 
@@ -298,12 +305,44 @@ export async function runAutoHealer(): Promise<HealerResult> {
     }
   }
 
-  // 5. Reap stuck PUBLISHING posts (post targets stuck in PUBLISHING > 30min).
-  // Do NOT re-queue: the publish worker's claim guard only transitions
-  // SCHEDULED/FAILED/DRAFT → PUBLISHING, so a re-queued job on a PUBLISHING
-  // target is silently skipped (claim.count === 0) and never rescues anything.
-  // The target is orphaned, so mark it FAILED with an actionable message instead.
-  const now = new Date();
+  // 5. Reap stuck PUBLISHING post targets.
+  await reapStuckPublishingTargets();
+
+  return result;
+}
+
+/** How many stuck targets one healer cycle may reap (oldest first). */
+const REAP_BATCH_SIZE = 100;
+
+/**
+ * Reap PostTargets stuck in PUBLISHING for more than 30 minutes.
+ *
+ * Do NOT re-queue: the publish worker's claim guard only transitions
+ * SCHEDULED/FAILED/DRAFT → PUBLISHING, so a re-queued job on a PUBLISHING
+ * target is silently skipped (claim.count === 0) and never rescues anything.
+ * The target is orphaned, so mark it FAILED with an actionable message instead.
+ *
+ * 2026-09-16 hardening:
+ *   - runs on EVERY cycle (it used to be skipped whenever there were no failed
+ *     autopilot posts — prod happens to have some, but that was luck);
+ *   - LIVENESS: a target that a running publish job still holds (BullMQ's
+ *     active list, or this process's own claims) is never reaped, and nothing
+ *     is reaped when the active list cannot be read;
+ *   - an unheld target is PARKED as ambiguous (FAILED + ambiguousAt, shown as
+ *     "Needs check") instead of re-armed — its dead holder may already have
+ *     published, and every automatic recovery variant was shown to duplicate;
+ *   - oldest first, 100 per cycle (was an unordered 20), so a large backlog
+ *     like the 60-target orphan of 2026-09-16 clears in one cycle;
+ *   - the write is CONDITIONAL on the row still being PUBLISHING and still
+ *     stale, so a target whose job finished between the read and the write is
+ *     never clobbered back to FAILED;
+ *   - it increments retryCount. The job that held this claim may have
+ *     published before it died, and retryCount > 0 is what makes a later human
+ *     Retry run the duplicate pre-flight. errorMessage alone is not durable:
+ *     post.publishNow clears it. (The 2026-09-15 deploy victims were reaped
+ *     with retryCount 0, so a Retry would have skipped that check.)
+ */
+export async function reapStuckPublishingTargets(now: Date = new Date()): Promise<number> {
   const thirtyMinAgo = new Date(now.getTime() - 30 * 60 * 1000);
   const stuckPublishing = await prisma.postTarget.findMany({
     where: {
@@ -315,26 +354,60 @@ export async function runAutoHealer(): Promise<HealerResult> {
       status: true,
       updatedAt: true,
     },
-    take: 20,
+    orderBy: { updatedAt: "asc" },
+    take: REAP_BATCH_SIZE,
   });
 
-  if (stuckPublishing.length > 0) {
-    console.log(`[AutoHealer] Found ${stuckPublishing.length} stuck PUBLISHING post targets, marking FAILED`);
-    for (const target of stuckPublishing) {
-      if (!shouldReapPublishing(target, now)) continue;
-      try {
-        await prisma.postTarget.update({
-          where: { id: target.id },
-          data: {
-            status: "FAILED",
-            errorMessage: "Publishing stuck for over 30 minutes — please retry",
-          },
-        });
-      } catch {}
-    }
+  let reaped = 0;
+  if (stuckPublishing.length === 0) return reaped;
+
+  // LIVENESS (adversarial review, 2026-09-16): a publish job can legitimately
+  // hold a claim for a long time without touching updatedAt (queued behind
+  // shared video prep, a long IG container wait, same-post dispatch pacing).
+  // Reaping it would make a LIVE publish re-claimable — and the next Retry
+  // would publish it a second time. Only targets that NO running job holds
+  // are reaped, and that needs positive evidence: if the active list cannot
+  // be read, nothing is reaped this cycle (the next cycle tries again).
+  let heldTargets: Set<string>;
+  try {
+    const active = await postPublishQueue.getActive();
+    heldTargets = new Set(
+      active
+        .map((j) => (j?.data as { postTargetId?: unknown } | undefined)?.postTargetId)
+        .filter((id): id is string => typeof id === "string")
+    );
+  } catch (err: any) {
+    console.warn(`[AutoHealer] could not read active publish jobs — skipping the stuck-PUBLISHING reap this cycle: ${err?.message ?? err}`);
+    return reaped;
   }
 
-  return result;
+  console.log(`[AutoHealer] Found ${stuckPublishing.length} stuck PUBLISHING post targets (${heldTargets.size} publish job(s) active)`);
+  for (const target of stuckPublishing) {
+    if (!shouldReapPublishing(target, now)) continue;
+    const decision = decideReap({
+      heldByActiveJob: heldTargets.has(target.id) || localClaimCount(target.id) > 0,
+    });
+    if (decision === "skip") {
+      console.log(`[AutoHealer] target ${target.id} is still held by a running publish job — not reaping`);
+      continue;
+    }
+    try {
+      // Parked, not re-armed: the dead holder may already have published, so a
+      // person checks first ("Needs check" → "It didn't publish").
+      const res = await prisma.postTarget.updateMany({
+        where: { id: target.id, status: "PUBLISHING", updatedAt: { lt: thirtyMinAgo } },
+        data: {
+          status: "FAILED",
+          errorMessage: ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE,
+          ambiguousAt: now,
+          ambiguousReason: ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE,
+          retryCount: { increment: 1 },
+        },
+      });
+      reaped += res.count;
+    } catch {}
+  }
+  return reaped;
 }
 
 // ---------------------------------------------------------------------------
