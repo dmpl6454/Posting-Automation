@@ -28,6 +28,7 @@ import { createSuperTextWorker } from "./workers/super-text.worker";
 import { startCronJobs } from "./scheduler/cron-jobs";
 import { registerWorker, markWorkerStopped, startHealthServer } from "./lib/health";
 import { createGracefulShutdown, readActiveJobCount, resolveShutdownTimeoutMs } from "./lib/shutdown";
+import { awaitBackgroundTasks, pendingBackgroundTaskCount } from "./lib/background-tasks";
 
 console.log("=== Post Automation Worker Starting ===");
 
@@ -123,7 +124,7 @@ console.log("  - Cron Jobs (token refresh: 30min, analytics: 6hr, agent runs: 1m
 // The 2026-09-15 deploy SIGKILLed 10 in-flight Instagram publishes after
 // Docker's default 10s grace (an IG reel publish takes 80-120s); they then sat
 // orphaned at PUBLISHING for 30 min. The worker service now has
-// `init: true` + `stop_grace_period: 5m`, and this handler spends that window
+// `stop_grace_period: 5m` (and NO init — see the compose comment), and this handler spends that window
 // letting in-flight jobs finish: every worker.close() below stops fetching new
 // jobs at once and resolves when its active jobs complete. The wait is capped
 // at WORKER_SHUTDOWN_TIMEOUT_MS (default 270s, 30s inside the grace) so we exit
@@ -139,6 +140,8 @@ console.log("  - Cron Jobs (token refresh: 30min, analytics: 6hr, agent runs: 1m
 const shutdown = createGracefulShutdown({
   timeoutMs: resolveShutdownTimeoutMs(),
   activePublishJobs: () => readActiveJobCount(postPublishWorker),
+  awaitBackgroundTasks,
+  pendingBackgroundTasks: pendingBackgroundTaskCount,
   markStopped: () => {
     // Mark all workers as stopped for health checks
     markWorkerStopped("post-publish");

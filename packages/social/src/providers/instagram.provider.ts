@@ -101,17 +101,45 @@ const POLL_TOKEN_INVALID_CODES = new Set([190, 102, 463, 467]);
 
 /**
  * Should a Graph error body returned by a container-status poll end the wait
- * NOW? A dead token (190/102/463/467) or a container that no longer exists
- * (#24, or #100 with subcode 33 "object does not exist") can never turn into
- * FINISHED, so polling on only delayed the inevitable by the full budget — up to
- * 4 minutes per target on 2026-09-16's measured dead-token fan-outs — before a
- * generic "did not finish" error that hid the real cause.
+ * NOW — and with what message? A dead token (190/102/463/467) or a container
+ * that no longer exists (#24, or #100 with subcode 33 "object does not exist")
+ * can never turn into FINISHED, so polling on only delayed the inevitable by
+ * the full budget — up to 4 minutes per target on 2026-09-16's measured
+ * dead-token fan-outs — before a generic "did not finish" error that hid the
+ * real cause. Returns null for any other body.
+ *
+ * The message is worded for the worker's
+ * substring classifier (adversarial review, 2026-09-16): a raw
+ * `"code":100`/`"code":102` body matched its `code":10` PERMISSION pattern, so
+ * a vanished container read "Missing permissions" and a 102 dead session never
+ * reached the dead-credential path.
+ *   - token codes → "access token invalid" + the JSON (keeps `"code":NNN`
+ *     for isDefiniteAuthFailure) → classified token_expired;
+ *   - vanished container → plain words, no JSON → classified unknown and
+ *     shown verbatim.
  */
-function isFatalStatusPollError(error: { code?: unknown; error_subcode?: unknown }): boolean {
+function fatalStatusPollMessage(error: { code?: unknown; error_subcode?: unknown }): string | null {
   const code = Number(error?.code);
-  if (POLL_TOKEN_INVALID_CODES.has(code)) return true;
-  if (code === 24) return true;
-  return code === 100 && Number(error?.error_subcode) === 33;
+  if (POLL_TOKEN_INVALID_CODES.has(code)) {
+    return `Instagram media status check failed: access token invalid (code ${code}) ${JSON.stringify(error)}`;
+  }
+  if (code === 24 || (code === 100 && Number(error?.error_subcode) === 33)) {
+    return `Instagram media container no longer exists (Graph code ${code}${code === 100 ? "/33" : ""}) — it must be created again`;
+  }
+  return null;
+}
+
+/**
+ * Graph error bodies that mean "slow down / try again shortly" rather than
+ * "this read failed": Meta's transient codes (1, 2, or is_transient) and the
+ * rate-limit family. Waited out within the poll budget and NOT counted as read
+ * failures — HEAD before 2026-09-16 kept polling through them, and giving up
+ * after four would burn a new container (a fresh download + transcode) in the
+ * middle of the very throttle that caused them.
+ */
+const POLL_WAIT_OUT_CODES = new Set([1, 2, 4, 17, 32, 341, 613, 80001, 80002]);
+function isWaitOutStatusPollError(error: { code?: unknown; is_transient?: unknown }): boolean {
+  return error?.is_transient === true || POLL_WAIT_OUT_CODES.has(Number(error?.code));
 }
 
 /**
@@ -638,8 +666,15 @@ export class InstagramProvider extends SocialProvider {
       if (!readFailure) {
         const graphError = data?.error;
         if (graphError) {
-          if (isFatalStatusPollError(graphError)) {
-            throw new Error(`Instagram media status check failed: ${JSON.stringify(graphError)}`);
+          const fatal = fatalStatusPollMessage(graphError);
+          if (fatal) throw new Error(fatal);
+          if (isWaitOutStatusPollError(graphError)) {
+            // Keep waiting (consumes an attempt, not the failure allowance).
+            console.warn(
+              `[Instagram] status poll for container ${containerId} got a transient/rate-limit body ` +
+                `(code ${Number(graphError.code)}) — still waiting`
+            );
+            continue;
           }
           // Only the numeric code — Meta's free text stays out of the message.
           const code = Number(graphError.code);

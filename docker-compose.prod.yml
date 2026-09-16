@@ -232,12 +232,14 @@ services:
     # Compose stops the old worker with ITS timeout, not this value. That is
     # why scripts/deploy.sh also passes `--timeout 300` (WORKER_STOP_TIMEOUT)
     # — keep the two in step.
-    # `init: true` runs tini as PID 1: it forwards SIGTERM to the
-    # pnpm → tsx → node chain and reaps the zombies that exited ffmpeg/Chromium
-    # children leave behind (pnpm as PID 1 never reaps them). Verified locally:
-    # the signal reaches node once and a running child process is left alone
-    # until node exits.
-    init: true
+    # ⚠️ Deliberately NO `init: true`. With tini as PID 1, pnpm becomes an
+    # ordinary process whose SIGTERM forwarder is registered with
+    # process.once(): a SECOND SIGTERM (an operator's `docker stop` during the
+    # drain, an overlapping deploy) then kills pnpm, tini exits, and every
+    # in-flight publish is SIGKILLed. As PID 1, pnpm keeps the kernel's init
+    # protection, so the second signal is ignored and the drain continues.
+    # Verified in the worker image (2026-09-16): SIGTERM reaches node through
+    # pnpm → tsx, the drain runs, the process exits 0.
     stop_grace_period: 5m
     environment:
       NODE_ENV: production

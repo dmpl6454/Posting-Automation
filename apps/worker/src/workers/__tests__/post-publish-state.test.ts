@@ -65,16 +65,15 @@ describe("final-attempt orphan terminalization", () => {
     // Before 2026-09-16 every non-final no-op claim was skipped silently, so a
     // target whose holder died (deploy SIGKILL) or threw without releasing sat
     // at PUBLISHING until the 30-min reaper. It is still never TERMINALIZED
-    // early — it is released and retried, with the duplicate pre-flight.
-    expect(
-      decideClaimMiss({ isFinalAttempt: false, status: "PUBLISHING", hasPublishedId: false, otherActiveJobs: 0 })
-    ).toBe("recover-orphan");
+    // early — it is released and retried, with the duplicate pre-flight —
+    // but ONLY where that pre-flight exists; elsewhere it is parked.
+    const orphan = { isFinalAttempt: false, status: "PUBLISHING", hasPublishedId: false, otherActiveJobs: 0 };
+    expect(decideClaimMiss({ ...orphan, providerSupportsReconcile: true })).toBe("recover-orphan");
+    expect(decideClaimMiss({ ...orphan, providerSupportsReconcile: false })).toBe("park-orphan");
     // A live holder, or an already-finished target, is still skipped exactly as before.
+    expect(decideClaimMiss({ ...orphan, otherActiveJobs: 1, providerSupportsReconcile: true })).toBe("skip");
     expect(
-      decideClaimMiss({ isFinalAttempt: false, status: "PUBLISHING", hasPublishedId: false, otherActiveJobs: 1 })
-    ).toBe("skip");
-    expect(
-      decideClaimMiss({ isFinalAttempt: false, status: "PUBLISHED", hasPublishedId: true, otherActiveJobs: null })
+      decideClaimMiss({ isFinalAttempt: false, status: "PUBLISHED", hasPublishedId: true, otherActiveJobs: null, providerSupportsReconcile: true })
     ).toBe("skip");
   });
 

@@ -1,3 +1,4 @@
+import { trackBackgroundTask } from "../lib/background-tasks";
 import { Worker, type Job } from "bullmq";
 import { execFile } from "child_process";
 import { promisify } from "util";
@@ -475,11 +476,15 @@ export function createSuperTextWorker() {
     // attemptsMade is incremented before "failed" fires, so >= attempts means
     // there are no retries left → surface it instead of leaving a stuck DRAFT.
     if (job && job.attemptsMade >= (job.opts.attempts ?? 1)) {
-      void markSuperTextFailed(
-        job.data.postId,
-        job.data.organizationId,
-        err?.message ?? "unknown error"
-      ).catch((e) => console.error("[super-text] markSuperTextFailed errored:", e));
+      // Tracked so a graceful drain waits for it (lib/background-tasks.ts):
+      // cut short, the post would stay DRAFT with pendingBurn set forever.
+      trackBackgroundTask(
+        markSuperTextFailed(
+          job.data.postId,
+          job.data.organizationId,
+          err?.message ?? "unknown error"
+        ).catch((e) => console.error("[super-text] markSuperTextFailed errored:", e))
+      );
     }
   });
 

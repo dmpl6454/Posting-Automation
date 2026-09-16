@@ -175,7 +175,10 @@ describe("InstagramProvider — status poll fail-fast (2026-09-16)", () => {
     jsonRes({ error: { code: 2, is_transient: true, message: "An unexpected error has occurred. Please retry." } }, false);
 
   /** Queue one "failure" of the given kind onto the ordered fetch mock. */
-  type FailureKind = "timeout" | "abort" | "fetchFailed" | "html" | "graph2" | "httpNoBody";
+  /** A Graph error body that is neither fatal nor transient — counted as a read failure. */
+  const otherGraphBody = () => jsonRes({ error: { code: 100, message: "Invalid parameter" } }, false);
+
+  type FailureKind = "timeout" | "abort" | "fetchFailed" | "html" | "graphOther" | "httpNoBody";
   const queueFailure = (kind: FailureKind) => {
     switch (kind) {
       case "timeout":
@@ -186,8 +189,8 @@ describe("InstagramProvider — status poll fail-fast (2026-09-16)", () => {
         return mockFetch.mockRejectedValueOnce(fetchFailed());
       case "html":
         return mockFetch.mockResolvedValueOnce(htmlBody());
-      case "graph2":
-        return mockFetch.mockResolvedValueOnce(transientBody());
+      case "graphOther":
+        return mockFetch.mockResolvedValueOnce(otherGraphBody());
       case "httpNoBody":
         return mockFetch.mockResolvedValueOnce({ ok: false, status: 504, json: async () => ({}) } as unknown as Response);
     }
@@ -228,9 +231,9 @@ describe("InstagramProvider — status poll fail-fast (2026-09-16)", () => {
     const err = await caught;
 
     expect(err).toBeInstanceOf(Error);
-    // The literal "code":190 survives, so the worker still classifies it as
-    // token_expired.
-    expect(err.message).toMatch(/^Instagram media status check failed: \{.*"code":190/);
+    // Worded for the worker's classifier: "token … invalid" routes it to
+    // token_expired, and the literal "code":190 feeds isDefiniteAuthFailure.
+    expect(err.message).toMatch(/^Instagram media status check failed: access token invalid \(code 190\) \{.*"code":190/);
     expect(statusCalls()).toHaveLength(1);
     // One poll interval (5s for video), not the 240s reel budget.
     expect(Date.now() - t0).toBeLessThanOrEqual(5_000);
@@ -249,6 +252,7 @@ describe("InstagramProvider — status poll fail-fast (2026-09-16)", () => {
     await vi.runAllTimersAsync();
     const err = await caught;
     expect(err.message).toContain(`"code":${code}`);
+    expect(err.message).toContain(`access token invalid (code ${code})`);
     expect(statusCalls()).toHaveLength(1);
   });
 
@@ -263,8 +267,11 @@ describe("InstagramProvider — status poll fail-fast (2026-09-16)", () => {
     const caught = new InstagramProvider().publishPost(tokens, imagePayload()).catch((e) => e);
     await vi.runAllTimersAsync();
     const err = await caught;
-    expect(err.message).toMatch(/^Instagram media status check failed: /);
-    expect(err.message).toContain(`"code":${error.code}`);
+    expect(err.message).toMatch(/^Instagram media container no longer exists \(Graph code /);
+    // No raw JSON: a `"code":100` body matched the worker's `code":10`
+    // PERMISSION pattern and was reported as "Missing permissions".
+    expect(err.message).not.toContain('"code"');
+    expect(err.message.toLowerCase()).not.toMatch(/permission|token|rate limit|too many/);
     expect(statusCalls()).toHaveLength(1);
     expect(publishCalls()).toHaveLength(0);
   });
@@ -287,7 +294,7 @@ describe("InstagramProvider — status poll fail-fast (2026-09-16)", () => {
     mockFetch.mockResolvedValueOnce(jsonRes({ id: "container-1" }));
     queueFailure("fetchFailed");
     queueFailure("html");
-    queueFailure("graph2");
+    queueFailure("graphOther");
     mockFetch
       .mockResolvedValueOnce(jsonRes({ status_code: "FINISHED" }))
       .mockResolvedValueOnce(jsonRes({ id: "post-1" }))
@@ -302,7 +309,7 @@ describe("InstagramProvider — status poll fail-fast (2026-09-16)", () => {
     expect(publishCalls()).toHaveLength(1);
   });
 
-  it.each<FailureKind>(["timeout", "abort", "fetchFailed", "html", "graph2", "httpNoBody"])(
+  it.each<FailureKind>(["timeout", "abort", "fetchFailed", "html", "graphOther", "httpNoBody"])(
     "4 consecutive '%s' failures throw a DEFINITE, pre-write error",
     async (kind) => {
       mockFetch.mockResolvedValueOnce(jsonRes({ id: "container-1" }));
@@ -343,7 +350,7 @@ describe("InstagramProvider — status poll fail-fast (2026-09-16)", () => {
   it("resets the counter after any readable status", async () => {
     mockFetch.mockResolvedValueOnce(jsonRes({ id: "container-1" }));
     queueFailure("timeout");
-    queueFailure("graph2");
+    queueFailure("graphOther");
     queueFailure("html");
     mockFetch.mockResolvedValueOnce(jsonRes({ status_code: "IN_PROGRESS" })); // resets
     queueFailure("fetchFailed");
@@ -368,7 +375,7 @@ describe("InstagramProvider — status poll fail-fast (2026-09-16)", () => {
     mockFetch.mockResolvedValueOnce(jsonRes({ id: "container-1" }));
     for (let i = 0; i < 15; i++) {
       if (i % 4 === 3) mockFetch.mockResolvedValueOnce(jsonRes({ status_code: "IN_PROGRESS" }));
-      else queueFailure("graph2");
+      else queueFailure("graphOther");
     }
     // Anything past the 15th poll would be a budget overrun — make it loud.
     mockFetch.mockResolvedValue(jsonRes({ status_code: "FINISHED" }));
@@ -377,6 +384,39 @@ describe("InstagramProvider — status poll fail-fast (2026-09-16)", () => {
     await vi.runAllTimersAsync();
     const err = await caught;
 
+    expect(err.message).toMatch(/did not finish within .*budget 30s/);
+    expect(statusCalls()).toHaveLength(15);
+    expect(publishCalls()).toHaveLength(0);
+  });
+
+  it.each([
+    ["code 2 is_transient", { code: 2, is_transient: true, message: "An unexpected error has occurred. Please retry." }],
+    ["#4 app limit", { code: 4, message: "(#4) Application request limit reached" }],
+    ["#17 user limit", { code: 17, message: "(#17) User request limit reached" }],
+    ["#32 page limit", { code: 32, message: "(#32) Page request limit reached" }],
+    ["80002 IG BUC", { code: 80002, message: "There have been too many calls to this Instagram account." }],
+  ])("a %s body is WAITED OUT (not counted), as before 2026-09-16 — 6 in a row, then FINISHED publishes", async (_l, error) => {
+    mockFetch.mockResolvedValueOnce(jsonRes({ id: "container-1" }));
+    for (let i = 0; i < 6; i++) mockFetch.mockResolvedValueOnce(jsonRes({ error }, false));
+    mockFetch
+      .mockResolvedValueOnce(jsonRes({ status_code: "FINISHED" }))
+      .mockResolvedValueOnce(jsonRes({ id: "post-1" }))
+      .mockResolvedValueOnce(jsonRes({ permalink: "https://instagram.com/p/abc" }));
+
+    const promise = new InstagramProvider().publishPost(tokens, videoPayload());
+    await vi.runAllTimersAsync();
+    expect((await promise).platformPostId).toBe("post-1");
+    expect(statusCalls()).toHaveLength(7);
+    expect(publishCalls()).toHaveLength(1);
+  });
+
+  it("a transient run that outlasts the budget ends with the ordinary budget message", async () => {
+    mockFetch.mockResolvedValueOnce(jsonRes({ id: "container-1" }));
+    mockFetch.mockResolvedValue(transientBody());
+
+    const caught = new InstagramProvider().publishPost(tokens, imagePayload()).catch((e) => e);
+    await vi.runAllTimersAsync();
+    const err = await caught;
     expect(err.message).toMatch(/did not finish within .*budget 30s/);
     expect(statusCalls()).toHaveLength(15);
     expect(publishCalls()).toHaveLength(0);

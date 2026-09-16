@@ -253,4 +253,57 @@ describe("createGracefulShutdown", () => {
     expect(logs[0]).toContain("SIGINT received");
     expect(logs[0]).toContain("active publish jobs: unknown");
   });
+
+  it("waits for pending failed-listener bookkeeping AFTER the workers close, before exiting (review finding)", async () => {
+    let settle!: () => void;
+    const order: string[] = [];
+    const { deps, shutdown } = harness({
+      closeWorkers: vi.fn(async () => void order.push("closeWorkers")),
+      pendingBackgroundTasks: () => 1,
+      awaitBackgroundTasks: vi.fn(
+        (_ms: number) =>
+          new Promise<"settled" | "timeout">((r) => {
+            order.push("awaitBackgroundTasks");
+            settle = () => r("settled");
+          })
+      ),
+      exit: vi.fn(() => void order.push("exit")),
+    });
+    const done = shutdown("SIGTERM");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(order).toEqual(["closeWorkers", "awaitBackgroundTasks"]);
+    expect(deps.exit).not.toHaveBeenCalled();
+    settle();
+    await done;
+    expect(order).toEqual(["closeWorkers", "awaitBackgroundTasks", "exit"]);
+  });
+
+  it("gives the bookkeeping only what is LEFT of the drain budget", async () => {
+    const awaitBackgroundTasks = vi.fn(async (_ms: number) => "settled" as const);
+    const { shutdown } = harness({
+      timeoutMs: 10_000,
+      pendingBackgroundTasks: () => 2,
+      awaitBackgroundTasks,
+    });
+    await shutdown("SIGTERM");
+    const budget = awaitBackgroundTasks.mock.calls[0]![0];
+    expect(budget).toBeGreaterThan(9_000);
+    expect(budget).toBeLessThanOrEqual(10_000);
+  });
+
+  it("skips the bookkeeping wait when nothing is pending, and still exits if it throws", async () => {
+    const idle = harness({ pendingBackgroundTasks: () => 0, awaitBackgroundTasks: vi.fn(async () => "settled" as const) });
+    await idle.shutdown("SIGTERM");
+    expect(idle.deps.awaitBackgroundTasks).not.toHaveBeenCalled();
+    expect(idle.deps.exit).toHaveBeenCalledWith(0);
+
+    const broken = harness({
+      pendingBackgroundTasks: () => 1,
+      awaitBackgroundTasks: vi.fn(async () => {
+        throw new Error("nope");
+      }),
+    });
+    await broken.shutdown("SIGTERM");
+    expect(broken.deps.exit).toHaveBeenCalledWith(0);
+  });
 });

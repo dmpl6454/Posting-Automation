@@ -1,11 +1,14 @@
 /**
  * The auto-healer's stuck-PUBLISHING reaper (step 5), hardened 2026-09-16:
  *   - it ran ONLY when there were failed autopilot posts (an early return
- *     skipped it otherwise — i.e. nearly always);
+ *     skipped it otherwise — prod happened to have some, which was luck);
  *   - it took an unordered 20, so a 60-target orphan needed several cycles;
  *   - its unconditional write could clobber a target that had just finished;
  *   - it left retryCount at 0, so a later human Retry skipped the duplicate
- *     pre-flight (post.publishNow clears errorMessage, the other signal).
+ *     pre-flight (post.publishNow clears errorMessage, the other signal);
+ *   - (adversarial review) it had no liveness check, so a slow LIVE publish
+ *     could be made re-claimable, and it re-armed targets on platforms that
+ *     cannot check for an existing post.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -25,7 +28,10 @@ const h = vi.hoisted(() => ({
   queue: {
     contentGenerateQueue: { add: vi.fn(async () => ({})) },
     autopilotScheduleQueue: { add: vi.fn(async () => ({})) },
+    postPublishQueue: { getActive: vi.fn(async (): Promise<any[]> => []) },
   },
+  /** Platforms whose provider implements findExistingPost. */
+  reconcilable: new Set(["INSTAGRAM", "FACEBOOK"]),
   redisDown: false,
 }));
 
@@ -33,6 +39,11 @@ vi.mock("@postautomation/db", () => ({ prisma: h.prisma }));
 vi.mock("@postautomation/queue", () => ({
   contentGenerateQueue: h.queue.contentGenerateQueue,
   autopilotScheduleQueue: h.queue.autopilotScheduleQueue,
+  postPublishQueue: h.queue.postPublishQueue,
+}));
+vi.mock("@postautomation/social", () => ({
+  getSocialProvider: (platform: string) =>
+    h.reconcilable.has(platform) ? { findExistingPost: async () => null } : {},
 }));
 vi.mock("@aws-sdk/client-s3", () => ({
   S3Client: class {
@@ -56,6 +67,10 @@ vi.mock("ioredis", () => ({
 }));
 
 import { runAutoHealer, reapStuckPublishingTargets, STUCK_PUBLISHING_MESSAGE } from "../auto-healer.worker";
+import { ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE } from "../../lib/publish-recovery";
+import { addLocalClaim, releaseLocalClaim } from "../../lib/local-claims";
+
+const IG = { platform: "INSTAGRAM" };
 
 const NOW = new Date("2026-09-16T12:00:00.000Z");
 const minutesAgo = (m: number) => new Date(NOW.getTime() - m * 60 * 1000);
@@ -66,6 +81,7 @@ beforeEach(() => {
   h.prisma.autopilotPost.findMany.mockResolvedValue([]);
   h.prisma.postTarget.findMany.mockResolvedValue([]);
   h.prisma.postTarget.updateMany.mockResolvedValue({ count: 1 });
+  h.queue.postPublishQueue.getActive.mockResolvedValue([]);
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -83,8 +99,8 @@ describe("reapStuckPublishingTargets", () => {
 
   it("writes CONDITIONALLY and increments retryCount", async () => {
     h.prisma.postTarget.findMany.mockResolvedValue([
-      { id: "t1", status: "PUBLISHING", updatedAt: minutesAgo(45) },
-      { id: "t2", status: "PUBLISHING", updatedAt: minutesAgo(31) },
+      { id: "t1", status: "PUBLISHING", updatedAt: minutesAgo(45), channel: IG },
+      { id: "t2", status: "PUBLISHING", updatedAt: minutesAgo(31), channel: IG },
     ]);
 
     const reaped = await reapStuckPublishingTargets(NOW);
@@ -102,14 +118,68 @@ describe("reapStuckPublishingTargets", () => {
     });
   });
 
+  it("selects the channel platform (needed for the duplicate-check policy)", async () => {
+    await reapStuckPublishingTargets(NOW);
+    const arg = h.prisma.postTarget.findMany.mock.calls[0]![0] as any;
+    expect(arg.select.channel).toEqual({ select: { platform: true } });
+  });
+
+  it("NEVER reaps a target a running publish job still holds (liveness, review finding)", async () => {
+    h.prisma.postTarget.findMany.mockResolvedValue([
+      { id: "t1", status: "PUBLISHING", updatedAt: minutesAgo(45), channel: IG },
+      { id: "t2", status: "PUBLISHING", updatedAt: minutesAgo(45), channel: IG },
+    ]);
+    h.queue.postPublishQueue.getActive.mockResolvedValue([{ id: "job-x", data: { postTargetId: "t1" } }]);
+
+    expect(await reapStuckPublishingTargets(NOW)).toBe(1);
+    expect(h.prisma.postTarget.updateMany.mock.calls.map((c: any[]) => c[0].where.id)).toEqual(["t2"]);
+  });
+
+  it("also skips a target this process still holds (a lapsed-lock re-run hides it from the active list)", async () => {
+    h.prisma.postTarget.findMany.mockResolvedValue([{ id: "t1", status: "PUBLISHING", updatedAt: minutesAgo(45), channel: IG }]);
+    addLocalClaim("t1");
+    try {
+      expect(await reapStuckPublishingTargets(NOW)).toBe(0);
+      expect(h.prisma.postTarget.updateMany).not.toHaveBeenCalled();
+    } finally {
+      releaseLocalClaim("t1");
+    }
+  });
+
+  it("reaps NOTHING when the active list cannot be read (needs positive evidence)", async () => {
+    h.prisma.postTarget.findMany.mockResolvedValue([{ id: "t1", status: "PUBLISHING", updatedAt: minutesAgo(45), channel: IG }]);
+    h.queue.postPublishQueue.getActive.mockRejectedValue(new Error("Redis down"));
+
+    expect(await reapStuckPublishingTargets(NOW)).toBe(0);
+    expect(h.prisma.postTarget.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("PARKS an unheld target on a platform with no duplicate check instead of re-arming it", async () => {
+    h.prisma.postTarget.findMany.mockResolvedValue([
+      { id: "tw", status: "PUBLISHING", updatedAt: minutesAgo(45), channel: { platform: "TWITTER" } },
+    ]);
+
+    expect(await reapStuckPublishingTargets(NOW)).toBe(1);
+    expect(h.prisma.postTarget.updateMany.mock.calls[0]![0]).toEqual({
+      where: { id: "tw", status: "PUBLISHING", updatedAt: { lt: minutesAgo(30) } },
+      data: {
+        status: "FAILED",
+        errorMessage: ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE,
+        ambiguousAt: NOW,
+        ambiguousReason: ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE,
+        retryCount: { increment: 1 },
+      },
+    });
+  });
+
   it("keeps the user-facing message unchanged", () => {
     expect(STUCK_PUBLISHING_MESSAGE).toBe("Publishing stuck for over 30 minutes — please retry");
   });
 
   it("does not count a target that finished between the read and the write", async () => {
     h.prisma.postTarget.findMany.mockResolvedValue([
-      { id: "t1", status: "PUBLISHING", updatedAt: minutesAgo(45) },
-      { id: "t2", status: "PUBLISHING", updatedAt: minutesAgo(45) },
+      { id: "t1", status: "PUBLISHING", updatedAt: minutesAgo(45), channel: IG },
+      { id: "t2", status: "PUBLISHING", updatedAt: minutesAgo(45), channel: IG },
     ]);
     h.prisma.postTarget.updateMany.mockResolvedValueOnce({ count: 0 }).mockResolvedValueOnce({ count: 1 });
 
@@ -118,9 +188,9 @@ describe("reapStuckPublishingTargets", () => {
 
   it("still honours shouldReapPublishing and survives a failed write", async () => {
     h.prisma.postTarget.findMany.mockResolvedValue([
-      { id: "fresh", status: "PUBLISHING", updatedAt: minutesAgo(5) }, // not stale → skipped
-      { id: "t1", status: "PUBLISHING", updatedAt: minutesAgo(45) },
-      { id: "t2", status: "PUBLISHING", updatedAt: minutesAgo(45) },
+      { id: "fresh", status: "PUBLISHING", updatedAt: minutesAgo(5), channel: IG }, // not stale → skipped
+      { id: "t1", status: "PUBLISHING", updatedAt: minutesAgo(45), channel: IG },
+      { id: "t2", status: "PUBLISHING", updatedAt: minutesAgo(45), channel: IG },
     ]);
     h.prisma.postTarget.updateMany.mockRejectedValueOnce(new Error("db blip")).mockResolvedValueOnce({ count: 1 });
 
@@ -131,7 +201,7 @@ describe("reapStuckPublishingTargets", () => {
 
 describe("runAutoHealer step 5 scheduling", () => {
   it("reaps even when there are NO failed autopilot posts (the old early return skipped it)", async () => {
-    h.prisma.postTarget.findMany.mockResolvedValue([{ id: "t1", status: "PUBLISHING", updatedAt: new Date(0) }]);
+    h.prisma.postTarget.findMany.mockResolvedValue([{ id: "t1", status: "PUBLISHING", updatedAt: new Date(0), channel: IG }]);
 
     const result = await runAutoHealer();
 
@@ -149,7 +219,7 @@ describe("runAutoHealer step 5 scheduling", () => {
         { id: "ap1", organizationId: "o1", errorMessage: "ECONNRESET", createdAt: new Date(), retryCount: 0 },
       ])
       .mockResolvedValueOnce([]); // step 4: no stuck SCHEDULED autopilot posts
-    h.prisma.postTarget.findMany.mockResolvedValue([{ id: "t1", status: "PUBLISHING", updatedAt: new Date(0) }]);
+    h.prisma.postTarget.findMany.mockResolvedValue([{ id: "t1", status: "PUBLISHING", updatedAt: new Date(0), channel: IG }]);
 
     const result = await runAutoHealer();
 

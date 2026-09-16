@@ -9,8 +9,11 @@ import { QUEUE_NAMES, postPublishQueue, analyticsSyncQueue, type PostPublishJobD
 import IORedis from "ioredis";
 import { buildPublishEmail, buildPublishReportCsv } from "../lib/publish-email";
 import { planFacebookAnalyticsId, earlyVideoSyncDelayMs } from "../lib/fb-video-post-id";
-import { markTargetFailed, markTargetAmbiguous, buildPublishClaimWhere, routePublishError, shouldPreflightReconcile, buildPublishNotifications, mediaRequiredReason, terminalizeStuckClaim, isSeedNoise, isStaleScheduleJob, isHeavyPublish, planHeavyDefer, HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE, classifyError, isDefiniteAuthFailure, releaseClaimAfterPrePublishError, decideClaimMiss, countOtherActiveJobsForTarget, ORPHANED_CLAIM_MESSAGE, formatPublishTiming, type PublishJobState } from "../lib/publish-recovery";
-import { PRIORITY_RETRY, mediaOptimizeQueue, atAgeWindowsForFormat } from "@postautomation/queue";
+import { addLocalClaim, releaseLocalClaim, localClaimCount } from "../lib/local-claims";
+import { trackBackgroundTask } from "../lib/background-tasks";
+import { createDispatchPacer } from "../lib/dispatch-pacer";
+import { markTargetFailed, markTargetAmbiguous, buildPublishClaimWhere, routePublishError, shouldPreflightReconcile, buildPublishNotifications, mediaRequiredReason, isSeedNoise, isStaleScheduleJob, isHeavyPublish, planHeavyDefer, HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE, classifyError, isDefiniteAuthFailure, releaseClaimAfterPrePublishError, decideClaimMiss, countOtherActiveJobsForTarget, ORPHANED_CLAIM_MESSAGE, ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE, FINAL_ATTEMPT_ORPHAN_MESSAGE, formatPublishTiming, type PublishJobState } from "../lib/publish-recovery";
+import { PRIORITY_RETRY, mediaOptimizeQueue, atAgeWindowsForFormat, resolvePlatformStaggerMs } from "@postautomation/queue";
 import { planOptimizeGate, choosePublishUrl } from "../lib/media-optimize";
 import { buildSnapshotMetadata } from "../lib/snapshot-metadata";
 
@@ -69,20 +72,14 @@ const HEAVY_MEDIA_THRESHOLD_BYTES = envInt("HEAVY_MEDIA_THRESHOLD_MB", 300, 1, 4
 const HEAVY_STREAM_PLATFORMS = new Set(["YOUTUBE", "TWITTER", "LINKEDIN"]);
 let heavyActive = 0;
 
-// Targets this PROCESS currently holds a publish claim on (targetId → holders).
-// The claim-miss orphan recovery below checks it alongside BullMQ's active
-// list: if a job's lock lapses, BullMQ can re-run the SAME job id while the
-// first run is still publishing, and filtering the active list by job id would
-// hide that first run (2026-09-16).
-const localClaimHolders = new Map<string, number>();
-function addLocalClaim(postTargetId: string): void {
-  localClaimHolders.set(postTargetId, (localClaimHolders.get(postTargetId) ?? 0) + 1);
-}
-function releaseLocalClaim(postTargetId: string): void {
-  const n = (localClaimHolders.get(postTargetId) ?? 0) - 1;
-  if (n > 0) localClaimHolders.set(postTargetId, n);
-  else localClaimHolders.delete(postTargetId);
-}
+// Process-local claim registry: ../lib/local-claims (shared with the
+// stuck-PUBLISHING reaper in auto-healer.worker.ts).
+
+// Same-post Meta dispatch pacing (2026-09-16) — see lib/dispatch-pacer.ts. The
+// shared normalize encode releases every target that waited on it in the same
+// tick; this restores the per-platform spacing between their publish calls.
+const dispatchPacer = createDispatchPacer();
+const PACED_DISPATCH_PLATFORMS = new Set(["INSTAGRAM", "FACEBOOK"]);
 
 // Redis pub/sub publisher for upload progress SSE
 const progressPublisher = new IORedis(process.env.REDIS_URL || "redis://localhost:6379", {
@@ -320,80 +317,110 @@ export function createPostPublishWorker() {
       if (claim.count === 0) {
         // The claim guard only transitions SCHEDULED/FAILED/DRAFT → PUBLISHING.
         // count===0 means the target is already PUBLISHING/PUBLISHED or gone.
-        // On a NON-final attempt we skip (a later attempt or the original job may
-        // still finish) — unless the target is PUBLISHING and NO job holds it,
-        // which is recovered below. On the FINAL attempt a no-op claim means a previous
-        // attempt left it orphaned at PUBLISHING — terminalize it now so it can't
-        // sit "in progress" forever (the 30-min watchdog is the slow backstop).
+        //
+        // ── Claim-miss handling (reworked 2026-09-16) ────────────────────────
+        // A target left at PUBLISHING by a job that is no longer running (the
+        // 2026-09-15 deploy SIGKILLed 10 in-flight publishes) used to be
+        // skipped here and sat for 30 min until the reaper. It is now handled
+        // on POSITIVE evidence that no job holds it (BullMQ's active list plus
+        // this process's own claims) — see decideClaimMiss:
+        //   - another holder exists → skip (that job owns the terminal write),
+        //     on the final attempt too;
+        //   - Instagram/Facebook → release and retry through the duplicate
+        //     pre-flight (non-final) or fail it retryably (final);
+        //   - any other platform → the dead holder may already have published
+        //     and nothing can check, so park it as ambiguous for a person
+        //     rather than risk an automatic duplicate.
+        // Every write is conditional on the exact row inspected, and any error
+        // in the check falls back to a skip (the reaper is the backstop).
         const isFinalAttempt = (job.attemptsMade + 1) >= (job.opts?.attempts ?? 1);
-        if (terminalizeStuckClaim({ claimCount: claim.count, isFinalAttempt })) {
-          const stuck = await prisma.postTarget.findUnique({
+        let outcome: "skip" | "retry" | "terminal" = "skip";
+        let terminalMessage = "";
+        try {
+          const current = await prisma.postTarget.findUnique({
             where: { id: postTargetId },
-            select: { status: true, publishedId: true },
+            select: { status: true, publishedId: true, updatedAt: true },
           });
-          // Only terminalize a target genuinely orphaned at PUBLISHING with no
-          // platform id — never clobber a PUBLISHED row or one that has a
-          // publishedId (the publishedId short-circuit will mark it PUBLISHED).
-          if (stuck && stuck.status === "PUBLISHING" && !stuck.publishedId) {
-            await markTargetFailed(
-              prisma,
-              postTargetId,
-              "Publishing did not complete after all retries — please retry.",
-            );
-            console.warn(`[PostPublish] target ${postTargetId} orphaned at PUBLISHING on final attempt — marked FAILED (job ${job.id})`);
-          }
-        } else {
-          // ── Orphaned-claim recovery (2026-09-16) ──────────────────────────
-          // A target left at PUBLISHING by a job that is no longer running —
-          // the 2026-09-15 deploy SIGKILLed 10 in-flight publishes, and a
-          // pre-publish throw used to leave its claim behind — was silently
-          // skipped here and sat for 30 min until the reaper. If NO other job
-          // holds it, release it (conditionally) and fail THIS attempt, so
-          // BullMQ retries: worker.on("failed") increments retryCount, the
-          // retry re-claims FAILED → PUBLISHING, and the duplicate pre-flight
-          // asks the platform before any re-publish (the dead holder may have
-          // published). Any error here falls back to the old skip.
-          let recovered = false;
-          try {
-            const current = await prisma.postTarget.findUnique({
-              where: { id: postTargetId },
-              select: { status: true, publishedId: true, updatedAt: true },
-            });
-            let otherActiveJobs: number | null = null;
-            if (current && current.status === "PUBLISHING" && !current.publishedId) {
+          let otherActiveJobs: number | null = null;
+          let providerSupportsReconcile = false;
+          if (current && current.status === "PUBLISHING" && !current.publishedId) {
+            try {
+              providerSupportsReconcile =
+                typeof getSocialProvider(platform as any).findExistingPost === "function";
+            } catch {
+              providerSupportsReconcile = false;
+            }
+            try {
               const active = await postPublishQueue.getActive();
               otherActiveJobs = countOtherActiveJobsForTarget(
                 active as Array<{ id?: string | null; data?: { postTargetId?: unknown } | null } | undefined>,
                 job.id,
                 postTargetId,
-                localClaimHolders.get(postTargetId) ?? 0,
+                localClaimCount(postTargetId),
               );
+            } catch (activeErr: any) {
+              console.warn(`[PostPublish] active-job lookup failed for ${postTargetId}: ${activeErr?.message}`);
+              otherActiveJobs = null;
             }
-            const decision = decideClaimMiss({
-              isFinalAttempt,
-              status: current?.status ?? null,
-              hasPublishedId: !!current?.publishedId,
-              otherActiveJobs,
+          }
+          const decision = decideClaimMiss({
+            isFinalAttempt,
+            status: current?.status ?? null,
+            hasPublishedId: !!current?.publishedId,
+            otherActiveJobs,
+            providerSupportsReconcile,
+          });
+          // ⚠️ Conditional on the exact row we inspected: any write since (a
+          // finishing holder, a progress tick, a platform id) bumps updatedAt
+          // and makes each write below a no-op.
+          const sameRow = current
+            ? { id: postTargetId, status: "PUBLISHING" as const, publishedId: null, updatedAt: current.updatedAt }
+            : null;
+          if (decision === "recover-orphan" && sameRow) {
+            const released = await prisma.postTarget.updateMany({
+              where: sameRow,
+              data: { status: "FAILED", errorMessage: ORPHANED_CLAIM_MESSAGE },
             });
-            if (decision === "recover-orphan" && current) {
-              // ⚠️ Conditional on the exact row we inspected: any write since
-              // (a finishing holder, a progress tick, a platform id) bumps
-              // updatedAt and makes this a no-op.
-              const released = await prisma.postTarget.updateMany({
-                where: { id: postTargetId, status: "PUBLISHING", publishedId: null, updatedAt: current.updatedAt },
-                data: { status: "FAILED", errorMessage: ORPHANED_CLAIM_MESSAGE },
-              });
-              recovered = released.count === 1;
+            if (released.count === 1) outcome = "retry";
+          } else if (decision === "park-orphan" && sameRow) {
+            const parked = await prisma.postTarget.updateMany({
+              where: sameRow,
+              data: {
+                status: "FAILED",
+                errorMessage: ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE,
+                ambiguousAt: new Date(),
+                ambiguousReason: ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE,
+              },
+            });
+            if (parked.count === 1) {
+              outcome = "terminal";
+              terminalMessage = ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE;
             }
-          } catch (recoverErr: any) {
-            console.warn(`[PostPublish] orphan-claim check failed for ${postTargetId} — skipping as before: ${recoverErr?.message}`);
+          } else if (decision === "terminalize" && sameRow) {
+            const failed = await prisma.postTarget.updateMany({
+              where: sameRow,
+              data: { status: "FAILED", errorMessage: FINAL_ATTEMPT_ORPHAN_MESSAGE },
+            });
+            if (failed.count === 1) {
+              outcome = "terminal";
+              terminalMessage = FINAL_ATTEMPT_ORPHAN_MESSAGE;
+            }
           }
-          if (recovered) {
-            console.warn(`[PostPublish] target ${postTargetId} was orphaned at PUBLISHING (no job holds it) — released to FAILED; failing job ${job.id} so BullMQ retries with the duplicate pre-flight`);
-            throw new Error(ORPHANED_CLAIM_MESSAGE);
-          }
-          console.warn(`[PostPublish] target ${postTargetId} already claimed or published — skipping duplicate job ${job.id}`);
+        } catch (recoverErr: any) {
+          console.warn(`[PostPublish] orphan-claim check failed for ${postTargetId} — skipping: ${recoverErr?.message}`);
         }
+        if (outcome === "retry") {
+          console.warn(`[PostPublish] target ${postTargetId} was orphaned at PUBLISHING (no job holds it) — released to FAILED; failing job ${job.id} so BullMQ retries with the duplicate pre-flight`);
+          throw new Error(ORPHANED_CLAIM_MESSAGE);
+        }
+        if (outcome === "terminal") {
+          // UnrecoverableError so worker.on("failed") finalizes the target,
+          // increments retryCount (a later human Retry then runs the duplicate
+          // pre-flight where one exists), notifies, and settles the parent post.
+          console.warn(`[PostPublish] target ${postTargetId} orphaned at PUBLISHING (no job holds it) — marked terminal (job ${job.id}): ${terminalMessage}`);
+          throw new UnrecoverableError(terminalMessage);
+        }
+        console.warn(`[PostPublish] target ${postTargetId} already claimed or published — skipping duplicate job ${job.id}`);
         return;
       }
       // This job now owns the claim. Recorded for the pre-publish guard in the
@@ -581,6 +608,20 @@ export function createPostPublishWorker() {
       // (2026-09-16). Computed HERE, while mediaUrls is still index-aligned
       // with the attachments and untouched by any later step.
       const mediaIsRendition = postTarget.post.mediaAttachments.map((m, i) => mediaUrls[i] !== m.media.url);
+      // Size of the file that video prep would actually download and encode:
+      // the rendition when one is being sent (its size is recorded by
+      // media-optimize), else the original. Checking the ORIGINAL's size here
+      // made a >250MB original skip the story 9:16 canvas even though the
+      // file being published was a small rendition (adversarial review,
+      // 2026-09-16). The encode's own Content-Length cap still guards a
+      // rendition that turns out to be large.
+      const mediaPrepSizes = postTarget.post.mediaAttachments.map((m, i) => {
+        if (!mediaIsRendition[i]) return Number(m.media.fileSize ?? 0);
+        const renditionSize = Number(
+          ((m.media as { metadata?: unknown }).metadata as { optimize?: { size?: unknown } } | null)?.optimize?.size
+        );
+        return Number.isFinite(renditionSize) && renditionSize > 0 ? renditionSize : Number(m.media.fileSize ?? 0);
+      });
       const mediaTypes = postTarget.post.mediaAttachments.map((m) => m.media.fileType);
       // Number(): fileSize is a Prisma BigInt (Phase 4) — safe up to 2^53,
       // far beyond any real file; keeps the gate math plain-number.
@@ -734,7 +775,7 @@ export function createPostPublishWorker() {
             // to /tmp, re-encodes it, and re-uploads — untenable for multi-GB
             // Shorts/Reels (disk + CPU + wall-clock). Post the creator's
             // original video as-is instead of failing or stalling.
-            const tooBigForOverlay = (mediaSizes[i] ?? 0) > OVERLAY_MAX_BYTES;
+            const tooBigForOverlay = (mediaPrepSizes[i] ?? 0) > OVERLAY_MAX_BYTES;
             const plan = planMetaVideoPrep({
               watermarkOn,
               hasOverlayText: !!overlayText,
@@ -745,7 +786,7 @@ export function createPostPublishWorker() {
             videoPrepPlans.push(plan);
 
             if (plan === "skip-too-big") {
-              console.log(`[PostPublish] Skipping watermark on large video ${i + 1} (${Math.round((mediaSizes[i] ?? 0) / 1024 / 1024)}MB > ${OVERLAY_MAX_BYTES / 1024 / 1024}MB) — posting original`);
+              console.log(`[PostPublish] Skipping video prep on large video ${i + 1} (${Math.round((mediaPrepSizes[i] ?? 0) / 1024 / 1024)}MB > ${OVERLAY_MAX_BYTES / 1024 / 1024}MB) — posting it as-is`);
               processed.push(mediaUrls[i]!);
             } else if (plan === "skip-rendition") {
               // Already H.264 + yuv420p + AAC + +faststart — the same shape the
@@ -815,6 +856,16 @@ export function createPostPublishWorker() {
           mediaUrls = processed;
         } catch (e) {
           console.warn(`[PostPublish] Video overlay failed, posting without:`, (e as Error).message);
+          // The canvas warning above lives inside the try, so a THROWN prep
+          // (short download, truncated encode, S3 error) never reached it —
+          // yet the story still publishes unpadded. Keep the promise that every
+          // unpadded story logs this line.
+          if (publishesAsStory) {
+            console.warn(
+              `[PostPublish] story 9:16 canvas NOT applied to video for target ${postTargetId} (${platform}) — ` +
+                `video prep failed (${(e as Error).message}); publishing the original`
+            );
+          }
         }
         console.log(
           `[PostPublish] target ${postTargetId} (${platform}) video prep ${Date.now() - videoPrepStartedAt}ms plan=${videoPrepPlans.join(",") || "none"}`
@@ -937,6 +988,17 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
         const validationReason = `Validation failed: ${errors.join(", ")}`;
         await markTargetFailed(prisma, postTargetId, validationReason);
         throw new UnrecoverableError(validationReason);
+      }
+
+      // Re-impose the same-platform spacing between this post's publish calls
+      // (a no-op when the enqueue stagger already spaced them). Still before
+      // dispatch: nothing has been sent, so the pre-publish claim guard covers
+      // any throw here.
+      if (PACED_DISPATCH_PLATFORMS.has(platform)) {
+        const pacedMs = await dispatchPacer.waitTurn(`${postTarget.postId}:${platform}`, resolvePlatformStaggerMs(platform));
+        if (pacedMs > 0) {
+          console.log(`[PostPublish] target ${postTargetId} (${platform}) paced ${pacedMs}ms to keep same-post spacing`);
+        }
       }
 
       let result;
@@ -1453,7 +1515,11 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
     }
   );
 
-  worker.on("failed", async (job, err) => {
+  // Tracked (2026-09-16): BullMQ never awaits this async listener, so the
+  // graceful drain waits for it explicitly (lib/background-tasks.ts) —
+  // otherwise a job that fails DURING shutdown loses its terminal write,
+  // notification and publish email when the process exits.
+  const handleFailedJob = async (job: Job<PostPublishJobData> | undefined, err: Error) => {
     if (!job) return;
     try {
       // ⚠️ Route before classifying, for the same reason as the publish catch: an
@@ -1582,6 +1648,9 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
       // Never let the failed handler itself crash the worker
       console.error(`[PostPublish] Unhandled error in failed handler for job ${job.id}:`, handlerErr?.message);
     }
+  };
+  worker.on("failed", (job, err) => {
+    trackBackgroundTask(handleFailedJob(job, err));
   });
 
   worker.on("completed", (job) => {

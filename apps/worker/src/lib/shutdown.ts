@@ -97,12 +97,20 @@ export interface GracefulShutdownDeps {
   timeoutMs: number;
   /** In-flight post-publish jobs, or null when not cheaply knowable. */
   activePublishJobs?: () => number | null;
+  /**
+   * Waits (up to the given ms) for fire-and-forget `failed`-listener work that
+   * BullMQ does not await — see lib/background-tasks.ts. Runs after the
+   * workers have closed, within whatever is left of the drain budget.
+   */
+  awaitBackgroundTasks?: (timeoutMs: number) => Promise<"settled" | "timeout">;
+  /** How many of those tasks are still pending (for the log only). */
+  pendingBackgroundTasks?: () => number;
   log?: (msg: string) => void;
   warn?: (msg: string, err?: unknown) => void;
 }
 
 /**
- * Build the SIGTERM/SIGINT handler. Idempotent: Docker, tini and a human
+ * Build the SIGTERM/SIGINT handler. Idempotent: Docker, pnpm and a human
  * pressing Ctrl+C twice can all deliver a second signal while the first drain
  * is still running — that must NOT start a second drain or cut the first one
  * short, so it only logs. (BullMQ's close() is itself idempotent, but a second
@@ -165,6 +173,33 @@ export function createGracefulShutdown(deps: GracefulShutdownDeps): (signal?: st
       );
     } else {
       warn(`[Shutdown] Closing workers failed after ${secs}s (exiting anyway):`, error);
+    }
+
+    // BullMQ emits `failed` without awaiting its async listeners, so close()
+    // can resolve while a job's terminal bookkeeping (post status, report
+    // email, super-text failure, caption fan-out valve) is still running.
+    // Give it whatever is left of the budget before exiting.
+    if (deps.awaitBackgroundTasks) {
+      const remaining = deps.timeoutMs - (Date.now() - started);
+      const pendingCount = (() => {
+        try {
+          return deps.pendingBackgroundTasks?.() ?? null;
+        } catch {
+          return null;
+        }
+      })();
+      if (pendingCount !== 0) {
+        try {
+          const tasks = await deps.awaitBackgroundTasks(Math.max(0, remaining));
+          log(
+            tasks === "settled"
+              ? `[Shutdown] Pending job bookkeeping finished.`
+              : `[Shutdown] Pending job bookkeeping did not finish within the drain budget — exiting anyway.`
+          );
+        } catch (err) {
+          warn("[Shutdown] waiting for job bookkeeping failed (exiting anyway):", err);
+        }
+      }
     }
 
     try {

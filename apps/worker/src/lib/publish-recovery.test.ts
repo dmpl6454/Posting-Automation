@@ -8,6 +8,9 @@ import {
   isDefiniteAuthFailure,
   releaseClaimAfterPrePublishError,
   decideClaimMiss,
+  decideReap,
+  ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE,
+  FINAL_ATTEMPT_ORPHAN_MESSAGE,
   countOtherActiveJobsForTarget,
   ORPHANED_CLAIM_MESSAGE,
   formatPublishTiming,
@@ -199,7 +202,8 @@ describe("isDefiniteAuthFailure", () => {
     for (const m of [
       '{"error":"invalid_grant","error_description":"Token has been expired or revoked."}',
       '{"error":{"code" : 190}}',
-      "OAuthException: whatever",
+      '{"error":{"code":102,"message":"API Session"}}',
+      '{"error":{"code":463}}',
       "The access token has been revoked",
       "unauthorized_client",
       "invalid_client",
@@ -207,6 +211,25 @@ describe("isDefiniteAuthFailure", () => {
     ]) {
       expect(isDefiniteAuthFailure(m), m).toBe(true);
     }
+  });
+
+  it("a bare OAuthException is NOT evidence — Meta stamps it on transient errors and rate limits too (review finding)", () => {
+    for (const m of [
+      "OAuthException: whatever",
+      'Instagram long-lived token exchange failed: {"error":{"message":"An unexpected error has occurred. Please retry your request later.","type":"OAuthException","is_transient":true,"code":2}}',
+      '{"error":{"message":"(#4) Application request limit reached","type":"OAuthException","code":4}}',
+      '{"error":{"message":"(#17) User request limit reached","type":"OAuthException","code":17}}',
+      '{"error":{"message":"(#32) Page request limit reached","type":"OAuthException","code":32}}',
+      // A credential-looking body that Meta itself marks transient stays retryable.
+      '{"error":{"message":"Error validating access token","type":"OAuthException","code":190,"is_transient":true}}',
+    ]) {
+      expect(isDefiniteAuthFailure(m), m).toBe(false);
+    }
+  });
+
+  it("does not mistake other codes that merely start with 190/102 for credential codes", () => {
+    expect(isDefiniteAuthFailure('{"error":{"code":1905}}')).toBe(false);
+    expect(isDefiniteAuthFailure('{"error":{"code":10200}}')).toBe(false);
   });
 
   it("is false for transient / network / upstream failures", () => {
@@ -296,32 +319,64 @@ describe("releaseClaimAfterPrePublishError", () => {
 });
 
 describe("decideClaimMiss", () => {
-  const orphan = { isFinalAttempt: false, status: "PUBLISHING", hasPublishedId: false, otherActiveJobs: 0 };
+  const orphan = {
+    isFinalAttempt: false,
+    status: "PUBLISHING",
+    hasPublishedId: false,
+    otherActiveJobs: 0,
+    providerSupportsReconcile: true,
+  };
 
-  it("final attempt → terminalize, exactly like terminalizeStuckClaim, whatever else is true", () => {
-    for (const status of ["PUBLISHING", "PUBLISHED", "FAILED", null]) {
-      expect(decideClaimMiss({ ...orphan, isFinalAttempt: true, status, otherActiveJobs: 3 })).toBe("terminalize");
-    }
-    expect(terminalizeStuckClaim({ claimCount: 0, isFinalAttempt: true })).toBe(true);
-  });
-
-  it("recovers a PUBLISHING target with no platform id that nobody else is working on", () => {
+  it("recovers an unheld, id-less PUBLISHING target when the platform can check for an existing post", () => {
     expect(decideClaimMiss(orphan)).toBe("recover-orphan");
   });
 
-  it("skips when another job holds it", () => {
+  it("PARKS the same orphan when the platform cannot check — never an automatic re-publish (critical review finding)", () => {
+    expect(decideClaimMiss({ ...orphan, providerSupportsReconcile: false })).toBe("park-orphan");
+    expect(decideClaimMiss({ ...orphan, providerSupportsReconcile: false, isFinalAttempt: true })).toBe("park-orphan");
+  });
+
+  it("final attempt on an unheld orphan of a checkable platform → terminalize", () => {
+    expect(decideClaimMiss({ ...orphan, isFinalAttempt: true })).toBe("terminalize");
+    expect(terminalizeStuckClaim({ claimCount: 0, isFinalAttempt: true })).toBe(true);
+  });
+
+  it("skips when another job holds it — on the FINAL attempt too (review finding)", () => {
     expect(decideClaimMiss({ ...orphan, otherActiveJobs: 1 })).toBe("skip");
+    expect(decideClaimMiss({ ...orphan, otherActiveJobs: 2, isFinalAttempt: true })).toBe("skip");
+    expect(decideClaimMiss({ ...orphan, otherActiveJobs: 1, providerSupportsReconcile: false })).toBe("skip");
   });
 
-  it("skips when the holder check did not run (null) — recovery needs positive evidence", () => {
+  it("when the holder check did not run (null): skip, except the final attempt keeps the legacy terminalize", () => {
     expect(decideClaimMiss({ ...orphan, otherActiveJobs: null })).toBe("skip");
+    expect(decideClaimMiss({ ...orphan, otherActiveJobs: null, providerSupportsReconcile: false })).toBe("skip");
+    expect(decideClaimMiss({ ...orphan, otherActiveJobs: null, isFinalAttempt: true })).toBe("terminalize");
   });
 
-  it("skips anything that is not an id-less PUBLISHING row", () => {
-    for (const status of ["PUBLISHED", "FAILED", "SCHEDULED", "DRAFT", null]) {
-      expect(decideClaimMiss({ ...orphan, status }), String(status)).toBe("skip");
+  it("skips anything that is not an id-less PUBLISHING row, final attempt or not", () => {
+    for (const isFinalAttempt of [false, true]) {
+      for (const status of ["PUBLISHED", "FAILED", "SCHEDULED", "DRAFT", null]) {
+        expect(decideClaimMiss({ ...orphan, isFinalAttempt, status }), `${status} final=${isFinalAttempt}`).toBe("skip");
+      }
+      expect(decideClaimMiss({ ...orphan, isFinalAttempt, hasPublishedId: true })).toBe("skip");
     }
-    expect(decideClaimMiss({ ...orphan, hasPublishedId: true })).toBe("skip");
+  });
+
+  it("the park and final-attempt messages keep their text through worker.on('failed')", () => {
+    expect(classifyError(ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE)).toBe("unknown");
+    expect(classifyError(FINAL_ATTEMPT_ORPHAN_MESSAGE)).toBe("unknown");
+  });
+});
+
+describe("decideReap", () => {
+  it("never reaps a target a running job still holds", () => {
+    expect(decideReap({ heldByActiveJob: true, providerSupportsReconcile: true })).toBe("skip");
+    expect(decideReap({ heldByActiveJob: true, providerSupportsReconcile: false })).toBe("skip");
+  });
+
+  it("fails an unheld target retryably where a duplicate check exists, parks it otherwise", () => {
+    expect(decideReap({ heldByActiveJob: false, providerSupportsReconcile: true })).toBe("fail-retryable");
+    expect(decideReap({ heldByActiveJob: false, providerSupportsReconcile: false })).toBe("park");
   });
 });
 

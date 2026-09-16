@@ -1,3 +1,4 @@
+import { trackBackgroundTask } from "../lib/background-tasks";
 import { Worker, type Job } from "bullmq";
 import { prisma } from "@postautomation/db";
 import { QUEUE_NAMES, createRedisConnection, type CaptionFanoutJobData } from "@postautomation/queue";
@@ -358,7 +359,9 @@ export function createCaptionFanoutWorker() {
     // SCHEDULED with whatever overrides exist — shared captions publish,
     // the post is never stranded in DRAFT.
     if (job && job.attemptsMade >= (job.opts.attempts ?? 1)) {
-      flipPendingFanoutPost({ prisma: prisma as any }, job.data.postId, job.data.organizationId, { degraded: true })
+      // Tracked so a graceful drain waits for this safety valve
+      // (lib/background-tasks.ts) instead of stranding the post in DRAFT.
+      trackBackgroundTask(flipPendingFanoutPost({ prisma: prisma as any }, job.data.postId, job.data.organizationId, { degraded: true })
         .then((flipped) => {
           if (flipped) {
             console.warn(
@@ -368,7 +371,7 @@ export function createCaptionFanoutWorker() {
         })
         .catch((e) =>
           console.error(`[caption-fanout] Final-failure flip failed for post ${job.data.postId}:`, e?.message ?? e)
-        );
+        ));
     }
   });
 

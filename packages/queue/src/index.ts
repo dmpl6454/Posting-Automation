@@ -3,7 +3,7 @@ export { QUEUE_NAMES, postPublishQueue, tokenRefreshQueue, analyticsSyncQueue, m
 export type { PostPublishJobData, TokenRefreshJobData, AnalyticsSyncJobData, MediaProcessJobData, WebhookDeliveryJobData, RssSyncJobData, NotificationSendJobData, AgentRunJobData, TrendDiscoverJobData, TrendScoreJobData, ContentGenerateJobData, AutopilotScheduleJobData, ListeningSyncJobData, SentimentAnalysisJobData, CampaignAnalyticsSyncJobData, BrandContentSyncJobData, OutreachSendJobData, OutreachPollJobData, RepurposeVideoJobData, AvatarCacheJobData, CaptionFanoutJobData, MediaOptimizeJobData, SuperTextBurnJobData, ExternalPostSyncJobData } from "./types";
 export { scopedProgressId, pushProgress, getProgress, finishProgress } from "./progress";
 export type { ProgressStep, StepStatus } from "./progress";
-export { computePublishDelays, PLATFORM_STAGGER_MS, DEFAULT_STAGGER_MS } from "./publish-stagger";
+export { computePublishDelays, resolvePlatformStaggerMs, PLATFORM_STAGGER_MS, DEFAULT_STAGGER_MS } from "./publish-stagger";
 export { PRIORITY_BULK, PRIORITY_RETRY } from "./publish-priority";
 export { buildPublishNowJobId, PUBLISH_NOW_DEDUPE_WINDOW_MS } from "./publish-now-jobid";
 export {

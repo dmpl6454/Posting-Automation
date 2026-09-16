@@ -184,10 +184,16 @@ export function classifyError(errMsg: string): PublishErrorType {
  * succeeded. Calling a definite failure "not definite" only costs the old
  * behaviour, so every doubt resolves to false.
  */
+//
+// ⚠️ A bare "OAuthException" is NOT evidence: Meta stamps that type on nearly
+// every Graph error, including transient ones (code 1/2 with is_transient) and
+// rate limits (#4/#17/#32) — a refresh that failed that way must stay
+// retryable (adversarial review, 2026-09-16). Only credential-specific signals
+// count, and Meta's own transience markers veto them.
 const DEFINITE_AUTH_FAILURE_RE =
-  /invalid_grant|"code"\s*:\s*190|OAuthException|session has been invalidated|Error validating access token|has been revoked|unauthorized_client|invalid_client|invalid_token/i;
+  /invalid_grant|"code"\s*:\s*(?:190|102|463|467)\b|session has been invalidated|Error validating access token|has been revoked|unauthorized_client|invalid_client|invalid_token/i;
 const TRANSIENT_FAILURE_RE =
-  /fetch failed|ETIMEDOUT|ECONNRESET|ENOTFOUND|EAI_AGAIN|socket hang up|aborted|timed? ?out|\b5\d\d\b/i;
+  /fetch failed|ETIMEDOUT|ECONNRESET|ENOTFOUND|EAI_AGAIN|socket hang up|aborted|timed? ?out|\b5\d\d\b|"is_transient"\s*:\s*true|"code"\s*:\s*(?:1|2|4|17|32|341|613|80001|80002)\b|retry your request later|request limit/i;
 
 export function isDefiniteAuthFailure(message: string | null | undefined): boolean {
   if (!message) return false;
@@ -271,41 +277,80 @@ export async function releaseClaimAfterPrePublishError(
  * keeps it verbatim instead of swapping in "rate limit"/"reconnect" copy.
  */
 export const ORPHANED_CLAIM_MESSAGE =
-  "A previous publish attempt was interrupted before it finished; retrying after first checking whether it already went live (where the platform supports that check).";
+  "A previous publish attempt was interrupted before it finished; retrying after first checking whether it already went live.";
 
-export type ClaimMissDecision = "terminalize" | "recover-orphan" | "skip";
+/**
+ * Written when a dead holder's publish outcome is unknown AND the platform
+ * offers no "is it already live?" check (everything except Instagram and
+ * Facebook). Parked as ambiguous: re-publishing automatically could post it
+ * twice, so a person checks first (2026-09-16 adversarial review).
+ */
+export const ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE =
+  "Publishing was interrupted before it finished, and this platform cannot tell us whether the post went live. Nothing was re-sent. Check the account, then use \"It didn't publish\" to try again.";
+
+/**
+ * Final-attempt orphan on a platform that CAN be checked (Instagram/Facebook):
+ * terminal but retryable, and the next human Retry runs the duplicate
+ * pre-flight because worker.on("failed") increments retryCount.
+ */
+export const FINAL_ATTEMPT_ORPHAN_MESSAGE = "Publishing did not complete after all retries — please retry.";
+
+export type ClaimMissDecision = "terminalize" | "recover-orphan" | "park-orphan" | "skip";
 
 /**
  * What to do when the atomic claim matched nothing (claim.count === 0).
  *
- *   "terminalize"    — FINAL attempt: exactly the pre-existing
- *                      terminalizeStuckClaim path, unchanged.
- *   "recover-orphan" — the target is PUBLISHING with no platform id and NO
- *                      other job is working on it: its holder died (the
- *                      2026-09-15 deploy killed 10 in-flight publishes) or
- *                      threw without releasing. The worker releases it
- *                      (conditionally) and fails this attempt so BullMQ
- *                      retries — and the retry runs the duplicate pre-flight
- *                      before any re-publish, because the dead holder may have
- *                      published.
- *   "skip"           — anything else: already PUBLISHED/FAILED/SCHEDULED, has a
- *                      publishedId, another job holds it, or the holder check
- *                      did not run.
+ *   "skip"           — nothing to do: the target is not PUBLISHING, it already
+ *                      has a platform id, another job holds it, or (non-final
+ *                      attempt) the holder check could not run.
+ *   "recover-orphan" — NON-final attempt, the target is PUBLISHING, NO job
+ *                      holds it, and the platform CAN tell us whether the dead
+ *                      holder already published (Instagram / Facebook
+ *                      findExistingPost; IG/FB stories via their checkpoint).
+ *                      The worker releases it and fails this attempt, and the
+ *                      retry runs that duplicate check before any re-publish.
+ *   "park-orphan"    — same, but the platform has NO such check. The dead
+ *                      holder may have published, so an automatic retry could
+ *                      post it twice: park it as ambiguous for a person.
+ *   "terminalize"    — FINAL attempt on an unheld orphan whose platform can be
+ *                      checked (the next human Retry runs the check), or the
+ *                      final attempt when the holder check itself failed (the
+ *                      pre-2026-09-16 behaviour, kept for that case only).
  *
- * `otherActiveJobs` is `null` when the holder check was not (or could not be)
- * performed. ⚠️ null ⇒ "skip": recovery requires POSITIVE evidence that nobody
- * holds the claim, since releasing a live claim invites a concurrent publish.
+ * `otherActiveJobs` is null when the holder check was not (or could not be)
+ * performed. ⚠️ Recovery needs POSITIVE evidence that nobody holds the claim:
+ * releasing a live claim invites a concurrent publish. The final attempt also
+ * honours a live holder now — terminalizing a target another job is still
+ * publishing made it re-claimable mid-publish (adversarial review).
  */
 export function decideClaimMiss(opts: {
   isFinalAttempt: boolean;
   status: string | null;
   hasPublishedId: boolean;
   otherActiveJobs: number | null;
+  providerSupportsReconcile: boolean;
 }): ClaimMissDecision {
-  if (terminalizeStuckClaim({ claimCount: 0, isFinalAttempt: opts.isFinalAttempt })) return "terminalize";
   if (opts.status !== "PUBLISHING" || opts.hasPublishedId) return "skip";
-  if (opts.otherActiveJobs === null || opts.otherActiveJobs > 0) return "skip";
-  return "recover-orphan";
+  if (opts.otherActiveJobs === null) {
+    return terminalizeStuckClaim({ claimCount: 0, isFinalAttempt: opts.isFinalAttempt }) ? "terminalize" : "skip";
+  }
+  if (opts.otherActiveJobs > 0) return "skip";
+  if (!opts.providerSupportsReconcile) return "park-orphan";
+  return opts.isFinalAttempt ? "terminalize" : "recover-orphan";
+}
+
+export type ReapDecision = "skip" | "fail-retryable" | "park";
+
+/**
+ * The stuck-PUBLISHING reaper's per-target rule (2026-09-16). Same evidence
+ * standard as decideClaimMiss: a target that a running job still holds is
+ * never reaped (a slow, live publish would otherwise be made re-claimable and
+ * published twice on the next Retry). An unheld target's outcome is unknown,
+ * so platforms without a duplicate check are parked for a person.
+ */
+export function decideReap(opts: { heldByActiveJob: boolean; providerSupportsReconcile: boolean }): ReapDecision {
+  if (opts.heldByActiveJob) return "skip";
+  return opts.providerSupportsReconcile ? "fail-retryable" : "park";
 }
 
 /**
