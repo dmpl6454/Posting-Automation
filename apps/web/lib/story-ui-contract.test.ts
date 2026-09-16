@@ -84,7 +84,7 @@ describe("Post-mode controls never leak into a story payload", () => {
   it("sends the story marker on the DRAFT path too", () => {
     // A draft saved without it becomes an ordinary post, and scheduling it later
     // would publish a FEED post to the account.
-    expect(compose.match(/isStoryMode && \{ story: \{ mentions: storyMentions \} \}/g) ?? []).toHaveLength(2);
+    expect(compose.match(/isStoryMode && \{ story: \{ mentions: effectiveStoryMentions \} \}/g) ?? []).toHaveLength(2);
   });
 
   it("hides the cover control AND the cover it already set", () => {
@@ -185,5 +185,51 @@ describe("diff-review fixes", () => {
   it("renders the story blocker VISIBLY, not only as a title tooltip", () => {
     expect(compose).toMatch(/\{\(youtubeBlockReason \|\| storyBlock\) && \(/);
     expect(compose).toMatch(/\{youtubeBlockReason \?\? storyBlock\}/);
+  });
+});
+
+describe("facebook stories (2026-09-16)", () => {
+  it("no longer tells the user stories are Instagram-only", () => {
+    // Comments stripped: the explanatory notes quote the very strings under test.
+    const code = compose.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(code).not.toMatch(/Instagram channels only/);
+    expect(code).toMatch(/Instagram &amp; Facebook/);
+  });
+
+  it("shows the Tag people card ONLY when an Instagram channel is selected", () => {
+    // Meta's Page Stories API documents no tag parameter at all, so on a
+    // Facebook-only selection the card is hidden rather than silently ignored.
+    expect(compose).toMatch(/\{isStoryMode && selectedPlatforms\.includes\("instagram"\) && \(/);
+  });
+
+  it("does not promise that Instagram notifies tagged accounts", () => {
+    // No Meta source supports that promise — see the 2026-09-15 investigation.
+    expect(compose).not.toMatch(/Instagram notifies them/);
+    expect(compose).toMatch(/has no tagging/);
+  });
+
+  it("does not send or preview tags once the last Instagram channel is deselected", () => {
+    // The raw state is kept so re-selecting Instagram restores what the user
+    // typed, but nothing downstream sees tags that cannot be delivered.
+    expect(compose).toMatch(/const effectiveStoryMentions = hasInstagram \? storyMentions : \[\];/);
+    expect(compose.match(/story: \{ mentions: effectiveStoryMentions \}/g)?.length).toBe(2);
+    expect(compose).toMatch(/mentions=\{effectiveStoryMentions\}/);
+    // The UNGATED expression must be gone from both submit paths.
+    expect(compose).not.toMatch(/story: \{ mentions: storyMentions \}/);
+  });
+
+  it("the story preview shows the blurred fit the publish actually produces", () => {
+    const previewRaw = readFileSync(
+      join(__dirname, "..", "components", "previews", "instagram-story-preview.tsx"),
+      "utf8"
+    );
+    // Comments stripped: the file's own warning note contains the banned tag.
+    const preview = previewRaw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(preview).toMatch(/blur-xl/);
+    expect(preview).toMatch(/object-contain/);
+    // Both layers must go through PreviewMedia: an img tag pointed at a video
+    // makes WebKit ingest the whole file and kills the tab.
+    expect(preview.match(/<PreviewMedia/g)?.length).toBe(2);
+    expect(preview).not.toMatch(/<img/);
   });
 });

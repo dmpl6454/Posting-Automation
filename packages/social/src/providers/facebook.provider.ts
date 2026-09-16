@@ -25,6 +25,17 @@ import {
   AmbiguousPublishError,
   isIndeterminatePublishError,
 } from "../utils/ambiguous-publish";
+import { isStoryFormat } from "../utils/instagram-story";
+import {
+  FB_STORY_LIST_MAX_PAGES,
+  fbStoryUrl,
+  findFbStoryByMediaId,
+  isFbPermissionError,
+  isFbStoryMediaExpired,
+  readFbStoryCheckpoint,
+  type FbStoryKind,
+  type FbStoryMatch,
+} from "../utils/facebook-story";
 import {
   RECONCILE_MAX_PAGES,
   RECONCILE_SKEW_MS,
@@ -324,6 +335,23 @@ export class FacebookProvider extends SocialProvider {
     payload: SocialPostPayload,
     pageId: string
   ): Promise<SocialPostResult> {
+    // A STORY is a different Facebook surface entirely — photo_stories /
+    // video_stories, not the feed — so it is routed before every feed path.
+    //
+    // ⚠️ Until this branch existed, a FACEBOOK target carrying format "STORY"
+    // silently published an ordinary Page FEED post: nothing in this provider
+    // read `metadata.format`.
+    if (isStoryFormat(payload.metadata)) {
+      // 🔴 Unconditional. Gating this on `mediaUrls?.length` let a media-less
+      // story fall through to the TEXT branch below, which publishes the story's
+      // private note as a permanent PUBLIC Page post — the opposite of what the
+      // user asked for, and not deletable by them. Mirrors instagram.provider.ts.
+      if (!payload.mediaUrls?.length) {
+        throw new Error("A Facebook story requires one image or video. Attach media and try again.");
+      }
+      return this.publishStory(tokens, payload, pageId);
+    }
+
     if (payload.mediaUrls?.length) {
       return this.publishPostWithMedia(tokens, payload, pageId);
     }
@@ -350,6 +378,260 @@ export class FacebookProvider extends SocialProvider {
       url: `https://www.facebook.com/${data.id.replace("_", "/posts/")}`,
       metadata: data,
     };
+  }
+
+  /**
+   * Publish one image or video as a Page STORY.
+   *
+   * Photo: POST /{page}/photos?published=false → POST /{page}/photo_stories.
+   * Video: POST /{page}/video_stories(start) → upload to rupload.facebook.com
+   *        → POST /{page}/video_stories(finish).
+   *
+   * 🔴 The uploaded media id is CHECKPOINTED BEFORE the story is created. A
+   * story carries no caption, so the caption reconciliation every other
+   * Facebook path relies on cannot work here; on a retry we ask
+   * `GET /{page}/stories` whether a story already carries that media id. See
+   * utils/facebook-story.ts.
+   *
+   * ⚠️ NO TAGGING. Meta's Page Stories API documents exactly one parameter for
+   * photo stories (`photo_id`) and three for video stories (`video_id`,
+   * `upload_phase`, `is_ai_generated`) — no tags, mentions or stickers, while
+   * the Instagram reference documents `user_tags` for stories explicitly. So
+   * Compose offers tagging on Instagram channels only.
+   */
+  private async publishStory(
+    tokens: OAuthTokens,
+    payload: SocialPostPayload,
+    pageId: string
+  ): Promise<SocialPostResult> {
+    const mediaUrl = payload.mediaUrls![0]!;
+    const isVideo =
+      /\.(mp4|mov|avi|mkv|webm)$/i.test(mediaUrl) || (payload.mediaTypes?.[0] ?? "").startsWith("video/");
+    const kind: FbStoryKind = isVideo ? "VIDEO" : "PHOTO";
+
+    // ── Resume from a checkpoint, if this is a retry ────────────────────────
+    const checkpoint = readFbStoryCheckpoint(payload.metadata);
+    if (checkpoint && checkpoint.kind === kind) {
+      // Throws when the listing is unreadable — deliberately. "I could not
+      // check" must never be treated as "nothing was published", or the retry
+      // posts a second story.
+      const existing = await this.findStoryByMediaId(tokens, pageId, checkpoint.id, checkpoint.createdAt);
+      if (existing) {
+        return {
+          platformPostId: existing.postId,
+          url: existing.url ?? fbStoryUrl(existing.postId),
+          metadata: { fbStoryMediaId: checkpoint.id, adopted: true },
+        };
+      }
+      if (!isFbStoryMediaExpired(checkpoint)) {
+        // The media is still on Facebook's servers and provably not published
+        // yet: finish the job with the SAME media id instead of uploading again.
+        return await this.createStoryFromMedia(tokens, pageId, checkpoint.id, kind);
+      }
+      console.warn(
+        `[Facebook] story media ${checkpoint.id} is past Facebook's 24h unpublished window — uploading again`
+      );
+    }
+
+    // ── Upload the media (nothing is published by this step) ────────────────
+    let mediaId: string;
+    if (isVideo) {
+      const session = await this.startFacebookVideoStory(tokens, pageId);
+      await this.uploadFacebookStoryVideo(session.uploadUrl, mediaUrl, tokens);
+      mediaId = session.videoId;
+    } else {
+      const photo = await this.uploadPhotoToFacebook(tokens, pageId, mediaUrl, false);
+      if (!photo?.id) throw new Error(`Facebook story photo upload returned no id: ${JSON.stringify(photo)}`);
+      mediaId = photo.id;
+    }
+
+    // ⚠️ FATAL, never best-effort — the same reasoning as the Instagram
+    // container checkpoint. Nothing is published yet, so aborting here cannot
+    // duplicate; it costs one unpublished upload that Facebook expires in 24h.
+    try {
+      await payload.onCheckpoint?.({
+        fbStoryMedia: { id: mediaId, kind, createdAt: new Date().toISOString() },
+      });
+    } catch (err) {
+      throw new Error(
+        `Could not record the Facebook story media ${mediaId} — refusing to publish a story that a retry could not find. ` +
+          `Nothing was published. Cause: ${(err as Error)?.message}`
+      );
+    }
+
+    return await this.createStoryFromMedia(tokens, pageId, mediaId, kind);
+  }
+
+  /** Turn already-uploaded media into a published Page story. */
+  private async createStoryFromMedia(
+    tokens: OAuthTokens,
+    pageId: string,
+    mediaId: string,
+    kind: FbStoryKind
+  ): Promise<SocialPostResult> {
+    const edge = kind === "VIDEO" ? "video_stories" : "photo_stories";
+    const body: Record<string, string> =
+      kind === "VIDEO"
+        ? { video_id: mediaId, upload_phase: "finish", access_token: tokens.accessToken }
+        : { photo_id: mediaId, access_token: tokens.accessToken };
+
+    const res = await this.graphFetch(
+      `${this.graphBaseUrl}/${this.apiVersion}/${pageId}/${edge}`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
+      pageId
+    );
+    let bodyUnreadable = false;
+    const data: any = await res.json().catch(() => {
+      bodyUnreadable = true;
+      return {};
+    });
+    if (!res.ok || data?.success === false) {
+      if (isFbPermissionError(data)) {
+        throw new Error(
+          `Facebook refused to publish this story to the Page. The connected account needs permission to create content on the Page ` +
+            `(a Page admin role, or the "Create content" task). Platform error: ${JSON.stringify(data)}`
+        );
+      }
+      // ⚠️ A 5xx, or a body we could not even parse (a proxy's HTML error page),
+      // does NOT prove the story was not created. Treating it as a definite
+      // failure makes the target re-claimable, and the retry publishes a SECOND
+      // story. Ask the listing first; if it cannot answer, park it for a human.
+      if (res.status >= 500 || bodyUnreadable) {
+        const live = await this.findStoryByMediaId(tokens, pageId, mediaId).catch(() => null);
+        if (live) {
+          console.warn(
+            `[Facebook] story publish did not acknowledge, but media ${mediaId} is already live on page ${pageId} — adopting it`
+          );
+          return {
+            platformPostId: live.postId,
+            url: live.url ?? fbStoryUrl(live.postId),
+            metadata: { fbStoryMediaId: mediaId, storyKind: kind, adopted: true },
+          };
+        }
+        throw new AmbiguousPublishError(
+          `Facebook did not confirm whether this story published (HTTP ${res.status}). It may already be live on the Page — ` +
+            `check the Page's stories before retrying. Media id: ${mediaId}.`,
+          {
+            platform: "FACEBOOK",
+            cause: bodyUnreadable ? new Error("unreadable response body") : new Error(JSON.stringify(data)),
+          }
+        );
+      }
+      throw new Error(`Facebook story publish failed: ${JSON.stringify(data)}`);
+    }
+
+    const postId = String(data?.post_id ?? data?.id ?? "");
+    if (!postId) throw new Error(`Facebook story publish returned no post id: ${JSON.stringify(data)}`);
+
+    // Best-effort: the listing carries the real viewable URL. A failure here
+    // must not fail a story that IS live, so it falls back to the documented
+    // /stories/{id} shape.
+    const listed = await this.findStoryByMediaId(tokens, pageId, mediaId).catch(() => null);
+    return {
+      platformPostId: postId,
+      url: listed?.url ?? fbStoryUrl(postId),
+      metadata: { fbStoryMediaId: mediaId, storyKind: kind, ...(data ?? {}) },
+    };
+  }
+
+  /**
+   * Is a story made from THIS media id already live on the Page?
+   *
+   * ⚠️ Throws when the listing cannot be read. The caller uses this to decide
+   * whether it is safe to publish again, and an unreadable answer is not a "no".
+   */
+  private async findStoryByMediaId(
+    tokens: OAuthTokens,
+    pageId: string,
+    mediaId: string,
+    sinceIso?: string
+  ): Promise<FbStoryMatch | null> {
+    // ⚠️ One unfiltered page is not a complete answer, and the caller reads
+    // "not found" as "safe to publish". A busy Page posts stories from the phone
+    // all day, so the window is narrowed to the upload (minus the reconcile skew)
+    // and a bounded number of pages is followed before concluding anything.
+    const sinceUnix = sinceIso ? Math.floor(new Date(sinceIso).getTime() / 1000) : NaN;
+    const sinceParam =
+      Number.isFinite(sinceUnix) ? `&since=${Math.max(0, sinceUnix - Math.ceil(RECONCILE_SKEW_MS / 1000))}` : "";
+
+    let url =
+      `${this.graphBaseUrl}/${this.apiVersion}/${pageId}/stories` +
+      `?fields=post_id,media_id,url,status,creation_time&limit=50${sinceParam}` +
+      `&access_token=${encodeURIComponent(tokens.accessToken)}`;
+
+    for (let page = 0; page < FB_STORY_LIST_MAX_PAGES; page++) {
+      const res = await this.graphFetch(url, { method: "GET" }, pageId);
+      const data: any = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(`Facebook story listing failed: ${JSON.stringify(data)}`);
+      }
+      const hit = findFbStoryByMediaId(data?.data, mediaId);
+      if (hit) return hit;
+      const next = typeof data?.paging?.next === "string" ? data.paging.next : null;
+      if (!next) return null;
+      url = next;
+    }
+    // Ran out of pages without an answer. "I could not check" must never be
+    // reported as "nothing was published".
+    throw new Error(
+      `Facebook story listing did not resolve media ${mediaId} within ${FB_STORY_LIST_MAX_PAGES} pages`
+    );
+  }
+
+  /** Open a video-story upload session. Returns the id and the upload host URL. */
+  private async startFacebookVideoStory(
+    tokens: OAuthTokens,
+    pageId: string
+  ): Promise<{ videoId: string; uploadUrl: string }> {
+    const res = await this.graphFetch(
+      `${this.graphBaseUrl}/${this.apiVersion}/${pageId}/video_stories`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ upload_phase: "start", access_token: tokens.accessToken }),
+      },
+      pageId
+    );
+    const data: any = await res.json().catch(() => ({}));
+    if (!res.ok || !data?.video_id || !data?.upload_url) {
+      if (isFbPermissionError(data)) {
+        throw new Error(
+          `Facebook refused to start a video story for this Page. The connected account needs permission to create content on the Page. ` +
+            `Platform error: ${JSON.stringify(data)}`
+        );
+      }
+      throw new Error(`Facebook video story start failed: ${JSON.stringify(data)}`);
+    }
+    return { videoId: String(data.video_id), uploadUrl: String(data.upload_url) };
+  }
+
+  /**
+   * Hand the video to Facebook's upload host by URL.
+   *
+   * ⚠️ NOT graph.facebook.com and NOT a JSON body: rupload.facebook.com takes
+   * the source as the `file_url` HEADER with an `Authorization: OAuth <token>`
+   * header. Facebook fetches the file itself, so the worker never buffers it —
+   * the same reasoning as the feed path's remote-pull branch. Left out of
+   * `fetchT` deliberately: that helper is documented for connect-path calls,
+   * and Meta's pull can legitimately outlast a connect-sized budget.
+   */
+  private async uploadFacebookStoryVideo(
+    uploadUrl: string,
+    mediaUrl: string,
+    tokens: OAuthTokens
+  ): Promise<void> {
+    const res = await fetch(uploadUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `OAuth ${tokens.accessToken}`,
+        file_url: mediaUrl,
+      },
+      signal: AbortSignal.timeout(180_000),
+    });
+    const data: any = await res.json().catch(() => ({}));
+    if (!res.ok || data?.success === false) {
+      throw new Error(`Facebook story video upload failed: ${JSON.stringify(data)}`);
+    }
   }
 
   async deletePost(tokens: OAuthTokens, platformPostId: string): Promise<void> {
@@ -1360,6 +1642,32 @@ export class FacebookProvider extends SocialProvider {
       await this.sleep(RECONCILE_SETTLE_MS);
     }
 
+    // A story is reconciled by its uploaded media id, never by caption: it has no
+    // caption, and it is not on the feed edge this method reads.
+    if (isStoryFormat(payload.metadata)) {
+      const checkpoint = readFbStoryCheckpoint(payload.metadata);
+      if (checkpoint) {
+        const live = await this.findStoryByMediaId(tokens, pageId, checkpoint.id, checkpoint.createdAt).catch(
+          () => null
+        );
+        if (live) {
+          console.warn(
+            `[Facebook] story publish did not acknowledge, but media ${checkpoint.id} is live on page ${pageId} — adopting it`
+          );
+          return {
+            platformPostId: live.postId,
+            url: live.url ?? fbStoryUrl(live.postId),
+            metadata: { fbStoryMediaId: checkpoint.id, adopted: true },
+          };
+        }
+      }
+      throw new AmbiguousPublishError(
+        `Facebook did not confirm whether this story published. It may already be live on the Page — check the Page's ` +
+          `stories before retrying. Cause: ${cause instanceof Error ? cause.message : String(cause)}`,
+        { platform: "FACEBOOK", cause }
+      );
+    }
+
     const match = await this.findPublishedMatch(tokens, pageId, payload.content, since, true).catch((e) => {
       console.warn(`[Facebook] reconciliation read failed for page ${pageId}: ${(e as Error)?.message}`);
       return null;
@@ -1452,6 +1760,11 @@ export class FacebookProvider extends SocialProvider {
   ): Promise<SocialPostResult | null> {
     const pageId =
       (payload.metadata?.pageId as string) || (payload.metadata?.platformId as string) || "me";
+    // ⚠️ NEVER for a story. A story carries no caption and is not on the
+    // `published_posts` edge, so caption matching can only ever return the WRONG
+    // post (an unrelated Page post sharing the note text) or nothing. Stories own
+    // their idempotency through the media-id checkpoint — see publishStory.
+    if (isStoryFormat(payload.metadata)) return null;
     // PRE-write: an empty listing means "not published", so publishing must proceed.
     return this.findPublishedMatch(tokens, pageId, payload.content, since, false);
   }

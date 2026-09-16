@@ -211,7 +211,7 @@ export function PostsTab({ onSwitchTab }: PostsTabProps) {
                     {/* A story's note is optional, so the title must not be blank. */}
                     {post.content.slice(0, 100) ||
                       (post.targets.some((t: any) => t.format === "STORY")
-                        ? "Instagram story"
+                        ? "Story"
                         : "Untitled post")}
                   </p>
                   <p className="mt-1 truncate text-[11px] leading-none text-muted-foreground">

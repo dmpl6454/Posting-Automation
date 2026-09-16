@@ -81,6 +81,40 @@ export function shouldReconcileCheckpoints(format: string | null | undefined): b
  *
  * So the NULL case is stated explicitly, as its own OR branch.
  */
+/**
+ * Prisma `where` fragment: skip targets whose metrics can never be read.
+ *
+ * Expiry (below) PLUS Facebook stories at any age. A Facebook Page story has no
+ * published insights path — Meta removed PAGE_STORY_IMPRESSIONS_BY_STORY_ID* in
+ * v25.0 and the replacement reference 404s — so measuring one is a
+ * guaranteed-failing Graph call, and one invalid metric name 400s the whole
+ * request.
+ *
+ * ⚠️ Stated as explicit OR branches, never `NOT: { format: "STORY", channel: ... }`.
+ * `PostTarget.format` is a NULLABLE enum and nearly every legacy row is NULL; a
+ * NOT over a NULL comparison yields NULL, which DROPS the row. That single
+ * predicate would silently remove every legacy target from the sweep.
+ *
+ * ⚠️ Returned under `AND` because it carries two OR groups. Spreading two `OR`
+ * keys into one `where` object would make the second overwrite the first.
+ */
+export function excludeUnmeasurableStoriesWhere(now: Date): {
+  AND: Array<Record<string, unknown>>;
+} {
+  return {
+    AND: [
+      excludeExpiredStoriesWhere(now),
+      {
+        OR: [
+          { format: null },
+          { format: { not: "STORY" } },
+          { channel: { platform: { not: "FACEBOOK" } } },
+        ],
+      },
+    ],
+  };
+}
+
 export function excludeExpiredStoriesWhere(now: Date): {
   OR: Array<Record<string, unknown>>;
 } {

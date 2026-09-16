@@ -18,17 +18,29 @@ export function isInstagramChannel(channel: { platform: string }): boolean {
   return channel.platform === "INSTAGRAM";
 }
 
-/** In Story mode only Instagram channels are selectable; Post mode is untouched. */
+/**
+ * Platforms a story can publish to (2026-09-16: Facebook Page stories added).
+ *
+ * ⚠️ Tagging stays INSTAGRAM-ONLY — Meta's Page Stories API documents no tag or
+ * mention parameter, so a tag cannot reach a Facebook story at all.
+ */
+export const STORY_PLATFORMS = ["INSTAGRAM", "FACEBOOK"] as const;
+
+export function isStoryChannel(channel: { platform: string }): boolean {
+  return (STORY_PLATFORMS as readonly string[]).includes(channel.platform);
+}
+
+/** In Story mode only Instagram and Facebook channels are selectable; Post mode is untouched. */
 export function storySelectableChannels<T extends { platform: string }>(
   channels: T[] | undefined | null,
   postType: PostType
 ): T[] {
   const list = channels ?? [];
-  return postType === "story" ? list.filter(isInstagramChannel) : list;
+  return postType === "story" ? list.filter(isStoryChannel) : list;
 }
 
 /**
- * Drop every selected id that is not a live Instagram channel.
+ * Drop every selected id that is not a live story-capable channel.
  *
  * Runs on the mode switch AND whenever the channel list resolves — a restored
  * draft, or a group cache that lags a platform change, can otherwise leave a
@@ -39,8 +51,8 @@ export function pruneSelectionForStory(
   selectedIds: string[],
   channels: Array<{ id: string; platform: string }>
 ): { next: string[]; removed: number } {
-  const igIds = new Set(channels.filter(isInstagramChannel).map((c) => c.id));
-  const next = selectedIds.filter((id) => igIds.has(id));
+  const storyIds = new Set(channels.filter(isStoryChannel).map((c) => c.id));
+  const next = selectedIds.filter((id) => storyIds.has(id));
   return { next, removed: selectedIds.length - next.length };
 }
 
@@ -48,9 +60,10 @@ export function pruneSelectionForStory(
  * The ids a Groups pill acts on.
  *
  * Post mode keeps today's rule (active members still present in the live channel
- * list). Story mode additionally keeps only Instagram members, so one click can
- * never pull a Facebook Page into a story — and a group with no Instagram members
- * shows no pill at all rather than a pill that does nothing.
+ * list). Story mode additionally keeps only story-capable members (Instagram and
+ * Facebook Pages), so one click can never pull a YouTube or X channel into a
+ * story — and a group with none shows no pill at all rather than a pill that
+ * does nothing.
  */
 export function groupSelectableIds(
   group: { channels?: Array<{ id: string; platform: string; isActive: boolean }> | null },
@@ -59,7 +72,7 @@ export function groupSelectableIds(
 ): string[] {
   return (group.channels ?? [])
     .filter((c) => c.isActive && liveIds.has(c.id))
-    .filter((c) => postType === "post" || isInstagramChannel(c))
+    .filter((c) => postType === "post" || isStoryChannel(c))
     .map((c) => c.id);
 }
 
@@ -135,6 +148,6 @@ export function storyBlockReason(input: {
     const extra = input.mediaCount - 1;
     return `A story takes exactly one image or video — remove ${extra} attachment${extra === 1 ? "" : "s"}.`;
   }
-  if (input.selectedCount === 0) return "Select at least one Instagram channel.";
+  if (input.selectedCount === 0) return "Select at least one Instagram or Facebook channel.";
   return null;
 }

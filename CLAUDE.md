@@ -955,8 +955,149 @@ was run against real Postgres (rolled-back transaction): null-format rows kept, 
 a 30h story dropped, and `IS DISTINCT FROM 'STORY'` valid on the enum column — while the rejected
 bare `NOT` form really did drop a 5-day null-format row.
 
-⚠️ **NOT yet verified against a live Instagram account.** No story has been published through prod
-yet and no browser walk-through has run. The first real story publish is the remaining proof.
+✅ **LIVE-VERIFIED on Instagram (owner, 2026-09-16):** stories publish end to end with tags, from
+prod. Four tagged stories confirmed on `priyanshu123321123`. Two follow-ups came out of that
+verification — the 9:16 canvas and Facebook Page stories — see the section below.
+
+⚠️ **Tag NOTIFICATIONS are not ours to promise.** Meta documents `user_tags` on a story as
+"mentioning users without a sticker" and promises a notification only for caption @mentions (and a
+story has no caption); the API cannot create the app's @mention sticker at all. Instagram's own
+Help Centre makes even in-app story mentions conditional: the recipient's "Who can @mention you"
+setting, and a mention from someone they do not follow arriving as a MESSAGE REQUEST. Compose used
+to claim "Instagram notifies them" — that promise was removed 2026-09-16; no Meta source supports
+it. Do not re-add it.
+
+## 📖 FACEBOOK Page stories + the 9:16 STORY CANVAS (2026-09-16) — read before touching story media or the FB publish path
+
+Two owner reports, one change: Instagram stories were **cropped on phones** (caption cut off at
+both ends) while the same story looked fine on instagram.com, and Facebook had no story support at
+all — worse, a FACEBOOK target carrying `format: "STORY"` silently published an ordinary **feed
+post**, because `FacebookProvider` read `metadata.format` nowhere.
+
+### The crop: we were making Meta decide
+
+Meta does NOT normalise an organic story. Its own spec says only *"Aspect ratio: We recommended
+9:16 to avoid cropping or blank space"* — naming both outcomes and promising neither. So each
+client resolved our non-9:16 upload differently: the phone app fills (crops the long edge), the web
+viewer fits. Posting the same photo by hand looks right because the Instagram app's composer IS a
+9:16 canvas — what it uploads is the rendered frame, not your file.
+
+**The fix is renderer-agnostic: an exactly-9:16 asset is a fixed point for BOTH fill and fit.** We
+compose one — content contained, padding filled with a blurred, darkened copy of the image (owner's
+choice; it is what the app does) — and nothing is left for any client to crop.
+
+- **Geometry is pure and shared**: [story-fit.ts](apps/worker/src/lib/story-fit.ts) — `1080x1920` as
+  a CONSTANT (Meta's ads guidance allows only a 1% ratio tolerance, so deriving it from the source
+  re-opens the divergence), even integers everywhere (libx264/yuv420p rejects odd dimensions), and
+  `needsStoryFit` with a **0.5% tolerance** so an already-correct story is passed through UNTOUCHED
+  and its publish stays byte-identical.
+- **Images**: [story-render.ts](apps/worker/src/lib/story-render.ts) (sharp — ALREADY a worker
+  dependency, so no Dockerfile change and no quirk-#10 exposure) + [story-media.ts](apps/worker/src/lib/story-media.ts).
+  ⚠️ `.rotate()` is mandatory: sharp reports PRE-rotation dimensions, so a phone photo would
+  otherwise be planned as landscape and render sideways.
+- **Video padding rides INSIDE the existing watermark encode** — `storyCanvas` on
+  [video-overlay.ts](apps/worker/src/lib/video-overlay.ts), splicing
+  [buildStoryCanvasFilter](apps/worker/src/lib/story-render-args.ts) into the FRONT of its graph.
+  🔴 A second ffmpeg pass per target is the **2026-08-07 incident** (per-target re-encode pegged the
+  4-core box and turned 22 of 39 targets into false FAILEDs). One download, one encode. The filter
+  is **expression-based** (`force_original_aspect_ratio`), never probed pixels, because ffmpeg
+  auto-rotates on decode and probed numbers describe the pre-rotation frame.
+- **Where it runs**: the publish worker, after the overlay block and before the AI-image block —
+  the one place where story-ness, platform, `mediaTypes` and a mutable `mediaUrls` coexist. The
+  PROVIDER is untouched, so every byte-identity lock stays green unedited.
+- ⚠️ **FAIL OPEN, always.** `ensureStoryImageUrl` returns the ORIGINAL url on any error. A throw
+  here would land inside the publish `try`, where `classifyError` can route it into the
+  token-refresh **re-publish** branch — a documented duplicate-post vector.
+- ⚠️ **DETERMINISTIC S3 key + HeadObject short-circuit** (`storyfit/{org}/{mediaId}-1080x1920-v1.jpg`).
+  Story mode fans ONE image out to many accounts at concurrency 10; a random key would mint an
+  object per channel per attempt. Keep the `.jpg` — `instagram.provider.ts` sniffs video by URL
+  EXTENSION first.
+- **Format gate**: a non-JPEG image is re-rendered for INSTAGRAM only ("JPEG is the only image
+  format supported"); Facebook photo stories accept png/gif/bmp/tiff, so a correct-aspect PNG is
+  left alone there.
+- 🔴 **Reshaping keys on `publishesAsStory` (format STORY **and exactly one media**), never on the
+  format label alone.** `instagram.provider.ts` sends anything longer than one media to
+  `publishCarouselPost`, so a legacy per-channel-picker post — Post mode, one Instagram channel set
+  to "Story", two attachments — publishes an ordinary CAROUSEL; padding those slides would silently
+  change what the user published. Facebook stories only come from story MODE (media capped at 1),
+  so it is a no-op there.
+- **Known gap, now LOUD**: a story VIDEO skips padding when the overlay itself is skipped — over
+  `VIDEO_OVERLAY_MAX_MB` (250) or `VIDEO_OVERLAY_ENABLED=false`. The worker logs
+  `story 9:16 canvas NOT applied` in every such case (url identity is the exact signal, since
+  `processVideoOverlay` returns a new URL whenever it ran). Large source videos are normally
+  already 9:16.
+- **Backdrop blur runs at 1/4 canvas size and scales back up** — a full-resolution `gblur` measured
+  ~3.2× the filter cost per target, for an indistinguishable result, on the box that is also
+  serving the media to Meta.
+
+### Facebook Page stories
+
+**Permissions we ALREADY hold cover this** (`pages_manage_posts`, `pages_read_engagement`,
+`pages_show_list`) — no App Review, no scope change, **no forced reconnect** of the ~1,300 Meta
+channels. The one condition we cannot check is the per-user, per-Page **CREATE_CONTENT task**; a
+Page connected by a moderator publishes feed posts but fails here, so that failure is named rather
+than reported as a media problem.
+
+| | flow |
+|---|---|
+| **Photo** | `POST /{page}/photos?published=false` → `photo_id` → `POST /{page}/photo_stories {photo_id}` |
+| **Video** | `POST /{page}/video_stories upload_phase=start` → `{video_id, upload_url}` → POST to **rupload.facebook.com** with headers `Authorization: OAuth <page token>` + `file_url` → `POST /{page}/video_stories {video_id, upload_phase:"finish"}` |
+
+- ⚠️ The upload host is **not** graph.facebook.com and takes the source as a **header**, not a body
+  field. It deliberately does not go through `graphFetch` (that is Graph's rate-limit/backoff path)
+  and not through `fetchT` (documented for connect-sized budgets; Meta's pull can outlast one).
+- 🔴 **DUPLICATE PREVENTION — the uploaded media id is the story's identity.** A Facebook story has
+  no caption and is not on the `published_posts` edge, so the caption reconciliation every other FB
+  path relies on cannot work. The media id is checkpointed via `onCheckpoint` BEFORE the story is
+  created (**FATAL, never best-effort** — same reasoning as the IG container), and a retry asks
+  `GET /{page}/stories` whether a story already carries THAT media id. ⚠️ An unreadable listing
+  **throws**: "I could not check" must never be treated as "nothing was published".
+  Facebook deletes an unpublished photo after ~24h, so past that window the media is re-uploaded.
+- **NO TAGGING.** Meta's Page Stories API documents exactly `photo_id` for photo stories and
+  `video_id`/`upload_phase`/`is_ai_generated` for video stories — no tag, mention or sticker
+  parameter, while the Instagram reference documents `user_tags` for stories explicitly. Compose
+  therefore shows the Tag people card **only when an Instagram channel is selected**. The one
+  unproven avenue: `POST /{page}/photos` (story step 1) does document `tags` with `tag_uid` — a
+  numeric USER id, not a username — but whether it survives into a story is undocumented and
+  unprobed. Do not ship FB tagging on the Instagram precedent.
+- 🔴 **The story route is UNCONDITIONAL, and a media-less story THROWS.** Gating it on
+  `mediaUrls?.length` let a media-less story fall through to the TEXT branch, which publishes the
+  story's private note as a permanent PUBLIC Page post. Caught in review before shipping.
+- ⚠️ **A story is never reconciled by caption.** `findExistingPost` returns null for stories and
+  `resolveUnknownPublish` looks the story up by its checkpointed media id — caption matching on
+  `published_posts` can only ever return an unrelated Page post that happens to share the note text.
+- ⚠️ **A 5xx or an unparseable body is UNKNOWN, not failed.** It raises `AmbiguousPublishError`
+  (after asking the listing), because a definite-failure verdict makes the target re-claimable and
+  the retry publishes a SECOND story.
+- ⚠️ The adoption listing is **narrowed by `since`** (the checkpoint's own timestamp, minus the
+  reconcile skew) and follows up to `FB_STORY_LIST_MAX_PAGES`; running out of pages **throws**
+  rather than reporting "not published". These Pages post stories from the phone all day, so an
+  unfiltered first page is not an answer.
+- **Analytics: publish-time snapshot only.** At-age checkpoints are SKIPPED for a Facebook story
+  (`skipAtAgeCheckpoints`): v25.0 removed `PAGE_STORY_IMPRESSIONS_BY_STORY_ID*` in favour of names
+  whose reference page 404s, and one invalid metric name 400s the whole insights call. Scheduling
+  is otherwise free — `story-analytics.ts` keys on FORMAT, not platform, so the 24h expiry
+  exclusion already covers Facebook stories.
+
+### UI
+
+⚠️ **Tags are dropped from the payload, the preview and the draft the moment the last Instagram
+channel is deselected** (`effectiveStoryMentions`), while the typed state is KEPT so re-selecting
+Instagram restores it. Otherwise a Facebook-only story still carried tags nothing could deliver.
+
+Story mode now offers Instagram accounts AND Facebook Pages (`isStoryChannel` /`STORY_PLATFORMS`),
+groups union both, and `validateStoryPost` names anything else ("Instagram or Facebook"). The story
+preview renders the **blurred fit** the pipeline actually produces — previously it showed
+`object-contain` on a plain dark frame while the publish handed Meta the raw URL, so preview and
+publish disagreed about framing. Tagging copy is Instagram-scoped.
+
+Tests: [story-fit.test.ts](apps/worker/src/lib/story-fit.test.ts) (12),
+[story-render.test.ts](apps/worker/src/lib/story-render.test.ts) (6, real pixels),
+[story-render-args.test.ts](apps/worker/src/lib/story-render-args.test.ts) (6),
+[story-media.test.ts](apps/worker/src/lib/story-media.test.ts) (8),
+[story-fit-wiring.test.ts](apps/worker/src/__tests__/story-fit-wiring.test.ts) (11),
+[facebook-story.test.ts](packages/social/src/__tests__/facebook-story.test.ts) (14),
+[facebook-story-publish.test.ts](packages/social/src/__tests__/facebook-story-publish.test.ts) (9).
 
 ## 🖼️ Custom uploaded THUMBNAILS for reels/videos (2026-09-01) — read before touching a video publish path
 

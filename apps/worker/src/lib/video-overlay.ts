@@ -10,6 +10,7 @@ import { createSemaphore } from "@postautomation/ai";
 // unit-testable without dragging langchain through this file. Re-exported
 // for existing importers.
 import { buildOverlayFfmpegArgs } from "./video-overlay-args";
+import { buildStoryCanvasFilter } from "./story-render-args";
 export { buildOverlayFfmpegArgs } from "./video-overlay-args";
 
 // Async ffmpeg (stability guard, 2026-07-18): the sync encode blocked the whole
@@ -57,6 +58,16 @@ interface VideoOverlayOptions {
   logoPosition?: "top_left" | "top_right" | "bottom_left" | "bottom_right";
   logoSize?: number;          // logo width in pixels (default 120)
   /**
+   * Fit the video onto the 1080x1920 story canvas, padding with a blurred copy
+   * of itself (2026-09-16).
+   *
+   * Spliced into the FRONT of this pass's existing filter graph on purpose: a
+   * story video is already re-encoded here for the watermark, and a SECOND
+   * ffmpeg pass per target is the 2026-08-07 incident that collapsed a
+   * 39-channel publish. Absent this flag the graph is byte-identical.
+   */
+  storyCanvas?: boolean;
+  /**
    * Defense-in-depth size cap: if the remote video's Content-Length exceeds
    * this, skip the overlay and return the ORIGINAL url (same degraded path as
    * the caller's fileSize gate). Covers forged/NULL/stale DB sizes. Fail-open
@@ -82,9 +93,10 @@ export async function processVideoOverlay(
     logoPosition = "bottom_right",
     logoSize = 120,
     maxBytes,
+    storyCanvas = false,
   } = options;
 
-  if (!text && !logoUrl && !channelName) return videoUrl; // nothing to do
+  if (!text && !logoUrl && !channelName && !storyCanvas) return videoUrl; // nothing to do
   // Operator kill switch — checked BEFORE the semaphore so a disabled overlay
   // never queues behind an in-flight encode.
   if (!isVideoOverlayEnabled()) {
@@ -139,6 +151,16 @@ export async function processVideoOverlay(
       inputArgs.push("-i", logoPath);
     }
 
+    // --- Story canvas (2026-09-16) ---
+    // Meta does not normalise an organic story, so a non-9:16 clip is cropped by
+    // the phone app and letterboxed on the web. Padding it to an exact 9:16
+    // canvas makes every client render the same picture. Everything below then
+    // draws on the finished canvas, so the watermark lands inside the frame.
+    const baseLabel = storyCanvas ? "[vfit]" : "[0:v]";
+    if (storyCanvas) {
+      filters.push(buildStoryCanvasFilter("[0:v]", "[vfit]"));
+    }
+
     // --- Logo overlay filter ---
     if (hasLogo) {
       const margin = 30;
@@ -150,7 +172,7 @@ export async function processVideoOverlay(
         case "bottom_right":
         default:            overlayPos = `main_w-overlay_w-${margin}:main_h-overlay_h-${margin}`; break;
       }
-      filters.push(`[1:v]scale=${logoSize}:-1[logo];[0:v][logo]overlay=${overlayPos}[vlogo]`);
+      filters.push(`[1:v]scale=${logoSize}:-1[logo];${baseLabel}[logo]overlay=${overlayPos}[vlogo]`);
     } else if (channelName) {
       // Fallback: channel name as text watermark
       const escaped = channelName
@@ -159,7 +181,7 @@ export async function processVideoOverlay(
         .replace(/\[/g, "\\[")
         .replace(/\]/g, "\\]");
       const margin = 30;
-      filters.push(`[0:v]drawtext=text='${escaped}':fontsize=28:fontcolor=white@0.7:x=w-text_w-${margin}:y=h-text_h-${margin}[vlogo]`);
+      filters.push(`${baseLabel}drawtext=text='${escaped}':fontsize=28:fontcolor=white@0.7:x=w-text_w-${margin}:y=h-text_h-${margin}[vlogo]`);
     }
 
     // --- Text overlay filter (headline/supertext) ---
@@ -180,11 +202,14 @@ export async function processVideoOverlay(
         default:       yExpr = `h-text_h-${padding * 4}`; break;
       }
 
-      const inputLabel = (hasLogo || channelName) ? "[vlogo]" : "[0:v]";
+      const inputLabel = (hasLogo || channelName) ? "[vlogo]" : baseLabel;
       filters.push(`${inputLabel}drawtext=text='${escaped}':fontsize=${textFontSize}:fontcolor=white:x=(w-text_w)/2:y=${yExpr}:box=1:boxcolor=black@0.6:boxborderw=${padding}[vout]`);
     } else if (hasLogo || channelName) {
       // No text, just rename the logo output
       filters.push(`[vlogo]null[vout]`);
+    } else if (storyCanvas) {
+      // Story padding with no watermark and no text: the canvas IS the output.
+      filters.push(`[vfit]null[vout]`);
     }
 
     // 4. Build FFmpeg args (ARRAY, not a shell string) and run with async execFile

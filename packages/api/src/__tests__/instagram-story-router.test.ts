@@ -107,14 +107,19 @@ describe("post.publishNow — story media guard", () => {
 
 describe("analytics — expired stories are not measured", () => {
   it("Sync Now applies the SAME shared exclusion the worker crons use", () => {
-    expect(analyticsRouter).toMatch(/excludeExpiredStoriesWhere/);
+    // 2026-09-16: widened to also skip FACEBOOK stories, which have no
+    // published insights path at all — same shared fragment, same reason.
+    expect(analyticsRouter).toMatch(/excludeUnmeasurableStoriesWhere/);
     expect(analyticsRouter).toMatch(/from "@postautomation\/queue"/);
   });
 
   it("Reports at_age hides stories in the 7d/15d/30d windows", () => {
     // A story has no checkpoint there by design; listing one prints a permanent
     // all-"—" row that reads like a MISSED capture.
-    expect(analyticsRouter).toMatch(/mode === "at_age" && window !== "24h"/);
+    expect(analyticsRouter).toMatch(/window !== "24h"/);
+    // A FACEBOOK story has no checkpoint even at 24h, so it is excluded there too —
+    // NULL-safely, or every legacy NULL-format target would be dropped.
+    expect(analyticsRouter).toMatch(/pt\.format IS NOT DISTINCT FROM 'STORY' AND c\.platform::text = 'FACEBOOK'/);
     // IS DISTINCT FROM, never <> — nearly every legacy target has format NULL.
     expect(analyticsRouter).toMatch(/pt\.format IS DISTINCT FROM 'STORY'/);
     expect(analyticsRouter).toMatch(/\$\{storyAtAgeFilter\}/);
