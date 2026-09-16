@@ -545,6 +545,14 @@ export function createPostPublishWorker() {
       // Build merged provider metadata: post intent → target overrides → format → channel IDs (wins)
       const channelMetadata = (channel.metadata ?? {}) as Record<string, unknown>;
       const isStoryTarget = postTarget.format === "STORY";
+      // ⚠️ RESHAPING keys on what actually PUBLISHES as a story, not on the
+      // format label. instagram.provider.ts sends anything longer than one media
+      // to publishCarouselPost, so a legacy per-channel-picker post (Post mode,
+      // one Instagram channel set to "Story", two attachments) publishes an
+      // ordinary CAROUSEL — padding those slides to 9:16 would silently change
+      // what the user published. Facebook stories only come from story MODE,
+      // which caps media at one, so this is a no-op there.
+      const publishesAsStory = isStoryTarget && postTarget.post.mediaAttachments.length === 1;
       const providerMetadata: Record<string, unknown> = {
         ...((postTarget.post.metadata as object) || {}),
         ...((postTarget.metadata as object) || {}),
@@ -642,7 +650,7 @@ export function createPostPublishWorker() {
                 // A story is 9:16. Padding rides along INSIDE this existing
                 // re-encode; a separate pass per target is the 2026-08-07
                 // incident. Non-story publishes pass false and are unchanged.
-                storyCanvas: isStoryTarget,
+                storyCanvas: publishesAsStory,
               });
               processed.push(newUrl);
             } else {
@@ -652,10 +660,31 @@ export function createPostPublishWorker() {
               processed.push(mediaUrls[i]!);
             }
           }
+          // ⚠️ The story canvas rides INSIDE this pass, so wherever the pass is
+          // skipped — video over OVERLAY_MAX_BYTES, VIDEO_OVERLAY_ENABLED=false,
+          // or the catch below — the video publishes UNPADDED and will be cropped
+          // on a phone. processVideoOverlay returns a new URL whenever it ran, so
+          // url identity is an exact signal. Say so rather than failing: an
+          // unpadded story still publishes.
+          if (publishesAsStory) {
+            for (let i = 0; i < processed.length; i++) {
+              if (mediaTypes[i]?.startsWith("video/") && processed[i] === mediaUrls[i]) {
+                console.warn(
+                  `[PostPublish] story 9:16 canvas NOT applied to video for target ${postTargetId} (${platform}) — ` +
+                    `the overlay pass was skipped (size cap or VIDEO_OVERLAY_ENABLED=false); publishing the original`
+                );
+              }
+            }
+          }
           mediaUrls = processed;
         } catch (e) {
           console.warn(`[PostPublish] Video overlay failed, posting without:`, (e as Error).message);
         }
+      } else if (publishesAsStory && hasVideo) {
+        console.warn(
+          `[PostPublish] story 9:16 canvas NOT applied to video for target ${postTargetId} (${platform}) — ` +
+            `the overlay pass does not run for this platform; publishing the original`
+        );
       }
 
       // ── Story IMAGES must be exactly 9:16 (2026-09-16) ─────────────────────
@@ -668,7 +697,7 @@ export function createPostPublishWorker() {
       // cheap, so they are fitted here. ensureStoryImageUrl is FAIL-OPEN — every
       // error returns the original URL — and writes to a deterministic S3 key,
       // so one render serves the whole fan-out and every retry.
-      if (isStoryTarget && ["INSTAGRAM", "FACEBOOK"].includes(platform) && mediaUrls.length > 0) {
+      if (publishesAsStory && ["INSTAGRAM", "FACEBOOK"].includes(platform)) {
         try {
           const { ensureStoryImageUrl } = await import("../lib/story-media");
           const fitted: string[] = [];

@@ -23,6 +23,12 @@ export const STORY_CANVAS_HEIGHT = 1920;
 
 /** Backdrop treatment: blur hard, darken slightly, so it never competes. */
 export const STORY_BACKDROP_BLUR_SIGMA = 40;
+
+/**
+ * The backdrop is blurred at 1/N canvas size and scaled back up. Sigma is scaled
+ * with it so the visual result matches a full-resolution blur.
+ */
+export const BACKDROP_BLUR_DOWNSCALE = 4;
 export const STORY_BACKDROP_BRIGHTNESS = -0.12;
 
 /**
@@ -36,9 +42,17 @@ export function buildStoryCanvasFilter(inLabel: string, outLabel: string): strin
   const h = STORY_CANVAS_HEIGHT;
   return (
     `${inLabel}split=2[stbg][stfg];` +
-    // Backdrop: cover the canvas, crop the overflow, blur, darken.
-    `[stbg]scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},` +
-    `gblur=sigma=${STORY_BACKDROP_BLUR_SIGMA},eq=brightness=${STORY_BACKDROP_BRIGHTNESS}[stbgb];` +
+    // Backdrop: cover the canvas, crop the overflow, then blur at a FRACTION of
+    // the canvas size and scale back up.
+    // ⚠️ Blurring 1080x1920 directly measured ~3.2x this filter's cost, per
+    // target, on a 4-core box that is also serving the media to Meta — and the
+    // result is indistinguishable, because a sigma-40 blur destroys exactly the
+    // detail the downscale drops.
+    `[stbg]scale=${Math.round(w / BACKDROP_BLUR_DOWNSCALE)}:${Math.round(h / BACKDROP_BLUR_DOWNSCALE)}` +
+    `:force_original_aspect_ratio=increase,` +
+    `crop=${Math.round(w / BACKDROP_BLUR_DOWNSCALE)}:${Math.round(h / BACKDROP_BLUR_DOWNSCALE)},` +
+    `gblur=sigma=${Math.round(STORY_BACKDROP_BLUR_SIGMA / BACKDROP_BLUR_DOWNSCALE)},` +
+    `eq=brightness=${STORY_BACKDROP_BRIGHTNESS},scale=${w}:${h}[stbgb];` +
     // Foreground: contain — the whole frame, never cropped.
     `[stfg]scale=${w}:${h}:force_original_aspect_ratio=decrease[stfgs];` +
     // Centre it. W/H are the backdrop's, w/h the foreground's.

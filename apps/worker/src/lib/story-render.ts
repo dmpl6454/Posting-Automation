@@ -17,20 +17,34 @@ import type { StoryFitPlan, Dimensions } from "./story-fit";
 export const STORY_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
 export const STORY_JPEG_QUALITY_LADDER = [90, 82, 74, 66] as const;
 
-/** Read a source image's pixel dimensions, or null when it cannot be measured. */
-export async function probeImageSize(input: Buffer): Promise<Dimensions | null> {
+export interface ImageProbe extends Dimensions {
+  /** sharp's format name: "jpeg", "png", "webp", … */
+  format: string | null;
+}
+
+/**
+ * Read a source image's display dimensions and format in ONE parse.
+ *
+ * ⚠️ EXIF orientation 5-8 swaps the axes, and sharp reports PRE-rotation
+ * numbers, so a portrait phone photo would otherwise be planned as landscape.
+ */
+export async function probeImageSource(input: Buffer): Promise<ImageProbe | null> {
   try {
     const meta = await sharp(input).metadata();
-    // EXIF orientation 5-8 swaps the axes; sharp reports PRE-rotation numbers,
-    // so a portrait phone photo would otherwise be planned as landscape.
     const swap = (meta.orientation ?? 1) >= 5;
     const width = swap ? meta.height : meta.width;
     const height = swap ? meta.width : meta.height;
     if (!width || !height) return null;
-    return { width, height };
+    return { width, height, format: meta.format ?? null };
   } catch {
     return null;
   }
+}
+
+/** Dimensions only — kept for callers and tests that do not need the format. */
+export async function probeImageSize(input: Buffer): Promise<Dimensions | null> {
+  const probe = await probeImageSource(input);
+  return probe ? { width: probe.width, height: probe.height } : null;
 }
 
 /**

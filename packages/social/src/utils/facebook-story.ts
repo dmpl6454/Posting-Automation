@@ -37,6 +37,15 @@ export interface FbStoryCheckpoint {
  */
 export const FB_STORY_MEDIA_TTL_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * How many pages of `GET /{page-id}/stories` to walk before giving up.
+ *
+ * ⚠️ Running out of pages is NOT "nothing was published" — the caller throws,
+ * because these Pages post stories from the phone all day and a diluted listing
+ * must never license a second publish.
+ */
+export const FB_STORY_LIST_MAX_PAGES = 3;
+
 export function readFbStoryCheckpoint(
   metadata: Record<string, unknown> | undefined | null
 ): FbStoryCheckpoint | null {

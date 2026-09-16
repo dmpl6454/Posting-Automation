@@ -17,9 +17,23 @@ const overlay = strip(readFileSync(join(ROOT, "apps/worker/src/lib/video-overlay
 
 describe("video: padding rides inside the existing encode", () => {
   it("passes the story flag to the overlay instead of adding a second pass", () => {
-    expect(worker).toMatch(/storyCanvas: isStoryTarget/);
+    expect(worker).toMatch(/storyCanvas: publishesAsStory/);
     // No separate ffmpeg invocation for stories anywhere in the worker.
     expect(worker).not.toMatch(/buildStoryVideoArgs/);
+  });
+
+  it("reshapes only what actually PUBLISHES as a story, never the format label alone", () => {
+    // A legacy per-channel-picker post with 2 attachments publishes as a
+    // CAROUSEL (instagram.provider.ts sends >1 media there), so padding its
+    // slides would silently change what the user published.
+    expect(worker).toMatch(
+      /const publishesAsStory = isStoryTarget && postTarget\.post\.mediaAttachments\.length === 1;/
+    );
+    expect(worker).not.toMatch(/storyCanvas: isStoryTarget/);
+  });
+
+  it("says so when a story video could NOT be padded, instead of failing silently", () => {
+    expect(worker).toMatch(/story 9:16 canvas NOT applied/);
   });
 
   it("the overlay splices the canvas into the FRONT of its own filter graph", () => {
@@ -51,9 +65,7 @@ describe("images: fitted after the overlay, fail-open", () => {
   });
 
   it("only touches story targets on the two platforms that have stories", () => {
-    expect(worker).toMatch(
-      /if \(isStoryTarget && \["INSTAGRAM", "FACEBOOK"\]\.includes\(platform\) && mediaUrls\.length > 0\)/
-    );
+    expect(worker).toMatch(/if \(publishesAsStory && \["INSTAGRAM", "FACEBOOK"\]\.includes\(platform\)\)/);
   });
 
   it("skips video here — it was already padded in the encode above", () => {

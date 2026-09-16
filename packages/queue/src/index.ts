@@ -25,6 +25,7 @@ export {
   atAgeWindowsForFormat,
   shouldReconcileCheckpoints,
   excludeExpiredStoriesWhere,
+  excludeUnmeasurableStoriesWhere,
 } from "./story-analytics";
 export { buildScheduledPublishJobs, enqueueScheduledPublishJobs } from "./schedule-publish";
 export type { SchedulablePublishTarget, ScheduledPublishArgs, ScheduledPublishJobSpec } from "./schedule-publish";

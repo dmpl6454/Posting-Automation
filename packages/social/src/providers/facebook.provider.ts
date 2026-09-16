@@ -27,6 +27,7 @@ import {
 } from "../utils/ambiguous-publish";
 import { isStoryFormat } from "../utils/instagram-story";
 import {
+  FB_STORY_LIST_MAX_PAGES,
   fbStoryUrl,
   findFbStoryByMediaId,
   isFbPermissionError,
@@ -340,7 +341,14 @@ export class FacebookProvider extends SocialProvider {
     // ⚠️ Until this branch existed, a FACEBOOK target carrying format "STORY"
     // silently published an ordinary Page FEED post: nothing in this provider
     // read `metadata.format`.
-    if (isStoryFormat(payload.metadata) && payload.mediaUrls?.length) {
+    if (isStoryFormat(payload.metadata)) {
+      // 🔴 Unconditional. Gating this on `mediaUrls?.length` let a media-less
+      // story fall through to the TEXT branch below, which publishes the story's
+      // private note as a permanent PUBLIC Page post — the opposite of what the
+      // user asked for, and not deletable by them. Mirrors instagram.provider.ts.
+      if (!payload.mediaUrls?.length) {
+        throw new Error("A Facebook story requires one image or video. Attach media and try again.");
+      }
       return this.publishStory(tokens, payload, pageId);
     }
 
@@ -407,7 +415,7 @@ export class FacebookProvider extends SocialProvider {
       // Throws when the listing is unreadable — deliberately. "I could not
       // check" must never be treated as "nothing was published", or the retry
       // posts a second story.
-      const existing = await this.findStoryByMediaId(tokens, pageId, checkpoint.id);
+      const existing = await this.findStoryByMediaId(tokens, pageId, checkpoint.id, checkpoint.createdAt);
       if (existing) {
         return {
           platformPostId: existing.postId,
@@ -472,12 +480,41 @@ export class FacebookProvider extends SocialProvider {
       { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
       pageId
     );
-    const data: any = await res.json().catch(() => ({}));
+    let bodyUnreadable = false;
+    const data: any = await res.json().catch(() => {
+      bodyUnreadable = true;
+      return {};
+    });
     if (!res.ok || data?.success === false) {
       if (isFbPermissionError(data)) {
         throw new Error(
           `Facebook refused to publish this story to the Page. The connected account needs permission to create content on the Page ` +
             `(a Page admin role, or the "Create content" task). Platform error: ${JSON.stringify(data)}`
+        );
+      }
+      // ⚠️ A 5xx, or a body we could not even parse (a proxy's HTML error page),
+      // does NOT prove the story was not created. Treating it as a definite
+      // failure makes the target re-claimable, and the retry publishes a SECOND
+      // story. Ask the listing first; if it cannot answer, park it for a human.
+      if (res.status >= 500 || bodyUnreadable) {
+        const live = await this.findStoryByMediaId(tokens, pageId, mediaId).catch(() => null);
+        if (live) {
+          console.warn(
+            `[Facebook] story publish did not acknowledge, but media ${mediaId} is already live on page ${pageId} — adopting it`
+          );
+          return {
+            platformPostId: live.postId,
+            url: live.url ?? fbStoryUrl(live.postId),
+            metadata: { fbStoryMediaId: mediaId, storyKind: kind, adopted: true },
+          };
+        }
+        throw new AmbiguousPublishError(
+          `Facebook did not confirm whether this story published (HTTP ${res.status}). It may already be live on the Page — ` +
+            `check the Page's stories before retrying. Media id: ${mediaId}.`,
+          {
+            platform: "FACEBOOK",
+            cause: bodyUnreadable ? new Error("unreadable response body") : new Error(JSON.stringify(data)),
+          }
         );
       }
       throw new Error(`Facebook story publish failed: ${JSON.stringify(data)}`);
@@ -506,19 +543,39 @@ export class FacebookProvider extends SocialProvider {
   private async findStoryByMediaId(
     tokens: OAuthTokens,
     pageId: string,
-    mediaId: string
+    mediaId: string,
+    sinceIso?: string
   ): Promise<FbStoryMatch | null> {
-    const res = await this.graphFetch(
+    // ⚠️ One unfiltered page is not a complete answer, and the caller reads
+    // "not found" as "safe to publish". A busy Page posts stories from the phone
+    // all day, so the window is narrowed to the upload (minus the reconcile skew)
+    // and a bounded number of pages is followed before concluding anything.
+    const sinceUnix = sinceIso ? Math.floor(new Date(sinceIso).getTime() / 1000) : NaN;
+    const sinceParam =
+      Number.isFinite(sinceUnix) ? `&since=${Math.max(0, sinceUnix - Math.ceil(RECONCILE_SKEW_MS / 1000))}` : "";
+
+    let url =
       `${this.graphBaseUrl}/${this.apiVersion}/${pageId}/stories` +
-        `?fields=post_id,media_id,url,status,creation_time&limit=50&access_token=${encodeURIComponent(tokens.accessToken)}`,
-      { method: "GET" },
-      pageId
-    );
-    const data: any = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      throw new Error(`Facebook story listing failed: ${JSON.stringify(data)}`);
+      `?fields=post_id,media_id,url,status,creation_time&limit=50${sinceParam}` +
+      `&access_token=${encodeURIComponent(tokens.accessToken)}`;
+
+    for (let page = 0; page < FB_STORY_LIST_MAX_PAGES; page++) {
+      const res = await this.graphFetch(url, { method: "GET" }, pageId);
+      const data: any = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(`Facebook story listing failed: ${JSON.stringify(data)}`);
+      }
+      const hit = findFbStoryByMediaId(data?.data, mediaId);
+      if (hit) return hit;
+      const next = typeof data?.paging?.next === "string" ? data.paging.next : null;
+      if (!next) return null;
+      url = next;
     }
-    return findFbStoryByMediaId(data?.data, mediaId);
+    // Ran out of pages without an answer. "I could not check" must never be
+    // reported as "nothing was published".
+    throw new Error(
+      `Facebook story listing did not resolve media ${mediaId} within ${FB_STORY_LIST_MAX_PAGES} pages`
+    );
   }
 
   /** Open a video-story upload session. Returns the id and the upload host URL. */
@@ -1585,6 +1642,32 @@ export class FacebookProvider extends SocialProvider {
       await this.sleep(RECONCILE_SETTLE_MS);
     }
 
+    // A story is reconciled by its uploaded media id, never by caption: it has no
+    // caption, and it is not on the feed edge this method reads.
+    if (isStoryFormat(payload.metadata)) {
+      const checkpoint = readFbStoryCheckpoint(payload.metadata);
+      if (checkpoint) {
+        const live = await this.findStoryByMediaId(tokens, pageId, checkpoint.id, checkpoint.createdAt).catch(
+          () => null
+        );
+        if (live) {
+          console.warn(
+            `[Facebook] story publish did not acknowledge, but media ${checkpoint.id} is live on page ${pageId} — adopting it`
+          );
+          return {
+            platformPostId: live.postId,
+            url: live.url ?? fbStoryUrl(live.postId),
+            metadata: { fbStoryMediaId: checkpoint.id, adopted: true },
+          };
+        }
+      }
+      throw new AmbiguousPublishError(
+        `Facebook did not confirm whether this story published. It may already be live on the Page — check the Page's ` +
+          `stories before retrying. Cause: ${cause instanceof Error ? cause.message : String(cause)}`,
+        { platform: "FACEBOOK", cause }
+      );
+    }
+
     const match = await this.findPublishedMatch(tokens, pageId, payload.content, since, true).catch((e) => {
       console.warn(`[Facebook] reconciliation read failed for page ${pageId}: ${(e as Error)?.message}`);
       return null;
@@ -1677,6 +1760,11 @@ export class FacebookProvider extends SocialProvider {
   ): Promise<SocialPostResult | null> {
     const pageId =
       (payload.metadata?.pageId as string) || (payload.metadata?.platformId as string) || "me";
+    // ⚠️ NEVER for a story. A story carries no caption and is not on the
+    // `published_posts` edge, so caption matching can only ever return the WRONG
+    // post (an unrelated Page post sharing the note text) or nothing. Stories own
+    // their idempotency through the media-id checkpoint — see publishStory.
+    if (isStoryFormat(payload.metadata)) return null;
     // PRE-write: an empty listing means "not published", so publishing must proceed.
     return this.findPublishedMatch(tokens, pageId, payload.content, since, false);
   }

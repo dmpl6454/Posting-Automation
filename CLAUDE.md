@@ -1015,9 +1015,20 @@ choice; it is what the app does) — and nothing is left for any client to crop.
 - **Format gate**: a non-JPEG image is re-rendered for INSTAGRAM only ("JPEG is the only image
   format supported"); Facebook photo stories accept png/gif/bmp/tiff, so a correct-aspect PNG is
   left alone there.
-- **Known gap**: a story VIDEO skips padding when the overlay itself is skipped — over
-  `VIDEO_OVERLAY_MAX_MB` (250) or `VIDEO_OVERLAY_ENABLED=false`. Large source videos are normally
+- 🔴 **Reshaping keys on `publishesAsStory` (format STORY **and exactly one media**), never on the
+  format label alone.** `instagram.provider.ts` sends anything longer than one media to
+  `publishCarouselPost`, so a legacy per-channel-picker post — Post mode, one Instagram channel set
+  to "Story", two attachments — publishes an ordinary CAROUSEL; padding those slides would silently
+  change what the user published. Facebook stories only come from story MODE (media capped at 1),
+  so it is a no-op there.
+- **Known gap, now LOUD**: a story VIDEO skips padding when the overlay itself is skipped — over
+  `VIDEO_OVERLAY_MAX_MB` (250) or `VIDEO_OVERLAY_ENABLED=false`. The worker logs
+  `story 9:16 canvas NOT applied` in every such case (url identity is the exact signal, since
+  `processVideoOverlay` returns a new URL whenever it ran). Large source videos are normally
   already 9:16.
+- **Backdrop blur runs at 1/4 canvas size and scales back up** — a full-resolution `gblur` measured
+  ~3.2× the filter cost per target, for an indistinguishable result, on the box that is also
+  serving the media to Meta.
 
 ### Facebook Page stories
 
@@ -1049,6 +1060,19 @@ than reported as a media problem.
   unproven avenue: `POST /{page}/photos` (story step 1) does document `tags` with `tag_uid` — a
   numeric USER id, not a username — but whether it survives into a story is undocumented and
   unprobed. Do not ship FB tagging on the Instagram precedent.
+- 🔴 **The story route is UNCONDITIONAL, and a media-less story THROWS.** Gating it on
+  `mediaUrls?.length` let a media-less story fall through to the TEXT branch, which publishes the
+  story's private note as a permanent PUBLIC Page post. Caught in review before shipping.
+- ⚠️ **A story is never reconciled by caption.** `findExistingPost` returns null for stories and
+  `resolveUnknownPublish` looks the story up by its checkpointed media id — caption matching on
+  `published_posts` can only ever return an unrelated Page post that happens to share the note text.
+- ⚠️ **A 5xx or an unparseable body is UNKNOWN, not failed.** It raises `AmbiguousPublishError`
+  (after asking the listing), because a definite-failure verdict makes the target re-claimable and
+  the retry publishes a SECOND story.
+- ⚠️ The adoption listing is **narrowed by `since`** (the checkpoint's own timestamp, minus the
+  reconcile skew) and follows up to `FB_STORY_LIST_MAX_PAGES`; running out of pages **throws**
+  rather than reporting "not published". These Pages post stories from the phone all day, so an
+  unfiltered first page is not an answer.
 - **Analytics: publish-time snapshot only.** At-age checkpoints are SKIPPED for a Facebook story
   (`skipAtAgeCheckpoints`): v25.0 removed `PAGE_STORY_IMPRESSIONS_BY_STORY_ID*` in favour of names
   whose reference page 404s, and one invalid metric name 400s the whole insights call. Scheduling
@@ -1056,6 +1080,10 @@ than reported as a media problem.
   exclusion already covers Facebook stories.
 
 ### UI
+
+⚠️ **Tags are dropped from the payload, the preview and the draft the moment the last Instagram
+channel is deselected** (`effectiveStoryMentions`), while the typed state is KEPT so re-selecting
+Instagram restores it. Otherwise a Facebook-only story still carried tags nothing could deliver.
 
 Story mode now offers Instagram accounts AND Facebook Pages (`isStoryChannel` /`STORY_PLATFORMS`),
 groups union both, and `validateStoryPost` names anything else ("Instagram or Facebook"). The story

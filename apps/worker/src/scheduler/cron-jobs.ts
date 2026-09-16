@@ -487,6 +487,12 @@ export async function scheduleFacebookAnalyticsSync() {
        AND pt.status::text = 'PUBLISHED'
        AND pt."publishedId" IS NOT NULL
        AND pt."publishedAt" IS NOT NULL
+       -- A Facebook story is gone in 24h and has no published insights path, so
+       -- re-measuring it is guaranteed-failing spend that also starves this
+       -- pass's never-measured reserve (it can never get a snapshot, so it stays
+       -- at the head of the queue forever). IS DISTINCT FROM, never <>: format is
+       -- a nullable enum and nearly every legacy row is NULL.
+       AND pt.format IS DISTINCT FROM 'STORY'
      ORDER BY "lastSnapshotAt" ASC NULLS FIRST, pt.id ASC
      LIMIT $1`,
     candidateLimit

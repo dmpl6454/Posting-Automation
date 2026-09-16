@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
-import { analyticsSyncQueue, externalPostSyncQueue, excludeExpiredStoriesWhere } from "@postautomation/queue";
+import { analyticsSyncQueue, externalPostSyncQueue, excludeUnmeasurableStoriesWhere } from "@postautomation/queue";
 import { groupChannelsIntoAccounts } from "../lib/sync-accounts";
 import { externalPostFloor, externalPostFloorLabel } from "../lib/external-post-floor";
 import { insightsIncludeExternalPosts } from "../lib/insights-population";
@@ -562,7 +562,16 @@ async function fetchPostReportRows(
   // treats as a bug. `IS DISTINCT FROM` (not `<>`) so NULL formats — nearly every
   // legacy target — are kept.
   const storyAtAgeFilter =
-    mode === "at_age" && window !== "24h" ? `AND pt.format IS DISTINCT FROM 'STORY'` : "";
+    mode === "at_age"
+      ? window !== "24h"
+        ? `AND pt.format IS DISTINCT FROM 'STORY'`
+        : // At 24h an INSTAGRAM story does have a checkpoint, but a FACEBOOK one
+          // never does (no insights path — see skipAtAgeCheckpoints), so listing
+          // it prints a permanent all-"—" row that reads like a missed capture.
+          // Spelled NULL-safely: `NOT (pt.format = 'STORY' AND ...)` yields NULL
+          // for the NULL formats nearly every legacy row carries, dropping them.
+          `AND NOT (pt.format IS NOT DISTINCT FROM 'STORY' AND c.platform::text = 'FACEBOOK')`
+      : "";
 
   // Snapshot selector: latest overall vs latest tagged at-age checkpoint.
   const snapshotFilter =
@@ -1543,11 +1552,12 @@ export const analyticsRouter = createRouter({
         status: "PUBLISHED",
         publishedId: { not: null },
         publishedAt: { gte: since },
-        // An Instagram story and its insights are gone 24h after publish. Without
-        // this, one "Sync Now" click enqueues a guaranteed-failing job for every
-        // expired story in the org — the same rule the worker's crons apply, from
-        // the same shared fragment so the two containers cannot disagree.
-        ...excludeExpiredStoriesWhere(new Date()),
+        // A story's insights are gone 24h after publish, and a FACEBOOK story has
+        // no published insights path at all. Without this, one "Sync Now" click
+        // enqueues a guaranteed-failing job for every expired story in the org —
+        // the same rule the worker's crons apply, from the same shared fragment
+        // so the two containers cannot disagree.
+        ...excludeUnmeasurableStoriesWhere(new Date()),
         channel: {
           organizationId: ctx.organizationId,
           isActive: true,

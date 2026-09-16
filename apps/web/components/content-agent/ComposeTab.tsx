@@ -1254,7 +1254,7 @@ ${content}`;
         // pruned. The server forces STORY on every story target anyway; not
         // sending it keeps a stale REEL/SHORT out of the story payload entirely.
         ...(!isStoryMode && Object.keys(formatByChannelId).length > 0 && { formatByChannelId }),
-        ...(isStoryMode && { story: { mentions: storyMentions } }),
+        ...(isStoryMode && { story: { mentions: effectiveStoryMentions } }),
         ...(() => {
           // ONE cover per post: the platforms each have exactly one (a reel
           // cover, a Facebook video thumbnail, a YouTube thumbnail), and keying
@@ -1303,6 +1303,11 @@ ${content}`;
   // user cannot even see in the picker.
   const hasYouTube = !isStoryMode && selectedPlatforms.includes("youtube");
   const hasInstagram = selectedPlatforms.includes("instagram");
+  // ⚠️ Tags only mean something on Instagram, and only while an Instagram
+  // channel is actually selected. The raw state is KEPT (re-selecting Instagram
+  // restores what the user typed), but nothing downstream — preview, payload or
+  // draft — sees tags that cannot be delivered.
+  const effectiveStoryMentions = hasInstagram ? storyMentions : [];
   const hasVideoAttached = postMedia.some((m) => {
     const t = m.file?.type ?? "";
     return t.startsWith("video/") || VIDEO_EXT_RE.test(m.url);
@@ -1859,7 +1864,7 @@ ${content}`;
                   <CardTitle>Select Channels</CardTitle>
                   <CardDescription>
                     {isStoryMode
-                      ? "Stories publish only to Instagram accounts"
+                      ? "Stories publish to Instagram accounts and Facebook Pages"
                       : "Search and pick channels to publish to"}
                   </CardDescription>
                 </div>
@@ -2112,7 +2117,7 @@ ${content}`;
                       <>
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <span className="text-xs text-muted-foreground">
-                          {sorted.length} {isStoryMode ? "Instagram " : ""}channel{sorted.length === 1 ? "" : "s"}
+                          {sorted.length} {isStoryMode ? "story " : ""}channel{sorted.length === 1 ? "" : "s"}
                           {!isStoryMode && platformFilter ? ` · ${platformFilter}` : ""}
                           {selectedVisibleCount > 0 ? ` · ${selectedVisibleCount} selected` : ""}
                         </span>
@@ -2136,7 +2141,7 @@ ${content}`;
                         {sorted.length === 0 ? (
                           <p className="p-3 text-center text-xs text-muted-foreground">
                             {isStoryMode && !channelSearch
-                              ? "No Instagram accounts connected — connect one on the Channels page"
+                              ? "No Instagram accounts or Facebook Pages connected — connect one on the Channels page"
                               : "No channels found"}
                           </p>
                         ) : (
@@ -2416,7 +2421,7 @@ ${content}`;
                     // later would publish a FEED post to the account — the exact
                     // "never post a normal post to this channel" rule this mode
                     // exists to keep.
-                    ...(isStoryMode && { story: { mentions: storyMentions } }),
+                    ...(isStoryMode && { story: { mentions: effectiveStoryMentions } }),
                     ...(() => {
                       const cover = postMedia.find((m) => m.thumbnail)?.thumbnail;
                       const md = isStoryMode
@@ -2516,7 +2521,7 @@ ${content}`;
             <InstagramStoryPreview
               mediaUrl={postMedia[0]?.url}
               mediaKind={postMedia[0] ? (isVideoMediaItem(postMedia[0]) ? "video" : "image") : undefined}
-              mentions={storyMentions}
+              mentions={effectiveStoryMentions}
               accounts={((channels as any[]) ?? [])
                 .filter((c: any) => selectedChannels.includes(c.id))
                 .map((c: any) => ({ name: c.name, username: c.username, avatar: c.avatar }))}

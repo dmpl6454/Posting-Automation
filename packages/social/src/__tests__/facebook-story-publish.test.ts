@@ -16,10 +16,14 @@ const provider = readFileSync(join(ROOT, "packages/social/src/providers/facebook
   .replace(/^\s*\/\/.*$/gm, "");
 
 describe("FacebookProvider — story routing", () => {
-  it("routes a STORY target away from the feed paths", () => {
+  it("routes a STORY target away from the feed paths, UNCONDITIONALLY", () => {
     // Until this branch existed a FACEBOOK target with format STORY silently
     // published an ordinary feed post: nothing here read metadata.format.
-    expect(provider).toMatch(/if \(isStoryFormat\(payload\.metadata\) && payload\.mediaUrls\?\.length\) \{/);
+    // ⚠️ And gating the route on media let a media-less story fall through to
+    // the TEXT branch, publishing the story's private note as a public Page post.
+    expect(provider).toMatch(/if \(isStoryFormat\(payload\.metadata\)\) \{/);
+    expect(provider).not.toMatch(/isStoryFormat\(payload\.metadata\) && payload\.mediaUrls/);
+    expect(provider).toMatch(/A Facebook story requires one image or video/);
     const route = provider.indexOf("return this.publishStory(tokens, payload, pageId)");
     const feed = provider.indexOf("return this.publishPostWithMedia(tokens, payload, pageId)");
     expect(route).toBeGreaterThan(-1);
@@ -53,7 +57,9 @@ describe("FacebookProvider — duplicate prevention", () => {
   });
 
   it("adopts an existing story by OUR media id instead of publishing again", () => {
-    expect(provider).toMatch(/const existing = await this\.findStoryByMediaId\(tokens, pageId, checkpoint\.id\)/);
+    expect(provider).toMatch(
+      /const existing = await this\.findStoryByMediaId\(tokens, pageId, checkpoint\.id, checkpoint\.createdAt\)/
+    );
     expect(provider).toMatch(/adopted: true/);
   });
 
@@ -79,5 +85,35 @@ describe("FacebookProvider — the non-story paths are untouched", () => {
   it("still publishes feed photos as PUBLISHED and keeps the text-only path", () => {
     expect(provider).toMatch(/uploadPhotoToFacebook\(tokens, pageId, firstUrl, true, payload\.content\)/);
     expect(provider).toMatch(/\$\{pageId\}\/feed/);
+  });
+});
+
+describe("FacebookProvider — a story is never reconciled by caption", () => {
+  it("findExistingPost returns null for a story rather than matching the wrong post", () => {
+    // A story has no caption and is not on the published_posts edge, so caption
+    // matching can only return an unrelated Page post that happens to share the
+    // note text.
+    expect(provider).toMatch(/if \(isStoryFormat\(payload\.metadata\)\) return null;/);
+  });
+
+  it("the unknown-outcome resolver looks the story up by its media id", () => {
+    const resolver = provider.slice(provider.indexOf("private async resolveUnknownPublish"));
+    expect(resolver).toMatch(/readFbStoryCheckpoint\(payload\.metadata\)/);
+    expect(resolver).toMatch(/findStoryByMediaId\(tokens, pageId, checkpoint\.id, checkpoint\.createdAt\)/);
+    expect(resolver).toMatch(/AmbiguousPublishError/);
+  });
+
+  it("treats a 5xx or an unreadable body as UNKNOWN, never as a definite failure", () => {
+    // A definite failure makes the target re-claimable, and the retry publishes
+    // a SECOND story.
+    expect(provider).toMatch(/if \(res\.status >= 500 \|\| bodyUnreadable\) \{/);
+    expect(provider).toMatch(/did not confirm whether this story published/);
+  });
+
+  it("narrows the adoption listing by time and follows pages before concluding anything", () => {
+    expect(provider).toMatch(/&since=\$\{Math\.max\(0, sinceUnix - Math\.ceil\(RECONCILE_SKEW_MS \/ 1000\)\)\}/);
+    expect(provider).toMatch(/for \(let page = 0; page < FB_STORY_LIST_MAX_PAGES; page\+\+\)/);
+    // Running out of pages is not "nothing was published".
+    expect(provider).toMatch(/did not resolve media \$\{mediaId\} within/);
   });
 });

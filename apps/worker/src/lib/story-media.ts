@@ -20,7 +20,7 @@
 
 import { HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { needsStoryFit, planStoryFit, STORY_HEIGHT, STORY_WIDTH, type Dimensions } from "./story-fit";
-import { probeImageSize, renderStoryImage } from "./story-render";
+import { probeImageSource, renderStoryImage } from "./story-render";
 
 export const STORY_FIT_VERSION = "v1";
 
@@ -120,9 +120,11 @@ export async function ensureStoryImageUrl(opts: {
     const buffer = Buffer.from(await res.arrayBuffer());
     if (buffer.byteLength > MAX_SOURCE_BYTES) return url;
 
-    const dimensions = await probeImageSize(buffer);
-    const format = await readImageFormat(buffer);
-    const action = decideStoryImageAction({ dimensions, format, platform });
+    // ONE metadata() call for both the shape and the format — this runs per
+    // target in a fan-out, so a second parse is pure waste.
+    const probe = await probeImageSource(buffer);
+    const dimensions = probe ? { width: probe.width, height: probe.height } : null;
+    const action = decideStoryImageAction({ dimensions, format: probe?.format ?? null, platform });
     if (action === "passthrough" || !dimensions) return url;
 
     const plan = planStoryFit(dimensions);
@@ -145,14 +147,5 @@ export async function ensureStoryImageUrl(opts: {
   } catch (err: any) {
     console.warn(`[StoryFit] failed for media ${opts.mediaId}: ${err?.message} — publishing the original`);
     return url;
-  }
-}
-
-async function readImageFormat(buffer: Buffer): Promise<string | null> {
-  try {
-    const sharp = (await import("sharp")).default;
-    return (await sharp(buffer).metadata()).format ?? null;
-  } catch {
-    return null;
   }
 }

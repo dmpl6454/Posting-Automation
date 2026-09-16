@@ -84,7 +84,7 @@ describe("Post-mode controls never leak into a story payload", () => {
   it("sends the story marker on the DRAFT path too", () => {
     // A draft saved without it becomes an ordinary post, and scheduling it later
     // would publish a FEED post to the account.
-    expect(compose.match(/isStoryMode && \{ story: \{ mentions: storyMentions \} \}/g) ?? []).toHaveLength(2);
+    expect(compose.match(/isStoryMode && \{ story: \{ mentions: effectiveStoryMentions \} \}/g) ?? []).toHaveLength(2);
   });
 
   it("hides the cover control AND the cover it already set", () => {
@@ -206,6 +206,16 @@ describe("facebook stories (2026-09-16)", () => {
     // No Meta source supports that promise — see the 2026-09-15 investigation.
     expect(compose).not.toMatch(/Instagram notifies them/);
     expect(compose).toMatch(/has no tagging/);
+  });
+
+  it("does not send or preview tags once the last Instagram channel is deselected", () => {
+    // The raw state is kept so re-selecting Instagram restores what the user
+    // typed, but nothing downstream sees tags that cannot be delivered.
+    expect(compose).toMatch(/const effectiveStoryMentions = hasInstagram \? storyMentions : \[\];/);
+    expect(compose.match(/story: \{ mentions: effectiveStoryMentions \}/g)?.length).toBe(2);
+    expect(compose).toMatch(/mentions=\{effectiveStoryMentions\}/);
+    // The UNGATED expression must be gone from both submit paths.
+    expect(compose).not.toMatch(/story: \{ mentions: storyMentions \}/);
   });
 
   it("the story preview shows the blurred fit the publish actually produces", () => {

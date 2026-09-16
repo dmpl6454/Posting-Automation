@@ -11,7 +11,10 @@ describe("buildStoryCanvasFilter", () => {
   it("contains the source — the only crop belongs to the backdrop copy", () => {
     expect(f).toContain(`[stfg]scale=${STORY_CANVAS_WIDTH}:${STORY_CANVAS_HEIGHT}:force_original_aspect_ratio=decrease`);
     expect(f.match(/crop=/g)).toHaveLength(1);
-    expect(f).toContain(`[stbg]scale=${STORY_CANVAS_WIDTH}:${STORY_CANVAS_HEIGHT}:force_original_aspect_ratio=increase,crop=1080:1920`);
+    // Blurred at a fraction of canvas size and scaled back up: a full-resolution
+    // gblur measured ~3.2x the filter cost per target, for an identical result.
+    expect(f).toContain("[stbg]scale=270:480:force_original_aspect_ratio=increase,crop=270:480");
+    expect(f).toContain(`scale=${STORY_CANVAS_WIDTH}:${STORY_CANVAS_HEIGHT}[stbgb]`);
   });
 
   it("centres the content on the canvas", () => {
@@ -32,7 +35,7 @@ describe("buildStoryCanvasFilter", () => {
   it("uses RUNTIME expressions, never probed pixel counts — rotated phone clips depend on it", () => {
     // A concrete source size must never be baked in: ffmpeg auto-rotates on
     // decode, so probed dimensions describe the pre-rotation frame.
-    expect(f).not.toMatch(/scale=\d+:\d+\[/); // no fixed foreground size
+    expect(f).not.toMatch(/\[stfg\]scale=\d+:\d+\[/); // the FOREGROUND never gets a fixed size
     expect(f).toContain("force_original_aspect_ratio");
   });
 
