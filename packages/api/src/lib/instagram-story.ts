@@ -13,6 +13,21 @@ import { z } from "zod";
 export const IG_USERNAME_RE = /^[A-Za-z0-9._]{1,30}$/;
 export const STORY_MAX_MENTIONS = 20;
 
+/**
+ * Platforms that can receive a story (2026-09-16: Facebook Page stories added).
+ *
+ * ⚠️ Tagging is INSTAGRAM-ONLY and deliberately not widened with this list.
+ * Meta documents `user_tags` for Instagram stories; the Page Stories API
+ * documents no tag, mention or sticker parameter at all, so a tag simply cannot
+ * be delivered to a Facebook story.
+ */
+export const STORY_PLATFORMS = ["INSTAGRAM", "FACEBOOK"] as const;
+export const STORY_MENTION_PLATFORMS = ["INSTAGRAM"] as const;
+
+export function isStoryPlatform(platform: string): boolean {
+  return (STORY_PLATFORMS as readonly string[]).includes(platform);
+}
+
 /** Raw client input, bounded so a hostile payload cannot be large. */
 export const storyInputSchema = z.object({
   mentions: z.array(z.string().max(64)).max(50).default([]),
@@ -61,10 +76,10 @@ export function validateStoryPost(input: {
   mediaCount: number;
   scheduling: boolean;
 }): string | null {
-  const foreign = input.channels.filter((c) => c.platform !== "INSTAGRAM");
+  const foreign = input.channels.filter((c) => !isStoryPlatform(c.platform));
   if (foreign.length > 0) {
     const names = foreign.map((c) => c.name || c.id).join(", ");
-    return `Stories can only be published to Instagram channels. Remove: ${names}.`;
+    return `Stories can only be published to Instagram or Facebook channels. Remove: ${names}.`;
   }
   if (input.mediaCount > 1) {
     return (

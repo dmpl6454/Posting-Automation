@@ -639,6 +639,10 @@ export function createPostPublishWorker() {
                 // Defense-in-depth vs forged/NULL DB fileSize — the overlay
                 // re-checks the REAL Content-Length and skips if oversized.
                 maxBytes: OVERLAY_MAX_BYTES,
+                // A story is 9:16. Padding rides along INSIDE this existing
+                // re-encode; a separate pass per target is the 2026-08-07
+                // incident. Non-story publishes pass false and are unchanged.
+                storyCanvas: isStoryTarget,
               });
               processed.push(newUrl);
             } else {
@@ -651,6 +655,41 @@ export function createPostPublishWorker() {
           mediaUrls = processed;
         } catch (e) {
           console.warn(`[PostPublish] Video overlay failed, posting without:`, (e as Error).message);
+        }
+      }
+
+      // ── Story IMAGES must be exactly 9:16 (2026-09-16) ─────────────────────
+      // Meta does not normalise an organic story: the phone app fills (cropping
+      // the caption off a 4:5 creative — the owner's report) while the web
+      // viewer fits. An exactly-9:16 asset is a fixed point for both, so we
+      // compose one, the way the Instagram app does when posting by hand.
+      //
+      // Video is handled INSIDE the overlay pass above (one encode). Images are
+      // cheap, so they are fitted here. ensureStoryImageUrl is FAIL-OPEN — every
+      // error returns the original URL — and writes to a deterministic S3 key,
+      // so one render serves the whole fan-out and every retry.
+      if (isStoryTarget && ["INSTAGRAM", "FACEBOOK"].includes(platform) && mediaUrls.length > 0) {
+        try {
+          const { ensureStoryImageUrl } = await import("../lib/story-media");
+          const fitted: string[] = [];
+          for (let i = 0; i < mediaUrls.length; i++) {
+            const mediaId = postTarget.post.mediaAttachments[i]?.media.id;
+            if (mediaTypes[i]?.startsWith("video/") || !mediaId) {
+              fitted.push(mediaUrls[i]!);
+              continue;
+            }
+            fitted.push(
+              await ensureStoryImageUrl({
+                url: mediaUrls[i]!,
+                organizationId: postTarget.post.organizationId,
+                mediaId,
+                platform,
+              })
+            );
+          }
+          mediaUrls = fitted;
+        } catch (e) {
+          console.warn(`[PostPublish] Story image fit failed, posting original:`, (e as Error).message);
         }
       }
 
@@ -1064,7 +1103,14 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
       // A STORY gets ONE checkpoint, an hour before Instagram withdraws it (the
       // job's delay is measured from enqueue, so a flat 24h always lands after
       // expiry). Every other format keeps all four, with identical delays.
-      if (result.platformPostId) {
+      // ⚠️ NOT for a FACEBOOK story. Meta removed the old per-story metrics in
+      // v25.0, and the Stories Insights reference 404s, so the replacement metric
+      // names, node and permission are all unpublished. A speculative capture is
+      // a guaranteed-failing Graph call — and one invalid metric name 400s the
+      // WHOLE insights request. A Facebook story therefore keeps only its
+      // publish-time snapshot until story insights are built deliberately.
+      const skipAtAgeCheckpoints = isStoryTarget && platform === "FACEBOOK";
+      if (result.platformPostId && !skipAtAgeCheckpoints) {
         for (const [windowTag, delay] of atAgeWindowsForFormat(postTarget.format)) {
           try {
             await analyticsSyncQueue.add(

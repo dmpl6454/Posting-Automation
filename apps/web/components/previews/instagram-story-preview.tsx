@@ -7,7 +7,7 @@ export interface InstagramStoryPreviewProps {
   mediaUrl?: string;
   mediaKind?: MediaKind;
   mentions: string[];
-  /** Selected Instagram accounts — the first fills the header, the rest are counted. */
+  /** Selected story accounts — the first fills the header, the rest are counted. */
   accounts: Array<{ name: string; username?: string | null; avatar?: string | null }>;
   /** The optional note kept with the post. Instagram never displays it. */
   note?: string;
@@ -27,7 +27,9 @@ function initials(name: string): string {
 /**
  * A 9:16 story frame, rendered INSTEAD of PostPreviewSwitcher while Compose is in
  * Story mode — a story is not a feed post, and showing one as a square card with
- * a caption misrepresents what will be published.
+ * a caption misrepresents what will be published. Used for Instagram AND
+ * Facebook Page stories (2026-09-16); mentions are Instagram-only and simply
+ * absent for a Facebook-only selection.
  *
  * ⚠️ Media goes through PreviewMedia, never a bare tag. That component is the one
  * place allowed to decide image-vs-video, and it fails toward `<video>`: an
@@ -68,9 +70,23 @@ export function InstagramStoryPreview({
           <span className="flex-none text-[10px] text-white/70">now</span>
         </div>
 
-        {/* Media */}
+        {/* Media.
+            The blurred layer behind it is not decoration: the publish pipeline
+            composes a 1080x1920 frame with exactly this treatment (the whole
+            image contained, padding filled with a blurred, darkened copy), so
+            without it the preview would promise a framing the story does not
+            have. Both layers read the SAME url through PreviewMedia. */}
         {mediaUrl ? (
-          <PreviewMedia url={mediaUrl} kind={mediaKind} className="h-full w-full object-contain" />
+          <>
+            <div className="absolute inset-0 z-0 overflow-hidden" aria-hidden="true">
+              <PreviewMedia
+                url={mediaUrl}
+                kind={mediaKind}
+                className="h-full w-full scale-110 object-cover opacity-60 blur-xl"
+              />
+            </div>
+            <PreviewMedia url={mediaUrl} kind={mediaKind} className="relative z-10 h-full w-full object-contain" />
+          </>
         ) : (
           <div className="flex h-full items-center justify-center px-6 text-center text-xs text-white/60">
             Add one image or video to preview your story
@@ -98,7 +114,7 @@ export function InstagramStoryPreview({
       </div>
 
       <p className="text-center text-[10px] text-muted-foreground">
-        {accounts.length > 1 ? `Publishes to ${accounts.length} Instagram accounts · ` : ""}
+        {accounts.length > 1 ? `Publishes to ${accounts.length} accounts · ` : ""}
         Preview only · disappears 24 hours after publishing
       </p>
       {note ? (

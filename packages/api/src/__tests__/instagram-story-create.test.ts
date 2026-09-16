@@ -48,14 +48,20 @@ describe("validateStoryPost", () => {
     expect(validateStoryPost({ channels: [ig("a"), ig("b")], mediaCount: 1, scheduling: true })).toBeNull();
   });
 
-  it("names the offending non-Instagram channels", () => {
+  it("accepts Facebook Pages, and a mix of both (2026-09-16: Page stories added)", () => {
+    const fb = { id: "f", platform: "FACEBOOK", name: "My Page" };
+    expect(validateStoryPost({ channels: [fb], mediaCount: 1, scheduling: true })).toBeNull();
+    expect(validateStoryPost({ channels: [ig("a"), fb], mediaCount: 1, scheduling: true })).toBeNull();
+  });
+
+  it("names channels on platforms that have no story surface at all", () => {
     const err = validateStoryPost({
-      channels: [ig("a"), { id: "f", platform: "FACEBOOK", name: "My Page" }],
+      channels: [ig("a"), { id: "y", platform: "YOUTUBE", name: "My Channel" }],
       mediaCount: 1,
       scheduling: true,
     });
-    expect(err).toMatch(/Instagram/);
-    expect(err).toContain("My Page");
+    expect(err).toMatch(/Instagram or Facebook/);
+    expect(err).toContain("My Channel");
   });
 
   it("requires exactly one media to publish, and never two even as a draft", () => {

@@ -199,9 +199,11 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   const [platformFilter, setPlatformFilter] = useState<string | null>(null);
   const [formatByChannelId, setFormatByChannelId] = useState<Record<string, "FEED" | "REEL" | "STORY" | "SHORT" | "VIDEO" | "CAROUSEL">>({});
   const [ytMetadata, setYtMetadata] = useState<{ title?: string; privacyStatus?: "public" | "unlisted" | "private" }>({});
-  // Instagram Story mode (2026-09-15). "story" publishes ONE image or video as a
-  // STORY, to Instagram channels only, and can tag people. Every branch below
-  // that reads `isStoryMode` is the pre-feature code when it is false.
+  // Story mode (2026-09-15; Facebook Pages added 2026-09-16). "story" publishes
+  // ONE image or video as a STORY to Instagram accounts and/or Facebook Pages,
+  // and can tag people on Instagram (Meta's Page Stories API has no tagging).
+  // Every branch below that reads `isStoryMode` is the pre-feature code when it
+  // is false.
   const [postType, setPostType] = useState<PostType>("post");
   const isStoryMode = postType === "story";
   const [storyMentions, setStoryMentions] = useState<string[]>([]);
@@ -371,7 +373,7 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
         id: TASK_ID,
         type: "compose",
         label: isStoryMode ? "Composing story" : "Composing post",
-        description: content.slice(0, 60) || (isStoryMode ? "New Instagram story" : "New post"),
+        description: content.slice(0, 60) || (isStoryMode ? "New story" : "New post"),
         href: "/dashboard/content-agent?tab=compose",
         draft: {
           content,
@@ -784,7 +786,7 @@ ${content}`;
       setSelectedChannels(pruned);
       toast({
         title: "Switched to Story",
-        description: `${removed} non-Instagram channel${removed === 1 ? "" : "s"} removed — stories publish only to Instagram.`,
+        description: `${removed} channel${removed === 1 ? "" : "s"} removed — stories publish to Instagram and Facebook only.`,
       });
     }
     // ⚠️ Deliberately NOT resetting platformFilter or uniqueCaptions here. Both
@@ -1195,7 +1197,7 @@ ${content}`;
       toast({
         title: "Missing required fields",
         description: isStoryMode
-          ? "Select at least one Instagram channel."
+          ? "Select at least one Instagram or Facebook channel."
           : "Please add content and select at least one channel.",
         variant: "destructive",
       });
@@ -1356,7 +1358,7 @@ ${content}`;
           ) : (
           <>
           {/* Post type. A story is a different product from a feed post — one
-              image or video, Instagram only, gone in 24 hours — so it gets a
+              image or video, Instagram or Facebook, gone in 24 hours — so it gets a
               first-class switch rather than being buried in a per-channel
               format picker that only appears once a video is attached. */}
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -1384,7 +1386,7 @@ ${content}`;
             </div>
             {isStoryMode && (
               <p className="min-w-0 text-[11px] leading-snug text-muted-foreground">
-                Instagram Story · one image or video · Instagram channels only · disappears after 24 hours
+                Story · one image or video · Instagram &amp; Facebook · disappears after 24 hours
               </p>
             )}
           </div>
@@ -1479,7 +1481,7 @@ ${content}`;
               </div>
               {isStoryMode && (
                 <CardDescription>
-                  Instagram doesn&apos;t display a caption on a story. This note is kept with the post for your records.
+                  Stories don&apos;t display a caption. This note is kept with the post for your records.
                 </CardDescription>
               )}
             </CardHeader>
@@ -2191,12 +2193,16 @@ ${content}`;
           {/* Tag people — story only. Meta supports sticker-less @mentions on a
               story via `user_tags`; link/poll/location stickers are not
               publishable through the API at all. */}
-          {isStoryMode && (
+          {/* Instagram-only: Meta's Page Stories API documents no tag, mention or
+              sticker parameter, so a tag cannot be delivered to a Facebook
+              story. Hidden entirely for a Facebook-only selection rather than
+              shown and silently ignored. */}
+          {isStoryMode && selectedPlatforms.includes("instagram") && (
             <Card>
               <CardHeader className="pb-3">
                 <CardTitle>Tag people</CardTitle>
                 <CardDescription>
-                  Mention Instagram accounts on this story. They must be public, and Instagram notifies them.
+                  Mention public Instagram accounts. Instagram only — Facebook&apos;s story API has no tagging.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-2">
@@ -2249,7 +2255,7 @@ ${content}`;
                     <span className="min-w-0 text-destructive">{storyMentionError}</span>
                   ) : (
                     <span className="min-w-0 text-muted-foreground">
-                      Added as mentions, without a sticker.
+                      Added as mentions, without a sticker. Instagram decides whether the account is notified.
                     </span>
                   )}
                   <span className="flex-none tabular-nums text-muted-foreground">

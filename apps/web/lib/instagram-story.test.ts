@@ -15,19 +15,24 @@ const ch = (id: string, platform: string, isActive = true) => ({ id, platform, i
 describe("storySelectableChannels / pruneSelectionForStory", () => {
   const channels = [ch("ig1", "INSTAGRAM"), ch("fb1", "FACEBOOK"), ch("ig2", "INSTAGRAM"), ch("yt", "YOUTUBE")];
 
-  it("Post mode returns every channel untouched; Story mode only Instagram", () => {
+  it("Post mode returns every channel untouched; Story mode keeps Instagram AND Facebook", () => {
+    // 2026-09-16: Facebook Page stories are publishable, so they are selectable.
     expect(storySelectableChannels(channels, "post")).toEqual(channels);
-    expect(storySelectableChannels(channels, "story").map((c) => c.id)).toEqual(["ig1", "ig2"]);
+    expect(storySelectableChannels(channels, "story").map((c) => c.id)).toEqual(["ig1", "fb1", "ig2"]);
     expect(storySelectableChannels(undefined, "story")).toEqual([]);
     expect(isInstagramChannel(ch("x", "INSTAGRAM"))).toBe(true);
   });
 
-  it("prunes non-Instagram and unknown ids, and reports how many went", () => {
-    expect(pruneSelectionForStory(["ig1", "fb1", "yt", "ghost"], channels)).toEqual({ next: ["ig1"], removed: 3 });
+  it("prunes platforms with no story surface, and unknown ids, reporting how many went", () => {
+    expect(pruneSelectionForStory(["ig1", "fb1", "yt", "ghost"], channels)).toEqual({
+      next: ["ig1", "fb1"],
+      removed: 2,
+    });
   });
 
-  it("is a no-op when the selection is already Instagram-only", () => {
+  it("is a no-op when every selected channel can take a story", () => {
     expect(pruneSelectionForStory(["ig1", "ig2"], channels)).toEqual({ next: ["ig1", "ig2"], removed: 0 });
+    expect(pruneSelectionForStory(["ig1", "fb1"], channels)).toEqual({ next: ["ig1", "fb1"], removed: 0 });
   });
 });
 
@@ -41,13 +46,13 @@ describe("groupSelectableIds", () => {
     expect(groupSelectableIds(group, live, "post")).toEqual(["ig1", "fb1"]);
   });
 
-  it("Story mode: ONLY active, live Instagram members", () => {
-    // One click must never pull a Facebook Page into a story.
-    expect(groupSelectableIds(group, live, "story")).toEqual(["ig1"]);
+  it("Story mode: ONLY active, live story-capable members (Instagram and Facebook)", () => {
+    // One click must never pull a YouTube or X channel into a story.
+    expect(groupSelectableIds(group, live, "story")).toEqual(["ig1", "fb1"]);
   });
 
-  it("Story mode yields nothing for a group with no Instagram members, so no pill renders", () => {
-    expect(groupSelectableIds({ channels: [ch("fb1", "FACEBOOK")] }, live, "story")).toEqual([]);
+  it("Story mode yields nothing for a group whose members have no story surface", () => {
+    expect(groupSelectableIds({ channels: [ch("yt1", "YOUTUBE")] }, new Set(["yt1"]), "story")).toEqual([]);
     expect(groupSelectableIds({}, live, "story")).toEqual([]);
   });
 });
@@ -87,7 +92,9 @@ describe("storyBlockReason", () => {
     expect(storyBlockReason({ mediaCount: 0, selectedCount: 1, uploading: false })).toMatch(/one image or video/);
     expect(storyBlockReason({ mediaCount: 2, selectedCount: 1, uploading: false })).toMatch(/remove 1 attachment/);
     expect(storyBlockReason({ mediaCount: 3, selectedCount: 1, uploading: false })).toMatch(/remove 2 attachments/);
-    expect(storyBlockReason({ mediaCount: 1, selectedCount: 0, uploading: false })).toMatch(/Instagram channel/);
+    expect(storyBlockReason({ mediaCount: 1, selectedCount: 0, uploading: false })).toMatch(
+      /Instagram or Facebook channel/
+    );
     expect(storyBlockReason({ mediaCount: 1, selectedCount: 1, uploading: true })).toMatch(/uploading/);
   });
 

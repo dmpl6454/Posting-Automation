@@ -187,3 +187,39 @@ describe("diff-review fixes", () => {
     expect(compose).toMatch(/\{youtubeBlockReason \?\? storyBlock\}/);
   });
 });
+
+describe("facebook stories (2026-09-16)", () => {
+  it("no longer tells the user stories are Instagram-only", () => {
+    // Comments stripped: the explanatory notes quote the very strings under test.
+    const code = compose.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(code).not.toMatch(/Instagram channels only/);
+    expect(code).toMatch(/Instagram &amp; Facebook/);
+  });
+
+  it("shows the Tag people card ONLY when an Instagram channel is selected", () => {
+    // Meta's Page Stories API documents no tag parameter at all, so on a
+    // Facebook-only selection the card is hidden rather than silently ignored.
+    expect(compose).toMatch(/\{isStoryMode && selectedPlatforms\.includes\("instagram"\) && \(/);
+  });
+
+  it("does not promise that Instagram notifies tagged accounts", () => {
+    // No Meta source supports that promise — see the 2026-09-15 investigation.
+    expect(compose).not.toMatch(/Instagram notifies them/);
+    expect(compose).toMatch(/has no tagging/);
+  });
+
+  it("the story preview shows the blurred fit the publish actually produces", () => {
+    const previewRaw = readFileSync(
+      join(__dirname, "..", "components", "previews", "instagram-story-preview.tsx"),
+      "utf8"
+    );
+    // Comments stripped: the file's own warning note contains the banned tag.
+    const preview = previewRaw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(preview).toMatch(/blur-xl/);
+    expect(preview).toMatch(/object-contain/);
+    // Both layers must go through PreviewMedia: an img tag pointed at a video
+    // makes WebKit ingest the whole file and kills the tab.
+    expect(preview.match(/<PreviewMedia/g)?.length).toBe(2);
+    expect(preview).not.toMatch(/<img/);
+  });
+});

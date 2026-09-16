@@ -156,7 +156,9 @@ export default function PostDetailPage() {
     !!(post?.metadata as { instagramStory?: unknown } | null)?.instagramStory ||
     ((post?.targets ?? []) as any[]).some((t: any) => t.format === "STORY");
   const addableChannels = (allChannels ?? []).filter(
-    (c: any) => !targetedChannelIds.has(c.id) && (!isStoryPost || c.platform === "INSTAGRAM")
+    (c: any) =>
+      !targetedChannelIds.has(c.id) &&
+      (!isStoryPost || c.platform === "INSTAGRAM" || c.platform === "FACEBOOK")
   );
 
   const handleAddChannel = (channelId: string) => {
@@ -459,7 +461,7 @@ export default function PostDetailPage() {
                   empty one must read as "no note", not as a blank panel. */}
               {post.content || (
                 <span className="italic text-muted-foreground">
-                  {isStoryPost ? "No note — Instagram doesn't display a caption on a story." : "No content"}
+                  {isStoryPost ? "No note — stories don't display a caption." : "No content"}
                 </span>
               )}
             </div>
