@@ -2884,6 +2884,28 @@ A THIRD access concept, orthogonal to org `MemberRole` AND to `isSuperAdmin`: `e
 - **Re-arm later:** set `BILLING_DISABLED=false` (or remove it) in `.env.prod` and redeploy. **Zero code change.** Do NOT delete the `isBillingDisabled()` checks — they ARE the toggle.
 - **Regression guard:** [billing-disabled.test.ts](packages/api/src/__tests__/billing-disabled.test.ts) locks both flag-ON bypass (no DB read) and flag-OFF unchanged enforcement. Keep green.
 
+## ✍️ Hand-written caption per channel in Compose (2026-09-18, PR #192)
+
+Optional **"Different caption per channel"** toggle under the Captions card (>1 channel selected, never in
+story mode). Each selected channel gets a textarea; blank = shared caption. Stored as
+**`PostTarget.contentOverride`** — the SAME column the AI caption-fanout and the post page's editor write —
+so the publish precedence `contentOverride ?? contentVariants?.[platform] ?? post.content` is untouched.
+
+- Server: `post.create` input `captionOverrides` (channelId → caption) → `sanitizeCaptionOverrides`
+  ([caption-overrides.ts](packages/api/src/lib/caption-overrides.ts)): own channels only, no blanks, and a
+  caption **identical to the shared one is dropped** (a no-op override shows a fake "Custom" badge and blocks
+  later shared-caption edits). The key is spread into the target **only when present** — unused ⇒ pre-feature
+  row byte-for-byte. Coexists with the AI toggle (fanout skips non-null overrides).
+- **`post.update` now carries `contentOverride` through channel replacement** (`contentOverrideForReplacedTarget`).
+  Before, adding one channel on the post page recreated targets with channelId+status+format only and **wiped
+  every per-channel caption**, AI or manual — same class as the format-drop bug. Keep it in the select.
+- Web: `buildCaptionOverridesPayload` ([caption-overrides-payload.ts](apps/web/lib/caption-overrides-payload.ts))
+  sends only STILL-selected channels (the editor map is never pruned on deselect) with the same blank/identical
+  rule, on BOTH create paths (publish/schedule + save-draft). Draft persistence keys on a STRING signature
+  (OOM dep rule); restore re-validates and turns the editor on.
+- Tests: [caption-overrides.test.ts](packages/api/src/__tests__/caption-overrides.test.ts),
+  [caption-overrides-payload.test.ts](apps/web/lib/caption-overrides-payload.test.ts).
+
 ## ⚠️ NEVER commit a macOS `" 2"` duplicate file — and there is exactly ONE CLAUDE.md
 
 Finder appends `" 2"` when resolving a filename collision (duplicate-on-copy, or a sync client reconciling two versions). These are **never** intentional source files, and three have already reached this repo:
