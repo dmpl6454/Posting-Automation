@@ -2,6 +2,14 @@ import type { SocialPlatform } from "@postautomation/db";
 import { SocialProvider } from "../abstract/social.abstract";
 import { resolveVideoThumbnailUrl, supportsInstagramCover } from "../utils/video-thumbnail";
 import {
+  parseCommentsPage,
+  isCommentPermissionDeniedError,
+  isCommentObjectGoneError,
+  COMMENT_PERMISSION_DENIED_MESSAGE,
+  COMMENT_OBJECT_GONE_MESSAGE,
+  type InstagramCommentPage,
+} from "../utils/instagram-comments";
+import {
   isStoryFormat,
   isStoryModePost,
   buildStoryUserTags,
@@ -1624,5 +1632,71 @@ export class InstagramProvider extends SocialProvider {
 
     // Step 3: Publish the carousel
     return this.publishContainer(tokens, igUserId, carouselData.id, payload.content);
+  }
+
+  /**
+   * List top-level comments on a published IG Media. Requires
+   * `instagram_manage_comments` — see instagram-comments.ts for the current
+   * permission status. `after` is the cursor from a previous page's
+   * `nextCursor` (undefined = first page).
+   *
+   * Connect-path-shaped call (interactive, user-initiated, low frequency) —
+   * uses fetchT like getProfile/getAllInstagramAccounts, not the worker's
+   * unbounded publish-path fetch.
+   */
+  async getMediaComments(
+    tokens: OAuthTokens,
+    mediaId: string,
+    after?: string
+  ): Promise<InstagramCommentPage> {
+    const params = new URLSearchParams({
+      fields: "id,text,timestamp,username,like_count,hidden",
+      access_token: tokens.accessToken,
+    });
+    if (after) params.set("after", after);
+
+    const res = await fetchT(`${this.graphBaseUrl}/${this.apiVersion}/${mediaId}/comments?${params.toString()}`);
+    const data: any = await res.json();
+
+    if (!res.ok) {
+      if (isCommentPermissionDeniedError(data?.error)) {
+        throw new Error(COMMENT_PERMISSION_DENIED_MESSAGE);
+      }
+      if (isCommentObjectGoneError(data?.error)) {
+        throw new Error(COMMENT_OBJECT_GONE_MESSAGE);
+      }
+      throw new Error(`Instagram comment list failed: ${JSON.stringify(data)}`);
+    }
+
+    return parseCommentsPage(data);
+  }
+
+  /**
+   * Reply to a comment on media owned by this account. Meta's own
+   * authorization model is what stops one connected account's token from
+   * replying to a comment on ANOTHER account's media — the token can only
+   * act on media the granting account owns — so no extra ownership check of
+   * `commentId` against `mediaId` is needed here beyond the org-scoping the
+   * router already does on the CHANNEL whose token gets used.
+   */
+  async replyToComment(tokens: OAuthTokens, commentId: string, message: string): Promise<{ id: string }> {
+    const res = await fetch(`${this.graphBaseUrl}/${this.apiVersion}/${commentId}/replies`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message, access_token: tokens.accessToken }),
+    });
+    const data: any = await res.json();
+
+    if (!res.ok) {
+      if (isCommentPermissionDeniedError(data?.error)) {
+        throw new Error(COMMENT_PERMISSION_DENIED_MESSAGE);
+      }
+      if (isCommentObjectGoneError(data?.error)) {
+        throw new Error(COMMENT_OBJECT_GONE_MESSAGE);
+      }
+      throw new Error(`Instagram comment reply failed: ${JSON.stringify(data)}`);
+    }
+
+    return { id: data.id };
   }
 }

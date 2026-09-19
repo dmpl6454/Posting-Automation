@@ -2906,6 +2906,45 @@ so the publish precedence `contentOverride ?? contentVariants?.[platform] ?? pos
 - Tests: [caption-overrides.test.ts](packages/api/src/__tests__/caption-overrides.test.ts),
   [caption-overrides-payload.test.ts](apps/web/lib/caption-overrides-payload.test.ts).
 
+## 💬 Instagram comment REPLIES (2026-09-19) — read before touching comment.router / the IG scope list
+
+Reply to comments on posts published through PostAutomation, per Instagram channel, from the post
+detail page ("Show comments" under a PUBLISHED Instagram target → per-comment "Reply"). v1 is
+**on-demand**: `GET /{ig-media}/comments` when the section is opened, `POST /{ig-comment}/replies` to
+reply. No DB model, no webhook — nothing is stored.
+
+- **Permission: `instagram_manage_comments` — REQUESTED again, NOT yet Advanced-Access approved.** Meta
+  rejected it 2026-06 ("Disallowed Use Case") because nothing in the app then replied to or moderated
+  comments — only counts were read, which ride on `instagram_basic`. This feature is exactly what was
+  missing. **Do NOT drop the scope again without removing the feature.** Requesting an unapproved
+  scope does not block connect for external users (they just aren't GRANTED it). **App-role accounts
+  (admin/dev/tester) get it on the next reconnect** and can use the feature today — one real
+  list + reply from such an account satisfies Meta's App Review **test-call gate** for the resubmission.
+  External users see the actionable `COMMENT_PERMISSION_DENIED_MESSAGE` until approval.
+- **Files:** pure helpers + messages in [instagram-comments.ts](packages/social/src/utils/instagram-comments.ts)
+  (`parseCommentsPage` — cursor surfaced ONLY when `paging.next` exists; `isCommentPermissionDeniedError`
+  = code 10 **AND** "does not have permission" wording, since code 10 is overloaded;
+  `isCommentObjectGoneError` = the `#100/33` PAIR, never bare #100); provider methods
+  `getMediaComments`/`replyToComment` on `InstagramProvider` (NOT on the abstract class — Meta-only,
+  like FB's `resolveVideoPostId`); [comment.router.ts](packages/api/src/routers/comment.router.ts)
+  (`list`/`reply`, `orgProcedure` — a USER-level action like publishing).
+- **🔴 DECRYPT GOTCHA applies:** the router does TWO queries — `postTarget.findUnique` (org check via
+  `post.organizationId`, **no `include: { channel }`**) then a DIRECT `channel.findUnique` — because
+  only a direct channel read auto-decrypts `accessToken`. Locked by [comment-router.test.ts](packages/api/src/__tests__/comment-router.test.ts).
+- **Gate is identical on `list` and `reply`** (target must be PUBLISHED with a `publishedId`, channel
+  INSTAGRAM and not disconnected) so `reply` cannot be used to skip `list`'s checks. Reply text
+  `.trim().min(1).max(2200)` (Instagram's ceiling). The token travels in the POST **body**, never the
+  query string. Cross-account safety on `commentId` is Meta's own authorization model (a token can
+  only act on media its granting account owns) — the router scopes WHICH channel's token is used.
+- Uses `fetchT` (connect-path timeout) — interactive, user-triggered, low frequency; **not** a worker path.
+- **v1 limits:** first page only (cursor API exists, UI has no "load more" yet); top-level comments only;
+  no hide/delete; Instagram only (Facebook Page comments would need `pages_manage_engagement`);
+  no real-time `comments` webhook (the webhook route still logs it as unhandled).
+- Tests: [instagram-comments.test.ts](packages/social/src/__tests__/instagram-comments.test.ts) (7),
+  [instagram-comment-reply.test.ts](packages/social/src/__tests__/instagram-comment-reply.test.ts) (8),
+  [comment-router.test.ts](packages/api/src/__tests__/comment-router.test.ts) (13), + a scope lock in
+  [meta-scopes.test.ts](packages/api/src/__tests__/meta-scopes.test.ts).
+
 ## ⚠️ NEVER commit a macOS `" 2"` duplicate file — and there is exactly ONE CLAUDE.md
 
 Finder appends `" 2"` when resolving a filename collision (duplicate-on-copy, or a sync client reconciling two versions). These are **never** intentional source files, and three have already reached this repo:
