@@ -69,7 +69,9 @@ describe("post.update — a story stays a story", () => {
   it("SELECTS format on the existing targets", () => {
     // Recreating targets with channelId+status alone dropped the format, which
     // silently republished a Story as a Reel.
-    expect(postRouter).toMatch(/targets: \{ select: \{ channelId: true, format: true \} \}/);
+    // 2026-09-18: the select also carries contentOverride (per-channel captions
+    // were being wiped the same way) — see caption-overrides.test.ts.
+    expect(postRouter).toMatch(/targets: \{ select: \{ channelId: true, format: true, contentOverride: true \} \}/);
   });
 
   it("CARRIES the format onto every recreated target", () => {

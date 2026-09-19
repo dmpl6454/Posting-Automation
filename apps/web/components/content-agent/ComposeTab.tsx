@@ -22,6 +22,7 @@ import { DateTimePicker } from "~/components/ui/datetime-picker";
 import { Badge } from "~/components/ui/badge";
 import { Separator } from "~/components/ui/separator";
 import { Switch } from "~/components/ui/switch";
+import { buildCaptionOverridesPayload, sanitizeRestoredCaptionOverrides } from "~/lib/caption-overrides-payload";
 import { useToast } from "~/hooks/use-toast";
 import {
   Sparkles,
@@ -165,6 +166,12 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   const [scheduledAt, setScheduledAt] = useState("");
   // PR-5: unique caption per channel (AI) — only meaningful with >1 channel.
   const [uniqueCaptions, setUniqueCaptions] = useState(false);
+  // Manual per-channel captions (2026-09-18): channelId → caption, edited under
+  // the Captions card when `customCaptions` is on. The map is never pruned on
+  // deselect; buildCaptionOverridesPayload sends only STILL-selected channels.
+  // Off / empty ⇒ the payload omits the key and the post is byte-identical.
+  const [customCaptions, setCustomCaptions] = useState(false);
+  const [captionOverrides, setCaptionOverrides] = useState<Record<string, string>>({});
   const [isGenerating, setIsGenerating] = useState(false);
   const [postMedia, setPostMedia] = useState<{ url: string; mediaId?: string; file?: File; uploading?: boolean; progress?: number; superText?: SuperTextConfig; thumbnail?: { mediaId: string; url: string }; thumbnailUploading?: boolean }[]>([]);
   // Index into postMedia whose super text is being edited (null = dialog closed).
@@ -278,6 +285,14 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
     if (saved.draft.postType === "story") setPostType("story");
     const restoredMentions = sanitizeRestoredMentions(saved.draft.storyMentions);
     if (restoredMentions.length > 0) setStoryMentions(restoredMentions);
+    // Per-channel captions: re-validated (a malformed entry from an older build
+    // or hand-edited storage is dropped, never sent). Presence turns the editor
+    // on so the restored captions are visible, not silently attached.
+    const restoredOverrides = sanitizeRestoredCaptionOverrides(saved.draft.captionOverrides);
+    if (Object.keys(restoredOverrides).length > 0) {
+      setCaptionOverrides(restoredOverrides);
+      setCustomCaptions(true);
+    }
     // Restore attachments that are losslessly restorable (Media-row id or a
     // non-blob URL). Never resurrect blob: tiles (their File died with the old
     // page) and never pre-empt deep-link media (carousel/initialImage flow).
@@ -362,6 +377,9 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   // Mentions change only on an explicit edit, so a string signature is enough to
   // key the persist effect without reintroducing an identity-keyed dependency.
   const storyMentionsSignature = storyMentions.join(",");
+  // Same rule for the per-channel captions: a string signature, so the persist
+  // effect re-fires on an actual edit and never on object identity.
+  const captionOverridesSignature = customCaptions ? JSON.stringify(captionOverrides) : "";
   useEffect(() => {
     if (
       content.trim().length > 0 ||
@@ -380,6 +398,9 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
           channels: selectedChannels,
           postType,
           storyMentions,
+          // Only when the editor is on and holds something — an older-build draft
+          // (key absent) restores exactly as before.
+          ...(customCaptions && Object.keys(captionOverrides).length > 0 ? { captionOverrides } : {}),
           mediaUrls: postMedia.map((m) => m.url),
           // Only losslessly-restorable items (library picks, AI images,
           // completed uploads) — blob-only tiles can't survive a remount.
@@ -400,7 +421,7 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
     // postMedia is read in the body but deliberately keyed via its persisted
     // signature — see the comment above draftMediaSignature. Same for mentions.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [content, selectedChannels, draftMediaSignature, postType, storyMentionsSignature]);
+  }, [content, selectedChannels, draftMediaSignature, postType, storyMentionsSignature, captionOverridesSignature]);
 
   useEffect(() => {
     if (initialContent) setContent(initialContent);
@@ -622,6 +643,8 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
       setSelectedChannels([]);
       setScheduledAt("");
       setUniqueCaptions(false);
+      setCustomCaptions(false);
+      setCaptionOverrides({});
       setPostMedia([]);
       // Mentions are per-story. Carrying them over would silently re-tag the
       // previous story's people on the next one. The MODE is kept deliberately:
@@ -1233,10 +1256,17 @@ ${content}`;
       // with postMedia[i]. Re-validated here so a stale restored draft can never
       // 400 the whole post — an invalid config is simply dropped.
       const superTextByMediaId = buildSuperTextPayload(postMedia, mediaIds);
+      // Manual per-channel captions: only still-selected channels, only captions
+      // that actually differ from the shared one. Never for a story (no caption).
+      const manualCaptions =
+        !isStoryMode && customCaptions
+          ? buildCaptionOverridesPayload(captionOverrides, selectedChannels, content)
+          : {};
 
       createPost.mutate({
         content,
         channelIds: selectedChannels,
+        ...(Object.keys(manualCaptions).length > 0 && { captionOverrides: manualCaptions }),
         // DateTimePicker emits a LOCAL "YYYY-MM-DDTHH:mm" string; the API's
         // z.string().datetime() requires full ISO — convert at the submit
         // boundary exactly like BulkTab and the post-detail page do. Sending
@@ -2368,11 +2398,99 @@ ${content}`;
               <CardHeader className="pb-3">
                 <CardTitle>Captions</CardTitle>
                 <CardDescription>
-                  Write one distinct AI caption for each of your {selectedChannels.length} selected channels
+                  Give each of your {selectedChannels.length} selected channels its own caption — by hand, with AI, or both
                 </CardDescription>
               </CardHeader>
-              <CardContent>
+              <CardContent className="space-y-3">
+                {/* Manual per-channel captions (2026-09-18). Channels left blank
+                    use the shared caption — or the AI caption when that toggle is
+                    also on (the fanout worker skips channels that already have one). */}
                 <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <Label htmlFor="custom-captions" className="text-sm">
+                      Different caption per channel
+                    </Label>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      Write your own caption for any selected channel. Channels you leave blank use the shared caption{uniqueCaptions ? " (or the AI caption)" : ""}.
+                    </p>
+                  </div>
+                  <Switch
+                    id="custom-captions"
+                    checked={customCaptions}
+                    onCheckedChange={setCustomCaptions}
+                  />
+                </div>
+                {customCaptions && (() => {
+                  const customIds = Object.keys(buildCaptionOverridesPayload(captionOverrides, selectedChannels, content));
+                  return (
+                    <div className="space-y-3">
+                      <p className="text-xs text-muted-foreground">
+                        {customIds.length} of {selectedChannels.length} channels have a custom caption.
+                      </p>
+                      {selectedChannels.map((id) => {
+                        const ch = channels?.find((c: any) => c.id === id) as any;
+                        if (!ch) return null;
+                        const value = captionOverrides[id] ?? "";
+                        const isCustom = customIds.includes(id);
+                        return (
+                          <div key={id} className="space-y-1.5 rounded-md border p-3">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div className="flex min-w-0 items-center gap-2">
+                                <ChannelAvatar
+                                  avatar={ch.avatar}
+                                  name={ch.name}
+                                  className="h-5 w-5"
+                                  fallbackClassName="text-[9px]"
+                                />
+                                <span className="truncate text-sm font-medium">{ch.name}</span>
+                                <PlatformIcon platform={ch.platform} size="sm" className="shrink-0" />
+                                {isCustom ? (
+                                  <Badge variant="secondary" className="text-[10px]">Custom</Badge>
+                                ) : (
+                                  <span className="text-[11px] text-muted-foreground">Uses shared caption</span>
+                                )}
+                              </div>
+                              <div className="flex shrink-0 gap-2">
+                                <button
+                                  type="button"
+                                  className="text-[11px] text-muted-foreground hover:text-foreground"
+                                  onClick={() => setCaptionOverrides((prev) => ({ ...prev, [id]: content }))}
+                                  disabled={!content}
+                                >
+                                  Start from shared
+                                </button>
+                                {value && (
+                                  <button
+                                    type="button"
+                                    className="text-[11px] text-muted-foreground hover:text-destructive"
+                                    onClick={() =>
+                                      setCaptionOverrides((prev) => {
+                                        const next = { ...prev };
+                                        delete next[id];
+                                        return next;
+                                      })
+                                    }
+                                  >
+                                    Clear
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                            <Textarea
+                              value={value}
+                              onChange={(e) => setCaptionOverrides((prev) => ({ ...prev, [id]: e.target.value }))}
+                              rows={3}
+                              placeholder="Leave blank to use the shared caption"
+                              className="text-sm"
+                            />
+                            <p className="text-right text-[11px] text-muted-foreground">{value.length} characters</p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
+                <div className="flex items-center justify-between gap-3 border-t pt-3">
                   <div className="min-w-0">
                     <Label htmlFor="unique-captions" className="text-sm">
                       Unique caption per channel (AI)
@@ -2412,9 +2530,16 @@ ${content}`;
                   // the strip the user placed (the burn runs now; the draft simply
                   // isn't scheduled, so there is no flip to wait for).
                   const superTextByMediaId = buildSuperTextPayload(postMedia, mediaIds);
+                  // A draft carries the per-channel captions too, so they are
+                  // already on the post page when it is scheduled later.
+                  const manualCaptions =
+                    !isStoryMode && customCaptions
+                      ? buildCaptionOverridesPayload(captionOverrides, selectedChannels, content)
+                      : {};
                   createPost.mutate({
                     content,
                     channelIds: selectedChannels.length > 0 ? selectedChannels : [],
+                    ...(Object.keys(manualCaptions).length > 0 && { captionOverrides: manualCaptions }),
                     ...(mediaIds.length > 0 && { mediaIds }),
                     // ⚠️ The draft must carry the story marker too. Without it the
                     // server stores an ordinary post, and scheduling that draft

@@ -31,6 +31,13 @@ export interface ActiveTask {
      * rejects the whole post.
      */
     storyMentions?: string[];
+    /**
+     * Manual per-channel captions (channelId → caption) from Compose's
+     * "Different caption per channel" editor (2026-09-18). ABSENT ⇒ off, so a
+     * draft from an earlier build restores exactly as before. Re-validated on
+     * restore — kept loose here so this provider stays package-agnostic.
+     */
+    captionOverrides?: Record<string, string>;
   };
   createdAt: number;
 }

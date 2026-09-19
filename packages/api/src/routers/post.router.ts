@@ -18,6 +18,11 @@ import crypto from "crypto";
 import { enforcePlanLimit } from "../middleware/plan-limit.middleware";
 import { assertMediaOwned, assertMediaForPlatforms } from "./chat.router";
 import { planCaptionFanout, captionFanoutJobId } from "../lib/caption-fanout";
+import {
+  captionOverridesSchema,
+  sanitizeCaptionOverrides,
+  contentOverrideForReplacedTarget,
+} from "../lib/caption-overrides";
 
 /**
  * PR-5: load a PostTarget with its parent post's org and require it to belong
@@ -139,6 +144,12 @@ export const postRouter = createRouter({
         // the parked DRAFT to SCHEDULED). Only meaningful with >1 channel —
         // false / single-channel keeps today's shared-caption path untouched.
         uniqueCaptions: z.boolean().default(false),
+        // Manual per-channel captions (channelId → caption) from Compose's
+        // "Different caption per channel" editor (2026-09-18). Written to
+        // PostTarget.contentOverride — the same column the AI fanout and the post
+        // page's editor use — so the publish worker needs no change. Absent ⇒ the
+        // targets are written exactly as before. See lib/caption-overrides.ts.
+        captionOverrides: captionOverridesSchema.optional(),
         formatByChannelId: z.record(z.enum(["FEED", "REEL", "STORY", "SHORT", "VIDEO", "CAROUSEL"])).optional(),
         // Instagram Story mode (2026-09-15). Its PRESENCE is what makes this a
         // story post: every target is forced to format STORY, channels must all be
@@ -431,10 +442,20 @@ export const postRouter = createRouter({
               const formats = isStory
                 ? undefined
                 : sanitizeFormatByChannelId(input.formatByChannelId, ownedChannels, hasVideoMedia);
+              // Manual per-channel captions. A story displays no caption, so none
+              // apply there. Only channels this post targets, only non-blank, only
+              // when different from the shared caption — a no-op override must not
+              // be stored (it would block a later shared-caption edit from reaching
+              // that channel). The key is spread in ONLY when present so a post
+              // without custom captions writes the pre-feature row.
+              const overrides = isStory
+                ? undefined
+                : sanitizeCaptionOverrides(input.captionOverrides, input.channelIds, input.content);
               return input.channelIds.map((channelId) => ({
                 channelId,
                 status,
                 format: (isStory ? "STORY" : (formats?.[channelId] ?? null)) as any,
+                ...(overrides?.[channelId] ? { contentOverride: overrides[channelId] } : {}),
               }));
             })(),
           },
@@ -584,7 +605,10 @@ export const postRouter = createRouter({
           // `format` is selected because channel replacement RECREATES targets:
           // without it every target came back with format NULL, which silently
           // republished an Instagram Story as a Reel (the provider's default).
-          targets: { select: { channelId: true, format: true } },
+          // `contentOverride` for the same reason: recreating targets without it
+          // wiped every per-channel caption (AI-generated or hand-written) the
+          // moment one channel was added on the post page.
+          targets: { select: { channelId: true, format: true, contentOverride: true } },
           _count: { select: { mediaAttachments: true } },
         },
       });
@@ -690,6 +714,9 @@ export const postRouter = createRouter({
                 // alone dropped it for EVERY target, so adding one channel from
                 // the post detail page silently turned a Story into a Reel.
                 format: formatForReplacedTarget(channelId, existing.targets, isStoryPost) as any,
+                // A kept channel keeps its per-channel caption; a new one starts
+                // with the shared caption (null).
+                contentOverride: contentOverrideForReplacedTarget(channelId, existing.targets),
               })),
             },
           }),

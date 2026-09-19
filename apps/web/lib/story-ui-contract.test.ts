@@ -121,7 +121,9 @@ describe("mentions", () => {
 
   it("persists postType and mentions with a STRING signature, never an array identity", () => {
     expect(compose).toMatch(/const storyMentionsSignature = storyMentions\.join\(","\)/);
-    expect(compose).toMatch(/\[content, selectedChannels, draftMediaSignature, postType, storyMentionsSignature\]/);
+    // 2026-09-18: the per-channel captions joined the same dep array, also as a
+    // string signature (caption-overrides-payload.test.ts locks that one).
+    expect(compose).toMatch(/\[content, selectedChannels, draftMediaSignature, postType, storyMentionsSignature, captionOverridesSignature\]/);
   });
 });
 
