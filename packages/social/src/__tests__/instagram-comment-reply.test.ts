@@ -15,9 +15,12 @@ interface Call {
   url: string;
   method: string;
   body?: any;
+  signal?: any;
 }
 
-function mockGraph(handler: (url: string, method: string) => { ok: boolean; status?: number; body: any }) {
+function mockGraph(
+  handler: (url: string, method: string) => { ok: boolean; status?: number; body: any; unparseable?: boolean }
+) {
   const calls: Call[] = [];
   vi.stubGlobal(
     "fetch",
@@ -29,9 +32,18 @@ function mockGraph(handler: (url: string, method: string) => { ok: boolean; stat
       } catch {
         body = init?.body;
       }
-      calls.push({ url: String(url), method, body });
-      const { ok, body: res, status } = handler(String(url), method);
-      return { ok, status: status ?? (ok ? 200 : 400), json: async () => res, headers: { get: () => null } } as any;
+      calls.push({ url: String(url), method, body, signal: init?.signal });
+      const { ok, body: res, status, unparseable } = handler(String(url), method);
+      return {
+        ok,
+        status: status ?? (ok ? 200 : 400),
+        // Mirrors what res.json() really does on an HTML body.
+        json: async () => {
+          if (unparseable) throw new SyntaxError("Unexpected token '<', \"<html> <h\"... is not valid JSON");
+          return res;
+        },
+        headers: { get: () => null },
+      } as any;
     })
   );
   return calls;
@@ -95,7 +107,25 @@ describe("InstagramProvider.getMediaComments", () => {
   it("surfaces any other Graph error verbatim (never a silent empty page)", async () => {
     mockGraph(() => ({ ok: false, body: { error: { code: 4, message: "Application request limit reached" } } }));
     await expect(new InstagramProvider().getMediaComments(tokens, "MEDIA_1")).rejects.toThrow(
-      /Instagram comment list failed: .*request limit/
+      /Instagram comment list failed \(HTTP 400\): .*request limit/
+    );
+  });
+
+  it("does not let a NON-JSON error body (proxy HTML 502) throw a raw SyntaxError past the classifiers", async () => {
+    // The documented failure class: `await res.json()` outside a guard turned a
+    // gateway HTML page into an unhandled parse error.
+    mockGraph(() => ({ ok: false, status: 502, body: undefined, unparseable: true }) as any);
+    await expect(new InstagramProvider().getMediaComments(tokens, "MEDIA_1")).rejects.toThrow(
+      /Instagram comment list failed \(HTTP 502\): unreadable response body/
+    );
+  });
+
+  it("refuses to render an unreadable OK body as an EMPTY comment list", async () => {
+    // "No comments yet" for a post with hundreds would be a displayed value the
+    // API never reported.
+    mockGraph(() => ({ ok: true, status: 200, body: undefined, unparseable: true }) as any);
+    await expect(new InstagramProvider().getMediaComments(tokens, "MEDIA_1")).rejects.toThrow(
+      /unreadable response while loading comments \(HTTP 200\)/
     );
   });
 });
@@ -132,6 +162,35 @@ describe("InstagramProvider.replyToComment", () => {
     }));
     await expect(new InstagramProvider().replyToComment(tokens, "COMMENT_1", "x")).rejects.toThrow(
       COMMENT_OBJECT_GONE_MESSAGE
+    );
+  });
+
+  it("carries an abort signal (fetchT) so a hung Meta connection cannot hold the web request until nginx 504s", async () => {
+    const calls = mockGraph(() => ({ ok: true, body: { id: "REPLY_1" } }));
+    await new InstagramProvider().replyToComment(tokens, "COMMENT_1", "x");
+    expect(calls[0]!.signal).toBeDefined();
+  });
+
+  it("does NOT report a definite failure when an OK response is unreadable — creating a reply is not idempotent", async () => {
+    // Same reasoning as AmbiguousPublishError one tier down: calling this a
+    // failure invites a retry that posts the reply twice.
+    mockGraph(() => ({ ok: true, status: 200, body: undefined, unparseable: true }) as any);
+    await expect(new InstagramProvider().replyToComment(tokens, "COMMENT_1", "x")).rejects.toThrow(
+      /did not confirm it.*may already be posted/s
+    );
+  });
+
+  it("treats an OK response with no id the same way (outcome unknown, not a clean failure)", async () => {
+    mockGraph(() => ({ ok: true, body: {} }));
+    await expect(new InstagramProvider().replyToComment(tokens, "COMMENT_1", "x")).rejects.toThrow(
+      /may already be posted/
+    );
+  });
+
+  it("reports a non-JSON error body with its status instead of a raw SyntaxError", async () => {
+    mockGraph(() => ({ ok: false, status: 504, body: undefined, unparseable: true }) as any);
+    await expect(new InstagramProvider().replyToComment(tokens, "COMMENT_1", "x")).rejects.toThrow(
+      /Instagram comment reply failed \(HTTP 504\): unreadable response body/
     );
   });
 });

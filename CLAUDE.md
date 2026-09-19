@@ -2936,7 +2936,15 @@ reply. No DB model, no webhook — nothing is stored.
   `.trim().min(1).max(2200)` (Instagram's ceiling). The token travels in the POST **body**, never the
   query string. Cross-account safety on `commentId` is Meta's own authorization model (a token can
   only act on media its granting account owns) — the router scopes WHICH channel's token is used.
-- Uses `fetchT` (connect-path timeout) — interactive, user-triggered, low frequency; **not** a worker path.
+- **Both** methods use `fetchT` (connect-path timeout) — interactive, user-triggered, web-process calls, so
+  an unbounded hang would hold the request until nginx 504s. **Never bare `fetch` here.**
+- **⚠️ `await res.json().catch(() => null)`, never bare `res.json()`** — matches every sibling Graph call in
+  the Meta providers, and is the documented 2026-08-18 lesson ("an unreadable body is indeterminate"): an
+  HTML 502/504 would otherwise throw a raw `SyntaxError` PAST both classifiers. Three distinct outcomes:
+  an unreadable ERROR body reports its HTTP status; an unreadable OK body on **list** throws rather than
+  rendering a fabricated "No comments yet"; an unreadable (or id-less) OK body on **reply** says the reply
+  **may already be posted** — creating a reply is NOT idempotent, so calling it a clean failure would
+  invite a retry that double-posts. Same reasoning as `AmbiguousPublishError`, one severity tier down.
 - **v1 limits:** first page only (cursor API exists, UI has no "load more" yet); top-level comments only;
   no hide/delete; Instagram only (Facebook Page comments would need `pages_manage_engagement`);
   no real-time `comments` webhook (the webhook route still logs it as unhandled).

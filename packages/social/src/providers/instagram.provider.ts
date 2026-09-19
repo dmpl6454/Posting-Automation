@@ -1656,7 +1656,11 @@ export class InstagramProvider extends SocialProvider {
     if (after) params.set("after", after);
 
     const res = await fetchT(`${this.graphBaseUrl}/${this.apiVersion}/${mediaId}/comments?${params.toString()}`);
-    const data: any = await res.json();
+    // ⚠️ `.catch(() => null)` like every sibling Graph call in this file: a
+    // proxy's HTML 502/504 would otherwise throw a raw SyntaxError PAST both
+    // classifiers below (the documented failure class from the 2026-08-18
+    // incident — "an unreadable body is indeterminate").
+    const data: any = await res.json().catch(() => null);
 
     if (!res.ok) {
       if (isCommentPermissionDeniedError(data?.error)) {
@@ -1665,7 +1669,18 @@ export class InstagramProvider extends SocialProvider {
       if (isCommentObjectGoneError(data?.error)) {
         throw new Error(COMMENT_OBJECT_GONE_MESSAGE);
       }
-      throw new Error(`Instagram comment list failed: ${JSON.stringify(data)}`);
+      throw new Error(
+        `Instagram comment list failed (HTTP ${res.status}): ${
+          data === null ? "unreadable response body" : JSON.stringify(data)
+        }`
+      );
+    }
+
+    // An OK response we cannot parse is NOT an empty comment list. Returning
+    // one would render "No comments yet" for a post that may have hundreds —
+    // a displayed value the API never reported.
+    if (data === null) {
+      throw new Error(`Instagram returned an unreadable response while loading comments (HTTP ${res.status}).`);
     }
 
     return parseCommentsPage(data);
@@ -1680,12 +1695,14 @@ export class InstagramProvider extends SocialProvider {
    * router already does on the CHANNEL whose token gets used.
    */
   async replyToComment(tokens: OAuthTokens, commentId: string, message: string): Promise<{ id: string }> {
-    const res = await fetch(`${this.graphBaseUrl}/${this.apiVersion}/${commentId}/replies`, {
+    // fetchT, not bare fetch: this runs in the WEB process on a user-triggered
+    // request, so an unbounded hang would hold the request until nginx 504s.
+    const res = await fetchT(`${this.graphBaseUrl}/${this.apiVersion}/${commentId}/replies`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message, access_token: tokens.accessToken }),
     });
-    const data: any = await res.json();
+    const data: any = await res.json().catch(() => null);
 
     if (!res.ok) {
       if (isCommentPermissionDeniedError(data?.error)) {
@@ -1694,7 +1711,22 @@ export class InstagramProvider extends SocialProvider {
       if (isCommentObjectGoneError(data?.error)) {
         throw new Error(COMMENT_OBJECT_GONE_MESSAGE);
       }
-      throw new Error(`Instagram comment reply failed: ${JSON.stringify(data)}`);
+      throw new Error(
+        `Instagram comment reply failed (HTTP ${res.status}): ${
+          data === null ? "unreadable response body" : JSON.stringify(data)
+        }`
+      );
+    }
+
+    // ⚠️ An OK response we cannot read leaves the outcome UNKNOWN, and creating
+    // a reply is NOT idempotent. Reporting a plain failure here would invite the
+    // user to retry and post the reply twice — the same reasoning as
+    // AmbiguousPublishError on the publish path, one severity tier down. Say
+    // plainly that it may already be live instead.
+    if (data === null || !data.id) {
+      throw new Error(
+        "Instagram accepted the reply but did not confirm it. Refresh the comments before replying again — it may already be posted."
+      );
     }
 
     return { id: data.id };
