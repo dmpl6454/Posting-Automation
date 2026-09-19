@@ -20,6 +20,13 @@ describe("Meta insights scopes", () => {
     expect(getDefaultScopes("FACEBOOK")).toContain("pages_read_user_content");
   });
 
+  it("INSTAGRAM includes instagram_manage_comments (required for the comment-reply feature)", () => {
+    // Re-added 2026-09-19 — see channel.router.ts's comment above this scope for
+    // why the 2026-06 App Review rejection doesn't apply anymore: a real
+    // reply/moderate feature now backs the request (comment.router.ts).
+    expect(getDefaultScopes("INSTAGRAM")).toContain("instagram_manage_comments");
+  });
+
   it("keeps the existing publishing scopes intact", () => {
     const fb = getDefaultScopes("FACEBOOK");
     expect(fb).toEqual(expect.arrayContaining(["pages_manage_posts", "pages_read_engagement"]));

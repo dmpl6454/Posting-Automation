@@ -2,6 +2,14 @@ import type { SocialPlatform } from "@postautomation/db";
 import { SocialProvider } from "../abstract/social.abstract";
 import { resolveVideoThumbnailUrl, supportsInstagramCover } from "../utils/video-thumbnail";
 import {
+  parseCommentsPage,
+  isCommentPermissionDeniedError,
+  isCommentObjectGoneError,
+  COMMENT_PERMISSION_DENIED_MESSAGE,
+  COMMENT_OBJECT_GONE_MESSAGE,
+  type InstagramCommentPage,
+} from "../utils/instagram-comments";
+import {
   isStoryFormat,
   isStoryModePost,
   buildStoryUserTags,
@@ -1624,5 +1632,103 @@ export class InstagramProvider extends SocialProvider {
 
     // Step 3: Publish the carousel
     return this.publishContainer(tokens, igUserId, carouselData.id, payload.content);
+  }
+
+  /**
+   * List top-level comments on a published IG Media. Requires
+   * `instagram_manage_comments` — see instagram-comments.ts for the current
+   * permission status. `after` is the cursor from a previous page's
+   * `nextCursor` (undefined = first page).
+   *
+   * Connect-path-shaped call (interactive, user-initiated, low frequency) —
+   * uses fetchT like getProfile/getAllInstagramAccounts, not the worker's
+   * unbounded publish-path fetch.
+   */
+  async getMediaComments(
+    tokens: OAuthTokens,
+    mediaId: string,
+    after?: string
+  ): Promise<InstagramCommentPage> {
+    const params = new URLSearchParams({
+      fields: "id,text,timestamp,username,like_count,hidden",
+      access_token: tokens.accessToken,
+    });
+    if (after) params.set("after", after);
+
+    const res = await fetchT(`${this.graphBaseUrl}/${this.apiVersion}/${mediaId}/comments?${params.toString()}`);
+    // ⚠️ `.catch(() => null)` like every sibling Graph call in this file: a
+    // proxy's HTML 502/504 would otherwise throw a raw SyntaxError PAST both
+    // classifiers below (the documented failure class from the 2026-08-18
+    // incident — "an unreadable body is indeterminate").
+    const data: any = await res.json().catch(() => null);
+
+    if (!res.ok) {
+      if (isCommentPermissionDeniedError(data?.error)) {
+        throw new Error(COMMENT_PERMISSION_DENIED_MESSAGE);
+      }
+      if (isCommentObjectGoneError(data?.error)) {
+        throw new Error(COMMENT_OBJECT_GONE_MESSAGE);
+      }
+      throw new Error(
+        `Instagram comment list failed (HTTP ${res.status}): ${
+          data === null ? "unreadable response body" : JSON.stringify(data)
+        }`
+      );
+    }
+
+    // An OK response we cannot parse is NOT an empty comment list. Returning
+    // one would render "No comments yet" for a post that may have hundreds —
+    // a displayed value the API never reported.
+    if (data === null) {
+      throw new Error(`Instagram returned an unreadable response while loading comments (HTTP ${res.status}).`);
+    }
+
+    return parseCommentsPage(data);
+  }
+
+  /**
+   * Reply to a comment on media owned by this account. Meta's own
+   * authorization model is what stops one connected account's token from
+   * replying to a comment on ANOTHER account's media — the token can only
+   * act on media the granting account owns — so no extra ownership check of
+   * `commentId` against `mediaId` is needed here beyond the org-scoping the
+   * router already does on the CHANNEL whose token gets used.
+   */
+  async replyToComment(tokens: OAuthTokens, commentId: string, message: string): Promise<{ id: string }> {
+    // fetchT, not bare fetch: this runs in the WEB process on a user-triggered
+    // request, so an unbounded hang would hold the request until nginx 504s.
+    const res = await fetchT(`${this.graphBaseUrl}/${this.apiVersion}/${commentId}/replies`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message, access_token: tokens.accessToken }),
+    });
+    const data: any = await res.json().catch(() => null);
+
+    if (!res.ok) {
+      if (isCommentPermissionDeniedError(data?.error)) {
+        throw new Error(COMMENT_PERMISSION_DENIED_MESSAGE);
+      }
+      if (isCommentObjectGoneError(data?.error)) {
+        throw new Error(COMMENT_OBJECT_GONE_MESSAGE);
+      }
+      throw new Error(
+        `Instagram comment reply failed (HTTP ${res.status}): ${
+          data === null ? "unreadable response body" : JSON.stringify(data)
+        }`
+      );
+    }
+
+    // ⚠️ An OK response we cannot read leaves the outcome UNKNOWN, and creating
+    // a reply is NOT idempotent. Reporting a plain failure here would invite the
+    // user to retry and post the reply twice — the same reasoning as
+    // AmbiguousPublishError on the publish path, one severity tier down. Say
+    // plainly that it may already be live instead.
+    if (data === null || !data.id) {
+      throw new Error(
+        "Instagram accepted the reply but did not confirm it. Refresh the comments before replying again — it may already be posted."
+      );
+    }
+
+    return { id: data.id };
   }
 }

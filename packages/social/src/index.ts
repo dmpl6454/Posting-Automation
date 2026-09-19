@@ -68,3 +68,10 @@ export {
   isIndeterminatePublishError,
 } from "./utils/ambiguous-publish";
 export type { ExternalPostSummary, ExternalPostPage } from "./abstract/social.types";
+// Instagram comment replies (2026-09-19) — see instagram-comments.ts for the
+// current instagram_manage_comments permission status.
+export {
+  COMMENT_REPLY_MAX_LENGTH,
+  type InstagramComment,
+  type InstagramCommentPage,
+} from "./utils/instagram-comments";

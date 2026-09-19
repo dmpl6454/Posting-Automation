@@ -251,6 +251,32 @@ export default function PostDetailPage() {
     },
   });
 
+  // ── Instagram comment replies (2026-09-19) ──────────────────────────────────
+  // One expanded target at a time (accordion) — keeps the query/state simple for
+  // a v1 that doesn't yet paginate past the first page of comments.
+  const [expandedCommentsTargetId, setExpandedCommentsTargetId] = useState<string | null>(null);
+  const [replyingCommentId, setReplyingCommentId] = useState<string | null>(null);
+  const [replyDraftByCommentId, setReplyDraftByCommentId] = useState<Record<string, string>>({});
+  const commentsQuery = trpc.comment.list.useQuery(
+    { targetId: expandedCommentsTargetId ?? "" },
+    { enabled: !!expandedCommentsTargetId }
+  );
+  const replyToComment = trpc.comment.reply.useMutation({
+    onSuccess: (_res, variables) => {
+      toast({ title: "Reply sent" });
+      setReplyDraftByCommentId((prev) => {
+        const next = { ...prev };
+        delete next[variables.commentId];
+        return next;
+      });
+      setReplyingCommentId(null);
+      commentsQuery.refetch();
+    },
+    onError: (err) => {
+      toast({ title: "Couldn't send reply", description: humanizeError(err), variant: "destructive" });
+    },
+  });
+
   // ── Submit for review (APPR-1) ──────────────────────────────────────────────
   const [reviewerOpen, setReviewerOpen] = useState(false);
   const [reviewerIds, setReviewerIds] = useState<string[]>([]);
@@ -674,6 +700,99 @@ export default function PostDetailPage() {
                       + Add a unique caption for this channel
                     </button>
                   ) : null}
+                  {/* Instagram comment replies (2026-09-19). Requires
+                      instagram_manage_comments — app-role accounts have it today;
+                      external accounts get it once Meta approves Advanced Access. */}
+                  {target.channel.platform === "INSTAGRAM" && target.status === "PUBLISHED" && target.publishedId && (
+                    <div className="space-y-2">
+                      <button
+                        type="button"
+                        className="text-left text-xs text-muted-foreground hover:text-primary hover:underline"
+                        onClick={() => {
+                          setExpandedCommentsTargetId((prev) => (prev === target.id ? null : target.id));
+                          setReplyingCommentId(null);
+                        }}
+                      >
+                        {expandedCommentsTargetId === target.id ? "Hide comments" : "Show comments"}
+                      </button>
+                      {expandedCommentsTargetId === target.id && (
+                        <div className="space-y-2 rounded-md border p-2">
+                          {commentsQuery.isLoading ? (
+                            <p className="text-xs text-muted-foreground">Loading comments…</p>
+                          ) : commentsQuery.isError ? (
+                            <p className="text-xs text-destructive">{humanizeError(commentsQuery.error)}</p>
+                          ) : commentsQuery.data?.comments.length === 0 ? (
+                            <p className="text-xs text-muted-foreground">No comments yet.</p>
+                          ) : (
+                            commentsQuery.data?.comments.map((c: any) => (
+                              <div key={c.id} className="space-y-1 border-b pb-2 last:border-b-0 last:pb-0">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-xs font-medium">@{c.username ?? "unknown"}</span>
+                                  {c.hidden && (
+                                    <Badge variant="secondary" className="text-[10px]">
+                                      Hidden
+                                    </Badge>
+                                  )}
+                                </div>
+                                <p className="whitespace-pre-wrap text-xs text-muted-foreground">{c.text}</p>
+                                {replyingCommentId === c.id ? (
+                                  <div className="flex flex-col gap-1.5">
+                                    <Textarea
+                                      value={replyDraftByCommentId[c.id] ?? ""}
+                                      onChange={(e) =>
+                                        setReplyDraftByCommentId((prev) => ({ ...prev, [c.id]: e.target.value }))
+                                      }
+                                      rows={2}
+                                      placeholder="Write a reply…"
+                                      className="text-xs"
+                                      maxLength={2200}
+                                    />
+                                    <div className="flex gap-2">
+                                      <Button
+                                        size="sm"
+                                        className="h-6 px-2 text-xs"
+                                        disabled={
+                                          replyToComment.isPending || !(replyDraftByCommentId[c.id] ?? "").trim()
+                                        }
+                                        onClick={() =>
+                                          replyToComment.mutate({
+                                            targetId: target.id,
+                                            commentId: c.id,
+                                            message: replyDraftByCommentId[c.id] ?? "",
+                                          })
+                                        }
+                                      >
+                                        {replyToComment.isPending && (
+                                          <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                                        )}
+                                        Send
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        className="h-6 px-2 text-xs"
+                                        onClick={() => setReplyingCommentId(null)}
+                                      >
+                                        Cancel
+                                      </Button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    className="text-[11px] text-muted-foreground hover:text-primary hover:underline"
+                                    onClick={() => setReplyingCommentId(c.id)}
+                                  >
+                                    Reply
+                                  </button>
+                                )}
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                   {/* Upload progress bar — live via SSE; falls back to DB-polled value */}
                   {target.status === "PUBLISHING" && (() => {
                     const pct = liveProgress[target.id] ?? target.uploadProgress;

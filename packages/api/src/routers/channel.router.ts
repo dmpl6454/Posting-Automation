@@ -585,7 +585,6 @@ function getDefaultScopes(platform: string): string[] {
     //    stay "—" for external users until this is approved.
     //  - `read_insights`: helps the post_clicks/post_video_views insight VALUES.
     //    Does NOT restore impressions/reach (Meta deleted those metrics).
-    // `instagram_manage_comments` intentionally omitted (Meta rejected it 2026-06).
     FACEBOOK: ["public_profile", "pages_show_list", "pages_manage_posts", "pages_read_engagement", "pages_read_user_content", "read_insights"],
     // `instagram_manage_insights` is REQUIRED (with instagram_basic +
     // pages_read_engagement) to read /{ig-media}/insights on the Facebook-Login
@@ -593,7 +592,20 @@ function getDefaultScopes(platform: string): string[] {
     // call 403s and IG reach/impressions/shares are stored as 0 while only
     // like_count/comments_count (which ride on instagram_basic) are real —
     // confirmed against prod. Needs Advanced Access via App Review.
-    INSTAGRAM: ["public_profile", "pages_show_list", "pages_read_engagement", "instagram_basic", "instagram_content_publish", "business_management", "instagram_manage_insights"],
+    //
+    // `instagram_manage_comments` (2026-09-19): re-added after being dropped
+    // 2026-06 for "Disallowed Use Case" (Dev Policy 1.6) — at that time nothing
+    // in the app actually replied to/moderated comments, only read counts (which
+    // ride on instagram_basic and never needed this scope). The comment-reply
+    // feature this scope now backs (comment.router.ts, instagram.provider.ts
+    // getMediaComments/replyToComment) is exactly what was missing last time —
+    // do NOT drop this again without also removing that feature. Requesting an
+    // unapproved scope does not block connect for external users (verified
+    // pattern, see instagram_manage_insights above); it just isn't GRANTED to
+    // them until Advanced Access is approved. App-role accounts (admin/dev/
+    // tester) get it immediately on reconnect, which also satisfies Meta's
+    // "one successful call exercising the permission" App Review test-call gate.
+    INSTAGRAM: ["public_profile", "pages_show_list", "pages_read_engagement", "instagram_basic", "instagram_content_publish", "business_management", "instagram_manage_insights", "instagram_manage_comments"],
     REDDIT: ["submit", "identity", "read"],
     // TikTok Content Posting API. `video.publish` = Direct Post (what publishPost
     // uses via PULL_FROM_URL); `video.upload` = upload-to-drafts; `user.info.basic`

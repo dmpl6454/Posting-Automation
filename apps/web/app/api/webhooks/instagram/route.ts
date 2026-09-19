@@ -22,7 +22,9 @@ export const runtime = "nodejs";
  *
  * WHY story_insights ONLY (for now)
  * ---------------------------------
- *   comments        — needs instagram_manage_comments (REJECTED — pending Tier 3 resubmission)
+ *   comments        — needs instagram_manage_comments (REQUESTED again 2026-09-19 now that a real
+ *                     reply feature backs it — comment.router.ts; not yet Advanced-Access approved.
+ *                     Real-time comment webhooks are a follow-up; v1 lists on demand.)
  *   mentions        — needs instagram_manage_comments (same)
  *   messages        — Messenger API territory, out of scope
  *   story_insights  — needs instagram_manage_insights (APPROVED)
