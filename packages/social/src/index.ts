@@ -72,6 +72,10 @@ export type { ExternalPostSummary, ExternalPostPage } from "./abstract/social.ty
 // current instagram_manage_comments permission status.
 export {
   COMMENT_REPLY_MAX_LENGTH,
+  // 🔴 The router MUST validate client-supplied comment ids with this before
+  // they reach a Graph URL path — see the note on the constant.
+  GRAPH_OBJECT_ID_RE,
+  isValidGraphObjectId,
   type InstagramComment,
   type InstagramCommentPage,
 } from "./utils/instagram-comments";

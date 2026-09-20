@@ -7,6 +7,8 @@ import {
   isCommentObjectGoneError,
   COMMENT_PERMISSION_DENIED_MESSAGE,
   COMMENT_OBJECT_GONE_MESSAGE,
+  COMMENT_LIST_FAILED_MESSAGE,
+  COMMENT_REPLY_FAILED_MESSAGE,
   type InstagramCommentPage,
 } from "../utils/instagram-comments";
 import {
@@ -1655,7 +1657,13 @@ export class InstagramProvider extends SocialProvider {
     });
     if (after) params.set("after", after);
 
-    const res = await fetchT(`${this.graphBaseUrl}/${this.apiVersion}/${mediaId}/comments?${params.toString()}`);
+    // encodeURIComponent on every interpolated PATH segment — see
+    // GRAPH_OBJECT_ID_RE. mediaId is DB-derived today, but encoding here means a
+    // future caller cannot turn this into the path-injection the reply endpoint
+    // was vulnerable to.
+    const res = await fetchT(
+      `${this.graphBaseUrl}/${this.apiVersion}/${encodeURIComponent(mediaId)}/comments?${params.toString()}`
+    );
     // ⚠️ `.catch(() => null)` like every sibling Graph call in this file: a
     // proxy's HTML 502/504 would otherwise throw a raw SyntaxError PAST both
     // classifiers below (the documented failure class from the 2026-08-18
@@ -1669,18 +1677,22 @@ export class InstagramProvider extends SocialProvider {
       if (isCommentObjectGoneError(data?.error)) {
         throw new Error(COMMENT_OBJECT_GONE_MESSAGE);
       }
-      throw new Error(
-        `Instagram comment list failed (HTTP ${res.status}): ${
-          data === null ? "unreadable response body" : JSON.stringify(data)
-        }`
+      // The raw body is LOGGED, never thrown: it becomes a TRPCError message on
+      // the client, and humanizeError does not recognise Graph JSON as technical,
+      // so it would render verbatim in the UI.
+      console.error(
+        `[Instagram] comment list failed (HTTP ${res.status}):`,
+        data === null ? "unreadable response body" : JSON.stringify(data)
       );
+      throw new Error(COMMENT_LIST_FAILED_MESSAGE);
     }
 
     // An OK response we cannot parse is NOT an empty comment list. Returning
     // one would render "No comments yet" for a post that may have hundreds —
     // a displayed value the API never reported.
     if (data === null) {
-      throw new Error(`Instagram returned an unreadable response while loading comments (HTTP ${res.status}).`);
+      console.error(`[Instagram] comment list returned an unreadable body on HTTP ${res.status}`);
+      throw new Error(COMMENT_LIST_FAILED_MESSAGE);
     }
 
     return parseCommentsPage(data);
@@ -1697,7 +1709,11 @@ export class InstagramProvider extends SocialProvider {
   async replyToComment(tokens: OAuthTokens, commentId: string, message: string): Promise<{ id: string }> {
     // fetchT, not bare fetch: this runs in the WEB process on a user-triggered
     // request, so an unbounded hang would hold the request until nginx 504s.
-    const res = await fetchT(`${this.graphBaseUrl}/${this.apiVersion}/${commentId}/replies`, {
+    // 🔴 encodeURIComponent is LOAD-BEARING here: commentId is client-supplied,
+    // and raw interpolation made this an arbitrary authenticated Graph POST.
+    // The router's GRAPH_OBJECT_ID_RE check is the first layer; this is the
+    // second, so the provider is safe even if called from somewhere else.
+    const res = await fetchT(`${this.graphBaseUrl}/${this.apiVersion}/${encodeURIComponent(commentId)}/replies`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message, access_token: tokens.accessToken }),
@@ -1711,11 +1727,11 @@ export class InstagramProvider extends SocialProvider {
       if (isCommentObjectGoneError(data?.error)) {
         throw new Error(COMMENT_OBJECT_GONE_MESSAGE);
       }
-      throw new Error(
-        `Instagram comment reply failed (HTTP ${res.status}): ${
-          data === null ? "unreadable response body" : JSON.stringify(data)
-        }`
+      console.error(
+        `[Instagram] comment reply failed (HTTP ${res.status}):`,
+        data === null ? "unreadable response body" : JSON.stringify(data)
       );
+      throw new Error(COMMENT_REPLY_FAILED_MESSAGE);
     }
 
     // ⚠️ An OK response we cannot read leaves the outcome UNKNOWN, and creating

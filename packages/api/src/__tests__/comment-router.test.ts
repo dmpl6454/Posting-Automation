@@ -39,7 +39,7 @@ function session() {
 }
 
 function buildCaller(opts: {
-  target?: Partial<{ status: string; publishedId: string | null; orgId: string; channelId: string }> | null;
+  target?: Partial<{ status: string; format: string | null; publishedId: string | null; orgId: string; channelId: string }> | null;
   channel?: Partial<{ platform: string; disconnectedAt: Date | null; accessToken: string }> | null;
 }) {
   const target =
@@ -48,6 +48,7 @@ function buildCaller(opts: {
       : {
           id: TARGET_ID,
           status: "PUBLISHED",
+          format: null,
           publishedId: "MEDIA_1",
           channelId: CHANNEL_ID,
           post: { organizationId: opts.target?.orgId ?? ORG_ID },
@@ -162,14 +163,14 @@ describe("comment.reply", () => {
     replyToComment.mockResolvedValue({ id: "REPLY_1" });
     const { caller, channelFindUnique } = buildCaller({});
 
-    const res = await caller.reply({ targetId: TARGET_ID, commentId: "COMMENT_1", message: "  Thanks!  " });
+    const res = await caller.reply({ targetId: TARGET_ID, commentId: "17900000000000001", message: "  Thanks!  " });
 
     expect(res).toEqual({ id: "REPLY_1" });
     expect(channelFindUnique.mock.calls[0]![0]).toEqual({ where: { id: CHANNEL_ID } });
     // zod .trim() runs before the provider sees it
     expect(replyToComment).toHaveBeenCalledWith(
       expect.objectContaining({ accessToken: "DECRYPTED_TOKEN" }),
-      "COMMENT_1",
+      "17900000000000001",
       "Thanks!"
     );
   });
@@ -177,34 +178,93 @@ describe("comment.reply", () => {
   it("cannot bypass the gate by calling reply directly on a foreign target", async () => {
     const { caller } = buildCaller({ target: { orgId: "org-other" } });
     await expect(
-      caller.reply({ targetId: TARGET_ID, commentId: "COMMENT_1", message: "hi" })
+      caller.reply({ targetId: TARGET_ID, commentId: "17900000000000001", message: "hi" })
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
     expect(replyToComment).not.toHaveBeenCalled();
   });
 
   it("rejects an empty / whitespace-only reply before any Graph call", async () => {
     const { caller } = buildCaller({});
-    await expect(caller.reply({ targetId: TARGET_ID, commentId: "C", message: "   " })).rejects.toThrow();
+    await expect(caller.reply({ targetId: TARGET_ID, commentId: "17900000000000001", message: "   " })).rejects.toThrow();
     expect(replyToComment).not.toHaveBeenCalled();
   });
 
   it("rejects a reply over Instagram's 2200-character ceiling before any Graph call", async () => {
     const { caller } = buildCaller({});
     await expect(
-      caller.reply({ targetId: TARGET_ID, commentId: "C", message: "x".repeat(2201) })
+      caller.reply({ targetId: TARGET_ID, commentId: "17900000000000001", message: "x".repeat(2201) })
     ).rejects.toThrow();
     expect(replyToComment).not.toHaveBeenCalled();
   });
 
   it("refuses to reply through a non-Instagram or disconnected channel", async () => {
     const fb = buildCaller({ channel: { platform: "FACEBOOK" } });
-    await expect(fb.caller.reply({ targetId: TARGET_ID, commentId: "C", message: "hi" })).rejects.toMatchObject({
+    await expect(fb.caller.reply({ targetId: TARGET_ID, commentId: "17900000000000001", message: "hi" })).rejects.toMatchObject({
       code: "BAD_REQUEST",
     });
     const gone = buildCaller({ channel: { disconnectedAt: new Date() } });
-    await expect(gone.caller.reply({ targetId: TARGET_ID, commentId: "C", message: "hi" })).rejects.toMatchObject({
+    await expect(gone.caller.reply({ targetId: TARGET_ID, commentId: "17900000000000001", message: "hi" })).rejects.toMatchObject({
       code: "BAD_REQUEST",
     });
     expect(replyToComment).not.toHaveBeenCalled();
+  });
+});
+
+describe("comment.reply — commentId is the only client value reaching a Graph URL path", () => {
+  it("🔴 REJECTS the arbitrary-authenticated-POST payload before any Graph call", async () => {
+    const { caller } = buildCaller({});
+    await expect(
+      caller.reply({
+        targetId: TARGET_ID,
+        // Raw-interpolated this retargets the POST to the Create-Media edge on
+        // the org's own token, bypassing enforcePlanLimit/assertMediaOwned.
+        commentId: "17841400000000000/media?image_url=https%3A%2F%2Fevil.example%2Fx.jpg&caption=Hacked&x=",
+        message: "hi",
+      })
+    ).rejects.toThrow();
+    expect(replyToComment).not.toHaveBeenCalled();
+  });
+
+  it("rejects any id containing a path/query breakout character", async () => {
+    const { caller } = buildCaller({});
+    for (const bad of ["123/media", "123?fields=x", "123&method=delete", "123%2Fmedia", "abc", "../me"]) {
+      await expect(
+        caller.reply({ targetId: TARGET_ID, commentId: bad, message: "hi" })
+      ).rejects.toThrow();
+    }
+    expect(replyToComment).not.toHaveBeenCalled();
+  });
+
+  it("still accepts a legitimate composite {page}_{post} id", async () => {
+    replyToComment.mockResolvedValue({ id: "REPLY_1" });
+    const { caller } = buildCaller({});
+    await caller.reply({ targetId: TARGET_ID, commentId: "112035290218472_9988776655", message: "hi" });
+    expect(replyToComment).toHaveBeenCalledWith(expect.anything(), "112035290218472_9988776655", "hi");
+  });
+});
+
+describe("stories have no comments edge", () => {
+  it("refuses list on a STORY-format target", async () => {
+    const { caller } = buildCaller({ target: { format: "STORY" } });
+    await expect(caller.list({ targetId: TARGET_ID })).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringContaining("stories don't have comments"),
+    });
+    expect(getMediaComments).not.toHaveBeenCalled();
+  });
+
+  it("refuses reply on a STORY-format target", async () => {
+    const { caller } = buildCaller({ target: { format: "STORY" } });
+    await expect(
+      caller.reply({ targetId: TARGET_ID, commentId: "17900000000000001", message: "hi" })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(replyToComment).not.toHaveBeenCalled();
+  });
+
+  it("still allows a REEL / feed target", async () => {
+    getMediaComments.mockResolvedValue({ comments: [], nextCursor: null });
+    const { caller } = buildCaller({ target: { format: "REEL" } });
+    await caller.list({ targetId: TARGET_ID });
+    expect(getMediaComments).toHaveBeenCalled();
   });
 });

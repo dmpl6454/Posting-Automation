@@ -3,6 +3,8 @@ import { InstagramProvider } from "../providers/instagram.provider";
 import {
   COMMENT_PERMISSION_DENIED_MESSAGE,
   COMMENT_OBJECT_GONE_MESSAGE,
+  COMMENT_LIST_FAILED_MESSAGE,
+  COMMENT_REPLY_FAILED_MESSAGE,
 } from "../utils/instagram-comments";
 
 /**
@@ -84,6 +86,14 @@ describe("InstagramProvider.getMediaComments", () => {
     expect(new URL(calls[0]!.url).searchParams.get("after")).toBe("CURSOR_A");
   });
 
+  it("encodes the media id path segment too (defence in depth for a future caller)", async () => {
+    const calls = mockGraph(() => ({ ok: true, body: { data: [] } }));
+    await new InstagramProvider().getMediaComments(tokens, "123/insights?metric=x&");
+    const u = new URL(calls[0]!.url);
+    expect(u.pathname.endsWith("/comments")).toBe(true);
+    expect(u.pathname).not.toContain("/insights");
+  });
+
   it("maps Meta's (#10) permission error to the actionable reconnect message", async () => {
     mockGraph(() => ({
       ok: false,
@@ -104,29 +114,40 @@ describe("InstagramProvider.getMediaComments", () => {
     );
   });
 
-  it("surfaces any other Graph error verbatim (never a silent empty page)", async () => {
+  it("does NOT render raw Graph JSON to the user — logs it, throws a stable message", async () => {
+    // humanizeError does not recognise `{"error":{...}}` as technical, so a raw
+    // Graph body in the thrown message reaches the UI verbatim.
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     mockGraph(() => ({ ok: false, body: { error: { code: 4, message: "Application request limit reached" } } }));
     await expect(new InstagramProvider().getMediaComments(tokens, "MEDIA_1")).rejects.toThrow(
-      /Instagram comment list failed \(HTTP 400\): .*request limit/
+      COMMENT_LIST_FAILED_MESSAGE
     );
+    // The detail is not lost — it goes to the server log.
+    expect(spy.mock.calls.flat().join(" ")).toMatch(/request limit/);
+    spy.mockRestore();
   });
 
   it("does not let a NON-JSON error body (proxy HTML 502) throw a raw SyntaxError past the classifiers", async () => {
     // The documented failure class: `await res.json()` outside a guard turned a
     // gateway HTML page into an unhandled parse error.
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     mockGraph(() => ({ ok: false, status: 502, body: undefined, unparseable: true }) as any);
     await expect(new InstagramProvider().getMediaComments(tokens, "MEDIA_1")).rejects.toThrow(
-      /Instagram comment list failed \(HTTP 502\): unreadable response body/
+      COMMENT_LIST_FAILED_MESSAGE
     );
+    expect(spy.mock.calls.flat().join(" ")).toMatch(/502|unreadable/);
+    spy.mockRestore();
   });
 
   it("refuses to render an unreadable OK body as an EMPTY comment list", async () => {
     // "No comments yet" for a post with hundreds would be a displayed value the
     // API never reported.
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     mockGraph(() => ({ ok: true, status: 200, body: undefined, unparseable: true }) as any);
     await expect(new InstagramProvider().getMediaComments(tokens, "MEDIA_1")).rejects.toThrow(
-      /unreadable response while loading comments \(HTTP 200\)/
+      COMMENT_LIST_FAILED_MESSAGE
     );
+    spy.mockRestore();
   });
 });
 
@@ -188,9 +209,25 @@ describe("InstagramProvider.replyToComment", () => {
   });
 
   it("reports a non-JSON error body with its status instead of a raw SyntaxError", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     mockGraph(() => ({ ok: false, status: 504, body: undefined, unparseable: true }) as any);
     await expect(new InstagramProvider().replyToComment(tokens, "COMMENT_1", "x")).rejects.toThrow(
-      /Instagram comment reply failed \(HTTP 504\): unreadable response body/
+      COMMENT_REPLY_FAILED_MESSAGE
     );
+    expect(spy.mock.calls.flat().join(" ")).toMatch(/504|unreadable/);
+    spy.mockRestore();
+  });
+
+  it("🔴 ENCODES commentId so a crafted value cannot retarget the Graph edge", async () => {
+    const calls = mockGraph(() => ({ ok: true, body: { id: "REPLY_1" } }));
+    const evil = "17841400000000000/media?image_url=https%3A%2F%2Fevil.example%2Fx.jpg&caption=Hacked&x=";
+    await new InstagramProvider().replyToComment(tokens, evil, "x");
+
+    const u = new URL(calls[0]!.url);
+    // Without encoding this resolves to /v18.0/17841400000000000/media and the
+    // POST lands on the Create-Media edge, authenticated by the org's token.
+    expect(u.pathname.endsWith("/replies")).toBe(true);
+    expect(u.pathname).not.toContain("/media");
+    expect(u.search).toBe("");
   });
 });

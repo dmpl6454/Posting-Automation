@@ -103,3 +103,43 @@ export const COMMENT_OBJECT_GONE_MESSAGE =
 
 /** Instagram comment text limit (same as a normal IG comment). */
 export const COMMENT_REPLY_MAX_LENGTH = 2200;
+
+/**
+ * 🔴 SECURITY — the shape a Graph object id may take, enforced at the router
+ * boundary because `commentId` is the ONLY client-supplied value this feature
+ * puts into a Graph URL **path**.
+ *
+ * Without it, `${base}/${version}/${commentId}/replies` is a path-injection
+ * primitive: a commentId of
+ *   `17841400000000000/media?image_url=…&caption=…&x=`
+ * resolves (verified with WHATWG URL) to pathname `/v18.0/17841400000000000/media`
+ * with the trailing `/replies` absorbed as a query token — i.e. an arbitrary
+ * authenticated POST to any Graph edge the channel's token can reach (Create
+ * Media, media_publish, /{page}/feed, DELETE via `?method=delete`), bypassing
+ * enforcePlanLimit, assertMediaOwned and the whole ambiguousAt duplicate-publish
+ * machinery. Instagram channels store the long-lived Facebook USER token, so the
+ * blast radius spans every Page that consent granted — including ones belonging
+ * to other orgs' channels.
+ *
+ * Real ids are digits, optionally `{page}_{post}` composite. Everything else —
+ * `/ ? # & % :` and whitespace — is refused. `encodeURIComponent` at the
+ * interpolation site is the second, independent layer.
+ */
+export const GRAPH_OBJECT_ID_RE = /^\d+(_\d+)?$/;
+
+export function isValidGraphObjectId(value: string): boolean {
+  return GRAPH_OBJECT_ID_RE.test(value);
+}
+
+/**
+ * User-facing fallback for a Graph failure we have no specific classification
+ * for. The raw body is logged server-side instead of being thrown: it reaches
+ * the client as a TRPCError message, and `humanizeError` does not recognise
+ * `Instagram comment list failed: {"error":…}` as technical, so the raw Meta
+ * JSON would render verbatim in the UI.
+ */
+export const COMMENT_LIST_FAILED_MESSAGE =
+  "Instagram couldn't load the comments right now. Please try again in a moment.";
+
+export const COMMENT_REPLY_FAILED_MESSAGE =
+  "Instagram couldn't post that reply right now. Please try again in a moment.";

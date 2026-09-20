@@ -2928,6 +2928,23 @@ reply. No DB model, no webhook — nothing is stored.
   `getMediaComments`/`replyToComment` on `InstagramProvider` (NOT on the abstract class — Meta-only,
   like FB's `resolveVideoPostId`); [comment.router.ts](packages/api/src/routers/comment.router.ts)
   (`list`/`reply`, `orgProcedure` — a USER-level action like publishing).
+- **🔴🔴 `commentId` is the ONLY client-supplied value that reaches a Graph URL PATH — it MUST stay
+  validated by `GRAPH_OBJECT_ID_RE` (`/^\d+(_\d+)?$/`) at the router AND `encodeURIComponent`'d at the
+  interpolation site. Do not relax either layer.** Shipped unconstrained on the first cut
+  (`z.string().min(1)` + raw interpolation) and an adversarial review caught it: a commentId of
+  `17841400000000000/media?image_url=…&caption=…&x=` resolves (verified with WHATWG URL) to pathname
+  `/v18.0/17841400000000000/media`, the trailing `/replies` absorbed as a query token — i.e. **any org
+  member could turn `comment.reply` into an arbitrary authenticated Graph POST** (Create Media,
+  `media_publish`, `/{page}/feed`, DELETE via `?method=delete`), bypassing `enforcePlanLimit`,
+  `assertMediaOwned` and the whole `ambiguousAt` duplicate-publish machinery. ⚠️ Blast radius is wider
+  than one account: an INSTAGRAM channel stores the long-lived Facebook **USER** token, so it reaches
+  every Page that consent granted — including Pages backing OTHER orgs' channels. Every other Graph path
+  segment in these providers is DB-derived; this was the only client-supplied one.
+- **A STORY target has no comments edge** — gated in BOTH the router (`format === "STORY"` → actionable
+  BAD_REQUEST) and the UI (the affordance is not rendered). Keys on FORMAT, not story-mode.
+- **⚠️ Never throw raw Graph JSON as the error message.** `humanizeError` does not recognise
+  `{"error":{…}}` as technical, so it renders verbatim in the UI. Unclassified failures log the body
+  server-side and throw `COMMENT_LIST_FAILED_MESSAGE` / `COMMENT_REPLY_FAILED_MESSAGE`.
 - **🔴 DECRYPT GOTCHA applies:** the router does TWO queries — `postTarget.findUnique` (org check via
   `post.organizationId`, **no `include: { channel }`**) then a DIRECT `channel.findUnique` — because
   only a direct channel read auto-decrypts `accessToken`. Locked by [comment-router.test.ts](packages/api/src/__tests__/comment-router.test.ts).
@@ -2948,10 +2965,11 @@ reply. No DB model, no webhook — nothing is stored.
 - **v1 limits:** first page only (cursor API exists, UI has no "load more" yet); top-level comments only;
   no hide/delete; Instagram only (Facebook Page comments would need `pages_manage_engagement`);
   no real-time `comments` webhook (the webhook route still logs it as unhandled).
-- Tests: [instagram-comments.test.ts](packages/social/src/__tests__/instagram-comments.test.ts) (7),
-  [instagram-comment-reply.test.ts](packages/social/src/__tests__/instagram-comment-reply.test.ts) (8),
-  [comment-router.test.ts](packages/api/src/__tests__/comment-router.test.ts) (13), + a scope lock in
-  [meta-scopes.test.ts](packages/api/src/__tests__/meta-scopes.test.ts).
+- Tests: [instagram-comments.test.ts](packages/social/src/__tests__/instagram-comments.test.ts) (10),
+  [instagram-comment-reply.test.ts](packages/social/src/__tests__/instagram-comment-reply.test.ts) (16),
+  [comment-router.test.ts](packages/api/src/__tests__/comment-router.test.ts) (19), + a scope lock in
+  [meta-scopes.test.ts](packages/api/src/__tests__/meta-scopes.test.ts). The 12 guard tests added after
+  the review were each verified FAILING against the pre-fix sources before being kept.
 
 ## ⚠️ NEVER commit a macOS `" 2"` duplicate file — and there is exactly ONE CLAUDE.md
 

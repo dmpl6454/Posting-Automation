@@ -1,7 +1,12 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
-import { getSocialProvider, COMMENT_REPLY_MAX_LENGTH, type InstagramProvider } from "@postautomation/social";
+import {
+  getSocialProvider,
+  COMMENT_REPLY_MAX_LENGTH,
+  GRAPH_OBJECT_ID_RE,
+  type InstagramProvider,
+} from "@postautomation/social";
 
 /**
  * Instagram comment replies (2026-09-19). See
@@ -33,6 +38,7 @@ async function resolvePublishedInstagramTarget(
     select: {
       id: true,
       status: true,
+      format: true,
       publishedId: true,
       channelId: true,
       post: { select: { organizationId: true } },
@@ -45,6 +51,15 @@ async function resolvePublishedInstagramTarget(
     throw new TRPCError({
       code: "BAD_REQUEST",
       message: "Comments are only available once this channel's post has published.",
+    });
+  }
+  // A story has no comments edge (and expires in 24h), so the call could only
+  // ever fail with a confusing Meta error. Same format-vs-mode distinction the
+  // publish and analytics paths already draw.
+  if (target.format === "STORY") {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Instagram stories don't have comments — replies are available on feed posts and reels.",
     });
   }
 
@@ -92,7 +107,13 @@ export const commentRouter = createRouter({
     .input(
       z.object({
         targetId: z.string(),
-        commentId: z.string().min(1),
+        // 🔴 SECURITY: this is the only client-supplied value that reaches a
+        // Graph URL PATH. Unconstrained, it is an arbitrary-authenticated-POST
+        // primitive — see GRAPH_OBJECT_ID_RE. encodeURIComponent in the provider
+        // is the second, independent layer.
+        commentId: z
+          .string()
+          .regex(GRAPH_OBJECT_ID_RE, "That doesn't look like a valid Instagram comment."),
         // Same ceiling as a normal Instagram comment.
         message: z.string().trim().min(1, "Reply cannot be empty.").max(COMMENT_REPLY_MAX_LENGTH),
       })

@@ -3,6 +3,7 @@ import {
   parseCommentsPage,
   isCommentPermissionDeniedError,
   isCommentObjectGoneError,
+  isValidGraphObjectId,
   COMMENT_REPLY_MAX_LENGTH,
 } from "../utils/instagram-comments";
 
@@ -75,5 +76,41 @@ describe("isCommentObjectGoneError", () => {
 describe("COMMENT_REPLY_MAX_LENGTH", () => {
   it("is Instagram's comment ceiling", () => {
     expect(COMMENT_REPLY_MAX_LENGTH).toBe(2200);
+  });
+});
+
+describe("isValidGraphObjectId (path-injection guard)", () => {
+  it("accepts the real Graph id shapes", () => {
+    expect(isValidGraphObjectId("17841400000000000")).toBe(true);
+    expect(isValidGraphObjectId("112035290218472_9988776655")).toBe(true);
+  });
+
+  it("🔴 REJECTS the arbitrary-authenticated-POST payload", () => {
+    // Verified with WHATWG URL: raw interpolation of this value resolves to
+    // pathname /v18.0/17841400000000000/media with the trailing /replies
+    // absorbed as a query token — an arbitrary Graph POST on the org's token.
+    expect(
+      isValidGraphObjectId("17841400000000000/media?image_url=https%3A%2F%2Fevil.example%2Fx.jpg&caption=Hacked&x=")
+    ).toBe(false);
+  });
+
+  it("rejects every character that could break out of one path segment", () => {
+    for (const bad of [
+      "123/media",
+      "123?fields=x",
+      "123#frag",
+      "123&method=delete",
+      "123%2Fmedia",
+      "123 456",
+      "123\n456",
+      "../me",
+      "",
+      "abc",
+      "123_",
+      "_123",
+      "123__456",
+    ]) {
+      expect(isValidGraphObjectId(bad), `expected ${JSON.stringify(bad)} to be rejected`).toBe(false);
+    }
   });
 });

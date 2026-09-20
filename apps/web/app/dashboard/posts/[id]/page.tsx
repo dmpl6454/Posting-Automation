@@ -703,7 +703,12 @@ export default function PostDetailPage() {
                   {/* Instagram comment replies (2026-09-19). Requires
                       instagram_manage_comments — app-role accounts have it today;
                       external accounts get it once Meta approves Advanced Access. */}
-                  {target.channel.platform === "INSTAGRAM" && target.status === "PUBLISHED" && target.publishedId && (
+                  {target.channel.platform === "INSTAGRAM" &&
+                    target.status === "PUBLISHED" &&
+                    target.publishedId &&
+                    // A story has no comments edge and expires in 24h — offering
+                    // the affordance there can only produce a confusing error.
+                    target.format !== "STORY" && (
                     <div className="space-y-2">
                       <button
                         type="button"
