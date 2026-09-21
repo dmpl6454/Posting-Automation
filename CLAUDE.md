@@ -739,6 +739,60 @@ media fingerprint would be the real answer.
 the code the claim describes does not exist". That is the fixes landing, not the findings being
 wrong; each was confirmed by reading the source before it was changed.
 
+### ⏳ A THROTTLE is a definite refusal — `is_transient` does not mean "may have half-landed" (2026-09-21)
+
+**An amendment to the doctrine above, from measured production evidence.** On 2026-09-19 a
+~93-channel Facebook **story** fan-out exhausted the Meta app quota; its tail came back with
+
+```json
+{"message":"(#4) Application request limit reached","type":"OAuthException","is_transient":true,"code":4}
+```
+
+and **17 targets parked as "Needs check — may already be live"**. Nothing was wrong with the
+parking machinery; it did exactly what it was built to do. The defect was upstream, in TWO places:
+
+- **🔴 `is_transient: true` was read literally.** Meta sets that flag on a throttle to mean *"try
+  again later"*, NOT *"the write may have partially landed"* — a rate limit is refused at the API
+  **gateway**, before the request reaches a handler, so nothing is created. `RATE_LIMIT_CODES`
+  (4, 17, 32, 341, 613) in [ambiguous-publish.ts](packages/social/src/utils/ambiguous-publish.ts) is
+  now the ONE place that flag is overruled. ⚠️ **ORDER IS LOAD-BEARING** — the code test must run
+  BEFORE the `is_transient` test or the flag swallows it again. Code 2 is deliberately NOT in the
+  set: that is a genuine server fault where work may have begun.
+- **🔴 `classifyError` never recognised `#4` at all.** Meta's wording is "**request** limit
+  reached"; the branch only matched "**rate** limit", "limit how often", "too many", `code":368`
+  and `code":32`. So even once rethrown, a throttle classified as **`unknown`** and burned three
+  fast BullMQ attempts instead of taking the backoff re-queue that exists for exactly this.
+  Now also matches `"request limit reached"` / `"application limit reached"`.
+  ⚠️ **Matched on the MESSAGE, never on `code":4`** — that substring also sits inside `"code":400`,
+  `"code":463` and `"code":467`, so a dead token would be re-queued as a throttle and retried
+  forever.
+
+**⚠️ Why the "when unsure, say INDETERMINATE" default is WRONG for a throttle.** An ambiguous park
+is **TERMINAL**: it makes the target unclaimable by every retry layer. So a condition that clears
+itself in minutes instead means the post **never publishes at all** and a human must clear each
+target by hand — permanent content loss. Retrying a request the gateway refused cannot duplicate
+anything. The asymmetry that governs the rest of this module genuinely inverts here.
+
+**The evidence (do not re-derive by reasoning).** All 17 parked targets were checked against their
+own Page's `/stories` listing, inside the 24h story window, with a probe replicating
+`findStoryByMediaId`: **17 of 17 had NOT published.** Corroborating: 0 of 17 had any story in the
+tray within ±5 min of our upload; listings were readable and COMPLETE (every tray returned far
+fewer than the `limit=100` requested, so absence is conclusive, not truncation); and the 2 Pages
+that did return 100 reach back a year. ⚠️ Two wrong turns on the way, recorded so they are not
+repeated: story `media_id` values sit numerically ADJACENT to our uploaded photo id (they are the
+Page's *other* stories, not ours — timing disproved it), and a published sibling carries **no**
+`fbStoryMedia` checkpoint, so comparing against it yields `undefined !== id` and proves nothing.
+#4 is the code the evidence covers; the siblings share the identical gateway-refusal mechanism and
+the identical "X request limit reached" wording.
+
+**Not a bypass:** the FB story path DOES go through `graphFetch`, so it already had the
+usage-aware pacing and backoff. The stagger was not touched — owner decision, see PR #190.
+
+Tests: 5 cases in [ambiguous-publish.test.ts](packages/social/src/__tests__/ambiguous-publish.test.ts)
+and 4 in [publish-recovery.test.ts](apps/worker/src/lib/publish-recovery.test.ts), both built on the
+**verbatim production error body** rather than a hand-written approximation; all 4 new guards were
+verified FAILING against the pre-fix sources before being kept.
+
 ### 📜 All-time historical insights — LIVE-PROBED, and the floor is now configurable (2026-08-18)
 
 **Question asked: "can we fetch all-time historical insights?" Answer: the floor was never an API

@@ -33,6 +33,42 @@ const SAFE_CONNECT_CODES = new Set([
 ]);
 
 /**
+ * Meta THROTTLE codes — the one place `is_transient: true` is overruled.
+ *
+ * 🔴 Meta sets `is_transient: true` on a rate limit, but there it means "try
+ * again later", NOT "the write may have partially landed". A throttle is
+ * refused at the API gateway before the request ever reaches the handler, so
+ * nothing was created. Reading the flag literally turned every throttled
+ * publish into an ambiguous park.
+ *
+ * ⚠️ MEASURED, not reasoned. On 2026-09-19 a 93-channel Facebook story
+ * fan-out hit `(#4) Application request limit reached` on its tail and parked
+ * 17 targets as "may already be live". Each was checked against its own Page's
+ * `/stories` listing (complete listings, still inside the 24h story window):
+ * **17 of 17 had NOT published.** #4 is the code that evidence covers; the
+ * others share the identical gateway-refusal mechanism and the identical
+ * "X request limit reached" wording.
+ *
+ * ⚠️ Why the usual "when unsure, say INDETERMINATE" default is WRONG here: an
+ * ambiguous park is TERMINAL. It makes the target unclaimable by every retry
+ * layer, so a condition that clears itself in minutes instead means the post
+ * NEVER publishes and a human must clear each target by hand. For a throttle
+ * the safe answer is the retryable one — `rate_limit` already re-queues these
+ * with backoff. Parking loses content; retrying a refused request cannot
+ * duplicate anything.
+ *
+ * Code 2 is deliberately NOT here: that is a genuine server-side fault where
+ * work may have begun.
+ */
+const RATE_LIMIT_CODES = new Set([
+  4, // Application request limit reached
+  17, // User request limit reached
+  32, // Page request limit reached
+  341, // Application limit reached
+  613, // Calls to this api have exceeded the rate limit
+]);
+
+/**
  * Message shapes that mean "the request was dispatched and we never learned the
  * outcome". `fetch failed` is undici's generic wrapper, so it lands here unless
  * its `cause.code` proves otherwise (see SAFE_CONNECT_CODES).
@@ -131,6 +167,10 @@ export function isIndeterminatePublishError(err: unknown): boolean {
   //    in the codebase and that is precisely how the duplicates happened.
   const metaError = parseMetaError(message);
   if (metaError) {
+    // ⚠️ ORDER IS LOAD-BEARING: a throttle arrives WITH `is_transient: true`,
+    // so this must be tested first or the flag below swallows it and parks a
+    // request Meta never executed. See RATE_LIMIT_CODES.
+    if (RATE_LIMIT_CODES.has(Number(metaError.code))) return false;
     if (metaError.is_transient === true) return true;
     // code 2 = "API Service" / transient downtime. Deliberately NOT code 1:
     // Meta reuses code 1 for permanent app-config faults (the observed

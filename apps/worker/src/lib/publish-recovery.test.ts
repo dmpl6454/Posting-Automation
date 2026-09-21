@@ -403,3 +403,35 @@ describe("formatPublishTiming", () => {
     expect(formatPublishTiming({ postTargetId: "t1", platform: "X", now: 4_000 })).toBe("[PublishTiming] target=t1 platform=X");
   });
 });
+
+describe("classifyError routes Meta THROTTLES to the rate-limit re-queue", () => {
+  const PROD_RATE_LIMIT =
+    'Facebook story publish failed: {"error":{"message":"(#4) Application request limit reached",' +
+    '"type":"OAuthException","is_transient":true,"code":4,"fbtrace_id":"A_OWQTXoJ2E4Sl3hFwg9rlW"}}';
+
+  it("🔴 classifies the real production #4 body as rate_limit, not unknown", () => {
+    // Meta says "request limit", never "rate limit", so none of the sibling
+    // patterns matched and #4 burned three fast BullMQ attempts.
+    expect(classifyError(PROD_RATE_LIMIT)).toBe("rate_limit");
+  });
+
+  it("covers the user (#17) and application (#341) throttles too", () => {
+    expect(classifyError('{"error":{"message":"(#17) User request limit reached","code":17}}')).toBe("rate_limit");
+    expect(classifyError('{"error":{"message":"(#341) Application limit reached","code":341}}')).toBe("rate_limit");
+  });
+
+  it("⚠️ a dead token is NOT mistaken for a throttle", () => {
+    // The reason the match is on the MESSAGE and never on `code":4`:
+    // "code":463 and "code":467 both contain that substring.
+    expect(
+      classifyError('{"error":{"message":"Error validating access token: session invalid","code":463}}')
+    ).toBe("token_expired");
+    expect(
+      classifyError('{"error":{"message":"The access token is invalid","code":467}}')
+    ).toBe("token_expired");
+  });
+
+  it("keeps our own pre-publish verdict out of the rate-limit branch", () => {
+    expect(classifyError("Validation failed: Too many media attachments. Instagram allows max 10.")).toBe("unknown");
+  });
+});
