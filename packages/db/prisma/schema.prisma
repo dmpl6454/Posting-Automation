@@ -471,6 +471,20 @@ model Post {
   aiPrompt    String? @db.Text
   metadata    Json?
 
+  /// Free-text INTERNAL campaign name typed in Compose (2026-09-21). Never sent
+  /// to any platform — it exists purely so Reports can group a run of posts and
+  /// show their live links beside views/likes/comments/reach.
+  ///
+  /// ⚠️ Deliberately NOT a relation to `Campaign`. That model is a brand/competitor
+  /// MONITORING tool (trackers + a monitoring toggle), its router is
+  /// adminOrgProcedure + PROFESSIONAL-gated, and `CampaignPost` rows are never
+  /// created. Reports must stay readable by an ordinary USER, so a plain label on
+  /// the Post is the honest fit — no plan gate, no role change, no dormant model.
+  ///
+  /// NULL on every pre-existing row, and every read path treats NULL as
+  /// "ungrouped", so this is inert until someone types a name.
+  campaignLabel String?
+
   organization     Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   targets          PostTarget[]
   mediaAttachments PostMedia[]
@@ -484,6 +498,7 @@ model Post {
   @@index([organizationId, status])
   @@index([organizationId, scheduledAt])
   @@index([status, scheduledAt])
+  @@index([organizationId, campaignLabel])
 }
 
 model PostTarget {

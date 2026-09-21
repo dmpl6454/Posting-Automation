@@ -22,7 +22,11 @@ import {
   captionOverridesSchema,
   sanitizeCaptionOverrides,
   contentOverrideForReplacedTarget,
+  everyChannelHasOwnCaption,
+  everyTargetHasOwnCaption,
+  MISSING_CAPTION_MESSAGE,
 } from "../lib/caption-overrides";
+import { campaignLabelSchema, normalizeCampaignLabel } from "../lib/campaign-label";
 
 /**
  * PR-5: load a PostTarget with its parent post's org and require it to belong
@@ -150,6 +154,8 @@ export const postRouter = createRouter({
         // page's editor use — so the publish worker needs no change. Absent ⇒ the
         // targets are written exactly as before. See lib/caption-overrides.ts.
         captionOverrides: captionOverridesSchema.optional(),
+        // Internal campaign name for grouped reporting. Never reaches a platform.
+        campaignLabel: campaignLabelSchema.optional(),
         formatByChannelId: z.record(z.enum(["FEED", "REEL", "STORY", "SHORT", "VIDEO", "CAROUSEL"])).optional(),
         // Instagram Story mode (2026-09-15). Its PRESENCE is what makes this a
         // story post: every target is forced to format STORY, channels must all be
@@ -183,8 +189,16 @@ export const postRouter = createRouter({
       // Story mode. `content` is optional ONLY here — Instagram shows no caption
       // on a story, so the note may be blank. Everything else keeps the old rule.
       const isStory = !!input.story;
-      if (!isStory && input.content.trim().length === 0) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Content is required." });
+      // ...and when every selected channel supplies its OWN caption. The publish
+      // worker never falls through to the shared caption in that case, so nothing
+      // can publish blank. Partial coverage still fails: one uncovered channel
+      // would publish empty text.
+      if (
+        !isStory &&
+        input.content.trim().length === 0 &&
+        !everyChannelHasOwnCaption(input.captionOverrides, input.channelIds, input.content)
+      ) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: MISSING_CAPTION_MESSAGE });
       }
       let storyMentions: string[] = [];
       if (input.story) {
@@ -396,6 +410,9 @@ export const postRouter = createRouter({
           aiGenerated: input.aiGenerated,
           aiProvider: input.aiProvider,
           aiPrompt: input.aiPrompt,
+          // Internal-only grouping label. `undefined` when absent ⇒ Prisma omits
+          // the column, so a post created without one is the pre-feature row.
+          campaignLabel: normalizeCampaignLabel(input.campaignLabel) ?? undefined,
           // Gate metadata. The RAW client `superText` map is stripped and replaced
           // by the normalized block (validated + attached-video-only), so the DB
           // never carries configs for media that isn't on this post. With NO gates
@@ -569,6 +586,23 @@ export const postRouter = createRouter({
     .mutation(async ({ ctx, input }) => {
       await assertTargetEditable(ctx.prisma as any, ctx.organizationId, input.targetId);
       const trimmed = input.contentOverride?.trim() ?? "";
+      // Clearing an override falls the target back to the shared caption — which
+      // is only safe if there IS one. On a post whose shared caption is empty
+      // (allowed when every channel supplies its own), clearing would leave this
+      // channel with no caption at all and publish empty text.
+      if (trimmed.length === 0) {
+        const target = await ctx.prisma.postTarget.findUnique({
+          where: { id: input.targetId },
+          select: { post: { select: { content: true } } },
+        });
+        if ((target?.post?.content ?? "").trim().length === 0) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "This post has no shared caption, so this channel needs its own. Add a shared caption first, or write one here.",
+          });
+        }
+      }
       const updated = await ctx.prisma.postTarget.update({
         where: { id: input.targetId },
         data: { contentOverride: trimmed.length > 0 ? input.contentOverride : null },
@@ -591,6 +625,8 @@ export const postRouter = createRouter({
         // Replace the post's target channels (drafts/scheduled only). Enables
         // adding channels to a channel-less draft saved from Content Studio.
         channelIds: z.array(z.string()).optional(),
+        // Internal campaign name. `null` clears it back to ungrouped.
+        campaignLabel: campaignLabelSchema.nullable().optional(),
         // Mirrors create: whether AI image generation is on for this post. Default
         // true keeps the worker's auto-gen behaviour; an explicit false blocks a
         // media-less IG/FB SCHEDULE (the post-update path of the media-required
@@ -628,8 +664,23 @@ export const postRouter = createRouter({
       // same line (isStoryModePost vs isStoryFormat).
       const isStoryPost = isStoryModeMetadata(existing.metadata);
 
-      if (!isStoryPost && input.content !== undefined && input.content.trim().length === 0) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Content is required." });
+      // Same rule as create: an empty shared caption is allowed only while every
+      // target carries its own. Derived from the RESULTING target set, so adding
+      // a channel to a caption-less post is refused here rather than silently
+      // creating a target with no caption at all (a new channel starts with none).
+      const resultingTargets = input.channelIds
+        ? input.channelIds.map((channelId) => ({
+            contentOverride: contentOverrideForReplacedTarget(channelId, existing.targets),
+          }))
+        : existing.targets;
+
+      if (
+        !isStoryPost &&
+        input.content !== undefined &&
+        input.content.trim().length === 0 &&
+        !everyTargetHasOwnCaption(resultingTargets)
+      ) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: MISSING_CAPTION_MESSAGE });
       }
 
       // `aiImages` is a guard input, not a Post column — keep it out of `data`.
@@ -698,6 +749,10 @@ export const postRouter = createRouter({
         data: {
           ...data,
           scheduledAt: data.scheduledAt ? new Date(data.scheduledAt) : data.scheduledAt === null ? null : undefined,
+          // ⚠️ `...data` would otherwise write the RAW typed string here while
+          // create writes a normalized one. Grouping is an exact-match on this
+          // column, so "Diwali " and "Diwali" would show as two campaigns.
+          campaignLabel: normalizeCampaignLabel(data.campaignLabel),
           ...(tags && {
             tags: {
               deleteMany: {},

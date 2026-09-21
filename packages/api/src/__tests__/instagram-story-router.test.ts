@@ -59,9 +59,14 @@ describe("post.create — story mode", () => {
     expect(postRouter).toMatch(/uniqueCaptions: isStory \? false : input\.uniqueCaptions/);
   });
 
-  it("allows empty content ONLY for a story", () => {
+  it("allows empty content for a story, or when every channel has its own caption", () => {
     expect(postRouter).toMatch(/content: z\.string\(\),/);
-    expect(postRouter).toMatch(/if \(!isStory && input\.content\.trim\(\)\.length === 0\)/);
+    // 2026-09-21: the rule widened — an empty shared caption is also allowed when
+    // EVERY selected channel carries its own (owner-reported: per-channel captions
+    // filled in, shared box empty, no way to publish). A non-story post with
+    // neither is still refused, which is what this test exists to protect.
+    expect(postRouter).toMatch(/!isStory &&\s*input\.content\.trim\(\)\.length === 0/);
+    expect(postRouter).toMatch(/!everyChannelHasOwnCaption\(/);
   });
 });
 
@@ -97,7 +102,11 @@ describe("post.update — a story stays a story", () => {
 
   it("allows empty content on a story but keeps the rule for everything else", () => {
     expect(postRouter).toMatch(/content: z\.string\(\)\.optional\(\)/);
-    expect(postRouter).toMatch(/if \(!isStoryPost && input\.content !== undefined/);
+    // 2026-09-21: same widening as create, but derived from the RESULTING targets
+    // (update has no captionOverrides input). A non-story post with no caption
+    // anywhere is still refused.
+    expect(postRouter).toMatch(/!isStoryPost &&\s*input\.content !== undefined/);
+    expect(postRouter).toMatch(/!everyTargetHasOwnCaption\(resultingTargets\)/);
   });
 });
 

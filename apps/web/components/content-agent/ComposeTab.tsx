@@ -63,6 +63,7 @@ import {
   storyBlockReason,
   STORY_MAX_MENTIONS,
 } from "~/lib/instagram-story";
+import { captionBlockReason } from "~/lib/caption-coverage";
 import { InstagramStoryPreview } from "~/components/previews/instagram-story-preview";
 
 const MediaEditor = dynamic(
@@ -170,6 +171,10 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   // the Captions card when `customCaptions` is on. The map is never pruned on
   // deselect; buildCaptionOverridesPayload sends only STILL-selected channels.
   // Off / empty ⇒ the payload omits the key and the post is byte-identical.
+  // Internal campaign name (2026-09-21). Never sent to a platform — it only
+  // groups posts in Insights → Reports. Persisted with the draft like any other
+  // compose field.
+  const [campaignLabel, setCampaignLabel] = useState("");
   const [customCaptions, setCustomCaptions] = useState(false);
   const [captionOverrides, setCaptionOverrides] = useState<Record<string, string>>({});
   const [isGenerating, setIsGenerating] = useState(false);
@@ -293,6 +298,12 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
       setCaptionOverrides(restoredOverrides);
       setCustomCaptions(true);
     }
+    // Campaign label: re-validated like everything else — a hand-edited or
+    // older-build value that is not a string is dropped, and the server caps it
+    // at 120 anyway.
+    if (typeof saved.draft.campaignLabel === "string" && saved.draft.campaignLabel.trim()) {
+      setCampaignLabel(saved.draft.campaignLabel.slice(0, 120));
+    }
     // Restore attachments that are losslessly restorable (Media-row id or a
     // non-blob URL). Never resurrect blob: tiles (their File died with the old
     // page) and never pre-empt deep-link media (carousel/initialImage flow).
@@ -401,6 +412,8 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
           // Only when the editor is on and holds something — an older-build draft
           // (key absent) restores exactly as before.
           ...(customCaptions && Object.keys(captionOverrides).length > 0 ? { captionOverrides } : {}),
+          // Same rule: only when set, so an older-build draft restores unchanged.
+          ...(campaignLabel.trim() ? { campaignLabel } : {}),
           mediaUrls: postMedia.map((m) => m.url),
           // Only losslessly-restorable items (library picks, AI images,
           // completed uploads) — blob-only tiles can't survive a remount.
@@ -421,7 +434,7 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
     // postMedia is read in the body but deliberately keyed via its persisted
     // signature — see the comment above draftMediaSignature. Same for mentions.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [content, selectedChannels, draftMediaSignature, postType, storyMentionsSignature, captionOverridesSignature]);
+  }, [content, selectedChannels, draftMediaSignature, postType, storyMentionsSignature, captionOverridesSignature, campaignLabel]);
 
   useEffect(() => {
     if (initialContent) setContent(initialContent);
@@ -458,6 +471,9 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   }, [externalMediaToAdd]);
 
   const { data: channels, isLoading: channelsLoading } = trpc.channel.list.useQuery();
+  // Campaign names already used by this org — suggestions only, so a typo just
+  // starts a new group rather than failing anything.
+  const { data: existingCampaigns } = trpc.analytics.campaignLabels.useQuery();
   const { data: recentlyUsedIds } = trpc.channel.recentlyUsed.useQuery();
   // Channel Groups (org-scoped) power the "Groups" quick-select block below.
   // Group selection state is always DERIVED from selectedChannels — never
@@ -1216,12 +1232,16 @@ ${content}`;
   const handleSubmit = async (publishNow: boolean) => {
     // A story carries no visible caption, so its note is optional — but it still
     // needs somewhere to go.
-    if ((!isStoryMode && !content) || selectedChannels.length === 0) {
+    if (needsSharedCaption || selectedChannels.length === 0) {
       toast({
         title: "Missing required fields",
         description: isStoryMode
           ? "Select at least one Instagram or Facebook channel."
-          : "Please add content and select at least one channel.",
+          : selectedChannels.length === 0
+            ? "Select at least one channel."
+            : // Names the actual way out when per-channel captions are half-filled,
+              // e.g. "1 of 3 channels still have no caption."
+              (captionBlock ?? "Add a caption."),
         variant: "destructive",
       });
       return;
@@ -1267,6 +1287,9 @@ ${content}`;
         content,
         channelIds: selectedChannels,
         ...(Object.keys(manualCaptions).length > 0 && { captionOverrides: manualCaptions }),
+        // Internal grouping label for Reports. Omitted when blank ⇒ the post is
+        // written exactly as before.
+        ...(campaignLabel.trim() && { campaignLabel: campaignLabel.trim() }),
         // DateTimePicker emits a LOCAL "YYYY-MM-DDTHH:mm" string; the API's
         // z.string().datetime() requires full ISO — convert at the submit
         // boundary exactly like BulkTab and the post-detail page do. Sending
@@ -1365,6 +1388,15 @@ ${content}`;
           ? "This video is landscape — YouTube Shorts must be vertical (9:16). Switch the format to “Video”, or attach a vertical clip."
           : null
     : null;
+
+  // Why this post has no usable caption yet, or null. An empty shared caption is
+  // fine once EVERY selected channel carries its own — see lib/caption-coverage.
+  // One predicate feeds the submit handler AND all three buttons, so the gate and
+  // its message cannot disagree (same shape as storyBlock below).
+  const captionBlock = isStoryMode
+    ? null
+    : captionBlockReason({ content, customCaptions, selectedChannels, captionOverrides });
+  const needsSharedCaption = !!captionBlock;
 
   // Why the story cannot be submitted yet, or null. One predicate feeds the
   // submit handler AND both buttons' disabled/title, so they cannot disagree.
@@ -2391,6 +2423,38 @@ ${content}`;
             </CardContent>
           </Card>
 
+          {/* Internal campaign name (2026-09-21). Groups this post with others in
+              Insights → Reports so their live links and metrics can be read
+              together. Never sent to any platform. */}
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle>Campaign</CardTitle>
+              <CardDescription>
+                Optional. Internal only — never posted. Groups this post in Insights → Reports.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Label htmlFor="campaign-label" className="sr-only">
+                Campaign name
+              </Label>
+              <Input
+                id="campaign-label"
+                value={campaignLabel}
+                onChange={(e) => setCampaignLabel(e.target.value)}
+                placeholder="e.g. Diwali 2026"
+                maxLength={120}
+                list="campaign-label-options"
+              />
+              {/* Existing names, so a second post joins a campaign instead of
+                  creating a near-duplicate (grouping is an exact match). */}
+              <datalist id="campaign-label-options">
+                {(existingCampaigns ?? []).map((name) => (
+                  <option key={name} value={name} />
+                ))}
+              </datalist>
+            </CardContent>
+          </Card>
+
           {/* Unique captions (PR-5) — shown only when >1 channel is selected.
               Never in story mode: a story displays no caption to vary. */}
           {!isStoryMode && selectedChannels.length > 1 && (
@@ -2540,6 +2604,7 @@ ${content}`;
                     content,
                     channelIds: selectedChannels.length > 0 ? selectedChannels : [],
                     ...(Object.keys(manualCaptions).length > 0 && { captionOverrides: manualCaptions }),
+                    ...(campaignLabel.trim() && { campaignLabel: campaignLabel.trim() }),
                     ...(mediaIds.length > 0 && { mediaIds }),
                     // ⚠️ The draft must carry the story marker too. Without it the
                     // server stores an ordinary post, and scheduling that draft
@@ -2577,7 +2642,9 @@ ${content}`;
               // A story's note is optional, so a draft needs media OR a note —
               // but never two attachments, which the server refuses outright.
               disabled={
-                (isStoryMode ? (postMedia.length === 0 && !content) || postMedia.length > 1 : !content) ||
+                (isStoryMode
+                  ? (postMedia.length === 0 && !content) || postMedia.length > 1
+                  : needsSharedCaption) ||
                 createPost.isPending ||
                 isUploading
               }
@@ -2590,9 +2657,9 @@ ${content}`;
               className="w-full sm:w-auto"
               onClick={() => handleSubmit(false)}
               disabled={
-                (!isStoryMode && !content) || selectedChannels.length === 0 || !scheduledAt || createPost.isPending || isUploading || !!youtubeBlockReason || !!storyBlock
+                needsSharedCaption || selectedChannels.length === 0 || !scheduledAt || createPost.isPending || isUploading || !!youtubeBlockReason || !!storyBlock
               }
-              title={youtubeBlockReason ?? storyBlock ?? undefined}
+              title={youtubeBlockReason ?? storyBlock ?? captionBlock ?? undefined}
             >
               <Clock className="mr-2 h-4 w-4" />
               {isStoryMode ? "Schedule story" : "Schedule"}
@@ -2600,8 +2667,8 @@ ${content}`;
             <Button
               className="w-full sm:w-auto"
               onClick={() => handleSubmit(true)}
-              disabled={(!isStoryMode && !content) || selectedChannels.length === 0 || createPost.isPending || isUploading || !!youtubeBlockReason || !!storyBlock}
-              title={youtubeBlockReason ?? storyBlock ?? undefined}
+              disabled={needsSharedCaption || selectedChannels.length === 0 || createPost.isPending || isUploading || !!youtubeBlockReason || !!storyBlock}
+              title={youtubeBlockReason ?? storyBlock ?? captionBlock ?? undefined}
             >
               {(createPost.isPending || isUploading) ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -2613,9 +2680,13 @@ ${content}`;
           </div>
           {/* The disabled buttons explain themselves only through `title`, which a
               touch device never shows — so the same predicate is rendered here. */}
-          {(youtubeBlockReason || storyBlock) && (
+          {/* Shown only once a channel is picked — before that an empty composer
+              would nag about a caption the user has not started writing. A touch
+              device never shows a `title` tooltip, so a disabled button needs a
+              visible reason or it reads as broken. */}
+          {(youtubeBlockReason || storyBlock || (captionBlock && selectedChannels.length > 0)) && (
             <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-300">
-              {youtubeBlockReason ?? storyBlock}
+              {youtubeBlockReason ?? storyBlock ?? captionBlock}
             </div>
           )}
           </>

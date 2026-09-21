@@ -64,6 +64,10 @@ const CSV_HEADER_FIXED = [
   "Platform",
   "Published At (UTC)",
   "Post URL",
+  // Appended AFTER the pre-existing fixed columns so a saved spreadsheet's
+  // leading column order is unchanged. Empty for a direct post and for any post
+  // created before the field existed.
+  "Campaign",
 ];
 
 /**
@@ -82,6 +86,7 @@ export function ReportsTab() {
   const [recipient, setRecipient] = useState("");
   // Per-platform view. `null` = All.
   const [platformView, setPlatformView] = useState<string | null>(null);
+  const [campaignView, setCampaignView] = useState<string | null>(null);
 
   const { toast } = useToast();
   const utils = trpc.useUtils();
@@ -92,8 +97,15 @@ export function ReportsTab() {
   const platformFilter =
     platformView && (orgPlatforms ?? []).includes(platformView) ? platformView : undefined;
 
+  // Internal campaign view. Same fallback reasoning as platform: a label that no
+  // longer exists falls back to All rather than rendering an unexplained empty
+  // table.
+  const { data: orgCampaigns } = trpc.analytics.campaignLabels.useQuery();
+  const campaignFilter =
+    campaignView && (orgCampaigns ?? []).includes(campaignView) ? campaignView : undefined;
+
   const { data, isLoading } = trpc.analytics.postReports.useQuery(
-    { window: win, mode, platform: platformFilter },
+    { window: win, mode, platform: platformFilter, campaign: campaignFilter },
     // A new `platform` in the key is a NEW query — without placeholderData the
     // table collapses to skeletons on every pill click.
     { staleTime: 60 * 1000, placeholderData: (prev) => prev }
@@ -113,6 +125,10 @@ export function ReportsTab() {
   // Saves ride in capture metadata rather than the metric map; show the column
   // only when some row actually carries one.
   const anySaves = rows.some((r) => r.saved != null);
+  // Derived from the ORG's campaigns, not from the rows on screen: filtering to
+  // one campaign would otherwise hide the column that says which campaign you
+  // are looking at.
+  const anyCampaigns = (orgCampaigns?.length ?? 0) > 0;
 
   const emailReport = trpc.analytics.emailReport.useMutation({
     onSuccess: (res) => {
@@ -135,7 +151,9 @@ export function ReportsTab() {
   const onSendEmail = () => {
     const to = recipient.trim();
     if (!to || emailReport.isPending) return;
-    emailReport.mutate({ to, window: win, mode, platform: platformFilter });
+    // ⚠️ campaign too — an email covering a DIFFERENT population than the table
+    // on screen is the exact drift this file has already seen twice.
+    emailReport.mutate({ to, window: win, mode, platform: platformFilter, campaign: campaignFilter });
   };
 
   const onExport = async () => {
@@ -151,6 +169,7 @@ export function ReportsTab() {
         // Export the SAME rows the table shows — a CSV that silently widens
         // past the on-screen filter is a different report than the one asked for.
         platform: platformFilter,
+        campaign: campaignFilter,
         window: win,
         mode,
         limit: EXPORT_LIMIT + 1,
@@ -200,6 +219,7 @@ export function ReportsTab() {
             r.platform,
             r.publishedAt ? new Date(r.publishedAt).toISOString() : "",
             r.publishedUrl ?? "",
+            r.campaignLabel ?? "",
             ...metricCols.map((c) => c.get(r)),
             ...(includeSaves ? [r.saved] : []),
             ...(includeEng ? [r.engagementRate] : []),
@@ -369,6 +389,29 @@ export function ReportsTab() {
                 })}
               </>
             )}
+
+            {/* Internal campaign view. A <select> rather than pills: labels are
+                free text and there can be many, so pills would wrap unboundedly.
+                Rendered only once at least one campaign exists, so orgs that
+                never use the field see no extra control. */}
+            {(orgCampaigns?.length ?? 0) > 0 && (
+              <label className="ml-auto flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+                Campaign
+                <select
+                  aria-label="Filter by internal campaign"
+                  value={campaignFilter ?? ""}
+                  onChange={(e) => setCampaignView(e.target.value || null)}
+                  className="max-w-[200px] rounded-md border bg-background px-2 py-0.5 text-[11px] font-medium"
+                >
+                  <option value="">All campaigns</option>
+                  {orgCampaigns!.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
           </div>
         </div>
 
@@ -453,6 +496,9 @@ export function ReportsTab() {
                 <tr className="whitespace-nowrap border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
                   <th className="py-2.5 pr-3 font-medium">Post</th>
                   <th className="py-2.5 pr-3 font-medium">Channel</th>
+                  {/* Only when the org actually uses campaigns, so nobody else
+                      gains a column of blanks on an already-wide table. */}
+                  {anyCampaigns && <th className="py-2.5 pr-3 font-medium">Campaign</th>}
                   <th className="py-2.5 pr-3 font-medium">Published (UTC)</th>
                   {/* Columns are capability-driven: a metric that NO platform in
                       these rows can ever report is dropped rather than rendering a
@@ -527,6 +573,19 @@ export function ReportsTab() {
                         )}
                       </div>
                     </td>
+                    {anyCampaigns && (
+                      <td className="py-2.5 pr-3">
+                        {r.campaignLabel ? (
+                          <span className="block max-w-[160px] truncate" title={r.campaignLabel}>
+                            {r.campaignLabel}
+                          </span>
+                        ) : (
+                          // A real absence, not a missing measurement — the em dash
+                          // here means "no campaign", consistent with the metric cells.
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </td>
+                    )}
                     <td className="whitespace-nowrap py-2.5 pr-3 text-muted-foreground">
                       {fmtUtc(r.publishedAt)}
                     </td>

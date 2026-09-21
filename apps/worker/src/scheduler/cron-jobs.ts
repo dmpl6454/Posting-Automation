@@ -172,7 +172,7 @@ export async function scheduleMetaDataAccessBackfill() {
   //
   // NUL-joined: a plain separator like ":" could collide if any component ever
   // contained one, silently merging two groups.
-  const SEP = " ";
+  const SEP = "\u0000";
   const byToken = new Map<
     string,
     { token: string; platform: string; metaAppId: string | null; channelIds: string[] }

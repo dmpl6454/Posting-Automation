@@ -38,6 +38,12 @@ export interface ActiveTask {
      * restore — kept loose here so this provider stays package-agnostic.
      */
     captionOverrides?: Record<string, string>;
+    /**
+     * Internal campaign name (2026-09-21) — groups the post in Insights →
+     * Reports, never sent to a platform. ABSENT ⇒ an earlier build's draft,
+     * which restores exactly as before.
+     */
+    campaignLabel?: string;
   };
   createdAt: number;
 }

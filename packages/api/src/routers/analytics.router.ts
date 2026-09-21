@@ -346,6 +346,14 @@ export interface PostReportRow {
   platform: string;
   publishedAt: Date | null;
   publishedUrl: string | null;
+  /**
+   * Internal campaign name typed in Compose. null ⇒ ungrouped, and always null
+   * for a direct platform post (it was never composed here).
+   *
+   * ⚠️ OPTIONAL on purpose: several test fixtures build full PostReportRow
+   * literals, and gatePostReportRow passes it through untouched via `...r`.
+   */
+  campaignLabel?: string | null;
   impressions: number | null;
   clicks: number | null;
   likes: number | null;
@@ -542,7 +550,9 @@ async function fetchPostReportRows(
   mode: ReportMode,
   limit: number,
   /** Optional per-platform view. Undefined ⇒ every platform (unchanged). */
-  platform?: string
+  platform?: string,
+  /** Optional internal-campaign view. Undefined ⇒ every campaign (unchanged). */
+  campaign?: string
 ): Promise<PostReportRow[]> {
   const hours = { "24h": 24, "7d": 168, "15d": 360, "30d": 720 }[window];
   const boundary = new Date(Date.now() - hours * 3_600_000);
@@ -596,6 +606,24 @@ async function fetchPostReportRows(
   const platformFilterApp = `AND ($${platformIdx}::text IS NULL OR c.platform::text = $${platformIdx})`;
   const platformFilterExt = `AND ($${platformIdx}::text IS NULL OR c2.platform::text = $${platformIdx})`;
 
+  // Optional per-campaign view, same shape and same reason as the platform filter
+  // (the query is capped, so filtering client-side would silently drop rows past
+  // the cap).
+  //
+  // ⚠️ The param is pushed AND its placeholder interpolated UNCONDITIONALLY. Push
+  // without interpolating and Postgres raises "bind message supplies N parameters
+  // but prepared statement requires M", which 500s the whole Reports page for
+  // every org, campaign filter or not.
+  //
+  // ⚠️ Appended AFTER platform, so $1/$2/$3/$4 keep their meanings. Renumbering
+  // here would rescope the aggregate to another organization — an IDOR, not a
+  // cosmetic bug.
+  params.push(campaign ?? null);
+  const campaignIdx = params.length;
+  const campaignFilterApp = `AND ($${campaignIdx}::text IS NULL OR p."campaignLabel" = $${campaignIdx})`;
+  // A direct post has no label, so any campaign filter excludes the whole arm.
+  const campaignFilterExt = `AND $${campaignIdx}::text IS NULL`;
+
   // Platform-native posts (not published through us) are unioned in ONLY when the
   // population switch is on AND the mode is "current".
   //
@@ -619,6 +647,10 @@ async function fetchPostReportRows(
             c2.platform::text AS "platform",
             ep."publishedAt",
             ep.permalink      AS "publishedUrl",
+            -- A direct platform post was never composed here, so it can carry no
+            -- internal campaign label. NULL keeps the UNION column-compatible
+            -- (matched by POSITION, not name) if the population switch is flipped.
+            NULL::text        AS "campaignLabel",
             ep.impressions, ep.clicks, ep.likes, ep.comments, ep.shares, ep.reach, ep.views,
             CASE
               WHEN ep.impressions > 0
@@ -646,7 +678,8 @@ async function fetchPostReportRows(
      WHERE c2."organizationId" = $1
        AND ep."postTargetId" IS NULL
        AND ep."publishedAt" >= $2
-       ${platformFilterExt}`
+       ${platformFilterExt}
+       ${campaignFilterExt}`
       : "";
 
   const rows: PostReportRow[] = await (prisma.$queryRawUnsafe as any)(
@@ -659,6 +692,7 @@ async function fetchPostReportRows(
             c.platform::text   AS "platform",
             pt."publishedAt",
             pt."publishedUrl",
+            p."campaignLabel",
             s.impressions, s.clicks, s.likes, s.comments, s.shares, s.reach, s.views,
             -- Recompute Eng.% from the raw counts: stored engagementRate is
             -- a 0–1 FRACTION for YT/IG/FB/Reddit but a PERCENT for
@@ -712,6 +746,7 @@ async function fetchPostReportRows(
        ${publishedAtFilter}
        ${storyAtAgeFilter}
        ${platformFilterApp}
+       ${campaignFilterApp}
      ${externalUnion}
      ) combined
      ORDER BY "publishedAt" DESC
@@ -1711,6 +1746,8 @@ export const analyticsRouter = createRouter({
          * rows all sit past the cap.
          */
         platform: z.string().optional(),
+        /** Optional internal-campaign view. Same server-side reasoning as platform. */
+        campaign: z.string().optional(),
       })
     )
     .query(async ({ ctx, input }) => {
@@ -1720,7 +1757,8 @@ export const analyticsRouter = createRouter({
         input.window,
         input.mode,
         input.limit,
-        input.platform
+        input.platform,
+        input.campaign
       );
 
       return {
@@ -1754,6 +1792,25 @@ export const analyticsRouter = createRouter({
     }),
 
   /**
+   * Distinct internal campaign labels used by this org, newest first — the
+   * options for the Reports campaign filter.
+   *
+   * ⚠️ Deliberately NOT derived from the rows already on screen: those are capped
+   * by `limit` and scoped to the selected window, so a campaign whose posts all
+   * sit outside it would silently vanish from its own filter.
+   */
+  campaignLabels: orgProcedure.query(async ({ ctx }) => {
+    const rows = await ctx.prisma.post.findMany({
+      where: { organizationId: ctx.organizationId, campaignLabel: { not: null } },
+      select: { campaignLabel: true },
+      distinct: ["campaignLabel"],
+      orderBy: { createdAt: "desc" },
+      take: 200,
+    });
+    return rows.map((r) => r.campaignLabel).filter((l): l is string => !!l);
+  }),
+
+  /**
    * Email the current filtered report (same rows as postReports) as a CSV
    * attachment to an arbitrary address. Recipient is UNTRUSTED input: the
    * mutation is rate-limited (5/hour/user), audit-logged, and the address is
@@ -1768,6 +1825,9 @@ export const analyticsRouter = createRouter({
         mode: z.enum(["current", "at_age"]).default("current"),
         /** Keeps the emailed CSV identical to the filtered table on screen. */
         platform: z.string().optional(),
+        /** Same reason as platform — omit it and the email covers a DIFFERENT
+         *  population than the table the user is looking at. */
+        campaign: z.string().optional(),
         limit: z.number().min(1).max(1000).default(1000),
       })
     )
@@ -1778,7 +1838,8 @@ export const analyticsRouter = createRouter({
         input.window,
         input.mode,
         input.limit,
-        input.platform
+        input.platform,
+        input.campaign
       );
 
       if (rows.length === 0) {
