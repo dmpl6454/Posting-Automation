@@ -36,7 +36,11 @@ describe("Story mode is one derived flag, not scattered conditions", () => {
     // The handler refuses, and both buttons are disabled with the same reason.
     expect(compose).toMatch(/if \(storyBlock\) \{/);
     expect(compose.match(/!!storyBlock/g) ?? []).toHaveLength(2);
-    expect(compose.match(/youtubeBlockReason \?\? storyBlock \?\? undefined/g) ?? []).toHaveLength(2);
+    // 2026-09-21: the chain gained `?? captionBlock` (the missing-caption reason)
+    // on both buttons. storyBlock still precedes it, so a story's reason wins.
+    expect(
+      compose.match(/youtubeBlockReason \?\? storyBlock \?\? captionBlock \?\? undefined/g) ?? []
+    ).toHaveLength(2);
   });
 });
 
@@ -123,7 +127,11 @@ describe("mentions", () => {
     expect(compose).toMatch(/const storyMentionsSignature = storyMentions\.join\(","\)/);
     // 2026-09-18: the per-channel captions joined the same dep array, also as a
     // string signature (caption-overrides-payload.test.ts locks that one).
-    expect(compose).toMatch(/\[content, selectedChannels, draftMediaSignature, postType, storyMentionsSignature, captionOverridesSignature\]/);
+    // 2026-09-21: campaignLabel joined it — already a plain string, so the rule
+    // ("never key on an array/object identity") holds without a signature.
+    expect(compose).toMatch(
+      /\[content, selectedChannels, draftMediaSignature, postType, storyMentionsSignature, captionOverridesSignature, campaignLabel\]/
+    );
   });
 });
 
@@ -162,7 +170,12 @@ describe("self-review fixes", () => {
 
   it("blocks a two-attachment story on the DRAFT button too", () => {
     // The server refuses it outright; the button must not offer the click.
-    expect(compose).toMatch(/isStoryMode \? \(postMedia\.length === 0 && !content\) \|\| postMedia\.length > 1 : !content/);
+    // 2026-09-21: the non-story branch became `needsSharedCaption` (an empty
+    // shared caption is allowed once every channel has its own). The STORY branch
+    // — the thing this test guards — is unchanged.
+    expect(compose).toMatch(
+      /isStoryMode\s*\?\s*\(postMedia\.length === 0 && !content\) \|\| postMedia\.length > 1\s*:\s*needsSharedCaption/
+    );
   });
 
   it("does not put a fixed-size PlatformIcon inside the post-type tab", () => {
@@ -185,8 +198,13 @@ describe("diff-review fixes", () => {
   });
 
   it("renders the story blocker VISIBLY, not only as a title tooltip", () => {
-    expect(compose).toMatch(/\{\(youtubeBlockReason \|\| storyBlock\) && \(/);
-    expect(compose).toMatch(/\{youtubeBlockReason \?\? storyBlock\}/);
+    // 2026-09-21: the missing-caption reason joins the same banner, for the same
+    // reason (a touch device never shows a tooltip). It is gated on having picked
+    // a channel so an untouched composer does not nag.
+    expect(compose).toMatch(
+      /\{\(youtubeBlockReason \|\| storyBlock \|\| \(captionBlock && selectedChannels\.length > 0\)\) && \(/
+    );
+    expect(compose).toMatch(/\{youtubeBlockReason \?\? storyBlock \?\? captionBlock\}/);
   });
 });
 

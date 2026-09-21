@@ -53,6 +53,51 @@ export function sanitizeCaptionOverrides(
 }
 
 /**
+ * The message shown when a post has no caption anywhere. Shared by create and
+ * update so the two rules cannot drift apart.
+ */
+export const MISSING_CAPTION_MESSAGE =
+  "Add a caption — either a shared one, or a caption for every selected channel.";
+
+/**
+ * Does EVERY selected channel carry its own non-blank caption?
+ *
+ * This is what makes an empty shared caption publishable. The publish worker
+ * resolves `contentOverride ?? contentVariants?.[platform] ?? post.content`, so
+ * when every target has its own text the empty shared caption is never reached
+ * and nothing can publish blank. Partial coverage is NOT enough: one uncovered
+ * channel would fall through to the empty shared caption and publish empty text
+ * — and on Reddit/Medium/dev.to the caption also supplies the post TITLE, where
+ * an empty value is a hard API rejection.
+ *
+ * ⚠️ Zero channels ⇒ false. A channel-less draft covers nothing, so a
+ * caption-less one stays refused rather than becoming schedulable later with no
+ * caption anywhere.
+ */
+export function everyChannelHasOwnCaption(
+  overrides: Record<string, string> | undefined,
+  channelIds: string[],
+  sharedContent: string
+): boolean {
+  if (channelIds.length === 0) return false;
+  const sanitized = sanitizeCaptionOverrides(overrides, channelIds, sharedContent);
+  if (!sanitized) return false;
+  return channelIds.every((id) => (sanitized[id] ?? "").trim().length > 0);
+}
+
+/**
+ * The same question asked of PostTargets that already exist — used by
+ * `post.update` and `post.updateTargetContent`, which have no `captionOverrides`
+ * input and must read coverage off the rows themselves.
+ */
+export function everyTargetHasOwnCaption(
+  targets: Array<{ contentOverride: string | null }>
+): boolean {
+  if (targets.length === 0) return false;
+  return targets.every((t) => (t.contentOverride ?? "").trim().length > 0);
+}
+
+/**
  * The `contentOverride` a recreated PostTarget should carry when `post.update`
  * replaces a post's channels.
  *

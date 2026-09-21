@@ -6,6 +6,8 @@ import {
   contentOverrideForReplacedTarget,
   captionOverridesSchema,
   CAPTION_OVERRIDE_MAX,
+  everyChannelHasOwnCaption,
+  everyTargetHasOwnCaption,
 } from "../lib/caption-overrides";
 
 /**
@@ -71,6 +73,62 @@ describe("contentOverrideForReplacedTarget", () => {
   });
 });
 
+/**
+ * Owner-reported 2026-09-21: "when put manual caption on each page and i dont
+ * give caption in content it doesnt give me option to publish". An empty shared
+ * caption is now allowed, but ONLY when every channel supplies its own — the
+ * publish worker resolves `contentOverride ?? contentVariants ?? post.content`,
+ * so one uncovered channel would publish empty text (and on Reddit/Medium/dev.to
+ * the caption is also the post TITLE, where empty is a hard API rejection).
+ */
+describe("everyChannelHasOwnCaption — the empty-shared-caption gate", () => {
+  const channels = ["ch1", "ch2"];
+
+  it("is true when EVERY channel has its own non-blank caption and the shared one is empty", () => {
+    expect(everyChannelHasOwnCaption({ ch1: "A", ch2: "B" }, channels, "")).toBe(true);
+  });
+
+  it("is FALSE on partial coverage — the uncovered channel would publish empty text", () => {
+    expect(everyChannelHasOwnCaption({ ch1: "A" }, channels, "")).toBe(false);
+  });
+
+  it("treats a whitespace-only caption as no caption", () => {
+    expect(everyChannelHasOwnCaption({ ch1: "A", ch2: "   \n " }, channels, "")).toBe(false);
+  });
+
+  it("is FALSE with zero channels — a channel-less draft covers nothing", () => {
+    // Otherwise a caption-less draft could be saved and then scheduled later with
+    // no caption anywhere.
+    expect(everyChannelHasOwnCaption({ ch1: "A" }, [], "")).toBe(false);
+  });
+
+  it("is FALSE for absent overrides", () => {
+    expect(everyChannelHasOwnCaption(undefined, channels, "")).toBe(false);
+  });
+
+  it("ignores captions aimed at channels the post does not target", () => {
+    expect(everyChannelHasOwnCaption({ ch1: "A", other: "B" }, channels, "")).toBe(false);
+  });
+
+  it("an override identical to a NON-empty shared caption is dropped, so coverage fails", () => {
+    // sanitizeCaptionOverrides drops no-op overrides. That only matters when the
+    // shared caption is non-empty — in which case the post is publishable anyway.
+    expect(everyChannelHasOwnCaption({ ch1: "s", ch2: "B" }, channels, "s")).toBe(false);
+  });
+});
+
+describe("everyTargetHasOwnCaption — the same question for existing rows", () => {
+  it("is true only when every target carries its own caption", () => {
+    expect(everyTargetHasOwnCaption([{ contentOverride: "A" }, { contentOverride: "B" }])).toBe(true);
+    expect(everyTargetHasOwnCaption([{ contentOverride: "A" }, { contentOverride: null }])).toBe(false);
+    expect(everyTargetHasOwnCaption([{ contentOverride: "A" }, { contentOverride: "  " }])).toBe(false);
+  });
+
+  it("is FALSE for an empty target list", () => {
+    expect(everyTargetHasOwnCaption([])).toBe(false);
+  });
+});
+
 describe("post.router wiring (source-level contract)", () => {
   const ROOT = join(__dirname, "..", "..", "..", "..");
   const src = readFileSync(join(ROOT, "packages/api/src/routers/post.router.ts"), "utf8");
@@ -94,5 +152,21 @@ describe("post.router wiring (source-level contract)", () => {
     // caption (AI-generated and hand-written alike).
     expect(src).toMatch(/targets: \{ select: \{ channelId: true, format: true, contentOverride: true \} \}/);
     expect(src).toMatch(/contentOverride: contentOverrideForReplacedTarget\(channelId, existing\.targets\)/);
+  });
+
+  it("create allows an empty shared caption ONLY when every channel has its own", () => {
+    expect(src).toMatch(
+      /!everyChannelHasOwnCaption\(input\.captionOverrides, input\.channelIds, input\.content\)/
+    );
+  });
+
+  it("update derives coverage from the RESULTING targets, so adding a channel cannot strand it captionless", () => {
+    expect(src).toMatch(/!everyTargetHasOwnCaption\(resultingTargets\)/);
+    expect(src).toMatch(/contentOverride: contentOverrideForReplacedTarget\(channelId, existing\.targets\)/);
+  });
+
+  it("updateTargetContent refuses to clear the last caption on a post with no shared caption", () => {
+    // Clearing falls the target back to the shared caption — only safe if one exists.
+    expect(src).toMatch(/post: \{ select: \{ content: true \} \}/);
   });
 });
