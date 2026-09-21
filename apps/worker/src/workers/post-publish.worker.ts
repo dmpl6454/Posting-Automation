@@ -12,7 +12,7 @@ import { planFacebookAnalyticsId, earlyVideoSyncDelayMs } from "../lib/fb-video-
 import { addLocalClaim, releaseLocalClaim, localClaimCount } from "../lib/local-claims";
 import { trackBackgroundTask } from "../lib/background-tasks";
 import { markTargetFailed, markTargetAmbiguous, buildPublishClaimWhere, routePublishError, shouldPreflightReconcile, buildPublishNotifications, mediaRequiredReason, isSeedNoise, isStaleScheduleJob, isHeavyPublish, planHeavyDefer, HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE, classifyError, isDefiniteAuthFailure, releaseClaimAfterPrePublishError, decideClaimMiss, countOtherActiveJobsForTarget, ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE, formatPublishTiming, type PublishJobState } from "../lib/publish-recovery";
-import { PRIORITY_RETRY, mediaOptimizeQueue, atAgeWindowsForFormat } from "@postautomation/queue";
+import { PRIORITY_RETRY, mediaOptimizeQueue, atAgeWindowsForFormat, resolvePostStatusFromTargets } from "@postautomation/queue";
 import { planOptimizeGate, choosePublishUrl } from "../lib/media-optimize";
 import { buildSnapshotMetadata } from "../lib/snapshot-metadata";
 
@@ -541,8 +541,10 @@ export function createPostPublishWorker() {
         // failed — and the delayed job then lost the claim and skipped it. Now a
         // failed add simply propagates: the target is already SCHEDULED, so
         // BullMQ's retry of THIS job can claim it again.
-        await prisma.postTarget.update({
-          where: { id: postTargetId },
+        // updateMany + a status guard: a target the user CANCELLED while this
+        // job was deferred must not be re-armed to SCHEDULED and published.
+        await prisma.postTarget.updateMany({
+          where: { id: postTargetId, status: { not: "CANCELLED" } },
           // OPTIMIZE_WAIT_MESSAGE is a watchdog keep-alive marker like
           // HEAVY_SLOT_WAIT_MESSAGE — defer-parked targets stay live.
           data: { status: "SCHEDULED", errorMessage: OPTIMIZE_WAIT_MESSAGE },
@@ -606,8 +608,9 @@ export function createPostPublishWorker() {
         );
         // Release the claim FIRST, then enqueue — same reasoning as the
         // optimize-wait defer above (2026-09-16).
-        await prisma.postTarget.update({
-          where: { id: postTargetId },
+        // Status-guarded for the same reason as the optimize defer above.
+        await prisma.postTarget.updateMany({
+          where: { id: postTargetId, status: { not: "CANCELLED" } },
           // HEAVY_SLOT_WAIT_MESSAGE is ALSO the watchdog's keep-alive marker —
           // a defer-parked target is exempt from the 10-min freshness check
           // (its PRIORITY_RETRY re-queue can legitimately starve behind the
@@ -1105,9 +1108,10 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
             // fresh interactive + bulk work (@postautomation/queue publish-priority).
             { delay: delayMs, priority: PRIORITY_RETRY, attempts: 3, backoff: { type: "exponential", delay: 60_000 } }
           );
-          // Mark as SCHEDULED (not FAILED) so the UI shows it's pending
-          await prisma.postTarget.update({
-            where: { id: postTargetId },
+          // Mark as SCHEDULED (not FAILED) so the UI shows it's pending.
+          // Status-guarded: a cancel during the backoff must stick.
+          await prisma.postTarget.updateMany({
+            where: { id: postTargetId, status: { not: "CANCELLED" } },
             data: { status: "SCHEDULED", errorMessage: `Rate-limited, retrying in ${Math.round(delayMs / 60_000)}min` },
           });
           return; // Don't throw — this is handled
@@ -1400,7 +1404,10 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
           include: { channel: { select: { platform: true, name: true, username: true } } },
         });
         const allPublished = allTargets.every((t) => t.status === "PUBLISHED");
-        const allTerminal = allTargets.every((t) => t.status === "PUBLISHED" || t.status === "FAILED");
+        // ⚠️ ONE shared rule (packages/queue/post-status). A CANCELLED target is
+        // excluded from the verdict rather than counted as a success or a
+        // failure — see that module for why each alternative is visibly wrong.
+        const verdict = resolvePostStatusFromTargets(allTargets);
         if (allPublished) {
           await prisma.post.update({
             where: { id: postTarget.postId },
@@ -1409,7 +1416,7 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
 
           // Send email report with all published links
           await sendPublishReportEmail(postTarget.post.organizationId, postTarget.postId, postTarget.post.content, allTargets);
-        } else if (allTerminal) {
+        } else if (verdict.settled) {
           // Mixed outcome where the LAST terminal event is a SUCCESS (a
           // sibling already failed terminally): mirror the failed-handler's
           // finalize — without this the post sits at PUBLISHING (spinning
@@ -1417,7 +1424,11 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
           // 2026-07-21: IG published after Twitter had failed).
           await prisma.post.update({
             where: { id: postTarget.postId },
-            data: { status: "PUBLISHED", publishedAt: new Date() },
+            data: {
+              status: verdict.status,
+              // Only a real publish stamps publishedAt.
+              ...(verdict.status === "PUBLISHED" ? { publishedAt: new Date() } : {}),
+            },
           });
           await sendPublishReportEmail(postTarget.post.organizationId, postTarget.postId, postTarget.post.content, allTargets);
         }
@@ -1512,8 +1523,11 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
 
       // Update PostTarget — guard against P2025 (target may have been deleted)
       try {
-        await prisma.postTarget.update({
-          where: { id: job.data.postTargetId },
+        // Status-guarded: this handler runs ASYNCHRONOUSLY after the job fails,
+        // so a target the user cancelled in the meantime would otherwise be
+        // relabelled FAILED — reporting a deliberate cancel as a malfunction.
+        await prisma.postTarget.updateMany({
+          where: { id: job.data.postTargetId, status: { not: "CANCELLED" } },
           data: {
             ...(isFinalAttempt ? { status: "FAILED" } : {}),
             errorMessage: userMessage,
@@ -1590,12 +1604,15 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
               where: { postId: postTarget.postId },
               include: { channel: { select: { platform: true, name: true, username: true } } },
             });
-            const allDone = allTargets.every((t) => t.status === "PUBLISHED" || t.status === "FAILED");
-            const allFailed = allTargets.every((t) => t.status === "FAILED");
-            if (allDone) {
+            // ⚠️ Derived from ONE filtered population, never from a pair of
+            // independent every() checks. Widening an "all done" check to admit
+            // CANCELLED while leaving "all failed" alone writes PUBLISHED for a
+            // post that only ever FAILED and was cancelled.
+            const verdict = resolvePostStatusFromTargets(allTargets);
+            if (verdict.settled) {
               await prisma.post.update({
                 where: { id: postTarget.postId },
-                data: { status: allFailed ? "FAILED" : "PUBLISHED" },
+                data: { status: verdict.status },
               });
 
               // Send email report with publish results (including failures)

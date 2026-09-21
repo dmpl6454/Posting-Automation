@@ -12,7 +12,7 @@ import {
 } from "@postautomation/social";
 import { runAutoHealerWithLogging } from "../workers/auto-healer.worker";
 import { runCelebrityDetectors } from "../workers/celebrity-detect.worker";
-import { enqueueScheduledPublishJobs, excludeExpiredStoriesWhere, shouldReconcileCheckpoints } from "@postautomation/queue";
+import { enqueueScheduledPublishJobs, excludeExpiredStoriesWhere, shouldReconcileCheckpoints, resolvePostStatusFromTargets } from "@postautomation/queue";
 import { HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE } from "../lib/publish-recovery";
 
 /**
@@ -1141,8 +1141,16 @@ export async function publishScheduledPosts() {
         // load-bearing for the rate-limit retry path: a retried target flips
         // back to SCHEDULED, and this post-level flip is what keeps the cron
         // from re-enqueuing it ahead of its long backoff delay.
-        await prisma.post.update({
-          where: { id: post.id },
+        //
+        // ⚠️ CONDITIONAL on the post still being SCHEDULED. The rows were read at
+        // the top of this scan and one Redis `add` per target runs in between, so
+        // on a large fan-out the window is hundreds of ms — exactly when a user
+        // watching the schedule fire is most likely to hit Stop. An unconditional
+        // write would stamp PUBLISHING over a post cancelRemaining had just
+        // settled, and since no job would then claim anything, it would sit
+        // there until the 45-minute watchdog reported it FAILED.
+        await prisma.post.updateMany({
+          where: { id: post.id, status: "SCHEDULED" },
           data: { status: "PUBLISHING" },
         });
         postCount++;
@@ -1194,17 +1202,21 @@ export async function watchdogPublishingPosts() {
   console.log(`[Watchdog] Found ${stuckPosts.length} candidate stuck PUBLISHING post(s)`);
 
   for (const post of stuckPosts) {
-    const statuses = post.targets.map((t: any) => t.status as string);
-    const allTerminal = statuses.every((s) => s === "PUBLISHED" || s === "FAILED" || s === "CANCELLED");
-    const anyPublished = statuses.some((s) => s === "PUBLISHED");
+    // ⚠️ ONE shared rule with both publish-worker finalizers
+    // (packages/queue/post-status). This block already admitted CANCELLED into
+    // "all terminal" but then reported an ENTIRELY cancelled post as FAILED —
+    // a deliberate user action rendered as a malfunction.
+    const verdict = resolvePostStatusFromTargets(post.targets as Array<{ status: string }>);
 
-    if (allTerminal) {
-      const newStatus = anyPublished ? "PUBLISHED" : "FAILED";
+    if (verdict.settled) {
       await prisma.post.update({
         where: { id: post.id },
-        data: { status: newStatus, publishedAt: anyPublished ? new Date() : undefined },
+        data: {
+          status: verdict.status,
+          ...(verdict.status === "PUBLISHED" ? { publishedAt: new Date() } : {}),
+        },
       });
-      console.log(`[Watchdog] Post ${post.id}: set to ${newStatus} (all targets terminal)`);
+      console.log(`[Watchdog] Post ${post.id}: set to ${verdict.status} (all targets terminal)`);
       continue;
     }
 

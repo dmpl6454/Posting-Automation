@@ -11,7 +11,8 @@ vi.mock("@postautomation/db", () => ({
     },
   },
 }));
-vi.mock("@postautomation/queue", () => ({
+vi.mock("@postautomation/queue", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@postautomation/queue")>()),
   enqueueScheduledPublishJobs: vi.fn(), postPublishQueue: {}, rssSyncQueue: {},
   tokenRefreshQueue: {}, analyticsSyncQueue: {}, agentRunQueue: {}, trendDiscoverQueue: {},
   listeningSyncQueue: {}, campaignAnalyticsSyncQueue: {}, brandContentSyncQueue: {},

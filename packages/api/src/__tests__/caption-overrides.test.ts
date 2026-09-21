@@ -150,7 +150,8 @@ describe("post.router wiring (source-level contract)", () => {
   it("post.update selects contentOverride and carries it through channel replacement", () => {
     // Without this, adding one channel on the post page wiped every per-channel
     // caption (AI-generated and hand-written alike).
-    expect(src).toMatch(/targets: \{ select: \{ channelId: true, format: true, contentOverride: true \} \}/);
+        // 2026-09-21: `status` joined the select for the cancel feature.
+    expect(src).toMatch(/targets: \{ select: \{ channelId: true, format: true, contentOverride: true, status: true \} \}/);
     expect(src).toMatch(/contentOverride: contentOverrideForReplacedTarget\(channelId, existing\.targets\)/);
   });
 

@@ -202,6 +202,63 @@ export default function PostDetailPage() {
 
   const [retryingTargetId, setRetryingTargetId] = useState<string | null>(null);
 
+  // ── Stop the channels that have not gone out yet ────────────────────────────
+  // Only queued targets can be stopped. A channel already handed to a platform
+  // is live, and one mid-flight will be answered by the platform regardless — so
+  // the confirm names exactly what will and will not be affected rather than
+  // implying the whole post can be recalled.
+  const cancellableTargets = (post?.targets ?? []).filter(
+    (t: any) => t.status === "SCHEDULED" || t.status === "DRAFT"
+  );
+  const inFlightTargets = (post?.targets ?? []).filter((t: any) => t.status === "PUBLISHING");
+  const publishedTargets = (post?.targets ?? []).filter((t: any) => t.status === "PUBLISHED");
+
+  const cancelRemaining = trpc.post.cancelRemaining.useMutation({
+    onSuccess: (res) => {
+      toast({
+        title: res.cancelled > 0 ? `Stopped ${res.cancelled} channel${res.cancelled === 1 ? "" : "s"}` : "Nothing left to stop",
+        description:
+          res.cancelled === 0
+            ? // Composed from the returned counts, never asserted: the remaining
+              // channels may have FAILED rather than been sent, in which case
+              // "already been sent" is simply false.
+              res.stillInFlight > 0
+              ? `${res.stillInFlight} channel${res.stillInFlight === 1 ? " is" : "s are"} mid-publish — nothing was left to queue.`
+              : res.failed > 0
+                ? `${res.failed} channel${res.failed === 1 ? " has" : "s have"} already finished with an error — see the channel list below.`
+                : "Every channel had already been sent."
+            : [
+                res.published > 0 ? `${res.published} already published and cannot be recalled.` : null,
+                res.stillInFlight > 0 ? `${res.stillInFlight} still mid-publish — the platform will finish those.` : null,
+              ]
+                .filter(Boolean)
+                .join(" ") || undefined,
+      });
+      refetch();
+    },
+    onError: (err) =>
+      toast({ title: "Couldn't stop this post", description: humanizeError(err), variant: "destructive" }),
+  });
+
+  const handleCancelRemaining = () => {
+    const lines = [
+      `Stop the ${cancellableTargets.length} channel${cancellableTargets.length === 1 ? "" : "s"} that have not been sent yet?`,
+      "",
+    ];
+    if (publishedTargets.length > 0) {
+      lines.push(`${publishedTargets.length} channel${publishedTargets.length === 1 ? " has" : "s have"} already published. Those posts stay live — this cannot remove them.`);
+    }
+    if (inFlightTargets.length > 0) {
+      lines.push(`${inFlightTargets.length} channel${inFlightTargets.length === 1 ? " is" : "s are"} mid-publish and will finish.`);
+    }
+    // The one thing that cannot be undone from this page: a stopped channel is
+    // not re-publishable here — it has to be added again.
+    lines.push("");
+    lines.push("Stopped channels can't be re-sent from this page. You'd need to add the channel again.");
+    if (!confirm(lines.join("\n"))) return;
+    cancelRemaining.mutate({ id: postId });
+  };
+
   // ── Ambiguous publish outcome ("we don't know if it went live") ─────────────
   // A target parked with ambiguousAt must NOT offer a plain Retry: the platform
   // may already hold the post. The only way forward is a human confirming it did
@@ -1106,6 +1163,26 @@ export default function PostDetailPage() {
             >
               <Ban className="mr-2 h-4 w-4" />
               Cancel Schedule
+            </Button>
+          )}
+
+          {/* Stop remaining channels — while a fan-out is still working through
+              the stagger. Shown whenever something is genuinely still stoppable,
+              rather than keyed on post.status, so it also covers a post that is
+              PUBLISHING with a queued tail. */}
+          {cancellableTargets.length > 0 && post.status !== "DRAFT" && (
+            <Button
+              variant="outline"
+              onClick={handleCancelRemaining}
+              disabled={cancelRemaining.isPending}
+              title="Stops only the channels that have not been sent yet"
+            >
+              {cancelRemaining.isPending ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Ban className="mr-2 h-4 w-4" />
+              )}
+              Stop remaining ({cancellableTargets.length})
             </Button>
           )}
 

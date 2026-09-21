@@ -113,3 +113,38 @@ export function contentOverrideForReplacedTarget(
 ): string | null {
   return existingTargets.find((t) => t.channelId === channelId)?.contentOverride ?? null;
 }
+
+/**
+ * The `status` a recreated PostTarget should carry when `post.update` replaces a
+ * post's channels (2026-09-21).
+ *
+ * A kept channel in a SETTLED state keeps it; everything else — and every NEW
+ * channel — takes the post's own status. This is the same "a kept target keeps
+ * exactly what it had" rule that `format` and `contentOverride` already follow.
+ *
+ * ⚠️ CANCELLED must survive, or one click of the post page's "Add channel" on a
+ * partially-stopped post re-arms every withdrawn channel and publishes it.
+ *
+ * 🔴 PUBLISHED must survive for a much sharper reason: `post.update` recreates
+ * targets with `deleteMany` + `create`, which DESTROYS `publishedId`. The publish
+ * worker's "already published" short-circuit keys on that column, so a recreated
+ * PUBLISHED target comes back as SCHEDULED with no publishedId and is published a
+ * SECOND time to a live account. Reachable today: `post.publishNow` sets the POST
+ * to SCHEDULED while leaving already-PUBLISHED targets alone, and a SCHEDULED
+ * post is editable — so "Retry All Failed" followed by "Add channel" duplicates
+ * every channel that had already succeeded.
+ *
+ * ⚠️ FAILED deliberately does NOT survive: it must take the post's status so the
+ * Retry path keeps working. PUBLISHING cannot occur here — `post.update` refuses
+ * a PUBLISHING post outright.
+ */
+const SETTLED_TARGET_STATUSES = ["PUBLISHED", "CANCELLED"];
+
+export function statusForReplacedTarget(
+  channelId: string,
+  existingTargets: Array<{ channelId: string; status: string }>,
+  postStatus: string
+): string {
+  const kept = existingTargets.find((t) => t.channelId === channelId);
+  return kept && SETTLED_TARGET_STATUSES.includes(kept.status) ? kept.status : postStatus;
+}

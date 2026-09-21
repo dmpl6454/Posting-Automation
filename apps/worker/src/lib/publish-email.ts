@@ -76,15 +76,23 @@ export function buildPublishEmail(input: PublishEmailInput): {
 
   const published = targets.filter((t) => t.status === "PUBLISHED");
   const failed = targets.filter((t) => t.status === "FAILED");
+  // A channel the user CANCELLED is neither a success nor a failure, so it is
+  // out of the denominator entirely. Counting it would report "2/3 channels" for
+  // a post where the third was deliberately withdrawn — reading as a partial
+  // failure when nothing failed. The CSV still lists every target.
+  const cancelled = targets.filter((t) => t.status === "CANCELLED");
+  const attempted = targets.length - cancelled.length;
 
   const titleRaw = postContent.split("\n")[0]?.slice(0, 60) || "Untitled post";
   const titleSuffix = (postContent.split("\n")[0]?.length ?? 0) > 60 ? "…" : "";
   const subject =
-    published.length === targets.length
-      ? `✅ Published: "${titleRaw}${titleSuffix}" — ${published.length}/${targets.length} channel${targets.length === 1 ? "" : "s"}`
-      : published.length > 0
-        ? `⚠️ Partially published: "${titleRaw}${titleSuffix}" — ${published.length}/${targets.length} channels`
-        : `❌ Publish failed: "${titleRaw}${titleSuffix}" — 0/${targets.length} channel${targets.length === 1 ? "" : "s"}`;
+    attempted === 0
+      ? `🚫 Cancelled: "${titleRaw}${titleSuffix}" — ${cancelled.length} channel${cancelled.length === 1 ? "" : "s"} stopped before publishing`
+      : published.length === attempted
+        ? `✅ Published: "${titleRaw}${titleSuffix}" — ${published.length}/${attempted} channel${attempted === 1 ? "" : "s"}`
+        : published.length > 0
+          ? `⚠️ Partially published: "${titleRaw}${titleSuffix}" — ${published.length}/${attempted} channels`
+          : `❌ Publish failed: "${titleRaw}${titleSuffix}" — 0/${attempted} channel${attempted === 1 ? "" : "s"}`;
 
   const dashboardUrl = `${appUrl}/dashboard/posts/${postId}`;
 
@@ -95,13 +103,15 @@ export function buildPublishEmail(input: PublishEmailInput): {
   const definitelyFailed = failed.length - unconfirmed;
 
   const heading =
-    published.length === targets.length
-      ? "Your post is live"
-      : published.length > 0
-        ? "Your post partially published"
-        : unconfirmed > 0
-          ? "Your post may not have published — check before retrying"
-          : "Your post could not be published";
+    attempted === 0
+      ? "You cancelled this post before it published"
+      : published.length === attempted
+        ? "Your post is live"
+        : published.length > 0
+          ? "Your post partially published"
+          : unconfirmed > 0
+            ? "Your post may not have published — check before retrying"
+            : "Your post could not be published";
 
   // Only real post URLs go in the list. The dashboard link is kept OUT of it,
   // so anything reading "the block of URLs" gets post links and nothing else.
@@ -135,6 +145,13 @@ export function buildPublishEmail(input: PublishEmailInput): {
   }
   if (unlinked > 0) {
     notes.push(`${unlinked} published post${unlinked === 1 ? " has" : "s have"} no public link.`);
+  }
+  // Stated plainly so a shorter link list is explained rather than looking like
+  // channels silently went missing.
+  if (cancelled.length > 0 && attempted > 0) {
+    notes.push(
+      `${cancelled.length} channel${cancelled.length === 1 ? " was" : "s were"} cancelled before publishing.`
+    );
   }
 
   const linkHtml = links
