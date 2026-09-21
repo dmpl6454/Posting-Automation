@@ -125,3 +125,47 @@ describe("isIndeterminatePublishError — network failures", () => {
     expect(isIndeterminatePublishError(new AmbiguousPublishError("x"))).toBe(true);
   });
 });
+
+describe("Meta THROTTLE codes are a definite refusal, not an unknown outcome", () => {
+  // VERBATIM production body — captured 2026-09-19 from a parked target's
+  // ambiguousReason, not hand-written. Note `is_transient: true`, which is what
+  // used to promote it to indeterminate.
+  const PROD_RATE_LIMIT =
+    'Facebook story publish failed: {"error":{"message":"(#4) Application request limit reached",' +
+    '"type":"OAuthException","is_transient":true,"code":4,"fbtrace_id":"A_OWQTXoJ2E4Sl3hFwg9rlW"}}';
+
+  it("🔴 does NOT park the real production #4 body (17/17 of these had not published)", () => {
+    expect(isIndeterminatePublishError(new Error(PROD_RATE_LIMIT))).toBe(false);
+  });
+
+  it("overrules is_transient for every throttle code in the family", () => {
+    for (const code of [4, 17, 32, 341, 613]) {
+      const err = new Error(
+        `Facebook publish failed: {"error":{"message":"(#${code}) request limit reached","is_transient":true,"code":${code}}}`
+      );
+      expect(isIndeterminatePublishError(err), `code ${code} must be definite`).toBe(false);
+    }
+  });
+
+  it("⚠️ still parks code 2 — a real server fault where work may have begun", () => {
+    const err = new Error(
+      'Instagram publish failed: {"error":{"message":"An unexpected error","is_transient":true,"code":2}}'
+    );
+    expect(isIndeterminatePublishError(err)).toBe(true);
+  });
+
+  it("still parks a NON-throttle error that sets is_transient", () => {
+    const err = new Error(
+      'Facebook publish failed: {"error":{"message":"Something odd","is_transient":true,"code":1}}'
+    );
+    expect(isIndeterminatePublishError(err)).toBe(true);
+  });
+
+  it("does not let a throttle code appearing in fbtrace_id flip a real ambiguity", () => {
+    // 4 inside the trace id must not be read as the error code.
+    const err = new Error(
+      'Facebook publish failed: {"error":{"message":"An unexpected error","is_transient":true,"code":2,"fbtrace_id":"A4x17x32x613"}}'
+    );
+    expect(isIndeterminatePublishError(err)).toBe(true);
+  });
+});

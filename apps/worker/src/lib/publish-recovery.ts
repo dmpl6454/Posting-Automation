@@ -158,7 +158,16 @@ export function classifyError(errMsg: string): PublishErrorType {
   // 11-image post (2026-09-16) was reported as "Platform rate limit hit. Will
   // retry automatically." for a post that can never publish as it stands.
   if (msg.trimStart().startsWith("validation failed")) return "unknown";
-  if (msg.includes("limit how often") || msg.includes("rate limit") || msg.includes("too many") || msg.includes("code\":368") || msg.includes("code\":32")) return "rate_limit";
+  // ⚠️ "request limit reached" is Meta's wording for the THROTTLE family —
+  // (#4) Application / (#17) User / (#32) Page / (#341) Application limit. None
+  // of the patterns beside it matched: Meta says "request limit", not "rate
+  // limit", so #4 fell through to "unknown" and burned three fast BullMQ
+  // attempts instead of taking the backoff re-queue this branch exists for.
+  //
+  // ⚠️ Matched on the MESSAGE, never on `code":4` — that substring also sits
+  // inside "code":400, "code":463 and "code":467, so a dead token (463/467)
+  // would be re-queued as a throttle and retried forever.
+  if (msg.includes("limit how often") || msg.includes("rate limit") || msg.includes("request limit reached") || msg.includes("application limit reached") || msg.includes("too many") || msg.includes("code\":368") || msg.includes("code\":32")) return "rate_limit";
   if (msg.includes("token") && (msg.includes("expired") || msg.includes("invalid")) || msg.includes("code\":190") || msg.includes("401")) return "token_expired";
   if (msg.includes("permission") || msg.includes("code\":10") || msg.includes("403")) return "permission";
   if (msg.includes("reduce the amount") || msg.includes("too long") || msg.includes("too large") || msg.includes("content is too")) return "content_too_large";
