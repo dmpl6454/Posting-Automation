@@ -17,6 +17,7 @@ import {
   redirectUriAllowed,
   buildUnauthorizedChallenge,
   buildInsufficientScopeChallenge,
+  narrowToClientScopes,
 } from "../lib/mcp-oauth";
 
 /**
@@ -245,5 +246,50 @@ describe("WWW-Authenticate challenges", () => {
     const h = buildInsufficientScopeChallenge("https://x.example/.well-known/x", ["mcp:read"], 'he said "no"');
     expect(h).not.toMatch(/error_description="he said "no""/);
     expect(h).toContain(`error_description="he said 'no'"`);
+  });
+});
+
+/**
+ * The registered-client scope ceiling (2026-09-22).
+ *
+ * Added after review: the scope value is a FORM FIELD on the consent screen, so
+ * it is attacker-controlled. Narrowing it to what we define was not enough — it
+ * must also be narrowed to what this client registered for, or a read-only
+ * client can request publish and get it from one user click.
+ */
+describe("narrowToClientScopes", () => {
+  it("refuses a scope the client did not register for", () => {
+    // The whole point: a read-only client asking to publish gets read only.
+    expect(narrowToClientScopes(["mcp:read", "mcp:publish"], ["mcp:read"])).toEqual(["mcp:read"]);
+  });
+
+  it("returns nothing when the request is entirely outside the ceiling", () => {
+    // Must be empty, not a silent fallback to the default set — a fallback here
+    // would turn "asked for something you may not have" into "granted everything".
+    expect(narrowToClientScopes(["mcp:publish"], ["mcp:read"])).toEqual([]);
+  });
+
+  it("treats an empty registration as the full supported set, not as zero", () => {
+    // RFC 7591 clients commonly omit `scope`. Reading that as "no scopes" would
+    // make every default registration unusable.
+    expect(narrowToClientScopes(["mcp:publish"], [])).toEqual(["mcp:publish"]);
+  });
+
+  it("gives the ceiling when the client asks for nothing", () => {
+    expect(narrowToClientScopes([], ["mcp:read", "mcp:write"])).toEqual(["mcp:read", "mcp:write"]);
+  });
+
+  it("drops unknown scopes from BOTH sides", () => {
+    // A junk value in the stored ceiling must not become grantable, and a junk
+    // request must not pass through.
+    expect(narrowToClientScopes(["mcp:read", "admin:*"], ["mcp:read", "root"])).toEqual([
+      "mcp:read",
+    ]);
+  });
+
+  it("never lets a ceiling widen a request", () => {
+    expect(narrowToClientScopes(["mcp:read"], ["mcp:read", "mcp:write", "mcp:publish"])).toEqual([
+      "mcp:read",
+    ]);
   });
 });

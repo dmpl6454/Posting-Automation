@@ -291,3 +291,24 @@ export const AUTH_CODE_TTL_SECONDS = 60;
 export function expiresAt(seconds: number, now: Date): Date {
   return new Date(now.getTime() + seconds * 1000);
 }
+
+/**
+ * Narrow a requested scope set to what the client is registered to receive.
+ *
+ * 🔴 The consent screen and the consent ACTION must agree exactly, or the screen
+ * describes one grant and the server mints another. Sharing one function is what
+ * makes that structural rather than a convention two files happen to follow.
+ *
+ * Both inputs are untrusted: `requested` arrives in a query string and then in a
+ * hidden form field, `allowed` is whatever the client sent to dynamic
+ * registration. An empty `allowed` means the client registered no ceiling, which
+ * is the spec's "all supported scopes" default — NOT "no scopes", which would
+ * make every default registration unusable.
+ */
+export function narrowToClientScopes(requested: string[], allowed: string[]): McpScope[] {
+  const ceiling = sanitizeScopes(allowed.length ? allowed : [...ALL_MCP_SCOPES]);
+  const asked = sanitizeScopes(requested);
+  // An absent request means "everything you offer", bounded by the ceiling.
+  const effective = asked.length ? asked : ceiling;
+  return effective.filter((s) => ceiling.includes(s));
+}

@@ -7,6 +7,7 @@ import {
   type McpAuthContext,
 } from "~/lib/mcp-verify-token";
 import { MCP_TOOLS, runTool } from "~/lib/mcp-tools";
+import { sanitizeErrorMessage } from "~/lib/mcp-guards";
 import { mcpResourceUri } from "~/lib/mcp-urls";
 
 /**
@@ -56,12 +57,21 @@ function buildServer(ctx: McpAuthContext) {
           const result = await runTool(tool, args, ctx);
           return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
         } catch (err: any) {
-          // Surface the platform's own actionable message (plan limits, missing
-          // media, story rules) rather than a stack trace — the model can act on
-          // a sentence like "Add a caption", not on an exception.
+          /**
+           * Surface the platform's own actionable message (plan limits, missing
+           * media, story rules) rather than a stack trace — the model can act on
+           * a sentence like "Add a caption", not on an exception.
+           *
+           * 🔴 SANITIZED FIRST. This path reaches the model exactly like a
+           * successful result does, but it bypasses `redactSecrets` entirely —
+           * that runs inside runTool, on the return value. A Prisma constraint
+           * error quotes field values and a provider error can quote the request
+           * it sent, `access_token` included.
+           */
+          console.error(`[mcp] tool ${tool.name} failed:`, err);
           return {
             isError: true,
-            content: [{ type: "text" as const, text: err?.message ?? "The request failed." }],
+            content: [{ type: "text" as const, text: sanitizeErrorMessage(err) }],
           };
         }
       }
@@ -81,23 +91,33 @@ async function handle(req: Request): Promise<Response> {
     sessionIdGenerator: undefined,
   });
 
-  try {
-    await server.connect(transport);
-    return await transport.handleRequest(req, {
-      authInfo: {
-        token: "[verified]",
-        clientId: auth.ctx.clientId,
-        scopes: auth.ctx.scopes,
-        resource: new URL(mcpResourceUri()),
-        extra: { userId: auth.ctx.userId, organizationId: auth.ctx.organizationId },
-      },
-    });
-  } finally {
-    // Release the per-request server/transport pair. Without this, a long-lived
-    // process accumulates one of each per call.
-    transport.close?.().catch?.(() => {});
-    server.close?.().catch?.(() => {});
-  }
+  /**
+   * 🔴 DO NOT close the transport or server here, and NEVER in a `finally`.
+   *
+   * handleRequest returns `new Response(readableStream)` whose body is filled
+   * ASYNCHRONOUSLY, after this function has already returned. A `finally` that
+   * tore them down ran the instant the promise resolved — before a single byte
+   * was written — so every request returned an EMPTY body and no client could
+   * connect at all. Caught by review, having shipped nowhere.
+   *
+   * The pair is per-request and becomes garbage once the stream completes; the
+   * only link kept is transport -> server, so the server is released when the
+   * transport genuinely closes.
+   */
+  transport.onclose = () => {
+    void server.close?.().catch?.(() => {});
+  };
+
+  await server.connect(transport);
+  return await transport.handleRequest(req, {
+    authInfo: {
+      token: "[verified]",
+      clientId: auth.ctx.clientId,
+      scopes: auth.ctx.scopes,
+      resource: new URL(mcpResourceUri()),
+      extra: { userId: auth.ctx.userId, organizationId: auth.ctx.organizationId },
+    },
+  });
 }
 
 export const POST = handle;

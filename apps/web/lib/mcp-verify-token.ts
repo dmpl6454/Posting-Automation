@@ -28,6 +28,13 @@ export type McpAuthContext = {
   scopes: string[];
   clientId: string;
   tokenId: string;
+  /**
+   * Carried so the synthesized session can hand `protectedProcedure` the REAL
+   * value rather than omitting the field. Verification already refuses a banned
+   * user, so this is defence in depth — but `undefined` is falsy, so an omitted
+   * field would silently pass that gate if this check were ever removed.
+   */
+  isBanned: boolean;
 };
 
 export type McpAuthFailure = {
@@ -92,6 +99,48 @@ export async function verifyMcpToken(req: Request): Promise<McpAuthResult> {
     return unauthorized("This token was not issued for this server.");
   }
 
+  /**
+   * 🔴 RE-CHECK THE PRINCIPAL ON EVERY REQUEST, exactly as the NextAuth jwt
+   * callback re-reads the User row on every auth(). A bearer token is a snapshot
+   * of a consent that happened up to an hour ago (30 days, via refresh) — without
+   * this, banning a user, deleting them, resetting their password or revoking the
+   * client would all leave the AI connector working.
+   *
+   * ⚠️ `passwordChangedAt` matters MOST here. The web session already invalidates
+   * on it, and CLAUDE.md records that invariant ("forces re-login everywhere after
+   * a reset"). A password reset is what someone does when they believe they were
+   * compromised, so a connector that survives it defeats the one action the user
+   * took to lock the attacker out.
+   */
+  const [user, client] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id: token.userId },
+      select: { isBanned: true, deletedAt: true, passwordChangedAt: true },
+    }),
+    prisma.mcpOAuthClient.findUnique({
+      where: { clientId: token.clientId },
+      select: { revokedAt: true },
+    }),
+  ]);
+
+  if (!user || user.deletedAt || user.isBanned) {
+    return unauthorized("Invalid or expired token.");
+  }
+  if (!client || client.revokedAt) {
+    return unauthorized("Invalid or expired token.");
+  }
+  if (user.passwordChangedAt && user.passwordChangedAt.getTime() > token.createdAt.getTime()) {
+    // Retire the whole grant, not just this token — the refresh token would
+    // otherwise mint a replacement seconds later.
+    await prisma.mcpAccessToken
+      .updateMany({
+        where: { userId: token.userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      })
+      .catch(() => {});
+    return unauthorized("Invalid or expired token.");
+  }
+
   // Best-effort: never let bookkeeping fail a valid request.
   prisma.mcpAccessToken
     .update({ where: { id: token.id }, data: { lastUsedAt: new Date() } })
@@ -105,6 +154,7 @@ export async function verifyMcpToken(req: Request): Promise<McpAuthResult> {
       scopes: token.scopes,
       clientId: token.clientId,
       tokenId: token.id,
+      isBanned: user.isBanned,
     },
   };
 }

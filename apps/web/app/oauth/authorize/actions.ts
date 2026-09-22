@@ -9,6 +9,7 @@ import {
   expiresAt,
   AUTH_CODE_TTL_SECONDS,
   sanitizeScopes,
+  narrowToClientScopes,
   redirectUriAllowed,
   canonicalizeResource,
 } from "@postautomation/api/src/lib/mcp-oauth";
@@ -78,10 +79,24 @@ export async function decideAuthorization(formData: FormData) {
     redirect(back.toString());
   }
 
-  const scopes = sanitizeScopes(scopeRaw.split(/\s+/).filter(Boolean));
+  /**
+   * 🔴 THE SCOPE FIELD IS A FORM INPUT, so it is attacker-controlled — the
+   * consent page renders a hidden input and anything can POST this action
+   * directly. Narrowing to what WE define is not enough: it must also be
+   * narrowed to what THIS client registered for.
+   *
+   * Otherwise a client that registered read-only can post `mcp:publish` and,
+   * with one click from a user who was shown a read-only screen, hold publish
+   * rights on live audience accounts. The registered set is the ceiling; the
+   * user's consent narrows within it, never past it.
+   */
+  const scopes = narrowToClientScopes(scopeRaw.split(/\s+/).filter(Boolean), client.scopes);
   if (scopes.length === 0) {
     back.searchParams.set("error", "invalid_scope");
-    back.searchParams.set("error_description", "No recognised scopes were requested.");
+    back.searchParams.set(
+      "error_description",
+      "No recognised scopes were requested, or none are permitted for this client."
+    );
     redirect(back.toString());
   }
 

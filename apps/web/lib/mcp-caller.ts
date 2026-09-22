@@ -38,6 +38,23 @@ export function buildMcpCaller(ctx: McpAuthContext) {
     user: {
       id: ctx.userId,
       isSuperAdmin: false,
+      /**
+       * ⚠️ PRESENT DELIBERATELY. `protectedProcedure` gates on
+       * `ctx.session.user.isBanned`, and `undefined` is falsy — omitting this
+       * field would let a suspended account keep using its connector. The value
+       * is read fresh from the User row on every request in verifyMcpToken, so
+       * it is never a stale snapshot from consent time.
+       */
+      isBanned: ctx.isBanned,
+      /**
+       * ⚠️ `appRole` is ABSENT ON PURPOSE, not by oversight. `isAppAdmin` reads
+       * it, so leaving it undefined means every app-admin router (rss, agent,
+       * autopilot, campaign, webhook, apikey, audit, team management, billing
+       * checkout…) is closed to the connector regardless of the human's own
+       * role. None of the MCP tools need it — they are all orgProcedure — and an
+       * LLM holding an owner's admin surface is a far worse failure than a tool
+       * returning FORBIDDEN. Do not "fix" this by copying appRole through.
+       */
     },
     expires: new Date(Date.now() + 60_000).toISOString(),
   } as any;
@@ -78,6 +95,19 @@ const SECRET_KEYS = new Set([
   "password",
   "webhookSecret",
   "apiKey",
+  // OAuth material, in case a future tool ever reaches these tables.
+  "clientSecret",
+  "codeChallenge",
+  "codeVerifier",
+  "access_token",
+  "refresh_token",
+  "client_secret",
+  // Credential-bearing channel config: Telegram bot tokens, Discord webhook
+  // URLs, Mastodon/WordPress app passwords all arrive under these names.
+  "botToken",
+  "webhookUrl",
+  "appPassword",
+  "secret",
 ]);
 
 export function redactSecrets<T>(value: T, depth = 0): T {

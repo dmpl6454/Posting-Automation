@@ -2,11 +2,10 @@ import { redirect } from "next/navigation";
 import { auth } from "~/lib/auth";
 import { prisma } from "@postautomation/db";
 import {
-  sanitizeScopes,
+  narrowToClientScopes,
   parseScopeParam,
   redirectUriAllowed,
   SCOPE_DESCRIPTIONS,
-  ALL_MCP_SCOPES,
   type McpScope,
 } from "@postautomation/api/src/lib/mcp-oauth";
 import { decideAuthorization } from "./actions";
@@ -101,8 +100,20 @@ export default async function AuthorizePage({
   // Requested scopes, narrowed to what we define. An empty/absent request gets
   // the full set — the spec's guidance is that scopes_supported is the default
   // when the client does not ask for something narrower.
-  const requested = sanitizeScopes(parseScopeParam(scopeParam));
-  const scopes: McpScope[] = requested.length ? requested : ALL_MCP_SCOPES;
+  // ⚠️ Narrowed by the client's REGISTERED ceiling as well as by what we define,
+  // so the screen can never describe access the server action will refuse (or,
+  // worse, describe less than it grants). actions.ts applies the same filter
+  // authoritatively — this one only keeps the display honest.
+  const scopes: McpScope[] = narrowToClientScopes(parseScopeParam(scopeParam), client.scopes);
+
+  if (scopes.length === 0) {
+    return (
+      <ErrorPanel
+        title="Nothing to approve"
+        detail="This application asked for access that it is not registered to receive."
+      />
+    );
+  }
 
   // Which workspace this token will act on. Same deterministic ordering the rest
   // of the app uses (OWNER first, then oldest) so the default here matches the
@@ -220,7 +231,7 @@ export default async function AuthorizePage({
       </div>
 
       <p className="mt-3 text-center text-xs text-muted-foreground">
-        You can revoke this at any time from Settings.
+        You can revoke this at any time from Settings &rarr; Connected apps.
       </p>
     </div>
   );

@@ -1,6 +1,8 @@
 import { z } from "zod";
-import { MCP_SCOPES } from "@postautomation/api/src/lib/mcp-oauth";
+import { MCP_SCOPES, type McpScope } from "@postautomation/api/src/lib/mcp-oauth";
+import { createAuditLog } from "@postautomation/api/src/lib/audit";
 import { buildMcpCaller, redactSecrets } from "./mcp-caller";
+import { checkMcpActionLimit } from "./mcp-guards";
 import type { McpAuthContext } from "./mcp-verify-token";
 
 /**
@@ -19,7 +21,7 @@ export type McpTool = {
   description: string;
   inputSchema: z.ZodTypeAny;
   /** Scope required. The hierarchy means publish implies write implies read. */
-  scope: string;
+  scope: McpScope;
   handler: (args: any, ctx: McpAuthContext) => Promise<unknown>;
 };
 
@@ -127,6 +129,12 @@ export const MCP_TOOLS: McpTool[] = [
       const post = await buildMcpCaller(ctx).post.create({
         content: args.content,
         channelIds: args.channel_ids ?? [],
+        // 🔴 aiImages defaults TRUE. Left alone, a media-less Instagram/Facebook
+        // post makes the publish worker GENERATE an image per channel at publish
+        // time — so an AI-written post would also carry AI imagery nobody chose
+        // or reviewed, on a live audience account. An assistant drafting copy
+        // must not silently commission pictures.
+        aiImages: false,
         ...(args.campaign_label ? { campaignLabel: args.campaign_label } : {}),
       } as any);
       return summarizePost(post);
@@ -160,10 +168,27 @@ export const MCP_TOOLS: McpTool[] = [
           "publish_at must be at least 5 minutes in the future. To publish immediately, use publish_post — it is irreversible and says so."
         );
       }
-      const post = await buildMcpCaller(ctx).post.update({
-        id: args.post_id,
-        scheduledAt: when.toISOString(),
+      /**
+       * 🔴 `post.update` CANNOT schedule. Its input has no `status` field and the
+       * mutation never writes one, so a DRAFT given a scheduledAt stays DRAFT —
+       * and the publish cron selects only SCHEDULED posts. This tool previously
+       * called it and reported success while scheduling precisely nothing.
+       *
+       * That is the exact bug class CLAUDE.md records for bulkSchedule ("Bulk
+       * Schedule never published anything"): the UI said it worked, the post
+       * never went out. bulk.bulkSchedule is the path that actually arms a post
+       * AND flips its targets, which is what the cron needs to enqueue jobs.
+       */
+      const caller = buildMcpCaller(ctx);
+      const res: any = await caller.bulk.bulkSchedule({
+        items: [{ postId: args.post_id, scheduledAt: when.toISOString() }],
       } as any);
+      if (!res?.scheduled) {
+        throw new Error(
+          "That post could not be scheduled. It may already be published, cancelled, or a story without exactly one media attachment."
+        );
+      }
+      const post = await caller.post.getById({ id: args.post_id });
       return summarizePost(post);
     },
   },
@@ -206,7 +231,8 @@ export const MCP_TOOLS: McpTool[] = [
 
   {
     name: "reply_to_comment",
-    description: "Reply to a comment on a published Instagram post. The reply is public and immediate.",
+    description:
+      "Reply to a comment on a published Instagram post. The reply is PUBLIC, IMMEDIATE and cannot be deleted through this tool — it appears under the user's brand. Only call it when the user has approved the wording.",
     scope: MCP_SCOPES.WRITE,
     inputSchema: z.object({
       target_id: z.string(),
@@ -230,6 +256,36 @@ export async function runTool(
   ctx: McpAuthContext
 ): Promise<unknown> {
   const parsed = tool.inputSchema.parse(args ?? {});
+
+  // Rate limit BEFORE the handler — a limit applied after the side effect is
+  // not a limit. Read tools are exempt.
+  const limit = checkMcpActionLimit(tool.scope, `${ctx.clientId}:${ctx.userId}`);
+  if (!limit.ok) throw new Error(limit.message);
+
   const result = await tool.handler(parsed, ctx);
+
+  /**
+   * ⚠️ AUDIT EVERY SIDE EFFECT, naming the CLIENT.
+   *
+   * Without this, a post created by an AI connector is indistinguishable in the
+   * audit log from one a human typed — `createdById` is the same user either
+   * way. The first question after an unexpected post ("did I do that, or did
+   * the assistant?") would have no answer. Writes only: auditing reads would
+   * bury the record that matters under routine polling.
+   *
+   * Fire-and-forget, like every other call site — bookkeeping must never fail
+   * the operation it describes.
+   */
+  if (tool.scope !== MCP_SCOPES.READ) {
+    void createAuditLog({
+      organizationId: ctx.organizationId,
+      userId: ctx.userId,
+      action: `mcp.${tool.name}`,
+      entityType: "mcp",
+      entityId: (result as any)?.id ?? undefined,
+      metadata: { tool: tool.name, clientId: ctx.clientId, scope: tool.scope, via: "mcp" },
+    });
+  }
+
   return redactSecrets(result);
 }

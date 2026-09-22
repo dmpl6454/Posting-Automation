@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@postautomation/db";
+import { createRateLimiter } from "@postautomation/api/src/middleware/rate-limit";
 import {
   generateSecret,
   hashSecret,
@@ -32,6 +33,36 @@ export const dynamic = "force-dynamic";
 /** Bound the damage an unauthenticated write endpoint can do. */
 const MAX_REDIRECT_URIS = 10;
 const MAX_NAME_LENGTH = 200;
+/**
+ * ⚠️ A per-URI cap as well as a count cap. Ten URIs with no length limit is a
+ * ~megabyte row per request against an endpoint that needs no credential; the
+ * count alone does not bound the write.
+ */
+const MAX_REDIRECT_URI_LENGTH = 2048;
+const MAX_BODY_BYTES = 64 * 1024;
+
+/**
+ * 🔴 UNAUTHENTICATED MEANS UNMETERED UNLESS IT IS METERED HERE.
+ *
+ * Registration grants nothing — a client with no consent gets no token — but
+ * the row is still a database write anyone on the internet can make, in a
+ * deployment whose real constraint is a 4-core box with a shared disk that
+ * Postgres and MinIO both live on. The limit is deliberately generous: a real
+ * client registers once, and a user re-adding a connector a few times must not
+ * be locked out.
+ *
+ * ⚠️ Per PROCESS and per IP, so it is a brake, not a wall. nginx's own
+ * `limit_req` on /api/ is the layer that actually bounds a distributed flood;
+ * this stops the single-source case from reaching Postgres at all.
+ */
+const registerLimiter = createRateLimiter({ windowMs: 60 * 60_000, max: 30 });
+
+function clientIp(req: NextRequest): string {
+  // nginx sets X-Forwarded-For; take the first hop it recorded.
+  const fwd = req.headers.get("x-forwarded-for");
+  if (fwd) return fwd.split(",")[0]!.trim();
+  return req.headers.get("x-real-ip") ?? "unknown";
+}
 
 function badRequest(error: string, description: string) {
   // RFC 7591 §3.2.2 error shape.
@@ -39,9 +70,30 @@ function badRequest(error: string, description: string) {
 }
 
 export async function POST(req: NextRequest) {
+  const limited = registerLimiter(clientIp(req));
+  if (!limited.success) {
+    return NextResponse.json(
+      {
+        error: "invalid_client_metadata",
+        error_description: `Too many registration attempts. Try again after ${limited.resetAt.toISOString()}.`,
+      },
+      { status: 429, headers: { "Retry-After": "3600", "Cache-Control": "no-store" } }
+    );
+  }
+
+  // Reject an oversized body before parsing it, not after.
+  const declared = Number(req.headers.get("content-length") ?? "0");
+  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+    return badRequest("invalid_client_metadata", "Registration body is too large.");
+  }
+
   let body: any;
   try {
-    body = await req.json();
+    const raw = await req.text();
+    if (raw.length > MAX_BODY_BYTES) {
+      return badRequest("invalid_client_metadata", "Registration body is too large.");
+    }
+    body = JSON.parse(raw);
   } catch {
     return badRequest("invalid_client_metadata", "Body must be JSON.");
   }
@@ -59,6 +111,9 @@ export async function POST(req: NextRequest) {
   }
   const uris: string[] = [];
   for (const u of redirectUris) {
+    if (typeof u === "string" && u.length > MAX_REDIRECT_URI_LENGTH) {
+      return badRequest("invalid_redirect_uri", "A redirect URI is too long.");
+    }
     if (typeof u !== "string" || !isValidRedirectUri(u)) {
       // Named explicitly: a client author debugging this needs to know WHICH
       // URI we refused and why, or they cannot fix it.

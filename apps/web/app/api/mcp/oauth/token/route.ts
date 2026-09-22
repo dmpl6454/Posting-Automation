@@ -195,12 +195,29 @@ async function handleRefresh(p: Record<string, string>) {
     return oauthError("invalid_grant", "Refresh token has expired.");
   }
 
-  // Retire the old row, then mint a new pair carrying the SAME audience and
-  // scopes — a refresh must never broaden either.
-  await prisma.mcpAccessToken.update({
-    where: { id: existing.id },
+  /**
+   * 🔴 ATOMIC retire-and-claim, exactly like the authorization-code burn above.
+   *
+   * An unconditional update here was a TOCTOU: the revoked check ran in memory,
+   * then two concurrent requests could both write revokedAt and both mint a
+   * pair — forking one single-use token into TWO live chains, each rotating
+   * itself forward forever. The reuse alarm never fires, because neither chain
+   * ever presents an already-revoked token again. Losing this race IS reuse.
+   */
+  const rotated = await prisma.mcpAccessToken.updateMany({
+    where: { id: existing.id, revokedAt: null },
     data: { revokedAt: new Date() },
   });
+  if (rotated.count === 0) {
+    await prisma.mcpAccessToken.updateMany({
+      where: { clientId: existing.clientId, userId: existing.userId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+    console.warn(
+      `[mcp-oauth] refresh token RACE/REUSE for client=${existing.clientId} user=${existing.userId} — all tokens revoked`
+    );
+    return oauthError("invalid_grant", "Refresh token has already been used.");
+  }
 
   return issueTokens({
     clientId,
@@ -209,6 +226,7 @@ async function handleRefresh(p: Record<string, string>) {
     scopes: existing.scopes,
     resource: existing.resource,
     withRefresh: true,
+    inheritRefreshDeadline: existing.refreshExpiresAt,
   });
 }
 
@@ -219,6 +237,8 @@ async function issueTokens(args: {
   scopes: string[];
   resource: string;
   withRefresh: boolean;
+  /** Carried from the rotated token so a chain cannot outlive its original grant. */
+  inheritRefreshDeadline?: Date | null;
 }) {
   const now = new Date();
   const accessToken = generateSecret("mcp_at");
@@ -236,7 +256,13 @@ async function issueTokens(args: {
       // against its own canonical URI on every request.
       resource: args.resource,
       expiresAt: expiresAt(ACCESS_TOKEN_TTL_SECONDS, now),
-      refreshExpiresAt: refreshToken ? expiresAt(REFRESH_TOKEN_TTL_SECONDS, now) : null,
+      // ⚠️ The refresh deadline is INHERITED across rotations, not reset. Resetting
+      // it on every rotation means a client refreshing hourly never expires, so a
+      // stolen chain lives indefinitely. The chain now has an absolute ceiling and
+      // the user must reconsent after it.
+      refreshExpiresAt: refreshToken
+        ? args.inheritRefreshDeadline ?? expiresAt(REFRESH_TOKEN_TTL_SECONDS, now)
+        : null,
     },
   });
 
