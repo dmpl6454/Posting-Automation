@@ -108,3 +108,7 @@ export const commentReadRateLimiter = createRateLimiter({ windowMs: 60_000, max:
  */
 export const commentPageReadLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
 export const commentPageReplyLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
+
+/** Hide / unhide / delete / like / edit — per user, and per Page across everyone. */
+export const commentModerateRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
+export const commentPageModerateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });

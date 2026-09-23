@@ -32,7 +32,8 @@ export const FB_EMBEDDED_REPLY_LIMIT = 25;
 /** Top-level comments per page. */
 export const FB_COMMENT_PAGE_SIZE = 25;
 
-const FB_REPLY_FIELDS = "id,message,created_time,from{id,name},like_count,is_hidden,attachment{type}";
+const FB_REPLY_FIELDS =
+  "id,message,created_time,from{id,name},like_count,is_hidden,attachment{type},user_likes,can_hide,can_remove,can_like";
 
 /**
  * The NEWEST replies, not the oldest: on a busy comment (more than the limit)
@@ -51,6 +52,7 @@ const FB_EMBEDDED_REPLIES = `comments.order(reverse_chronological).limit(${FB_EM
  */
 export const FB_COMMENT_FIELDS =
   "id,message,created_time,from{id,name},like_count,comment_count,is_hidden,can_comment,attachment{type}," +
+  "user_likes,can_hide,can_remove,can_like," +
   `${FB_EMBEDDED_REPLIES}{${FB_REPLY_FIELDS}}`;
 
 /**
@@ -63,8 +65,8 @@ export const FB_COMMENT_FIELDS =
  * render, hence the only ones dropped.
  */
 export const FB_COMMENT_FIELDS_MINIMAL =
-  "id,message,created_time,from{id,name},like_count,comment_count,can_comment," +
-  `${FB_EMBEDDED_REPLIES}{id,message,created_time,from{id,name},like_count}`;
+  "id,message,created_time,from{id,name},like_count,comment_count,can_comment,user_likes," +
+  `${FB_EMBEDDED_REPLIES}{id,message,created_time,from{id,name},like_count,user_likes}`;
 
 /** Facebook's comment length ceiling. */
 export const FB_COMMENT_MAX_LENGTH = 8000;
@@ -79,6 +81,10 @@ interface FbCommentRow {
   is_hidden?: boolean;
   can_comment?: boolean;
   attachment?: { type?: string };
+  user_likes?: boolean;
+  can_hide?: boolean;
+  can_remove?: boolean;
+  can_like?: boolean;
   comments?: { data?: FbCommentRow[] };
 }
 
@@ -106,6 +112,13 @@ function toSocialComment(row: FbCommentRow, pageId: string | null, isReply: bool
     // false on e.g. a post whose comments were turned off after the fact.
     canReply: isReply ? false : row.can_comment !== false,
     attachmentType: row.attachment?.type ?? null,
+    likedByAccount: typeof row.user_likes === "boolean" ? row.user_likes : null,
+    // Trust Meta's can_* when present (they are absent on the minimal rung).
+    // A Page cannot hide its OWN comment; it can delete it and edit it.
+    canHide: row.can_hide ?? authorId !== pageId,
+    canDelete: row.can_remove ?? true,
+    canLike: row.can_like ?? true,
+    canEdit: !!pageId && authorId === pageId,
   };
 }
 
@@ -151,6 +164,10 @@ export function isFbCommentPermissionError(err: FbErrorLike | undefined | null):
   const code = Number(err.code);
   const message = String(err.message ?? "");
   if (code >= 200 && code <= 299) return true;
+  // `(#100) Missing Permission` — observed LIVE 2026-09-23 on a reply from a
+  // token minted before the comment scope was requested. #100 is overloaded,
+  // so the wording is what identifies it.
+  if (code === 100 && /missing permission/i.test(message)) return true;
   return code === 10 && /permission|pages_read_user_content|pages_manage_engagement|pages_read_engagement/i.test(message);
 }
 
@@ -175,6 +192,9 @@ export const FB_COMMENT_PERMISSION_DENIED_MESSAGE =
   "This Facebook Page hasn't granted comment access yet. Reconnect the channel on the Channels page " +
   "(choose “Edit settings” and keep this Page ticked). If it still doesn't work, Meta hasn't approved " +
   "comment access for accounts outside our own team yet.";
+
+export const FB_COMMENT_ACTION_FAILED_MESSAGE =
+  "Facebook couldn't complete that action right now. Refresh the comments and try again.";
 
 export const FB_COMMENT_TOKEN_INVALID_MESSAGE =
   "Facebook rejected this Page's connection. Reconnect the channel on the Channels page, then try again.";

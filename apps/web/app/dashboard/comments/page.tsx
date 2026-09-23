@@ -168,6 +168,17 @@ function CommentsInbox() {
                     </span>
                     <span className="flex shrink-0 flex-col items-end gap-0.5">
                       <span className="text-[11px] text-muted-foreground">{a.publishedPosts}</span>
+                      {/* Known from the grant recorded at connect: this channel's
+                          token can't reply/moderate until it is reconnected. */}
+                      {a.commentAccess.known && a.commentAccess.canReply === false && (
+                        <Badge
+                          variant="outline"
+                          className="h-4 border-amber-500 px-1 text-[9px] text-amber-600 dark:text-amber-400"
+                          title={`Reconnect to enable replies — missing ${a.commentAccess.missing.join(", ")}`}
+                        >
+                          Reconnect
+                        </Badge>
+                      )}
                       {!a.isActive && (
                         <Badge variant="outline" className="h-4 px-1 text-[9px]">
                           Paused

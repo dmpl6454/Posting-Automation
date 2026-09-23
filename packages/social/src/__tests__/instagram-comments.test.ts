@@ -38,6 +38,11 @@ describe("parseCommentsPage", () => {
         isOwn: false,
         canReply: true,
         attachmentType: null,
+        likedByAccount: null,
+        canHide: true,
+        canDelete: true,
+        canLike: false,
+        canEdit: false,
       },
       {
         id: "c2",
@@ -51,6 +56,11 @@ describe("parseCommentsPage", () => {
         isOwn: false,
         canReply: true,
         attachmentType: null,
+        likedByAccount: null,
+        canHide: true,
+        canDelete: true,
+        canLike: false,
+        canEdit: false,
       },
     ]);
   });
@@ -116,6 +126,20 @@ describe("parseCommentsPage", () => {
     expect(page.comments[0]!.isOwn).toBe(false);
   });
 
+  it("moderation: can hide/delete others' comments, never its OWN hide, never like/edit (not available on IG)", () => {
+    const page = parseCommentsPage(
+      { data: [{ id: "c1", username: "fan", replies: { data: [{ id: "r1", username: "bollywooddaily" }] } }] },
+      { username: "bollywooddaily" }
+    );
+    expect(page.comments[0]).toMatchObject({ canHide: true, canDelete: true, canLike: false, canEdit: false, likedByAccount: null });
+    expect(page.comments[0]!.replies[0]).toMatchObject({ isOwn: true, canHide: false, canDelete: true });
+  });
+
+  it("a HIDDEN top-level comment cannot be replied to (Instagram refuses it)", () => {
+    const page = parseCommentsPage({ data: [{ id: "c1", hidden: true }] });
+    expect(page.comments[0]).toMatchObject({ hidden: true, canReply: false, canHide: true });
+  });
+
   it("never flags anything as own when the account identity is unknown", () => {
     const page = parseCommentsPage({ data: [{ id: "c1", username: "anyone" }] });
     expect(page.comments[0]!.isOwn).toBe(false);
@@ -132,6 +156,10 @@ describe("isCommentPermissionDeniedError", () => {
     ).toBe(true);
     // code arrives as a string on some proxies
     expect(isCommentPermissionDeniedError({ code: "10", message: "does not have permission" })).toBe(true);
+    // What Meta ACTUALLY returned on 2026-09-23 for a token without
+    // instagram_manage_comments — the #10 rule alone missed it.
+    expect(isCommentPermissionDeniedError({ code: 100, message: "(#100) Missing Permission" })).toBe(true);
+    expect(isCommentPermissionDeniedError({ code: 100, message: "Invalid parameter" })).toBe(false);
   });
 
   it("does NOT treat every code 10 as a missing scope", () => {

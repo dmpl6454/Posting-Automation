@@ -212,12 +212,19 @@ export async function scheduleMetaDataAccessBackfill() {
     );
     const checkedAt = new Date().toISOString();
     // Stamp the ATTEMPT even on failure — that is what makes the cooldown work.
-    const stamp = window?.dataAccessExpiresAt
-      ? {
-          dataAccessExpiresAt: window.dataAccessExpiresAt.toISOString(),
-          dataAccessCheckedAt: checkedAt,
-        }
-      : { dataAccessCheckedAt: checkedAt };
+    const stamp = {
+      ...(window?.dataAccessExpiresAt
+        ? {
+            dataAccessExpiresAt: window.dataAccessExpiresAt.toISOString(),
+            dataAccessCheckedAt: checkedAt,
+          }
+        : { dataAccessCheckedAt: checkedAt }),
+      // Same debug_token answer also says which scopes were GRANTED — record it
+      // so the Comments inbox knows, without its own lazy check, whether this
+      // channel must be reconnected before it can reply/moderate (2026-09-23).
+      // Only from a VALID token: a dead one reports no scopes, which is not a grant.
+      ...(window?.valid ? { grantedScopes: window.scopes, grantedScopesCheckedAt: checkedAt } : {}),
+    };
     if (!window?.dataAccessExpiresAt) unavailable += channelIds.length;
 
     for (const id of channelIds) {

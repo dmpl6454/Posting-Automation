@@ -54,6 +54,19 @@ export interface SocialComment {
   canReply: boolean;
   /** Facebook attachment type ("photo", "sticker", "animated_image_share"…), else null. */
   attachmentType: string | null;
+  /**
+   * Has the connected Page liked this comment (Facebook `user_likes`, the viewer
+   * being the Page)? null where the platform can't tell us (Instagram — liking
+   * needs `instagram_manage_engagement`, which this app does not request).
+   */
+  likedByAccount: boolean | null;
+  /** Moderation affordances, as far as the platform reports them. */
+  canHide: boolean;
+  canDelete: boolean;
+  /** Like as the Page — Facebook only. */
+  canLike: boolean;
+  /** Edit the text — only the Page's OWN Facebook comments. */
+  canEdit: boolean;
 }
 
 export interface SocialCommentPage {
@@ -109,6 +122,76 @@ export function isIndeterminateReplyError(body: { error?: unknown } | null | und
   if (!body || typeof body !== "object" || !body.error || typeof body.error !== "object") return false;
   return isIndeterminatePublishError(new Error(`reply failed: ${JSON.stringify({ error: body.error })}`));
 }
+
+/**
+ * What a channel's token may do with comments, from the scopes Meta GRANTED it
+ * (debug_token). Requesting a scope is not being granted it: a token minted
+ * before a scope was added — or by a person Meta won't grant it to yet — lacks
+ * it until the channel is reconnected, and Meta then fails the call with
+ * `(#100) Missing Permission` / `#10` / `#200`, or (Instagram) silently withholds
+ * the commenter's `username`.
+ *
+ *   Facebook   read → pages_read_user_content · reply/like/hide/delete/edit → pages_manage_engagement
+ *   Instagram  everything → instagram_manage_comments
+ *
+ * `known: false` when the grant has not been checked yet (then every flag is
+ * null and the UI must not guess).
+ */
+export interface CommentCapabilities {
+  known: boolean;
+  canRead: boolean | null;
+  canReply: boolean | null;
+  canModerate: boolean | null;
+  /** Instagram withholds commenter usernames without instagram_manage_comments. */
+  namesHidden: boolean | null;
+  /** Scopes the channel is missing for the full feature, in request order. */
+  missing: string[];
+}
+
+export const COMMENT_READ_SCOPES: Record<CommentPlatform, string[]> = {
+  FACEBOOK: ["pages_read_engagement", "pages_read_user_content"],
+  INSTAGRAM: ["instagram_basic", "instagram_manage_comments"],
+};
+
+export const COMMENT_WRITE_SCOPES: Record<CommentPlatform, string[]> = {
+  FACEBOOK: ["pages_manage_engagement"],
+  INSTAGRAM: ["instagram_manage_comments"],
+};
+
+export function commentCapabilities(
+  platform: CommentPlatform,
+  grantedScopes: readonly string[] | null | undefined
+): CommentCapabilities {
+  if (!Array.isArray(grantedScopes)) {
+    return { known: false, canRead: null, canReply: null, canModerate: null, namesHidden: null, missing: [] };
+  }
+  const has = (s: string) => grantedScopes.includes(s);
+  const readOk = COMMENT_READ_SCOPES[platform].every(has);
+  const writeOk = COMMENT_WRITE_SCOPES[platform].every(has);
+  const missing = [...COMMENT_READ_SCOPES[platform], ...COMMENT_WRITE_SCOPES[platform]].filter(
+    (s, i, all) => !has(s) && all.indexOf(s) === i
+  );
+  return {
+    known: true,
+    // Instagram comments still LIST without instagram_manage_comments — just
+    // without usernames — so reading only needs instagram_basic there.
+    canRead: platform === "INSTAGRAM" ? has("instagram_basic") : readOk,
+    canReply: writeOk,
+    canModerate: writeOk,
+    namesHidden: platform === "INSTAGRAM" ? !has("instagram_manage_comments") : false,
+    missing,
+  };
+}
+
+/**
+ * An idempotent moderation action (hide, delete, like, edit) whose outcome we
+ * could not confirm. Unlike a reply, repeating it cannot duplicate anything —
+ * but the user must still see the real state before deciding, hence "refresh".
+ */
+export const COMMENT_ACTION_UNCONFIRMED_MESSAGE =
+  "The platform didn't confirm that change. Refresh the comments to see the current state.";
+
+export type CommentModerationAction = "hide" | "unhide" | "delete" | "like" | "unlike" | "edit";
 
 /** Non-negative integer or 0 — Graph omits counts it cannot report. */
 export function safeCount(value: unknown): number {

@@ -105,6 +105,14 @@ function toSocialComment(row: IgCommentRow, own: InstagramOwnAccount | undefined
     // Comment Replies reference) — don't offer an affordance that must fail.
     canReply: !isReply && row.hidden !== true,
     attachmentType: null,
+    // Liking on Instagram needs instagram_manage_engagement (not requested).
+    likedByAccount: null,
+    // The media owner can hide or delete any comment on their media. Their OWN
+    // comments always display even if "hidden", so don't offer hide there.
+    canHide: !isOwnInstagramComment(row, own),
+    canDelete: true,
+    canLike: false,
+    canEdit: false,
   };
 }
 
@@ -137,13 +145,23 @@ export function isCommentPermissionDeniedError(err: MetaErrorLike | undefined | 
   if (!err) return false;
   const code = Number(err.code);
   const message = String(err.message ?? "");
+  // `(#100) Missing Permission` is what Meta actually returned on 2026-09-23 for
+  // a reply from a token without instagram_manage_comments — the #10 wording
+  // alone missed it and the user saw a generic "try again".
+  if (code === 100 && /missing permission/i.test(message)) return true;
   return code === 10 && /does not have permission/i.test(message);
 }
 
 export const COMMENT_PERMISSION_DENIED_MESSAGE =
   "This Instagram account hasn't been granted comment-reply permission yet. " +
-  "Try disconnecting and reconnecting the channel — if it still doesn't work, " +
-  "Meta hasn't approved this feature for accounts outside our own team yet.";
+  "Reconnect the channel on the Channels page (choose “Edit settings” and keep this account's Page ticked) — " +
+  "if it still doesn't work, Meta hasn't approved this feature for accounts outside our own team yet.";
+
+export const COMMENT_ACTION_FAILED_MESSAGE =
+  "Instagram couldn't complete that action right now. Refresh the comments and try again.";
+
+/** The comment id does not belong to the post it was sent against. */
+export const COMMENT_NOT_ON_POST_MESSAGE = "That comment doesn't belong to this post. Refresh the comments and try again.";
 
 /**
  * `#100 / subcode 33` "Object does not exist" — the comment (or the reply

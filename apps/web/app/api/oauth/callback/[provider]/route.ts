@@ -325,12 +325,22 @@ export async function GET(
             () => null
           )
         : null;
-    const metaWindowMeta = metaTokenWindow?.dataAccessExpiresAt
-      ? {
-          dataAccessExpiresAt: metaTokenWindow.dataAccessExpiresAt.toISOString(),
-          dataAccessCheckedAt: new Date().toISOString(),
-        }
-      : {};
+    const metaWindowMeta = {
+      ...(metaTokenWindow?.dataAccessExpiresAt
+        ? {
+            dataAccessExpiresAt: metaTokenWindow.dataAccessExpiresAt.toISOString(),
+            dataAccessCheckedAt: new Date().toISOString(),
+          }
+        : {}),
+      // The scopes Meta actually GRANTED this consent (2026-09-23). Requested ≠
+      // granted: a person without an app role isn't granted a not-yet-approved
+      // scope, and a token minted before a scope existed never has it. The
+      // Comments inbox reads this to say "reconnect to enable replies" instead
+      // of letting a reply fail. Same debug_token call as above — no extra cost.
+      ...(metaTokenWindow?.valid
+        ? { grantedScopes: metaTokenWindow.scopes, grantedScopesCheckedAt: new Date().toISOString() }
+        : {}),
+    };
 
     // For Facebook, fetch and save managed Pages instead of the user account
     if (platform === "FACEBOOK" && provider instanceof FacebookProvider) {

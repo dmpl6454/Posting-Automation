@@ -12,12 +12,17 @@ import {
   COMMENT_REPLY_UNCONFIRMED_MESSAGE,
   COMMENT_MEDIA_GONE_MESSAGE,
   COMMENT_TOKEN_INVALID_MESSAGE,
+  COMMENT_ACTION_FAILED_MESSAGE,
   IG_COMMENT_FIELDS,
   IG_COMMENT_FIELDS_MINIMAL,
   type InstagramCommentPage,
   type InstagramOwnAccount,
 } from "../utils/instagram-comments";
-import { isGraphFieldError, isIndeterminateReplyError } from "../utils/social-comments";
+import {
+  COMMENT_ACTION_UNCONFIRMED_MESSAGE,
+  isGraphFieldError,
+  isIndeterminateReplyError,
+} from "../utils/social-comments";
 import {
   isStoryFormat,
   isStoryModePost,
@@ -1703,6 +1708,92 @@ export class InstagramProvider extends SocialProvider {
     }
 
     return parseCommentsPage(data, own);
+  }
+
+  // ── Comment moderation (2026-09-23) — instagram_manage_comments ────────
+
+  /**
+   * Which media a comment belongs to (`GET /{ig-comment-id}?fields=media{id}`).
+   *
+   * 🔒 An INSTAGRAM channel stores the long-lived Facebook USER token, which can
+   * act on every IG account that consent granted — including accounts connected
+   * in OTHER workspaces by the same person. Meta's authorization therefore does
+   * NOT stop org A's channel from replying to / hiding / deleting a comment on
+   * org B's media. The router calls this before every write and refuses unless
+   * the comment sits on the target's own media. Returns null when the comment
+   * no longer exists.
+   */
+  async getCommentMediaId(tokens: OAuthTokens, commentId: string): Promise<string | null> {
+    const params = new URLSearchParams({ fields: "id,media{id}", access_token: tokens.accessToken });
+    let res: Response;
+    try {
+      res = await fetchT(`${this.graphBaseUrl}/${this.apiVersion}/${encodeURIComponent(commentId)}?${params.toString()}`);
+    } catch (err: any) {
+      console.error(`[Instagram] comment lookup did not complete:`, err?.message ?? err);
+      throw new Error(COMMENT_ACTION_FAILED_MESSAGE);
+    }
+    const data: any = await res.json().catch(() => null);
+    if (!res.ok) {
+      if (isCommentObjectGoneError(data?.error)) return null;
+      throw this.igCommentError(data, res.status, "lookup");
+    }
+    const mediaId = data?.media?.id;
+    return typeof mediaId === "string" && mediaId ? mediaId : null;
+  }
+
+  /** Hide (`hidden=true`) or unhide a comment on media this account owns. */
+  async setCommentHidden(tokens: OAuthTokens, commentId: string, hidden: boolean): Promise<void> {
+    await this.igCommentAction(tokens, "POST", commentId, { hide: hidden });
+  }
+
+  /** Delete a comment on media this account owns. */
+  async deleteComment(tokens: OAuthTokens, commentId: string): Promise<void> {
+    await this.igCommentAction(tokens, "DELETE", commentId, {});
+  }
+
+  private async igCommentAction(
+    tokens: OAuthTokens,
+    method: "POST" | "DELETE",
+    commentId: string,
+    body: Record<string, unknown>
+  ): Promise<void> {
+    // 🔴 encodeURIComponent is LOAD-BEARING — commentId is client-supplied.
+    const base = `${this.graphBaseUrl}/${this.apiVersion}/${encodeURIComponent(commentId)}`;
+    let res: Response;
+    try {
+      res =
+        method === "DELETE"
+          ? await fetchT(`${base}?access_token=${encodeURIComponent(tokens.accessToken)}`, { method: "DELETE" })
+          : await fetchT(base, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ ...body, access_token: tokens.accessToken }),
+            });
+    } catch (err: any) {
+      console.error(`[Instagram] comment action request did not complete:`, err?.message ?? err);
+      throw new Error(COMMENT_ACTION_UNCONFIRMED_MESSAGE);
+    }
+    const data: any = await res.json().catch(() => null);
+    if (!res.ok) {
+      if (res.status >= 500 || isIndeterminateReplyError(data)) {
+        console.error(`[Instagram] comment action outcome unknown (HTTP ${res.status}):`, data === null ? "unreadable" : JSON.stringify(data));
+        throw new Error(COMMENT_ACTION_UNCONFIRMED_MESSAGE);
+      }
+      throw this.igCommentError(data, res.status, "action");
+    }
+    if (data && data.success === false) {
+      console.error(`[Instagram] comment action refused:`, JSON.stringify(data));
+      throw new Error(COMMENT_ACTION_FAILED_MESSAGE);
+    }
+  }
+
+  private igCommentError(body: any, status: number, op: "lookup" | "action"): Error {
+    const err = body?.error;
+    if (Number(err?.code) === 190) return new Error(COMMENT_TOKEN_INVALID_MESSAGE);
+    if (isCommentPermissionDeniedError(err)) return new Error(COMMENT_PERMISSION_DENIED_MESSAGE);
+    if (isCommentObjectGoneError(err)) return new Error(COMMENT_OBJECT_GONE_MESSAGE);
+    console.error(`[Instagram] comment ${op} failed (HTTP ${status}):`, body === null ? "unreadable response body" : JSON.stringify(body));
+    return new Error(COMMENT_ACTION_FAILED_MESSAGE);
   }
 
   private async fetchMediaCommentsPage(
