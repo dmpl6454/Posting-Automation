@@ -57,6 +57,7 @@ import {
 } from "../utils/fb-insight-metrics";
 import { scrapeFacebookReelEngagement } from "@postautomation/social-scrapers";
 import {
+  FB_COMMENT_ACTION_FAILED_MESSAGE,
   FB_COMMENT_FIELDS,
   FB_COMMENT_FIELDS_MINIMAL,
   FB_COMMENT_PAGE_SIZE,
@@ -73,7 +74,12 @@ import {
   parseFacebookCommentsPage,
 } from "../utils/facebook-comments";
 import { COMMENT_OBJECT_GONE_MESSAGE, isCommentObjectGoneError } from "../utils/instagram-comments";
-import { isGraphFieldError, isIndeterminateReplyError, type SocialCommentPage } from "../utils/social-comments";
+import {
+  COMMENT_ACTION_UNCONFIRMED_MESSAGE,
+  isGraphFieldError,
+  isIndeterminateReplyError,
+  type SocialCommentPage,
+} from "../utils/social-comments";
 
 /**
  * Videos larger than this are published via Graph's `file_url` remote-pull
@@ -1911,6 +1917,12 @@ export class FacebookProvider extends SocialProvider {
     // an empty edge). Descend once to a known-good set so the thread degrades
     // instead of breaking — and shout, because this log line is the only signal
     // that Meta changed the Comment schema.
+    // "(#100) Tried accessing nonexisting field (comments)" names the EDGE, not
+    // one of our fields: the object no longer exists / isn't a post any more
+    // (live-probed 2026-09-23 on deleted videos). The minimal rung can't help.
+    if (!res.ok && isGraphFieldError(data?.error) && /\(comments\)/i.test(String(data?.error?.message ?? ""))) {
+      throw new Error(FB_COMMENT_POST_GONE_MESSAGE);
+    }
     if (!res.ok && isGraphFieldError(data?.error)) {
       console.error(
         `[Facebook] comment field rejected — retrying with the minimal field set. Update FB_COMMENT_FIELDS:`,
@@ -2033,7 +2045,77 @@ export class FacebookProvider extends SocialProvider {
    * Order matters: #190 (dead token / lost Page role) before the permission
    * family, so a dead token never reads as "not approved yet".
    */
-  private commentError(body: any, status: number, op: "list" | "reply"): Error {
+  // ── Comment moderation (2026-09-23) — pages_manage_engagement ──────────
+  // Idempotent state changes (unlike creating a reply): an unconfirmed outcome
+  // means "refresh and look", never "may have duplicated". No automatic retry.
+
+  /** Hide (`hidden=true`) or unhide a comment on the Page's content. */
+  async setCommentHidden(tokens: OAuthTokens, commentId: string, hidden: boolean, pageId?: string | null): Promise<void> {
+    await this.commentAction(tokens, "POST", `/${encodeURIComponent(commentId)}`, { is_hidden: hidden }, pageId);
+  }
+
+  /** Delete a comment (a user's comment on the Page's content, or the Page's own). */
+  async deleteComment(tokens: OAuthTokens, commentId: string, pageId?: string | null): Promise<void> {
+    await this.commentAction(tokens, "DELETE", `/${encodeURIComponent(commentId)}`, {}, pageId);
+  }
+
+  /** Like (`liked=true`) or unlike a comment AS THE PAGE. */
+  async setCommentLiked(tokens: OAuthTokens, commentId: string, liked: boolean, pageId?: string | null): Promise<void> {
+    await this.commentAction(tokens, liked ? "POST" : "DELETE", `/${encodeURIComponent(commentId)}/likes`, {}, pageId);
+  }
+
+  /** Edit the text of one of the Page's OWN comments. */
+  async editComment(tokens: OAuthTokens, commentId: string, message: string, pageId?: string | null): Promise<void> {
+    await this.commentAction(tokens, "POST", `/${encodeURIComponent(commentId)}`, { message }, pageId);
+  }
+
+  /**
+   * One moderation call. `path` must already be encodeURIComponent'd — the
+   * comment id is client-supplied (validated by GRAPH_OBJECT_ID_RE at the router
+   * too). POST carries the token in the JSON body; DELETE has no reliable body
+   * on Graph, so its token goes in the query string like the list GET's.
+   */
+  private async commentAction(
+    tokens: OAuthTokens,
+    method: "POST" | "DELETE",
+    path: string,
+    body: Record<string, unknown>,
+    pageId?: string | null
+  ): Promise<void> {
+    const base = `${this.graphBaseUrl}/${this.apiVersion}${path}`;
+    const init: RequestInit =
+      method === "DELETE"
+        ? { method: "DELETE" }
+        : {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...body, access_token: tokens.accessToken }),
+          };
+    const url = method === "DELETE" ? `${base}?access_token=${encodeURIComponent(tokens.accessToken)}` : base;
+
+    let res: Response;
+    try {
+      res = await this.graphFetch(url, init, pageId ?? undefined, INTERACTIVE_WRITE_GRAPH_OPTS);
+    } catch (err: any) {
+      console.error(`[Facebook] comment action request did not complete:`, err?.message ?? err);
+      throw new Error(COMMENT_ACTION_UNCONFIRMED_MESSAGE);
+    }
+    const data: any = await res.json().catch(() => null);
+    if (!res.ok) {
+      if (res.status >= 500 || isIndeterminateReplyError(data)) {
+        console.error(`[Facebook] comment action outcome unknown (HTTP ${res.status}):`, data === null ? "unreadable" : JSON.stringify(data));
+        throw new Error(COMMENT_ACTION_UNCONFIRMED_MESSAGE);
+      }
+      throw this.commentError(data, res.status, "action");
+    }
+    // Graph answers {success:true} for these edges. An explicit false is a refusal.
+    if (data && data.success === false) {
+      console.error(`[Facebook] comment action refused:`, JSON.stringify(data));
+      throw new Error(FB_COMMENT_ACTION_FAILED_MESSAGE);
+    }
+  }
+
+  private commentError(body: any, status: number, op: "list" | "reply" | "action"): Error {
     const err = body?.error;
     if (isFbTokenInvalidError(err)) return new Error(FB_COMMENT_TOKEN_INVALID_MESSAGE);
     if (isFbCommentPermissionError(err)) return new Error(FB_COMMENT_PERMISSION_DENIED_MESSAGE);
@@ -2046,6 +2128,8 @@ export class FacebookProvider extends SocialProvider {
       `[Facebook] comment ${op} failed (HTTP ${status}):`,
       body === null ? "unreadable response body" : JSON.stringify(body)
     );
-    return new Error(op === "list" ? FB_COMMENT_LIST_FAILED_MESSAGE : FB_COMMENT_REPLY_FAILED_MESSAGE);
+    return new Error(
+      op === "list" ? FB_COMMENT_LIST_FAILED_MESSAGE : op === "reply" ? FB_COMMENT_REPLY_FAILED_MESSAGE : FB_COMMENT_ACTION_FAILED_MESSAGE
+    );
   }
 }

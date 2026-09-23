@@ -3,9 +3,15 @@ import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
 import {
   getSocialProvider,
+  commentCapabilities,
+  fetchMetaTokenWindow,
+  resolveMetaCredentials,
+  COMMENT_NOT_ON_POST_MESSAGE,
   COMMENT_REPLY_MAX_LENGTH,
   FB_COMMENT_MAX_LENGTH,
   GRAPH_OBJECT_ID_RE,
+  type CommentCapabilities,
+  type CommentModerationAction,
   type CommentPlatform,
   type FacebookProvider,
   type InstagramProvider,
@@ -13,6 +19,8 @@ import {
 } from "@postautomation/social";
 import { createRateLimitMiddleware } from "../middleware/rate-limit.middleware";
 import {
+  commentModerateRateLimiter,
+  commentPageModerateLimiter,
   commentPageReadLimiter,
   commentPageReplyLimiter,
   commentReadRateLimiter,
@@ -70,8 +78,12 @@ const STORY_MESSAGE: Record<CommentPlatform, string> = {
 
 interface ResolvedCommentTarget {
   platform: CommentPlatform;
+  /** Which Meta app minted this channel's token (NULL = the legacy app). */
+  metaAppId: string | null;
   /** Graph object whose /comments edge we read — PostTarget.publishedId. */
   objectId: string;
+  /** FB video targets: the composite feed-post id, when analytics-sync resolved it. */
+  resolvedPostId: string | null;
   publishedUrl: string | null;
   tokens: { accessToken: string; refreshToken?: string; metadata?: Record<string, unknown> };
   account: {
@@ -102,6 +114,9 @@ export async function resolvePublishedCommentTarget(
       publishedId: true,
       publishedUrl: true,
       channelId: true,
+      // resolvedPostId (FB videos: the feed-post id analytics-sync recorded) —
+      // one more valid prefix for this post's comment ids.
+      metadata: true,
       post: { select: { organizationId: true } },
     },
   });
@@ -144,7 +159,10 @@ export async function resolvePublishedCommentTarget(
 
   return {
     platform: channel.platform as CommentPlatform,
+    metaAppId: channel.metaAppId ?? null,
     objectId: target.publishedId as string,
+    resolvedPostId:
+      typeof (target.metadata as any)?.resolvedPostId === "string" ? (target.metadata as any).resolvedPostId : null,
     publishedUrl: target.publishedUrl ?? null,
     tokens: {
       accessToken: channel.accessToken,
@@ -163,10 +181,178 @@ export async function resolvePublishedCommentTarget(
   };
 }
 
+/** The scopes recorded at connect (or by a later check); null when never checked. */
+function cachedGrantedScopes(metadata: Record<string, unknown> | undefined | null): string[] | null {
+  const raw = metadata?.grantedScopes;
+  return Array.isArray(raw) && raw.every((s) => typeof s === "string") ? (raw as string[]) : null;
+}
+
+/**
+ * Ask Meta which scopes this channel's token was actually GRANTED (one
+ * debug_token call) and remember the answer on the channel. Used lazily for
+ * channels connected before grantedScopes was recorded at connect, and again
+ * whenever Meta refuses a call for a missing permission (the user may have
+ * revoked it in Facebook's settings since).
+ *
+ * ⚠️ Atomic jsonb MERGE, never a read-modify-write of the whole column: the
+ * worker writes insightsHealth into the same `metadata` concurrently, and a
+ * whole-column write would silently drop its verdict. Best-effort — never
+ * fails the caller.
+ */
+async function refreshGrantedScopes(prisma: any, t: ResolvedCommentTarget): Promise<string[] | null> {
+  try {
+    const creds = resolveMetaCredentials(t.platform, t.metaAppId);
+    if (!creds) return null;
+    const win = await fetchMetaTokenWindow(t.tokens.accessToken, creds.clientId, creds.clientSecret);
+    // A DEAD token reports no scopes — recording that as "granted nothing" would
+    // show "missing the permission" when the real fault is the token (#190,
+    // which the comment call itself surfaces as "reconnect"). Stay unknown.
+    if (!win || !win.valid) return null;
+    const patch = JSON.stringify({ grantedScopes: win.scopes, grantedScopesCheckedAt: new Date().toISOString() });
+    await prisma.$executeRaw`UPDATE "Channel" SET "metadata" = COALESCE("metadata", '{}'::jsonb) || ${patch}::jsonb WHERE "id" = ${t.account.channelId}`;
+    return win.scopes;
+  } catch (err: any) {
+    console.error("[comment] granted-scope check failed:", err?.message ?? err);
+    return null;
+  }
+}
+
+/** When the grant was last read (connect, backfill cron, or a lazy check). */
+function grantCheckedAt(metadata: Record<string, unknown> | undefined | null): number | null {
+  const raw = metadata?.grantedScopesCheckedAt;
+  const t = typeof raw === "string" ? Date.parse(raw) : NaN;
+  return Number.isFinite(t) ? t : null;
+}
+
+const GRANT_RECHECK_IF_MISSING_MS = 60 * 60 * 1000; // a "missing" answer is re-read after 1h
+const GRANT_RECHECK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // any answer after a week
+
+/**
+ * Should the list re-read the grant? Yes when it was never read; when it says a
+ * write permission is missing and is over an hour old (the person may have
+ * granted it in Facebook's settings — reconnecting rewrites it anyway); and
+ * when it is over a week old. At most one debug_token per channel per hour.
+ */
+function grantNeedsRefresh(
+  platform: CommentPlatform,
+  metadata: Record<string, unknown> | undefined | null,
+  now: number
+): boolean {
+  const scopes = cachedGrantedScopes(metadata);
+  if (!scopes) return true;
+  const checkedAt = grantCheckedAt(metadata);
+  if (checkedAt === null) return true;
+  const age = now - checkedAt;
+  if (age > GRANT_RECHECK_MAX_AGE_MS) return true;
+  return commentCapabilities(platform, scopes).canReply === false && age > GRANT_RECHECK_IF_MISSING_MS;
+}
+
+/** A provider message that means "the token lacks the permission". */
+function isPermissionMessage(message: unknown): boolean {
+  return /hasn't (been )?granted comment/i.test(String(message ?? ""));
+}
+
 /** Public posts as the Page / account — human-paced ceiling (see the limiter). */
 const replyRateLimited = orgProcedure.use(createRateLimitMiddleware(commentReplyRateLimiter));
 /** Live Graph reads against the Page's rate budget (see the limiter). */
 const readRateLimited = orgProcedure.use(createRateLimitMiddleware(commentReadRateLimiter));
+/** Hide / unhide / delete / like / edit (see the limiter). */
+const moderateRateLimited = orgProcedure.use(createRateLimitMiddleware(commentModerateRateLimiter));
+
+/**
+ * 🔒 Instagram writes must target a comment ON THE TARGET'S OWN MEDIA. An IG
+ * channel's token is the Facebook USER token, which reaches every IG account
+ * that consent granted — including accounts connected in other workspaces by
+ * the same person — so Meta's own authorization does not scope it to this
+ * channel. (Facebook has its own check below: a Page token is scoped to the
+ * Page, but not to COMMENTS on this post.)
+ */
+async function assertInstagramCommentOnTarget(prisma: any, t: ResolvedCommentTarget, commentId: string): Promise<void> {
+  if (t.platform !== "INSTAGRAM") return;
+  const provider = getSocialProvider("INSTAGRAM") as InstagramProvider;
+  let mediaId: string | null;
+  try {
+    mediaId = await provider.getCommentMediaId(t.tokens, commentId);
+  } catch (err: any) {
+    // The lookup is usually the FIRST call to hit a missing permission — keep
+    // the recorded grant honest so the reconnect banner appears.
+    if (isPermissionMessage(err?.message)) void refreshGrantedScopes(prisma, t);
+    throw new TRPCError({ code: "BAD_REQUEST", message: err?.message ?? "Couldn't check that comment." });
+  }
+  if (mediaId === null) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "That comment no longer exists — it may have been deleted. Refresh and try again.",
+    });
+  }
+  if (mediaId !== t.objectId) {
+    throw new TRPCError({ code: "FORBIDDEN", message: COMMENT_NOT_ON_POST_MESSAGE });
+  }
+}
+
+/** The object-id part a Facebook comment id starts with, for a post id. */
+function postObjectSegment(postId: string): string {
+  return postId.includes("_") ? postId.slice(postId.indexOf("_") + 1) : postId;
+}
+
+/**
+ * 🔒 Facebook writes must target a COMMENT ON THIS POST. The channel token is a
+ * Page token, which limits the damage to this Page — but not to comments: the
+ * id-shape check alone also accepts a Page POST id (`{pageId}_{postId}`) or a
+ * bare photo/video id, and `DELETE /{id}` / `POST /{id} {message}` would then
+ * delete or rewrite a live Page post (caught in review, 2026-09-23).
+ *
+ * Facebook comment ids are `{postObjectId}_{commentId}`, where postObjectId is
+ * the second half of the post's composite id — live-verified 2026-09-23
+ * (post 1200847766436751_122136671235340772 → comment
+ * 122136671235340772_1452846363362337). Replies share the prefix. For a VIDEO
+ * post (bare Video-node id) the prefix may be the video id or its feed-post id,
+ * so both are accepted, resolving the post id once if analytics hasn't.
+ */
+async function assertFacebookCommentOnTarget(t: ResolvedCommentTarget, commentId: string): Promise<void> {
+  if (t.platform !== "FACEBOOK") return;
+  const refuse = () => {
+    throw new TRPCError({ code: "FORBIDDEN", message: COMMENT_NOT_ON_POST_MESSAGE });
+  };
+  const underscore = commentId.indexOf("_");
+  // A comment id is ALWAYS composite; a bare id is a photo/video/post node.
+  if (underscore <= 0) refuse();
+  // A Page post id starts with the Page id — never a comment on this post.
+  if (commentId === t.objectId || commentId.startsWith(`${t.account.platformId}_`)) refuse();
+
+  const prefix = commentId.slice(0, underscore);
+  const accepted = new Set<string>([postObjectSegment(t.objectId)]);
+  if (t.resolvedPostId) accepted.add(postObjectSegment(t.resolvedPostId));
+  if (accepted.has(prefix)) return;
+
+  // Video post whose feed-post id we haven't learned yet: resolve it once.
+  if (!t.objectId.includes("_") && !t.resolvedPostId) {
+    const fb = getSocialProvider("FACEBOOK") as FacebookProvider;
+    const resolved = await fb.resolveVideoPostId(t.tokens, t.objectId, t.account.platformId).catch(() => null);
+    if (resolved && postObjectSegment(resolved) === prefix) return;
+  }
+  refuse();
+}
+
+/** Both platforms' "is this comment on this post?" gate, run before every write. */
+async function assertCommentOnTarget(prisma: any, t: ResolvedCommentTarget, commentId: string): Promise<void> {
+  await assertFacebookCommentOnTarget(t, commentId);
+  await assertInstagramCommentOnTarget(prisma, t, commentId);
+}
+
+/** A write whose outcome the platform didn't confirm — it may have happened. */
+function isUnconfirmedMessage(message: unknown): boolean {
+  return /may already be posted|didn't confirm that change/i.test(String(message ?? ""));
+}
+
+const MODERATION_AUDIT: Record<CommentModerationAction, string> = {
+  hide: AUDIT_ACTIONS.COMMENT_HIDDEN,
+  unhide: AUDIT_ACTIONS.COMMENT_UNHIDDEN,
+  delete: AUDIT_ACTIONS.COMMENT_DELETED,
+  like: AUDIT_ACTIONS.COMMENT_LIKED,
+  unlike: AUDIT_ACTIONS.COMMENT_UNLIKED,
+  edit: AUDIT_ACTIONS.COMMENT_EDITED,
+};
 
 /**
  * Per-Page budget shared by every user and org that connected this Page —
@@ -197,7 +383,9 @@ export const commentRouter = createRouter({
         disconnectedAt: null,
         platform: { in: ["FACEBOOK", "INSTAGRAM"] },
       },
-      select: { id: true, platform: true, name: true, username: true, avatar: true, isActive: true },
+      // metadata is read ONLY to derive commentAccess from the cached grant —
+      // never forwarded raw (it carries provider internals).
+      select: { id: true, platform: true, name: true, username: true, avatar: true, isActive: true, metadata: true },
     });
     if (channels.length === 0) return [];
 
@@ -216,12 +404,16 @@ export const commentRouter = createRouter({
     const byChannel = new Map(counts.map((c) => [c.channelId, c]));
 
     return channels
-      .map((c) => {
+      .map(({ metadata, ...c }) => {
         const row = byChannel.get(c.id);
         return {
           ...c,
           publishedPosts: row?._count._all ?? 0,
           lastPublishedAt: row?._max.publishedAt ?? null,
+          commentAccess: commentCapabilities(
+            c.platform as CommentPlatform,
+            cachedGrantedScopes(metadata as Record<string, unknown> | null)
+          ),
         };
       })
       .sort((a, b) => {
@@ -326,6 +518,13 @@ export const commentRouter = createRouter({
       enforcePageBudget(commentPageReadLimiter, t.platform, t.account.platformId);
       const cursor = input.cursor ?? input.after ?? undefined;
 
+      // What this channel's token may do — from the grant recorded at connect,
+      // or (channels connected before that existed) one lazy debug_token check.
+      let scopes = cachedGrantedScopes(t.tokens.metadata);
+      if (!cursor && grantNeedsRefresh(t.platform, t.tokens.metadata, Date.now())) {
+        scopes = (await refreshGrantedScopes(ctx.prisma, t)) ?? scopes;
+      }
+
       let page: SocialCommentPage;
       try {
         page =
@@ -343,10 +542,15 @@ export const commentRouter = createRouter({
                 { igUserId: t.account.igUserId, username: t.account.username }
               );
       } catch (err: any) {
+        // A permission refusal may mean the grant changed since we last looked —
+        // refresh it so the next load shows the right "reconnect" state.
+        if (isPermissionMessage(err?.message)) void refreshGrantedScopes(ctx.prisma, t);
         throw new TRPCError({ code: "BAD_REQUEST", message: err?.message ?? "Failed to load comments." });
       }
 
+      const capabilities: CommentCapabilities = commentCapabilities(t.platform, scopes);
       return {
+        capabilities,
         platform: t.platform,
         publishedUrl: t.publishedUrl,
         account: {
@@ -386,6 +590,8 @@ export const commentRouter = createRouter({
         });
       }
 
+      await assertCommentOnTarget(ctx.prisma, t, input.commentId);
+
       let result: { id: string };
       try {
         result =
@@ -402,6 +608,19 @@ export const commentRouter = createRouter({
                 input.message
               );
       } catch (err: any) {
+        if (isPermissionMessage(err?.message)) void refreshGrantedScopes(ctx.prisma, t);
+        // A reply that MAY be live is still an outward action someone took —
+        // keep the trail even though we couldn't confirm it.
+        if (isUnconfirmedMessage(err?.message)) {
+          await createAuditLog({
+            organizationId: ctx.organizationId,
+            userId: (ctx.session?.user as any)?.id,
+            action: AUDIT_ACTIONS.COMMENT_REPLIED,
+            entityType: "PostTarget",
+            entityId: input.targetId,
+            metadata: { platform: t.platform, channelId: t.account.channelId, commentId: input.commentId, outcome: "unconfirmed", length: input.message.length },
+          });
+        }
         throw new TRPCError({ code: "BAD_REQUEST", message: err?.message ?? "Failed to send the reply." });
       }
 
@@ -423,5 +642,83 @@ export const commentRouter = createRouter({
       });
 
       return { id: result.id, platform: t.platform };
+    }),
+
+  /**
+   * Moderate a comment as the Page / account: hide, unhide, delete (both
+   * platforms), like, unlike and edit-own (Facebook). Same org/status/platform
+   * gate as list/reply; Instagram additionally proves the comment is on the
+   * target's own media. All of these are idempotent state changes.
+   */
+  moderate: moderateRateLimited
+    .input(
+      z
+        .object({
+          targetId: z.string(),
+          // 🔴 Same path-injection guard as reply — see GRAPH_OBJECT_ID_RE.
+          commentId: z.string().regex(GRAPH_OBJECT_ID_RE, "That doesn't look like a valid comment."),
+          action: z.enum(["hide", "unhide", "delete", "like", "unlike", "edit"]),
+          message: z.string().trim().min(1, "Comment cannot be empty.").max(FB_COMMENT_MAX_LENGTH).optional(),
+        })
+        .refine((v) => v.action !== "edit" || !!v.message, { message: "Edited text is required.", path: ["message"] })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const t = await resolvePublishedCommentTarget(ctx.prisma as any, ctx.organizationId, input.targetId);
+      if (t.platform === "INSTAGRAM" && ["like", "unlike", "edit"].includes(input.action)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            input.action === "edit"
+              ? "Instagram doesn't allow editing a comment — delete it and reply again instead."
+              : "Liking comments isn't available for Instagram.",
+        });
+      }
+      enforcePageBudget(commentPageModerateLimiter, t.platform, t.account.platformId);
+      await assertCommentOnTarget(ctx.prisma, t, input.commentId);
+
+      try {
+        if (t.platform === "FACEBOOK") {
+          const fb = getSocialProvider("FACEBOOK") as FacebookProvider;
+          const pageId = t.account.platformId;
+          if (input.action === "hide" || input.action === "unhide") {
+            await fb.setCommentHidden(t.tokens, input.commentId, input.action === "hide", pageId);
+          } else if (input.action === "delete") {
+            await fb.deleteComment(t.tokens, input.commentId, pageId);
+          } else if (input.action === "like" || input.action === "unlike") {
+            await fb.setCommentLiked(t.tokens, input.commentId, input.action === "like", pageId);
+          } else {
+            await fb.editComment(t.tokens, input.commentId, input.message!, pageId);
+          }
+        } else {
+          const ig = getSocialProvider("INSTAGRAM") as InstagramProvider;
+          if (input.action === "delete") await ig.deleteComment(t.tokens, input.commentId);
+          else await ig.setCommentHidden(t.tokens, input.commentId, input.action === "hide");
+        }
+      } catch (err: any) {
+        if (isPermissionMessage(err?.message)) void refreshGrantedScopes(ctx.prisma, t);
+        if (isUnconfirmedMessage(err?.message)) {
+          await createAuditLog({
+            organizationId: ctx.organizationId,
+            userId: (ctx.session?.user as any)?.id,
+            action: MODERATION_AUDIT[input.action],
+            entityType: "PostTarget",
+            entityId: input.targetId,
+            metadata: { platform: t.platform, channelId: t.account.channelId, commentId: input.commentId, outcome: "unconfirmed" },
+          });
+        }
+        throw new TRPCError({ code: "BAD_REQUEST", message: err?.message ?? "Couldn't complete that action." });
+      }
+
+      await createAuditLog({
+        organizationId: ctx.organizationId,
+        userId: (ctx.session?.user as any)?.id,
+        action: MODERATION_AUDIT[input.action],
+        entityType: "PostTarget",
+        entityId: input.targetId,
+        // Never the comment text (edit included).
+        metadata: { platform: t.platform, channelId: t.account.channelId, commentId: input.commentId },
+      });
+
+      return { ok: true as const, action: input.action, platform: t.platform };
     }),
 });

@@ -89,6 +89,12 @@ export const AUDIT_ACTIONS = {
   // Comments — a reply is a PUBLIC post made as the org's Page / IG account,
   // so record who sent it (never the text itself).
   COMMENT_REPLIED: "comment.replied",
+  COMMENT_HIDDEN: "comment.hidden",
+  COMMENT_UNHIDDEN: "comment.unhidden",
+  COMMENT_DELETED: "comment.deleted",
+  COMMENT_LIKED: "comment.liked",
+  COMMENT_UNLIKED: "comment.unliked",
+  COMMENT_EDITED: "comment.edited",
 
   // User profile / settings
   USER_PROFILE_UPDATED: "user.profile_updated",

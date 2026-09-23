@@ -18,18 +18,41 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const getMediaComments = vi.fn();
 const igReplyToComment = vi.fn();
+const getCommentMediaId = vi.fn();
+const igSetHidden = vi.fn(async () => {});
+const igDelete = vi.fn(async () => {});
 const getPostComments = vi.fn();
 const fbReplyToComment = vi.fn();
+const fbSetHidden = vi.fn(async () => {});
+const fbDelete = vi.fn(async () => {});
+const fbSetLiked = vi.fn(async () => {});
+const fbEdit = vi.fn(async () => {});
+const fetchMetaTokenWindow = vi.fn();
 const createAuditLog = vi.fn(async (_input: any) => {});
 
 vi.mock("@postautomation/social", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@postautomation/social")>();
   return {
     ...actual,
+    fetchMetaTokenWindow: (...args: any[]) => fetchMetaTokenWindow(...args),
+    resolveMetaCredentials: vi.fn(() => ({ appId: "APP", clientId: "APP", clientSecret: "SECRET", legacy: true })),
     getSocialProvider: vi.fn((platform: string) =>
       platform === "FACEBOOK"
-        ? { getPostComments, replyToComment: fbReplyToComment }
-        : { getMediaComments, replyToComment: igReplyToComment }
+        ? {
+            getPostComments,
+            replyToComment: fbReplyToComment,
+            setCommentHidden: fbSetHidden,
+            deleteComment: fbDelete,
+            setCommentLiked: fbSetLiked,
+            editComment: fbEdit,
+          }
+        : {
+            getMediaComments,
+            replyToComment: igReplyToComment,
+            getCommentMediaId,
+            setCommentHidden: igSetHidden,
+            deleteComment: igDelete,
+          }
     ),
   };
 });
@@ -115,7 +138,9 @@ function buildCaller(opts: {
   const channelFindFirst = vi.fn(async (_args: any) => opts.findFirstChannel ?? null);
   const postTargetGroupBy = vi.fn(async (_args: any) => opts.groupByRows ?? []);
   const postTargetFindMany = vi.fn(async (_args: any) => opts.targetRows ?? []);
+  const executeRaw = vi.fn(async () => 1);
   const prisma = {
+    $executeRaw: executeRaw,
     organizationMember: {
       findUnique: vi.fn(async () => ({ userId: USER_ID, organizationId: ORG_ID, role: "OWNER" })),
     },
@@ -132,16 +157,21 @@ function buildCaller(opts: {
     channelFindFirst,
     postTargetGroupBy,
     postTargetFindMany,
+    executeRaw,
   };
 }
 
+const FB_PAGE = "112035290218472";
 const FB_CHANNEL = {
   platform: "FACEBOOK",
-  platformId: "PAGE_1",
+  platformId: FB_PAGE,
   name: "Contents of bollywood",
   username: null,
-  metadata: { pageId: "PAGE_1" },
+  metadata: { pageId: FB_PAGE },
 };
+/** A Page post `{pageId}_{postId}` — its comments are `9_{commentId}` (live-verified shape). */
+const FB_TARGET = { publishedId: `${FB_PAGE}_9` };
+const FRESH = new Date().toISOString();
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -149,6 +179,11 @@ beforeEach(() => {
   igReplyToComment.mockReset();
   getPostComments.mockReset();
   fbReplyToComment.mockReset();
+  getCommentMediaId.mockReset();
+  // By default the IG comment sits on the target's own media (MEDIA_1).
+  getCommentMediaId.mockResolvedValue("MEDIA_1");
+  fetchMetaTokenWindow.mockReset();
+  fetchMetaTokenWindow.mockResolvedValue(null);
 });
 
 describe("comment.list", () => {
@@ -199,15 +234,12 @@ describe("comment.list", () => {
 
   it("routes a FACEBOOK target to getPostComments with the Page id (flags the Page's own replies)", async () => {
     getPostComments.mockResolvedValue({ comments: [], nextCursor: null, totalCount: 3 });
-    const { caller } = buildCaller({
-      target: { publishedId: "PAGE_1_9" },
-      channel: FB_CHANNEL,
-    });
+    const { caller } = buildCaller({ target: FB_TARGET, channel: FB_CHANNEL });
     const res = await caller.list({ targetId: TARGET_ID });
     expect(getPostComments).toHaveBeenCalledWith(
       expect.objectContaining({ accessToken: "DECRYPTED_TOKEN" }),
-      "PAGE_1_9",
-      "PAGE_1",
+      `${FB_PAGE}_9`,
+      FB_PAGE,
       undefined
     );
     expect(getMediaComments).not.toHaveBeenCalled();
@@ -279,7 +311,7 @@ describe("comment.list", () => {
 
   it("surfaces the provider's actionable message (permission / gone) as BAD_REQUEST", async () => {
     getPostComments.mockRejectedValue(new Error("This Facebook Page hasn't granted comment access yet."));
-    const { caller } = buildCaller({ channel: FB_CHANNEL });
+    const { caller } = buildCaller({ target: FB_TARGET, channel: FB_CHANNEL });
     await expect(caller.list({ targetId: TARGET_ID })).rejects.toMatchObject({
       code: "BAD_REQUEST",
       message: expect.stringContaining("hasn't granted comment access"),
@@ -306,22 +338,22 @@ describe("comment.reply", () => {
   });
 
   it("Facebook: replies AS THE PAGE through the Facebook provider with the Page id", async () => {
-    fbReplyToComment.mockResolvedValue({ id: "PAGE_1_77" });
-    const { caller } = buildCaller({ target: { publishedId: "PAGE_1_9" }, channel: FB_CHANNEL });
+    fbReplyToComment.mockResolvedValue({ id: "9_77" });
+    const { caller } = buildCaller({ target: FB_TARGET, channel: FB_CHANNEL });
     const res = await caller.reply({ targetId: TARGET_ID, commentId: "9_55", message: "Thank you!" });
-    expect(res).toEqual({ id: "PAGE_1_77", platform: "FACEBOOK" });
+    expect(res).toEqual({ id: "9_77", platform: "FACEBOOK" });
     expect(fbReplyToComment).toHaveBeenCalledWith(
       expect.objectContaining({ accessToken: "DECRYPTED_TOKEN" }),
       "9_55",
       "Thank you!",
-      "PAGE_1"
+      FB_PAGE
     );
     expect(igReplyToComment).not.toHaveBeenCalled();
   });
 
   it("audit-logs a successful reply with who/where — never the reply text", async () => {
-    fbReplyToComment.mockResolvedValue({ id: "PAGE_1_77" });
-    const { caller } = buildCaller({ target: { publishedId: "PAGE_1_9" }, channel: FB_CHANNEL });
+    fbReplyToComment.mockResolvedValue({ id: "9_77" });
+    const { caller } = buildCaller({ target: FB_TARGET, channel: FB_CHANNEL });
     await caller.reply({ targetId: TARGET_ID, commentId: "9_55", message: "a private-ish message" });
 
     expect(createAuditLog).toHaveBeenCalledTimes(1);
@@ -332,19 +364,27 @@ describe("comment.reply", () => {
       action: "comment.replied",
       entityType: "PostTarget",
       entityId: TARGET_ID,
-      metadata: { platform: "FACEBOOK", channelId: CHANNEL_ID, commentId: "9_55", replyId: "PAGE_1_77" },
+      metadata: { platform: "FACEBOOK", channelId: CHANNEL_ID, commentId: "9_55", replyId: "9_77" },
     });
     expect(JSON.stringify(entry)).not.toContain("private-ish");
   });
 
-  it("does NOT audit a reply the provider failed (or could not confirm)", async () => {
+  it("does NOT audit a reply the platform definitely refused", async () => {
+    fbReplyToComment.mockRejectedValue(new Error("Facebook couldn't post that reply right now."));
+    const { caller } = buildCaller({ target: FB_TARGET, channel: FB_CHANNEL });
+    await expect(caller.reply({ targetId: TARGET_ID, commentId: "9_55", message: "hi" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(createAuditLog).not.toHaveBeenCalled();
+  });
+
+  it("DOES audit a reply whose outcome is unknown — it may be live, so the trail must exist", async () => {
     fbReplyToComment.mockRejectedValue(new Error("Facebook accepted the reply but did not confirm it. … may already be posted."));
-    const { caller } = buildCaller({ channel: FB_CHANNEL });
-    await expect(caller.reply({ targetId: TARGET_ID, commentId: "9_55", message: "hi" })).rejects.toMatchObject({
-      code: "BAD_REQUEST",
+    const { caller } = buildCaller({ target: FB_TARGET, channel: FB_CHANNEL });
+    await expect(caller.reply({ targetId: TARGET_ID, commentId: "9_55", message: "a private-ish reply" })).rejects.toMatchObject({
       message: expect.stringContaining("may already be posted"),
     });
-    expect(createAuditLog).not.toHaveBeenCalled();
+    expect(createAuditLog).toHaveBeenCalledTimes(1);
+    expect(createAuditLog.mock.calls[0]![0]).toMatchObject({ action: "comment.replied", metadata: { outcome: "unconfirmed" } });
+    expect(JSON.stringify(createAuditLog.mock.calls)).not.toContain("private-ish");
   });
 
   it("cannot bypass the gate by calling reply directly on a foreign target", async () => {
@@ -370,7 +410,7 @@ describe("comment.reply", () => {
     expect(igReplyToComment).not.toHaveBeenCalled();
 
     fbReplyToComment.mockResolvedValue({ id: "R" });
-    const fb = buildCaller({ channel: FB_CHANNEL });
+    const fb = buildCaller({ target: FB_TARGET, channel: FB_CHANNEL });
     await fb.caller.reply({ targetId: TARGET_ID, commentId: "9_55", message: "x".repeat(2201) });
     expect(fbReplyToComment).toHaveBeenCalledTimes(1);
 
@@ -385,7 +425,7 @@ describe("comment.reply", () => {
     await expect(tw.caller.reply({ targetId: TARGET_ID, commentId: "17900000000000001", message: "hi" })).rejects.toMatchObject({
       code: "BAD_REQUEST",
     });
-    const gone = buildCaller({ channel: { ...FB_CHANNEL, disconnectedAt: new Date() } });
+    const gone = buildCaller({ target: FB_TARGET, channel: { ...FB_CHANNEL, disconnectedAt: new Date() } });
     await expect(gone.caller.reply({ targetId: TARGET_ID, commentId: "9_55", message: "hi" })).rejects.toMatchObject({
       code: "BAD_REQUEST",
     });
@@ -396,7 +436,7 @@ describe("comment.reply", () => {
 
 describe("comment.reply — commentId is the only client value reaching a Graph URL path", () => {
   it("🔴 REJECTS the arbitrary-authenticated-POST payload before any Graph call", async () => {
-    const { caller } = buildCaller({ channel: FB_CHANNEL });
+    const { caller } = buildCaller({ target: FB_TARGET, channel: FB_CHANNEL });
     await expect(
       caller.reply({
         targetId: TARGET_ID,
@@ -419,9 +459,9 @@ describe("comment.reply — commentId is the only client value reaching a Graph 
 
   it("still accepts a legitimate composite {object}_{comment} id", async () => {
     fbReplyToComment.mockResolvedValue({ id: "REPLY_1" });
-    const { caller } = buildCaller({ channel: FB_CHANNEL });
-    await caller.reply({ targetId: TARGET_ID, commentId: "122111714397390760_9988776655", message: "hi" });
-    expect(fbReplyToComment).toHaveBeenCalledWith(expect.anything(), "122111714397390760_9988776655", "hi", "PAGE_1");
+    const { caller } = buildCaller({ target: FB_TARGET, channel: FB_CHANNEL });
+    await caller.reply({ targetId: TARGET_ID, commentId: "9_9988776655", message: "hi" });
+    expect(fbReplyToComment).toHaveBeenCalledWith(expect.anything(), "9_9988776655", "hi", FB_PAGE);
   });
 });
 
@@ -571,5 +611,279 @@ describe("comment.posts", () => {
     // A video with no thumbnail must NOT fall back to the .mp4 URL.
     expect(res.items[1]).toMatchObject({ targetId: "t2", mediaKind: "video", thumbnailUrl: null });
     expect(res.nextCursor).toBe("t2");
+  });
+});
+
+
+describe("capabilities — what the channel's token was actually GRANTED", () => {
+  const OLD_IG = ["instagram_basic", "pages_read_engagement", "pages_show_list", "business_management"];
+
+  it("uses the grant recorded at connect — no extra Graph call", async () => {
+    getMediaComments.mockResolvedValue(EMPTY_PAGE);
+    const { caller, executeRaw } = buildCaller({ channel: { metadata: { igUserId: "IG_USER", grantedScopes: OLD_IG, grantedScopesCheckedAt: FRESH } } });
+    const res = await caller.list({ targetId: TARGET_ID });
+    expect(fetchMetaTokenWindow).not.toHaveBeenCalled();
+    expect(executeRaw).not.toHaveBeenCalled();
+    expect(res.capabilities).toMatchObject({ known: true, canReply: false, namesHidden: true, missing: ["instagram_manage_comments"] });
+  });
+
+  it("checks ONCE (debug_token) for a channel connected before grants were recorded, and remembers it with an atomic merge", async () => {
+    getPostComments.mockResolvedValue(EMPTY_PAGE);
+    fetchMetaTokenWindow.mockResolvedValue({ valid: true, scopes: ["pages_read_engagement", "pages_read_user_content", "pages_show_list"] });
+    const { caller, executeRaw } = buildCaller({ target: FB_TARGET, channel: FB_CHANNEL });
+    const res = await caller.list({ targetId: TARGET_ID });
+    expect(fetchMetaTokenWindow).toHaveBeenCalledWith("DECRYPTED_TOKEN", "APP", "SECRET");
+    // jsonb MERGE (metadata || patch) — never a whole-column rewrite that could
+    // drop the worker's concurrent insightsHealth write.
+    expect(executeRaw).toHaveBeenCalledTimes(1);
+    const sql = (executeRaw.mock.calls[0] as any)[0].join("?");
+    expect(sql).toMatch(/COALESCE\("metadata", '\{\}'::jsonb\) \|\|/);
+    expect(res.capabilities).toMatchObject({ known: true, canRead: true, canReply: false, missing: ["pages_manage_engagement"] });
+  });
+
+  it("never records a DEAD token's empty scope list as a grant (the fault is the token, not a permission)", async () => {
+    getPostComments.mockResolvedValue(EMPTY_PAGE);
+    fetchMetaTokenWindow.mockResolvedValue({ valid: false, scopes: [] });
+    const { caller, executeRaw } = buildCaller({ target: FB_TARGET, channel: FB_CHANNEL });
+    const res = await caller.list({ targetId: TARGET_ID });
+    expect(executeRaw).not.toHaveBeenCalled();
+    expect(res.capabilities).toMatchObject({ known: false });
+  });
+
+  it("does not re-check on 'load more' pages", async () => {
+    getPostComments.mockResolvedValue(EMPTY_PAGE);
+    const { caller } = buildCaller({ target: FB_TARGET, channel: FB_CHANNEL });
+    await caller.list({ targetId: TARGET_ID, cursor: "NEXT" });
+    expect(fetchMetaTokenWindow).not.toHaveBeenCalled();
+  });
+
+  it("an unknown grant (check failed) is reported as unknown, never guessed", async () => {
+    getPostComments.mockResolvedValue(EMPTY_PAGE);
+    const { caller } = buildCaller({ target: FB_TARGET, channel: FB_CHANNEL });
+    const res = await caller.list({ targetId: TARGET_ID });
+    expect(res.capabilities).toMatchObject({ known: false, canReply: null });
+  });
+
+  it("re-checks the grant when Meta refuses a call for a missing permission", async () => {
+    getPostComments.mockRejectedValue(new Error("This Facebook Page hasn't granted comment access yet."));
+    const { caller } = buildCaller({
+      target: FB_TARGET,
+      channel: { ...FB_CHANNEL, metadata: { grantedScopes: ["pages_manage_engagement", "pages_read_engagement", "pages_read_user_content"], grantedScopesCheckedAt: FRESH } },
+    });
+    await expect(caller.list({ targetId: TARGET_ID })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(fetchMetaTokenWindow).toHaveBeenCalledTimes(1);
+  });
+
+  it("comment.accounts derives commentAccess from the cached grant and never returns raw metadata", async () => {
+    const { caller } = buildCaller({
+      channels: [
+        { id: "c1", platform: "INSTAGRAM", name: "IG", username: "ig", avatar: null, isActive: true, metadata: { igUserId: "X", grantedScopes: OLD_IG } },
+        { id: "c2", platform: "FACEBOOK", name: "FB", username: null, avatar: null, isActive: true, metadata: { pageId: "P", userAccessToken: "enc:v1:secret" } },
+      ],
+    });
+    const res: any[] = await caller.accounts();
+    const ig = res.find((a) => a.id === "c1");
+    const fb = res.find((a) => a.id === "c2");
+    expect(ig.commentAccess).toMatchObject({ known: true, canReply: false });
+    expect(fb.commentAccess).toMatchObject({ known: false });
+    expect(JSON.stringify(res)).not.toContain("userAccessToken");
+    expect(ig.metadata).toBeUndefined();
+  });
+});
+
+describe("🔒 Instagram writes are scoped to the target's OWN media", () => {
+  it("refuses to reply to a comment that belongs to other media (a user token spans accounts)", async () => {
+    getCommentMediaId.mockResolvedValue("SOMEONE_ELSES_MEDIA");
+    const { caller } = buildCaller({});
+    await expect(caller.reply({ targetId: TARGET_ID, commentId: "17900000000000001", message: "hi" })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    expect(igReplyToComment).not.toHaveBeenCalled();
+  });
+
+  it("a comment that no longer exists is a clean 'refresh' error, not a reply attempt", async () => {
+    getCommentMediaId.mockResolvedValue(null);
+    const { caller } = buildCaller({});
+    await expect(caller.reply({ targetId: TARGET_ID, commentId: "17900000000000001", message: "hi" })).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringContaining("no longer exists"),
+    });
+    expect(igReplyToComment).not.toHaveBeenCalled();
+  });
+
+  it("Facebook needs no Graph lookup — the comment id itself proves which post it is on", async () => {
+    fbReplyToComment.mockResolvedValue({ id: "R" });
+    const { caller } = buildCaller({ target: FB_TARGET, channel: FB_CHANNEL });
+    await caller.reply({ targetId: TARGET_ID, commentId: "9_55", message: "hi" });
+    expect(getCommentMediaId).not.toHaveBeenCalled();
+  });
+});
+
+describe("comment.moderate", () => {
+  it("routes every Facebook action to the provider as the Page", async () => {
+    const { caller } = buildCaller({ target: FB_TARGET, channel: FB_CHANNEL });
+    await caller.moderate({ targetId: TARGET_ID, commentId: "9_1", action: "hide" });
+    await caller.moderate({ targetId: TARGET_ID, commentId: "9_1", action: "unhide" });
+    await caller.moderate({ targetId: TARGET_ID, commentId: "9_1", action: "like" });
+    await caller.moderate({ targetId: TARGET_ID, commentId: "9_1", action: "unlike" });
+    await caller.moderate({ targetId: TARGET_ID, commentId: "9_2", action: "edit", message: "  New text " });
+    await caller.moderate({ targetId: TARGET_ID, commentId: "9_1", action: "delete" });
+    expect(fbSetHidden.mock.calls.map((c: any[]) => [c[1], c[2], c[3]])).toEqual([["9_1", true, FB_PAGE], ["9_1", false, FB_PAGE]]);
+    expect(fbSetLiked.mock.calls.map((c: any[]) => c[2])).toEqual([true, false]);
+    expect(fbEdit).toHaveBeenCalledWith(expect.objectContaining({ accessToken: "DECRYPTED_TOKEN" }), "9_2", "New text", FB_PAGE);
+    expect(fbDelete).toHaveBeenCalledWith(expect.anything(), "9_1", FB_PAGE);
+  });
+
+  it("audit-logs each action with who/where — never the comment text", async () => {
+    const { caller } = buildCaller({ target: FB_TARGET, channel: FB_CHANNEL });
+    await caller.moderate({ targetId: TARGET_ID, commentId: "9_2", action: "edit", message: "secret words" });
+    await caller.moderate({ targetId: TARGET_ID, commentId: "9_1", action: "delete" });
+    expect(createAuditLog.mock.calls.map((c: any[]) => c[0].action)).toEqual(["comment.edited", "comment.deleted"]);
+    expect(JSON.stringify(createAuditLog.mock.calls)).not.toContain("secret words");
+  });
+
+  it("Instagram: hide/unhide/delete after proving the comment is on the target's media", async () => {
+    const { caller } = buildCaller({});
+    await caller.moderate({ targetId: TARGET_ID, commentId: "17900000000000001", action: "hide" });
+    await caller.moderate({ targetId: TARGET_ID, commentId: "17900000000000001", action: "delete" });
+    expect(getCommentMediaId).toHaveBeenCalledTimes(2);
+    expect(igSetHidden).toHaveBeenCalledWith(expect.anything(), "17900000000000001", true);
+    expect(igDelete).toHaveBeenCalledWith(expect.anything(), "17900000000000001");
+  });
+
+  it("Instagram: refuses a comment on other media, and refuses like/edit (not available there)", async () => {
+    getCommentMediaId.mockResolvedValue("OTHER");
+    const { caller } = buildCaller({});
+    await expect(caller.moderate({ targetId: TARGET_ID, commentId: "17900000000000001", action: "delete" })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    expect(igDelete).not.toHaveBeenCalled();
+    for (const action of ["like", "unlike"] as const) {
+      await expect(caller.moderate({ targetId: TARGET_ID, commentId: "17900000000000001", action })).rejects.toMatchObject({
+        code: "BAD_REQUEST",
+      });
+    }
+    await expect(
+      caller.moderate({ targetId: TARGET_ID, commentId: "17900000000000001", action: "edit", message: "x" })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST", message: expect.stringContaining("doesn't allow editing") });
+  });
+
+  it("validates input: edit needs text, and the comment id must be a Graph id", async () => {
+    const { caller } = buildCaller({ target: FB_TARGET, channel: FB_CHANNEL });
+    await expect(caller.moderate({ targetId: TARGET_ID, commentId: "9_1", action: "edit" })).rejects.toThrow();
+    await expect(caller.moderate({ targetId: TARGET_ID, commentId: "9_1/feed", action: "delete" })).rejects.toThrow();
+    expect(fbEdit).not.toHaveBeenCalled();
+    expect(fbDelete).not.toHaveBeenCalled();
+  });
+
+  it("applies the same org gate as list/reply", async () => {
+    const { caller } = buildCaller({ target: { ...FB_TARGET, orgId: "org-other" }, channel: FB_CHANNEL });
+    await expect(caller.moderate({ targetId: TARGET_ID, commentId: "9_1", action: "delete" })).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    expect(fbDelete).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("🔒 Facebook writes are scoped to comments ON THIS POST", () => {
+  // Caught in review 2026-09-23: the id-shape check alone accepts a Page POST id,
+  // so `delete`/`edit` could have deleted or rewritten any live Page post.
+  it("refuses a Page POST id (it starts with the Page id) for every write", async () => {
+    const { caller } = buildCaller({ target: FB_TARGET, channel: FB_CHANNEL });
+    for (const action of ["delete", "hide", "like"] as const) {
+      await expect(caller.moderate({ targetId: TARGET_ID, commentId: `${FB_PAGE}_12345`, action })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    }
+    await expect(
+      caller.moderate({ targetId: TARGET_ID, commentId: `${FB_PAGE}_12345`, action: "edit", message: "defaced" })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(caller.reply({ targetId: TARGET_ID, commentId: `${FB_PAGE}_12345`, message: "x" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(fbDelete).not.toHaveBeenCalled();
+    expect(fbEdit).not.toHaveBeenCalled();
+    expect(fbSetHidden).not.toHaveBeenCalled();
+    expect(fbReplyToComment).not.toHaveBeenCalled();
+  });
+
+  it("refuses the target post itself and any BARE id (a photo/video/post node, never a comment)", async () => {
+    const { caller } = buildCaller({ target: FB_TARGET, channel: FB_CHANNEL });
+    for (const commentId of [`${FB_PAGE}_9`, "1748002179986936"]) {
+      await expect(caller.moderate({ targetId: TARGET_ID, commentId, action: "delete" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    }
+    expect(fbDelete).not.toHaveBeenCalled();
+  });
+
+  it("refuses a comment that belongs to ANOTHER post of the same Page", async () => {
+    const { caller } = buildCaller({ target: FB_TARGET, channel: FB_CHANNEL });
+    await expect(caller.moderate({ targetId: TARGET_ID, commentId: "777_1", action: "delete" })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringContaining("doesn't belong to this post"),
+    });
+  });
+
+  it("accepts a comment (or reply) on this post — replies share the post's prefix", async () => {
+    const { caller } = buildCaller({ target: FB_TARGET, channel: FB_CHANNEL });
+    await caller.moderate({ targetId: TARGET_ID, commentId: "9_1452846363362337", action: "hide" });
+    expect(fbSetHidden).toHaveBeenCalledTimes(1);
+  });
+
+  it("video post: accepts comments prefixed by the video id OR its feed-post id (resolved once if unknown)", async () => {
+    const resolveVideoPostId = vi.fn(async () => `${FB_PAGE}_4242`);
+    const social = await import("@postautomation/social");
+    (social.getSocialProvider as any).mockImplementation((platform: string) =>
+      platform === "FACEBOOK"
+        ? { setCommentHidden: fbSetHidden, deleteComment: fbDelete, setCommentLiked: fbSetLiked, editComment: fbEdit, replyToComment: fbReplyToComment, getPostComments, resolveVideoPostId }
+        : { getMediaComments, replyToComment: igReplyToComment, getCommentMediaId, setCommentHidden: igSetHidden, deleteComment: igDelete }
+    );
+    const { caller } = buildCaller({ target: { publishedId: "1748002179986936" }, channel: FB_CHANNEL });
+    await caller.moderate({ targetId: TARGET_ID, commentId: "1748002179986936_5", action: "hide" }); // video-id prefix: no lookup
+    expect(resolveVideoPostId).not.toHaveBeenCalled();
+    await caller.moderate({ targetId: TARGET_ID, commentId: "4242_6", action: "hide" }); // post-id prefix: resolved
+    expect(resolveVideoPostId).toHaveBeenCalledTimes(1);
+    await expect(caller.moderate({ targetId: TARGET_ID, commentId: "999_7", action: "hide" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(fbSetHidden).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("recorded grants are re-read when stale", () => {
+  it("re-reads a grant that says a write permission is missing once it is over an hour old", async () => {
+    getMediaComments.mockResolvedValue(EMPTY_PAGE);
+    fetchMetaTokenWindow.mockResolvedValue({ valid: true, scopes: ["instagram_basic", "instagram_manage_comments"] });
+    const old = new Date(Date.now() - 2 * 3600e3).toISOString();
+    const { caller, executeRaw } = buildCaller({
+      channel: { metadata: { igUserId: "IG_USER", grantedScopes: ["instagram_basic"], grantedScopesCheckedAt: old } },
+    });
+    const res = await caller.list({ targetId: TARGET_ID });
+    expect(fetchMetaTokenWindow).toHaveBeenCalledTimes(1);
+    expect(executeRaw).toHaveBeenCalledTimes(1);
+    expect(res.capabilities).toMatchObject({ canReply: true, namesHidden: false });
+  });
+
+  it("does not re-read a recent 'missing' answer (at most once an hour)", async () => {
+    getMediaComments.mockResolvedValue(EMPTY_PAGE);
+    const { caller } = buildCaller({
+      channel: { metadata: { igUserId: "IG_USER", grantedScopes: ["instagram_basic"], grantedScopesCheckedAt: FRESH } },
+    });
+    await caller.list({ targetId: TARGET_ID });
+    expect(fetchMetaTokenWindow).not.toHaveBeenCalled();
+  });
+
+  it("keeps the old answer if the re-read fails", async () => {
+    getMediaComments.mockResolvedValue(EMPTY_PAGE);
+    fetchMetaTokenWindow.mockResolvedValue(null);
+    const old = new Date(Date.now() - 8 * 24 * 3600e3).toISOString();
+    const { caller } = buildCaller({
+      channel: { metadata: { igUserId: "IG_USER", grantedScopes: ["instagram_basic", "instagram_manage_comments"], grantedScopesCheckedAt: old } },
+    });
+    const res = await caller.list({ targetId: TARGET_ID });
+    expect(res.capabilities).toMatchObject({ known: true, canReply: true });
+  });
+});
+
+describe("unconfirmed moderation is still audited", () => {
+  it("records an unconfirmed delete with outcome 'unconfirmed'", async () => {
+    fbDelete.mockRejectedValueOnce(new Error("The platform didn't confirm that change. Refresh the comments to see the current state."));
+    const { caller } = buildCaller({ target: FB_TARGET, channel: FB_CHANNEL });
+    await expect(caller.moderate({ targetId: TARGET_ID, commentId: "9_1", action: "delete" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(createAuditLog.mock.calls[0]![0]).toMatchObject({ action: "comment.deleted", metadata: { outcome: "unconfirmed" } });
   });
 });

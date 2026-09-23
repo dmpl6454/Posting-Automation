@@ -93,7 +93,37 @@ describe("parseFacebookCommentsPage", () => {
       isOwn: false,
       canReply: true,
       attachmentType: null,
+      // No can_* on the row (the minimal rung): offer the actions and let Meta decide.
+      likedByAccount: null,
+      canHide: true,
+      canDelete: true,
+      canLike: true,
+      canEdit: false,
     });
+  });
+
+  it("maps the moderation fields: the Page's like, Meta's can_*, and edit only on the Page's OWN comment", () => {
+    const page = parseFacebookCommentsPage(
+      {
+        data: [
+          {
+            id: "u1",
+            from: { id: "PSID_1" },
+            user_likes: true,
+            can_hide: true,
+            can_remove: true,
+            can_like: true,
+            comments: { data: [{ id: "own1", from: { id: PAGE_ID }, user_likes: false }] },
+          },
+          { id: "u2", from: { id: "PSID_2" }, can_hide: false, can_remove: false, can_like: false },
+        ],
+      },
+      PAGE_ID
+    );
+    expect(page.comments[0]).toMatchObject({ likedByAccount: true, canHide: true, canDelete: true, canLike: true, canEdit: false });
+    // The Page's own reply: editable, deletable, but a Page can't hide its own comment.
+    expect(page.comments[0]!.replies[0]).toMatchObject({ isOwn: true, canEdit: true, canHide: false, canDelete: true, likedByAccount: false });
+    expect(page.comments[1]).toMatchObject({ canHide: false, canDelete: false, canLike: false });
   });
 
   it("honours can_comment=false (comments turned off) and flags hidden comments", () => {
@@ -148,6 +178,20 @@ describe("error classification", () => {
     // and/or pages_read_user_content" error on the comments edge.
     expect(isFbCommentPermissionError({ code: 283, message: "That action requires the extended permission pages_read_user_content" })).toBe(true);
     expect(isFbCommentPermissionError({ code: "200" })).toBe(true);
+    // Observed LIVE 2026-09-23 on a reply from a token minted before the scope existed.
+    expect(isFbCommentPermissionError({ code: 100, message: "(#100) Missing Permission" })).toBe(true);
+    // …but #100 alone is overloaded (object-not-found, validation).
+    expect(isFbCommentPermissionError({ code: 100, message: "Unsupported get request" })).toBe(false);
+    // 🔴 Meta's VERBATIM #100/33 text contains "missing permissions" — it must
+    // stay an object-gone error, never a permission error.
+    expect(
+      isFbCommentPermissionError({
+        code: 100,
+        error_subcode: 33,
+        message:
+          "Unsupported delete request. Object with ID '9_55' does not exist, cannot be loaded due to missing permissions, or does not support this operation.",
+      })
+    ).toBe(false);
   });
 
   it("does NOT treat every #10 as a missing scope, nor a dead token, nor nothing", () => {

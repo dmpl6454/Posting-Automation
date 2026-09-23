@@ -1,16 +1,22 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
 import {
   ExternalLink,
+  Eye,
   EyeOff,
   Heart,
   Loader2,
   MessageCircle,
+  Pencil,
   RefreshCw,
+  ShieldAlert,
+  ThumbsUp,
+  Trash2,
 } from "lucide-react";
-import type { SocialComment } from "@postautomation/social";
+import type { CommentModerationAction, SocialComment } from "@postautomation/social";
 import { trpc } from "~/lib/trpc/client";
 import { humanizeError } from "~/lib/errors";
 import { parseGraphTimestamp } from "~/lib/graph-time";
@@ -20,6 +26,7 @@ import { Button } from "~/components/ui/button";
 import { Badge } from "~/components/ui/badge";
 import { Textarea } from "~/components/ui/textarea";
 import { Skeleton } from "~/components/ui/skeleton";
+import { ConfirmDialog } from "~/components/ui/confirm-dialog";
 import { ChannelAvatar } from "~/components/channel-avatar";
 import { FacebookIcon, InstagramIcon } from "~/components/icons/platform-icons";
 import { cn } from "~/lib/utils";
@@ -34,6 +41,56 @@ export const PLATFORM_NAME: Record<CommentPlatform, string> = {
 export const ACCOUNT_KIND: Record<CommentPlatform, string> = {
   FACEBOOK: "Facebook Page",
   INSTAGRAM: "Instagram account",
+};
+
+/** What "hidden" means differs per platform — say the right thing on each. */
+const HIDE_TOOLTIP: Record<CommentPlatform, string> = {
+  FACEBOOK: "Hide from everyone except the commenter and their friends",
+  INSTAGRAM: "Hide from everyone except the person who wrote it",
+};
+const HIDDEN_BADGE_TOOLTIP: Record<CommentPlatform, string> = {
+  FACEBOOK: "Hidden — only the commenter and their friends can see it",
+  INSTAGRAM: "Hidden — only the person who wrote it can see it",
+};
+
+/** Apply a CONFIRMED moderation result to one comment (top-level or reply). */
+function applyModeration(
+  c: SocialComment,
+  id: string,
+  action: CommentModerationAction,
+  message?: string
+): SocialComment | null {
+  if (c.id === id) {
+    if (action === "delete") return null;
+    if (action === "hide" || action === "unhide") return { ...c, hidden: action === "hide" };
+    if (action === "like" || action === "unlike") {
+      const liked = action === "like";
+      const delta = liked === !!c.likedByAccount ? 0 : liked ? 1 : -1;
+      return { ...c, likedByAccount: liked, likeCount: Math.max(0, c.likeCount + delta) };
+    }
+    return { ...c, text: message ?? c.text };
+  }
+  if (!c.replies.some((r) => r.id === id)) return c;
+  const replies = c.replies
+    .map((r) => applyModeration(r, id, action, message))
+    .filter((r): r is SocialComment => r !== null);
+  const removed = c.replies.length - replies.length;
+  return { ...c, replies, replyCount: Math.max(0, c.replyCount - removed) };
+}
+
+const MODERATION_TOAST: Record<CommentModerationAction, string> = {
+  hide: "Comment hidden",
+  unhide: "Comment unhidden",
+  delete: "Comment deleted",
+  like: "Liked as the Page",
+  unlike: "Like removed",
+  edit: "Comment updated",
+};
+
+/** Which permission unlocks writes, per platform — shown in the reconnect banner. */
+const WRITE_SCOPE: Record<CommentPlatform, string> = {
+  FACEBOOK: "pages_manage_engagement",
+  INSTAGRAM: "instagram_manage_comments",
 };
 
 /** Mirrors the server ceilings (FB_COMMENT_MAX_LENGTH / COMMENT_REPLY_MAX_LENGTH). */
@@ -59,8 +116,14 @@ function attachmentLabel(type: string | null): string | null {
   return "Attachment";
 }
 
-function authorLabel(c: SocialComment, platform: CommentPlatform): string {
-  if (platform === "INSTAGRAM") return c.author.username ? `@${c.author.username}` : "Instagram user";
+function authorLabel(c: SocialComment, platform: CommentPlatform, namesHidden: boolean): string {
+  if (platform === "INSTAGRAM") {
+    if (c.author.username) return `@${c.author.username}`;
+    // Meta withholds commenter usernames unless the token holds
+    // instagram_manage_comments (since 2024-08-27). Say WHY, so "Instagram user"
+    // doesn't read as a bug when several people comment.
+    return namesHidden ? "Instagram user (name hidden)" : "Instagram user";
+  }
   // Meta withholds the commenter's identity in some cases (privacy settings,
   // deleted profiles) — say so plainly rather than inventing a name.
   return c.author.name ?? "Facebook user";
@@ -111,6 +174,14 @@ export function CommentThread({
   // Comments whose last reply attempt has an UNKNOWN outcome (it may be live).
   // The composer stays open with a warning and an explicit "send again anyway".
   const [unconfirmed, setUnconfirmed] = useState<Record<string, boolean>>({});
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState("");
+  const [pendingDelete, setPendingDelete] = useState<SocialComment | null>(null);
+  // Per-comment in-flight tracking: one shared mutation's isPending/variables
+  // follow only the LATEST call, so a second action elsewhere would otherwise
+  // hide the first one's spinner and re-enable its buttons mid-flight.
+  const [busyIds, setBusyIds] = useState<Set<string>>(() => new Set());
+  const utils = trpc.useUtils();
 
   const query = trpc.comment.list.useInfiniteQuery(
     { targetId },
@@ -181,8 +252,85 @@ export function CommentThread({
         return;
       }
       toast({ title: "Couldn't send reply", description: humanizeError(err), variant: "destructive" });
+      if (/hasn't (been )?granted comment/i.test(err.message)) setTimeout(() => void query.refetch(), 1500);
     },
   });
+
+  // What this channel's token may actually do (granted scopes, checked at
+  // connect or lazily on first open). `false` = known missing → the UI shows
+  // WHY and how to fix it instead of letting an action fail or hiding it.
+  const caps = first?.capabilities;
+  const writeBlocked = caps?.known === true && caps.canReply === false;
+  const namesHidden = caps?.namesHidden === true;
+  // The lazy grant check may have just recorded this channel's permissions —
+  // refresh the account list so its "Reconnect" badge agrees with this banner.
+  const capsKnown = caps?.known === true;
+  const capsCanReply = caps?.canReply ?? null;
+  useEffect(() => {
+    if (capsKnown) void utils.comment.accounts.invalidate();
+  }, [capsKnown, capsCanReply, utils]);
+
+  // Losing the permission (a refresh after a refusal) closes any open composer.
+  useEffect(() => {
+    if (writeBlocked) {
+      setReplyingTo(null);
+      setEditingId(null);
+    }
+  }, [writeBlocked]);
+
+  const blockedTitle = knownPlatform
+    ? `Needs the ${WRITE_SCOPE[knownPlatform]} permission — reconnect this ${knownPlatform === "FACEBOOK" ? "Page" : "account"} on the Channels page`
+    : undefined;
+
+  const moderate = trpc.comment.moderate.useMutation({
+    onMutate: (variables) => {
+      setBusyIds((prev) => new Set(prev).add(variables.commentId));
+    },
+    onSettled: (_data, _err, variables) => {
+      setBusyIds((prev) => {
+        const next = new Set(prev);
+        next.delete(variables.commentId);
+        return next;
+      });
+      // Resets are scoped to THIS comment — another comment's open editor or
+      // delete dialog must survive an unrelated action finishing.
+      setPendingDelete((cur) => (cur?.id === variables.commentId ? null : cur));
+    },
+    onSuccess: (_res, variables) => {
+      toast({ title: MODERATION_TOAST[variables.action] });
+      if (variables.action === "edit") setEditingId((cur) => (cur === variables.commentId ? null : cur));
+      // Patch the loaded pages instead of re-reading every page from Meta — each
+      // re-read spends the Page's rate budget (shared with publishing).
+      utils.comment.list.setInfiniteData({ targetId }, (data) =>
+        data
+          ? {
+              ...data,
+              pages: data.pages.map((page) => ({
+                ...page,
+                comments: (page.comments as SocialComment[])
+                  .map((c) => applyModeration(c, variables.commentId, variables.action, variables.message))
+                  .filter((c): c is SocialComment => c !== null),
+              })),
+            }
+          : data
+      );
+    },
+    onError: (err) => {
+      if (/didn't confirm that change/i.test(err.message)) {
+        // Idempotent action, unknown outcome: show the real state, calmly.
+        toast({ title: "Change not confirmed", description: "Refreshing to show the current state." });
+        void query.refetch();
+        return;
+      }
+      toast({ title: "Couldn't update the comment", description: humanizeError(err), variant: "destructive" });
+      // A permission refusal made the server re-read the grant; pick it up so
+      // the reconnect banner appears.
+      if (/hasn't (been )?granted comment/i.test(err.message)) setTimeout(() => void query.refetch(), 1500);
+    },
+  });
+  const runAction = (comment: SocialComment, action: CommentModerationAction, message?: string) =>
+    moderate.mutate({ targetId, commentId: comment.id, action, message });
+  const actionBusy = (id: string) => busyIds.has(id);
 
   const send = (commentId: string) => {
     const message = (drafts[commentId] ?? "").trim();
@@ -196,7 +344,7 @@ export function CommentThread({
     return (
       <div key={c.id} className={cn("space-y-1", isReply ? "border-l-2 pl-3" : "")}>
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-          <span className="text-xs font-semibold">{authorLabel(c, platform)}</span>
+          <span className="text-xs font-semibold">{authorLabel(c, platform, namesHidden)}</span>
           {c.isOwn && (
             <Badge variant="secondary" className="h-4 px-1.5 text-[10px]" title={`Written by ${accountName}`}>
               {platform === "FACEBOOK" ? "Page" : "You"}
@@ -206,37 +354,123 @@ export function CommentThread({
             <Badge
               variant="outline"
               className="h-4 gap-1 px-1.5 text-[10px]"
-              title="Hidden on the platform — only you and the commenter can see it"
+              title={HIDDEN_BADGE_TOOLTIP[platform]}
             >
               <EyeOff className="h-2.5 w-2.5" /> Hidden
             </Badge>
           )}
           <RelativeTime value={c.createdAt} />
         </div>
-        {c.text ? (
+        {editingId === c.id ? (
+          <div className="space-y-1.5">
+            <Textarea
+              autoFocus
+              value={editDraft}
+              maxLength={maxLength}
+              rows={2}
+              className="text-sm"
+              onChange={(e) => setEditDraft(e.target.value)}
+            />
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                className="h-7 px-3 text-xs"
+                disabled={writeBlocked || actionBusy(c.id) || !editDraft.trim() || editDraft.trim() === c.text}
+                onClick={() => runAction(c, "edit", editDraft.trim())}
+                title={`Save the new text of ${accountName}'s comment on Facebook`}
+              >
+                {actionBusy(c.id) && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
+                Save edit
+              </Button>
+              <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => setEditingId(null)}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        ) : c.text ? (
           <p className="whitespace-pre-wrap break-words text-sm">{c.text}</p>
         ) : attachment ? (
           <p className="text-sm italic text-muted-foreground">[{attachment}]</p>
         ) : null}
-        <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
           {c.likeCount > 0 && (
             <span className="inline-flex items-center gap-1" title="Likes">
               <Heart className="h-3 w-3" /> {c.likeCount}
             </span>
           )}
-          {c.canReply && replyingTo !== c.id && (
+          {/* Reply stays VISIBLE (disabled, with the reason) when the token lacks
+              the permission — Facebook reports can_comment=false in that case,
+              which used to make the button silently disappear. */}
+          {(writeBlocked ? !isReply && !c.hidden : replyingTo !== c.id && c.canReply) && (
             <button
               type="button"
-              className="font-medium hover:text-primary hover:underline"
-              title={`Reply publicly as ${accountName}`}
+              className="font-medium hover:text-primary hover:underline disabled:cursor-not-allowed disabled:no-underline disabled:opacity-50"
+              title={writeBlocked ? blockedTitle : `Reply publicly as ${accountName}`}
+              disabled={writeBlocked}
               onClick={() => setReplyingTo(c.id)}
             >
               Reply
             </button>
           )}
+          {c.canLike && (
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 font-medium hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
+              title={writeBlocked ? blockedTitle : c.likedByAccount ? "Remove the Page's like" : `Like as ${accountName}`}
+              disabled={writeBlocked || actionBusy(c.id)}
+              onClick={() => runAction(c, c.likedByAccount ? "unlike" : "like")}
+            >
+              <ThumbsUp className={cn("h-3 w-3", c.likedByAccount && "fill-current text-primary")} />
+              {c.likedByAccount ? "Liked" : "Like"}
+            </button>
+          )}
+          {c.canHide && (
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 font-medium hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
+              title={
+                writeBlocked
+                  ? blockedTitle
+                  : c.hidden
+                    ? "Show this comment to everyone again"
+                    : HIDE_TOOLTIP[platform]
+              }
+              disabled={writeBlocked || actionBusy(c.id)}
+              onClick={() => runAction(c, c.hidden ? "unhide" : "hide")}
+            >
+              {c.hidden ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
+              {c.hidden ? "Unhide" : "Hide"}
+            </button>
+          )}
+          {c.canEdit && editingId !== c.id && (
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 font-medium hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
+              title={writeBlocked ? blockedTitle : `Edit ${accountName}'s comment`}
+              disabled={writeBlocked || actionBusy(c.id)}
+              onClick={() => {
+                setEditDraft(c.text);
+                setEditingId(c.id);
+              }}
+            >
+              <Pencil className="h-3 w-3" /> Edit
+            </button>
+          )}
+          {c.canDelete && (
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 font-medium hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
+              title={writeBlocked ? blockedTitle : `Delete this comment from ${PLATFORM_NAME[platform]}`}
+              disabled={writeBlocked || actionBusy(c.id)}
+              onClick={() => setPendingDelete(c)}
+            >
+              <Trash2 className="h-3 w-3" /> Delete
+            </button>
+          )}
+          {actionBusy(c.id) && <Loader2 className="h-3 w-3 animate-spin" />}
         </div>
 
-        {c.canReply && replyingTo === c.id && (
+        {c.canReply && !writeBlocked && replyingTo === c.id && (
           <div className="space-y-1.5 pt-1">
             {unconfirmed[c.id] && (
               <p className="rounded-md border border-amber-500/50 bg-amber-500/10 p-2 text-[11px] text-amber-700 dark:text-amber-400">
@@ -362,6 +596,31 @@ export function CommentThread({
         </div>
       </div>
 
+      {knownPlatform && (writeBlocked || namesHidden) && (
+        // The permission picture, in words: which scope is missing and exactly
+        // how to fix it. Without this, a missing grant looked like a broken
+        // button ("no Reply on Facebook") or a bug ("Instagram user").
+        <div className="flex gap-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-2.5 text-xs text-amber-800 dark:text-amber-300">
+          <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
+          <div className="space-y-1">
+            <p className="font-medium">
+              {knownPlatform === "FACEBOOK"
+                ? "Replying and moderating are off for this Page."
+                : "Commenter names are hidden and replying/moderating is off for this account."}
+            </p>
+            <p>
+              Its connection doesn't include <code className="font-mono">{WRITE_SCOPE[knownPlatform]}</code> — it was
+              connected before PostAutomation asked for it, or Meta hasn't approved it for this account yet. Reconnect:
+              Channels → Connect {PLATFORM_NAME[knownPlatform]} → <strong>Edit settings</strong> → keep this{" "}
+              {knownPlatform === "FACEBOOK" ? "Page" : "account's Page"} ticked → allow every permission.
+            </p>
+            <Link href="/dashboard/channels" className="inline-block font-medium underline">
+              Go to Channels
+            </Link>
+          </div>
+        </div>
+      )}
+
       {query.isLoading ? (
         <div className="space-y-3" aria-label="Loading comments">
           {[0, 1, 2].map((i) => (
@@ -439,6 +698,16 @@ export function CommentThread({
           )}
         </>
       )}
+
+      <ConfirmDialog
+        open={!!pendingDelete}
+        onOpenChange={(open) => !open && setPendingDelete(null)}
+        title="Delete this comment?"
+        description={`It will be removed from ${knownPlatform ? PLATFORM_NAME[knownPlatform] : "the platform"} for everyone. This can't be undone.`}
+        confirmLabel="Delete"
+        isPending={!!pendingDelete && actionBusy(pendingDelete.id)}
+        onConfirm={() => pendingDelete && runAction(pendingDelete, "delete")}
+      />
     </div>
   );
 }

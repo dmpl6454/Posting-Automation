@@ -20,8 +20,8 @@ same day.
 | Permission | What it does in our app | Graph call | App B | App A |
 |---|---|---|---|---|
 | `pages_read_user_content` | **Read** the comments people leave on the Page's posts (text, commenter name, replies) | `GET /{post-id}/comments` (Page token) | ❌ Rejected 2026-09-12 → **Request again** | ✅ Approved |
-| `pages_manage_engagement` | **Reply** to a comment **as the Page** | `POST /{comment-id}/comments` (Page token) | 🆕 add + test call + submit | 🆕 add + test call + submit |
-| `instagram_manage_comments` | **Read and reply** to comments on the IG professional account's media | `GET /{ig-media-id}/comments`, `POST /{ig-comment-id}/replies` | 🆕 add + test call + submit | 🔁 rejected 2026-06 ("Disallowed Use Case" — no feature then) → **request again** |
+| `pages_manage_engagement` | **Reply** as the Page, **edit/delete** the Page's own reply, **like** a comment, **hide/unhide/delete** a comment | `POST /{comment-id}/comments`, `POST /{comment-id}` (`message` / `is_hidden`), `DELETE /{comment-id}`, `POST/DELETE /{comment-id}/likes` (Page token) | 🆕 add + test call + submit | 🆕 add + test call + submit |
+| `instagram_manage_comments` | **Read** comments (with commenter usernames), **reply**, **hide/unhide**, **delete** on the IG professional account's media | `GET /{ig-media-id}/comments`, `POST /{ig-comment-id}/replies`, `POST /{ig-comment-id}` (`hide`), `DELETE /{ig-comment-id}` | 🆕 add + test call + submit | 🔁 rejected 2026-06 ("Disallowed Use Case" — no feature then) → **request again** |
 
 **Why `pages_manage_engagement` is not enough on its own:** Meta's Permissions
 Reference lists **`pages_read_user_content` and `pages_show_list` as dependencies** of
@@ -116,6 +116,16 @@ permissions are only granted at consent time.
    **Edit settings** (not "Continue as…") → tick the Page → approve every permission
    line → Save.
 3. Reconnect the test **Instagram** account the same way.
+4. **Check it worked:** open **Comments**. A channel still missing a permission shows an
+   amber **Reconnect** badge in the account list and an amber banner above its comments
+   naming the missing permission. Both must be gone before you record.
+
+> This is exactly what happened on 2026-09-23: the "Demo Test" Page and
+> `priyanshu123321123` tokens were minted on **2026-09-19**, before the new scopes
+> were requested. So the Instagram reply failed with `(#100) Missing Permission`, the
+> commenter showed as "Instagram user" (Meta hides usernames without
+> `instagram_manage_comments`), and Facebook had no Reply button. Reconnecting fixes all
+> three.
 
 ### 3.3 Make one successful call per permission (the "test call" gate)
 Meta keeps **Request advanced access** greyed out until it has logged **one successful
@@ -131,8 +141,12 @@ and Meta says logging can take **up to 2 days**.
    (**= `pages_read_user_content`**) → **Reply** → type → **Reply as ‹Page›**
    (**= `pages_manage_engagement`**). The reply appears under the comment with a
    **Page** badge.
-4. Same for the Instagram account (**= `instagram_manage_comments`** — read + reply).
-5. Wait. Check **App Review → Permissions and Features** ("API calls" column shows a
+4. On Facebook also click **Like**, **Hide** then **Unhide**, and **Edit** on the Page's
+   own reply. These are all `pages_manage_engagement` calls, and more logged calls do no
+   harm.
+5. Same for the Instagram account: read, **Reply**, **Hide/Unhide**
+   (**= `instagram_manage_comments`**).
+6. Wait. Check **App Review → Permissions and Features** ("API calls" column shows a
    green check) or the use case's successful-call count, for all three permissions.
 
 ### 3.4 Submit
@@ -199,11 +213,15 @@ comment shown **on the Page itself**.
 | 3 | Sidebar → **Comments** → **1. Page or account**: click the Page (name + picture visible) | "Step 1: the admin selects their Facebook Page. The Page's identity stays visible." |
 | 4 | **2. Post**: click a post → **3. Comments** loads | "`pages_read_user_content`: the Page's comments are retrieved live from Facebook and shown with the commenter's name, text and time, labeled with the Page." |
 | 5 | **Reply** → type → **Reply as ‹Page›** → reply appears with a **Page** badge | "`pages_manage_engagement`: the admin publishes a reply as the Page." |
-| 6 | Click **Open ↗** → facebook.com post shows the reply | "The reply is now live on the Facebook Page." |
-| 7 | **Content Studio → Compose** → publish a photo to the test Instagram account (≈20 s; see note) | "Publishing a post to the connected Instagram account." |
-| 8 | Comments → select the **Instagram** account → that post → comments → **Reply** → **Open ↗** on instagram.com | "`instagram_manage_comments`: reading comments on the Instagram post and replying as the account; the reply is live on Instagram." |
+| 6 | On the Page's reply click **Edit** → change the text → **Save edit** | "`pages_manage_engagement`: the admin edits the Page's own comment." |
+| 7 | On the user's comment click **Like** (turns to **Liked**), then **Hide** (a **Hidden** badge appears) and **Unhide** | "`pages_manage_engagement`: the Page likes a comment, and hides / unhides a comment to moderate the conversation." |
+| 8 | Click **Open ↗** → facebook.com post shows the reply, the edit and the like | "The reply, edit and like are live on the Facebook Page." |
+| 9 | Back in PostAutomation: **Delete** on the Page's reply → confirm | "`pages_manage_engagement`: the admin deletes a comment (after confirming)." |
+| 10 | **Content Studio → Compose** → publish a photo to the test Instagram account (≈20 s; see note) | "Publishing a post to the connected Instagram account." |
+| 11 | Comments → select the **Instagram** account → that post → comments (commenter @usernames visible) → **Reply** | "`instagram_manage_comments`: reading comments on the Instagram post (with usernames) and replying as the account." |
+| 12 | **Hide** then **Unhide** a comment; **Delete** a test comment → confirm; **Open ↗** on instagram.com | "`instagram_manage_comments`: hiding, unhiding and deleting comments on the account's own media. The result is live on Instagram." |
 
-Note on step 7: the "What to include in App Review" cell for
+Note on step 10: the "What to include in App Review" cell for
 `instagram_manage_comments` in Meta's Permissions Reference was copied from
 `instagram_content_publish` and asks for a photo to be published. Showing that costs
 20 seconds and satisfies the literal checklist. The **usage description must still
@@ -232,21 +250,30 @@ rejection.
 > published through PostAutomation.
 
 **`pages_manage_engagement`**
-> From the same Comments inbox, the Page admin can reply publicly, as their Page, to a
-> specific comment on the Page's post. When the admin types a reply and clicks
-> "Reply as ‹Page›", we call POST /{comment-id}/comments with the Page access token and
-> the text the admin wrote. We only publish text the admin typed, only on the comment
-> they chose, and only when they click the button. We never post automatically, and we
-> do not like, edit, hide or delete comments.
+> From the same Comments inbox, the Page admin engages with and moderates the
+> conversation on their Page's posts, acting as the Page. They can:
+> - reply to a comment (POST /{comment-id}/comments);
+> - edit or delete the Page's own reply (POST /{comment-id} with message, DELETE /{comment-id});
+> - like or unlike a comment as the Page (POST/DELETE /{comment-id}/likes);
+> - hide, unhide or delete an abusive or spam comment (POST /{comment-id} with is_hidden,
+>   DELETE /{comment-id}).
+>
+> Every action happens only when the admin clicks the button for that specific comment,
+> uses the Page access token, and publishes only text the admin typed. Deleting asks for
+> confirmation first. We never reply, like or moderate automatically.
 
 **`instagram_manage_comments`**
 > PostAutomation publishes to Instagram professional accounts connected through a
-> Facebook Page. Our Comments inbox lets the account owner read the comments on the
-> posts and reels they published through PostAutomation (GET /{ig-media-id}/comments,
-> including the commenter's username and existing replies), and reply to a comment as
-> their Instagram account (POST /{ig-comment-id}/replies) when they click
-> "Reply as ‹account›". Everything happens only on the user's action. We do not send
-> automated replies, and we do not hide or delete comments.
+> Facebook Page. Our Comments inbox lets the account owner manage the comments on the
+> posts and reels they published through PostAutomation:
+> - read them, including the commenter's username and existing replies
+>   (GET /{ig-media-id}/comments);
+> - reply as their Instagram account (POST /{ig-comment-id}/replies);
+> - hide or unhide a comment (POST /{ig-comment-id} with hide);
+> - delete a comment on their own media (DELETE /{ig-comment-id}).
+>
+> Everything happens only when the user clicks the button for that comment. Deleting asks
+> for confirmation first. We never reply or moderate automatically.
 > *(App A only, add:)* Our June 2026 request for this permission was correctly rejected:
 > at the time the app only displayed comment counts. The read-and-reply feature shown in
 > the screencast now uses it.
@@ -273,7 +300,11 @@ rejection.
 > 5. Click **Reply** under a comment, type a message, and click **Reply as ‹Page›**.
 >    The reply appears in the thread with a "Page" badge. Click **Open ↗** to see it
 >    on Facebook — `pages_manage_engagement`.
-> 6. Repeat steps 3–5 with the Instagram account — `instagram_manage_comments`.
+> 6. Still on Facebook: click **Edit** on the Page's reply and save a change; click
+>    **Like** on the user's comment; click **Hide**, then **Unhide**; click **Delete** on
+>    the Page's reply and confirm — all `pages_manage_engagement`.
+> 7. Repeat with the Instagram account: read (usernames shown), **Reply**,
+>    **Hide/Unhide**, **Delete** — `instagram_manage_comments`.
 >
 > If a post has no comments yet, please add one from any Facebook/Instagram account
 > (use **Open ↗** to reach the post), then click **Refresh** in PostAutomation. To test
@@ -294,9 +325,13 @@ rejection.
 
 | Message in Comments | Meaning | Fix |
 |---|---|---|
-| "…hasn't granted comment access yet. Reconnect…" (FB) / "…hasn't been granted comment-reply permission yet…" (IG) | The token lacks the permission: either not reconnected since the scope was added, or Meta hasn't approved it for non-role users yet | Reconnect (Edit settings, keep the Page ticked); if it still fails, it's pending approval |
+| Amber **Reconnect** badge on an account / amber banner above its comments naming a permission (buttons disabled; IG names read "Instagram user (name hidden)") | PostAutomation read the channel's GRANTED scopes (recorded at connect, or checked once on first open) and the write permission isn't among them | Reconnect with Edit settings; the banner disappears |
+| "…hasn't granted comment access yet. Reconnect…" (FB) / "…hasn't been granted comment permission yet (instagram_manage_comments)…" (IG) | The token lacks the permission: either not reconnected since the scope was added, or Meta hasn't approved it for non-role users yet | Reconnect (Edit settings, keep the Page ticked); if it still fails, it's pending approval |
 | "Facebook rejected this Page's connection…" | `#190` — dead token or lost Page role | Reconnect the channel |
 | "…temporarily limiting activity…" | Throttle / `#368` (too many replies too fast) | Wait a few minutes |
 | "Reply not confirmed — it may already be posted" (toast) + amber note in the reply box, button reads **Send again anyway** | Outcome unknown: a timeout, a 5xx, Meta's `is_transient`/code 2, or our own request dropping mid-flight. The reply may be live | **Check the thread (it refreshes itself) or the post first**; only then send again |
 | "There's a lot of comment activity on this Page right now…" | Our per-Page ceiling (120 reads / 30 replies per minute across all workspaces sharing the Page) | Wait a minute |
-| "That comment no longer exists…" | `#100/33` — deleted in the meantime | Refresh |
+| "That comment no longer exists…" | `#100/33` on a comment — deleted in the meantime | Refresh |
+| "This post is no longer available on Facebook/Instagram…" | The POST itself was deleted (or can't be loaded) | Nothing to do in PostAutomation |
+| "That comment doesn't belong to this post…" | Safety check: a write may only touch comments on the post being viewed | Refresh; open the right post |
+| "Change not confirmed — refreshing…" (toast) | A hide/delete/like/edit didn't confirm (timeout/5xx); it's idempotent | Look at the refreshed thread |
