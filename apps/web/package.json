@@ -14,12 +14,14 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1008.0",
     "@hookform/resolvers": "^3.9.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "@postautomation/ai": "workspace:*",
     "@postautomation/api": "workspace:*",
     "@postautomation/auth": "workspace:*",
     "@postautomation/billing": "workspace:*",
     "@postautomation/db": "workspace:*",
     "@postautomation/social": "workspace:*",
+    "@postautomation/super-text": "workspace:*",
     "@radix-ui/react-avatar": "^1.1.0",
     "@radix-ui/react-dialog": "^1.1.0",
     "@radix-ui/react-dropdown-menu": "^2.1.0",
@@ -59,8 +61,7 @@
     "superjson": "^2.2.1",
     "tailwind-merge": "^2.6.0",
     "tailwindcss": "^3.4.0",
-    "zod": "^3.24.0",
-    "@postautomation/super-text": "workspace:*"
+    "zod": "^3.24.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0",
