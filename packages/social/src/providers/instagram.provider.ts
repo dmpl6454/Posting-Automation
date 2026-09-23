@@ -9,8 +9,13 @@ import {
   COMMENT_OBJECT_GONE_MESSAGE,
   COMMENT_LIST_FAILED_MESSAGE,
   COMMENT_REPLY_FAILED_MESSAGE,
+  COMMENT_REPLY_UNCONFIRMED_MESSAGE,
+  IG_COMMENT_FIELDS,
+  IG_COMMENT_FIELDS_MINIMAL,
   type InstagramCommentPage,
+  type InstagramOwnAccount,
 } from "../utils/instagram-comments";
+import { isGraphFieldError } from "../utils/social-comments";
 import {
   isStoryFormat,
   isStoryModePost,
@@ -1649,26 +1654,21 @@ export class InstagramProvider extends SocialProvider {
   async getMediaComments(
     tokens: OAuthTokens,
     mediaId: string,
-    after?: string
+    after?: string,
+    own?: InstagramOwnAccount
   ): Promise<InstagramCommentPage> {
-    const params = new URLSearchParams({
-      fields: "id,text,timestamp,username,like_count,hidden",
-      access_token: tokens.accessToken,
-    });
-    if (after) params.set("after", after);
+    let { res, data } = await this.fetchMediaCommentsPage(tokens, mediaId, IG_COMMENT_FIELDS, after);
 
-    // encodeURIComponent on every interpolated PATH segment — see
-    // GRAPH_OBJECT_ID_RE. mediaId is DB-derived today, but encoding here means a
-    // future caller cannot turn this into the path-injection the reply endpoint
-    // was vulnerable to.
-    const res = await fetchT(
-      `${this.graphBaseUrl}/${this.apiVersion}/${encodeURIComponent(mediaId)}/comments?${params.toString()}`
-    );
-    // ⚠️ `.catch(() => null)` like every sibling Graph call in this file: a
-    // proxy's HTML 502/504 would otherwise throw a raw SyntaxError PAST both
-    // classifiers below (the documented failure class from the 2026-08-18
-    // incident — "an unreadable body is indeterminate").
-    const data: any = await res.json().catch(() => null);
+    // Two-rung ladder — see FacebookProvider.getPostComments. Graph does not
+    // validate field names on an empty edge, so a renamed field surfaces only on
+    // the first media that HAS comments; degrade instead of breaking.
+    if (!res.ok && isGraphFieldError(data?.error)) {
+      console.error(
+        `[Instagram] comment field rejected — retrying with the minimal field set. Update IG_COMMENT_FIELDS:`,
+        String(data?.error?.message ?? "")
+      );
+      ({ res, data } = await this.fetchMediaCommentsPage(tokens, mediaId, IG_COMMENT_FIELDS_MINIMAL, after));
+    }
 
     if (!res.ok) {
       if (isCommentPermissionDeniedError(data?.error)) {
@@ -1695,7 +1695,39 @@ export class InstagramProvider extends SocialProvider {
       throw new Error(COMMENT_LIST_FAILED_MESSAGE);
     }
 
-    return parseCommentsPage(data);
+    return parseCommentsPage(data, own);
+  }
+
+  private async fetchMediaCommentsPage(
+    tokens: OAuthTokens,
+    mediaId: string,
+    fields: string,
+    after?: string
+  ): Promise<{ res: Response; data: any }> {
+    const params = new URLSearchParams({ fields, access_token: tokens.accessToken });
+    if (after) params.set("after", after);
+
+    // encodeURIComponent on every interpolated PATH segment — see
+    // GRAPH_OBJECT_ID_RE. mediaId is DB-derived today, but encoding here means a
+    // future caller cannot turn this into the path-injection the reply endpoint
+    // was vulnerable to.
+    let res: Response;
+    try {
+      res = await fetchT(
+        `${this.graphBaseUrl}/${this.apiVersion}/${encodeURIComponent(mediaId)}/comments?${params.toString()}`
+      );
+    } catch (err: any) {
+      // Timeout / network failure: a read, so a plain "try again" is correct —
+      // but never let the raw AbortError text reach the UI.
+      console.error(`[Instagram] comment list request did not complete:`, err?.message ?? err);
+      throw new Error(COMMENT_LIST_FAILED_MESSAGE);
+    }
+    // ⚠️ `.catch(() => null)` like every sibling Graph call in this file: a
+    // proxy's HTML 502/504 would otherwise throw a raw SyntaxError PAST the
+    // classifiers (the documented failure class from the 2026-08-18 incident —
+    // "an unreadable body is indeterminate").
+    const data: any = await res.json().catch(() => null);
+    return { res, data };
   }
 
   /**
@@ -1713,14 +1745,31 @@ export class InstagramProvider extends SocialProvider {
     // and raw interpolation made this an arbitrary authenticated Graph POST.
     // The router's GRAPH_OBJECT_ID_RE check is the first layer; this is the
     // second, so the provider is safe even if called from somewhere else.
-    const res = await fetchT(`${this.graphBaseUrl}/${this.apiVersion}/${encodeURIComponent(commentId)}/replies`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, access_token: tokens.accessToken }),
-    });
+    let res: Response;
+    try {
+      res = await fetchT(`${this.graphBaseUrl}/${this.apiVersion}/${encodeURIComponent(commentId)}/replies`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message, access_token: tokens.accessToken }),
+      });
+    } catch (err: any) {
+      // Timeout / connection reset AFTER dispatch: Instagram may have processed
+      // the reply. "Failed" would invite a retry that double-posts it.
+      console.error(`[Instagram] comment reply request did not complete:`, err?.message ?? err);
+      throw new Error(COMMENT_REPLY_UNCONFIRMED_MESSAGE);
+    }
     const data: any = await res.json().catch(() => null);
 
     if (!res.ok) {
+      // A 5xx is indeterminate whatever the body says (the 2026-08-18 lesson) —
+      // the reply may exist. Only a 4xx is a definite refusal.
+      if (res.status >= 500) {
+        console.error(
+          `[Instagram] comment reply outcome unknown (HTTP ${res.status}):`,
+          data === null ? "unreadable response body" : JSON.stringify(data)
+        );
+        throw new Error(COMMENT_REPLY_UNCONFIRMED_MESSAGE);
+      }
       if (isCommentPermissionDeniedError(data?.error)) {
         throw new Error(COMMENT_PERMISSION_DENIED_MESSAGE);
       }
@@ -1740,9 +1789,7 @@ export class InstagramProvider extends SocialProvider {
     // AmbiguousPublishError on the publish path, one severity tier down. Say
     // plainly that it may already be live instead.
     if (data === null || !data.id) {
-      throw new Error(
-        "Instagram accepted the reply but did not confirm it. Refresh the comments before replying again — it may already be posted."
-      );
+      throw new Error(COMMENT_REPLY_UNCONFIRMED_MESSAGE);
     }
 
     return { id: data.id };

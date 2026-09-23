@@ -56,6 +56,23 @@ import {
   isFbMediaViewEnabled,
 } from "../utils/fb-insight-metrics";
 import { scrapeFacebookReelEngagement } from "@postautomation/social-scrapers";
+import {
+  FB_COMMENT_FIELDS,
+  FB_COMMENT_FIELDS_MINIMAL,
+  FB_COMMENT_PAGE_SIZE,
+  FB_COMMENT_LIST_FAILED_MESSAGE,
+  FB_COMMENT_PERMISSION_DENIED_MESSAGE,
+  FB_COMMENT_REPLY_FAILED_MESSAGE,
+  FB_COMMENT_REPLY_UNCONFIRMED_MESSAGE,
+  FB_COMMENT_THROTTLED_MESSAGE,
+  FB_COMMENT_TOKEN_INVALID_MESSAGE,
+  isFbCommentPermissionError,
+  isFbCommentThrottleError,
+  isFbTokenInvalidError,
+  parseFacebookCommentsPage,
+} from "../utils/facebook-comments";
+import { COMMENT_OBJECT_GONE_MESSAGE, isCommentObjectGoneError } from "../utils/instagram-comments";
+import { isGraphFieldError, type SocialCommentPage } from "../utils/social-comments";
 
 /**
  * Videos larger than this are published via Graph's `file_url` remote-pull
@@ -110,6 +127,22 @@ const CONNECT_GRAPH_OPTS: GraphFetchOpts = {
   maxSleepMs: 5_000,
   retries: 1,
   timeoutMs: 25_000,
+};
+
+/**
+ * Interactive comment calls (web process, user-triggered). Short sleeps and a
+ * hard timeout like the connect path; the READ may retry once on a throttle,
+ * the WRITE never retries automatically (creating a reply is not idempotent).
+ */
+const INTERACTIVE_READ_GRAPH_OPTS: GraphFetchOpts = {
+  maxSleepMs: 3_000,
+  retries: 1,
+  timeoutMs: 20_000,
+};
+const INTERACTIVE_WRITE_GRAPH_OPTS: GraphFetchOpts = {
+  maxSleepMs: 3_000,
+  retries: 0,
+  timeoutMs: 20_000,
 };
 
 /** Max pagination pages fetched during connect (~500 Pages at limit=25). */
@@ -1848,5 +1881,160 @@ export class FacebookProvider extends SocialProvider {
       url: `https://www.facebook.com/${feedData.id.replace("_", "/posts/")}`,
       metadata: feedData,
     };
+  }
+
+  // ── Page comments (2026-09-23) ─────────────────────────────────────────
+  // Interactive, user-triggered calls served by the WEB process — bounded like
+  // the connect path so a hung/throttled Graph API fails fast instead of
+  // holding the request until nginx 504s. See facebook-comments.ts for the
+  // permission each call needs.
+
+  /**
+   * First (or `after`) page of TOP-LEVEL comments on a Page post, newest
+   * first, each with its first page of replies embedded — one round-trip.
+   *
+   * `objectId` is `PostTarget.publishedId`: a composite `{page}_{post}` for
+   * feed/photo posts, a bare Video-node id for videos and reels. Both nodes
+   * carry the same `/comments` edge.
+   */
+  async getPostComments(
+    tokens: OAuthTokens,
+    objectId: string,
+    pageId: string | null,
+    after?: string
+  ): Promise<SocialCommentPage> {
+    let { res, data } = await this.fetchCommentsPage(tokens, objectId, pageId, FB_COMMENT_FIELDS, after);
+
+    // Two-rung ladder: a renamed/removed field 400s the whole call, and Graph
+    // only notices on a post that HAS comments (it does not validate fields on
+    // an empty edge). Descend once to a known-good set so the thread degrades
+    // instead of breaking — and shout, because this log line is the only signal
+    // that Meta changed the Comment schema.
+    if (!res.ok && isGraphFieldError(data?.error)) {
+      console.error(
+        `[Facebook] comment field rejected — retrying with the minimal field set. Update FB_COMMENT_FIELDS:`,
+        String(data?.error?.message ?? "")
+      );
+      ({ res, data } = await this.fetchCommentsPage(tokens, objectId, pageId, FB_COMMENT_FIELDS_MINIMAL, after));
+    }
+
+    if (!res.ok) throw this.commentError(data, res.status, "list");
+    // An OK response we cannot parse is NOT an empty comment list — rendering
+    // "No comments yet" would be a value the API never reported.
+    if (data === null) {
+      console.error(`[Facebook] comment list returned an unreadable body on HTTP ${res.status}`);
+      throw new Error(FB_COMMENT_LIST_FAILED_MESSAGE);
+    }
+    return parseFacebookCommentsPage(data, pageId);
+  }
+
+  private async fetchCommentsPage(
+    tokens: OAuthTokens,
+    objectId: string,
+    pageId: string | null,
+    fields: string,
+    after?: string
+  ): Promise<{ res: Response; data: any }> {
+    const params = new URLSearchParams({
+      fields,
+      filter: "toplevel",
+      order: "reverse_chronological",
+      summary: "true",
+      limit: String(FB_COMMENT_PAGE_SIZE),
+      access_token: tokens.accessToken,
+    });
+    if (after) params.set("after", after);
+
+    let res: Response;
+    try {
+      // encodeURIComponent on every interpolated PATH segment — see
+      // GRAPH_OBJECT_ID_RE. objectId is DB-derived, but encoding means a future
+      // caller cannot turn this into a path injection.
+      res = await this.graphFetch(
+        `${this.graphBaseUrl}/${this.apiVersion}/${encodeURIComponent(objectId)}/comments?${params.toString()}`,
+        {},
+        pageId ?? undefined,
+        INTERACTIVE_READ_GRAPH_OPTS
+      );
+    } catch (err: any) {
+      console.error(`[Facebook] comment list request did not complete:`, err?.message ?? err);
+      throw new Error(FB_COMMENT_LIST_FAILED_MESSAGE);
+    }
+    const data: any = await res.json().catch(() => null);
+    return { res, data };
+  }
+
+  /**
+   * Reply to a comment AS THE PAGE. Requires `pages_manage_engagement`.
+   *
+   * Creating a reply is NOT idempotent, so every outcome we cannot prove is
+   * reported as "may already be posted" rather than as a failure — a failure
+   * invites the user to retry and post the reply twice (the AmbiguousPublishError
+   * reasoning, one severity tier down). That covers: the request not completing
+   * (timeout/reset — it may have been processed), any 5xx (indeterminate
+   * whatever the body says), and an OK response without an id. No automatic
+   * retry for the same reason (`retries: 0`).
+   */
+  async replyToComment(
+    tokens: OAuthTokens,
+    commentId: string,
+    message: string,
+    pageId?: string | null
+  ): Promise<{ id: string }> {
+    let res: Response;
+    try {
+      // 🔴 encodeURIComponent is LOAD-BEARING: commentId is client-supplied.
+      // The router's GRAPH_OBJECT_ID_RE is the first layer, this the second.
+      res = await this.graphFetch(
+        `${this.graphBaseUrl}/${this.apiVersion}/${encodeURIComponent(commentId)}/comments`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          // Token in the BODY, never the query string.
+          body: JSON.stringify({ message, access_token: tokens.accessToken }),
+        },
+        pageId ?? undefined,
+        INTERACTIVE_WRITE_GRAPH_OPTS
+      );
+    } catch (err: any) {
+      console.error(`[Facebook] comment reply request did not complete:`, err?.message ?? err);
+      throw new Error(FB_COMMENT_REPLY_UNCONFIRMED_MESSAGE);
+    }
+    const data: any = await res.json().catch(() => null);
+
+    if (!res.ok) {
+      if (res.status >= 500) {
+        console.error(
+          `[Facebook] comment reply outcome unknown (HTTP ${res.status}):`,
+          data === null ? "unreadable response body" : JSON.stringify(data)
+        );
+        throw new Error(FB_COMMENT_REPLY_UNCONFIRMED_MESSAGE);
+      }
+      throw this.commentError(data, res.status, "reply");
+    }
+    if (data === null || !data.id) {
+      throw new Error(FB_COMMENT_REPLY_UNCONFIRMED_MESSAGE);
+    }
+    return { id: String(data.id) };
+  }
+
+  /**
+   * Map a failed comment call to an actionable, stable message. The raw Graph
+   * body is LOGGED, never thrown: it would reach the client as a TRPCError
+   * message, and humanizeError does not recognise Graph JSON as technical.
+   * Order matters: #190 (dead token / lost Page role) before the permission
+   * family, so a dead token never reads as "not approved yet".
+   */
+  private commentError(body: any, status: number, op: "list" | "reply"): Error {
+    const err = body?.error;
+    if (isFbTokenInvalidError(err)) return new Error(FB_COMMENT_TOKEN_INVALID_MESSAGE);
+    if (isFbCommentPermissionError(err)) return new Error(FB_COMMENT_PERMISSION_DENIED_MESSAGE);
+    if (isCommentObjectGoneError(err)) return new Error(COMMENT_OBJECT_GONE_MESSAGE);
+    if (isFbCommentThrottleError(err)) return new Error(FB_COMMENT_THROTTLED_MESSAGE);
+    console.error(
+      `[Facebook] comment ${op} failed (HTTP ${status}):`,
+      body === null ? "unreadable response body" : JSON.stringify(body)
+    );
+    return new Error(op === "list" ? FB_COMMENT_LIST_FAILED_MESSAGE : FB_COMMENT_REPLY_FAILED_MESSAGE);
   }
 }

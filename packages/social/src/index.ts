@@ -78,4 +78,14 @@ export {
   isValidGraphObjectId,
   type InstagramComment,
   type InstagramCommentPage,
+  type InstagramOwnAccount,
 } from "./utils/instagram-comments";
+// Facebook Page comments (2026-09-23) — read needs pages_read_user_content,
+// reply needs pages_manage_engagement. See facebook-comments.ts.
+export { FB_COMMENT_MAX_LENGTH } from "./utils/facebook-comments";
+export type {
+  CommentPlatform,
+  SocialComment,
+  SocialCommentAuthor,
+  SocialCommentPage,
+} from "./utils/social-comments";

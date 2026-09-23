@@ -84,3 +84,11 @@ export const aiRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
  * so keep the relay-abuse surface tightly bounded (also audit-logged).
  */
 export const emailReportRateLimiter = createRateLimiter({ windowMs: 60 * 60_000, max: 5 });
+
+/**
+ * 30 per minute — comment replies are PUBLIC posts made as the org's Facebook
+ * Page / Instagram account. A burst of identical replies is exactly what trips
+ * Meta's spam classifier (error #368, "temporarily blocked") on the Page AND
+ * counts against the shared app's standing, so keep a human-paced ceiling.
+ */
+export const commentReplyRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });

@@ -5,6 +5,9 @@ import {
   COMMENT_OBJECT_GONE_MESSAGE,
   COMMENT_LIST_FAILED_MESSAGE,
   COMMENT_REPLY_FAILED_MESSAGE,
+  COMMENT_REPLY_UNCONFIRMED_MESSAGE,
+  IG_COMMENT_FIELDS,
+  IG_COMMENT_FIELDS_MINIMAL,
 } from "../utils/instagram-comments";
 
 /**
@@ -70,14 +73,35 @@ describe("InstagramProvider.getMediaComments", () => {
     expect(calls).toHaveLength(1);
     const url = new URL(calls[0]!.url);
     expect(url.pathname.endsWith("/MEDIA_1/comments")).toBe(true);
-    expect(url.searchParams.get("fields")).toBe("id,text,timestamp,username,like_count,hidden");
+    // Embeds the first page of replies (and each author's id) in the same
+    // round-trip, so the account's own reply shows up right after sending.
+    expect(url.searchParams.get("fields")).toBe(IG_COMMENT_FIELDS);
+    expect(IG_COMMENT_FIELDS).toContain("replies{");
+    expect(IG_COMMENT_FIELDS).toContain("from{id,username}");
     expect(url.searchParams.get("access_token")).toBe("IG_PAGE_TOKEN");
     expect(url.searchParams.get("after")).toBeNull();
     expect(calls[0]!.method).toBe("GET");
-    expect(page).toEqual({
-      comments: [{ id: "c1", text: "hi", timestamp: "t", username: "u", likeCount: 1, hidden: false }],
+    expect(page).toMatchObject({
+      comments: [{ id: "c1", text: "hi", createdAt: "t", author: { username: "u" }, likeCount: 1, hidden: false }],
       nextCursor: "NEXT",
+      totalCount: null,
     });
+  });
+
+  it("descends ONCE to the minimal (2026-09-19) field set when Meta rejects a field name", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    let n = 0;
+    const calls = mockGraph(() =>
+      ++n === 1
+        ? { ok: false, body: { error: { code: 100, message: "(#100) Tried accessing nonexisting field (from) on node type (IGComment)" } } }
+        : { ok: true, body: { data: [{ id: "c1", text: "still here", username: "fan" }] } }
+    );
+    const page = await new InstagramProvider().getMediaComments(tokens, "MEDIA_1");
+    expect(calls).toHaveLength(2);
+    expect(new URL(calls[1]!.url).searchParams.get("fields")).toBe(IG_COMMENT_FIELDS_MINIMAL);
+    expect(page.comments[0]!.text).toBe("still here");
+    expect(spy.mock.calls.flat().join(" ")).toMatch(/field rejected/);
+    spy.mockRestore();
   });
 
   it("forwards the `after` cursor for the next page", async () => {
@@ -136,6 +160,17 @@ describe("InstagramProvider.getMediaComments", () => {
       COMMENT_LIST_FAILED_MESSAGE
     );
     expect(spy.mock.calls.flat().join(" ")).toMatch(/502|unreadable/);
+    spy.mockRestore();
+  });
+
+  it("maps a list request that never completed to the stable list-failed message (no raw AbortError)", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+    }));
+    await expect(new InstagramProvider().getMediaComments(tokens, "MEDIA_1")).rejects.toThrow(
+      COMMENT_LIST_FAILED_MESSAGE
+    );
     spy.mockRestore();
   });
 
@@ -208,13 +243,42 @@ describe("InstagramProvider.replyToComment", () => {
     );
   });
 
-  it("reports a non-JSON error body with its status instead of a raw SyntaxError", async () => {
+  it("reports a non-JSON 4xx error body with its status instead of a raw SyntaxError", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    mockGraph(() => ({ ok: false, status: 504, body: undefined, unparseable: true }) as any);
+    mockGraph(() => ({ ok: false, status: 400, body: undefined, unparseable: true }) as any);
     await expect(new InstagramProvider().replyToComment(tokens, "COMMENT_1", "x")).rejects.toThrow(
       COMMENT_REPLY_FAILED_MESSAGE
     );
-    expect(spy.mock.calls.flat().join(" ")).toMatch(/504|unreadable/);
+    expect(spy.mock.calls.flat().join(" ")).toMatch(/400|unreadable/);
+    spy.mockRestore();
+  });
+
+  it("treats ANY 5xx on reply as outcome-unknown, not failed (changed 2026-09-23)", async () => {
+    // Until 2026-09-23 a 504 read as a plain failure. A 5xx is indeterminate
+    // whatever the body says (CLAUDE.md, 2026-08-18 duplicate-post lessons):
+    // the reply may be live, and "failed" invites a retry that double-posts.
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    for (const status of [500, 502, 504]) {
+      mockGraph(() => ({ ok: false, status, body: undefined, unparseable: true }) as any);
+      await expect(new InstagramProvider().replyToComment(tokens, "COMMENT_1", "x")).rejects.toThrow(
+        COMMENT_REPLY_UNCONFIRMED_MESSAGE
+      );
+    }
+    mockGraph(() => ({ ok: false, status: 500, body: { error: { code: 1, message: "An unknown error occurred" } } }));
+    await expect(new InstagramProvider().replyToComment(tokens, "COMMENT_1", "x")).rejects.toThrow(
+      COMMENT_REPLY_UNCONFIRMED_MESSAGE
+    );
+    spy.mockRestore();
+  });
+
+  it("treats a request that never completed (timeout/reset) as outcome-unknown", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+    }));
+    await expect(new InstagramProvider().replyToComment(tokens, "COMMENT_1", "x")).rejects.toThrow(
+      COMMENT_REPLY_UNCONFIRMED_MESSAGE
+    );
     spy.mockRestore();
   });
 

@@ -8,24 +8,56 @@ import {
 } from "../utils/instagram-comments";
 
 describe("parseCommentsPage", () => {
-  it("maps Graph's snake_case comment rows to the app shape with safe defaults", () => {
+  it("maps Graph's snake_case comment rows to the platform-neutral shape with safe defaults", () => {
     const page = parseCommentsPage({
       data: [
-        { id: "c1", text: "Love this", timestamp: "2026-09-19T10:00:00+0000", username: "fan1", like_count: 3, hidden: false },
+        {
+          id: "c1",
+          text: "Love this",
+          timestamp: "2026-09-19T10:00:00+0000",
+          username: "fan1",
+          like_count: 3,
+          hidden: false,
+          from: { id: "IGSID_1", username: "fan1" },
+        },
         // Sparse row — Meta omits fields it cannot return (e.g. username for a
         // restricted commenter); the UI must never crash on them.
         { id: "c2" },
       ],
     });
     expect(page.comments).toEqual([
-      { id: "c1", text: "Love this", timestamp: "2026-09-19T10:00:00+0000", username: "fan1", likeCount: 3, hidden: false },
-      { id: "c2", text: "", timestamp: "", username: null, likeCount: 0, hidden: false },
+      {
+        id: "c1",
+        text: "Love this",
+        createdAt: "2026-09-19T10:00:00+0000",
+        author: { id: "IGSID_1", name: null, username: "fan1" },
+        likeCount: 3,
+        hidden: false,
+        replyCount: 0,
+        replies: [],
+        isOwn: false,
+        canReply: true,
+        attachmentType: null,
+      },
+      {
+        id: "c2",
+        text: "",
+        createdAt: "",
+        author: { id: null, name: null, username: null },
+        likeCount: 0,
+        hidden: false,
+        replyCount: 0,
+        replies: [],
+        isOwn: false,
+        canReply: true,
+        attachmentType: null,
+      },
     ]);
   });
 
   it("returns an empty page (not a throw) for a media with no comments", () => {
-    expect(parseCommentsPage({ data: [] })).toEqual({ comments: [], nextCursor: null });
-    expect(parseCommentsPage({})).toEqual({ comments: [], nextCursor: null });
+    expect(parseCommentsPage({ data: [] })).toEqual({ comments: [], nextCursor: null, totalCount: null });
+    expect(parseCommentsPage({})).toEqual({ comments: [], nextCursor: null, totalCount: null });
   });
 
   it("surfaces a cursor ONLY when paging.next says another page exists", () => {
@@ -40,6 +72,53 @@ describe("parseCommentsPage", () => {
         paging: { cursors: { after: "AFTER" }, next: "https://graph.facebook.com/next" },
       }).nextCursor
     ).toBe("AFTER");
+  });
+
+  it("nests embedded replies under their comment; a reply is never itself replyable", () => {
+    const page = parseCommentsPage({
+      data: [
+        {
+          id: "c1",
+          text: "When is part 2?",
+          username: "fan1",
+          replies: { data: [{ id: "r1", text: "Tomorrow!", username: "bollywooddaily" }] },
+        },
+      ],
+    });
+    const c = page.comments[0]!;
+    expect(c.canReply).toBe(true);
+    expect(c.replyCount).toBe(1);
+    expect(c.replies).toHaveLength(1);
+    expect(c.replies[0]).toMatchObject({ id: "r1", text: "Tomorrow!", canReply: false, replies: [] });
+  });
+
+  it("flags the connected account's OWN replies — by IG user id, or by handle (case-insensitive)", () => {
+    const page = parseCommentsPage(
+      {
+        data: [
+          {
+            id: "c1",
+            username: "fan1",
+            replies: {
+              data: [
+                { id: "r-by-id", username: "renamed", from: { id: "IG_USER" } },
+                { id: "r-by-handle", username: "BollywoodDaily" },
+                { id: "r-other", username: "fan2", from: { id: "IGSID_2" } },
+              ],
+            },
+          },
+        ],
+      },
+      { igUserId: "IG_USER", username: "@bollywooddaily" }
+    );
+    const flags = Object.fromEntries(page.comments[0]!.replies.map((r) => [r.id, r.isOwn]));
+    expect(flags).toEqual({ "r-by-id": true, "r-by-handle": true, "r-other": false });
+    expect(page.comments[0]!.isOwn).toBe(false);
+  });
+
+  it("never flags anything as own when the account identity is unknown", () => {
+    const page = parseCommentsPage({ data: [{ id: "c1", username: "anyone" }] });
+    expect(page.comments[0]!.isOwn).toBe(false);
   });
 });
 
