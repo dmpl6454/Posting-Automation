@@ -6,12 +6,13 @@ the permissions approved on **both** Meta apps.
 | | App ID | Who uses it | Test workspace |
 |---|---|---|---|
 | **App B — "Post Automation"** | `259982148841906` | only orgs pinned to it (today: **Tabish's Workspace** — 73 FB + 48 IG channels) | `tabish@dashmani.com` |
-| **App A — "Post Automation 2"** | `298449321694397` | everyone else (default, `metaAppId = NULL`) | a **new** PostAutomation account (defaults to App A) |
+| **App A — "Post Automation 2"** | `298449321694397` | everyone else (default, `metaAppId = NULL`) | `admin@dashmani.com` → **admin's Workspace** (verified on prod: `metaAppId` NULL = App A, not a super-admin, password login works) |
 
 Every claim below about Meta's rules was fetched from developers.facebook.com on
 2026-09-23 and checked by a second, independent read (research workflow
 `wf_cbe12111-213`). Claims about *our* tokens come from a read-only prod probe the
-same day.
+same day. The Instagram **like** permission was added later the same day (research
+workflow `wf_5bc90cb9-d84`, plus read-only prod probes — see §1).
 
 ---
 
@@ -22,6 +23,7 @@ same day.
 | `pages_read_user_content` | **Read** the comments people leave on the Page's posts (text, commenter name, replies) | `GET /{post-id}/comments` (Page token) | ❌ Rejected 2026-09-12 → **Request again** | ✅ Approved |
 | `pages_manage_engagement` | **Reply** as the Page, **edit/delete** the Page's own reply, **like** a comment, **hide/unhide/delete** a comment | `POST /{comment-id}/comments`, `POST /{comment-id}` (`message` / `is_hidden`), `DELETE /{comment-id}`, `POST/DELETE /{comment-id}/likes` (Page token) | 🆕 add + test call + submit | 🆕 add + test call + submit |
 | `instagram_manage_comments` | **Read** comments (with commenter usernames), **reply**, **hide/unhide**, **delete** on the IG professional account's media | `GET /{ig-media-id}/comments`, `POST /{ig-comment-id}/replies`, `POST /{ig-comment-id}` (`hide`), `DELETE /{ig-comment-id}` | 🆕 add + test call + submit | 🔁 rejected 2026-06 ("Disallowed Use Case" — no feature then) → **request again** |
+| `instagram_manage_engagement` (new permission, Meta changelog 2026-04-22) | **Like / unlike** a comment or reply, and **like / unlike the post itself**, as the Instagram account | `POST /{ig-user-id}/likes` and `DELETE /{ig-user-id}/likes` with `comment_id` or `media_id` (user token) | 🆕 add + test call + submit | 🆕 add + test call + submit |
 
 **Why `pages_manage_engagement` is not enough on its own:** Meta's Permissions
 Reference lists **`pages_read_user_content` and `pages_show_list` as dependencies** of
@@ -33,13 +35,32 @@ in the **same** submission.
 Meta lists `instagram_basic` + `pages_read_engagement` + `pages_show_list` as
 dependencies of `instagram_manage_comments`.
 
+**`instagram_manage_engagement` has different dependencies:** `instagram_basic`,
+**`pages_read_user_content`** and `pages_show_list`. Meta's App Review page says a
+dependency must be included in the same submission. On App A `pages_read_user_content`
+is already approved. On App B it is in this submission anyway. The Instagram connect
+now requests `pages_read_user_content` too, so a person who connects only Instagram
+still grants it.
+
+**Facts about Instagram likes, measured or from Meta's reference:**
+- There is **no way to read** whether the account already liked something. The IG Comment
+  object only has a `like_count`. So PostAutomation shows **Like**, and shows **Liked**
+  only after it liked the comment itself in that session.
+- Liking something already liked "has no effect" (Meta), and returns success. So after
+  each like the app re-reads the real like count instead of adding 1.
+- **Comments written by private accounts cannot be liked**, and stories cannot be liked.
+  Use a comment from a **public** Instagram account for the test call and the screencast.
+- More than 50 like requests in 5 seconds locks the Instagram account out for an hour.
+  PostAutomation caps likes at 10 per 10 seconds per account.
+- Meta refuses a token without the permission with `#100/33 "Authorization Error"`
+  (probed live). The endpoint answers at our Graph version (v18.0).
+
 **Deliberately NOT requested** (requesting unused permissions is itself a rejection reason):
 
 | Permission / feature | Why not |
 |---|---|
 | `pages_manage_metadata` | Only for **webhook** subscriptions (`/{page-id}/subscribed_apps`). We load comments on demand. |
 | `instagram_business_manage_comments` | The **Instagram Login** equivalent. We use Facebook Login, and an app uses one login type or the other. |
-| `instagram_manage_engagement` (new, 2026-04-22) | Only for **liking** media/comments. |
 | `pages_messaging`, `instagram_manage_messages` | Private replies (DMs) — a different feature. |
 | "Page Mentioning" feature | Only for `@[page-id]` mention tags; our replies are plain text. |
 
@@ -89,7 +110,10 @@ a rejection reason.
    `instagram_manage_comments`) redirects normally to login. A deliberately bogus
    scope returns HTTP 500, which shows Meta checks scopes before login. So connecting
    keeps working for everyone. Only app-role accounts are granted the permission until
-   it is approved.
+   it is approved. The final Instagram list, including `pages_read_user_content` and
+   `instagram_manage_engagement`, was re-probed the same way on both apps. Prod data
+   also shows an external account (karankumar) connecting on 2026-07-23 while an
+   unapproved scope (`read_insights`) was in the request.
 
 ---
 
@@ -99,8 +123,10 @@ a rejection reason.
 App B → **Use cases**:
 - **"Manage everything on your Page"** → *Customize* → Permissions → **Add** `pages_manage_engagement`.
   Confirm `pages_read_user_content` is listed. Status becomes *Ready for testing*.
-- The **Instagram** use case (e.g. "Manage messaging & content on Instagram" — the name
-  varies) → *Customize* → **Add** `instagram_manage_comments`.
+- The **Instagram** use case ("Manage messaging and content on Instagram") → *Customize* →
+  **Permissions and features** → **Add** `instagram_manage_comments` **and**
+  `instagram_manage_engagement` (Meta lists the latter as an optional permission of this
+  use case).
 
 If the dashboard still shows the older UI instead, use **App Review → Permissions and
 Features**, search each permission, and click **Request advanced access**. It stays
@@ -115,10 +141,15 @@ permissions are only granted at consent time.
 2. **Channels** → reconnect the test **Facebook Page** → in Facebook's dialog click
    **Edit settings** (not "Continue as…") → tick the Page → approve every permission
    line → Save.
-3. Reconnect the test **Instagram** account the same way.
+3. Reconnect the test **Instagram** account the same way. **If you reconnected before the
+   Instagram like permission was deployed, reconnect Instagram once more** after adding
+   `instagram_manage_engagement` in the dashboard. The consent screen must list a line about
+   likes. Reconnecting never loses posts or history.
 4. **Check it worked:** open **Comments**. A channel still missing a permission shows an
    amber **Reconnect** badge in the account list and an amber banner above its comments
-   naming the missing permission. Both must be gone before you record.
+   naming the missing permission. Both must be gone before you record. If only liking is
+   missing, the Instagram thread shows a grey line *"Liking is off for this account…"*
+   and the Like buttons are disabled. That line must be gone too.
 
 > This is exactly what happened on 2026-09-23: the "Demo Test" Page and
 > `priyanshu123321123` tokens were minted on **2026-09-19**, before the new scopes
@@ -146,13 +177,16 @@ and Meta says logging can take **up to 2 days**.
    harm.
 5. Same for the Instagram account: read, **Reply**, **Hide/Unhide**
    (**= `instagram_manage_comments`**).
-6. Wait. Check **App Review → Permissions and Features** ("API calls" column shows a
-   green check) or the use case's successful-call count, for all three permissions.
+6. On Instagram click **Like** on a comment from a **public** account (it turns into
+   **Liked**), click again to unlike, then click **Like post** in the thread header
+   (**= `instagram_manage_engagement`**).
+7. Wait. Check **App Review → Permissions and Features** ("API calls" column shows a
+   green check) or the use case's successful-call count, for all four permissions.
 
 ### 3.4 Submit
 1. App Review → Requests → the rejected request → **Request again** (or start a new
    request). Include **`pages_read_user_content` + `pages_manage_engagement` +
-   `instagram_manage_comments`** together.
+   `instagram_manage_comments` + `instagram_manage_engagement`** together.
 2. The new review flow asks you to re-certify allowed usage for **all** advanced
    permissions and may include Data Access Renewal questions. Reuse the answers from
    the approved renewal: processor = none, controller = Digital Sukoon Private Limited /
@@ -164,29 +198,30 @@ and Meta says logging can take **up to 2 days**.
 
 ---
 
-## 4. App A — "Post Automation 2" (new request, via a NEW PostAutomation account)
+## 4. App A — "Post Automation 2" (new request, via admin@dashmani.com)
 
-1. **Create a new PostAutomation account** (e.g. `appreview@dashmani.com`). Its
-   personal workspace uses App A by default: a new workspace has **no Meta app
-   override** (`Organization.metaAppId` is NULL), and nothing sets one except a
-   superadmin. The `/admin` UI does not display this. To double-check, ask engineering
-   to run
-   `SELECT name, "metaAppId" FROM "Organization" WHERE name ILIKE '%<new workspace>%';`
-   The result must be NULL.
+1. **Test account: `admin@dashmani.com`** → its only workspace, **admin's Workspace**.
+   Checked on prod 2026-09-23: the workspace has **no Meta app override**
+   (`metaAppId` NULL = App A), the account is **not** a super-admin (a reviewer cannot
+   reach `/admin`), the password works for email login, and the test Page "Demo Test"
+   and `priyanshu123321123` are connected there on App A.
 2. Confirm the Facebook test accounts (demo, priyanshu) have a **role on App A**
    (App A → App roles → Roles).
-3. App A → **Use cases** → add **`pages_manage_engagement`** (Page use case) and
-   **`instagram_manage_comments`** (Instagram use case). `pages_read_user_content`
-   is already approved there.
-4. In the new account: **Channels → Connect Facebook** (Edit settings → tick the test
-   Page → approve) and **Connect Instagram**.
-5. Repeat §3.3 with this account: publish → comment from another profile → read +
-   reply in **Comments** for both platforms. Wait up to 2 days.
+3. App A → **Use cases** → add **`pages_manage_engagement`** (Page use case), and
+   **`instagram_manage_comments`** + **`instagram_manage_engagement`** (Instagram use
+   case). `pages_read_user_content` is already approved there.
+4. In admin's Workspace: **Channels → Connect Instagram** again (Edit settings → approve
+   every line) so the token includes the like permission. Facebook was already
+   reconnected with the comment permissions.
+5. Repeat §3.3 with this account. The comment calls are already logged (audit log shows
+   hide/unhide/reply on Instagram and like/reply on Facebook at 09:00–09:01 UTC on
+   2026-09-23). Only the **Instagram like** calls are new. Wait up to 2 days.
 6. App Review → new request with **`pages_manage_engagement` +
-   `instagram_manage_comments`**. Descriptions (§6) and reviewer instructions (§7) as
-   below, with the new account's login. In the notes, say plainly that the 2026-06
-   `instagram_manage_comments` rejection was correct at the time (the app only showed
-   comment counts) and that a real read-and-reply feature now exists.
+   `instagram_manage_comments` + `instagram_manage_engagement`**. Descriptions (§6) and
+   reviewer instructions (§7) as below, with `admin@dashmani.com`. In the notes, say
+   plainly that the 2026-06 `instagram_manage_comments` rejection was correct at the
+   time (the app only showed comment counts) and that a real read-and-reply feature now
+   exists.
 
 **Existing App A users are not affected during the wait.** Requesting a
 not-yet-approved permission does not block connect: non-role users are simply not
@@ -209,7 +244,7 @@ comment shown **on the Page itself**.
 |---|---|---|
 | 0 | postautomation.co.in logged out → log in with the test account | "PostAutomation — social media management web app. Logging in." |
 | 1 | Channels → **Connect Facebook** → Facebook Login for Business → **Edit settings** → select the Page → permission list → Save | "Facebook Login for Business. The admin selects their Page and grants: read user content on the Page, manage comments on the Page." |
-| 2 | Channels → **Connect Instagram** → same dialog → approve | "The admin grants Instagram comment management for their Instagram professional account." |
+| 2 | Channels → **Connect Instagram** → same dialog → **Edit settings** → permission list (comments **and likes**) → approve | "The admin grants Instagram comment management and likes for their Instagram professional account." |
 | 3 | Sidebar → **Comments** → **1. Page or account**: click the Page (name + picture visible) | "Step 1: the admin selects their Facebook Page. The Page's identity stays visible." |
 | 4 | **2. Post**: click a post → **3. Comments** loads | "`pages_read_user_content`: the Page's comments are retrieved live from Facebook and shown with the commenter's name, text and time, labeled with the Page." |
 | 5 | **Reply** → type → **Reply as ‹Page›** → reply appears with a **Page** badge | "`pages_manage_engagement`: the admin publishes a reply as the Page." |
@@ -220,6 +255,13 @@ comment shown **on the Page itself**.
 | 10 | **Content Studio → Compose** → publish a photo to the test Instagram account (≈20 s; see note) | "Publishing a post to the connected Instagram account." |
 | 11 | Comments → select the **Instagram** account → that post → comments (commenter @usernames visible) → **Reply** | "`instagram_manage_comments`: reading comments on the Instagram post (with usernames) and replying as the account." |
 | 12 | **Hide** then **Unhide** a comment; **Delete** a test comment → confirm; **Open ↗** on instagram.com | "`instagram_manage_comments`: hiding, unhiding and deleting comments on the account's own media. The result is live on Instagram." |
+| 13 | On a comment from a **public** account click **Like** (turns to **Liked**), then click **Liked** to unlike | "`instagram_manage_engagement`: the account likes, then unlikes, a comment on its post." |
+| 14 | In the thread header click **Like post** (turns to **Post liked**); click again to unlike | "`instagram_manage_engagement`: the account likes, then unlikes, the post itself from its feed." |
+| 15 | **Open ↗** on instagram.com — the like on the comment and on the post is visible | "The likes are live on Instagram." |
+
+For step 2 make sure the Instagram consent screen lists the **likes** permission line
+(Meta's first screencast requirement for `instagram_manage_engagement`). Steps 13–14
+cover its other two requirements: a like on **media** and a like on a **comment**.
 
 Note on step 10: the "What to include in App Review" cell for
 `instagram_manage_comments` in Meta's Permissions Reference was copied from
@@ -261,6 +303,19 @@ rejection.
 > Every action happens only when the admin clicks the button for that specific comment,
 > uses the Page access token, and publishes only text the admin typed. Deleting asks for
 > confirmation first. We never reply, like or moderate automatically.
+
+**`instagram_manage_engagement`**
+> From the same Comments inbox, the owner of an Instagram professional account
+> (connected through its Facebook Page) can like the comments people leave on the posts
+> and reels they published through PostAutomation, and like the post itself, acting as
+> their Instagram account:
+> - like or unlike a comment or a reply (POST / DELETE /{ig-user-id}/likes with comment_id);
+> - like or unlike their own post or reel (POST / DELETE /{ig-user-id}/likes with media_id).
+>
+> This lets a business acknowledge its community quickly without leaving the dashboard.
+> Every like happens only when the user clicks **Like** on that specific comment or post.
+> We never like anything automatically, never like content the user did not choose, and
+> never like content outside the posts they published through PostAutomation.
 
 **`instagram_manage_comments`**
 > PostAutomation publishes to Instagram professional accounts connected through a
@@ -305,6 +360,10 @@ rejection.
 >    the Page's reply and confirm — all `pages_manage_engagement`.
 > 7. Repeat with the Instagram account: read (usernames shown), **Reply**,
 >    **Hide/Unhide**, **Delete** — `instagram_manage_comments`.
+> 8. On the Instagram thread: click **Like** under a comment (it turns into **Liked**;
+>    click again to unlike), and click **Like post** in the thread header to like the
+>    post itself — `instagram_manage_engagement`. Instagram does not allow liking a
+>    comment written by a private account, so please use a comment from a public account.
 >
 > If a post has no comments yet, please add one from any Facebook/Instagram account
 > (use **Open ↗** to reach the post), then click **Refresh** in PostAutomation. To test
@@ -335,3 +394,7 @@ rejection.
 | "This post is no longer available on Facebook/Instagram…" | The POST itself was deleted (or can't be loaded) | Nothing to do in PostAutomation |
 | "That comment doesn't belong to this post…" | Safety check: a write may only touch comments on the post being viewed | Refresh; open the right post |
 | "Change not confirmed — refreshing…" (toast) | A hide/delete/like/edit didn't confirm (timeout/5xx); it's idempotent | Look at the refreshed thread |
+| Grey line "Liking is off for this account…" / Like buttons disabled (Instagram) | The channel's grant lacks `instagram_manage_engagement`. Reply/hide/delete still work | Reconnect Instagram with Edit settings; if it persists, Meta hasn't approved likes for that account yet |
+| "…hasn't been granted permission to like (instagram_manage_engagement)…" | Meta refused the like for a missing permission | Same as above |
+| "Instagram refused this like… written by a private account…" | The account HAS the permission, but Instagram doesn't allow liking comments from private accounts | Nothing to fix; like a comment from a public account |
+| "Instagram is limiting likes for this account right now…" / "Slow down a little…" | Meta throttle, or our cap of 10 likes per 10 seconds per account (Meta locks an account for an hour above 50 in 5 s) | Wait a few seconds |

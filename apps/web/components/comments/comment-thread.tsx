@@ -446,19 +446,23 @@ export function CommentThread({
           )}
           {c.canLike &&
             (platform === "INSTAGRAM" ? (
-              // Instagram: gated on its own like permission, and the state is only
+              // Instagram: gated on its own like permission (and, like every other
+              // comment write, on the comment permission — the server proves the
+              // comment is on this post by reading it first). The liked state is only
               // known once this session has liked/unliked (Meta can't be asked).
               <button
                 type="button"
                 className="inline-flex items-center gap-1 font-medium hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
                 title={
-                  likeBlocked
-                    ? likeBlockedTitle
-                    : (c.likedByAccount ?? likedHere[c.id])
-                      ? `Remove ${accountName}'s like`
-                      : `Like as ${accountName}`
+                  writeBlocked
+                    ? blockedTitle
+                    : likeBlocked
+                      ? likeBlockedTitle
+                      : (c.likedByAccount ?? likedHere[c.id])
+                        ? `Remove ${accountName}'s like`
+                        : `Like as ${accountName}`
                 }
-                disabled={likeBlocked || actionBusy(c.id)}
+                disabled={writeBlocked || likeBlocked || actionBusy(c.id)}
                 onClick={() => runAction(c, (c.likedByAccount ?? likedHere[c.id]) ? "unlike" : "like")}
               >
                 <ThumbsUp

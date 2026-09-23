@@ -709,8 +709,10 @@ export const commentRouter = createRouter({
       }
       const igLike = t.platform === "INSTAGRAM" && (input.action === "like" || input.action === "unlike");
       const igUserId = igLike ? requireIgUserId(t) : null;
-      enforcePageBudget(commentPageModerateLimiter, t.platform, t.account.platformId);
+      // Burst check FIRST so a like it refuses does not also spend a slot of the
+      // per-account moderation budget shared with hide/delete.
       if (igLike) enforceInstagramLikeBurst(t.account.platformId);
+      enforcePageBudget(commentPageModerateLimiter, t.platform, t.account.platformId);
       await assertCommentOnTarget(ctx.prisma, t, input.commentId);
 
       let likeCount: number | null | undefined;
@@ -796,8 +798,8 @@ export const commentRouter = createRouter({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Liking the post from here is available for Instagram posts." });
       }
       const igUserId = requireIgUserId(t);
-      enforcePageBudget(commentPageModerateLimiter, t.platform, t.account.platformId);
       enforceInstagramLikeBurst(t.account.platformId);
+      enforcePageBudget(commentPageModerateLimiter, t.platform, t.account.platformId);
 
       const ig = getSocialProvider("INSTAGRAM") as InstagramProvider;
       const action = input.liked ? AUDIT_ACTIONS.POST_LIKED : AUDIT_ACTIONS.POST_UNLIKED;
