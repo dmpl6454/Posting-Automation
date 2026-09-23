@@ -585,7 +585,22 @@ function getDefaultScopes(platform: string): string[] {
     //    stay "—" for external users until this is approved.
     //  - `read_insights`: helps the post_clicks/post_video_views insight VALUES.
     //    Does NOT restore impressions/reach (Meta deleted those metrics).
-    FACEBOOK: ["public_profile", "pages_show_list", "pages_manage_posts", "pages_read_engagement", "pages_read_user_content", "read_insights"],
+    //
+    // Comment scopes (2026-09-23) — back the Comments inbox (comment.router.ts,
+    // facebook.provider.ts getPostComments/replyToComment):
+    //  - `pages_read_user_content` ALSO backs READING the comment thread
+    //    (GET /{post}/comments needs it on a Page token). Approved on the legacy
+    //    app; rejected once on app B for a screencast that only showed counts —
+    //    the Comments page is exactly the "live retrieval of user content" the
+    //    reviewer asked to see.
+    //  - `pages_manage_engagement`: REPLYING as the Page (POST /{comment}/comments).
+    //    Requested on both apps, approved on neither yet — same "requested ≠
+    //    granted" pattern as above: app-role accounts get it on reconnect (which
+    //    satisfies the App Review test-call gate), external users simply aren't
+    //    granted it and see an actionable "not approved yet" message. Do NOT drop
+    //    it without also removing the reply feature (the 2026-06
+    //    instagram_manage_comments "Disallowed Use Case" lesson, reversed).
+    FACEBOOK: ["public_profile", "pages_show_list", "pages_manage_posts", "pages_read_engagement", "pages_read_user_content", "read_insights", "pages_manage_engagement"],
     // `instagram_manage_insights` is REQUIRED (with instagram_basic +
     // pages_read_engagement) to read /{ig-media}/insights on the Facebook-Login
     // path (Meta Media Insights Requirements table). Without it the insights

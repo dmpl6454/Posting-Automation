@@ -2960,70 +2960,105 @@ so the publish precedence `contentOverride ?? contentVariants?.[platform] ?? pos
 - Tests: [caption-overrides.test.ts](packages/api/src/__tests__/caption-overrides.test.ts),
   [caption-overrides-payload.test.ts](apps/web/lib/caption-overrides-payload.test.ts).
 
-## 💬 Instagram comment REPLIES (2026-09-19) — read before touching comment.router / the IG scope list
+## 💬 COMMENTS INBOX — Facebook Pages + Instagram (IG 2026-09-19 #194, FB 2026-09-23) — read before touching comment.router, the comment providers, or the FB/IG scope lists
 
-Reply to comments on posts published through PostAutomation, per Instagram channel, from the post
-detail page ("Show comments" under a PUBLISHED Instagram target → per-comment "Reply"). v1 is
-**on-demand**: `GET /{ig-media}/comments` when the section is opened, `POST /{ig-comment}/replies` to
-reply. No DB model, no webhook — nothing is stored.
+Read and reply to comments on posts published **through PostAutomation**, from the
+`/dashboard/comments` inbox (1. pick the Page/account → 2. pick a post → 3. live thread) and
+from "Show comments" under each PUBLISHED FB/IG target on the post detail page. Both render the
+ONE shared [comment-thread.tsx](apps/web/components/comments/comment-thread.tsx). On-demand
+only: no DB model, no webhook, nothing stored. App Review steps for both Meta apps:
+[docs/META-COMMENTS-APP-REVIEW-RUNBOOK-2026-09-23.md](docs/META-COMMENTS-APP-REVIEW-RUNBOOK-2026-09-23.md).
 
-- **Permission: `instagram_manage_comments` — REQUESTED again, NOT yet Advanced-Access approved.** Meta
-  rejected it 2026-06 ("Disallowed Use Case") because nothing in the app then replied to or moderated
-  comments — only counts were read, which ride on `instagram_basic`. This feature is exactly what was
-  missing. **Do NOT drop the scope again without removing the feature.** Requesting an unapproved
-  scope does not block connect for external users (they just aren't GRANTED it). **App-role accounts
-  (admin/dev/tester) get it on the next reconnect** and can use the feature today — one real
-  list + reply from such an account satisfies Meta's App Review **test-call gate** for the resubmission.
-  External users see the actionable `COMMENT_PERMISSION_DENIED_MESSAGE` until approval.
-- **Files:** pure helpers + messages in [instagram-comments.ts](packages/social/src/utils/instagram-comments.ts)
-  (`parseCommentsPage` — cursor surfaced ONLY when `paging.next` exists; `isCommentPermissionDeniedError`
-  = code 10 **AND** "does not have permission" wording, since code 10 is overloaded;
-  `isCommentObjectGoneError` = the `#100/33` PAIR, never bare #100); provider methods
-  `getMediaComments`/`replyToComment` on `InstagramProvider` (NOT on the abstract class — Meta-only,
-  like FB's `resolveVideoPostId`); [comment.router.ts](packages/api/src/routers/comment.router.ts)
-  (`list`/`reply`, `orgProcedure` — a USER-level action like publishing).
-- **🔴🔴 `commentId` is the ONLY client-supplied value that reaches a Graph URL PATH — it MUST stay
-  validated by `GRAPH_OBJECT_ID_RE` (`/^\d+(_\d+)?$/`) at the router AND `encodeURIComponent`'d at the
-  interpolation site. Do not relax either layer.** Shipped unconstrained on the first cut
-  (`z.string().min(1)` + raw interpolation) and an adversarial review caught it: a commentId of
-  `17841400000000000/media?image_url=…&caption=…&x=` resolves (verified with WHATWG URL) to pathname
-  `/v18.0/17841400000000000/media`, the trailing `/replies` absorbed as a query token — i.e. **any org
-  member could turn `comment.reply` into an arbitrary authenticated Graph POST** (Create Media,
-  `media_publish`, `/{page}/feed`, DELETE via `?method=delete`), bypassing `enforcePlanLimit`,
-  `assertMediaOwned` and the whole `ambiguousAt` duplicate-publish machinery. ⚠️ Blast radius is wider
-  than one account: an INSTAGRAM channel stores the long-lived Facebook **USER** token, so it reaches
-  every Page that consent granted — including Pages backing OTHER orgs' channels. Every other Graph path
-  segment in these providers is DB-derived; this was the only client-supplied one.
-- **A STORY target has no comments edge** — gated in BOTH the router (`format === "STORY"` → actionable
-  BAD_REQUEST) and the UI (the affordance is not rendered). Keys on FORMAT, not story-mode.
-- **⚠️ Never throw raw Graph JSON as the error message.** `humanizeError` does not recognise
-  `{"error":{…}}` as technical, so it renders verbatim in the UI. Unclassified failures log the body
-  server-side and throw `COMMENT_LIST_FAILED_MESSAGE` / `COMMENT_REPLY_FAILED_MESSAGE`.
-- **🔴 DECRYPT GOTCHA applies:** the router does TWO queries — `postTarget.findUnique` (org check via
-  `post.organizationId`, **no `include: { channel }`**) then a DIRECT `channel.findUnique` — because
-  only a direct channel read auto-decrypts `accessToken`. Locked by [comment-router.test.ts](packages/api/src/__tests__/comment-router.test.ts).
-- **Gate is identical on `list` and `reply`** (target must be PUBLISHED with a `publishedId`, channel
-  INSTAGRAM and not disconnected) so `reply` cannot be used to skip `list`'s checks. Reply text
-  `.trim().min(1).max(2200)` (Instagram's ceiling). The token travels in the POST **body**, never the
-  query string. Cross-account safety on `commentId` is Meta's own authorization model (a token can
-  only act on media its granting account owns) — the router scopes WHICH channel's token is used.
-- **Both** methods use `fetchT` (connect-path timeout) — interactive, user-triggered, web-process calls, so
-  an unbounded hang would hold the request until nginx 504s. **Never bare `fetch` here.**
-- **⚠️ `await res.json().catch(() => null)`, never bare `res.json()`** — matches every sibling Graph call in
-  the Meta providers, and is the documented 2026-08-18 lesson ("an unreadable body is indeterminate"): an
-  HTML 502/504 would otherwise throw a raw `SyntaxError` PAST both classifiers. Three distinct outcomes:
-  an unreadable ERROR body reports its HTTP status; an unreadable OK body on **list** throws rather than
-  rendering a fabricated "No comments yet"; an unreadable (or id-less) OK body on **reply** says the reply
-  **may already be posted** — creating a reply is NOT idempotent, so calling it a clean failure would
-  invite a retry that double-posts. Same reasoning as `AmbiguousPublishError`, one severity tier down.
-- **v1 limits:** first page only (cursor API exists, UI has no "load more" yet); top-level comments only;
-  no hide/delete; Instagram only (Facebook Page comments would need `pages_manage_engagement`);
-  no real-time `comments` webhook (the webhook route still logs it as unhandled).
-- Tests: [instagram-comments.test.ts](packages/social/src/__tests__/instagram-comments.test.ts) (10),
-  [instagram-comment-reply.test.ts](packages/social/src/__tests__/instagram-comment-reply.test.ts) (16),
-  [comment-router.test.ts](packages/api/src/__tests__/comment-router.test.ts) (19), + a scope lock in
-  [meta-scopes.test.ts](packages/api/src/__tests__/meta-scopes.test.ts). The 12 guard tests added after
-  the review were each verified FAILING against the pre-fix sources before being kept.
+### Permissions (research workflow wf_cbe12111-213, every claim re-verified against developers.facebook.com)
+
+| | read | reply | App A `298449321694397` (everyone) | App B `259982148841906` (Tabish's Workspace) |
+|---|---|---|---|---|
+| Facebook | `pages_read_user_content` (+ pages_read_engagement, Page token, MODERATE task) | `pages_manage_engagement` | read ✅ approved · reply ⏳ requested | read ❌ rejected 2026-09-12 (screencast showed counts only) · reply ⏳ |
+| Instagram | `instagram_manage_comments` | same | ⏳ requested (rejected 2026-06 when no feature existed) | ⏳ requested |
+
+- **`pages_manage_engagement` lists `pages_read_user_content` as a DEPENDENCY** — submit together.
+  Do NOT drop either scope without removing the feature (the 2026-06 "Disallowed Use Case" lesson).
+- NOT needed (do not request): `pages_manage_metadata` (webhooks only), `instagram_business_manage_comments`
+  (Instagram-Login path), `instagram_manage_engagement` (likes only). Locked in [meta-scopes.test.ts](packages/api/src/__tests__/meta-scopes.test.ts).
+- **Conditional:** Meta's IG comment docs add `ads_management`/`ads_read` when the connecting person's
+  Page role comes via **Business Manager** — per person, unverified in prod. The test-call step settles
+  it; if it bites, adding `ads_read` is a NEW reviewed permission, not a toggle.
+- **Requesting an unapproved scope does not break connect — MEASURED 2026-09-23**: Facebook's live
+  login dialog 302s to login for both apps with `pages_manage_engagement` / `instagram_manage_comments`
+  in the scope list, while a bogus scope returns **HTTP 500** (Meta validates scopes pre-login). Only
+  app-role accounts are GRANTED it until approval.
+- **Existing tokens don't gain new scopes** — measured on prod: App B tokens in Tabish's Workspace hold
+  `pages_read_user_content` but NOT `pages_manage_engagement` / `instagram_manage_comments`; a reconnect
+  is required before the App Review test call. The operator's App A tokens (DASHMANI etc.) were all
+  dead (`190/460`) on 2026-09-23.
+- Test-call gate: one successful call **per permission**, within 30 days of submitting, logged within
+  **up to 2 days** (Meta's figure — not 24h).
+
+### Graph facts established live (read-only prod probes, 2026-09-23)
+
+- **🔴 Graph does NOT validate FIELD names on an EMPTY edge** — a bogus field on a post with zero
+  comments returns HTTP 200. A renamed field therefore surfaces only on the first post that HAS
+  comments (i.e. in front of the App Review reviewer). Hence the **two-rung field ladder** in both
+  readers: on `isGraphFieldError` (`#100` + "nonexisting field"/"tried accessing") retry ONCE with
+  `FB_COMMENT_FIELDS_MINIMAL` / `IG_COMMENT_FIELDS_MINIMAL`, logged loudly. Never descend on `#100/33`.
+- **Graph DOES validate the `order` modifier** (`comments.order(bogus)` → `#100 "order must be one of
+  chronological, reverse_chronological"`). Embedded FB replies are requested
+  `comments.order(reverse_chronological).limit(25)` — the NEWEST 25, so the Page's just-sent reply is
+  visible on a busy comment — and the parser flips them back to oldest-first.
+- FB `publishedId` is a composite `{page}_{post}` or a BARE Video-node id; both nodes carry `/comments`
+  (probe: HTTP 200 on both shapes).
+
+### Invariants — each one a defect a review caught
+
+- **🔴🔴 `commentId` is the ONLY client-supplied value that reaches a Graph URL PATH — `GRAPH_OBJECT_ID_RE`
+  (`/^\d+(_\d+)?$/`) at the router AND `encodeURIComponent` at the interpolation site. Do not relax
+  either layer.** Unconstrained it was an arbitrary authenticated Graph POST primitive (#194 review):
+  `17841400000000000/media?image_url=…&x=` retargets the POST to Create Media on the org's token, and an
+  IG channel stores the FB **user** token (reaches every Page that consent granted).
+- **🔴 Creating a reply is NOT idempotent — an UNKNOWN outcome must never read as "failed".** Providers
+  throw the `*_REPLY_UNCONFIRMED_MESSAGE` ("…may already be posted") for: a request that never completed
+  (timeout/reset), **any 5xx** (whatever the body says), a **4xx carrying `is_transient:true` or code 2**
+  (the 2026-08-18 duplicate-post shape — via `isIndeterminateReplyError`, which delegates to
+  `isIndeterminatePublishError` so throttle-first ordering lives in one place), and an OK body without an id.
+  FB reply uses `graphFetch` with **`retries: 0`** (never auto-retry the POST). The UI classifies failures
+  with [comment-reply-outcome.ts](apps/web/lib/comment-reply-outcome.ts): unknown ⇒ "Reply not confirmed"
+  toast, thread auto-refetch, amber note in the composer, button becomes **"Send again anyway"**. Our own
+  request dying without a tRPC envelope (network, nginx 502/504) is also unknown; a 429 is a refusal.
+- **🔴 DECRYPT GOTCHA:** `resolvePublishedCommentTarget` does TWO queries — `postTarget.findUnique`
+  (org via `post.organizationId`, **no `include: { channel }`**) then a DIRECT `channel.findUnique` — and
+  re-checks `channel.organizationId` (defence in depth: it is the row whose decrypted token gets used).
+  Identical gate on `list` and `reply` (PUBLISHED + publishedId, FB/IG, not STORY, not disconnected).
+- **NULL trap:** the "not a story" filter is `OR: [{ format: null }, { format: { not: "STORY" } }]` —
+  `format: { not: "STORY" }` alone drops every NULL-format (i.e. nearly every) post. Test-locked.
+- **Rate limits:** reply 30/min/user, list 60/min/user (middleware), plus **per-PAGE budgets** keyed
+  `${platform}:${platformId}` across ALL users/orgs (120 reads, 30 replies per minute) — the same Page can
+  be connected in several workspaces, and Meta's quota is per Page and shared with the publish worker.
+  Replies are audit-logged `comment.replied` (who/where/ids, **never the text**).
+- **Error messages are stable and actionable, never raw Graph JSON** (`humanizeError` renders it
+  verbatim). Order matters: `#190` ("reconnect") before the permission family (FB `#10`+wording and
+  `#200–299` incl. `#283`; IG `#10`+"does not have permission"), then `#100/33` — which means the POST is
+  gone on the LIST call (`FB_COMMENT_POST_GONE_MESSAGE` / `COMMENT_MEDIA_GONE_MESSAGE`) and the COMMENT is
+  gone on REPLY — then throttles (`4/17/32/368/613/800xx`).
+- Instagram: only TOP-LEVEL comments are replyable and **never a hidden one** (`canReply` false). IG has
+  no reply total; FB's `comment_count` is the true total (never report fewer than shown). FB
+  `summary.total_count` with `filter=toplevel` counts top-level only and can exceed the listable set —
+  the empty state says so instead of "No comments yet".
+- UI: `<img>` only ever gets an IMAGE url (the posts query never returns a video file as `thumbnailUrl`);
+  the thread header never GUESSES the platform (neutral until known); a failed refresh / "load more" keeps
+  the loaded thread (full-panel error only when nothing loaded); Graph timestamps (`+0000`) go through
+  [graph-time.ts](apps/web/lib/graph-time.ts) (Safari); future times clamp to "just now". Inbox: 3 columns
+  only from `xl`; below that the thread sits under the pickers and scrolls into view on selection.
+- v1 limits: posts published through PostAutomation only (same population as Insights); first page of
+  replies embedded (25); no hide/delete/like; no real-time webhook.
+- Tests: [facebook-comments.test.ts](packages/social/src/__tests__/facebook-comments.test.ts),
+  [facebook-comment-reply.test.ts](packages/social/src/__tests__/facebook-comment-reply.test.ts),
+  [instagram-comments.test.ts](packages/social/src/__tests__/instagram-comments.test.ts),
+  [instagram-comment-reply.test.ts](packages/social/src/__tests__/instagram-comment-reply.test.ts),
+  [comment-router.test.ts](packages/api/src/__tests__/comment-router.test.ts),
+  [comment-reply-rate-limit.test.ts](packages/api/src/__tests__/comment-reply-rate-limit.test.ts),
+  [comment-page-budget.test.ts](packages/api/src/__tests__/comment-page-budget.test.ts),
+  [comment-reply-outcome.test.ts](apps/web/lib/comment-reply-outcome.test.ts),
+  [graph-time.test.ts](apps/web/lib/graph-time.test.ts).
 
 ## ⚠️ NEVER commit a macOS `" 2"` duplicate file — and there is exactly ONE CLAUDE.md
 

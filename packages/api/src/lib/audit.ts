@@ -86,6 +86,10 @@ export const AUDIT_ACTIONS = {
   // Analytics
   ANALYTICS_REPORT_EMAILED: "analytics.report_emailed",
 
+  // Comments — a reply is a PUBLIC post made as the org's Page / IG account,
+  // so record who sent it (never the text itself).
+  COMMENT_REPLIED: "comment.replied",
+
   // User profile / settings
   USER_PROFILE_UPDATED: "user.profile_updated",
   USER_PASSWORD_CHANGED: "user.password_changed",

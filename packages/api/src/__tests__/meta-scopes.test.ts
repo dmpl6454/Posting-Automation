@@ -27,6 +27,23 @@ describe("Meta insights scopes", () => {
     expect(getDefaultScopes("INSTAGRAM")).toContain("instagram_manage_comments");
   });
 
+  it("FACEBOOK includes pages_manage_engagement (required to reply to comments as the Page)", () => {
+    // Added 2026-09-23 with the Comments inbox (comment.router.ts). Meta lists
+    // pages_read_user_content as its DEPENDENCY, so both must stay requested —
+    // do not drop either without also removing the reply feature.
+    const fb = getDefaultScopes("FACEBOOK");
+    expect(fb).toContain("pages_manage_engagement");
+    expect(fb).toContain("pages_read_user_content");
+  });
+
+  it("does not request comment scopes the feature does not use (App Review rejects unused permissions)", () => {
+    // Comments are read/replied on demand — no webhooks — so pages_manage_metadata
+    // is NOT needed, and IG never needs the Facebook-Page comment scopes.
+    expect(getDefaultScopes("FACEBOOK")).not.toContain("pages_manage_metadata");
+    expect(getDefaultScopes("INSTAGRAM")).not.toContain("pages_manage_engagement");
+    expect(getDefaultScopes("INSTAGRAM")).not.toContain("pages_manage_metadata");
+  });
+
   it("keeps the existing publishing scopes intact", () => {
     const fb = getDefaultScopes("FACEBOOK");
     expect(fb).toEqual(expect.arrayContaining(["pages_manage_posts", "pages_read_engagement"]));

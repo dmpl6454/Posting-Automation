@@ -14,19 +14,20 @@
  * permission" App Review test-call gate for a future resubmission.
  */
 
-export interface InstagramComment {
-  id: string;
-  text: string;
-  timestamp: string;
-  username: string | null;
-  likeCount: number;
-  hidden: boolean;
-}
+import {
+  nextCursorFromPaging,
+  safeCount,
+  type SocialComment,
+  type SocialCommentPage,
+} from "./social-comments";
 
-export interface InstagramCommentPage {
-  comments: InstagramComment[];
-  nextCursor: string | null;
-}
+/**
+ * Since 2026-09-23 Instagram comments are returned in the platform-neutral
+ * `SocialComment` shape shared with Facebook (social-comments.ts). The old
+ * names stay as aliases so existing imports keep compiling.
+ */
+export type InstagramComment = SocialComment;
+export type InstagramCommentPage = SocialCommentPage;
 
 export interface MetaErrorLike {
   code?: number | string;
@@ -39,32 +40,89 @@ export interface MetaErrorLike {
  * codebase already relies on for object-not-found elsewhere. */
 const OBJECT_GONE_SUBCODE = 33;
 
+const IG_REPLY_FIELDS = "id,text,timestamp,username,like_count,hidden,from{id,username}";
+
+/**
+ * Fields for GET /{ig-media-id}/comments. `replies{…}` embeds the first page of
+ * replies in the SAME round-trip, which is what lets the UI show the account's
+ * own reply under the comment right after sending it. One unknown field name
+ * 400s the whole call — check the IG Comment reference before adding one.
+ */
+export const IG_COMMENT_FIELDS = `id,text,timestamp,username,like_count,hidden,from{id,username},replies{${IG_REPLY_FIELDS}}`;
+
+/**
+ * Fallback rung used ONLY when Meta rejects a name in IG_COMMENT_FIELDS
+ * (isGraphFieldError) — the original 2026-09-19 field set, so the thread
+ * degrades (no embedded replies / author ids) instead of breaking.
+ */
+export const IG_COMMENT_FIELDS_MINIMAL = "id,text,timestamp,username,like_count,hidden";
+
+interface IgCommentRow {
+  id: string;
+  text?: string;
+  timestamp?: string;
+  username?: string;
+  like_count?: number;
+  hidden?: boolean;
+  from?: { id?: string; username?: string };
+  replies?: { data?: IgCommentRow[] };
+}
+
+export interface InstagramOwnAccount {
+  /** The IG professional account id (Channel.metadata.igUserId / platformId). */
+  igUserId?: string | null;
+  /** The account's handle (Channel.username), compared case-insensitively. */
+  username?: string | null;
+}
+
+function isOwnInstagramComment(row: IgCommentRow, own: InstagramOwnAccount | undefined): boolean {
+  if (!own) return false;
+  if (own.igUserId && row.from?.id && row.from.id === own.igUserId) return true;
+  const handle = (row.username ?? row.from?.username ?? "").toLowerCase();
+  return !!own.username && handle.length > 0 && handle === own.username.replace(/^@/, "").toLowerCase();
+}
+
+function toSocialComment(row: IgCommentRow, own: InstagramOwnAccount | undefined, isReply: boolean): SocialComment {
+  const replies = isReply ? [] : (row.replies?.data ?? []).map((r) => toSocialComment(r, own, true));
+  return {
+    id: row.id,
+    text: row.text ?? "",
+    createdAt: row.timestamp ?? "",
+    author: {
+      id: row.from?.id ?? null,
+      name: null,
+      username: row.username ?? row.from?.username ?? null,
+    },
+    likeCount: safeCount(row.like_count),
+    hidden: row.hidden === true,
+    // Instagram exposes no reply total on a comment — the embedded first page
+    // is all we can honestly report.
+    replyCount: replies.length,
+    replies,
+    isOwn: isOwnInstagramComment(row, own),
+    // Instagram's /replies edge only accepts TOP-LEVEL comments, and refuses a
+    // reply to a HIDDEN comment ("You cannot reply to hidden comments" — IG
+    // Comment Replies reference) — don't offer an affordance that must fail.
+    canReply: !isReply && row.hidden !== true,
+    attachmentType: null,
+  };
+}
+
 /** Graph API shape for GET /{ig-media-id}/comments. */
-export function parseCommentsPage(data: {
-  data?: Array<{
-    id: string;
-    text?: string;
-    timestamp?: string;
-    username?: string;
-    like_count?: number;
-    hidden?: boolean;
-  }>;
-  paging?: { next?: string; cursors?: { after?: string } };
-}): InstagramCommentPage {
-  const comments = (data.data ?? []).map((c) => ({
-    id: c.id,
-    text: c.text ?? "",
-    timestamp: c.timestamp ?? "",
-    username: c.username ?? null,
-    likeCount: c.like_count ?? 0,
-    hidden: c.hidden ?? false,
-  }));
-  // Only surface a cursor when Meta's own `paging.next` says a page actually
-  // follows — `cursors.after` can be present even on the last page for some
-  // Graph edges, and a stray cursor would let the UI request a page that
-  // returns empty forever.
-  const nextCursor = data.paging?.next ? (data.paging.cursors?.after ?? null) : null;
-  return { comments, nextCursor };
+export function parseCommentsPage(
+  data: {
+    data?: IgCommentRow[];
+    paging?: { next?: string; cursors?: { after?: string } };
+  },
+  own?: InstagramOwnAccount
+): InstagramCommentPage {
+  return {
+    comments: (data.data ?? []).map((row) => toSocialComment(row, own, false)),
+    nextCursor: nextCursorFromPaging(data.paging),
+    // Instagram's comments edge has no summary count; the media's own
+    // comments_count is a different (unfiltered) number, so don't borrow it.
+    totalCount: null,
+  };
 }
 
 /**
@@ -100,6 +158,14 @@ export function isCommentObjectGoneError(err: MetaErrorLike | undefined | null):
 
 export const COMMENT_OBJECT_GONE_MESSAGE =
   "That comment no longer exists — it may have been deleted. Refresh and try again.";
+
+/** `#100/33` on the LIST call — the media itself is gone, not a comment. */
+export const COMMENT_MEDIA_GONE_MESSAGE =
+  "This post is no longer available on Instagram — it may have been deleted there.";
+
+/** `#190` — the stored token is dead (password change, session invalidated, lost Page role). */
+export const COMMENT_TOKEN_INVALID_MESSAGE =
+  "Instagram rejected this account's connection. Reconnect the channel on the Channels page, then try again.";
 
 /** Instagram comment text limit (same as a normal IG comment). */
 export const COMMENT_REPLY_MAX_LENGTH = 2200;
@@ -143,3 +209,11 @@ export const COMMENT_LIST_FAILED_MESSAGE =
 
 export const COMMENT_REPLY_FAILED_MESSAGE =
   "Instagram couldn't post that reply right now. Please try again in a moment.";
+
+/**
+ * The reply's outcome is UNKNOWN (request timed out after dispatch, a 5xx, or
+ * an OK response without an id). Creating a reply is not idempotent, so this
+ * must never read as a plain failure — that invites a retry that double-posts.
+ */
+export const COMMENT_REPLY_UNCONFIRMED_MESSAGE =
+  "Instagram accepted the reply but did not confirm it. Refresh the comments before replying again — it may already be posted.";
