@@ -2960,9 +2960,10 @@ so the publish precedence `contentOverride ?? contentVariants?.[platform] ?? pos
 - Tests: [caption-overrides.test.ts](packages/api/src/__tests__/caption-overrides.test.ts),
   [caption-overrides-payload.test.ts](apps/web/lib/caption-overrides-payload.test.ts).
 
-## 💬 COMMENTS INBOX — Facebook Pages + Instagram (IG 2026-09-19 #194, FB 2026-09-23) — read before touching comment.router, the comment providers, or the FB/IG scope lists
+## 💬 COMMENTS INBOX — Facebook Pages + Instagram (IG 2026-09-19 #194, FB 2026-09-23 #199, moderation + granted-scope awareness 2026-09-23) — read before touching comment.router, the comment providers, or the FB/IG scope lists
 
-Read and reply to comments on posts published **through PostAutomation**, from the
+Read, reply to and **moderate** comments (FB: reply · like/unlike · hide/unhide · delete · edit the
+Page's own reply; IG: reply · hide/unhide · delete) on posts published **through PostAutomation**, from the
 `/dashboard/comments` inbox (1. pick the Page/account → 2. pick a post → 3. live thread) and
 from "Show comments" under each PUBLISHED FB/IG target on the post detail page. Both render the
 ONE shared [comment-thread.tsx](apps/web/components/comments/comment-thread.tsx). On-demand
@@ -2971,10 +2972,14 @@ only: no DB model, no webhook, nothing stored. App Review steps for both Meta ap
 
 ### Permissions (research workflow wf_cbe12111-213, every claim re-verified against developers.facebook.com)
 
-| | read | reply | App A `298449321694397` (everyone) | App B `259982148841906` (Tabish's Workspace) |
+| | read | reply + moderate | App A `298449321694397` (everyone) | App B `259982148841906` (Tabish's Workspace) |
 |---|---|---|---|---|
-| Facebook | `pages_read_user_content` (+ pages_read_engagement, Page token, MODERATE task) | `pages_manage_engagement` | read ✅ approved · reply ⏳ requested | read ❌ rejected 2026-09-12 (screencast showed counts only) · reply ⏳ |
-| Instagram | `instagram_manage_comments` | same | ⏳ requested (rejected 2026-06 when no feature existed) | ⏳ requested |
+| Facebook | `pages_read_user_content` (+ pages_read_engagement, Page token, MODERATE task) | `pages_manage_engagement` | read ✅ approved · write ⏳ requested | read ❌ rejected 2026-09-12 (screencast showed counts only) · write ⏳ |
+| Instagram | `instagram_manage_comments` (without it the list works but Meta HIDES `username`) | same | ⏳ requested (rejected 2026-06 when no feature existed) | ⏳ requested |
+
+Graph calls: FB hide `POST /{comment} {is_hidden}`, delete `DELETE /{comment}`, like `POST|DELETE
+/{comment}/likes`, edit `POST /{comment} {message}`; IG hide `POST /{ig-comment} {hide}`, delete
+`DELETE /{ig-comment}`. Liking on IG needs `instagram_manage_engagement` — NOT requested, so no IG like.
 
 - **`pages_manage_engagement` lists `pages_read_user_content` as a DEPENDENCY** — submit together.
   Do NOT drop either scope without removing the feature (the 2026-06 "Disallowed Use Case" lesson).
@@ -2994,6 +2999,32 @@ only: no DB model, no webhook, nothing stored. App Review steps for both Meta ap
 - Test-call gate: one successful call **per permission**, within 30 days of submitting, logged within
   **up to 2 days** (Meta's figure — not 24h).
 
+### 🔴 The 2026-09-23 incident — requested ≠ GRANTED, so the app must KNOW the grant
+
+Owner report: IG reply failed ("Instagram couldn't post that reply"), IG commenters showed as "Instagram
+user", Facebook had no Reply button. Measured on prod: both test channels' tokens were minted
+**2026-09-19**, before the comment scopes were requested — the prod log showed IG answering
+**`(#100) Missing Permission`**, Meta withholds IG `username` without `instagram_manage_comments`, and
+Facebook reports `can_comment=false` to a Page token lacking `pages_manage_engagement` (the UI then hid
+Reply). Fixes, each load-bearing:
+
+- **`Channel.metadata.grantedScopes` (+ `grantedScopesCheckedAt`)** = what `debug_token` says was GRANTED.
+  Written by the OAuth callback (same debug_token call it already made — no extra cost; channel metadata
+  is REPLACED wholesale on reconnect, so it refreshes), by the daily data-access backfill cron, and lazily
+  by `comment.list` (first page) for channels connected earlier — re-read when a "missing" answer is over
+  1h old or any answer over 7 days. **Only from a VALID token** (a dead token reports no scopes; recording
+  that as "granted nothing" would blame a permission for a #190). The lazy write is an **atomic
+  `metadata || patch` jsonb merge via `$executeRaw`** — never a whole-column rewrite (the worker writes
+  `insightsHealth` into the same column concurrently).
+- `commentCapabilities(platform, grantedScopes)` → `known/canRead/canReply/canModerate/namesHidden/missing`.
+  The inbox shows an amber **Reconnect** badge per account + a banner naming the missing scope, keeps the
+  actions VISIBLE but disabled (with the reason), and labels IG names "(name hidden)". Unknown ⇒ nothing
+  guessed.
+- `(#100) Missing Permission` is a permission error — **matched EXACTLY with subcode 33 excluded**:
+  Meta's standard `#100/33` text reads "…cannot be loaded due to missing permission**s**…", and a loose
+  `/missing permission/` turned every deleted post/comment into a fake permission problem (review catch).
+- A permission refusal re-reads the grant (incl. from the IG ownership lookup) so the banner catches up.
+
 ### Graph facts established live (read-only prod probes, 2026-09-23)
 
 - **🔴 Graph does NOT validate FIELD names on an EMPTY edge** — a bogus field on a post with zero
@@ -3006,7 +3037,12 @@ only: no DB model, no webhook, nothing stored. App Review steps for both Meta ap
   `comments.order(reverse_chronological).limit(25)` — the NEWEST 25, so the Page's just-sent reply is
   visible on a busy comment — and the parser flips them back to oldest-first.
 - FB `publishedId` is a composite `{page}_{post}` or a BARE Video-node id; both nodes carry `/comments`
-  (probe: HTTP 200 on both shapes).
+  (probe: HTTP 200 on both shapes). A DELETED post answers `(#100) Tried accessing nonexisting field
+  (comments)` — mapped to "post no longer available", never sent down the field ladder.
+- **FB comment ids are `{postObjectId}_{commentId}`** where postObjectId = the 2nd half of the post's
+  `{pageId}_{postId}` (live: post `1200847766436751_122136671235340772` → comment
+  `122136671235340772_1452846363362337`); replies share the prefix. A Page POST id always starts with the
+  PAGE id.
 
 ### Invariants — each one a defect a review caught
 
@@ -3024,16 +3060,32 @@ only: no DB model, no webhook, nothing stored. App Review steps for both Meta ap
   with [comment-reply-outcome.ts](apps/web/lib/comment-reply-outcome.ts): unknown ⇒ "Reply not confirmed"
   toast, thread auto-refetch, amber note in the composer, button becomes **"Send again anyway"**. Our own
   request dying without a tRPC envelope (network, nginx 502/504) is also unknown; a 429 is a refusal.
+- **🔴🔴 Every WRITE must prove the comment is ON THE TARGET POST (`assertCommentOnTarget`).**
+  - **Facebook:** the Page token limits damage to the Page, NOT to comments — the id-shape regex also
+    accepts a Page post id or a bare photo/video id, so `DELETE /{id}` / `POST /{id} {message}` could have
+    deleted or rewritten ANY live Page post, including other workspaces' posts on a shared Page (review
+    catch, 2026-09-23). Rule: comment id must be composite, must not equal the post or start with
+    `${pageId}_`, and its prefix must be the post's object id (or, for a video post, the video id or its
+    feed-post id — `metadata.resolvedPostId`, else `resolveVideoPostId` once). Applies to reply too.
+  - **Instagram:** an IG channel stores the Facebook USER token, which reaches every IG account that
+    consent granted (other workspaces' included) — so writes first read `GET /{comment}?fields=media{id}`
+    and require it to equal the target's media id.
+- Moderation actions are idempotent: an unknown outcome → "Change not confirmed — refreshing"; confirmed
+  outcomes PATCH the cached pages (`setInfiniteData`) instead of re-reading every page (each read spends the
+  Page's budget). Busy state is tracked per comment id (one shared mutation's `variables` follows only the
+  latest call). Delete sits behind a confirm dialog. Unconfirmed reply/moderation outcomes are STILL
+  audit-logged with `outcome: "unconfirmed"` — they may have happened.
 - **🔴 DECRYPT GOTCHA:** `resolvePublishedCommentTarget` does TWO queries — `postTarget.findUnique`
   (org via `post.organizationId`, **no `include: { channel }`**) then a DIRECT `channel.findUnique` — and
   re-checks `channel.organizationId` (defence in depth: it is the row whose decrypted token gets used).
   Identical gate on `list` and `reply` (PUBLISHED + publishedId, FB/IG, not STORY, not disconnected).
 - **NULL trap:** the "not a story" filter is `OR: [{ format: null }, { format: { not: "STORY" } }]` —
   `format: { not: "STORY" }` alone drops every NULL-format (i.e. nearly every) post. Test-locked.
-- **Rate limits:** reply 30/min/user, list 60/min/user (middleware), plus **per-PAGE budgets** keyed
-  `${platform}:${platformId}` across ALL users/orgs (120 reads, 30 replies per minute) — the same Page can
-  be connected in several workspaces, and Meta's quota is per Page and shared with the publish worker.
-  Replies are audit-logged `comment.replied` (who/where/ids, **never the text**).
+- **Rate limits:** reply 30/min/user, list 60/min/user, moderate 60/min/user (middleware), plus
+  **per-PAGE budgets** keyed `${platform}:${platformId}` across ALL users/orgs (120 reads, 30 replies,
+  60 moderations per minute) — the same Page can be connected in several workspaces, and Meta's quota is
+  per Page and shared with the publish worker. Audit actions `comment.replied/hidden/unhidden/deleted/
+  liked/unliked/edited` (who/where/ids, **never the text**).
 - **Error messages are stable and actionable, never raw Graph JSON** (`humanizeError` renders it
   verbatim). Order matters: `#190` ("reconnect") before the permission family (FB `#10`+wording and
   `#200–299` incl. `#283`; IG `#10`+"does not have permission"), then `#100/33` — which means the POST is
@@ -3048,8 +3100,8 @@ only: no DB model, no webhook, nothing stored. App Review steps for both Meta ap
   the loaded thread (full-panel error only when nothing loaded); Graph timestamps (`+0000`) go through
   [graph-time.ts](apps/web/lib/graph-time.ts) (Safari); future times clamp to "just now". Inbox: 3 columns
   only from `xl`; below that the thread sits under the pickers and scrolls into view on selection.
-- v1 limits: posts published through PostAutomation only (same population as Insights); first page of
-  replies embedded (25); no hide/delete/like; no real-time webhook.
+- Limits: posts published through PostAutomation only (same population as Insights); first page of
+  replies embedded (25); no IG like (needs `instagram_manage_engagement`); no real-time webhook.
 - Tests: [facebook-comments.test.ts](packages/social/src/__tests__/facebook-comments.test.ts),
   [facebook-comment-reply.test.ts](packages/social/src/__tests__/facebook-comment-reply.test.ts),
   [instagram-comments.test.ts](packages/social/src/__tests__/instagram-comments.test.ts),
@@ -3057,6 +3109,8 @@ only: no DB model, no webhook, nothing stored. App Review steps for both Meta ap
   [comment-router.test.ts](packages/api/src/__tests__/comment-router.test.ts),
   [comment-reply-rate-limit.test.ts](packages/api/src/__tests__/comment-reply-rate-limit.test.ts),
   [comment-page-budget.test.ts](packages/api/src/__tests__/comment-page-budget.test.ts),
+  [comment-capabilities.test.ts](packages/social/src/__tests__/comment-capabilities.test.ts),
+  [comment-moderation.test.ts](packages/social/src/__tests__/comment-moderation.test.ts),
   [comment-reply-outcome.test.ts](apps/web/lib/comment-reply-outcome.test.ts),
   [graph-time.test.ts](apps/web/lib/graph-time.test.ts).
 

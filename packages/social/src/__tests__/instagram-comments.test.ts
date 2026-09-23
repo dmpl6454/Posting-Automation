@@ -160,6 +160,14 @@ describe("isCommentPermissionDeniedError", () => {
     // instagram_manage_comments — the #10 rule alone missed it.
     expect(isCommentPermissionDeniedError({ code: 100, message: "(#100) Missing Permission" })).toBe(true);
     expect(isCommentPermissionDeniedError({ code: 100, message: "Invalid parameter" })).toBe(false);
+    expect(
+      isCommentPermissionDeniedError({
+        code: 100,
+        error_subcode: 33,
+        message:
+          "Unsupported post request. Object with ID '17900000000000001' does not exist, cannot be loaded due to missing permissions, or does not support this operation.",
+      })
+    ).toBe(false);
   });
 
   it("does NOT treat every code 10 as a missing scope", () => {

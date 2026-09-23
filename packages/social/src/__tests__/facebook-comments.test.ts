@@ -182,6 +182,16 @@ describe("error classification", () => {
     expect(isFbCommentPermissionError({ code: 100, message: "(#100) Missing Permission" })).toBe(true);
     // …but #100 alone is overloaded (object-not-found, validation).
     expect(isFbCommentPermissionError({ code: 100, message: "Unsupported get request" })).toBe(false);
+    // 🔴 Meta's VERBATIM #100/33 text contains "missing permissions" — it must
+    // stay an object-gone error, never a permission error.
+    expect(
+      isFbCommentPermissionError({
+        code: 100,
+        error_subcode: 33,
+        message:
+          "Unsupported delete request. Object with ID '9_55' does not exist, cannot be loaded due to missing permissions, or does not support this operation.",
+      })
+    ).toBe(false);
   });
 
   it("does NOT treat every #10 as a missing scope, nor a dead token, nor nothing", () => {

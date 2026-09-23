@@ -1917,6 +1917,12 @@ export class FacebookProvider extends SocialProvider {
     // an empty edge). Descend once to a known-good set so the thread degrades
     // instead of breaking — and shout, because this log line is the only signal
     // that Meta changed the Comment schema.
+    // "(#100) Tried accessing nonexisting field (comments)" names the EDGE, not
+    // one of our fields: the object no longer exists / isn't a post any more
+    // (live-probed 2026-09-23 on deleted videos). The minimal rung can't help.
+    if (!res.ok && isGraphFieldError(data?.error) && /\(comments\)/i.test(String(data?.error?.message ?? ""))) {
+      throw new Error(FB_COMMENT_POST_GONE_MESSAGE);
+    }
     if (!res.ok && isGraphFieldError(data?.error)) {
       console.error(
         `[Facebook] comment field rejected — retrying with the minimal field set. Update FB_COMMENT_FIELDS:`,

@@ -167,7 +167,10 @@ export function isFbCommentPermissionError(err: FbErrorLike | undefined | null):
   // `(#100) Missing Permission` — observed LIVE 2026-09-23 on a reply from a
   // token minted before the comment scope was requested. #100 is overloaded,
   // so the wording is what identifies it.
-  if (code === 100 && /missing permission/i.test(message)) return true;
+  // ⚠️ NOT a loose /missing permission/ match: Meta's standard #100/subcode-33
+  // "object does not exist" text reads "…cannot be loaded due to missing
+  // permissions, or…", which would mislabel every deleted post/comment.
+  if (code === 100 && Number(err.error_subcode) !== 33 && /^\(#100\) missing permission\b/i.test(message)) return true;
   return code === 10 && /permission|pages_read_user_content|pages_manage_engagement|pages_read_engagement/i.test(message);
 }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
 import {
@@ -42,6 +42,41 @@ export const ACCOUNT_KIND: Record<CommentPlatform, string> = {
   FACEBOOK: "Facebook Page",
   INSTAGRAM: "Instagram account",
 };
+
+/** What "hidden" means differs per platform — say the right thing on each. */
+const HIDE_TOOLTIP: Record<CommentPlatform, string> = {
+  FACEBOOK: "Hide from everyone except the commenter and their friends",
+  INSTAGRAM: "Hide from everyone except the person who wrote it",
+};
+const HIDDEN_BADGE_TOOLTIP: Record<CommentPlatform, string> = {
+  FACEBOOK: "Hidden — only the commenter and their friends can see it",
+  INSTAGRAM: "Hidden — only the person who wrote it can see it",
+};
+
+/** Apply a CONFIRMED moderation result to one comment (top-level or reply). */
+function applyModeration(
+  c: SocialComment,
+  id: string,
+  action: CommentModerationAction,
+  message?: string
+): SocialComment | null {
+  if (c.id === id) {
+    if (action === "delete") return null;
+    if (action === "hide" || action === "unhide") return { ...c, hidden: action === "hide" };
+    if (action === "like" || action === "unlike") {
+      const liked = action === "like";
+      const delta = liked === !!c.likedByAccount ? 0 : liked ? 1 : -1;
+      return { ...c, likedByAccount: liked, likeCount: Math.max(0, c.likeCount + delta) };
+    }
+    return { ...c, text: message ?? c.text };
+  }
+  if (!c.replies.some((r) => r.id === id)) return c;
+  const replies = c.replies
+    .map((r) => applyModeration(r, id, action, message))
+    .filter((r): r is SocialComment => r !== null);
+  const removed = c.replies.length - replies.length;
+  return { ...c, replies, replyCount: Math.max(0, c.replyCount - removed) };
+}
 
 const MODERATION_TOAST: Record<CommentModerationAction, string> = {
   hide: "Comment hidden",
@@ -142,6 +177,11 @@ export function CommentThread({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
   const [pendingDelete, setPendingDelete] = useState<SocialComment | null>(null);
+  // Per-comment in-flight tracking: one shared mutation's isPending/variables
+  // follow only the LATEST call, so a second action elsewhere would otherwise
+  // hide the first one's spinner and re-enable its buttons mid-flight.
+  const [busyIds, setBusyIds] = useState<Set<string>>(() => new Set());
+  const utils = trpc.useUtils();
 
   const query = trpc.comment.list.useInfiniteQuery(
     { targetId },
@@ -212,6 +252,7 @@ export function CommentThread({
         return;
       }
       toast({ title: "Couldn't send reply", description: humanizeError(err), variant: "destructive" });
+      if (/hasn't (been )?granted comment/i.test(err.message)) setTimeout(() => void query.refetch(), 1500);
     },
   });
 
@@ -221,27 +262,75 @@ export function CommentThread({
   const caps = first?.capabilities;
   const writeBlocked = caps?.known === true && caps.canReply === false;
   const namesHidden = caps?.namesHidden === true;
+  // The lazy grant check may have just recorded this channel's permissions —
+  // refresh the account list so its "Reconnect" badge agrees with this banner.
+  const capsKnown = caps?.known === true;
+  const capsCanReply = caps?.canReply ?? null;
+  useEffect(() => {
+    if (capsKnown) void utils.comment.accounts.invalidate();
+  }, [capsKnown, capsCanReply, utils]);
+
+  // Losing the permission (a refresh after a refusal) closes any open composer.
+  useEffect(() => {
+    if (writeBlocked) {
+      setReplyingTo(null);
+      setEditingId(null);
+    }
+  }, [writeBlocked]);
+
   const blockedTitle = knownPlatform
     ? `Needs the ${WRITE_SCOPE[knownPlatform]} permission — reconnect this ${knownPlatform === "FACEBOOK" ? "Page" : "account"} on the Channels page`
     : undefined;
 
   const moderate = trpc.comment.moderate.useMutation({
+    onMutate: (variables) => {
+      setBusyIds((prev) => new Set(prev).add(variables.commentId));
+    },
+    onSettled: (_data, _err, variables) => {
+      setBusyIds((prev) => {
+        const next = new Set(prev);
+        next.delete(variables.commentId);
+        return next;
+      });
+      // Resets are scoped to THIS comment — another comment's open editor or
+      // delete dialog must survive an unrelated action finishing.
+      setPendingDelete((cur) => (cur?.id === variables.commentId ? null : cur));
+    },
     onSuccess: (_res, variables) => {
       toast({ title: MODERATION_TOAST[variables.action] });
-      if (variables.action === "edit") setEditingId(null);
-      if (variables.action === "delete") setPendingDelete(null);
-      void query.refetch();
+      if (variables.action === "edit") setEditingId((cur) => (cur === variables.commentId ? null : cur));
+      // Patch the loaded pages instead of re-reading every page from Meta — each
+      // re-read spends the Page's rate budget (shared with publishing).
+      utils.comment.list.setInfiniteData({ targetId }, (data) =>
+        data
+          ? {
+              ...data,
+              pages: data.pages.map((page) => ({
+                ...page,
+                comments: (page.comments as SocialComment[])
+                  .map((c) => applyModeration(c, variables.commentId, variables.action, variables.message))
+                  .filter((c): c is SocialComment => c !== null),
+              })),
+            }
+          : data
+      );
     },
-    onError: (err, variables) => {
+    onError: (err) => {
+      if (/didn't confirm that change/i.test(err.message)) {
+        // Idempotent action, unknown outcome: show the real state, calmly.
+        toast({ title: "Change not confirmed", description: "Refreshing to show the current state." });
+        void query.refetch();
+        return;
+      }
       toast({ title: "Couldn't update the comment", description: humanizeError(err), variant: "destructive" });
-      if (variables.action === "delete") setPendingDelete(null);
-      // These are idempotent — just show the real state.
-      void query.refetch();
+      // A permission refusal made the server re-read the grant; pick it up so
+      // the reconnect banner appears.
+      if (/hasn't (been )?granted comment/i.test(err.message)) setTimeout(() => void query.refetch(), 1500);
     },
   });
   const runAction = (comment: SocialComment, action: CommentModerationAction, message?: string) =>
     moderate.mutate({ targetId, commentId: comment.id, action, message });
-  const actionBusy = (id: string) => moderate.isPending && moderate.variables?.commentId === id;
+  const actionBusy = (id: string) => busyIds.has(id);
 
   const send = (commentId: string) => {
     const message = (drafts[commentId] ?? "").trim();
@@ -265,7 +354,7 @@ export function CommentThread({
             <Badge
               variant="outline"
               className="h-4 gap-1 px-1.5 text-[10px]"
-              title="Hidden on the platform — only you and the commenter can see it"
+              title={HIDDEN_BADGE_TOOLTIP[platform]}
             >
               <EyeOff className="h-2.5 w-2.5" /> Hidden
             </Badge>
@@ -286,7 +375,7 @@ export function CommentThread({
               <Button
                 size="sm"
                 className="h-7 px-3 text-xs"
-                disabled={actionBusy(c.id) || !editDraft.trim() || editDraft.trim() === c.text}
+                disabled={writeBlocked || actionBusy(c.id) || !editDraft.trim() || editDraft.trim() === c.text}
                 onClick={() => runAction(c, "edit", editDraft.trim())}
                 title={`Save the new text of ${accountName}'s comment on Facebook`}
               >
@@ -312,7 +401,7 @@ export function CommentThread({
           {/* Reply stays VISIBLE (disabled, with the reason) when the token lacks
               the permission — Facebook reports can_comment=false in that case,
               which used to make the button silently disappear. */}
-          {replyingTo !== c.id && (c.canReply || (writeBlocked && !isReply && !c.hidden)) && (
+          {(writeBlocked ? !isReply && !c.hidden : replyingTo !== c.id && c.canReply) && (
             <button
               type="button"
               className="font-medium hover:text-primary hover:underline disabled:cursor-not-allowed disabled:no-underline disabled:opacity-50"
@@ -344,7 +433,7 @@ export function CommentThread({
                   ? blockedTitle
                   : c.hidden
                     ? "Show this comment to everyone again"
-                    : "Hide from everyone except the commenter and their friends"
+                    : HIDE_TOOLTIP[platform]
               }
               disabled={writeBlocked || actionBusy(c.id)}
               onClick={() => runAction(c, c.hidden ? "unhide" : "hide")}

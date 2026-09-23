@@ -148,6 +148,15 @@ describe("FacebookProvider.getPostComments", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("maps 'nonexisting field (comments)' to 'post no longer available' without a pointless second call", async () => {
+    instantSleep();
+    const calls = mockGraph(() => ({ ok: false, body: { error: { code: 100, message: "(#100) Tried accessing nonexisting field (comments)" } } }));
+    await expect(new FacebookProvider().getPostComments(tokens, "1083541184078737", PAGE_ID)).rejects.toThrow(
+      FB_COMMENT_POST_GONE_MESSAGE
+    );
+    expect(calls).toHaveLength(1);
+  });
+
   it("asks for the NEWEST embedded replies and shows them oldest-first", async () => {
     instantSleep();
     const calls = mockGraph(() => ({

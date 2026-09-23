@@ -20,8 +20,8 @@ same day.
 | Permission | What it does in our app | Graph call | App B | App A |
 |---|---|---|---|---|
 | `pages_read_user_content` | **Read** the comments people leave on the Page's posts (text, commenter name, replies) | `GET /{post-id}/comments` (Page token) | ❌ Rejected 2026-09-12 → **Request again** | ✅ Approved |
-| `pages_manage_engagement` | **Reply** to a comment **as the Page** | `POST /{comment-id}/comments` (Page token) | 🆕 add + test call + submit | 🆕 add + test call + submit |
-| `instagram_manage_comments` | **Read and reply** to comments on the IG professional account's media | `GET /{ig-media-id}/comments`, `POST /{ig-comment-id}/replies` | 🆕 add + test call + submit | 🔁 rejected 2026-06 ("Disallowed Use Case" — no feature then) → **request again** |
+| `pages_manage_engagement` | **Reply** as the Page, **edit/delete** the Page's own reply, **like** a comment, **hide/unhide/delete** a comment | `POST /{comment-id}/comments`, `POST /{comment-id}` (`message` / `is_hidden`), `DELETE /{comment-id}`, `POST/DELETE /{comment-id}/likes` (Page token) | 🆕 add + test call + submit | 🆕 add + test call + submit |
+| `instagram_manage_comments` | **Read** comments (with commenter usernames), **reply**, **hide/unhide**, **delete** on the IG professional account's media | `GET /{ig-media-id}/comments`, `POST /{ig-comment-id}/replies`, `POST /{ig-comment-id}` (`hide`), `DELETE /{ig-comment-id}` | 🆕 add + test call + submit | 🔁 rejected 2026-06 ("Disallowed Use Case" — no feature then) → **request again** |
 
 **Why `pages_manage_engagement` is not enough on its own:** Meta's Permissions
 Reference lists **`pages_read_user_content` and `pages_show_list` as dependencies** of
@@ -326,9 +326,12 @@ rejection.
 | Message in Comments | Meaning | Fix |
 |---|---|---|
 | Amber **Reconnect** badge on an account / amber banner above its comments naming a permission (buttons disabled; IG names read "Instagram user (name hidden)") | PostAutomation read the channel's GRANTED scopes (recorded at connect, or checked once on first open) and the write permission isn't among them | Reconnect with Edit settings; the banner disappears |
-| "…hasn't granted comment access yet. Reconnect…" (FB) / "…hasn't been granted comment-reply permission yet…" (IG) | The token lacks the permission: either not reconnected since the scope was added, or Meta hasn't approved it for non-role users yet | Reconnect (Edit settings, keep the Page ticked); if it still fails, it's pending approval |
+| "…hasn't granted comment access yet. Reconnect…" (FB) / "…hasn't been granted comment permission yet (instagram_manage_comments)…" (IG) | The token lacks the permission: either not reconnected since the scope was added, or Meta hasn't approved it for non-role users yet | Reconnect (Edit settings, keep the Page ticked); if it still fails, it's pending approval |
 | "Facebook rejected this Page's connection…" | `#190` — dead token or lost Page role | Reconnect the channel |
 | "…temporarily limiting activity…" | Throttle / `#368` (too many replies too fast) | Wait a few minutes |
 | "Reply not confirmed — it may already be posted" (toast) + amber note in the reply box, button reads **Send again anyway** | Outcome unknown: a timeout, a 5xx, Meta's `is_transient`/code 2, or our own request dropping mid-flight. The reply may be live | **Check the thread (it refreshes itself) or the post first**; only then send again |
 | "There's a lot of comment activity on this Page right now…" | Our per-Page ceiling (120 reads / 30 replies per minute across all workspaces sharing the Page) | Wait a minute |
-| "That comment no longer exists…" | `#100/33` — deleted in the meantime | Refresh |
+| "That comment no longer exists…" | `#100/33` on a comment — deleted in the meantime | Refresh |
+| "This post is no longer available on Facebook/Instagram…" | The POST itself was deleted (or can't be loaded) | Nothing to do in PostAutomation |
+| "That comment doesn't belong to this post…" | Safety check: a write may only touch comments on the post being viewed | Refresh; open the right post |
+| "Change not confirmed — refreshing…" (toast) | A hide/delete/like/edit didn't confirm (timeout/5xx); it's idempotent | Look at the refreshed thread |

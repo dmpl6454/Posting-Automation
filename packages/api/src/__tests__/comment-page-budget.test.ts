@@ -29,7 +29,7 @@ function callerFor(userId: string, orgId: string) {
         id: "t",
         status: "PUBLISHED",
         format: null,
-        publishedId: "SHARED_PAGE_1",
+        publishedId: "555_77",
         publishedUrl: null,
         channelId: `c-${orgId}`,
         post: { organizationId: orgId },
@@ -41,7 +41,7 @@ function callerFor(userId: string, orgId: string) {
         organizationId: orgId,
         platform: "FACEBOOK",
         // The SAME Page, connected in two different workspaces.
-        platformId: "SHARED_PAGE",
+        platformId: "555",
         name: "Shared Page",
         username: null,
         avatar: null,
@@ -63,11 +63,11 @@ describe("per-Page comment budgets", () => {
   it("caps replies to ONE Page at 30/min across users and orgs", async () => {
     const a = callerFor("user-a", "org-a");
     const b = callerFor("user-b", "org-b");
-    for (let i = 0; i < 20; i++) await a.reply({ targetId: "t", commentId: "1_2", message: `a ${i}` });
-    for (let i = 0; i < 10; i++) await b.reply({ targetId: "t", commentId: "1_2", message: `b ${i}` });
+    for (let i = 0; i < 20; i++) await a.reply({ targetId: "t", commentId: "77_2", message: `a ${i}` });
+    for (let i = 0; i < 10; i++) await b.reply({ targetId: "t", commentId: "77_2", message: `b ${i}` });
     expect(replyToComment).toHaveBeenCalledTimes(30);
     // user-b is only at 11/30 of their OWN limit — the Page budget is what stops it.
-    await expect(b.reply({ targetId: "t", commentId: "1_2", message: "b 10" })).rejects.toMatchObject({
+    await expect(b.reply({ targetId: "t", commentId: "77_2", message: "b 10" })).rejects.toMatchObject({
       code: "TOO_MANY_REQUESTS",
       message: expect.stringContaining("a lot of comment activity"),
     });
