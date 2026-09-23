@@ -112,3 +112,13 @@ export const commentPageReplyLimiter = createRateLimiter({ windowMs: 60_000, max
 /** Hide / unhide / delete / like / edit — per user, and per Page across everyone. */
 export const commentModerateRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
 export const commentPageModerateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
+
+/**
+ * Instagram LIKES, per Instagram account across everyone (2026-09-23). Meta's
+ * User Likes reference: "more than 50 requests in 5 seconds results in a 1-hour
+ * lockout for the Instagram User". The per-minute budgets above allow such a
+ * burst, and a lockout of a live publishing account is not worth the risk, so
+ * likes get their own tight window: 10 per 10s — even a burst straddling two
+ * fixed windows stays near 20, far under Meta's 50-in-5s.
+ */
+export const commentIgLikeBurstLimiter = createRateLimiter({ windowMs: 10_000, max: 10 });

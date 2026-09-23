@@ -41,7 +41,7 @@ describe("parseCommentsPage", () => {
         likedByAccount: null,
         canHide: true,
         canDelete: true,
-        canLike: false,
+        canLike: true,
         canEdit: false,
       },
       {
@@ -59,7 +59,7 @@ describe("parseCommentsPage", () => {
         likedByAccount: null,
         canHide: true,
         canDelete: true,
-        canLike: false,
+        canLike: true,
         canEdit: false,
       },
     ]);
@@ -126,13 +126,16 @@ describe("parseCommentsPage", () => {
     expect(page.comments[0]!.isOwn).toBe(false);
   });
 
-  it("moderation: can hide/delete others' comments, never its OWN hide, never like/edit (not available on IG)", () => {
+  it("moderation: can hide/delete others' comments, never its OWN hide, like comments AND replies, never edit", () => {
     const page = parseCommentsPage(
       { data: [{ id: "c1", username: "fan", replies: { data: [{ id: "r1", username: "bollywooddaily" }] } }] },
       { username: "bollywooddaily" }
     );
-    expect(page.comments[0]).toMatchObject({ canHide: true, canDelete: true, canLike: false, canEdit: false, likedByAccount: null });
-    expect(page.comments[0]!.replies[0]).toMatchObject({ isOwn: true, canHide: false, canDelete: true });
+    // Like is offered on comments and replies (User Likes reference covers both);
+    // the UI gates it on the GRANTED instagram_manage_engagement. The like STATE
+    // stays null — Instagram has no readable "liked by me" field.
+    expect(page.comments[0]).toMatchObject({ canHide: true, canDelete: true, canLike: true, canEdit: false, likedByAccount: null });
+    expect(page.comments[0]!.replies[0]).toMatchObject({ isOwn: true, canHide: false, canDelete: true, canLike: true, likedByAccount: null });
   });
 
   it("a HIDDEN top-level comment cannot be replied to (Instagram refuses it)", () => {

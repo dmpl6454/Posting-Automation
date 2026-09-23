@@ -56,14 +56,19 @@ export interface SocialComment {
   attachmentType: string | null;
   /**
    * Has the connected Page liked this comment (Facebook `user_likes`, the viewer
-   * being the Page)? null where the platform can't tell us (Instagram — liking
-   * needs `instagram_manage_engagement`, which this app does not request).
+   * being the Page)? null where the platform can't tell us: Instagram has NO
+   * readable "liked by me" field (IG Comment exposes only the aggregate
+   * `like_count`, and `/{ig-user-id}/likes` is POST/DELETE only), so the UI can
+   * only know the state of a like it made itself.
    */
   likedByAccount: boolean | null;
   /** Moderation affordances, as far as the platform reports them. */
   canHide: boolean;
   canDelete: boolean;
-  /** Like as the Page — Facebook only. */
+  /**
+   * Like as the Page (Facebook, pages_manage_engagement) or as the account
+   * (Instagram, instagram_manage_engagement — see COMMENT_LIKE_SCOPES).
+   */
   canLike: boolean;
   /** Edit the text — only the Page's OWN Facebook comments. */
   canEdit: boolean;
@@ -132,7 +137,7 @@ export function isIndeterminateReplyError(body: { error?: unknown } | null | und
  * the commenter's `username`.
  *
  *   Facebook   read → pages_read_user_content · reply/like/hide/delete/edit → pages_manage_engagement
- *   Instagram  everything → instagram_manage_comments
+ *   Instagram  read/reply/hide/delete → instagram_manage_comments · like → instagram_manage_engagement
  *
  * `known: false` when the grant has not been checked yet (then every flag is
  * null and the UI must not guess).
@@ -142,6 +147,14 @@ export interface CommentCapabilities {
   canRead: boolean | null;
   canReply: boolean | null;
   canModerate: boolean | null;
+  /**
+   * Liking (comments, and the post itself on Instagram). Deliberately SEPARATE
+   * from `missing`/`canReply`: the Reconnect badge and the lazy grant re-check
+   * key on those, and a like-only gap must never mark an account whose reply /
+   * hide / delete work as broken (Instagram likes need their own, newer
+   * permission that Meta may not have approved yet).
+   */
+  canLike: boolean | null;
   /** Instagram withholds commenter usernames without instagram_manage_comments. */
   namesHidden: boolean | null;
   /** Scopes the channel is missing for the full feature, in request order. */
@@ -158,12 +171,23 @@ export const COMMENT_WRITE_SCOPES: Record<CommentPlatform, string[]> = {
   INSTAGRAM: ["instagram_manage_comments"],
 };
 
+/**
+ * Liking. Instagram's is a separate permission (instagram_manage_engagement,
+ * Graph changelog 2026-04-22, "applies to all versions") on
+ * `POST|DELETE /{ig-user-id}/likes` — Meta lists instagram_basic,
+ * pages_read_user_content and pages_show_list as its dependencies.
+ */
+export const COMMENT_LIKE_SCOPES: Record<CommentPlatform, string[]> = {
+  FACEBOOK: ["pages_manage_engagement"],
+  INSTAGRAM: ["instagram_manage_engagement"],
+};
+
 export function commentCapabilities(
   platform: CommentPlatform,
   grantedScopes: readonly string[] | null | undefined
 ): CommentCapabilities {
   if (!Array.isArray(grantedScopes)) {
-    return { known: false, canRead: null, canReply: null, canModerate: null, namesHidden: null, missing: [] };
+    return { known: false, canRead: null, canReply: null, canModerate: null, canLike: null, namesHidden: null, missing: [] };
   }
   const has = (s: string) => grantedScopes.includes(s);
   const readOk = COMMENT_READ_SCOPES[platform].every(has);
@@ -178,6 +202,7 @@ export function commentCapabilities(
     canRead: platform === "INSTAGRAM" ? has("instagram_basic") : readOk,
     canReply: writeOk,
     canModerate: writeOk,
+    canLike: COMMENT_LIKE_SCOPES[platform].every(has),
     namesHidden: platform === "INSTAGRAM" ? !has("instagram_manage_comments") : false,
     missing,
   };

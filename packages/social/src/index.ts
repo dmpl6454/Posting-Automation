@@ -83,8 +83,8 @@ export {
 // Facebook Page comments (2026-09-23) — read needs pages_read_user_content,
 // reply needs pages_manage_engagement. See facebook-comments.ts.
 export { FB_COMMENT_MAX_LENGTH } from "./utils/facebook-comments";
-export { commentCapabilities, COMMENT_READ_SCOPES, COMMENT_WRITE_SCOPES } from "./utils/social-comments";
-export { COMMENT_NOT_ON_POST_MESSAGE } from "./utils/instagram-comments";
+export { commentCapabilities, COMMENT_READ_SCOPES, COMMENT_WRITE_SCOPES, COMMENT_LIKE_SCOPES } from "./utils/social-comments";
+export { COMMENT_NOT_ON_POST_MESSAGE, COMMENT_LIKE_PERMISSION_MESSAGE, COMMENT_LIKE_REFUSED_MESSAGE } from "./utils/instagram-comments";
 export type {
   CommentCapabilities,
   CommentModerationAction,

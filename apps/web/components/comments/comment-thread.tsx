@@ -21,6 +21,7 @@ import { trpc } from "~/lib/trpc/client";
 import { humanizeError } from "~/lib/errors";
 import { parseGraphTimestamp } from "~/lib/graph-time";
 import { classifyReplyFailure } from "~/lib/comment-reply-outcome";
+import { applyModeration } from "~/lib/comment-moderation-patch";
 import { useToast } from "~/hooks/use-toast";
 import { Button } from "~/components/ui/button";
 import { Badge } from "~/components/ui/badge";
@@ -53,31 +54,6 @@ const HIDDEN_BADGE_TOOLTIP: Record<CommentPlatform, string> = {
   INSTAGRAM: "Hidden — only the person who wrote it can see it",
 };
 
-/** Apply a CONFIRMED moderation result to one comment (top-level or reply). */
-function applyModeration(
-  c: SocialComment,
-  id: string,
-  action: CommentModerationAction,
-  message?: string
-): SocialComment | null {
-  if (c.id === id) {
-    if (action === "delete") return null;
-    if (action === "hide" || action === "unhide") return { ...c, hidden: action === "hide" };
-    if (action === "like" || action === "unlike") {
-      const liked = action === "like";
-      const delta = liked === !!c.likedByAccount ? 0 : liked ? 1 : -1;
-      return { ...c, likedByAccount: liked, likeCount: Math.max(0, c.likeCount + delta) };
-    }
-    return { ...c, text: message ?? c.text };
-  }
-  if (!c.replies.some((r) => r.id === id)) return c;
-  const replies = c.replies
-    .map((r) => applyModeration(r, id, action, message))
-    .filter((r): r is SocialComment => r !== null);
-  const removed = c.replies.length - replies.length;
-  return { ...c, replies, replyCount: Math.max(0, c.replyCount - removed) };
-}
-
 const MODERATION_TOAST: Record<CommentModerationAction, string> = {
   hide: "Comment hidden",
   unhide: "Comment unhidden",
@@ -92,6 +68,15 @@ const WRITE_SCOPE: Record<CommentPlatform, string> = {
   FACEBOOK: "pages_manage_engagement",
   INSTAGRAM: "instagram_manage_comments",
 };
+
+/** Which permission unlocks liking, per platform (Instagram's is separate — COMMENT_LIKE_SCOPES). */
+const LIKE_SCOPE: Record<CommentPlatform, string> = {
+  FACEBOOK: "pages_manage_engagement",
+  INSTAGRAM: "instagram_manage_engagement",
+};
+
+/** A server message meaning "the token lacks the permission" (comment or Instagram like). */
+const PERMISSION_REFUSAL_RE = /hasn't (been )?granted (comment|permission to like)/i;
 
 /** Mirrors the server ceilings (FB_COMMENT_MAX_LENGTH / COMMENT_REPLY_MAX_LENGTH). */
 export const REPLY_MAX_LENGTH: Record<CommentPlatform, number> = {
@@ -181,6 +166,12 @@ export function CommentThread({
   // follow only the LATEST call, so a second action elsewhere would otherwise
   // hide the first one's spinner and re-enable its buttons mid-flight.
   const [busyIds, setBusyIds] = useState<Set<string>>(() => new Set());
+  // Instagram has no readable "liked by me" field, so the only like state we can
+  // show is the one THIS session set. Kept here (not only in the query cache)
+  // so it survives a refetch, which re-reads likedByAccount as null. The thread
+  // remounts per post, so this never leaks across posts.
+  const [likedHere, setLikedHere] = useState<Record<string, boolean>>({});
+  const [postLiked, setPostLiked] = useState<boolean | null>(null);
   const utils = trpc.useUtils();
 
   const query = trpc.comment.list.useInfiniteQuery(
@@ -262,6 +253,9 @@ export function CommentThread({
   const caps = first?.capabilities;
   const writeBlocked = caps?.known === true && caps.canReply === false;
   const namesHidden = caps?.namesHidden === true;
+  // Liking has its own permission on Instagram. Separate from writeBlocked on
+  // purpose: a missing like grant must not disable reply / hide / delete.
+  const likeBlocked = caps?.known === true && caps.canLike === false;
   // The lazy grant check may have just recorded this channel's permissions —
   // refresh the account list so its "Reconnect" badge agrees with this banner.
   const capsKnown = caps?.known === true;
@@ -281,6 +275,9 @@ export function CommentThread({
   const blockedTitle = knownPlatform
     ? `Needs the ${WRITE_SCOPE[knownPlatform]} permission — reconnect this ${knownPlatform === "FACEBOOK" ? "Page" : "account"} on the Channels page`
     : undefined;
+  const likeBlockedTitle = knownPlatform
+    ? `Liking needs the ${LIKE_SCOPE[knownPlatform]} permission — reconnect this ${knownPlatform === "FACEBOOK" ? "Page" : "account"} on the Channels page`
+    : undefined;
 
   const moderate = trpc.comment.moderate.useMutation({
     onMutate: (variables) => {
@@ -296,8 +293,17 @@ export function CommentThread({
       // delete dialog must survive an unrelated action finishing.
       setPendingDelete((cur) => (cur?.id === variables.commentId ? null : cur));
     },
-    onSuccess: (_res, variables) => {
-      toast({ title: MODERATION_TOAST[variables.action] });
+    onSuccess: (res, variables) => {
+      const isLike = variables.action === "like" || variables.action === "unlike";
+      toast({
+        title:
+          platform === "INSTAGRAM" && variables.action === "like"
+            ? `Liked as ${accountName}`
+            : MODERATION_TOAST[variables.action],
+      });
+      if (isLike && platform === "INSTAGRAM") {
+        setLikedHere((prev) => ({ ...prev, [variables.commentId]: variables.action === "like" }));
+      }
       if (variables.action === "edit") setEditingId((cur) => (cur === variables.commentId ? null : cur));
       // Patch the loaded pages instead of re-reading every page from Meta — each
       // re-read spends the Page's rate budget (shared with publishing).
@@ -308,7 +314,9 @@ export function CommentThread({
               pages: data.pages.map((page) => ({
                 ...page,
                 comments: (page.comments as SocialComment[])
-                  .map((c) => applyModeration(c, variables.commentId, variables.action, variables.message))
+                  .map((c) =>
+                    applyModeration(c, variables.commentId, variables.action, variables.message, res?.likeCount)
+                  )
                   .filter((c): c is SocialComment => c !== null),
               })),
             }
@@ -324,10 +332,34 @@ export function CommentThread({
       }
       toast({ title: "Couldn't update the comment", description: humanizeError(err), variant: "destructive" });
       // A permission refusal made the server re-read the grant; pick it up so
-      // the reconnect banner appears.
-      if (/hasn't (been )?granted comment/i.test(err.message)) setTimeout(() => void query.refetch(), 1500);
+      // the reconnect banner / disabled Like appears.
+      if (PERMISSION_REFUSAL_RE.test(err.message)) setTimeout(() => void query.refetch(), 1500);
     },
   });
+
+  // Like / unlike the post itself (Instagram) — same permission and edge as a
+  // comment like, and part of what Meta asks to see for it.
+  const likePost = trpc.comment.likePost.useMutation({
+    onSuccess: (res) => {
+      setPostLiked(res.liked);
+      toast({
+        title: res.liked ? `Post liked as ${accountName}` : "Post like removed",
+        description:
+          typeof res.likeCount === "number"
+            ? `${res.likeCount.toLocaleString()} ${res.likeCount === 1 ? "like" : "likes"} on Instagram now.`
+            : undefined,
+      });
+    },
+    onError: (err) => {
+      if (/didn't confirm that change/i.test(err.message)) {
+        toast({ title: "Change not confirmed", description: "Check the post on Instagram to see its current state." });
+        return;
+      }
+      toast({ title: "Couldn't update the post like", description: humanizeError(err), variant: "destructive" });
+      if (PERMISSION_REFUSAL_RE.test(err.message)) setTimeout(() => void query.refetch(), 1500);
+    },
+  });
+
   const runAction = (comment: SocialComment, action: CommentModerationAction, message?: string) =>
     moderate.mutate({ targetId, commentId: comment.id, action, message });
   const actionBusy = (id: string) => busyIds.has(id);
@@ -412,18 +444,40 @@ export function CommentThread({
               Reply
             </button>
           )}
-          {c.canLike && (
-            <button
-              type="button"
-              className="inline-flex items-center gap-1 font-medium hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
-              title={writeBlocked ? blockedTitle : c.likedByAccount ? "Remove the Page's like" : `Like as ${accountName}`}
-              disabled={writeBlocked || actionBusy(c.id)}
-              onClick={() => runAction(c, c.likedByAccount ? "unlike" : "like")}
-            >
-              <ThumbsUp className={cn("h-3 w-3", c.likedByAccount && "fill-current text-primary")} />
-              {c.likedByAccount ? "Liked" : "Like"}
-            </button>
-          )}
+          {c.canLike &&
+            (platform === "INSTAGRAM" ? (
+              // Instagram: gated on its own like permission, and the state is only
+              // known once this session has liked/unliked (Meta can't be asked).
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 font-medium hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
+                title={
+                  likeBlocked
+                    ? likeBlockedTitle
+                    : (c.likedByAccount ?? likedHere[c.id])
+                      ? `Remove ${accountName}'s like`
+                      : `Like as ${accountName}`
+                }
+                disabled={likeBlocked || actionBusy(c.id)}
+                onClick={() => runAction(c, (c.likedByAccount ?? likedHere[c.id]) ? "unlike" : "like")}
+              >
+                <ThumbsUp
+                  className={cn("h-3 w-3", (c.likedByAccount ?? likedHere[c.id]) && "fill-current text-primary")}
+                />
+                {(c.likedByAccount ?? likedHere[c.id]) ? "Liked" : "Like"}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 font-medium hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
+                title={writeBlocked ? blockedTitle : c.likedByAccount ? "Remove the Page's like" : `Like as ${accountName}`}
+                disabled={writeBlocked || actionBusy(c.id)}
+                onClick={() => runAction(c, c.likedByAccount ? "unlike" : "like")}
+              >
+                <ThumbsUp className={cn("h-3 w-3", c.likedByAccount && "fill-current text-primary")} />
+                {c.likedByAccount ? "Liked" : "Like"}
+              </button>
+            ))}
           {c.canHide && (
             <button
               type="button"
@@ -570,6 +624,23 @@ export function CommentThread({
           </p>
         </div>
         <div className="flex items-center gap-1">
+          {knownPlatform === "INSTAGRAM" && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 px-2 text-xs"
+              onClick={() => likePost.mutate({ targetId, liked: postLiked !== true })}
+              disabled={likeBlocked || likePost.isPending}
+              title={likeBlocked ? likeBlockedTitle : postLiked ? `Remove ${accountName}'s like from this post` : `Like this post as ${accountName}`}
+            >
+              {likePost.isPending ? (
+                <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+              ) : (
+                <ThumbsUp className={cn("mr-1 h-3 w-3", postLiked && "fill-current text-primary")} />
+              )}
+              {postLiked ? "Post liked" : "Like post"}
+            </Button>
+          )}
           <Button
             size="sm"
             variant="outline"
@@ -595,6 +666,20 @@ export function CommentThread({
           )}
         </div>
       </div>
+
+      {knownPlatform === "INSTAGRAM" && likeBlocked && !writeBlocked && !namesHidden && (
+        // Only liking is off (its own, newer permission). A quiet line, not the
+        // amber banner — reply / hide / delete still work.
+        <p className="rounded-md border border-dashed px-2.5 py-1.5 text-[11px] text-muted-foreground">
+          Liking is off for this account — its connection doesn&apos;t include{" "}
+          <code className="font-mono">{LIKE_SCOPE.INSTAGRAM}</code>. Reconnect: Channels → Connect Instagram →{" "}
+          <strong>Edit settings</strong> → allow every permission. If you just did, Meta hasn&apos;t approved likes for this
+          account yet.{" "}
+          <Link href="/dashboard/channels" className="font-medium underline">
+            Go to Channels
+          </Link>
+        </p>
+      )}
 
       {knownPlatform && (writeBlocked || namesHidden) && (
         // The permission picture, in words: which scope is missing and exactly

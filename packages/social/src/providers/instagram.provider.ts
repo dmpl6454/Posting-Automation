@@ -13,6 +13,10 @@ import {
   COMMENT_MEDIA_GONE_MESSAGE,
   COMMENT_TOKEN_INVALID_MESSAGE,
   COMMENT_ACTION_FAILED_MESSAGE,
+  COMMENT_LIKE_PERMISSION_MESSAGE,
+  COMMENT_LIKE_THROTTLED_MESSAGE,
+  COMMENT_LIKE_TARGET_GONE_MESSAGE,
+  isInstagramLikeRefusedError,
   IG_COMMENT_FIELDS,
   IG_COMMENT_FIELDS_MINIMAL,
   type InstagramCommentPage,
@@ -1785,6 +1789,100 @@ export class InstagramProvider extends SocialProvider {
       console.error(`[Instagram] comment action refused:`, JSON.stringify(data));
       throw new Error(COMMENT_ACTION_FAILED_MESSAGE);
     }
+  }
+
+  /**
+   * Like (`liked=true`) or unlike a COMMENT or REPLY as the Instagram account —
+   * `POST|DELETE /{ig-user-id}/likes` with `comment_id` (User Likes reference;
+   * Graph changelog 2026-04-22, "applies to all versions" — verified reachable
+   * at our v18.0 on 2026-09-23). Needs instagram_manage_engagement + a USER
+   * token, which is exactly what an Instagram channel stores.
+   *
+   * Idempotent by contract: liking something already liked (or unliking
+   * something not liked) "has no effect" — so a success says nothing about the
+   * prior state. Callers re-read the count (readLikeCount) instead of guessing.
+   */
+  async setCommentLiked(tokens: OAuthTokens, igUserId: string, commentId: string, liked: boolean): Promise<void> {
+    await this.igLikeAction(tokens, igUserId, { comment_id: commentId }, liked);
+  }
+
+  /** Like / unlike the MEDIA itself (feed post, reel, carousel) — same edge, `media_id`. */
+  async setMediaLiked(tokens: OAuthTokens, igUserId: string, mediaId: string, liked: boolean): Promise<void> {
+    await this.igLikeAction(tokens, igUserId, { media_id: mediaId }, liked);
+  }
+
+  /**
+   * Current `like_count` of a comment or media, or null if it cannot be read.
+   * Never throws — it only refreshes a displayed number after a like that has
+   * already succeeded, and must not turn that success into an error.
+   */
+  async readLikeCount(tokens: OAuthTokens, objectId: string): Promise<number | null> {
+    try {
+      const params = new URLSearchParams({ fields: "like_count", access_token: tokens.accessToken });
+      const res = await fetchT(`${this.graphBaseUrl}/${this.apiVersion}/${encodeURIComponent(objectId)}?${params.toString()}`);
+      const data: any = await res.json().catch(() => null);
+      const n = Number(data?.like_count);
+      return res.ok && Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async igLikeAction(
+    tokens: OAuthTokens,
+    igUserId: string,
+    target: { comment_id: string } | { media_id: string },
+    liked: boolean
+  ): Promise<void> {
+    // 🔴 encodeURIComponent on BOTH ids. igUserId is DB-derived and the comment
+    // id is regex-checked at the router, but this edge acts AS the account, so
+    // neither may be able to reshape the path.
+    const base = `${this.graphBaseUrl}/${this.apiVersion}/${encodeURIComponent(igUserId)}/likes`;
+    let res: Response;
+    try {
+      if (liked) {
+        res = await fetchT(base, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...target, access_token: tokens.accessToken }),
+        });
+      } else {
+        const params = new URLSearchParams({ ...target, access_token: tokens.accessToken });
+        res = await fetchT(`${base}?${params.toString()}`, { method: "DELETE" });
+      }
+    } catch (err: any) {
+      console.error(`[Instagram] like request did not complete:`, err?.message ?? err);
+      throw new Error(COMMENT_ACTION_UNCONFIRMED_MESSAGE);
+    }
+    const data: any = await res.json().catch(() => null);
+    if (!res.ok) {
+      if (res.status >= 500 || isIndeterminateReplyError(data)) {
+        console.error(`[Instagram] like outcome unknown (HTTP ${res.status}):`, data === null ? "unreadable" : JSON.stringify(data));
+        throw new Error(COMMENT_ACTION_UNCONFIRMED_MESSAGE);
+      }
+      throw this.igLikeError(data, res.status);
+    }
+    if (data && data.success === false) {
+      console.error(`[Instagram] like refused:`, JSON.stringify(data));
+      throw new Error(COMMENT_ACTION_FAILED_MESSAGE);
+    }
+  }
+
+  private igLikeError(body: any, status: number): Error {
+    const err = body?.error;
+    const code = Number(err?.code);
+    if (code === 190) return new Error(COMMENT_TOKEN_INVALID_MESSAGE);
+    // ORDER IS LOAD-BEARING: the refusal shares #100/33 with "object gone".
+    if (isInstagramLikeRefusedError(err) || isCommentPermissionDeniedError(err) || (code >= 200 && code <= 299)) {
+      return new Error(COMMENT_LIKE_PERMISSION_MESSAGE);
+    }
+    if (isCommentObjectGoneError(err)) return new Error(COMMENT_LIKE_TARGET_GONE_MESSAGE);
+    if ([4, 17, 32, 613].includes(code) || (code >= 80000 && code <= 80099)) {
+      console.error(`[Instagram] like throttled (HTTP ${status}):`, JSON.stringify(body));
+      return new Error(COMMENT_LIKE_THROTTLED_MESSAGE);
+    }
+    console.error(`[Instagram] like failed (HTTP ${status}):`, body === null ? "unreadable response body" : JSON.stringify(body));
+    return new Error(COMMENT_ACTION_FAILED_MESSAGE);
   }
 
   private igCommentError(body: any, status: number, op: "lookup" | "action"): Error {

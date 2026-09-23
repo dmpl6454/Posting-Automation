@@ -21,6 +21,9 @@ const igReplyToComment = vi.fn();
 const getCommentMediaId = vi.fn();
 const igSetHidden = vi.fn(async () => {});
 const igDelete = vi.fn(async () => {});
+const igSetLiked = vi.fn(async (..._args: any[]) => {});
+const igSetMediaLiked = vi.fn(async (..._args: any[]) => {});
+const igReadLikeCount = vi.fn(async (..._args: any[]): Promise<number | null> => 7);
 const getPostComments = vi.fn();
 const fbReplyToComment = vi.fn();
 const fbSetHidden = vi.fn(async () => {});
@@ -29,6 +32,25 @@ const fbSetLiked = vi.fn(async () => {});
 const fbEdit = vi.fn(async () => {});
 const fetchMetaTokenWindow = vi.fn();
 const createAuditLog = vi.fn(async (_input: any) => {});
+
+/**
+ * ONE Instagram provider mock, shared by the module mock and any test that
+ * swaps the implementation — a hand-copied object there silently dropped
+ * methods added later (it lacked the like methods and leaked into every test
+ * after it, since clearAllMocks does not undo mockImplementation).
+ */
+function igProviderMock() {
+  return {
+    getMediaComments,
+    replyToComment: igReplyToComment,
+    getCommentMediaId,
+    setCommentHidden: igSetHidden,
+    deleteComment: igDelete,
+    setCommentLiked: igSetLiked,
+    setMediaLiked: igSetMediaLiked,
+    readLikeCount: igReadLikeCount,
+  };
+}
 
 vi.mock("@postautomation/social", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@postautomation/social")>();
@@ -46,13 +68,7 @@ vi.mock("@postautomation/social", async (importOriginal) => {
             setCommentLiked: fbSetLiked,
             editComment: fbEdit,
           }
-        : {
-            getMediaComments,
-            replyToComment: igReplyToComment,
-            getCommentMediaId,
-            setCommentHidden: igSetHidden,
-            deleteComment: igDelete,
-          }
+        : igProviderMock()
     ),
   };
 });
@@ -182,6 +198,10 @@ beforeEach(() => {
   getCommentMediaId.mockReset();
   // By default the IG comment sits on the target's own media (MEDIA_1).
   getCommentMediaId.mockResolvedValue("MEDIA_1");
+  igSetLiked.mockReset();
+  igSetMediaLiked.mockReset();
+  igReadLikeCount.mockReset();
+  igReadLikeCount.mockResolvedValue(7);
   fetchMetaTokenWindow.mockReset();
   fetchMetaTokenWindow.mockResolvedValue(null);
 });
@@ -751,18 +771,21 @@ describe("comment.moderate", () => {
     expect(igDelete).toHaveBeenCalledWith(expect.anything(), "17900000000000001");
   });
 
-  it("Instagram: refuses a comment on other media, and refuses like/edit (not available there)", async () => {
+  it("Instagram: refuses a comment on other media (every write, likes included), and refuses edit", async () => {
     getCommentMediaId.mockResolvedValue("OTHER");
-    const { caller } = buildCaller({});
+    const { caller } = buildCaller({ channel: { platformId: "IG_OWNERSHIP", metadata: { igUserId: "IG_OWNERSHIP" } } });
     await expect(caller.moderate({ targetId: TARGET_ID, commentId: "17900000000000001", action: "delete" })).rejects.toMatchObject({
       code: "FORBIDDEN",
     });
     expect(igDelete).not.toHaveBeenCalled();
+    // Likes are allowed on Instagram now (instagram_manage_engagement) — but a
+    // comment on ANOTHER media is still refused before any like is sent.
     for (const action of ["like", "unlike"] as const) {
       await expect(caller.moderate({ targetId: TARGET_ID, commentId: "17900000000000001", action })).rejects.toMatchObject({
-        code: "BAD_REQUEST",
+        code: "FORBIDDEN",
       });
     }
+    expect(igSetLiked).not.toHaveBeenCalled();
     await expect(
       caller.moderate({ targetId: TARGET_ID, commentId: "17900000000000001", action: "edit", message: "x" })
     ).rejects.toMatchObject({ code: "BAD_REQUEST", message: expect.stringContaining("doesn't allow editing") });
@@ -832,7 +855,7 @@ describe("🔒 Facebook writes are scoped to comments ON THIS POST", () => {
     (social.getSocialProvider as any).mockImplementation((platform: string) =>
       platform === "FACEBOOK"
         ? { setCommentHidden: fbSetHidden, deleteComment: fbDelete, setCommentLiked: fbSetLiked, editComment: fbEdit, replyToComment: fbReplyToComment, getPostComments, resolveVideoPostId }
-        : { getMediaComments, replyToComment: igReplyToComment, getCommentMediaId, setCommentHidden: igSetHidden, deleteComment: igDelete }
+        : igProviderMock()
     );
     const { caller } = buildCaller({ target: { publishedId: "1748002179986936" }, channel: FB_CHANNEL });
     await caller.moderate({ targetId: TARGET_ID, commentId: "1748002179986936_5", action: "hide" }); // video-id prefix: no lookup
@@ -885,5 +908,153 @@ describe("unconfirmed moderation is still audited", () => {
     const { caller } = buildCaller({ target: FB_TARGET, channel: FB_CHANNEL });
     await expect(caller.moderate({ targetId: TARGET_ID, commentId: "9_1", action: "delete" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
     expect(createAuditLog.mock.calls[0]![0]).toMatchObject({ action: "comment.deleted", metadata: { outcome: "unconfirmed" } });
+  });
+});
+
+
+describe("Instagram likes (instagram_manage_engagement, 2026-09-23)", () => {
+  // Each test uses its OWN account id: the burst limiter is module-level and
+  // keyed per Instagram account, so sharing one id would make tests interfere.
+  const igChannel = (id: string) => ({ platformId: id, metadata: { igUserId: id } });
+
+  it("likes a comment AS the account (DB ig user id), after proving the comment is on this media", async () => {
+    const { caller } = buildCaller({ channel: igChannel("IG_LIKE_A") });
+    const res = await caller.moderate({ targetId: TARGET_ID, commentId: "17900000000000002", action: "like" });
+    expect(getCommentMediaId).toHaveBeenCalledWith(expect.anything(), "17900000000000002");
+    expect(igSetLiked).toHaveBeenCalledWith(expect.objectContaining({ accessToken: "DECRYPTED_TOKEN" }), "IG_LIKE_A", "17900000000000002", true);
+    // Meta's like "has no effect" when already liked, so the count is RE-READ.
+    expect(igReadLikeCount).toHaveBeenCalledWith(expect.anything(), "17900000000000002");
+    expect(res).toMatchObject({ ok: true, action: "like", platform: "INSTAGRAM", likeCount: 7 });
+    expect(createAuditLog).toHaveBeenCalledWith(expect.objectContaining({ action: "comment.liked" }));
+  });
+
+  it("unlike sends liked=false; a failed count re-read still returns success with likeCount null", async () => {
+    igReadLikeCount.mockResolvedValue(null);
+    const { caller } = buildCaller({ channel: igChannel("IG_LIKE_B") });
+    const res = await caller.moderate({ targetId: TARGET_ID, commentId: "17900000000000003", action: "unlike" });
+    expect(igSetLiked).toHaveBeenCalledWith(expect.anything(), "IG_LIKE_B", "17900000000000003", false);
+    expect(res).toMatchObject({ ok: true, likeCount: null });
+  });
+
+  it("Facebook likes are untouched: no count re-read, no likeCount returned", async () => {
+    const { caller } = buildCaller({ target: FB_TARGET, channel: FB_CHANNEL });
+    const res = await caller.moderate({ targetId: TARGET_ID, commentId: "9_77", action: "like" });
+    expect(fbSetLiked).toHaveBeenCalledWith(expect.anything(), "9_77", true, FB_PAGE);
+    expect(igReadLikeCount).not.toHaveBeenCalled();
+    expect(res.likeCount).toBeUndefined();
+  });
+
+  it("a like permission refusal re-reads the grant (so the UI disables Like) and surfaces the message", async () => {
+    igSetLiked.mockRejectedValueOnce(
+      new Error("This Instagram account hasn't been granted permission to like (instagram_manage_engagement) yet. Reconnect…")
+    );
+    fetchMetaTokenWindow.mockResolvedValue({ valid: true, scopes: ["instagram_basic", "instagram_manage_comments"] });
+    const { caller, executeRaw } = buildCaller({ channel: igChannel("IG_LIKE_C") });
+    await expect(caller.moderate({ targetId: TARGET_ID, commentId: "17900000000000004", action: "like" })).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringContaining("instagram_manage_engagement"),
+    });
+    await vi.waitFor(() => expect(executeRaw).toHaveBeenCalled());
+  });
+
+  it("a refusal when the like permission IS recorded says 'private account', not 'reconnect' (no reconnect loop)", async () => {
+    igSetLiked.mockRejectedValueOnce(
+      new Error("This Instagram account hasn't been granted permission to like (instagram_manage_engagement) yet. Reconnect…")
+    );
+    const { caller, executeRaw } = buildCaller({
+      channel: {
+        platformId: "IG_LIKE_PRIVATE",
+        metadata: {
+          igUserId: "IG_LIKE_PRIVATE",
+          grantedScopes: ["instagram_basic", "instagram_manage_comments", "instagram_manage_engagement"],
+          grantedScopesCheckedAt: FRESH,
+        },
+      },
+    });
+    fetchMetaTokenWindow.mockResolvedValue({ valid: true, scopes: ["instagram_basic", "instagram_manage_engagement"] });
+    const err: any = await caller
+      .moderate({ targetId: TARGET_ID, commentId: "17900000000000007", action: "like" })
+      .catch((e) => e);
+    expect(err.code).toBe("BAD_REQUEST");
+    expect(err.message).toContain("private account");
+    expect(err.message).not.toMatch(/hasn't (been )?granted/i);
+    // The grant is still re-read, in case the permission was revoked since.
+    await vi.waitFor(() => expect(executeRaw).toHaveBeenCalled());
+  });
+
+  it("🛑 caps likes per Instagram account well under Meta's 50-in-5s lockout", async () => {
+    const { caller } = buildCaller({ channel: igChannel("IG_LIKE_BURST") });
+    for (let i = 0; i < 10; i++) {
+      await caller.moderate({ targetId: TARGET_ID, commentId: "17900000000000005", action: i % 2 ? "unlike" : "like" });
+    }
+    await expect(
+      caller.moderate({ targetId: TARGET_ID, commentId: "17900000000000005", action: "like" })
+    ).rejects.toMatchObject({ code: "TOO_MANY_REQUESTS", message: expect.stringContaining("locks an account") });
+    expect(igSetLiked).toHaveBeenCalledTimes(10);
+    // Hide/delete are NOT counted against the like window.
+    await caller.moderate({ targetId: TARGET_ID, commentId: "17900000000000005", action: "hide" });
+    expect(igSetHidden).toHaveBeenCalled();
+  });
+
+  it("refuses a like when the channel has no Instagram user id (never guesses who to like as)", async () => {
+    const { caller } = buildCaller({ channel: { platformId: "", metadata: {} } });
+    await expect(caller.moderate({ targetId: TARGET_ID, commentId: "17900000000000006", action: "like" })).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringContaining("Reconnect"),
+    });
+    expect(igSetLiked).not.toHaveBeenCalled();
+  });
+});
+
+describe("comment.likePost — like the Instagram post itself", () => {
+  const igChannel = (id: string) => ({ platformId: id, metadata: { igUserId: id } });
+
+  it("likes the TARGET's own media id from the DB (no client-supplied Graph id) and returns the re-read count", async () => {
+    igReadLikeCount.mockResolvedValue(42);
+    const { caller } = buildCaller({ channel: igChannel("IG_POST_A") });
+    const res = await caller.likePost({ targetId: TARGET_ID, liked: true });
+    expect(igSetMediaLiked).toHaveBeenCalledWith(expect.objectContaining({ accessToken: "DECRYPTED_TOKEN" }), "IG_POST_A", "MEDIA_1", true);
+    expect(igReadLikeCount).toHaveBeenCalledWith(expect.anything(), "MEDIA_1");
+    expect(res).toEqual({ ok: true, liked: true, likeCount: 42 });
+    expect(createAuditLog).toHaveBeenCalledWith(expect.objectContaining({ action: "post.liked", entityId: TARGET_ID }));
+  });
+
+  it("unlike → liked=false, audited as post.unliked", async () => {
+    const { caller } = buildCaller({ channel: igChannel("IG_POST_B") });
+    await caller.likePost({ targetId: TARGET_ID, liked: false });
+    expect(igSetMediaLiked).toHaveBeenCalledWith(expect.anything(), "IG_POST_B", "MEDIA_1", false);
+    expect(createAuditLog).toHaveBeenCalledWith(expect.objectContaining({ action: "post.unliked" }));
+  });
+
+  it("is Instagram-only — a Facebook target is refused without any Graph call", async () => {
+    const { caller } = buildCaller({ target: FB_TARGET, channel: FB_CHANNEL });
+    await expect(caller.likePost({ targetId: TARGET_ID, liked: true })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(igSetMediaLiked).not.toHaveBeenCalled();
+    expect(fbSetLiked).not.toHaveBeenCalled();
+  });
+
+  it("applies the same org gate as every other comment procedure", async () => {
+    const { caller } = buildCaller({ target: { orgId: "org-other" }, channel: igChannel("IG_POST_C") });
+    await expect(caller.likePost({ targetId: TARGET_ID, liked: true })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(igSetMediaLiked).not.toHaveBeenCalled();
+  });
+
+  it("refuses a story (Instagram cannot like one, and stories have no thread here)", async () => {
+    const { caller } = buildCaller({ target: { format: "STORY" }, channel: igChannel("IG_POST_D") });
+    await expect(caller.likePost({ targetId: TARGET_ID, liked: true })).rejects.toThrow();
+    expect(igSetMediaLiked).not.toHaveBeenCalled();
+  });
+
+  it("an unknown outcome is audited as unconfirmed and says so", async () => {
+    igSetMediaLiked.mockRejectedValueOnce(
+      new Error("The platform didn't confirm that change. Refresh the comments to see the current state.")
+    );
+    const { caller } = buildCaller({ channel: igChannel("IG_POST_E") });
+    await expect(caller.likePost({ targetId: TARGET_ID, liked: true })).rejects.toMatchObject({
+      message: expect.stringContaining("didn't confirm"),
+    });
+    expect(createAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "post.liked", metadata: expect.objectContaining({ outcome: "unconfirmed" }) })
+    );
   });
 });
