@@ -123,8 +123,8 @@ describe("parseFacebookCommentsPage", () => {
 });
 
 describe("field sets", () => {
-  it("the preferred set embeds replies in one round-trip, reading only top-level-safe names", () => {
-    expect(FB_COMMENT_FIELDS).toContain("comments.limit(");
+  it("the preferred set embeds the NEWEST replies in one round-trip", () => {
+    expect(FB_COMMENT_FIELDS).toContain("comments.order(reverse_chronological).limit(");
     expect(FB_COMMENT_FIELDS).toContain("from{id,name}");
   });
 
@@ -134,7 +134,7 @@ describe("field sets", () => {
     expect(FB_COMMENT_FIELDS_MINIMAL).not.toContain("is_hidden");
     expect(FB_COMMENT_FIELDS_MINIMAL).not.toContain("attachment");
     // …and still reads the thread (author, text, replies).
-    for (const f of ["message", "from{id,name}", "created_time", "comments.limit("]) {
+    for (const f of ["message", "from{id,name}", "created_time", "comments.order(reverse_chronological).limit("]) {
       expect(FB_COMMENT_FIELDS_MINIMAL).toContain(f);
     }
   });

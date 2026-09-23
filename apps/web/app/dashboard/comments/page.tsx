@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { format } from "date-fns";
@@ -45,6 +45,7 @@ function CommentsInbox() {
   const channelParam = searchParams.get("channel");
   const postParam = searchParams.get("post");
   const [search, setSearch] = useState("");
+  const threadRef = useRef<HTMLDivElement>(null);
 
   const accountsQuery = trpc.comment.accounts.useQuery(undefined, { staleTime: 60_000 });
   const accounts = accountsQuery.data ?? [];
@@ -79,7 +80,17 @@ function CommentsInbox() {
     params.set("channel", channelId);
     if (postTargetId) params.set("post", postTargetId);
     router.replace(`/dashboard/comments?${params.toString()}`, { scroll: false });
+    // Below xl the thread sits UNDER the lists — bring it into view so tapping a
+    // post visibly does something on a phone or small laptop.
+    if (postTargetId && typeof window !== "undefined" && window.innerWidth < 1280) {
+      requestAnimationFrame(() => threadRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+    }
   };
+
+  // Identity hints for the thread header while it loads: the selected account,
+  // when the URL's post belongs to it (always true for the post-page deep link,
+  // which sends the post's own channel).
+  const hintAccount = selectedAccount && (selectedPost || channelParam === selectedAccount.id) ? selectedAccount : null;
 
   return (
     <div className="space-y-4">
@@ -111,7 +122,10 @@ function CommentsInbox() {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,17rem)_minmax(0,21rem)_minmax(0,1fr)]">
+        // Three columns only from xl (1280px): below that the thread — the part
+        // people read and type into — would be squeezed to a sliver. At lg the
+        // two pickers sit side by side with the thread full-width underneath.
+        <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-[minmax(0,14rem)_minmax(0,17rem)_minmax(0,1fr)] 2xl:grid-cols-[minmax(0,17rem)_minmax(0,21rem)_minmax(0,1fr)]">
           {/* 1 — Page / account */}
           <Card className="min-w-0">
             <CardHeader className="space-y-2 p-4 pb-2">
@@ -126,7 +140,7 @@ function CommentsInbox() {
                 />
               </div>
             </CardHeader>
-            <CardContent className="max-h-72 space-y-1 overflow-y-auto p-2 lg:max-h-[calc(100vh-15rem)]">
+            <CardContent className="max-h-72 space-y-1 overflow-y-auto p-2 xl:max-h-[calc(100vh-15rem)]">
               {filteredAccounts.map((a) => {
                 const platform = a.platform as CommentPlatform;
                 const active = a.id === selectedChannelId;
@@ -180,7 +194,7 @@ function CommentsInbox() {
                 </CardDescription>
               )}
             </CardHeader>
-            <CardContent className="max-h-96 space-y-1 overflow-y-auto p-2 lg:max-h-[calc(100vh-15rem)]">
+            <CardContent className="max-h-96 space-y-1 overflow-y-auto p-2 xl:max-h-[calc(100vh-15rem)]">
               {postsQuery.isLoading ? (
                 <div className="space-y-2 p-2">
                   {[0, 1, 2].map((i) => (
@@ -253,11 +267,11 @@ function CommentsInbox() {
           </Card>
 
           {/* 3 — Comments */}
-          <Card className="min-w-0">
+          <Card ref={threadRef} className="min-w-0 scroll-mt-4 lg:col-span-2 xl:col-span-1">
             <CardHeader className="p-4 pb-2">
               <CardTitle className="text-sm">3. Comments</CardTitle>
             </CardHeader>
-            <CardContent className="p-4 pt-2 lg:max-h-[calc(100vh-13rem)] lg:overflow-y-auto">
+            <CardContent className="p-4 pt-2 xl:max-h-[calc(100vh-13rem)] xl:overflow-y-auto">
               {postParam ? (
                 // Rendered from the URL even when the post isn't in the loaded
                 // page of the list (a deep link to an older post). The server
@@ -266,15 +280,20 @@ function CommentsInbox() {
                 <CommentThread
                   key={postParam}
                   targetId={postParam}
-                  platform={selectedPost ? (selectedAccount?.platform as CommentPlatform | undefined) : undefined}
-                  accountName={selectedPost ? selectedAccount?.name : undefined}
-                  accountAvatar={selectedPost ? selectedAccount?.avatar : undefined}
+                  platform={hintAccount ? (hintAccount.platform as CommentPlatform) : undefined}
+                  accountName={hintAccount?.name}
+                  accountAvatar={hintAccount?.avatar}
                   publishedUrl={selectedPost?.publishedUrl ?? null}
                 />
               ) : (
                 <p className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
-                  Select a post to load its comments from{" "}
-                  {selectedAccount ? ACCOUNT_KIND[selectedAccount.platform as CommentPlatform] : "the platform"}.
+                  Select a post to load its comments live from{" "}
+                  {selectedAccount
+                    ? selectedAccount.platform === "FACEBOOK"
+                      ? "Facebook"
+                      : "Instagram"
+                    : "the platform"}
+                  .
                 </p>
               )}
             </CardContent>

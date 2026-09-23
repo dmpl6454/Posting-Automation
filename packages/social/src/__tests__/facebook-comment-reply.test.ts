@@ -5,6 +5,7 @@ import {
   FB_COMMENT_FIELDS_MINIMAL,
   FB_COMMENT_LIST_FAILED_MESSAGE,
   FB_COMMENT_PERMISSION_DENIED_MESSAGE,
+  FB_COMMENT_POST_GONE_MESSAGE,
   FB_COMMENT_REPLY_FAILED_MESSAGE,
   FB_COMMENT_REPLY_UNCONFIRMED_MESSAGE,
   FB_COMMENT_THROTTLED_MESSAGE,
@@ -135,16 +136,39 @@ describe("FacebookProvider.getPostComments", () => {
     expect(spy.mock.calls.flat().join(" ")).toMatch(/field rejected/);
   });
 
-  it("does NOT descend on an ordinary #100 (object gone) — no wasted second call", async () => {
+  it("does NOT descend on an ordinary #100 (object gone) — and says the POST is gone, not a comment", async () => {
     instantSleep();
     const calls = mockGraph(() => ({
       ok: false,
       body: { error: { code: 100, error_subcode: 33, message: "Unsupported get request. Object does not exist" } },
     }));
     await expect(new FacebookProvider().getPostComments(tokens, `${PAGE_ID}_9`, PAGE_ID)).rejects.toThrow(
-      COMMENT_OBJECT_GONE_MESSAGE
+      FB_COMMENT_POST_GONE_MESSAGE
     );
     expect(calls).toHaveLength(1);
+  });
+
+  it("asks for the NEWEST embedded replies and shows them oldest-first", async () => {
+    instantSleep();
+    const calls = mockGraph(() => ({
+      ok: true,
+      body: {
+        data: [
+          {
+            id: "9_1",
+            comment_count: 40,
+            // Graph returns newest-first because we asked for reverse_chronological.
+            comments: { data: [{ id: "r-newest", from: { id: PAGE_ID } }, { id: "r-older" }] },
+          },
+        ],
+      },
+    }));
+    const page = await new FacebookProvider().getPostComments(tokens, `${PAGE_ID}_9`, PAGE_ID);
+    expect(new URL(calls[0]!.url).searchParams.get("fields")).toContain("comments.order(reverse_chronological).limit(");
+    // The Page's just-sent reply (newest) is present even on a 40-reply comment…
+    expect(page.comments[0]!.replies.map((r) => r.id)).toEqual(["r-older", "r-newest"]);
+    expect(page.comments[0]!.replies[1]!.isOwn).toBe(true);
+    expect(page.comments[0]!.replyCount).toBe(40);
   });
 
   it("maps the permission family (#10 / #200 / #283) to the actionable reconnect message", async () => {
@@ -258,6 +282,29 @@ describe("FacebookProvider.replyToComment", () => {
     mockGraph(() => ({ ok: false, status: 400, body: { error: { code: 1705, message: "There was an error posting to this wall" } } }));
     await expect(new FacebookProvider().replyToComment(tokens, "9_55", "hi", PAGE_ID)).rejects.toThrow(
       FB_COMMENT_REPLY_FAILED_MESSAGE
+    );
+  });
+
+  it("treats a 4xx carrying is_transient / code 2 as OUTCOME UNKNOWN — the 2026-08-18 duplicate-post shape", async () => {
+    instantSleep();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    for (const error of [
+      { code: 2, is_transient: true, message: "An unexpected error has occurred. Please retry your request later." },
+      { code: 2, message: "Service temporarily unavailable" },
+      { code: 1, is_transient: true, message: "An unknown error occurred" },
+    ]) {
+      mockGraph(() => ({ ok: false, status: 400, body: { error } }));
+      await expect(new FacebookProvider().replyToComment(tokens, "9_55", "hi", PAGE_ID)).rejects.toThrow(
+        FB_COMMENT_REPLY_UNCONFIRMED_MESSAGE
+      );
+    }
+  });
+
+  it("but a THROTTLE flagged is_transient is still a definite refusal (Meta never executed it)", async () => {
+    instantSleep();
+    mockGraph(() => ({ ok: false, status: 400, body: { error: { code: 4, is_transient: true, message: "Application request limit reached" } } }));
+    await expect(new FacebookProvider().replyToComment(tokens, "9_55", "hi", PAGE_ID)).rejects.toThrow(
+      FB_COMMENT_THROTTLED_MESSAGE
     );
   });
 

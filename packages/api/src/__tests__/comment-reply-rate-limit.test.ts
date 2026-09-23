@@ -38,6 +38,7 @@ describe("comment.reply rate limit", () => {
       channel: {
         findUnique: vi.fn(async () => ({
           id: "c",
+          organizationId: "o",
           platform: "FACEBOOK",
           platformId: "P",
           name: "Page",

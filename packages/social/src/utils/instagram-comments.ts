@@ -159,6 +159,14 @@ export function isCommentObjectGoneError(err: MetaErrorLike | undefined | null):
 export const COMMENT_OBJECT_GONE_MESSAGE =
   "That comment no longer exists — it may have been deleted. Refresh and try again.";
 
+/** `#100/33` on the LIST call — the media itself is gone, not a comment. */
+export const COMMENT_MEDIA_GONE_MESSAGE =
+  "This post is no longer available on Instagram — it may have been deleted there.";
+
+/** `#190` — the stored token is dead (password change, session invalidated, lost Page role). */
+export const COMMENT_TOKEN_INVALID_MESSAGE =
+  "Instagram rejected this account's connection. Reconnect the channel on the Channels page, then try again.";
+
 /** Instagram comment text limit (same as a normal IG comment). */
 export const COMMENT_REPLY_MAX_LENGTH = 2200;
 

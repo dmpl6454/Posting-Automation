@@ -64,6 +64,7 @@ function buildCaller(opts: {
     channelId: string;
   }> | null;
   channel?: Partial<{
+    organizationId: string;
     platform: string;
     disconnectedAt: Date | null;
     accessToken: string;
@@ -95,6 +96,7 @@ function buildCaller(opts: {
       ? null
       : {
           id: CHANNEL_ID,
+          organizationId: ORG_ID,
           platform: "INSTAGRAM",
           platformId: "IG_USER",
           name: "Bollywood Daily",
@@ -225,6 +227,16 @@ describe("comment.list", () => {
     expect(channelFindUnique).not.toHaveBeenCalled();
     expect(getMediaComments).not.toHaveBeenCalled();
     expect(getPostComments).not.toHaveBeenCalled();
+  });
+
+  it("refuses a channel row belonging to ANOTHER org even if a target points at it (defence in depth)", async () => {
+    const { caller } = buildCaller({ channel: { organizationId: "org-other" } });
+    await expect(caller.list({ targetId: TARGET_ID })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      caller.reply({ targetId: TARGET_ID, commentId: "17900000000000001", message: "hi" })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(getMediaComments).not.toHaveBeenCalled();
+    expect(igReplyToComment).not.toHaveBeenCalled();
   });
 
   it("rejects an unknown target as NOT_FOUND", async () => {

@@ -46,12 +46,19 @@ dependencies of `instagram_manage_comments`.
 **⚠️ One conditional to watch — `ads_read`.** Meta's IG comment reference adds
 "`ads_management` **or** `ads_read`" when the connecting person's role on the Page was
 granted **through Business Manager**. It does not list `business_management` as an
-alternative. It could not be settled from prod: Graph returns HTTP 200 on an
-**empty** comment edge regardless of permissions, and none of the probe-reachable
-posts had comments. **The test-call step (§3) settles it.** If an Instagram comment
-load fails with *"hasn't been granted comment-reply permission"* on a freshly
-reconnected account whose Page role comes via Business Manager, add `ads_read`
-before submitting. Do not add it pre-emptively.
+alternative. This is a condition **per connecting person**, not per app: someone who
+admins the Page directly never needs it, while someone whose Page role comes from a
+Business portfolio might. It could not be settled from prod: Graph returns HTTP 200
+on an **empty** comment edge regardless of permissions, and none of the probe-reachable
+posts had comments.
+
+**The test-call step (§3) settles it for the accounts you test with.** If an Instagram
+comment load fails with *"hasn't been granted comment-reply permission"* on a freshly
+reconnected account whose Page role comes through Business Manager, stop and tell
+engineering. Adding `ads_read` is **not** a toggle: it is one more permission with its
+own App Review and usage description, and it must be requested in code first. Do not
+add it pre-emptively — requesting a permission the app visibly doesn't use is itself
+a rejection reason.
 
 ---
 
@@ -76,6 +83,13 @@ before submitting. Do not add it pre-emptively.
    permissions via the `scope` parameter (no `config_id`), which Meta still supports
    for user access tokens. Deploying the code is what adds `pages_manage_engagement`
    to the consent screen.
+5. **Deploying the new scope before touching the dashboard is safe.** Verified
+   2026-09-23 against Facebook's live login dialog for **both** apps: the scope list
+   including `pages_manage_engagement` (and the Instagram list including
+   `instagram_manage_comments`) redirects normally to login. A deliberately bogus
+   scope returns HTTP 500, which shows Meta checks scopes before login. So connecting
+   keeps working for everyone. Only app-role accounts are granted the permission until
+   it is approved.
 
 ---
 
@@ -139,8 +153,12 @@ and Meta says logging can take **up to 2 days**.
 ## 4. App A — "Post Automation 2" (new request, via a NEW PostAutomation account)
 
 1. **Create a new PostAutomation account** (e.g. `appreview@dashmani.com`). Its
-   personal workspace uses App A by default. In `/admin → Orgs`, confirm the new
-   workspace has **no Meta app override**.
+   personal workspace uses App A by default: a new workspace has **no Meta app
+   override** (`Organization.metaAppId` is NULL), and nothing sets one except a
+   superadmin. The `/admin` UI does not display this. To double-check, ask engineering
+   to run
+   `SELECT name, "metaAppId" FROM "Organization" WHERE name ILIKE '%<new workspace>%';`
+   The result must be NULL.
 2. Confirm the Facebook test accounts (demo, priyanshu) have a **role on App A**
    (App A → App roles → Roles).
 3. App A → **Use cases** → add **`pages_manage_engagement`** (Page use case) and
@@ -182,7 +200,14 @@ comment shown **on the Page itself**.
 | 4 | **2. Post**: click a post → **3. Comments** loads | "`pages_read_user_content`: the Page's comments are retrieved live from Facebook and shown with the commenter's name, text and time, labeled with the Page." |
 | 5 | **Reply** → type → **Reply as ‹Page›** → reply appears with a **Page** badge | "`pages_manage_engagement`: the admin publishes a reply as the Page." |
 | 6 | Click **Open ↗** → facebook.com post shows the reply | "The reply is now live on the Facebook Page." |
-| 7 | Comments → select the **Instagram** account → post → comments → **Reply** → **Open ↗** on instagram.com | "`instagram_manage_comments`: reading comments on the Instagram post and replying as the account; the reply is live on Instagram." |
+| 7 | **Content Studio → Compose** → publish a photo to the test Instagram account (≈20 s; see note) | "Publishing a post to the connected Instagram account." |
+| 8 | Comments → select the **Instagram** account → that post → comments → **Reply** → **Open ↗** on instagram.com | "`instagram_manage_comments`: reading comments on the Instagram post and replying as the account; the reply is live on Instagram." |
+
+Note on step 7: the "What to include in App Review" cell for
+`instagram_manage_comments` in Meta's Permissions Reference was copied from
+`instagram_content_publish` and asks for a photo to be published. Showing that costs
+20 seconds and satisfies the literal checklist. The **usage description must still
+describe comments** (§6), not publishing.
 
 Tip: if the Facebook dialog shows "Continue as …", click **Edit settings** so the full
 permission list is on screen. That exact omission caused the 2026-06 screencast
@@ -272,5 +297,6 @@ rejection.
 | "…hasn't granted comment access yet. Reconnect…" (FB) / "…hasn't been granted comment-reply permission yet…" (IG) | The token lacks the permission: either not reconnected since the scope was added, or Meta hasn't approved it for non-role users yet | Reconnect (Edit settings, keep the Page ticked); if it still fails, it's pending approval |
 | "Facebook rejected this Page's connection…" | `#190` — dead token or lost Page role | Reconnect the channel |
 | "…temporarily limiting activity…" | Throttle / `#368` (too many replies too fast) | Wait a few minutes |
-| "…accepted the reply but did not confirm it…" | Outcome unknown (timeout / 5xx) — the reply may be live | **Refresh first**; don't resend blindly |
+| "Reply not confirmed — it may already be posted" (toast) + amber note in the reply box, button reads **Send again anyway** | Outcome unknown: a timeout, a 5xx, Meta's `is_transient`/code 2, or our own request dropping mid-flight. The reply may be live | **Check the thread (it refreshes itself) or the post first**; only then send again |
+| "There's a lot of comment activity on this Page right now…" | Our per-Page ceiling (120 reads / 30 replies per minute across all workspaces sharing the Page) | Wait a minute |
 | "That comment no longer exists…" | `#100/33` — deleted in the meantime | Refresh |

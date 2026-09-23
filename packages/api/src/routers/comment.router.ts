@@ -12,7 +12,12 @@ import {
   type SocialCommentPage,
 } from "@postautomation/social";
 import { createRateLimitMiddleware } from "../middleware/rate-limit.middleware";
-import { commentReplyRateLimiter } from "../middleware/rate-limit";
+import {
+  commentPageReadLimiter,
+  commentPageReplyLimiter,
+  commentReadRateLimiter,
+  commentReplyRateLimiter,
+} from "../middleware/rate-limit";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 
 /**
@@ -111,7 +116,13 @@ export async function resolvePublishedCommentTarget(
   }
 
   const channel = await prisma.channel.findUnique({ where: { id: target.channelId } });
-  if (!channel || !isCommentPlatform(channel.platform)) {
+  // Defence in depth: post.create already refuses foreign channels, but this is
+  // the row whose DECRYPTED token we are about to use, so check its own org too
+  // rather than trusting that invariant from another router.
+  if (!channel || channel.organizationId !== organizationId) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Post target not found" });
+  }
+  if (!isCommentPlatform(channel.platform)) {
     throw new TRPCError({
       code: "BAD_REQUEST",
       message: "Comments are available for Facebook Pages and Instagram accounts only.",
@@ -154,6 +165,24 @@ export async function resolvePublishedCommentTarget(
 
 /** Public posts as the Page / account — human-paced ceiling (see the limiter). */
 const replyRateLimited = orgProcedure.use(createRateLimitMiddleware(commentReplyRateLimiter));
+/** Live Graph reads against the Page's rate budget (see the limiter). */
+const readRateLimited = orgProcedure.use(createRateLimitMiddleware(commentReadRateLimiter));
+
+/**
+ * Per-Page budget shared by every user and org that connected this Page —
+ * checked AFTER resolving the target, because only then is the Page known.
+ */
+function enforcePageBudget(
+  limiter: (key: string) => { success: boolean },
+  platform: CommentPlatform,
+  platformId: string
+): void {
+  if (limiter(`${platform}:${platformId}`).success) return;
+  throw new TRPCError({
+    code: "TOO_MANY_REQUESTS",
+    message: `There's a lot of comment activity on this ${platform === "FACEBOOK" ? "Page" : "account"} right now. Please wait a minute and try again.`,
+  });
+}
 
 export const commentRouter = createRouter({
   /**
@@ -284,7 +313,7 @@ export const commentRouter = createRouter({
    * loaded live from Meta. `cursor` is the previous page's `nextCursor`; the
    * legacy name `after` (2026-09-19 clients) is still accepted.
    */
-  list: orgProcedure
+  list: readRateLimited
     .input(
       z.object({
         targetId: z.string(),
@@ -294,6 +323,7 @@ export const commentRouter = createRouter({
     )
     .query(async ({ ctx, input }) => {
       const t = await resolvePublishedCommentTarget(ctx.prisma as any, ctx.organizationId, input.targetId);
+      enforcePageBudget(commentPageReadLimiter, t.platform, t.account.platformId);
       const cursor = input.cursor ?? input.after ?? undefined;
 
       let page: SocialCommentPage;
@@ -348,6 +378,7 @@ export const commentRouter = createRouter({
       // Resolving re-checks org/status/platform/disconnect — a client cannot
       // skip the gate `list` enforces by calling `reply` directly.
       const t = await resolvePublishedCommentTarget(ctx.prisma as any, ctx.organizationId, input.targetId);
+      enforcePageBudget(commentPageReplyLimiter, t.platform, t.account.platformId);
       if (t.platform === "INSTAGRAM" && input.message.length > COMMENT_REPLY_MAX_LENGTH) {
         throw new TRPCError({
           code: "BAD_REQUEST",

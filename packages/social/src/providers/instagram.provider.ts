@@ -10,12 +10,14 @@ import {
   COMMENT_LIST_FAILED_MESSAGE,
   COMMENT_REPLY_FAILED_MESSAGE,
   COMMENT_REPLY_UNCONFIRMED_MESSAGE,
+  COMMENT_MEDIA_GONE_MESSAGE,
+  COMMENT_TOKEN_INVALID_MESSAGE,
   IG_COMMENT_FIELDS,
   IG_COMMENT_FIELDS_MINIMAL,
   type InstagramCommentPage,
   type InstagramOwnAccount,
 } from "../utils/instagram-comments";
-import { isGraphFieldError } from "../utils/social-comments";
+import { isGraphFieldError, isIndeterminateReplyError } from "../utils/social-comments";
 import {
   isStoryFormat,
   isStoryModePost,
@@ -1671,11 +1673,16 @@ export class InstagramProvider extends SocialProvider {
     }
 
     if (!res.ok) {
+      // #190 first — a dead token must read as "reconnect", not "try again".
+      if (Number(data?.error?.code) === 190) {
+        throw new Error(COMMENT_TOKEN_INVALID_MESSAGE);
+      }
       if (isCommentPermissionDeniedError(data?.error)) {
         throw new Error(COMMENT_PERMISSION_DENIED_MESSAGE);
       }
+      // #100/33 on the LIST call: the media itself is gone (not a comment).
       if (isCommentObjectGoneError(data?.error)) {
-        throw new Error(COMMENT_OBJECT_GONE_MESSAGE);
+        throw new Error(COMMENT_MEDIA_GONE_MESSAGE);
       }
       // The raw body is LOGGED, never thrown: it becomes a TRPCError message on
       // the client, and humanizeError does not recognise Graph JSON as technical,
@@ -1769,6 +1776,15 @@ export class InstagramProvider extends SocialProvider {
           data === null ? "unreadable response body" : JSON.stringify(data)
         );
         throw new Error(COMMENT_REPLY_UNCONFIRMED_MESSAGE);
+      }
+      // A 4xx with Meta's `is_transient` flag or code 2 is ALSO unknown — the
+      // exact 2026-08-18 duplicate-post shape (throttles excluded in the helper).
+      if (isIndeterminateReplyError(data)) {
+        console.error(`[Instagram] comment reply outcome unknown (HTTP ${res.status}, transient):`, JSON.stringify(data));
+        throw new Error(COMMENT_REPLY_UNCONFIRMED_MESSAGE);
+      }
+      if (Number(data?.error?.code) === 190) {
+        throw new Error(COMMENT_TOKEN_INVALID_MESSAGE);
       }
       if (isCommentPermissionDeniedError(data?.error)) {
         throw new Error(COMMENT_PERMISSION_DENIED_MESSAGE);

@@ -62,6 +62,7 @@ import {
   FB_COMMENT_PAGE_SIZE,
   FB_COMMENT_LIST_FAILED_MESSAGE,
   FB_COMMENT_PERMISSION_DENIED_MESSAGE,
+  FB_COMMENT_POST_GONE_MESSAGE,
   FB_COMMENT_REPLY_FAILED_MESSAGE,
   FB_COMMENT_REPLY_UNCONFIRMED_MESSAGE,
   FB_COMMENT_THROTTLED_MESSAGE,
@@ -72,7 +73,7 @@ import {
   parseFacebookCommentsPage,
 } from "../utils/facebook-comments";
 import { COMMENT_OBJECT_GONE_MESSAGE, isCommentObjectGoneError } from "../utils/instagram-comments";
-import { isGraphFieldError, type SocialCommentPage } from "../utils/social-comments";
+import { isGraphFieldError, isIndeterminateReplyError, type SocialCommentPage } from "../utils/social-comments";
 
 /**
  * Videos larger than this are published via Graph's `file_url` remote-pull
@@ -2010,6 +2011,13 @@ export class FacebookProvider extends SocialProvider {
         );
         throw new Error(FB_COMMENT_REPLY_UNCONFIRMED_MESSAGE);
       }
+      // A 4xx can still leave the outcome unknown: Meta's `is_transient` flag
+      // or code 2 (the 2026-08-18 duplicate-post shape). Throttles are
+      // definite refusals and are excluded inside the helper.
+      if (isIndeterminateReplyError(data)) {
+        console.error(`[Facebook] comment reply outcome unknown (HTTP ${res.status}, transient):`, JSON.stringify(data));
+        throw new Error(FB_COMMENT_REPLY_UNCONFIRMED_MESSAGE);
+      }
       throw this.commentError(data, res.status, "reply");
     }
     if (data === null || !data.id) {
@@ -2029,7 +2037,10 @@ export class FacebookProvider extends SocialProvider {
     const err = body?.error;
     if (isFbTokenInvalidError(err)) return new Error(FB_COMMENT_TOKEN_INVALID_MESSAGE);
     if (isFbCommentPermissionError(err)) return new Error(FB_COMMENT_PERMISSION_DENIED_MESSAGE);
-    if (isCommentObjectGoneError(err)) return new Error(COMMENT_OBJECT_GONE_MESSAGE);
+    // #100/33 on the list call means the POST is gone; on reply, the comment.
+    if (isCommentObjectGoneError(err)) {
+      return new Error(op === "list" ? FB_COMMENT_POST_GONE_MESSAGE : COMMENT_OBJECT_GONE_MESSAGE);
+    }
     if (isFbCommentThrottleError(err)) return new Error(FB_COMMENT_THROTTLED_MESSAGE);
     console.error(
       `[Facebook] comment ${op} failed (HTTP ${status}):`,

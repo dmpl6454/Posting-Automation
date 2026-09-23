@@ -8,6 +8,8 @@ import {
   COMMENT_REPLY_UNCONFIRMED_MESSAGE,
   IG_COMMENT_FIELDS,
   IG_COMMENT_FIELDS_MINIMAL,
+  COMMENT_MEDIA_GONE_MESSAGE,
+  COMMENT_TOKEN_INVALID_MESSAGE,
 } from "../utils/instagram-comments";
 
 /**
@@ -128,13 +130,23 @@ describe("InstagramProvider.getMediaComments", () => {
     );
   });
 
-  it("maps #100/33 to the 'comment no longer exists' message", async () => {
+  it("maps #100/33 on the LIST call to 'this post is no longer available' (changed 2026-09-23)", async () => {
+    // Until 2026-09-23 this said "That comment no longer exists" — but on the
+    // list call the object that is gone is the MEDIA, not a comment.
     mockGraph(() => ({
       ok: false,
       body: { error: { code: 100, error_subcode: 33, message: "Unsupported get request. Object does not exist" } },
     }));
     await expect(new InstagramProvider().getMediaComments(tokens, "MEDIA_1")).rejects.toThrow(
-      COMMENT_OBJECT_GONE_MESSAGE
+      COMMENT_MEDIA_GONE_MESSAGE
+    );
+  });
+
+  it("maps a dead token (#190) to 'reconnect' on list and reply, not 'try again'", async () => {
+    mockGraph(() => ({ ok: false, body: { error: { code: 190, error_subcode: 460, message: "Error validating access token" } } }));
+    await expect(new InstagramProvider().getMediaComments(tokens, "MEDIA_1")).rejects.toThrow(COMMENT_TOKEN_INVALID_MESSAGE);
+    await expect(new InstagramProvider().replyToComment(tokens, "COMMENT_1", "x")).rejects.toThrow(
+      COMMENT_TOKEN_INVALID_MESSAGE
     );
   });
 
@@ -267,6 +279,19 @@ describe("InstagramProvider.replyToComment", () => {
     mockGraph(() => ({ ok: false, status: 500, body: { error: { code: 1, message: "An unknown error occurred" } } }));
     await expect(new InstagramProvider().replyToComment(tokens, "COMMENT_1", "x")).rejects.toThrow(
       COMMENT_REPLY_UNCONFIRMED_MESSAGE
+    );
+    spy.mockRestore();
+  });
+
+  it("treats a 4xx carrying is_transient / code 2 as outcome-unknown (throttles excepted)", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    mockGraph(() => ({ ok: false, status: 400, body: { error: { code: 2, is_transient: true, message: "Please retry your request later." } } }));
+    await expect(new InstagramProvider().replyToComment(tokens, "COMMENT_1", "x")).rejects.toThrow(
+      COMMENT_REPLY_UNCONFIRMED_MESSAGE
+    );
+    mockGraph(() => ({ ok: false, status: 400, body: { error: { code: 4, is_transient: true, message: "Application request limit reached" } } }));
+    await expect(new InstagramProvider().replyToComment(tokens, "COMMENT_1", "x")).rejects.toThrow(
+      COMMENT_REPLY_FAILED_MESSAGE
     );
     spy.mockRestore();
   });

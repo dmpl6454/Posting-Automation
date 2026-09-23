@@ -35,13 +35,23 @@ export const FB_COMMENT_PAGE_SIZE = 25;
 const FB_REPLY_FIELDS = "id,message,created_time,from{id,name},like_count,is_hidden,attachment{type}";
 
 /**
+ * The NEWEST replies, not the oldest: on a busy comment (more than the limit)
+ * the Page's just-sent reply must be in the embedded page, or "refresh before
+ * replying again" could never find it. Graph validates the `order` value
+ * (live-verified 2026-09-23: a bogus value 400s with "order must be one of
+ * chronological, reverse_chronological"). The parser flips them back to
+ * oldest-first for reading.
+ */
+const FB_EMBEDDED_REPLIES = `comments.order(reverse_chronological).limit(${FB_EMBEDDED_REPLY_LIMIT})`;
+
+/**
  * Fields for GET /{object-id}/comments. Every name here is a documented
  * Comment field; ONE unknown name 400s the whole call, so do not add a field
  * without checking the Comment reference first.
  */
 export const FB_COMMENT_FIELDS =
   "id,message,created_time,from{id,name},like_count,comment_count,is_hidden,can_comment,attachment{type}," +
-  `comments.limit(${FB_EMBEDDED_REPLY_LIMIT}){${FB_REPLY_FIELDS}}`;
+  `${FB_EMBEDDED_REPLIES}{${FB_REPLY_FIELDS}}`;
 
 /**
  * Fallback rung used ONLY when Meta rejects a name in FB_COMMENT_FIELDS
@@ -54,7 +64,7 @@ export const FB_COMMENT_FIELDS =
  */
 export const FB_COMMENT_FIELDS_MINIMAL =
   "id,message,created_time,from{id,name},like_count,comment_count,can_comment," +
-  `comments.limit(${FB_EMBEDDED_REPLY_LIMIT}){id,message,created_time,from{id,name},like_count}`;
+  `${FB_EMBEDDED_REPLIES}{id,message,created_time,from{id,name},like_count}`;
 
 /** Facebook's comment length ceiling. */
 export const FB_COMMENT_MAX_LENGTH = 8000;
@@ -73,9 +83,11 @@ interface FbCommentRow {
 }
 
 function toSocialComment(row: FbCommentRow, pageId: string | null, isReply: boolean): SocialComment {
+  // Fetched newest-first (FB_EMBEDDED_REPLIES) so the latest reply is always
+  // included; shown oldest-first, the order a conversation is read in.
   const replies = isReply
     ? []
-    : (row.comments?.data ?? []).map((r) => toSocialComment(r, pageId, true));
+    : (row.comments?.data ?? []).map((r) => toSocialComment(r, pageId, true)).reverse();
   const authorId = row.from?.id ?? null;
   return {
     id: row.id,
@@ -169,6 +181,10 @@ export const FB_COMMENT_TOKEN_INVALID_MESSAGE =
 
 export const FB_COMMENT_THROTTLED_MESSAGE =
   "Facebook is temporarily limiting activity for this Page. Please wait a few minutes before trying again.";
+
+/** `#100/33` on the LIST call — the post itself is gone, not a comment. */
+export const FB_COMMENT_POST_GONE_MESSAGE =
+  "This post is no longer available on Facebook — it may have been deleted there.";
 
 export const FB_COMMENT_LIST_FAILED_MESSAGE =
   "Facebook couldn't load the comments right now. Please try again in a moment.";

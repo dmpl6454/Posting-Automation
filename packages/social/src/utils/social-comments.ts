@@ -11,6 +11,8 @@
  * Graph specifics in facebook-comments.ts / instagram-comments.ts.
  */
 
+import { isIndeterminatePublishError } from "./ambiguous-publish";
+
 export type CommentPlatform = "FACEBOOK" | "INSTAGRAM";
 
 export interface SocialCommentAuthor {
@@ -92,6 +94,20 @@ export function nextCursorFromPaging(
 export function isGraphFieldError(err: { code?: number | string; message?: string } | undefined | null): boolean {
   if (!err) return false;
   return Number(err.code) === 100 && /nonexisting field|tried accessing/i.test(String(err.message ?? ""));
+}
+
+/**
+ * A 4xx reply error whose outcome is nonetheless UNKNOWN: Meta flags
+ * `is_transient: true`, or code 2 (service fault — work may have begun). This
+ * is the exact response shape of the 2026-08-18 duplicate-post incident, and
+ * creating a reply is not idempotent, so it must read as "may already be
+ * posted", never "failed". Delegates to the publish path's classifier so the
+ * load-bearing order (throttle codes are definite refusals and win over
+ * `is_transient`) lives in ONE place.
+ */
+export function isIndeterminateReplyError(body: { error?: unknown } | null | undefined): boolean {
+  if (!body || typeof body !== "object" || !body.error || typeof body.error !== "object") return false;
+  return isIndeterminatePublishError(new Error(`reply failed: ${JSON.stringify({ error: body.error })}`));
 }
 
 /** Non-negative integer or 0 — Graph omits counts it cannot report. */
