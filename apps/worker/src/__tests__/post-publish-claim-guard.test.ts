@@ -59,6 +59,10 @@ const h = vi.hoisted(() => {
           if (!(v.in as unknown[]).includes(cur)) return false;
         } else if ("lt" in v) {
           if (!(cur < v.lt)) return false;
+        } else if ("not" in v) {
+          // The CANCELLED guard on the defer/retry writes (2026-09-21): a target
+          // the user stopped must not be re-armed to SCHEDULED.
+          if (cur === (v as { not: unknown }).not) return false;
         } else {
           throw new Error(`fake prisma: unsupported filter on ${k}`);
         }
@@ -701,8 +705,11 @@ describe("defers release the claim BEFORE re-queueing", () => {
     await expect(s.processor!(makeJob())).resolves.toBeUndefined();
 
     expect(rows.get("t1")).toMatchObject({ status: "SCHEDULED", errorMessage: OPTIMIZE_WAIT_MESSAGE });
-    const scheduledWrite = prisma.postTarget.update.mock.calls.findIndex(([a]: any[]) => a.data.status === "SCHEDULED");
-    const writeOrder = prisma.postTarget.update.mock.invocationCallOrder[scheduledWrite]!;
+    // 2026-09-21: the defer writes moved to updateMany so they can carry a
+    // `status: { not: "CANCELLED" }` guard. The CONTRACT under test is unchanged
+    // — SCHEDULED is written BEFORE the delayed job is added.
+    const scheduledWrite = prisma.postTarget.updateMany.mock.calls.findIndex(([a]: any[]) => a.data.status === "SCHEDULED");
+    const writeOrder = prisma.postTarget.updateMany.mock.invocationCallOrder[scheduledWrite]!;
     expect(queue.postPublishQueue.add).toHaveBeenCalledTimes(1);
     expect(writeOrder).toBeLessThan(queue.postPublishQueue.add.mock.invocationCallOrder[0]!);
     const [, , opts] = queue.postPublishQueue.add.mock.calls[0] as any[];
@@ -743,10 +750,10 @@ describe("defers release the claim BEFORE re-queueing", () => {
     const err = await runExpectingError(yt("d"));
     expect(err.message).toBe("Redis connection lost");
     expect(rows.get("d")).toMatchObject({ status: "SCHEDULED", errorMessage: "Waiting for a large-upload slot" });
-    const scheduledWrite = prisma.postTarget.update.mock.calls.findIndex(
+    const scheduledWrite = prisma.postTarget.updateMany.mock.calls.findIndex(
       ([a]: any[]) => a.where.id === "d" && a.data.status === "SCHEDULED"
     );
-    expect(prisma.postTarget.update.mock.invocationCallOrder[scheduledWrite]!).toBeLessThan(
+    expect(prisma.postTarget.updateMany.mock.invocationCallOrder[scheduledWrite]!).toBeLessThan(
       queue.postPublishQueue.add.mock.invocationCallOrder[0]!
     );
 
@@ -821,8 +828,12 @@ describe("wiring — the ordering the behaviour above depends on", () => {
 
     seedTarget("t1", { status: "PUBLISHING" });
     let release!: () => void;
-    prisma.postTarget.update.mockImplementationOnce(
-      () => new Promise((resolve) => { release = () => resolve({}); }) as any
+    // 2026-09-21: the failed handler's write is an updateMany (it carries a
+    // `status: { not: "CANCELLED" }` guard so an async failure cannot relabel a
+    // target the user just stopped). The contract here is unchanged — the
+    // listener's bookkeeping is tracked, so a graceful drain waits for it.
+    prisma.postTarget.updateMany.mockImplementationOnce(
+      () => new Promise((resolve) => { release = () => resolve({ count: 1 }); }) as any
     );
     s.handlers.failed!(makeJob({ attemptsMade: 3 }), new Error("boom"));
     expect(pendingBackgroundTaskCount()).toBe(1);

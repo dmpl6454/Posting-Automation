@@ -133,8 +133,18 @@ export function createAutopilotScheduleWorker() {
         });
 
         // 8. Update PostTargets to SCHEDULED
+        //
+        // ⚠️ Status-predicated. An unfiltered updateMany here would flip a
+        // CANCELLED target back to SCHEDULED, and the 30s cron would then
+        // publish a channel the user explicitly withdrew. `ambiguousAt: null`
+        // for the same reason it guards the publish claim: an unknown-outcome
+        // target must stay unreachable by every arming path.
         await prisma.postTarget.updateMany({
-          where: { postId: post.id },
+          where: {
+            postId: post.id,
+            status: { in: ["DRAFT", "SCHEDULED", "FAILED"] },
+            ambiguousAt: null,
+          },
           data: { status: "SCHEDULED" },
         });
 

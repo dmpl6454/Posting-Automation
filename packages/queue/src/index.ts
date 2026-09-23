@@ -29,3 +29,9 @@ export {
 } from "./story-analytics";
 export { buildScheduledPublishJobs, enqueueScheduledPublishJobs } from "./schedule-publish";
 export type { SchedulablePublishTarget, ScheduledPublishArgs, ScheduledPublishJobSpec } from "./schedule-publish";
+export {
+  resolvePostStatusFromTargets,
+  isCancellableStatus,
+  CANCELLABLE_TARGET_STATUSES,
+} from "./post-status";
+export type { PostVerdict } from "./post-status";

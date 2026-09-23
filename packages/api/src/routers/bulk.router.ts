@@ -72,13 +72,25 @@ export const bulkRouter = createRouter({
           continue;
         }
 
-        await prisma.post.update({
-          where: { id: item.postId },
+        // ⚠️ The POST row needs the same guard its targets already have. Without
+        // it a fully-stopped post is armed to SCHEDULED while every target stays
+        // CANCELLED — a SCHEDULED post whose targets enqueue zero jobs, which
+        // flips to PUBLISHING and is reaped FAILED ~45 min later. Same failure
+        // shape as the 2026-07-27 bulkSchedule bug this procedure already fixed
+        // once, reached from the other side.
+        const armed = await prisma.post.updateMany({
+          where: {
+            id: item.postId,
+            status: { in: ["DRAFT", "SCHEDULED", "FAILED"] },
+          },
           data: {
             scheduledAt: new Date(item.scheduledAt),
             status: "SCHEDULED",
           },
         });
+        // Nothing armed ⇒ the post is PUBLISHED/PUBLISHING/CANCELLED. Skip it
+        // rather than flipping targets under a post that cannot publish.
+        if (armed.count === 0) continue;
 
         // Flip the post's own targets so the publish cron can actually see them.
         // Scoped to DRAFT/FAILED only: PUBLISHED/PUBLISHING/CANCELLED targets must

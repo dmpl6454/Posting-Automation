@@ -21,7 +21,10 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const postUpdate = vi.fn(async (_args: any) => ({ id: "post-1" }));
+// 2026-09-21: the post write became a GUARDED updateMany — it must not arm a
+// post that can no longer publish (e.g. every target cancelled). It returns a
+// count, and `armed.count === 0` makes bulkSchedule skip the post.
+const postUpdateMany = vi.fn(async (_args: any) => ({ count: 1 }));
 const postFindFirst = vi.fn(async (_args: any) => ({ id: "post-1", status: "DRAFT" }));
 const postTargetUpdateMany = vi.fn(async (_args: any) => ({ count: 2 }));
 
@@ -29,7 +32,7 @@ vi.mock("@postautomation/db", () => ({
   prisma: {
     post: {
       findFirst: (a: any) => postFindFirst(a),
-      update: (a: any) => postUpdate(a),
+      updateMany: (a: any) => postUpdateMany(a),
     },
     postTarget: { updateMany: (a: any) => postTargetUpdateMany(a) },
   },
@@ -74,12 +77,16 @@ describe("bulk.bulkSchedule — targets must be flipped, not just the post", () 
 
     expect(res.scheduled).toBe(1);
     // The post itself is scheduled…
-    expect(postUpdate).toHaveBeenCalledWith(
+    expect(postUpdateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: "post-1" },
+        where: expect.objectContaining({ id: "post-1" }),
         data: expect.objectContaining({ status: "SCHEDULED" }),
       })
     );
+    // The guard that stops a fully-cancelled post being armed.
+    expect(postUpdateMany.mock.calls[0]![0].where.status).toEqual({
+      in: ["DRAFT", "SCHEDULED", "FAILED"],
+    });
     // …AND its targets (this is the whole fix).
     expect(postTargetUpdateMany).toHaveBeenCalledTimes(1);
     const arg = postTargetUpdateMany.mock.calls[0]![0] as any;
@@ -110,7 +117,7 @@ describe("bulk.bulkSchedule — targets must be flipped, not just the post", () 
     });
 
     expect(res.scheduled).toBe(0);
-    expect(postUpdate).not.toHaveBeenCalled();
+    expect(postUpdateMany).not.toHaveBeenCalled();
     expect(postTargetUpdateMany).not.toHaveBeenCalled();
   });
 });
@@ -125,7 +132,7 @@ describe("bulk.* org membership enforcement (was a cross-org IDOR)", () => {
       caller.bulkSchedule({ items: [{ postId: "p", scheduledAt: "2099-01-01T10:00:00.000Z" }] })
     ).rejects.toThrow();
     // Crucially: rejected BEFORE any post is touched.
-    expect(postUpdate).not.toHaveBeenCalled();
+    expect(postUpdateMany).not.toHaveBeenCalled();
     expect(postTargetUpdateMany).not.toHaveBeenCalled();
   });
 });

@@ -275,8 +275,13 @@ export async function markSuperTextFailed(
     where: { postId, status: { in: ["DRAFT", "SCHEDULED"] } },
     data: { status: "FAILED", errorMessage: SUPER_TEXT_FAIL_MESSAGE },
   });
-  await prisma.post.update({
-    where: { id: postId },
+  // ⚠️ updateMany + a status guard, matching the target write above. A post whose
+  // targets were all stopped while the burn was in flight has already been
+  // settled to CANCELLED; stamping FAILED over it would leave a post labelled
+  // FAILED whose every target reads CANCELLED, and nothing would ever correct it
+  // (the watchdog only inspects PUBLISHING posts).
+  await prisma.post.updateMany({
+    where: { id: postId, status: { not: "CANCELLED" } },
     data: {
       status: "FAILED",
       metadata: {

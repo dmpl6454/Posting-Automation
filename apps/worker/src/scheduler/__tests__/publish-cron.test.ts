@@ -8,7 +8,10 @@ vi.mock("@postautomation/db", () => ({
   prisma: {
     post: {
       findMany: (...a: any[]) => findManyMock(...a),
-      update: (...a: any[]) => updateMock(...a),
+      // 2026-09-21: the flip became a GUARDED updateMany (where status is still
+      // SCHEDULED) so it cannot stamp PUBLISHING over a post the user just
+      // cancelled mid-scan. The contract asserted below is unchanged.
+      updateMany: (...a: any[]) => updateMock(...a),
     },
   },
 }));
@@ -42,7 +45,7 @@ beforeEach(() => {
   enqueueMock.mockImplementation(async (args: any) => args.targets.length);
   findManyMock.mockReset();
   updateMock.mockReset();
-  updateMock.mockResolvedValue({});
+  updateMock.mockResolvedValue({ count: 1 });
 });
 
 describe("publishScheduledPosts", () => {
@@ -66,7 +69,7 @@ describe("publishScheduledPosts", () => {
       ],
     });
     expect(updateMock).toHaveBeenCalledWith({
-      where: { id: "p1" },
+      where: { id: "p1", status: "SCHEDULED" },
       data: { status: "PUBLISHING" },
     });
   });

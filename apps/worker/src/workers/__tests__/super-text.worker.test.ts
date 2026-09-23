@@ -130,6 +130,15 @@ vi.mock("@postautomation/db", () => ({
         Object.assign(db.state.post, args.data);
         return db.state.post;
       }),
+      // 2026-09-21: markSuperTextFailed's post write became a GUARDED updateMany
+      // so a burn failure cannot relabel a post the user cancelled as FAILED.
+      updateMany: vi.fn(async (args: any) => {
+        const notStatus = args.where?.status?.not;
+        if (notStatus !== undefined && db.state.post.status === notStatus) return { count: 0 };
+        if (args.where?.id !== db.state.post.id) return { count: 0 };
+        Object.assign(db.state.post, args.data);
+        return { count: 1 };
+      }),
     },
     postTarget: {
       updateMany: vi.fn(async (args: any) => {

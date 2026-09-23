@@ -20,6 +20,7 @@ import {
   X,
   Sparkles,
   AlertTriangle,
+  Ban,
   Globe,
   Newspaper,
 } from "lucide-react";
@@ -48,6 +49,7 @@ const TYPE_ICONS: Record<string, any> = {
   "post.failed": XCircle,
   "post.publishing": Loader2,
   "post.scheduled": Clock,
+  "post.cancelled": Ban,
   "post.created": Sparkles,
   "agent.completed": Zap,
   "agent.started": Zap,
@@ -216,10 +218,16 @@ export function ActivityPanel({ open = false, onClose, onCountsChange }: Activit
       if (existing) continue;
       activities.push({
         id: `pt-${pt.id}`,
-        type: pt.status === "PUBLISHED" ? "post.published" : pt.status === "FAILED" ? "post.failed" : pt.status === "PUBLISHING" ? "post.publishing" : pt.status === "DRAFT" ? "post.draft" : "post.scheduled",
-        title: pt.status === "PUBLISHED" ? `Published to ${pt.platform}` : pt.status === "FAILED" ? `Failed on ${pt.platform}` : pt.status === "DRAFT" ? `Saved as draft for ${pt.platform}` : pt.status === "PUBLISHING" ? `Publishing to ${pt.platform}` : `Scheduled for ${pt.platform}`,
+        // ⚠️ CANCELLED needs an explicit arm in all three ternaries. As a
+        // fall-through it rendered "Scheduled for <platform>" with a yellow
+        // spinner — forever, since a cancelled target is terminal and nothing
+        // will ever write it again.
+        type: pt.status === "PUBLISHED" ? "post.published" : pt.status === "FAILED" ? "post.failed" : pt.status === "PUBLISHING" ? "post.publishing" : pt.status === "CANCELLED" ? "post.cancelled" : pt.status === "DRAFT" ? "post.draft" : "post.scheduled",
+        title: pt.status === "PUBLISHED" ? `Published to ${pt.platform}` : pt.status === "FAILED" ? `Failed on ${pt.platform}` : pt.status === "CANCELLED" ? `Stopped before publishing on ${pt.platform}` : pt.status === "DRAFT" ? `Saved as draft for ${pt.platform}` : pt.status === "PUBLISHING" ? `Publishing to ${pt.platform}` : `Scheduled for ${pt.platform}`,
         body: pt.content ? (pt.content.length >= 100 ? pt.content.slice(0, 80) + "…" : pt.content) : "",
-        status: pt.status === "PUBLISHED" ? "success" : pt.status === "FAILED" ? "error" : "pending",
+        // "info", not "error": a deliberate stop is not a malfunction, and not
+        // "pending" either — nothing is still happening.
+        status: pt.status === "PUBLISHED" ? "success" : pt.status === "FAILED" ? "error" : pt.status === "CANCELLED" ? "info" : "pending",
         timestamp: new Date(
           pt.status === "PUBLISHED" ? (pt.publishedAt ?? pt.updatedAt) :
           pt.status === "SCHEDULED" ? (pt.scheduledAt ?? pt.updatedAt) :

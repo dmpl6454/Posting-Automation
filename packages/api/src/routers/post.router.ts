@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
-import { postPublishQueue, captionFanoutQueue, superTextQueue, enqueueScheduledPublishJobs, buildPublishNowJobId } from "@postautomation/queue";
+import { postPublishQueue, captionFanoutQueue, superTextQueue, enqueueScheduledPublishJobs, buildPublishNowJobId, resolvePostStatusFromTargets, CANCELLABLE_TARGET_STATUSES } from "@postautomation/queue";
 import { superTextMapSchema } from "@postautomation/super-text";
 import { planSuperText, superTextJobId, type SuperTextPlan } from "../lib/super-text";
 import {
@@ -24,6 +24,7 @@ import {
   contentOverrideForReplacedTarget,
   everyChannelHasOwnCaption,
   everyTargetHasOwnCaption,
+  statusForReplacedTarget,
   MISSING_CAPTION_MESSAGE,
 } from "../lib/caption-overrides";
 import { campaignLabelSchema, normalizeCampaignLabel } from "../lib/campaign-label";
@@ -644,7 +645,9 @@ export const postRouter = createRouter({
           // `contentOverride` for the same reason: recreating targets without it
           // wiped every per-channel caption (AI-generated or hand-written) the
           // moment one channel was added on the post page.
-          targets: { select: { channelId: true, format: true, contentOverride: true } },
+          // `status` joins them for the same reason: a CANCELLED channel must
+          // survive a channel replacement rather than being silently re-armed.
+          targets: { select: { channelId: true, format: true, contentOverride: true, status: true } },
           _count: { select: { mediaAttachments: true } },
         },
       });
@@ -764,7 +767,7 @@ export const postRouter = createRouter({
               deleteMany: {},
               create: channelIds.map((channelId) => ({
                 channelId,
-                status: existing.status,
+                status: statusForReplacedTarget(channelId, existing.targets, existing.status) as any,
                 // ⚠️ Carry the format. Recreating targets with channelId+status
                 // alone dropped it for EVERY target, so adding one channel from
                 // the post detail page silently turned a Story into a Reel.
@@ -964,16 +967,39 @@ export const postRouter = createRouter({
       // procedure RESETS the status to SCHEDULED, which would make the in-flight
       // target claimable again and let a second job publish it concurrently. The
       // implicit branch never admitted PUBLISHING; the explicit branch did.
+      //
+      // ⚠️ BOTH branches are ALLOWLISTS over the same set. The explicit branch was
+      // a denylist (`!== PUBLISHED && !== PUBLISHING`), which meant every status
+      // added later silently became publishable through it — CANCELLED did
+      // exactly that: a stopped channel named explicitly was re-armed to
+      // SCHEDULED by the write below and published. A denylist here cannot be
+      // kept correct as the status set grows; an allowlist fails closed.
+      const PUBLISHABLE = ["FAILED", "DRAFT", "SCHEDULED"] as const;
       const requested = input.targetIds?.length
         ? post.targets.filter(
-            (t) => input.targetIds!.includes(t.id) && t.status !== "PUBLISHED" && t.status !== "PUBLISHING"
+            (t) => input.targetIds!.includes(t.id) && (PUBLISHABLE as readonly string[]).includes(t.status)
           )
-        : post.targets.filter((t) => t.status === "FAILED" || t.status === "DRAFT" || t.status === "SCHEDULED");
+        : post.targets.filter((t) => (PUBLISHABLE as readonly string[]).includes(t.status));
+
+      // Named explicitly but deliberately stopped. Reported rather than silently
+      // dropped — the same doctrine as the ambiguity block below.
+      const blockedAsCancelled = input.targetIds?.length
+        ? post.targets.filter((t) => input.targetIds!.includes(t.id) && t.status === "CANCELLED")
+        : [];
 
       const blockedAsAmbiguous = requested.filter(isAmbiguous);
       let targetsToPublish = requested.filter((t) => !isAmbiguous(t));
 
       if (targetsToPublish.length === 0) {
+        // Naming a STOPPED target explicitly is NOT a bypass either.
+        if (blockedAsCancelled.length > 0) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              `${blockedAsCancelled.length} channel(s) were stopped for this post and will not be published. ` +
+              `Add the channel again if you want to publish there.`,
+          });
+        }
         // Naming an ambiguous target explicitly is NOT a bypass — say why.
         if (blockedAsAmbiguous.length > 0) {
           throw new TRPCError({
@@ -994,8 +1020,14 @@ export const postRouter = createRouter({
         data: { status: "SCHEDULED", scheduledAt: new Date() },
       });
 
+      // Defence in depth: the same allowlist in the WHERE, so a status that slips
+      // past the filter above still cannot be armed. Mirrors bulk.router's rule.
       await ctx.prisma.postTarget.updateMany({
-        where: { id: { in: targetsToPublish.map((t) => t.id) } },
+        where: {
+          id: { in: targetsToPublish.map((t) => t.id) },
+          status: { in: [...PUBLISHABLE] },
+          ambiguousAt: null,
+        },
         data: { status: "SCHEDULED", errorMessage: null },
       });
 
@@ -1083,6 +1115,129 @@ export const postRouter = createRouter({
       }).catch(() => {});
 
       return { cleared: res.count };
+    }),
+
+  /**
+   * Stop the channels of an in-flight or scheduled post that have NOT gone out
+   * yet (2026-09-21, owner request: "there should be can cancel option once we
+   * click on publish").
+   *
+   * 🔴 THE HONEST SCOPE, which the UI must repeat: this cancels what is still
+   * QUEUED. A channel already handed to a platform is live and nothing can
+   * recall it; a channel currently PUBLISHING is mid-flight and the platform
+   * will answer regardless. What makes the feature worth having is the stagger —
+   * Meta targets are spaced ~10s apart, so a large fan-out leaves minutes during
+   * which most channels are still queued.
+   *
+   * ⚠️ It works by moving targets to CANCELLED, which is NOT in
+   * PUBLISH_CLAIM_STATUSES — so a cancelled target becomes unreachable by every
+   * retry layer (BullMQ attempts, the 30s cron, publishNow, the Retry button)
+   * by construction, with no change to the claim itself. Delayed jobs are
+   * deliberately NOT removed from Redis: a job that fires for a cancelled target
+   * fails its claim, and decideClaimMiss returns "skip" for any status that is
+   * not PUBLISHING, so it exits quietly.
+   *
+   * ⚠️ It FINALIZES the post in the same call. Without that, a fully cancelled
+   * post sits at PUBLISHING (no job will ever claim anything) until the 45-minute
+   * watchdog reaps it — which would report a deliberate cancel as FAILED.
+   */
+  cancelRemaining: orgProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const post = await ctx.prisma.post.findFirst({
+        where: { id: input.id, organizationId: ctx.organizationId },
+        select: { id: true, status: true, publishedAt: true },
+      });
+      if (!post) throw new TRPCError({ code: "NOT_FOUND" });
+
+      // Captured BEFORE the write so the audit entry can name what was stopped.
+      const cancellableIds = (
+        await ctx.prisma.postTarget.findMany({
+          where: {
+            postId: post.id,
+            status: { in: [...CANCELLABLE_TARGET_STATUSES] },
+            publishedId: null,
+            ambiguousAt: null,
+          },
+          select: { id: true },
+        })
+      ).map((t) => t.id);
+
+      const res = await ctx.prisma.postTarget.updateMany({
+        where: {
+          postId: post.id,
+          // Queued but not dispatched. PUBLISHING is excluded (a job holds it and
+          // the platform will answer); PUBLISHED is live; FAILED already settled
+          // and relabelling it would erase why it failed.
+          status: { in: [...CANCELLABLE_TARGET_STATUSES] },
+          // Belt-and-braces: neither shape should coexist with a cancellable
+          // status, and if one ever did, cancelling it would be the wrong call.
+          publishedId: null,
+          ambiguousAt: null,
+        },
+        // errorMessage cleared so a stale "Rate-limited, retrying…" does not sit
+        // under a channel the user has just stopped.
+        data: { status: "CANCELLED", errorMessage: null },
+      });
+
+      // Re-read and settle the parent. Counts come from the DB, not from the
+      // pre-update snapshot, so a target that published DURING this call is
+      // reported as published rather than as cancelled.
+      const after = await ctx.prisma.postTarget.findMany({
+        where: { postId: post.id },
+        select: { status: true },
+      });
+      const verdict = resolvePostStatusFromTargets(after);
+
+      if (verdict.settled) {
+        await ctx.prisma.post.update({
+          where: { id: post.id },
+          data: {
+            status: verdict.status,
+            // Clearing scheduledAt neutralises any surviving `sched:` job via the
+            // worker's isStaleScheduleJob guard — a second layer behind the claim.
+            // ⚠️ ONLY when settled: a partially cancelled post still has targets
+            // that must publish at their scheduled time.
+            scheduledAt: null,
+            ...(verdict.status === "PUBLISHED" && !post.publishedAt
+              ? { publishedAt: new Date() }
+              : {}),
+          },
+        });
+      }
+
+      // ⚠️ KNOWN GAP, deliberate for now: when the cancel itself SETTLES the post,
+      // no publish-report email is sent. Every other finalizer sends one, but
+      // `sendPublishReportEmail` and the pure `buildPublishEmail` builder both live
+      // in apps/worker and packages/api cannot import them; the alternatives are a
+      // new queue/job type in the publish path or a cross-package move of a builder
+      // whose CSV output is locked byte-for-byte. Neither is worth the risk here —
+      // the user is on the post page and its links are already on screen. The
+      // email's cancelled-aware branches ARE reached whenever a target completes
+      // AFTER the cancel, which is the case that actually needs a record.
+      createAuditLog({
+        organizationId: ctx.organizationId,
+        userId: (ctx.session.user as any).id,
+        action: AUDIT_ACTIONS.POST_UPDATED,
+        entityType: "Post",
+        entityId: input.id,
+        // The channel ids, so the action can be reconstructed later — a bare count
+        // cannot answer "which channels did we stop?".
+        metadata: {
+          cancelledTargets: res.count,
+          cancelledTargetIds: cancellableIds,
+          postStatus: verdict.settled ? verdict.status : "unchanged",
+        },
+      }).catch(() => {});
+
+      return {
+        cancelled: res.count,
+        // What the UI must tell the user about, honestly.
+        published: after.filter((t) => t.status === "PUBLISHED").length,
+        failed: after.filter((t) => t.status === "FAILED").length,
+        stillInFlight: after.filter((t) => t.status === "PUBLISHING").length,
+        settled: verdict.settled,
+      };
     }),
 
   /** Recent post target activity for the activity feed */
