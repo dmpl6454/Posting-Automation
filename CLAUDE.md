@@ -127,6 +127,13 @@ and calls the same tRPC procedures the web app does. Full detail:
 
 ## Local setup
 
+**⚠️ Keep the clone OUT of iCloud-synced folders (`~/Desktop`, `~/Documents`).** iCloud Desktop sync
+rewrote `.git` with a months-old snapshot twice (2026-08-12 and 2026-09-24: refs jumping to old commits,
+`Could not read <sha>`, `bad tree object HEAD`, pack files modified while no git command ran). The
+owner's clone now lives at `~/dev/Dashmani-PostAutomation`. Recovery is always a fresh clone — salvage
+`.env`, `apps/web/.env` (a symlink to `../../.env`) and `packages/db/.env` first. GitHub, not the local
+clone, is the source of truth; prod runs its own checkout on the box and is unaffected.
+
 1. Install deps: `pnpm install`
 2. Start infra: `docker compose up -d` (Postgres on 5433, Redis on 6380, MinIO on 9000/9001)
 3. Copy env: `cp .env.example .env` and fill in secrets
@@ -2977,7 +2984,7 @@ only: no DB model, no webhook, nothing stored. App Review steps for both Meta ap
 |---|---|---|---|---|
 | Facebook | `pages_read_user_content` (+ pages_read_engagement, Page token, MODERATE task) | `pages_manage_engagement` | read ✅ approved · write ⏳ requested | read ❌ rejected 2026-09-12 (screencast showed counts only) · write ⏳ |
 | Instagram | `instagram_manage_comments` (without it the list works but Meta HIDES `username`) | same | ⏳ requested (rejected 2026-06 when no feature existed) | ⏳ requested |
-| Instagram likes | — | `instagram_manage_engagement` (deps: instagram_basic, **pages_read_user_content**, pages_show_list) | ⏳ requested | ⏳ requested |
+| Instagram likes (PR #201, `47ad49b`, 2026-09-24) | — | `instagram_manage_engagement` (deps: instagram_basic, **pages_read_user_content**, pages_show_list) | ⏳ requested | ⏳ requested |
 
 Graph calls: FB hide `POST /{comment} {is_hidden}`, delete `DELETE /{comment}`, like `POST|DELETE
 /{comment}/likes`, edit `POST /{comment} {message}`; IG hide `POST /{ig-comment} {hide}`, delete
