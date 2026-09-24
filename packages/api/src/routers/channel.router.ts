@@ -620,7 +620,18 @@ function getDefaultScopes(platform: string): string[] {
     // them until Advanced Access is approved. App-role accounts (admin/dev/
     // tester) get it immediately on reconnect, which also satisfies Meta's
     // "one successful call exercising the permission" App Review test-call gate.
-    INSTAGRAM: ["public_profile", "pages_show_list", "pages_read_engagement", "instagram_basic", "instagram_content_publish", "business_management", "instagram_manage_insights", "instagram_manage_comments"],
+    //
+    // `instagram_manage_engagement` (2026-09-23): LIKING comments/replies and the
+    // post itself as the account (POST|DELETE /{ig-user-id}/likes — Graph
+    // changelog 2026-04-22, "applies to all versions"). Meta lists
+    // instagram_basic, pages_read_user_content and pages_show_list as its
+    // DEPENDENCIES, so pages_read_user_content is requested here too: a person
+    // who connects only Instagram would otherwise never grant it. Both were
+    // verified as recognised scopes on BOTH apps' live login dialog (302, while a
+    // bogus scope returns 500) before being added. Same "requested ≠ granted"
+    // pattern as above; the UI gates Like on the GRANTED scopes, separately from
+    // reply/hide/delete, so a missing like grant never marks the account broken.
+    INSTAGRAM: ["public_profile", "pages_show_list", "pages_read_engagement", "instagram_basic", "instagram_content_publish", "business_management", "instagram_manage_insights", "instagram_manage_comments", "pages_read_user_content", "instagram_manage_engagement"],
     REDDIT: ["submit", "identity", "read"],
     // TikTok Content Posting API. `video.publish` = Direct Post (what publishPost
     // uses via PULL_FROM_URL); `video.upload` = upload-to-drafts; `user.info.basic`

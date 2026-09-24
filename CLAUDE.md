@@ -2960,10 +2960,11 @@ so the publish precedence `contentOverride ?? contentVariants?.[platform] ?? pos
 - Tests: [caption-overrides.test.ts](packages/api/src/__tests__/caption-overrides.test.ts),
   [caption-overrides-payload.test.ts](apps/web/lib/caption-overrides-payload.test.ts).
 
-## 💬 COMMENTS INBOX — Facebook Pages + Instagram (IG 2026-09-19 #194, FB 2026-09-23 #199, moderation + granted-scope awareness 2026-09-23) — read before touching comment.router, the comment providers, or the FB/IG scope lists
+## 💬 COMMENTS INBOX — Facebook Pages + Instagram (IG 2026-09-19 #194, FB 2026-09-23 #199, moderation + granted-scope awareness 2026-09-23, IG likes 2026-09-23) — read before touching comment.router, the comment providers, or the FB/IG scope lists
 
 Read, reply to and **moderate** comments (FB: reply · like/unlike · hide/unhide · delete · edit the
-Page's own reply; IG: reply · hide/unhide · delete) on posts published **through PostAutomation**, from the
+Page's own reply; IG: reply · like/unlike (comments, replies and the post itself) · hide/unhide · delete)
+on posts published **through PostAutomation**, from the
 `/dashboard/comments` inbox (1. pick the Page/account → 2. pick a post → 3. live thread) and
 from "Show comments" under each PUBLISHED FB/IG target on the post detail page. Both render the
 ONE shared [comment-thread.tsx](apps/web/components/comments/comment-thread.tsx). On-demand
@@ -2976,15 +2977,20 @@ only: no DB model, no webhook, nothing stored. App Review steps for both Meta ap
 |---|---|---|---|---|
 | Facebook | `pages_read_user_content` (+ pages_read_engagement, Page token, MODERATE task) | `pages_manage_engagement` | read ✅ approved · write ⏳ requested | read ❌ rejected 2026-09-12 (screencast showed counts only) · write ⏳ |
 | Instagram | `instagram_manage_comments` (without it the list works but Meta HIDES `username`) | same | ⏳ requested (rejected 2026-06 when no feature existed) | ⏳ requested |
+| Instagram likes | — | `instagram_manage_engagement` (deps: instagram_basic, **pages_read_user_content**, pages_show_list) | ⏳ requested | ⏳ requested |
 
 Graph calls: FB hide `POST /{comment} {is_hidden}`, delete `DELETE /{comment}`, like `POST|DELETE
 /{comment}/likes`, edit `POST /{comment} {message}`; IG hide `POST /{ig-comment} {hide}`, delete
-`DELETE /{ig-comment}`. Liking on IG needs `instagram_manage_engagement` — NOT requested, so no IG like.
+`DELETE /{ig-comment}`; IG like/unlike `POST|DELETE /{ig-user-id}/likes` with `comment_id` or `media_id`
+(user token; Graph changelog 2026-04-22, "applies to all versions").
 
 - **`pages_manage_engagement` lists `pages_read_user_content` as a DEPENDENCY** — submit together.
   Do NOT drop either scope without removing the feature (the 2026-06 "Disallowed Use Case" lesson).
 - NOT needed (do not request): `pages_manage_metadata` (webhooks only), `instagram_business_manage_comments`
-  (Instagram-Login path), `instagram_manage_engagement` (likes only). Locked in [meta-scopes.test.ts](packages/api/src/__tests__/meta-scopes.test.ts).
+  (Instagram-Login path). Locked in [meta-scopes.test.ts](packages/api/src/__tests__/meta-scopes.test.ts).
+- `instagram_manage_engagement` IS requested (2026-09-23) — the INSTAGRAM list also requests its dependency
+  `pages_read_user_content`, so an Instagram-only connect grants it. Both apps' live login dialog accepted the
+  final list (302; a bogus scope 500s).
 - **Conditional:** Meta's IG comment docs add `ads_management`/`ads_read` when the connecting person's
   Page role comes via **Business Manager** — per person, unverified in prod. The test-call step settles
   it; if it bites, adding `ads_read` is a NEW reviewed permission, not a toggle.
@@ -3101,7 +3107,38 @@ Reply). Fixes, each load-bearing:
   [graph-time.ts](apps/web/lib/graph-time.ts) (Safari); future times clamp to "just now". Inbox: 3 columns
   only from `xl`; below that the thread sits under the pickers and scrolls into view on selection.
 - Limits: posts published through PostAutomation only (same population as Insights); first page of
-  replies embedded (25); no IG like (needs `instagram_manage_engagement`); no real-time webhook.
+  replies embedded (25); no real-time webhook.
+
+### ❤️ Instagram likes (2026-09-23) — invariants, each measured or from Meta's reference
+
+- **Like state is UNREADABLE.** IG Comment/Media expose only `like_count`; `/{ig-user-id}/likes` is
+  POST/DELETE only. The parser keeps `likedByAccount: null`; the UI shows **Liked** only for likes made in
+  this session (`likedHere`, survives refetch; the thread remounts per post). Never fake a state.
+- **Idempotent writes hide prior state** ("has no effect" if already liked/not liked, still `success:true`).
+  So the router RE-READS `like_count` after a like (`readLikeCount`, never throws → `likeCount: null`) and
+  `applyModeration` ([comment-moderation-patch.ts](apps/web/lib/comment-moderation-patch.ts)) uses it:
+  number → set; `null`/garbage → leave the count; `undefined` (Facebook never sends one) → the ORIGINAL
+  Facebook ±1 arithmetic byte-for-byte (test-locked). Don't "unify" these.
+- **🔴 `#100/33 "Authorization Error"` on the likes edge = missing permission** (probed live with a real
+  media id). The comment node's object-gone check reads the same code as "deleted", so `igLikeError` tests
+  `isInstagramLikeRefusedError` FIRST. Order is load-bearing.
+- **Private accounts:** Meta can't like "Media and Comments from Private Accounts". If a like is refused
+  while the channel's recorded grant already includes `instagram_manage_engagement`, the router replies with
+  `COMMENT_LIKE_REFUSED_MESSAGE` ("private account") instead of "reconnect" — the reconnect loop of the
+  morning incident, reached a new way. The grant is still re-read.
+- **`canLike` is a SEPARATE capability.** The Reconnect badge (`canReply === false`), the lazy grant
+  re-check and `missing` are unchanged, so a like-only gap never marks a working account broken; the UI shows
+  a quiet grey line + disabled Like instead of the amber banner.
+- **Burst limit:** Meta locks an IG account out for 1h above 50 like requests in 5s.
+  `commentIgLikeBurstLimiter` = 10 per 10s per IG account across all orgs (checked in `moderate` like/unlike
+  and `likePost`). Likes also share the per-account moderation budget, exactly like Facebook likes.
+- `comment.likePost` likes the TARGET's own media id from our DB (no client-supplied Graph id); IG only.
+  Meta's screencast requirements for this permission ask for a like on MEDIA and on a COMMENT — both exist.
+- The act-as id is `t.account.igUserId` (DB); refused with "reconnect" if absent, never guessed.
+- **Requesting an unapproved scope does not block external connects** — proven with prod data: external
+  `karankumar1166dt` connected 2026-07-23 11:27 UTC, ~2h after `read_insights` (unapproved until 08-06) went
+  into the request. Meta's FL4B doc line "all permissions … must be granted or none are" does not bite for
+  `scope`-requested, not-yet-approved permissions (they are simply not shown/granted).
 - Tests: [facebook-comments.test.ts](packages/social/src/__tests__/facebook-comments.test.ts),
   [facebook-comment-reply.test.ts](packages/social/src/__tests__/facebook-comment-reply.test.ts),
   [instagram-comments.test.ts](packages/social/src/__tests__/instagram-comments.test.ts),
@@ -3111,6 +3148,8 @@ Reply). Fixes, each load-bearing:
   [comment-page-budget.test.ts](packages/api/src/__tests__/comment-page-budget.test.ts),
   [comment-capabilities.test.ts](packages/social/src/__tests__/comment-capabilities.test.ts),
   [comment-moderation.test.ts](packages/social/src/__tests__/comment-moderation.test.ts),
+  [instagram-comment-likes.test.ts](packages/social/src/__tests__/instagram-comment-likes.test.ts),
+  [comment-moderation-patch.test.ts](apps/web/lib/comment-moderation-patch.test.ts),
   [comment-reply-outcome.test.ts](apps/web/lib/comment-reply-outcome.test.ts),
   [graph-time.test.ts](apps/web/lib/graph-time.test.ts).
 

@@ -105,13 +105,17 @@ function toSocialComment(row: IgCommentRow, own: InstagramOwnAccount | undefined
     // Comment Replies reference) — don't offer an affordance that must fail.
     canReply: !isReply && row.hidden !== true,
     attachmentType: null,
-    // Liking on Instagram needs instagram_manage_engagement (not requested).
+    // Instagram exposes NO "liked by me" field — only the aggregate like_count —
+    // so the state is unknown until this session likes/unlikes it itself.
     likedByAccount: null,
     // The media owner can hide or delete any comment on their media. Their OWN
     // comments always display even if "hidden", so don't offer hide there.
     canHide: !isOwnInstagramComment(row, own),
     canDelete: true,
-    canLike: false,
+    // POST|DELETE /{ig-user-id}/likes covers comments AND replies (User Likes
+    // reference, 2026-04-22). Needs instagram_manage_engagement — the UI gates
+    // the button on the channel's GRANTED scopes (CommentCapabilities.canLike).
+    canLike: true,
     canEdit: false,
   };
 }
@@ -186,6 +190,59 @@ export const COMMENT_MEDIA_GONE_MESSAGE =
 /** `#190` — the stored token is dead (password change, session invalidated, lost Page role). */
 export const COMMENT_TOKEN_INVALID_MESSAGE =
   "Instagram rejected this account's connection. Reconnect the channel on the Channels page, then try again.";
+
+/**
+ * How `POST|DELETE /{ig-user-id}/likes` refuses a token WITHOUT
+ * instagram_manage_engagement — measured live 2026-09-23 against a real media
+ * id: HTTP 400 `{code: 100, error_subcode: 33, type: "GraphMethodException",
+ * message: "Authorization Error"}`.
+ *
+ * ⚠️ That is the SAME code/subcode as "object does not exist" on the comment
+ * node, which `isCommentObjectGoneError` reads as a deleted comment. On the
+ * likes edge the bare "Authorization Error" wording is what identifies a
+ * refusal, so the like path checks THIS first — otherwise a missing permission
+ * would tell the user their comment had been deleted.
+ */
+export function isInstagramLikeRefusedError(err: MetaErrorLike | undefined | null): boolean {
+  if (!err) return false;
+  return (
+    Number(err.code) === 100 &&
+    Number(err.error_subcode) === OBJECT_GONE_SUBCODE &&
+    /^\s*authorization error\s*$/i.test(String(err.message ?? ""))
+  );
+}
+
+/**
+ * Liking refused for lack of the permission. Starts with the same "hasn't been
+ * granted" wording the router keys its grant re-check on.
+ */
+export const COMMENT_LIKE_PERMISSION_MESSAGE =
+  "This Instagram account hasn't been granted permission to like (instagram_manage_engagement) yet. " +
+  "Reconnect the channel on the Channels page (choose “Edit settings” and allow every permission) — " +
+  "if it still doesn't work, Meta hasn't approved likes for accounts outside our own team yet.";
+
+/**
+ * The like was refused although the account's recorded grant DOES include
+ * instagram_manage_engagement. Meta documents "Media and Comments from Private
+ * Accounts cannot be liked" (and no stories) — so a comment written by a
+ * private account is the likely reason, and "reconnect" would send the user in
+ * circles. Deliberately does NOT contain the "hasn't been granted" wording.
+ */
+export const COMMENT_LIKE_REFUSED_MESSAGE =
+  "Instagram refused this like. This account already has the likes permission, so the usual reason is that the " +
+  "comment was written by a private account — Instagram doesn't allow liking those. Try a comment from a public account.";
+
+/**
+ * Meta throttles (#4/#17/#32/#613) and Instagram's documented like burst limit
+ * (more than 50 like requests in 5 seconds locks the account out of liking for
+ * an hour). A definite refusal — nothing was liked.
+ */
+export const COMMENT_LIKE_THROTTLED_MESSAGE =
+  "Instagram is limiting likes for this account right now. Wait a little and try again.";
+
+/** `#100/33` on the likes edge for a media target that is gone. */
+export const COMMENT_LIKE_TARGET_GONE_MESSAGE =
+  "Instagram couldn't find that post or comment any more — it may have been deleted. Refresh and try again.";
 
 /** Instagram comment text limit (same as a normal IG comment). */
 export const COMMENT_REPLY_MAX_LENGTH = 2200;

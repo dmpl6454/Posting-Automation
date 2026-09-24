@@ -95,6 +95,9 @@ export const AUDIT_ACTIONS = {
   COMMENT_LIKED: "comment.liked",
   COMMENT_UNLIKED: "comment.unliked",
   COMMENT_EDITED: "comment.edited",
+  // Liking the post itself from the Comments inbox (Instagram, 2026-09-23).
+  POST_LIKED: "post.liked",
+  POST_UNLIKED: "post.unliked",
 
   // User profile / settings
   USER_PROFILE_UPDATED: "user.profile_updated",

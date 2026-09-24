@@ -7,6 +7,7 @@ import {
   fetchMetaTokenWindow,
   resolveMetaCredentials,
   COMMENT_NOT_ON_POST_MESSAGE,
+  COMMENT_LIKE_REFUSED_MESSAGE,
   COMMENT_REPLY_MAX_LENGTH,
   FB_COMMENT_MAX_LENGTH,
   GRAPH_OBJECT_ID_RE,
@@ -19,6 +20,7 @@ import {
 } from "@postautomation/social";
 import { createRateLimitMiddleware } from "../middleware/rate-limit.middleware";
 import {
+  commentIgLikeBurstLimiter,
   commentModerateRateLimiter,
   commentPageModerateLimiter,
   commentPageReadLimiter,
@@ -36,8 +38,9 @@ import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
  * Permissions (none of this works without them — see
  * docs/META-COMMENTS-APP-REVIEW-RUNBOOK-2026-09-23.md):
  *   Facebook  read  → pages_read_user_content (+ pages_read_engagement)
- *             reply → pages_manage_engagement
- *   Instagram read + reply → instagram_manage_comments
+ *             reply / like / hide / delete / edit → pages_manage_engagement
+ *   Instagram read + reply + hide + delete → instagram_manage_comments
+ *             like (comments, replies, the post) → instagram_manage_engagement
  * Until Meta approves Advanced Access only app-role accounts receive them;
  * everyone else gets an actionable "not approved yet / reconnect" message from
  * the provider's error classifier.
@@ -247,9 +250,12 @@ function grantNeedsRefresh(
   return commentCapabilities(platform, scopes).canReply === false && age > GRANT_RECHECK_IF_MISSING_MS;
 }
 
-/** A provider message that means "the token lacks the permission". */
+/**
+ * A provider message that means "the token lacks the permission" — the comment
+ * permission OR the Instagram like permission — so the cached grant is re-read.
+ */
 function isPermissionMessage(message: unknown): boolean {
-  return /hasn't (been )?granted comment/i.test(String(message ?? ""));
+  return /hasn't (been )?granted (comment|permission to like)/i.test(String(message ?? ""));
 }
 
 /** Public posts as the Page / account — human-paced ceiling (see the limiter). */
@@ -368,6 +374,32 @@ function enforcePageBudget(
     code: "TOO_MANY_REQUESTS",
     message: `There's a lot of comment activity on this ${platform === "FACEBOOK" ? "Page" : "account"} right now. Please wait a minute and try again.`,
   });
+}
+
+/**
+ * Instagram locks an account out of liking for an HOUR after "more than 50
+ * requests in 5 seconds" (User Likes reference). Keyed per IG account across
+ * every user and org, checked after the target resolves.
+ */
+function enforceInstagramLikeBurst(platformId: string): void {
+  if (commentIgLikeBurstLimiter(`INSTAGRAM:${platformId}`).success) return;
+  throw new TRPCError({
+    code: "TOO_MANY_REQUESTS",
+    message:
+      "Slow down a little — Instagram locks an account out of liking for an hour if it likes too fast. Try again in a few seconds.",
+  });
+}
+
+/** The IG user id the like is made AS — always from our DB, never the client. */
+function requireIgUserId(t: ResolvedCommentTarget): string {
+  const id = t.account.igUserId;
+  if (!id) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "This Instagram account's connection is incomplete. Reconnect it on the Channels page, then try again.",
+    });
+  }
+  return id;
 }
 
 export const commentRouter = createRouter({
@@ -645,10 +677,15 @@ export const commentRouter = createRouter({
     }),
 
   /**
-   * Moderate a comment as the Page / account: hide, unhide, delete (both
-   * platforms), like, unlike and edit-own (Facebook). Same org/status/platform
-   * gate as list/reply; Instagram additionally proves the comment is on the
-   * target's own media. All of these are idempotent state changes.
+   * Moderate a comment as the Page / account: hide, unhide, delete, like and
+   * unlike (both platforms — Instagram likes via instagram_manage_engagement),
+   * and edit-own (Facebook only). Same org/status/platform gate as list/reply;
+   * both platforms prove the comment is on the target post first. All of these
+   * are idempotent state changes.
+   *
+   * Instagram likes return the re-read `likeCount`: Meta's like/unlike "has no
+   * effect" when the state already matches, so a success does not say whether
+   * the count moved, and Instagram exposes no "liked by me" field to ask.
    */
   moderate: moderateRateLimited
     .input(
@@ -664,18 +701,21 @@ export const commentRouter = createRouter({
     )
     .mutation(async ({ ctx, input }) => {
       const t = await resolvePublishedCommentTarget(ctx.prisma as any, ctx.organizationId, input.targetId);
-      if (t.platform === "INSTAGRAM" && ["like", "unlike", "edit"].includes(input.action)) {
+      if (t.platform === "INSTAGRAM" && input.action === "edit") {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message:
-            input.action === "edit"
-              ? "Instagram doesn't allow editing a comment — delete it and reply again instead."
-              : "Liking comments isn't available for Instagram.",
+          message: "Instagram doesn't allow editing a comment — delete it and reply again instead.",
         });
       }
+      const igLike = t.platform === "INSTAGRAM" && (input.action === "like" || input.action === "unlike");
+      const igUserId = igLike ? requireIgUserId(t) : null;
+      // Burst check FIRST so a like it refuses does not also spend a slot of the
+      // per-account moderation budget shared with hide/delete.
+      if (igLike) enforceInstagramLikeBurst(t.account.platformId);
       enforcePageBudget(commentPageModerateLimiter, t.platform, t.account.platformId);
       await assertCommentOnTarget(ctx.prisma, t, input.commentId);
 
+      let likeCount: number | null | undefined;
       try {
         if (t.platform === "FACEBOOK") {
           const fb = getSocialProvider("FACEBOOK") as FacebookProvider;
@@ -692,11 +732,23 @@ export const commentRouter = createRouter({
         } else {
           const ig = getSocialProvider("INSTAGRAM") as InstagramProvider;
           if (input.action === "delete") await ig.deleteComment(t.tokens, input.commentId);
+          else if (igLike) await ig.setCommentLiked(t.tokens, igUserId!, input.commentId, input.action === "like");
           else await ig.setCommentHidden(t.tokens, input.commentId, input.action === "hide");
         }
       } catch (err: any) {
-        if (isPermissionMessage(err?.message)) void refreshGrantedScopes(ctx.prisma, t);
-        if (isUnconfirmedMessage(err?.message)) {
+        let message: string = err?.message ?? "Couldn't complete that action.";
+        if (isPermissionMessage(message)) {
+          void refreshGrantedScopes(ctx.prisma, t);
+          // Instagram refuses likes on comments FROM private accounts with the
+          // same "Authorization Error" as a missing permission. If the recorded
+          // grant already includes the like permission, "reconnect" is the
+          // wrong advice — say what is actually likely. (The re-read above still
+          // catches a permission revoked since it was recorded.)
+          if (igLike && cachedGrantedScopes(t.tokens.metadata)?.includes("instagram_manage_engagement")) {
+            message = COMMENT_LIKE_REFUSED_MESSAGE;
+          }
+        }
+        if (isUnconfirmedMessage(message)) {
           await createAuditLog({
             organizationId: ctx.organizationId,
             userId: (ctx.session?.user as any)?.id,
@@ -706,7 +758,7 @@ export const commentRouter = createRouter({
             metadata: { platform: t.platform, channelId: t.account.channelId, commentId: input.commentId, outcome: "unconfirmed" },
           });
         }
-        throw new TRPCError({ code: "BAD_REQUEST", message: err?.message ?? "Couldn't complete that action." });
+        throw new TRPCError({ code: "BAD_REQUEST", message });
       }
 
       await createAuditLog({
@@ -719,6 +771,56 @@ export const commentRouter = createRouter({
         metadata: { platform: t.platform, channelId: t.account.channelId, commentId: input.commentId },
       });
 
-      return { ok: true as const, action: input.action, platform: t.platform };
+      // After the action is confirmed and audited: a failed re-read only means
+      // the UI keeps its current number, never that the like failed.
+      if (igLike) {
+        likeCount = await (getSocialProvider("INSTAGRAM") as InstagramProvider).readLikeCount(t.tokens, input.commentId);
+      }
+
+      return { ok: true as const, action: input.action, platform: t.platform, likeCount };
+    }),
+
+  /**
+   * Like / unlike the POST itself as the Instagram account (feed post, reel,
+   * carousel) — `POST|DELETE /{ig-user-id}/likes` with `media_id`. Meta's
+   * screencast requirements for instagram_manage_engagement ask for a like on
+   * media as well as on comments, and this is the same permission and edge.
+   *
+   * The media id is the target's own `publishedId` from OUR database — no
+   * client-supplied Graph id reaches this call. Stories are refused by
+   * resolvePublishedCommentTarget (Instagram cannot like a story anyway).
+   */
+  likePost: moderateRateLimited
+    .input(z.object({ targetId: z.string(), liked: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      const t = await resolvePublishedCommentTarget(ctx.prisma as any, ctx.organizationId, input.targetId);
+      if (t.platform !== "INSTAGRAM") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Liking the post from here is available for Instagram posts." });
+      }
+      const igUserId = requireIgUserId(t);
+      enforceInstagramLikeBurst(t.account.platformId);
+      enforcePageBudget(commentPageModerateLimiter, t.platform, t.account.platformId);
+
+      const ig = getSocialProvider("INSTAGRAM") as InstagramProvider;
+      const action = input.liked ? AUDIT_ACTIONS.POST_LIKED : AUDIT_ACTIONS.POST_UNLIKED;
+      const audit = (outcome?: "unconfirmed") =>
+        createAuditLog({
+          organizationId: ctx.organizationId,
+          userId: (ctx.session?.user as any)?.id,
+          action,
+          entityType: "PostTarget",
+          entityId: input.targetId,
+          metadata: { platform: t.platform, channelId: t.account.channelId, ...(outcome ? { outcome } : {}) },
+        });
+      try {
+        await ig.setMediaLiked(t.tokens, igUserId, t.objectId, input.liked);
+      } catch (err: any) {
+        if (isPermissionMessage(err?.message)) void refreshGrantedScopes(ctx.prisma, t);
+        if (isUnconfirmedMessage(err?.message)) await audit("unconfirmed");
+        throw new TRPCError({ code: "BAD_REQUEST", message: err?.message ?? "Couldn't complete that action." });
+      }
+      await audit();
+      const likeCount = await ig.readLikeCount(t.tokens, t.objectId);
+      return { ok: true as const, liked: input.liked, likeCount };
     }),
 });
