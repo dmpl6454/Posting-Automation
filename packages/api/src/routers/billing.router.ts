@@ -51,6 +51,14 @@ export const billingRouter = createRouter({
     }),
 
   createPortalSession: adminOrgProcedure.mutation(async ({ ctx }) => {
+    // 🔒 Security audit 2026-09-28: missing the same OWNER check createCheckout
+    // above enforces. adminOrgProcedure gates on the app-wide role, which says
+    // nothing about ORG role — without this, any app-ADMIN who is merely a
+    // MEMBER/ADMIN of this workspace could open its live Stripe customer
+    // portal and change payment methods or cancel the subscription.
+    if (ctx.membership.role !== "OWNER") {
+      throw new TRPCError({ code: "FORBIDDEN", message: "Only owners can manage billing" });
+    }
     const org = await ctx.prisma.organization.findUniqueOrThrow({
       where: { id: ctx.organizationId },
     });
