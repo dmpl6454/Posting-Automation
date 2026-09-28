@@ -1,4 +1,5 @@
 import { ChatOpenAI } from "@langchain/openai";
+import { aiFailedAttemptHandler } from "../utils/credit-exhaustion";
 
 /**
  * DeepSeek provider — uses the OpenAI-compatible API at api.deepseek.com.
@@ -20,5 +21,6 @@ export function getDeepSeekModel(temperature = 0.7) {
     configuration: {
       baseURL: "https://api.deepseek.com",
     },
+    onFailedAttempt: aiFailedAttemptHandler,
   });
 }

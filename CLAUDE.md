@@ -513,7 +513,7 @@ Seven-commit batch (`241ffcf`…`0c50f2d`), each independently gated. Full audit
 - **Connect-path fetch timeouts (`299ad45`)**: `fetchT` ([fetch-timeout.ts](packages/social/src/utils/fetch-timeout.ts), 25s `AbortSignal.timeout`) on ALL providers' connect-path fetches (exchange/refresh/getProfile/getPages/IG account resolution). FB `graphFetch` takes opts `{maxSleepMs, retries, timeoutMs}` — connect callers clamp to 5s/1-retry; **worker publish paths pass no opts and keep the full 60s pause + 3-retry backoff (deliberate — protects shared app quota; do NOT clamp them)**. FB/IG pagination capped at 20 pages w/ warn. Do NOT remove signals or add timeouts to publish/upload fetches.
 - **Stability (`4d98f16`)**: `repurposeFromUrl`/`regenerateImage` are rate-limited (shared `aiRateLimiter` 20/min); Chromium launches bounded by a FIFO semaphore (`CREATIVE_RENDER_CONCURRENCY`, default 3, releases on browser `disconnected` — covers crash + launchCreativeBrowser); worker ffmpeg is async `execFile` (identical argv — keep argv-form). **Chat RBAC side-door CLOSED**: `create_campaign`/`create_brand_tracker`/`create_listening_query` now carry the same `isAppAdmin` gate as `create_agent` (+ `requirePlan(PROFESSIONAL)` on campaigns), locked by [chat-rbac-side-door.test.ts](packages/api/src/__tests__/chat-rbac-side-door.test.ts) (23 tests). ai_video Veo3-fallback worker-offload DEFERRED (needs UI videoPending contract check first).
 - **Insights freshness (`0f3ba23`)**: NEW once-daily long-tail sync (7–90d, non-FB) — metrics no longer freeze at 30d (they now freeze at 90d; a like after 90d is still never captured). Tagged at-age jobs rethrow so BullMQ attempts:3 engages (untagged cron jobs keep soft-null); daily reconciliation re-enqueues missed checkpoints (jobId `atage-late:{targetId}:{tag}` — BullMQ forbids 4-segment colon ids; `capturedLate:true` stamped; 45d floor so permanently-erroring targets aren't re-enqueued forever). `triggerSync` optional `days` (1–90, default 30). Reports: Captured (UTC) column + >24h stale hint + FB cadence note; Export refetches limit:1000 + `-truncated` filename marker. `analytics.emailReport` (rate-limited 5/h `emailReportRateLimiter`, audit-logged `ANALYTICS_REPORT_EMAILED`, CSV via [report-csv.ts](packages/api/src/lib/report-csv.ts) — another deliberate guard replica) + "Email report" button in ReportsTab. `sendEmail` gained optional `attachments` (the local [nodemailer.d.ts](packages/api/src/types/nodemailer.d.ts) shim governs tsc — extend it too if you extend options).
-- **Per-channel unique captions (`0c50f2d`)**: `PostTarget.contentOverride String? @db.Text`; publish worker precedence `contentOverride ?? contentVariants?.[platform] ?? post.content` (NULL = byte-identical legacy path — do NOT reorder). Opt-in via Compose "Unique caption per channel (AI)" toggle (>1 channel only) or chat `uniqueCaptions:true` on `schedule_post`/`publish_now` → post parks as DRAFT + `metadata.captionFanout` + ONE `caption-fanout:{postId}` job → [caption-fanout.worker.ts](apps/worker/src/workers/caption-fanout.worker.ts) (chunked ~10/call via provider fallback chain, idempotent — skips non-null overrides) flips DRAFT→SCHEDULED exactly once; **safety valve: final failure still flips with null overrides (shared caption publishes — degraded, never lost)**. `publish_now` on this path skips direct enqueue (cron picks up post-flip — do NOT dual-enqueue). Per-target caption editor on post detail via `post.updateTargetContent` (org-scoped `assertTargetEditable`, NOT_FOUND for cross-org, PUBLISHED immutable). Quota unchanged: 1 post = 1 unit. Super Agent prompt does NOT yet advertise the flag (1-line follow-up in chat-agent.prompt.ts if wanted).
+- **Per-channel unique captions (`0c50f2d`)**: `PostTarget.contentOverride String? @db.Text`; publish worker precedence `contentOverride ?? contentVariants?.[platform] ?? post.content` (NULL = byte-identical legacy path — do NOT reorder). Opt-in via Compose "Unique caption per channel (AI)" toggle (>1 channel only) or chat `uniqueCaptions:true` on `schedule_post`/`publish_now` → post parks as DRAFT + `metadata.captionFanout` + ONE `caption-fanout:{postId}` job → [caption-fanout.worker.ts](apps/worker/src/workers/caption-fanout.worker.ts) (chunked ~10/call via provider fallback chain, idempotent — skips non-null overrides) flips DRAFT→SCHEDULED exactly once; **safety valve: a PARTIAL failure still flips (the failed channels publish the shared caption); a TOTAL failure HOLDS the post as a draft (2026-09-28 — see the fan-out HOLD section).** `publish_now` on this path skips direct enqueue (cron picks up post-flip — do NOT dual-enqueue). Per-target caption editor on post detail via `post.updateTargetContent` (org-scoped `assertTargetEditable`, NOT_FOUND for cross-org, PUBLISHED immutable). Quota unchanged: 1 post = 1 unit. Super Agent prompt does NOT yet advertise the flag (1-line follow-up in chat-agent.prompt.ts if wanted).
 
 ## Audit fixes 2026-07-27 (7-area sweep) — do NOT regress these
 
@@ -535,7 +535,7 @@ Optional Instagram-style text strip (emoji + per-word colours + free positioning
 - **Why HTML→PNG→ffmpeg `overlay`, NOT `drawtext`:** ffmpeg `drawtext` cannot render colour emoji or per-word colours. Chromium can. The strip renders to a transparent PNG at the video's native size, composited at `overlay=0:0` — so **no user text ever reaches ffmpeg** (the drawtext escaping minefield is bypassed entirely). The legacy `metadata.videoOverlayText` drawtext watermark path in [video-overlay.ts](apps/worker/src/lib/video-overlay.ts) is untouched and still dormant (nothing sets it).
 - **SECURITY:** all text goes through `escapeHtml`, all colours through a strict `^#[0-9a-fA-F]{6}$` (`safeHexColor`) — the builder generates 100% of the markup and never accepts user HTML (same discipline as `creative-templates.ts`). XSS/CSS-injection locked by [super-text.test.ts](packages/super-text/src/__tests__/super-text.test.ts).
 - **Burn once, publish everywhere:** [super-text.worker.ts](apps/worker/src/workers/super-text.worker.ts) probes → renders strip → streams source to /tmp (never let a long encode read http through nginx — PR #144) → ffmpeg composite → **duration integrity check (≥98% of source, else FAIL)** → uploads to `supertext/{org}/{mediaId}-{cfgHash}.mp4` → creates a **DERIVED Media row** → `postMedia.updateMany` repoints the attachment → enqueues the standard `optimize:{id}:v1`. Because the post ends up holding an ordinary video Media row, **the frozen IG/FB publish paths, media-optimize, streamed uploads and the watchdog need ZERO changes**. concurrency 1 (one ffmpeg on the 4-core box); Puppeteer additionally bounded by `CREATIVE_RENDER_CONCURRENCY`.
-- **Gate coordination — [publish-gates.ts](apps/worker/src/lib/publish-gates.ts).** Super text and caption-fanout BOTH park a post as DRAFT. Each worker clears its OWN flag then calls `flipParkedPostIfReady`, which flips DRAFT→SCHEDULED only when NO gate remains, re-reading fresh metadata after its own write (so simultaneous completion can't strand the post). `caption-fanout`'s flip now defers when `superText.pendingBurn` is true. **Targets are flipped BEFORE the post** — a SCHEDULED post with DRAFT targets enqueues zero jobs (the bulkSchedule bug class).
+- **Gate coordination — [publish-gates.ts](packages/queue/src/publish-gates.ts)** (moved from apps/worker 2026-09-28; the worker path re-exports it). Super text and caption-fanout BOTH park a post as DRAFT. Each worker clears its OWN flag then calls `flipParkedPostIfReady`, which flips DRAFT→SCHEDULED only when NO gate remains, re-reading fresh metadata after its own write (so simultaneous completion can't strand the post). `caption-fanout`'s flip now defers when `superText.pendingBurn` is true. **Targets are flipped BEFORE the post** — a SCHEDULED post with DRAFT targets enqueues zero jobs (the bulkSchedule bug class).
 - **FAIL-VISIBLE, unlike caption-fanout.** A shared caption is an acceptable degraded fallback; a MISSING text strip changes the post's meaning. On final retry exhaustion `markSuperTextFailed` marks the post + targets FAILED with an actionable message — it never publishes the un-burned video. `post.publishNow` also refuses while `pendingBurn` is true.
 - **Retry idempotency:** `metadata.superText.results[mediaId].status === "done"` is persisted per entry, so a BullMQ retry never re-burns (the Media swap is not reversible). jobId `supertext:{postId}:v1` — **exactly 3 colon segments** (BullMQ >=5.70 rejects other counts).
 - **Worker image fonts ([docker/Dockerfile.worker](docker/Dockerfile.worker)): `font-noto-emoji` + `ttf-liberation` are REQUIRED.** Without the emoji font the user's 😍 burns as tofu; Liberation Sans is Arial-metric-compatible so the strip wraps at the same words in preview and burn. Do not drop either.
@@ -2966,6 +2966,46 @@ so the publish precedence `contentOverride ?? contentVariants?.[platform] ?? pos
   (OOM dep rule); restore re-validates and turns the editor on.
 - Tests: [caption-overrides.test.ts](packages/api/src/__tests__/caption-overrides.test.ts),
   [caption-overrides-payload.test.ts](apps/web/lib/caption-overrides-payload.test.ts).
+
+## ⏸️ Caption fan-out HOLDS on total failure; "out of credit" is final (2026-09-28)
+
+**Incident:** a DASHMANI post to **240 Facebook Pages** with per-channel AI captions sat as a DRAFT
+for 30+ min, then would have published the SAME caption to all 240 Pages. It was stopped by hand
+(backup: `/root/backups/stopped-post-cmuldd50u02urqg0i7huh5g82-*` on the box). Measured causes:
+
+- **OpenAI AND Anthropic were both out of credit** (worker log from 24 Sep 06:30 UTC onward; 1,117
+  OpenAI failures). DeepSeek held $34.17 but was not in the fallback chain.
+- **🔴 LangChain retried "no credit" as a rate limit.** OpenAI now returns HTTP 429,
+  `type: "insufficient_quota"`, **`code: "credit_balance_exhausted"`**; LangChain's AsyncCaller only
+  stops on `code === "insufficient_quota"`, so it retried 6× with backoff ≈ **95s per call**. The
+  fan-out makes one call per 10 channels ⇒ 24 × ~97s ≈ 39 min before anything failed.
+
+**Fixes (branch `fix/ai-credit-exhaustion-fanout-hold-2026-09-28`):**
+- [credit-exhaustion.ts](packages/ai/src/utils/credit-exhaustion.ts): `aiFailedAttemptHandler` is the
+  `onFailedAttempt` of **every** text model we construct (openai/deepseek/grok/anthropic + the
+  image-style describer). It reproduces LangChain's default rules exactly and adds "out of credit is
+  final". It rethrows the ORIGINAL error (LangChain's own quota branch replaces it with a bare
+  `Error(message)`, losing status/code). A per-minute rate limit is still retried — test-locked
+  against the REAL AsyncCaller. **Any new `new ChatOpenAI/ChatAnthropic` must pass it.**
+- **Text fallback chain is now `[chosen, openai, anthropic, deepseek]`** (owner decision). DeepSeek
+  is skipped when `DEEPSEEK_API_KEY` is unset, so the chain is otherwise byte-identical.
+- **Fan-out:** the loop stops at the first out-of-credit chunk. When **no** pending channel got a
+  caption and the post was waiting to publish, it is **HELD**: stays DRAFT,
+  `captionFanout = { pendingSchedule: false, held: true, heldAt, reason }`, creator notified
+  (`post.captions_held`, body says **NOT published**). Partial success still publishes (failed
+  channels use the shared caption). A plain unscheduled draft is never held.
+- **`held` is a publish GATE** in [publish-gates.ts](packages/queue/src/publish-gates.ts) — otherwise a
+  super-text burn finishing later calls `flipParkedPostIfReady` and publishes it anyway.
+- **Ways out (post page banner):** `post.retryUniqueCaptions` (re-arms + queues
+  `caption-fanout-{id}-retry{n}` — a FRESH id, because finished jobs are retained and re-adding the
+  original id is silently ignored; puts the hold back if queueing fails) and
+  `post.releaseWithSharedCaption` (releases + flips via the SAME gate, so it waits for a pending burn).
+  Both are compare-and-set on `metadata.captionFanout.held` (`updateMany` + JSON-path WHERE).
+- ⚠️ `publishNow` on a held draft still works and publishes immediately with the shared caption.
+- Tests: [credit-exhaustion.test.ts](packages/ai/src/__tests__/credit-exhaustion.test.ts) (17),
+  [publish-gates.test.ts](packages/queue/src/__tests__/publish-gates.test.ts) (4),
+  [caption-fanout-hold.test.ts](packages/api/src/__tests__/caption-fanout-hold.test.ts) (12, real
+  router), + the worker suite. Each new behaviour was verified FAILING with its fix disabled.
 
 ## 💬 COMMENTS INBOX — Facebook Pages + Instagram (IG 2026-09-19 #194, FB 2026-09-23 #199, moderation + granted-scope awareness 2026-09-23, IG likes 2026-09-23) — read before touching comment.router, the comment providers, or the FB/IG scope lists
 

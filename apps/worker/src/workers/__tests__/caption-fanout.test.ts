@@ -12,8 +12,14 @@
  *    regenerated on a re-run (BullMQ retry);
  *  - the DRAFT→SCHEDULED flip happens exactly once (guarded by post.status +
  *    metadata.captionFanout.pendingSchedule);
- *  - SAFETY VALVE: when generation fails, overrides stay NULL but the flip
- *    still happens (shared caption publishes — degraded, never lost);
+ *  - SAFETY VALVE (PARTIAL failure): the failed channels keep a NULL override
+ *    and the flip still happens (shared caption for those — degraded, never lost);
+ *  - HOLD (TOTAL failure, owner decision 2026-09-28): when NO channel gets a
+ *    unique caption, the post is HELD as a draft and the creator is told it was
+ *    NOT published. This REVERSES the original "always flip" rule: on
+ *    2026-09-28 a 240-Page Facebook post was minutes from publishing identical
+ *    text to every Page because both AI providers were out of credit;
+ *  - OUT OF CREDIT stops the loop: every later chunk would get the same answer;
  *  - PROVIDER EXHAUSTION surfacing: a degraded flip stamps
  *    metadata.captionFanout {degraded, degradedAt, reason} and writes ONE
  *    in-app Notification for the post creator (org-OWNER fallback for
@@ -30,8 +36,11 @@ import { join } from "node:path";
 import {
   runCaptionFanout,
   flipPendingFanoutPost,
+  holdPendingFanoutPost,
   parseCaptionArray,
   buildCaptionPrompt,
+  HELD_REASON_NO_CREDIT,
+  HELD_REASON_FAILED,
 } from "../caption-fanout.worker";
 
 const CHAR_LIMITS: Record<string, number> = { BLUESKY: 300, TWITTER: 25000, INSTAGRAM: 2200 };
@@ -189,7 +198,10 @@ describe("runCaptionFanout", () => {
     expect(generateText).toHaveBeenCalledTimes(1);
   });
 
-  it("SAFETY VALVE: generation failure still flips DRAFT→SCHEDULED with null overrides", async () => {
+  it("HOLD: when no channel gets a caption, the post stays a DRAFT and is NOT published", async () => {
+    // Was "SAFETY VALVE: generation failure still flips DRAFT→SCHEDULED". Owner
+    // decision 2026-09-28: total failure holds instead of publishing the shared
+    // caption to every channel.
     const { prisma, state } = statefulPrisma(pendingFanoutPost([target("t1", "BLUESKY"), target("t2", "TWITTER")]));
     const generateText = vi.fn(async () => {
       throw new Error("every provider is down");
@@ -200,14 +212,17 @@ describe("runCaptionFanout", () => {
       { prisma: prisma as any, generateText, charLimitFor }
     );
 
-    expect(result).toEqual({ generated: 0, skippedExisting: 0, flipped: true, degraded: true });
-    expect(state.post.status).toBe("SCHEDULED"); // degraded, never lost
-    expect(state.post.targets.every((t) => t.contentOverride === null)).toBe(true);
-    expect((state.post.metadata as any).captionFanout.degraded).toBe(true);
+    expect(result).toEqual({ generated: 0, skippedExisting: 0, flipped: false, degraded: true, held: true });
+    expect(state.post.status).toBe("DRAFT");
+    expect(state.post.targets.every((t) => t.status === "DRAFT")).toBe(true);
+    expect(prisma.postTarget.updateMany).not.toHaveBeenCalled();
     expect(prisma.postTarget.update).not.toHaveBeenCalled();
+    const fanoutMeta = (state.post.metadata as any).captionFanout;
+    expect(fanoutMeta).toMatchObject({ requested: true, pendingSchedule: false, held: true, reason: HELD_REASON_FAILED });
+    expect(typeof fanoutMeta.heldAt).toBe("string");
   });
 
-  it("PROVIDER EXHAUSTION end-to-end: every chunk throws → flip still happens, degraded metadata stamped, creator notified, never throws unhandled", async () => {
+  it("PROVIDER EXHAUSTION end-to-end: every chunk throws → HELD, not published, creator told it did NOT publish, never throws", async () => {
     // 3 targets with chunkSize 2 → 2 chunks, BOTH exhaust every provider.
     const { prisma, state } = statefulPrisma(
       pendingFanoutPost([target("t1", "BLUESKY"), target("t2", "TWITTER"), target("t3", "INSTAGRAM")])
@@ -222,30 +237,118 @@ describe("runCaptionFanout", () => {
         { postId: "post-1", organizationId: "org-1" },
         { prisma: prisma as any, generateText, charLimitFor, chunkSize: 2 }
       )
-    ).resolves.toEqual({ generated: 0, skippedExisting: 0, flipped: true, degraded: true });
+    ).resolves.toEqual({ generated: 0, skippedExisting: 0, flipped: false, degraded: true, held: true });
 
-    expect(generateText).toHaveBeenCalledTimes(2); // both chunks attempted
-    // (a) post still flips to SCHEDULED — degraded, never lost.
-    expect(state.post.status).toBe("SCHEDULED");
-    expect(state.post.targets.every((t) => t.status === "SCHEDULED")).toBe(true);
-    // (b) all overrides remain null → publish worker falls back to shared caption.
+    // No credit classifier injected → a generic failure: every chunk is still tried.
+    expect(generateText).toHaveBeenCalledTimes(2);
+    // (a) NOT published: post and every target remain DRAFT.
+    expect(state.post.status).toBe("DRAFT");
+    expect(state.post.targets.every((t) => t.status === "DRAFT")).toBe(true);
+    // (b) no override was written.
     expect(state.post.targets.every((t) => t.contentOverride === null)).toBe(true);
-    // (c) degraded metadata is persisted with timestamp + reason.
+    // (c) the hold is recorded, and it is a publish gate (pendingSchedule cleared, held set).
     const fanoutMeta = (state.post.metadata as any).captionFanout;
-    expect(fanoutMeta.degraded).toBe(true);
-    expect(typeof fanoutMeta.degradedAt).toBe("string");
-    expect(fanoutMeta.reason).toBe("caption generation unavailable");
-    expect(fanoutMeta.pendingSchedule).toBe(false);
-    // (d) one notification row for the post CREATOR (not org owners — creator resolvable).
+    expect(fanoutMeta).toMatchObject({ pendingSchedule: false, held: true, reason: HELD_REASON_FAILED });
+    // (d) one notification for the CREATOR that says, plainly, it was NOT published.
     expect(state.notifications).toHaveLength(1);
     expect(state.notifications[0]).toMatchObject({
       userId: "creator-1",
       organizationId: "org-1",
-      type: "post.captions_degraded",
+      type: "post.captions_held",
       link: "/dashboard/posts/post-1",
     });
-    expect(state.notifications[0].body).toMatch(/shared caption/);
+    expect(state.notifications[0].body).toMatch(/NOT published/);
     expect(prisma.organizationMember.findMany).not.toHaveBeenCalled();
+  });
+
+  it("OUT OF CREDIT stops at the first chunk instead of repeating a call that cannot succeed", async () => {
+    // 2026-09-28: 24 chunks x ~97s. With the classifier, one call is enough.
+    const targets = Array.from({ length: 30 }, (_, i) => target(`t${i}`, "FACEBOOK"));
+    const { prisma, state } = statefulPrisma(pendingFanoutPost(targets));
+    const noCredit = Object.assign(new Error("400 Your credit balance is too low to access the Anthropic API."), {
+      status: 400,
+    });
+    const generateText = vi.fn(async () => {
+      throw noCredit;
+    });
+    const isCreditExhausted = vi.fn((e: unknown) => e === noCredit);
+
+    const result = await runCaptionFanout(
+      { postId: "post-1", organizationId: "org-1" },
+      { prisma: prisma as any, generateText, charLimitFor, isCreditExhausted }
+    );
+
+    expect(generateText).toHaveBeenCalledTimes(1); // not 3
+    expect(result).toMatchObject({ generated: 0, flipped: false, held: true });
+    expect((state.post.metadata as any).captionFanout.reason).toBe(HELD_REASON_NO_CREDIT);
+    expect(state.notifications[0].body).toMatch(/out of credit/);
+    expect(state.post.status).toBe("DRAFT");
+  });
+
+  it("an ordinary failure does NOT stop the loop — later chunks may still succeed", async () => {
+    const targets = Array.from({ length: 4 }, (_, i) => target(`t${i}`, "FACEBOOK"));
+    const { prisma, state } = statefulPrisma(pendingFanoutPost(targets));
+    const generateText = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("503 overloaded"))
+      .mockResolvedValueOnce('[{"index":0,"caption":"C"},{"index":1,"caption":"D"}]');
+
+    const result = await runCaptionFanout(
+      { postId: "post-1", organizationId: "org-1" },
+      { prisma: prisma as any, generateText, charLimitFor, chunkSize: 2, isCreditExhausted: () => false }
+    );
+
+    expect(generateText).toHaveBeenCalledTimes(2);
+    // Partial success still publishes (the failed channels use the shared caption).
+    expect(result).toEqual({ generated: 2, skippedExisting: 0, flipped: true, degraded: true });
+    expect(state.post.status).toBe("SCHEDULED");
+  });
+
+  it("a model that returns no usable captions at all also HOLDS (nothing unique was produced)", async () => {
+    const { prisma, state } = statefulPrisma(pendingFanoutPost([target("t1", "BLUESKY"), target("t2", "TWITTER")]));
+    const generateText = vi.fn(async () => "[]");
+
+    const result = await runCaptionFanout(
+      { postId: "post-1", organizationId: "org-1" },
+      { prisma: prisma as any, generateText, charLimitFor }
+    );
+
+    expect(result).toMatchObject({ generated: 0, flipped: false, held: true });
+    expect(state.post.status).toBe("DRAFT");
+  });
+
+  it("a plain draft (no schedule) is never held — it was never going to publish", async () => {
+    const { prisma, state } = statefulPrisma({
+      ...pendingFanoutPost([target("t1", "BLUESKY"), target("t2", "TWITTER")]),
+      metadata: { captionFanout: { requested: true, pendingSchedule: false } },
+    });
+    const generateText = vi.fn(async () => {
+      throw new Error("every provider is down");
+    });
+
+    const result = await runCaptionFanout(
+      { postId: "post-1", organizationId: "org-1" },
+      { prisma: prisma as any, generateText, charLimitFor }
+    );
+
+    expect(result).toMatchObject({ flipped: false });
+    expect(result).not.toHaveProperty("held");
+    expect(state.post.status).toBe("DRAFT");
+    expect((state.post.metadata as any).captionFanout.held).toBeUndefined();
+  });
+
+  it("a notification failure NEVER blocks the hold (best-effort, never throws)", async () => {
+    const { prisma, state } = statefulPrisma(pendingFanoutPost([target("t1", "BLUESKY")]));
+    prisma.notification.create.mockRejectedValue(new Error("db write failed"));
+    const generateText = vi.fn(async () => {
+      throw new Error("all providers exhausted");
+    });
+
+    await expect(
+      runCaptionFanout({ postId: "post-1", organizationId: "org-1" }, { prisma: prisma as any, generateText, charLimitFor })
+    ).resolves.toMatchObject({ held: true });
+    expect((state.post.metadata as any).captionFanout.held).toBe(true);
+    expect(state.post.status).toBe("DRAFT");
   });
 
   it("partial failure: successful chunk's overrides are KEPT, failed chunk falls back, degraded=true + notification", async () => {
@@ -296,15 +399,17 @@ describe("runCaptionFanout", () => {
   });
 
   it("a notification failure NEVER blocks the flip (best-effort, never throws)", async () => {
-    const { prisma, state } = statefulPrisma(pendingFanoutPost([target("t1", "BLUESKY")]));
+    // A PARTIAL failure — total failure now holds instead of flipping.
+    const { prisma, state } = statefulPrisma(pendingFanoutPost([target("t1", "BLUESKY"), target("t2", "TWITTER")]));
     prisma.notification.create.mockRejectedValue(new Error("db write failed"));
-    const generateText = vi.fn(async () => {
-      throw new Error("all providers exhausted");
-    });
+    const generateText = vi
+      .fn()
+      .mockResolvedValueOnce('[{"index":0,"caption":"ok"}]')
+      .mockRejectedValueOnce(new Error("all providers exhausted"));
 
     const result = await runCaptionFanout(
       { postId: "post-1", organizationId: "org-1" },
-      { prisma: prisma as any, generateText, charLimitFor }
+      { prisma: prisma as any, generateText, charLimitFor, chunkSize: 1 }
     );
 
     expect(result).toMatchObject({ flipped: true, degraded: true });
@@ -384,6 +489,25 @@ describe("runCaptionFanout", () => {
     expect(result).toEqual({ skipped: "post_not_found" });
     expect(generateText).not.toHaveBeenCalled();
     expect(state.post.status).toBe("DRAFT");
+  });
+});
+
+describe("holdPendingFanoutPost", () => {
+  it("only holds a DRAFT that is still pending — never a post already scheduled or published", async () => {
+    for (const post of [
+      { ...pendingFanoutPost([target("t1", "BLUESKY")]), status: "SCHEDULED" },
+      { ...pendingFanoutPost([target("t1", "BLUESKY")]), metadata: { captionFanout: { requested: true, pendingSchedule: false } } },
+    ]) {
+      const { prisma } = statefulPrisma(post as any);
+      await expect(holdPendingFanoutPost({ prisma: prisma as any }, "post-1", "org-1", HELD_REASON_FAILED)).resolves.toBe(false);
+      expect(prisma.post.update).not.toHaveBeenCalled();
+    }
+  });
+
+  it("is org-scoped: a foreign organization can never hold the post", async () => {
+    const { prisma } = statefulPrisma(pendingFanoutPost([target("t1", "BLUESKY")]));
+    await expect(holdPendingFanoutPost({ prisma: prisma as any }, "post-1", "org-EVIL", HELD_REASON_FAILED)).resolves.toBe(false);
+    expect(prisma.post.update).not.toHaveBeenCalled();
   });
 });
 

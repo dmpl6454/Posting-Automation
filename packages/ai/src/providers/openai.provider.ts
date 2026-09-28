@@ -1,4 +1,5 @@
 import { ChatOpenAI } from "@langchain/openai";
+import { aiFailedAttemptHandler } from "../utils/credit-exhaustion";
 
 // Default to gpt-4o (current, non-deprecated). Operators can override via
 // OPENAI_MODEL without a code change if OpenAI rotates model IDs again.
@@ -9,5 +10,7 @@ export function getOpenAIModel(temperature = 0.7) {
     modelName: process.env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL,
     temperature,
     openAIApiKey: process.env.OPENAI_API_KEY,
+    // An out-of-credit account must fail at once, not burn ~95s in retries.
+    onFailedAttempt: aiFailedAttemptHandler,
   });
 }

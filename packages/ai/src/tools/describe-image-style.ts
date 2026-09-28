@@ -20,6 +20,7 @@
  */
 
 import { ChatOpenAI } from "@langchain/openai";
+import { aiFailedAttemptHandler } from "../utils/credit-exhaustion";
 import { HumanMessage } from "@langchain/core/messages";
 
 const STYLE_PROMPT =
@@ -47,6 +48,7 @@ export async function describeImageStyle(
       temperature: 0,
       maxTokens: 80,
       openAIApiKey: apiKey,
+      onFailedAttempt: aiFailedAttemptHandler,
     });
 
     const message = new HumanMessage({
