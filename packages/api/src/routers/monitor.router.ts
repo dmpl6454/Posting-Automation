@@ -31,8 +31,18 @@ export const monitorRouter = createRouter({
    * client-supplied `organizationId` / `userId` — that allowed any
    * unauthenticated client to forge error rows attributed to any tenant
    * (DB junk-fill + audit-log poisoning). It is now `protectedProcedure`,
-   * the org/user are taken from the session only, and the input fields
-   * for `organizationId` / `userId` are removed.
+   * the user is taken from the session only, and the input fields for
+   * `organizationId` / `userId` are removed.
+   *
+   * SECURITY (2026-09-28): this is `protectedProcedure`, not `orgProcedure`,
+   * so it never runs orgProcedure's membership-verification block —
+   * `ctx.organizationId` here is still the RAW `x-organization-id` header,
+   * which any signed-in user controls regardless of which org they actually
+   * belong to. Mirrors org.router.ts `current`: the header is honored only
+   * when a real OrganizationMember row proves it, never swapped for a guess
+   * otherwise. Without this, one org's error could dedup-collide with an
+   * identical message from an org the caller has no membership in, silently
+   * overwriting that org's stored metadata and occurrence count.
    */
   logError: protectedProcedure
     .input(
@@ -49,12 +59,23 @@ export const monitorRouter = createRouter({
     .mutation(async ({ ctx, input }) => {
       const fp = errorFingerprint(input.message, input.stack);
       const userId = (ctx.session?.user as any)?.id as string | undefined;
-      const organizationId = (ctx as any).organizationId as string | undefined;
+      const headerOrgId = (ctx as any).organizationId as string | undefined;
 
-      // Deduplicate: if same fingerprint exists in last 24h, increment count
+      let organizationId: string | undefined;
+      if (headerOrgId && userId) {
+        const membership = await ctx.prisma.organizationMember.findUnique({
+          where: { userId_organizationId: { userId, organizationId: headerOrgId } },
+        });
+        if (membership) organizationId = headerOrgId;
+      }
+
+      // Deduplicate: if same fingerprint exists in last 24h for the SAME
+      // (verified) org, increment count. Scoped by organizationId so two
+      // tenants' identical messages can never collide into one row.
       const existing = await ctx.prisma.errorLog.findFirst({
         where: {
           fingerprint: fp,
+          organizationId: organizationId ?? null,
           resolved: false,
           lastSeenAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
         },

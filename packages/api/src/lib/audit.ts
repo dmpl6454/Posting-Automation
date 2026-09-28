@@ -50,6 +50,7 @@ export const AUDIT_ACTIONS = {
   MEMBER_INVITED: "member.invited",
   MEMBER_REMOVED: "member.removed",
   MEMBER_ROLE_CHANGED: "member.role_changed",
+  INVITE_REVOKED: "invite.revoked",
 
   // API Keys
   API_KEY_CREATED: "apikey.created",
