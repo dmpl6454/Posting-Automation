@@ -158,14 +158,52 @@ export const bulkRouter = createRouter({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Organization ID required" });
       }
 
+      // 🔒 Security audit 2026-09-28: this used to relabel Post.status alone.
+      // post.create/update enqueue per-target DELAYED BullMQ jobs at save time
+      // (packages/queue/src/schedule-publish.ts); the worker's pre-claim guard
+      // (isStaleScheduleJob, apps/worker/src/lib/publish-recovery.ts) skips one
+      // of those jobs ONLY when the post's CURRENT scheduledAt no longer
+      // matches what it was enqueued with. Never touching scheduledAt meant a
+      // post the operator had just cancelled or drafted still published on
+      // schedule — the status change was cosmetic against an already-queued job.
+      //
+      // Never touch a post that is already PUBLISHED, or mid-flight PUBLISHING
+      // — rewriting either backward would corrupt state while its targets are
+      // live or in flight, the same rule publishNow/bulkSchedule already keep.
+      const eligible = await prisma.post.findMany({
+        where: { id: { in: input.postIds }, organizationId, status: { notIn: ["PUBLISHED", "PUBLISHING"] } },
+        select: { id: true },
+      });
+      const eligibleIds = eligible.map((p) => p.id);
+      if (eligibleIds.length === 0) {
+        return { updated: 0 };
+      }
+
       const result = await prisma.post.updateMany({
-        where: {
-          id: { in: input.postIds },
-          organizationId,
-        },
+        where: { id: { in: eligibleIds }, organizationId },
         data: {
           status: input.status,
+          // Kills any already-queued delayed publish job via isStaleScheduleJob
+          // — the SAME mechanism post.update's own "Cancel Schedule" path
+          // (scheduledAt: null with the status left alone) already relies on.
+          scheduledAt: null,
         },
+      });
+
+      // Flip the posts' own targets too — mirroring bulkSchedule's discipline
+      // in the opposite direction: SCHEDULED/DRAFT/FAILED are the only statuses
+      // a stray delayed job could still act on, PUBLISHED/PUBLISHING must never
+      // be touched, and a target whose outcome is UNKNOWN (ambiguousAt) is left
+      // alone entirely — that is the operator's separate "did it actually
+      // publish?" decision (post.clearPublishAmbiguity) and must not be
+      // silently overridden by a bulk status change.
+      await prisma.postTarget.updateMany({
+        where: {
+          postId: { in: eligibleIds },
+          status: { in: ["SCHEDULED", "DRAFT", "FAILED"] },
+          ambiguousAt: null,
+        },
+        data: { status: input.status },
       });
 
       return { updated: result.count };
