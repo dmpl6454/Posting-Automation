@@ -17,6 +17,18 @@ import { isStoryModeMetadata } from "../lib/instagram-story";
 // By FILE, not the package root: the root also builds every BullMQ queue
 // (Redis connections) at module load, which this router has never needed.
 import { pendingPublishGates } from "@postautomation/queue/src/publish-gates";
+import { checkUsageLimit } from "../middleware/plan-limit.middleware";
+
+/**
+ * Security audit 2026-09-28: csvImport had no cap on row count and never
+ * checked the postsPerMonth plan quota — every other post-creation path
+ * (post.create, chat's schedule_post/bulk_schedule) calls enforcePlanLimit
+ * first. A single pasted CSV could create an unbounded number of Post +
+ * PostTarget rows in one synchronous request: a complete quota bypass, and
+ * independent of plan, a resource-exhaustion vector (the loop below awaits
+ * one prisma.post.create per row, sequentially, inside a single request).
+ */
+export const MAX_CSV_IMPORT_ROWS = 1000;
 
 export const bulkRouter = createRouter({
   /**
@@ -249,6 +261,25 @@ export const bulkRouter = createRouter({
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "CSV must have a header row and at least one data row",
+        });
+      }
+
+      if (rows.length > MAX_CSV_IMPORT_ROWS) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `CSV has ${rows.length} rows — the limit is ${MAX_CSV_IMPORT_ROWS} per import. Split it into smaller files.`,
+        });
+      }
+
+      // Security audit 2026-09-28: check the monthly posts quota BEFORE
+      // creating anything, and against the WHOLE batch (current + rows.length)
+      // — checking one row at a time would let a single oversized CSV blow
+      // straight through the limit before the first over-quota row is hit.
+      const usage = await checkUsageLimit(organizationId, "postsPerMonth", ctx.isSuperAdmin);
+      if (usage.limit !== -1 && usage.current + rows.length > usage.limit) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: `Plan limit reached: ${usage.planName} plan allows ${usage.limit} posts this month (currently ${usage.current}, this import would add ${rows.length}). Upgrade your plan or import fewer rows.`,
         });
       }
 
