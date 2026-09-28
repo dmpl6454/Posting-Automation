@@ -1255,6 +1255,12 @@ export const postRouter = createRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // Security audit 2026-09-28: this generates up to 10 AI images per call
+      // (image.router.ts's own `generate` — ONE image per call — already
+      // gates on this same resource) but had no plan check at all, unlike
+      // every other AI-image-generation path in this codebase.
+      await enforcePlanLimit(ctx.organizationId, "aiImagesPerMonth", ctx.isSuperAdmin);
+
       const { generateContent, generateImage: generateGeminiImage, generateCarouselImages } = await import("@postautomation/ai");
       const userId = (ctx.session.user as any).id as string;
 
