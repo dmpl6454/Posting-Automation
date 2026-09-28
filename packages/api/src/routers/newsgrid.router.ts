@@ -674,6 +674,14 @@ Requirements:
         select: { url: true, channelId: true },
       });
 
+      // 🔒 Security audit 2026-09-28: the delete below ran on the BARE
+      // client-supplied id with no organizationId filter, so an org-scoped
+      // `findFirst` returning null (a foreign media row) did not stop it —
+      // any app-ADMIN could delete another workspace's Media row by id.
+      if (!media) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Logo not found." });
+      }
+
       if (media?.channelId) {
         // The media row is directly associated with a channel — clear the logo_path
         const channel = await ctx.prisma.channel.findFirst({
