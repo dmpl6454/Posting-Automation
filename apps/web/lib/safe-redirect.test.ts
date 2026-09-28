@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { safeCallbackPath } from "./safe-redirect";
+import { safeCallbackPath, isSafeInAppLink } from "./safe-redirect";
 
 /**
  * Where the login page may send a user afterwards (security audit 2026-09-28).
@@ -68,5 +68,27 @@ describe("safeCallbackPath", () => {
 
   it("uses the caller's fallback", () => {
     expect(safeCallbackPath("https://evil.example", "/home")).toBe("/home");
+  });
+});
+
+describe("isSafeInAppLink", () => {
+  it("accepts ordinary in-app paths", () => {
+    expect(isSafeInAppLink("/dashboard/posts/p1")).toBe(true);
+    expect(isSafeInAppLink("/dashboard")).toBe(true);
+  });
+
+  it("refuses everything safeCallbackPath would have to fall back from", () => {
+    for (const bad of [
+      null,
+      undefined,
+      "",
+      "javascript:alert(1)",
+      "https://evil.example",
+      "//evil.example",
+      "/\\evil.example",
+      "/..//evil.example",
+    ]) {
+      expect(isSafeInAppLink(bad)).toBe(false);
+    }
   });
 });

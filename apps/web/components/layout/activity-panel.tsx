@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { trpc } from "~/lib/trpc/client";
+import { isSafeInAppLink } from "~/lib/safe-redirect";
 import { Button } from "~/components/ui/button";
 import { Badge } from "~/components/ui/badge";
 import { ScrollArea } from "~/components/ui/scroll-area";
@@ -323,11 +324,12 @@ export function ActivityPanel({ open = false, onClose, onCountsChange }: Activit
                   <button
                     key={item.id}
                     onClick={() => {
-                      if (item.link) window.location.href = item.link;
+                      // 🔒 Same-origin only (security audit 2026-09-28).
+                      if (item.link && isSafeInAppLink(item.link)) window.location.href = item.link;
                     }}
                     className={cn(
                       "w-full text-left rounded-lg p-2 transition-colors hover:bg-muted/50 group",
-                      item.link && "cursor-pointer"
+                      item.link && isSafeInAppLink(item.link) && "cursor-pointer"
                     )}
                   >
                     <div className="flex items-start gap-2">
@@ -357,7 +359,7 @@ export function ActivityPanel({ open = false, onClose, onCountsChange }: Activit
                         )}
                       </div>
 
-                      {item.link && (
+                      {item.link && isSafeInAppLink(item.link) && (
                         <ChevronRight className="h-3 w-3 text-muted-foreground/0 group-hover:text-muted-foreground transition-colors mt-1 shrink-0" />
                       )}
                     </div>

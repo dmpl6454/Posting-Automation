@@ -4,6 +4,7 @@ import { useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Bell, Check, CheckCheck } from "lucide-react";
 import { trpc } from "~/lib/trpc/client";
+import { isSafeInAppLink } from "~/lib/safe-redirect";
 import { Button } from "~/components/ui/button";
 import { Badge } from "~/components/ui/badge";
 import {
@@ -101,7 +102,9 @@ export function NotificationBell() {
       if (!notification.isRead) {
         markReadMutation.mutate({ id: notification.id });
       }
-      if (notification.link) {
+      // 🔒 Same-origin only (security audit 2026-09-28): notification.link is
+      // stored data, not necessarily ours to trust.
+      if (notification.link && isSafeInAppLink(notification.link)) {
         router.push(notification.link);
       }
     },

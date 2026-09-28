@@ -35,3 +35,15 @@ export function safeCallbackPath(raw: string | null | undefined, fallback = "/da
   }
   return again.origin === PLACEHOLDER_ORIGIN && !candidate.startsWith("//") ? candidate : fallback;
 }
+
+/**
+ * A boolean gate for "is this link safe to navigate to", used where the caller
+ * should do NOTHING on a bad link rather than silently substitute a fallback
+ * destination (notification click handlers — security audit 2026-09-28).
+ * notification.create was reachable by any app-role ADMIN with no org-membership
+ * check on the target, so `link` was attacker-influenced data, not our own.
+ */
+export function isSafeInAppLink(link: string | null | undefined): boolean {
+  if (!link) return false;
+  return safeCallbackPath(link, "") === link;
+}
