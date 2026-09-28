@@ -16,6 +16,7 @@
  */
 
 import { TRPCError } from "@trpc/server";
+import { isPublicPageUrl } from "@postautomation/ai";
 
 export type TokenPlatform =
   | "TELEGRAM"
@@ -420,6 +421,15 @@ async function validateMastodon(creds: Record<string, string>): Promise<Validate
   if (!/^https:\/\/[\w.-]+\.[a-z]{2,}$/i.test(instance)) {
     badRequest("Instance URL must look like https://mastodon.social — no path or trailing slash.");
   }
+  // Security audit 2026-09-28: the format check above matches ANY hostname
+  // shaped like a domain — including an internal DNS name (e.g.
+  // metadata.google.internal) or an attacker-controlled domain pointed at a
+  // private IP. isPublicPageUrl (used everywhere else in this codebase for a
+  // user-supplied URL we fetch server-side) rejects private/loopback/
+  // link-local/metadata hosts before any network call is made.
+  if (!isPublicPageUrl(instance)) {
+    badRequest("That instance URL is not reachable — it must be a public Mastodon instance.");
+  }
 
   const res = await fetch(`${instance}/api/v1/accounts/verify_credentials`, {
     headers: { Authorization: `Bearer ${accessToken}` },
@@ -453,6 +463,15 @@ async function validateWordPress(creds: Record<string, string>): Promise<Validat
   const siteUrl = siteUrlRaw.replace(/\/+$/, "");
   if (!/^https?:\/\/[\w.-]+/.test(siteUrl)) {
     badRequest("Site URL must include http:// or https://");
+  }
+  // Security audit 2026-09-28: the format check above matches localhost, a
+  // bare private IPv4 literal, or the cloud metadata address — any org member
+  // could point this at an internal service with zero SSRF protection.
+  // isPublicPageUrl (used everywhere else in this codebase for a
+  // user-supplied URL we fetch server-side) rejects those before any
+  // network call is made.
+  if (!isPublicPageUrl(siteUrl)) {
+    badRequest("That site URL is not reachable — it must be a public WordPress site.");
   }
 
   // WordPress UI shows the app password with spaces — strip them before use.
