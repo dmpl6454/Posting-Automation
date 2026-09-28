@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { createRouter, protectedProcedure, orgProcedure } from "../trpc";
+import { createRouter, orgProcedure } from "../trpc";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import crypto from "crypto";
 import {
@@ -855,7 +855,14 @@ export function buildVideoJobData(args: {
 }
 
 export const repurposeRouter = createRouter({
-  repurpose: protectedProcedure
+  // Security audit 2026-09-28: repurpose/extractUrl/classifyStyleReference
+  // were bare `protectedProcedure` — no org-membership check and no rate
+  // limit, unlike repurposeFromUrl/regenerateImage below (which already use
+  // `aiRateLimited`). Each of these three runs a real LLM/vision-model call
+  // or fetches an arbitrary caller-supplied URL server-side; any signed-in
+  // user could hit them as fast as they wanted, regardless of org membership
+  // or plan. Now on the SAME aiRateLimited procedure as their siblings.
+  repurpose: aiRateLimited
     .input(
       z.object({
         originalContent: z.string().min(1).max(50000),
@@ -879,7 +886,7 @@ export const repurposeRouter = createRouter({
     }),
 
   /** Extract content from a URL */
-  extractUrl: protectedProcedure
+  extractUrl: aiRateLimited
     .input(z.object({ url: z.string().url() }))
     .mutation(async ({ input }) => {
       try {
@@ -905,7 +912,7 @@ export const repurposeRouter = createRouter({
    * (fail-closed on private/loopback/metadata hosts) — the url is user-supplied, so
    * it is NEVER fetched without these guards.
    */
-  classifyStyleReference: protectedProcedure
+  classifyStyleReference: aiRateLimited
     .input(z.object({ aestheticRefUrl: z.string().min(1) }))
     .mutation(
       async ({

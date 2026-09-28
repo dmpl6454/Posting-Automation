@@ -26,10 +26,20 @@ vi.mock("@postautomation/ai", () => ({
 import { createCallerFactory } from "../trpc";
 import { repurposeRouter } from "../routers/repurpose.router";
 
+// Security audit 2026-09-28: classifyStyleReference moved from bare
+// protectedProcedure onto aiRateLimited (orgProcedure + rate limit, matching
+// its siblings in this router) — see repurpose-cost-gates.test.ts for the
+// dedicated coverage of that gate. This caller now needs a real membership +
+// org row for orgProcedure's checks to pass.
 function makeCaller() {
   const createCaller = createCallerFactory(repurposeRouter);
   return createCaller({
-    prisma: {} as any,
+    prisma: {
+      organizationMember: {
+        findUnique: async () => ({ userId: "u1", organizationId: "org-1", role: "OWNER" }),
+      },
+      organization: { findUnique: async () => ({ plan: "PROFESSIONAL", planExpiresAt: null }) },
+    } as any,
     organizationId: "org-1",
     session: { user: { id: "u1", email: "x@y.z" }, expires: "2099-01-01" } as any,
   });
