@@ -12,6 +12,7 @@ import {
 import { resolveChannelErrorsOnReconnect, DISCONNECTED_TOKEN } from "@postautomation/db";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 import { evaluateChannelInsightsStatus } from "../lib/insights-health";
+import { PUBLIC_CHANNEL_SELECT, toPublicChannel } from "../lib/public-channel";
 import { enforcePlanLimit } from "../middleware/plan-limit.middleware";
 import {
   TOKEN_PLATFORMS,
@@ -428,7 +429,9 @@ export const channelRouter = createRouter({
         });
       });
 
-      return channel;
+      // The row was just upserted with the credentials the caller supplied; the
+      // client needs none of them back.
+      return toPublicChannel(channel);
     }),
 
   disconnect: orgProcedure
@@ -514,10 +517,14 @@ export const channelRouter = createRouter({
         where: { id: input.channelId, organizationId: ctx.organizationId },
       });
       if (!channel) throw new TRPCError({ code: "NOT_FOUND" });
-      return ctx.prisma.channel.update({
+      // ⚠️ Never return the raw row: the db extension decrypts the tokens on
+      // write, and this is callable by ANY member of the workspace.
+      const updated = await ctx.prisma.channel.update({
         where: { id: input.channelId },
         data: { isActive: !channel.isActive },
+        select: PUBLIC_CHANNEL_SELECT,
       });
+      return toPublicChannel(updated);
     }),
 
   /**

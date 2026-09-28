@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
+import { PUBLIC_CHANNEL_SELECT } from "../lib/public-channel";
 import { postPublishQueue, captionFanoutQueue, superTextQueue, enqueueScheduledPublishJobs, buildPublishNowJobId } from "@postautomation/queue";
 import { superTextMapSchema } from "@postautomation/super-text";
 import { planSuperText, superTextJobId, type SuperTextPlan } from "../lib/super-text";
@@ -86,7 +87,7 @@ export const postRouter = createRouter({
           archivedAt: input.archived ? { not: null } : null,
         },
         include: {
-          targets: { include: { channel: true } },
+          targets: { include: { channel: { select: PUBLIC_CHANNEL_SELECT } } },
           mediaAttachments: { include: { media: true } },
           tags: true,
         },
@@ -110,7 +111,7 @@ export const postRouter = createRouter({
       const post = await ctx.prisma.post.findFirst({
         where: { id: input.id, organizationId: ctx.organizationId },
         include: {
-          targets: { include: { channel: true } },
+          targets: { include: { channel: { select: PUBLIC_CHANNEL_SELECT } } },
           mediaAttachments: { include: { media: true }, orderBy: { order: "asc" } },
           tags: true,
         },
@@ -491,7 +492,7 @@ export const postRouter = createRouter({
           }),
         },
         include: {
-          targets: { include: { channel: true } },
+          targets: { include: { channel: { select: PUBLIC_CHANNEL_SELECT } } },
           mediaAttachments: { include: { media: true } },
           tags: true,
         },
@@ -777,7 +778,7 @@ export const postRouter = createRouter({
           }),
         },
         include: {
-          targets: { include: { channel: true } },
+          targets: { include: { channel: { select: PUBLIC_CHANNEL_SELECT } } },
           mediaAttachments: { include: { media: true } },
           tags: true,
         },
@@ -914,7 +915,7 @@ export const postRouter = createRouter({
       const post = await ctx.prisma.post.findFirst({
         where: { id: input.id, organizationId: ctx.organizationId },
         include: {
-          targets: { include: { channel: true } },
+          targets: { include: { channel: { select: PUBLIC_CHANNEL_SELECT } } },
           _count: { select: { mediaAttachments: true } },
         },
       });

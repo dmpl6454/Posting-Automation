@@ -9,6 +9,7 @@
 // strong as the membership check that produced that id.
 import { z } from "zod";
 import { createRouter, orgProcedure } from "../trpc";
+import { PUBLIC_CHANNEL_SELECT } from "../lib/public-channel";
 import { prisma } from "@postautomation/db";
 import { TRPCError } from "@trpc/server";
 import Papa from "papaparse";
@@ -306,7 +307,7 @@ export const bulkRouter = createRouter({
       const posts = await prisma.post.findMany({
         where,
         include: {
-          targets: { include: { channel: true } },
+          targets: { include: { channel: { select: PUBLIC_CHANNEL_SELECT } } },
         },
         orderBy: { createdAt: "desc" },
       });

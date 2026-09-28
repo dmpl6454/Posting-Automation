@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure, isAppAdmin } from "../trpc";
+import { PUBLIC_CHANNEL_SELECT } from "../lib/public-channel";
 import { agentRunQueue, postPublishQueue, captionFanoutQueue } from "@postautomation/queue";
 import { requirePlan, enforcePlanLimit } from "../middleware/plan-limit.middleware";
 import { planCaptionFanout, captionFanoutJobId } from "../lib/caption-fanout";
@@ -646,7 +647,7 @@ export const chatRouter = createRouter({
                 },
               }),
             },
-            include: { targets: { include: { channel: true } } },
+            include: { targets: { include: { channel: { select: PUBLIC_CHANNEL_SELECT } } } },
           });
 
           if (captionFanout.enabled) {

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { createRouter, adminOrgProcedure } from "../trpc";
+import { PUBLIC_CHANNEL_SELECT } from "../lib/public-channel";
 import { TRPCError } from "@trpc/server";
 import { postPublishQueue } from "@postautomation/queue";
 import { requirePlan, enforcePlanLimit } from "../middleware/plan-limit.middleware";
@@ -457,7 +458,7 @@ Requirements:
               },
             },
           },
-          include: { targets: { include: { channel: true } } },
+          include: { targets: { include: { channel: { select: PUBLIC_CHANNEL_SELECT } } } },
         });
 
         // Attach the preview image (from news grid) so the SAME image gets published
