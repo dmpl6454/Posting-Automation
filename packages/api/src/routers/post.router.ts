@@ -2,7 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
 import { PUBLIC_CHANNEL_SELECT } from "../lib/public-channel";
-import { postPublishQueue, captionFanoutQueue, superTextQueue, enqueueScheduledPublishJobs, buildPublishNowJobId } from "@postautomation/queue";
+import { postPublishQueue, captionFanoutQueue, superTextQueue, enqueueScheduledPublishJobs, buildPublishNowJobId, pendingPublishGates } from "@postautomation/queue";
 import { superTextMapSchema } from "@postautomation/super-text";
 import { planSuperText, superTextJobId, type SuperTextPlan } from "../lib/super-text";
 import {
@@ -978,15 +978,36 @@ export const postRouter = createRouter({
         if (storyError) throw new TRPCError({ code: "BAD_REQUEST", message: storyError });
       }
 
-      // Super text: refuse to publish while the burn is still in flight —
-      // otherwise this path would push the ORIGINAL, un-burned video and the
-      // user's placed text would silently never appear. The worker flips the
-      // post to SCHEDULED itself the moment the burn lands.
-      if ((post.metadata as any)?.superText?.pendingBurn === true) {
+      // 🔒 Refuse to publish while ANY parking gate is open (security audit
+      // 2026-09-28). This used to check ONLY superText.pendingBurn — a post
+      // mid caption fan-out, or HELD because no unique caption could be
+      // generated (packages/queue/src/publish-gates.ts), still had every
+      // target sitting DRAFT, which the implicit FAILED/DRAFT/SCHEDULED filter
+      // below happily picked up: publishNow would push the SHARED caption to
+      // every channel right now, the exact outcome the fan-out/hold machinery
+      // exists to prevent (the 2026-09-28 240-Facebook-Page incident, reached
+      // through this second door). pendingPublishGates is the SAME check the
+      // workers use to decide whether a post may be flipped to SCHEDULED.
+      const openGates = pendingPublishGates(post.metadata as Record<string, unknown> | null);
+      if (openGates.includes("superText")) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message:
             "Super text is still being applied to your video. This post will publish automatically as soon as it's ready.",
+        });
+      }
+      if (openGates.includes("captionFanout")) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Unique captions are still being generated for each channel. This post will publish automatically once they're ready.",
+        });
+      }
+      if (openGates.includes("captionFanoutHeld")) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Unique captions couldn't be generated for this post, so it was held. Open the post to retry, or publish with your shared caption instead.",
         });
       }
 

@@ -33,6 +33,14 @@ vi.mock("@postautomation/queue", () => ({
   buildPublishNowJobId: (targetId: string, nowMs: number) =>
     `pubnow:${targetId}:${Math.floor(nowMs / 60_000)}`,
   PUBLISH_NOW_DEDUPE_WINDOW_MS: 60_000,
+  // Real implementation, not a stub — this is the exact guard under test.
+  pendingPublishGates: (meta: Record<string, any> | null | undefined): string[] => {
+    const gates: string[] = [];
+    if (meta?.captionFanout?.pendingSchedule === true) gates.push("captionFanout");
+    if (meta?.captionFanout?.held === true) gates.push("captionFanoutHeld");
+    if (meta?.superText?.pendingBurn === true) gates.push("superText");
+    return gates;
+  },
 }));
 
 const orgMemberFindUnique = vi.fn();
@@ -148,6 +156,43 @@ describe("post.publishNow — ambiguous targets are not re-published", () => {
     });
     await expect(makeCaller().publishNow({ id: "p1" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
     expect(queueAdd).not.toHaveBeenCalled();
+  });
+
+  // 🔒 Security audit 2026-09-28: publishNow checked ONLY superText.pendingBurn.
+  // A post mid per-channel-caption fan-out (or HELD because every AI provider
+  // was out of credit — see caption-fanout.worker.ts) still had every target
+  // sitting DRAFT, which publishNow's implicit FAILED/DRAFT/SCHEDULED filter
+  // happily picked up — publishing the SHARED caption to every channel right
+  // now, exactly the outcome the fan-out/hold machinery exists to prevent. This
+  // is the 240-Facebook-Page incident, reached through a second door.
+  it("refuses to publish while a caption fan-out is still generating unique captions", async () => {
+    postFindFirst.mockResolvedValue({
+      id: "p1",
+      metadata: { captionFanout: { requested: true, pendingSchedule: true } },
+      targets: [target(), target({ id: "t2" })],
+    });
+    await expect(makeCaller().publishNow({ id: "p1" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(queueAdd).not.toHaveBeenCalled();
+  });
+
+  it("refuses to publish a post HELD because no unique caption could be generated", async () => {
+    postFindFirst.mockResolvedValue({
+      id: "p1",
+      metadata: { captionFanout: { requested: true, pendingSchedule: false, held: true } },
+      targets: [target(), target({ id: "t2" })],
+    });
+    await expect(makeCaller().publishNow({ id: "p1" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(queueAdd).not.toHaveBeenCalled();
+  });
+
+  it("still publishes normally once the fan-out has completed cleanly", async () => {
+    postFindFirst.mockResolvedValue({
+      id: "p1",
+      metadata: { captionFanout: { requested: true, pendingSchedule: false, completedAt: "x" } },
+      targets: [target()],
+    });
+    await makeCaller().publishNow({ id: "p1" });
+    expect(queueAdd).toHaveBeenCalledTimes(1);
   });
 
   it("still excludes PUBLISHED targets when ids are given explicitly", async () => {

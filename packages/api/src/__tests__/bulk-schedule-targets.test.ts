@@ -22,7 +22,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const postUpdate = vi.fn(async (_args: any) => ({ id: "post-1" }));
-const postFindFirst = vi.fn(async (_args: any) => ({ id: "post-1", status: "DRAFT" }));
+const postFindFirst = vi.fn(async (_args: any): Promise<{ id: string; status: string; metadata?: unknown }> => ({ id: "post-1", status: "DRAFT" }));
 const postTargetUpdateMany = vi.fn(async (_args: any) => ({ count: 2 }));
 
 vi.mock("@postautomation/db", () => ({
@@ -127,5 +127,71 @@ describe("bulk.* org membership enforcement (was a cross-org IDOR)", () => {
     // Crucially: rejected BEFORE any post is touched.
     expect(postUpdate).not.toHaveBeenCalled();
     expect(postTargetUpdateMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("bulk.bulkSchedule — a post whose captions/super-text are still pending is never armed", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  // 🔒 Security audit 2026-09-28: bulkSchedule checked NOTHING about the
+  // post's own pending state before flipping its DRAFT targets to SCHEDULED.
+  // The Bulk tab lists exactly these DRAFT posts (fan-out pending, or HELD
+  // because every AI provider was out of credit), so selecting one there and
+  // clicking Bulk Schedule armed it for the publish cron with every target
+  // still holding a NULL caption override — the shared caption goes to every
+  // channel, the exact outcome the fan-out/hold machinery exists to prevent.
+  it("skips (and counts) a post whose caption fan-out is still generating", async () => {
+    postFindFirst.mockResolvedValueOnce({
+      id: "post-1",
+      status: "DRAFT",
+      metadata: { captionFanout: { requested: true, pendingSchedule: true } },
+    });
+    const caller = buildCaller({ isMember: true });
+    const res = await caller.bulkSchedule({ items: [{ postId: "post-1", scheduledAt: "2099-01-01T10:00:00.000Z" }] });
+
+    expect(res.scheduled).toBe(0);
+    expect((res as any).skippedPending).toBe(1);
+    expect(postUpdate).not.toHaveBeenCalled();
+    expect(postTargetUpdateMany).not.toHaveBeenCalled();
+  });
+
+  it("skips (and counts) a post HELD because no unique caption could be generated", async () => {
+    postFindFirst.mockResolvedValueOnce({
+      id: "post-1",
+      status: "DRAFT",
+      metadata: { captionFanout: { requested: true, pendingSchedule: false, held: true } },
+    });
+    const caller = buildCaller({ isMember: true });
+    const res = await caller.bulkSchedule({ items: [{ postId: "post-1", scheduledAt: "2099-01-01T10:00:00.000Z" }] });
+
+    expect(res.scheduled).toBe(0);
+    expect((res as any).skippedPending).toBe(1);
+    expect(postUpdate).not.toHaveBeenCalled();
+  });
+
+  it("skips a post whose super-text burn is still in flight", async () => {
+    postFindFirst.mockResolvedValueOnce({
+      id: "post-1",
+      status: "DRAFT",
+      metadata: { superText: { pendingBurn: true } },
+    });
+    const caller = buildCaller({ isMember: true });
+    const res = await caller.bulkSchedule({ items: [{ postId: "post-1", scheduledAt: "2099-01-01T10:00:00.000Z" }] });
+
+    expect(res.scheduled).toBe(0);
+    expect((res as any).skippedPending).toBe(1);
+  });
+
+  it("still schedules normally once every gate has cleared", async () => {
+    postFindFirst.mockResolvedValueOnce({
+      id: "post-1",
+      status: "DRAFT",
+      metadata: { captionFanout: { requested: true, pendingSchedule: false, completedAt: "x" } },
+    });
+    const caller = buildCaller({ isMember: true });
+    const res = await caller.bulkSchedule({ items: [{ postId: "post-1", scheduledAt: "2099-01-01T10:00:00.000Z" }] });
+
+    expect(res.scheduled).toBe(1);
+    expect((res as any).skippedPending).toBe(0);
   });
 });

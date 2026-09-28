@@ -14,6 +14,9 @@ import { prisma } from "@postautomation/db";
 import { TRPCError } from "@trpc/server";
 import Papa from "papaparse";
 import { isStoryModeMetadata } from "../lib/instagram-story";
+// By FILE, not the package root: the root also builds every BullMQ queue
+// (Redis connections) at module load, which this router has never needed.
+import { pendingPublishGates } from "@postautomation/queue/src/publish-gates";
 
 export const bulkRouter = createRouter({
   /**
@@ -53,6 +56,7 @@ export const bulkRouter = createRouter({
 
       let scheduled = 0;
       let skippedStories = 0;
+      let skippedPending = 0;
 
       for (const item of input.items) {
         const post = await prisma.post.findFirst({
@@ -60,6 +64,19 @@ export const bulkRouter = createRouter({
           include: { _count: { select: { mediaAttachments: true } } },
         });
         if (!post) continue;
+
+        // 🔒 Security audit 2026-09-28: the Bulk tab lists exactly the DRAFT
+        // posts a caption fan-out is still writing, or HELD because no unique
+        // caption could be generated at all (packages/queue/publish-gates.ts).
+        // Arming one here would flip its targets to SCHEDULED while their
+        // captions are still NULL — the shared caption reaching every channel,
+        // which is precisely what the fan-out/hold machinery exists to
+        // prevent. Skipped and COUNTED, never silent — same discipline as the
+        // story check below.
+        if (pendingPublishGates(post.metadata as Record<string, unknown> | null).length > 0) {
+          skippedPending++;
+          continue;
+        }
 
         // An Instagram Story needs exactly ONE image or video. Story drafts may be
         // saved media-less (the user attaches later), and this tab lists every
@@ -97,7 +114,7 @@ export const bulkRouter = createRouter({
         scheduled++;
       }
 
-      return { scheduled, skippedStories };
+      return { scheduled, skippedStories, skippedPending };
     }),
 
   /**

@@ -34,6 +34,15 @@ vi.mock("@postautomation/queue", () => ({
   buildPublishNowJobId: (targetId: string, nowMs: number) =>
     `pubnow:${targetId}:${Math.floor(nowMs / 60_000)}`,
   PUBLISH_NOW_DEDUPE_WINDOW_MS: 60_000,
+  // Real implementation, not a stub (security audit 2026-09-28: publishNow now
+  // checks every parking gate, not only superText, before it may publish).
+  pendingPublishGates: (meta: Record<string, any> | null | undefined): string[] => {
+    const gates: string[] = [];
+    if (meta?.captionFanout?.pendingSchedule === true) gates.push("captionFanout");
+    if (meta?.captionFanout?.held === true) gates.push("captionFanoutHeld");
+    if (meta?.superText?.pendingBurn === true) gates.push("superText");
+    return gates;
+  },
 }));
 
 const orgMemberFindUnique = vi.fn();
