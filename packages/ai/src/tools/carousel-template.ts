@@ -3,6 +3,7 @@
  * Generates HTML for individual carousel slides rendered via Puppeteer.
  * Each slide is 1080x1350 (4:5 Instagram) with consistent branding.
  */
+import { safeColor, safeImageUrl } from "./card-engine";
 
 export interface CarouselSlide {
   type: "cover" | "content" | "cta";
@@ -52,19 +53,30 @@ export function generateCarouselSlideHtml(
   slideIndex: number
 ): string {
   const theme = THEMES[options.theme || "dark"];
-  const accent = options.accentColor || theme.accent;
+  // Security audit 2026-09-28: logoUrl/accentColor/backgroundImageUrl are
+  // reachable from repurposeFromUrl's free-form client input. isPublicImageUrl
+  // (the SSRF gate resolveLogoForOrg already runs) only checks the parsed
+  // HOSTNAME is public — new URL() happily parses a string containing a
+  // literal `"` and returns the original raw string unmodified, so a value
+  // that passes SSRF host-checking can still break out of `<img src="...">`
+  // or a CSS url() and inject an execution vector into this Puppeteer page
+  // (a page with real server-side network egress — see card-engine.ts /
+  // creative-templates.ts, which gate every such interpolation the same way).
+  const accent = options.accentColor ? safeColor(options.accentColor) : theme.accent;
+  const safeLogoUrl = safeImageUrl(options.logoUrl);
+  const safeBgImageUrl = safeImageUrl(options.backgroundImageUrl);
   const bgStyle = options.theme === "gradient"
     ? `background: ${theme.bg};`
     : `background-color: ${theme.bg};`;
 
-  const bgImageCss = options.backgroundImageUrl && slide.type === "cover"
-    ? `background-image: linear-gradient(to bottom, rgba(0,0,0,0.6), rgba(0,0,0,0.85)), url('${options.backgroundImageUrl}');
+  const bgImageCss = safeBgImageUrl && slide.type === "cover"
+    ? `background-image: linear-gradient(to bottom, rgba(0,0,0,0.6), rgba(0,0,0,0.85)), url('${safeBgImageUrl}');
        background-size: cover; background-position: center;`
     : "";
 
-  const logoHtml = options.logoUrl
-    ? `<img src="${options.logoUrl}" style="width:64px;height:64px;border-radius:50%;object-fit:cover;border:3px solid ${accent};" />`
-    : `<div style="width:64px;height:64px;border-radius:50%;background:${accent};display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:700;color:#fff;">${(options.channelName[0] || "?").toUpperCase()}</div>`;
+  const logoHtml = safeLogoUrl
+    ? `<img src="${safeLogoUrl}" style="width:64px;height:64px;border-radius:50%;object-fit:cover;border:3px solid ${accent};" />`
+    : `<div style="width:64px;height:64px;border-radius:50%;background:${accent};display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:700;color:#fff;">${escapeHtml((options.channelName[0] || "?").toUpperCase())}</div>`;
 
   let contentHtml = "";
 
@@ -128,9 +140,9 @@ export function generateCarouselSlideHtml(
   <!-- Footer branding -->
   <div style="padding:24px 60px;display:flex;align-items:center;justify-content:space-between;">
     <div style="display:flex;align-items:center;gap:10px;">
-      ${options.logoUrl
-        ? `<img src="${options.logoUrl}" style="width:28px;height:28px;border-radius:50%;object-fit:cover;" />`
-        : `<div style="width:28px;height:28px;border-radius:50%;background:${accent};display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#fff;">${(options.channelName[0] || "?").toUpperCase()}</div>`
+      ${safeLogoUrl
+        ? `<img src="${safeLogoUrl}" style="width:28px;height:28px;border-radius:50%;object-fit:cover;" />`
+        : `<div style="width:28px;height:28px;border-radius:50%;background:${accent};display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#fff;">${escapeHtml((options.channelName[0] || "?").toUpperCase())}</div>`
       }
       <span style="font-size:16px;color:${theme.muted};font-weight:600;">${escapeHtml(options.channelName)}</span>
     </div>
