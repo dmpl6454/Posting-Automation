@@ -36,6 +36,26 @@ export const approvalRouter = createRouter({
         });
       }
 
+      // Security audit 2026-09-28: every reviewerId must be a real member of
+      // THIS org. Without this check, any submitter could name an arbitrary
+      // userId — creating a notification for a stranger who has no business
+      // seeing this workspace's post, and (since that user can never pass
+      // orgProcedure's own membership gate on `review`) permanently wedging
+      // the request in PENDING with no way to re-submit.
+      const reviewerIds = Array.from(new Set(input.reviewerIds));
+      const members = await ctx.prisma.organizationMember.findMany({
+        where: { userId: { in: reviewerIds }, organizationId: ctx.organizationId },
+        select: { userId: true },
+      });
+      const memberIds = new Set(members.map((m) => m.userId));
+      const foreignReviewers = reviewerIds.filter((id) => !memberIds.has(id));
+      if (foreignReviewers.length > 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Every reviewer must be a member of this organization.",
+        });
+      }
+
       const requestedById = (ctx.session.user as any).id as string;
       const totalSteps = input.reviewerIds.length;
 
