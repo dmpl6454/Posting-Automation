@@ -66,6 +66,13 @@ export interface CaptionFanoutDeps {
   /** Per-platform caption char limit (PLATFORM_CHAR_LIMITS in the real worker). */
   charLimitFor: (platform: string) => number | undefined;
   chunkSize?: number;
+  /**
+   * True when an error means the provider chain is OUT OF CREDIT. Optional so
+   * tests and older callers are unaffected. When present the fan-out stops at
+   * the first such chunk: every later chunk would make the same call and get
+   * the same answer (2026-09-28: 24 chunks x ~97s = ~39 minutes of that).
+   */
+  isCreditExhausted?: (err: unknown) => boolean;
 }
 
 /**
@@ -123,6 +130,10 @@ export function parseCaptionArray(raw: string): Array<{ index: number; caption: 
 /** Reason stamped into post.metadata.captionFanout when generation fell back. */
 export const DEGRADED_REASON = "caption generation unavailable";
 
+/** Reasons stamped when the post is HELD because no caption could be generated. */
+export const HELD_REASON_NO_CREDIT = "every AI provider is out of credit";
+export const HELD_REASON_FAILED = "caption generation failed";
+
 /**
  * In-app notification for a degraded fanout: the post's unique captions could
  * not be generated, so it publishes with the shared caption. Recipient = the
@@ -135,6 +146,45 @@ async function notifyDegradedFanout(
   postId: string,
   organizationId: string,
   createdById: string | null | undefined
+): Promise<void> {
+  await notifyFanoutCreator(deps, postId, organizationId, createdById, {
+    type: "post.captions_degraded",
+    title: "Unique captions unavailable",
+    body: "Unique captions couldn't be generated (AI provider unavailable) — the post will publish with your shared caption.",
+    reason: DEGRADED_REASON,
+  });
+}
+
+/**
+ * The post was HELD, not published. The copy says so plainly — the whole point
+ * of holding is that nothing went out, and a user who reads "unavailable" and
+ * assumes it published anyway will not come back to it.
+ */
+async function notifyHeldFanout(
+  deps: Pick<CaptionFanoutDeps, "prisma">,
+  postId: string,
+  organizationId: string,
+  createdById: string | null | undefined,
+  reason: string
+): Promise<void> {
+  await notifyFanoutCreator(deps, postId, organizationId, createdById, {
+    type: "post.captions_held",
+    title: "Post not published — unique captions failed",
+    body:
+      reason === HELD_REASON_NO_CREDIT
+        ? "Unique captions couldn't be generated because every AI provider is out of credit, so this post was NOT published. Open it to retry the captions or publish with your shared caption."
+        : "Unique captions couldn't be generated, so this post was NOT published. Open it to retry the captions or publish with your shared caption.",
+    reason,
+  });
+}
+
+/** Creator-first, org-OWNER fallback. MUST never throw. */
+async function notifyFanoutCreator(
+  deps: Pick<CaptionFanoutDeps, "prisma">,
+  postId: string,
+  organizationId: string,
+  createdById: string | null | undefined,
+  message: { type: string; title: string; body: string; reason: string }
 ): Promise<void> {
   try {
     if (!deps.prisma.notification?.create) return; // injected mock without notifications — skip
@@ -151,17 +201,17 @@ async function notifyDegradedFanout(
         data: {
           userId,
           organizationId,
-          type: "post.captions_degraded",
-          title: "Unique captions unavailable",
-          body: "Unique captions couldn't be generated (AI provider unavailable) — the post will publish with your shared caption.",
+          type: message.type,
+          title: message.title,
+          body: message.body,
           link: `/dashboard/posts/${postId}`,
-          metadata: { postId, reason: DEGRADED_REASON },
+          metadata: { postId, reason: message.reason },
         },
       });
     }
   } catch (notifyErr: any) {
     console.warn(
-      `[caption-fanout] Degraded-fallback notification failed for post ${postId}:`,
+      `[caption-fanout] ${message.type} notification failed for post ${postId}:`,
       notifyErr?.message ?? notifyErr
     );
   }
@@ -238,10 +288,59 @@ export async function flipPendingFanoutPost(
   return true;
 }
 
+/**
+ * HOLD a pending-fanout post instead of publishing it (owner decision
+ * 2026-09-28): no unique caption could be generated for ANY channel, and
+ * publishing the shared caption to every channel is not what the user asked
+ * for — on 240 Facebook Pages it is identical text in one burst. The post stays
+ * a DRAFT; `captionFanout.held` is a publish GATE (publish-gates.ts), so no
+ * other worker can flip it. A human resolves it: retry the captions, or use the
+ * shared caption.
+ *
+ * Guarded like the flip: only a DRAFT that is still pending. Returns true only
+ * when THIS call held it.
+ */
+export async function holdPendingFanoutPost(
+  deps: Pick<CaptionFanoutDeps, "prisma">,
+  postId: string,
+  organizationId: string,
+  reason: string
+): Promise<boolean> {
+  const post = await deps.prisma.post.findFirst({
+    where: { id: postId, organizationId },
+    select: { id: true, status: true, metadata: true, createdById: true },
+  });
+  if (!post) return false;
+  const meta = (post.metadata ?? {}) as Record<string, any>;
+  const fanoutMeta = (meta.captionFanout ?? {}) as Record<string, any>;
+  if (post.status !== "DRAFT" || fanoutMeta.pendingSchedule !== true) return false;
+
+  await deps.prisma.post.update({
+    where: { id: postId },
+    data: {
+      metadata: {
+        ...meta,
+        captionFanout: {
+          ...fanoutMeta,
+          pendingSchedule: false,
+          held: true,
+          heldAt: new Date().toISOString(),
+          reason,
+        },
+      },
+    },
+  });
+  await notifyHeldFanout(deps, postId, organizationId, post.createdById, reason);
+  return true;
+}
+
 export async function runCaptionFanout(
   data: CaptionFanoutJobData,
   deps: CaptionFanoutDeps
-): Promise<{ generated: number; skippedExisting: number; flipped: boolean; degraded: boolean } | { skipped: string }> {
+): Promise<
+  | { generated: number; skippedExisting: number; flipped: boolean; degraded: boolean; held?: boolean }
+  | { skipped: string }
+> {
   const { postId, organizationId } = data;
 
   // Org-scoped load — a job with a foreign/unknown org can never touch the post.
@@ -265,6 +364,7 @@ export async function runCaptionFanout(
   const pending = targets.filter((t) => t.contentOverride == null);
   let generated = 0;
   let degraded = false;
+  let outOfCredit = false;
 
   const chunkSize = deps.chunkSize ?? CAPTION_CHUNK_SIZE;
   for (let i = 0; i < pending.length; i += chunkSize) {
@@ -301,7 +401,29 @@ export async function runCaptionFanout(
       console.error(
         `[caption-fanout] Caption generation failed for post ${postId} (chunk at ${i}): ${err?.message ?? err} — affected channels will use the shared caption`
       );
+      if (deps.isCreditExhausted?.(err)) {
+        outOfCredit = true;
+        const remaining = pending.length - (i + chunk.length);
+        if (remaining > 0) {
+          console.error(
+            `[caption-fanout] Post ${postId}: the AI providers are out of credit — not attempting the remaining ${remaining} channel(s)`
+          );
+        }
+        break;
+      }
     }
+  }
+
+  // Nothing unique could be written for ANY pending channel: hold, don't publish.
+  // (Partial success still publishes — the failed channels use the shared caption.)
+  const fanoutMeta = (((post.metadata ?? {}) as Record<string, any>).captionFanout ?? {}) as Record<string, any>;
+  if (pending.length > 0 && generated === 0 && fanoutMeta.pendingSchedule === true) {
+    const reason = outOfCredit ? HELD_REASON_NO_CREDIT : HELD_REASON_FAILED;
+    const held = await holdPendingFanoutPost(deps, postId, organizationId, reason);
+    console.error(
+      `[caption-fanout] Post ${postId}: no unique caption for any of ${pending.length} channel(s) — ${held ? "HELD as a draft, NOT published" : "hold skipped (post no longer pending)"} (${reason})`
+    );
+    return { generated: 0, skippedExisting: targets.length - pending.length, flipped: false, degraded: true, held };
   }
 
   const flipped = await flipPendingFanoutPost(deps, postId, organizationId, { degraded });
@@ -320,7 +442,9 @@ export function createCaptionFanoutWorker() {
       console.log(`[caption-fanout] Processing job ${job.id} for post ${job.data.postId}`);
       // Lazy-load @postautomation/ai (mirrors sentiment-analysis.worker) so the
       // worker's module graph stays light at boot.
-      const { generateContent, withTextProviderFallback, PLATFORM_CHAR_LIMITS } = await import("@postautomation/ai");
+      const { generateContent, withTextProviderFallback, PLATFORM_CHAR_LIMITS, isProviderCreditExhausted } = await import(
+        "@postautomation/ai"
+      );
       return runCaptionFanout(job.data, {
         prisma: prisma as any,
         generateText: (prompt) =>
@@ -343,6 +467,7 @@ export function createCaptionFanoutWorker() {
               )
           ),
         charLimitFor: (platform) => PLATFORM_CHAR_LIMITS[platform],
+        isCreditExhausted: isProviderCreditExhausted,
       });
     },
     {

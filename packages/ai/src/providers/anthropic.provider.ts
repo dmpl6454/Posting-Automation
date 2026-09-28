@@ -1,4 +1,5 @@
 import { ChatAnthropic } from "@langchain/anthropic";
+import { aiFailedAttemptHandler } from "../utils/credit-exhaustion";
 
 // Default to claude-sonnet-4-6 (current, non-deprecated alias — no date suffix).
 // Operators can override via ANTHROPIC_MODEL without a code change if Anthropic
@@ -20,5 +21,6 @@ export function getAnthropicModel(temperature = 0.7) {
     // Pass an explicit valid value (matches ChatOpenAI's own topP default of 1).
     // topP: undefined / null do NOT work — both collapse back to -1 via `?? -1`.
     topP: 1,
+    onFailedAttempt: aiFailedAttemptHandler,
   });
 }

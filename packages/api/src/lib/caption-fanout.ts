@@ -37,3 +37,17 @@ export function planCaptionFanout(input: {
 export function captionFanoutJobId(postId: string): string {
   return `caption-fanout-${postId}`;
 }
+
+/**
+ * jobId for a RETRY of a held fan-out (2026-09-28). Must differ from the
+ * original: finished jobs are retained in Redis (removeOnComplete keeps the
+ * last 500), so re-adding `caption-fanout-{postId}` would be silently ignored
+ * and the retry would do nothing. Numbered by attempt, hyphen-delimited for
+ * the same colon rule as above.
+ */
+export function captionFanoutRetryJobId(postId: string, attempt: number): string {
+  return `caption-fanout-${postId}-retry${attempt}`;
+}
+
+/** Stamped when the user releases a held fan-out with the shared caption. */
+export const SHARED_CAPTION_CHOSEN_REASON = "shared caption chosen";

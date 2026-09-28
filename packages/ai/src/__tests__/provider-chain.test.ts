@@ -19,6 +19,28 @@ describe("buildTextProviderChain", () => {
   it("defaults to openai when chosen is undefined", () => {
     expect(buildTextProviderChain(undefined)).toEqual(["openai", "anthropic"]);
   });
+
+  // 2026-09-28 (owner decision): OpenAI and Anthropic were BOTH out of credit for
+  // 4+ days while the DeepSeek key held $34 — AI text was down for every user with
+  // a working provider configured the whole time. DeepSeek is now the LAST hop.
+  it("appends deepseek as the last fallback when its key is configured", () => {
+    vi.stubEnv("DEEPSEEK_API_KEY", "test-key");
+    expect(buildTextProviderChain("openai")).toEqual(["openai", "anthropic", "deepseek"]);
+    expect(buildTextProviderChain(undefined)).toEqual(["openai", "anthropic", "deepseek"]);
+  });
+  it("never lists deepseek twice when it is the chosen provider", () => {
+    vi.stubEnv("DEEPSEEK_API_KEY", "test-key");
+    expect(buildTextProviderChain("deepseek")).toEqual(["deepseek", "openai", "anthropic"]);
+  });
+  it("leaves the chain byte-identical when no deepseek key is set", () => {
+    // beforeEach stubs DEEPSEEK_API_KEY to "" — an unplumbed compose key arrives as "".
+    expect(buildTextProviderChain("openai")).not.toContain("deepseek");
+  });
+  it("keeps a chosen provider first, then the full fallback order", () => {
+    vi.stubEnv("DEEPSEEK_API_KEY", "test-key");
+    vi.stubEnv("GOOGLE_GEMINI_API_KEY", "test-key");
+    expect(buildTextProviderChain("gemini")).toEqual(["gemini", "openai", "anthropic", "deepseek"]);
+  });
 });
 
 describe("getAnthropicModel default model id", () => {

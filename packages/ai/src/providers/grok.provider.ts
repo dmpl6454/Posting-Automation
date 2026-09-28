@@ -1,4 +1,5 @@
 import { ChatOpenAI } from "@langchain/openai";
+import { aiFailedAttemptHandler } from "../utils/credit-exhaustion";
 
 /**
  * Grok (xAI) provider — uses the OpenAI-compatible API at api.x.ai.
@@ -20,5 +21,6 @@ export function getGrokModel(temperature = 0.7) {
     configuration: {
       baseURL: "https://api.x.ai/v1",
     },
+    onFailedAttempt: aiFailedAttemptHandler,
   });
 }

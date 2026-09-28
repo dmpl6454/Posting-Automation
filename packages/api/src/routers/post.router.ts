@@ -18,7 +18,14 @@ import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import crypto from "crypto";
 import { enforcePlanLimit } from "../middleware/plan-limit.middleware";
 import { assertMediaOwned, assertMediaForPlatforms } from "./chat.router";
-import { planCaptionFanout, captionFanoutJobId } from "../lib/caption-fanout";
+import {
+  planCaptionFanout,
+  captionFanoutJobId,
+  captionFanoutRetryJobId,
+  SHARED_CAPTION_CHOSEN_REASON,
+} from "../lib/caption-fanout";
+// By FILE, not the package root: the root builds every BullMQ queue at load time.
+import { flipParkedPostIfReady } from "@postautomation/queue/src/publish-gates";
 import {
   captionOverridesSchema,
   sanitizeCaptionOverrides,
@@ -36,6 +43,37 @@ import { campaignLabelSchema, normalizeCampaignLabel } from "../lib/campaign-lab
  * foreign targets alike (no cross-org existence leak); rejects edits to
  * already-PUBLISHED targets. Exported for tests.
  */
+/** Load a post that the caption fan-out HELD; anything else is refused. */
+async function loadHeldFanoutPost(ctx: { prisma: any; organizationId: string }, id: string) {
+  const post = await ctx.prisma.post.findFirst({
+    where: { id, organizationId: ctx.organizationId },
+    select: { id: true, status: true, metadata: true },
+  });
+  if (!post) throw new TRPCError({ code: "NOT_FOUND" });
+  const meta = (post.metadata ?? {}) as Record<string, any>;
+  const fanout = (meta.captionFanout ?? {}) as Record<string, any>;
+  if (post.status !== "DRAFT" || fanout.held !== true) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "This post isn't waiting on unique captions." });
+  }
+  return { post, meta, fanout };
+}
+
+/** Compare-and-set: write `next` only while the post is STILL held. */
+async function claimHeldFanout(ctx: { prisma: any; organizationId: string }, id: string, next: Record<string, unknown>) {
+  const claimed = await ctx.prisma.post.updateMany({
+    where: {
+      id,
+      organizationId: ctx.organizationId,
+      status: "DRAFT",
+      metadata: { path: ["captionFanout", "held"], equals: true },
+    },
+    data: { metadata: next },
+  });
+  if (claimed.count === 0) {
+    throw new TRPCError({ code: "CONFLICT", message: "This post was just updated — refresh and try again." });
+  }
+}
+
 export async function assertTargetEditable(
   prisma: { postTarget: { findUnique: (args: any) => Promise<any> } },
   organizationId: string,
@@ -1040,6 +1078,70 @@ export const postRouter = createRouter({
    * PUBLISHED targets are refused — their outcome is already known, and clearing
    * a flag there would only invite a duplicate.
    */
+  /**
+   * The two ways out of a HELD caption fan-out (owner decision 2026-09-28).
+   *
+   * The worker holds a post — DRAFT, `captionFanout.held = true`, a publish
+   * gate — when no unique caption could be generated for ANY channel, instead
+   * of publishing the shared caption everywhere (a 240-Page Facebook post came
+   * within minutes of that). A held post must never be a dead end, so both of
+   * these are reachable from the post page.
+   *
+   * Both are a compare-and-set on the held flag: `updateMany` whose WHERE
+   * requires it to still be true, so two clicks can never queue two AI runs or
+   * flip the post twice.
+   */
+  retryUniqueCaptions: orgProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const { post, meta, fanout } = await loadHeldFanoutPost(ctx, input.id);
+      const attempt = (Number(fanout.retries) || 0) + 1;
+      // A fresh run from a clean slate: the worker only regenerates targets whose
+      // override is still NULL, so captions written by an earlier partial run stay.
+      const next = { ...meta, captionFanout: { requested: true, pendingSchedule: true, retries: attempt } };
+      await claimHeldFanout(ctx, post.id, next);
+
+      const jobId = captionFanoutRetryJobId(post.id, attempt);
+      try {
+        await captionFanoutQueue.add(jobId, { postId: post.id, organizationId: ctx.organizationId }, { jobId });
+      } catch (err) {
+        // Put the hold back: "pending" with no job behind it would sit forever.
+        console.error(`[retryUniqueCaptions] could not queue ${jobId}:`, err);
+        await ctx.prisma.post.update({ where: { id: post.id }, data: { metadata: meta as any } }).catch(() => {});
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Couldn't start the retry. Please try again in a moment.",
+        });
+      }
+      return { retrying: true, attempt };
+    }),
+
+  releaseWithSharedCaption: orgProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const { post, meta, fanout } = await loadHeldFanoutPost(ctx, input.id);
+      const now = new Date().toISOString();
+      const next = {
+        ...meta,
+        captionFanout: {
+          ...fanout,
+          held: false,
+          pendingSchedule: false,
+          degraded: true,
+          reason: SHARED_CAPTION_CHOSEN_REASON,
+          releasedAt: now,
+          completedAt: now,
+        },
+      };
+      await claimHeldFanout(ctx, post.id, next);
+
+      // The SAME gate the workers use: it re-reads the row, refuses while a
+      // super-text burn is pending (that worker flips it when the burn lands),
+      // and flips targets before the post.
+      const scheduled = await flipParkedPostIfReady(ctx.prisma as any, post.id, ctx.organizationId);
+      return { scheduled, waitingForVideo: !scheduled && meta.superText?.pendingBurn === true };
+    }),
+
   clearPublishAmbiguity: orgProcedure
     .input(z.object({ id: z.string(), targetIds: z.array(z.string()).min(1).max(200) }))
     .mutation(async ({ ctx, input }) => {
