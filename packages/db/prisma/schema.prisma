@@ -107,6 +107,10 @@ model PhoneOtp {
   expiresAt DateTime
   used      Boolean  @default(false)
   createdAt DateTime @default(now())
+  // Brute-force guard (security audit 2026-09-28): a 6-digit code has 1M
+  // combinations, and without a counter a guesser had the whole 10-minute
+  // window to try them. Nullable-free default so no backfill is needed.
+  attempts  Int      @default(0)
 
   @@index([phone])
 }

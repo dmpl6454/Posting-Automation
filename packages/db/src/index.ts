@@ -137,3 +137,4 @@ export { getPreauthOrgData, PREAUTH_EMAILS } from "./preauth";
 export { ensurePersonalOrg } from "./ensure-personal-org";
 // Monitoring hygiene: auto-resolve a channel's open token/auth errors on reconnect.
 export { resolveChannelErrorsOnReconnect } from "./resolve-channel-errors";
+export { verifyAndConsumePhoneOtp, MAX_OTP_ATTEMPTS } from "./verify-phone-otp";

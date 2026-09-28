@@ -5,7 +5,7 @@ import type { Adapter } from "next-auth/adapters";
 import GoogleProvider from "next-auth/providers/google";
 import CredentialsProvider from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
-import { ensurePersonalOrg } from "@postautomation/db";
+import { ensurePersonalOrg, verifyAndConsumePhoneOtp } from "@postautomation/db";
 
 // Wrap PrismaAdapter to skip createUser/createSession for credentials provider
 // This is required because NextAuth v5 beta + PrismaAdapter tries to create
@@ -37,24 +37,9 @@ export const authConfig: NextAuthConfig = {
           const otp = credentials.otp as string;
           if (!phone || !otp) return null;
 
-          const otpRecord = await prisma.phoneOtp.findFirst({
-            where: {
-              phone,
-              used: false,
-              expiresAt: { gt: new Date() },
-            },
-            orderBy: { createdAt: "desc" },
-          });
-
-          if (!otpRecord) return null;
-
-          const isValid = await bcrypt.compare(otp, otpRecord.otp);
-          if (!isValid) return null;
-
-          await prisma.phoneOtp.update({
-            where: { id: otpRecord.id },
-            data: { used: true },
-          });
+          // 🔒 Attempt-limited (security audit 2026-09-28) — see verify-phone-otp.ts.
+          const verified = await verifyAndConsumePhoneOtp(prisma, phone, otp);
+          if (!verified.ok) return null;
 
           const user = await prisma.user.findUnique({
             where: { phone },

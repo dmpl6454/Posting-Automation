@@ -2,8 +2,11 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import bcrypt from "bcryptjs";
 import { createRouter, protectedProcedure, adminProtectedProcedure } from "../trpc";
+import { createRateLimitMiddleware } from "../middleware/rate-limit.middleware";
+import { addPhoneOtpRateLimiter } from "../middleware/rate-limit";
 import { sendSms } from "../lib/sms";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
+import { verifyAndConsumePhoneOtp } from "@postautomation/db";
 
 export const userRouter = createRouter({
   me: protectedProcedure.query(async ({ ctx }) => {
@@ -115,7 +118,9 @@ export const userRouter = createRouter({
       return { success: true };
     }),
 
+  // 🔒 Rate limited (security audit 2026-09-28): sends a real SMS to any number.
   addPhone: protectedProcedure
+    .use(createRateLimitMiddleware(addPhoneOtpRateLimiter))
     .input(z.object({ phone: z.string().min(7).max(20) }))
     .mutation(async ({ ctx, input }) => {
       const userId = (ctx.session.user as any).id;
@@ -157,35 +162,17 @@ export const userRouter = createRouter({
     .mutation(async ({ ctx, input }) => {
       const userId = (ctx.session.user as any).id;
 
-      const otpRecord = await ctx.prisma.phoneOtp.findFirst({
-        where: {
-          phone: input.phone,
-          used: false,
-          expiresAt: { gt: new Date() },
-        },
-        orderBy: { createdAt: "desc" },
-      });
-
-      if (!otpRecord) {
+      // 🔒 Attempt-limited (security audit 2026-09-28) — see verify-phone-otp.ts.
+      const verified = await verifyAndConsumePhoneOtp(ctx.prisma as any, input.phone, input.otp);
+      if (!verified.ok) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Invalid or expired OTP. Please request a new one.",
+          message:
+            verified.reason === "locked"
+              ? "Too many incorrect attempts. Please request a new code."
+              : "Invalid or expired OTP. Please request a new one.",
         });
       }
-
-      const isValid = await bcrypt.compare(input.otp, otpRecord.otp);
-      if (!isValid) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "Incorrect OTP. Please try again.",
-        });
-      }
-
-      // Mark OTP as used
-      await ctx.prisma.phoneOtp.update({
-        where: { id: otpRecord.id },
-        data: { used: true },
-      });
 
       // Update user's phone and mark as verified
       await ctx.prisma.user.update({
@@ -222,22 +209,17 @@ export const userRouter = createRouter({
       }
 
       // Verify OTP sent to this phone
-      const otpRecord = await ctx.prisma.phoneOtp.findFirst({
-        where: {
-          phone: user.phone,
-          used: false,
-          expiresAt: { gt: new Date() },
-        },
-        orderBy: { createdAt: "desc" },
-      });
-      if (!otpRecord) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "OTP not found or expired. Please request a new code." });
+      // 🔒 Attempt-limited (security audit 2026-09-28) — see verify-phone-otp.ts.
+      const verifiedRemove = await verifyAndConsumePhoneOtp(ctx.prisma as any, user.phone, input.otp);
+      if (!verifiedRemove.ok) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            verifiedRemove.reason === "locked"
+              ? "Too many incorrect attempts. Please request a new code."
+              : "OTP not found or expired. Please request a new code.",
+        });
       }
-      const isValid = await bcrypt.compare(input.otp, otpRecord.otp);
-      if (!isValid) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Incorrect OTP. Please try again." });
-      }
-      await ctx.prisma.phoneOtp.update({ where: { id: otpRecord.id }, data: { used: true } });
 
       await ctx.prisma.user.update({
         where: { id: userId },

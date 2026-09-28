@@ -80,6 +80,15 @@ export const authRateLimiter = createRateLimiter({ windowMs: 60_000, max: 10 });
 export const aiRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
 
 /**
+ * 3 phone-OTP SMS sends per hour, per caller (security audit 2026-09-28).
+ * user.addPhone sends a real SMS to WHATEVER number is supplied; unlimited it
+ * is an SMS-toll-fraud primitive (drive up carrier cost by targeting
+ * premium-rate/international numbers) and a way to spam a stranger's phone.
+ * 3/hour comfortably covers a real user verifying their own number.
+ */
+export const addPhoneOtpRateLimiter = createRateLimiter({ windowMs: 60 * 60_000, max: 3 });
+
+/**
  * 5 per hour — emailed analytics reports go to an ARBITRARY recipient address,
  * so keep the relay-abuse surface tightly bounded (also audit-logged).
  */
