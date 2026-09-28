@@ -1,6 +1,12 @@
 /**
- * Shared text-provider fallback chain: [chosen → openai → anthropic],
+ * Shared text-provider fallback chain: [chosen → openai → anthropic → deepseek],
  * deduped, skipping providers whose API keys are absent from the environment.
+ *
+ * DeepSeek is the LAST hop (owner decision 2026-09-28): OpenAI and Anthropic were
+ * both out of credit for 4+ days while the DeepSeek account held a balance, so AI
+ * text was down for everyone despite a working provider being configured. Being
+ * last, it changes nothing while OpenAI answers; with no DEEPSEEK_API_KEY (an
+ * unplumbed compose key arrives as "") it is skipped and the chain is unchanged.
  * Always returns at least one entry (the chosen provider) so callers get a
  * meaningful provider error rather than a silent empty loop.
  *
@@ -19,7 +25,7 @@ export function buildTextProviderChain(chosen: string | undefined): string[] {
     deepseek: !!process.env.DEEPSEEK_API_KEY,
   };
   const seen = new Set<string>();
-  const chain = [safe, "openai", "anthropic"].filter((p) => {
+  const chain = [safe, "openai", "anthropic", "deepseek"].filter((p) => {
     if (seen.has(p)) return false;
     seen.add(p);
     return configured[p] ?? true; // unknown providers (e.g. in tests) pass through
