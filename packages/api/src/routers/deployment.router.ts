@@ -78,8 +78,19 @@ export const deploymentRouter = createRouter({
       return { items, nextCursor };
     }),
 
-  /** Register a new deployment (called by CI/CD or deploy script) */
-  register: adminOrgProcedure
+  /**
+   * Register a new deployment (called by CI/CD or deploy script).
+   *
+   * SECURITY (2026-09-28): this was `adminOrgProcedure` — but `Deployment`
+   * has no organizationId (see `rollback`'s comment, fixed for the same
+   * reason: deployments are global, not org-scoped). Any app-ADMIN of ANY
+   * organization, including a free workspace they created themselves, could
+   * mark every other deployment "superseded" and insert a forged "active"
+   * one with an arbitrary version/commitHash/commitMsg, which every admin
+   * across the whole platform would then see via `current`. Now
+   * superAdminProcedure, matching `rollback`.
+   */
+  register: superAdminProcedure
     .input(
       z.object({
         version: z.string(),
