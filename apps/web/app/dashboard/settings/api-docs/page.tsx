@@ -417,18 +417,6 @@ const routers: RouterDoc[] = [
         },
       },
       {
-        name: "getUploadUrl",
-        type: "mutation",
-        description: "Get a presigned S3 URL for uploading. Max 50MB. Validates file type.",
-        auth: "session+org",
-        input: {
-          fileName: { type: "string", required: true },
-          fileType: { type: "string", required: true, description: "MIME type" },
-          fileSize: { type: "integer", required: true, description: "Size in bytes, max 52428800" },
-        },
-        inputRequired: ["fileName", "fileType", "fileSize"],
-      },
-      {
         name: "confirmUpload",
         type: "mutation",
         description: "Confirm that a media file has been uploaded to S3.",

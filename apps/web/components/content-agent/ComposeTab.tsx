@@ -679,7 +679,6 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
       toast({ title: "Error", description: humanizeError(err), variant: "destructive" });
     },
   });
-  const getUploadUrl = trpc.media.getUploadUrl.useMutation();
   const saveGeneratedImage = trpc.image.saveGenerated.useMutation();
   const generateAI = trpc.ai.generateContent.useMutation();
   const { data: aiConfig } = trpc.ai.getConfig.useQuery();

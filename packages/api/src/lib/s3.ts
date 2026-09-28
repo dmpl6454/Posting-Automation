@@ -1,4 +1,5 @@
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { assertSafeStoredContentType } from "./media-content-type";
 
 /**
  * Shared S3/MinIO client configuration.
@@ -90,6 +91,9 @@ export async function uploadBase64ToS3(params: {
   key: string;
 }): Promise<string> {
   const { base64, mimeType, key } = params;
+  // Defence in depth: whatever the caller, never store a type a browser would
+  // render as a document on our own origin.
+  assertSafeStoredContentType(mimeType);
 
   const buffer = Buffer.from(base64, "base64");
 
