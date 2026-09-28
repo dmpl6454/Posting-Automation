@@ -152,8 +152,19 @@ describe("wiring lock — post.create unique-captions path", () => {
     expect(guard).toBeGreaterThan(-1);
     expect(add).toBeGreaterThan(guard);
     expect(src).toMatch(/\{ jobId: captionFanoutJobId\(post\.id\) \}/);
-    // ONE producer call site in this router.
-    expect(src.match(/captionFanoutQueue\.add\(/g)).toHaveLength(1);
+    // TWO producer call sites since 2026-09-28, each exactly once:
+    //  - post.create, with the deduping captionFanoutJobId (checked above);
+    //  - retryUniqueCaptions, for a HELD post, with a FRESH per-attempt id —
+    //    reusing the create id would be silently ignored by BullMQ, because
+    //    finished jobs are retained.
+    expect(src.match(/captionFanoutQueue\.add\(/g)).toHaveLength(2);
+    expect(src.match(/captionFanoutJobId\(post\.id\)/g)).toHaveLength(2); // name + jobId of the create call
+    const retry = src.indexOf("retryUniqueCaptions: orgProcedure");
+    expect(retry).toBeGreaterThan(-1);
+    expect(src.indexOf("captionFanoutQueue.add(", retry)).toBeGreaterThan(retry);
+    expect(src.slice(retry, src.indexOf("releaseWithSharedCaption: orgProcedure"))).toMatch(
+      /const jobId = captionFanoutRetryJobId\(post\.id, attempt\);/
+    );
   });
 
   it("updateTargetContent runs the IDOR guard before writing", () => {

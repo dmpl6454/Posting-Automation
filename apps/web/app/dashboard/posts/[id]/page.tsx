@@ -76,6 +76,12 @@ export default function PostDetailPage() {
   const degradedTargetCount = (post: any) =>
     (post?.targets ?? []).filter((t: any) => t.contentOverride == null).length;
 
+  // HELD (owner decision 2026-09-28): no unique caption could be generated for
+  // ANY channel, so the worker kept the post as a draft instead of publishing the
+  // shared caption everywhere. The user must choose; nothing publishes until then.
+  const isHeldCaptionFanout = (post: any) =>
+    post?.status === "DRAFT" && (post?.metadata as any)?.captionFanout?.held === true;
+
   const { data: post, isLoading, refetch } = trpc.post.getById.useQuery(
     { id: postId },
     // Poll every 2s while any target is PUBLISHING so status changes appear
@@ -199,6 +205,34 @@ export default function PostDetailPage() {
     onError: (err) => {
       toast({ title: "Publish failed", description: humanizeError(err), variant: "destructive" });
     },
+  });
+
+  const retryUniqueCaptions = trpc.post.retryUniqueCaptions.useMutation({
+    onSuccess: () => {
+      toast({
+        title: "Retrying unique captions",
+        description: "The post will be scheduled automatically once they're written.",
+      });
+      refetch();
+    },
+    onError: (err) =>
+      toast({ title: "Couldn't retry captions", description: humanizeError(err), variant: "destructive" }),
+  });
+
+  const releaseWithSharedCaption = trpc.post.releaseWithSharedCaption.useMutation({
+    onSuccess: (res) => {
+      toast({
+        title: res.scheduled ? "Scheduled with your shared caption" : "Shared caption chosen",
+        description: res.waitingForVideo
+          ? "It will be scheduled as soon as the text on your video has been applied."
+          : res.scheduled
+            ? "Every channel will use the main caption. If the scheduled time has passed, it publishes within a minute."
+            : "Refresh the page to see its current state.",
+      });
+      refetch();
+    },
+    onError: (err) =>
+      toast({ title: "Couldn't schedule the post", description: humanizeError(err), variant: "destructive" }),
   });
 
   const [retryingTargetId, setRetryingTargetId] = useState<string | null>(null);
@@ -487,6 +521,54 @@ export default function PostDetailPage() {
             <div className="mt-2 flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800 dark:border-blue-900/40 dark:bg-blue-950/30 dark:text-blue-300">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
               Generating a unique caption for each channel — the post will be scheduled automatically when they&apos;re ready.
+            </div>
+          )}
+          {isHeldCaptionFanout(post) && (
+            <div className="mt-2 space-y-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2.5 text-xs text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <div className="space-y-0.5">
+                  <p className="font-medium">Not published — unique captions couldn&apos;t be generated.</p>
+                  <p>
+                    {(post.metadata as any)?.captionFanout?.reason === "every AI provider is out of credit"
+                      ? "Every AI provider is out of credit. "
+                      : "The AI caption service failed. "}
+                    This post is saved as a draft. Retry the captions, or send it to all {post.targets.length} channel
+                    {post.targets.length !== 1 ? "s" : ""} with your main caption.
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2 pl-5">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs"
+                  disabled={retryUniqueCaptions.isPending || releaseWithSharedCaption.isPending}
+                  onClick={() => retryUniqueCaptions.mutate({ id: postId })}
+                >
+                  {retryUniqueCaptions.isPending && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
+                  Retry unique captions
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 text-xs"
+                  disabled={retryUniqueCaptions.isPending || releaseWithSharedCaption.isPending}
+                  onClick={() => {
+                    if (
+                      confirm(
+                        `Send the same main caption to all ${post.targets.length} channels?\n\n` +
+                          "Posting identical text to many Pages at once can look like spam to the platform."
+                      )
+                    ) {
+                      releaseWithSharedCaption.mutate({ id: postId });
+                    }
+                  }}
+                >
+                  {releaseWithSharedCaption.isPending && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
+                  Use shared caption
+                </Button>
+              </div>
             </div>
           )}
           {isDegradedCaptionFanout(post) && degradedTargetCount(post) > 0 && (

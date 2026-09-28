@@ -29,3 +29,4 @@ export {
 } from "./story-analytics";
 export { buildScheduledPublishJobs, enqueueScheduledPublishJobs } from "./schedule-publish";
 export type { SchedulablePublishTarget, ScheduledPublishArgs, ScheduledPublishJobSpec } from "./schedule-publish";
+export { pendingPublishGates, wasParkedForSchedule, flipParkedPostIfReady } from "./publish-gates";
