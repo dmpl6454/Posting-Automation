@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { prisma } from "@postautomation/db";
 import { ensurePersonalOrg } from "@postautomation/db";
+import { sendEmail } from "@postautomation/api/src/lib/email";
+import { accountAlreadyExistsEmail } from "@postautomation/api/src/lib/email-templates";
+import { decideRegisterAction } from "~/lib/register-response";
 
 export async function POST(req: Request) {
   try {
@@ -22,21 +25,24 @@ export async function POST(req: Request) {
       select: { password: true, accounts: { select: { provider: true } } },
     });
 
-    if (existing) {
-      // Tell the user which OAuth provider to use instead of giving a generic error
-      const oauthProviders = existing.accounts.map((a) => a.provider);
-      if (oauthProviders.length > 0 && !existing.password) {
-        const names = oauthProviders
-          .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
-          .join(" or ");
-        return NextResponse.json(
-          {
-            error: `This email is already registered via ${names}. Please sign in using the ${names} button instead.`,
-          },
-          { status: 409 }
-        );
-      }
-      return NextResponse.json({ error: "Email already registered" }, { status: 409 });
+    // Security audit 2026-09-28: never let the response reveal whether this
+    // email already has an account — that used to be a direct, unauthenticated
+    // existence (and OAuth-provider-fingerprinting) oracle: a distinct HTTP
+    // status (409 vs 200) and, for an OAuth-only email, the exact provider
+    // name in the message body. Mirrors requestPasswordReset's existing "same
+    // response either way" invariant. A real owner is told over email
+    // instead, never in the API response body.
+    const decision = decideRegisterAction(existing);
+
+    if (decision.action === "notify-existing") {
+      const emailContent = accountAlreadyExistsEmail(decision.oauthProviders);
+      sendEmail({
+        to: normalizedEmail,
+        subject: emailContent.subject,
+        html: emailContent.html,
+        text: emailContent.text,
+      }).catch(() => {}); // Non-blocking — never let mail delivery affect the response
+      return NextResponse.json({ success: true });
     }
 
     const hashedPassword = await bcrypt.hash(password, 12);

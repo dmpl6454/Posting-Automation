@@ -12,6 +12,13 @@ import { ensurePersonalOrg, verifyAndConsumePhoneOtp } from "@postautomation/db"
 // a database session even when strategy is "jwt", causing CredentialsSignin errors.
 const prismaAdapter = PrismaAdapter(prisma) as Adapter;
 
+// Security audit 2026-09-28: a fixed bcrypt-12 hash of an arbitrary string,
+// compared against on every "no such user" login attempt so a real account
+// lookup miss takes the same wall-clock time as a genuine wrong-password
+// compare — see the authorize() branch below. Never a real password; there
+// is no matching account, and nothing needs to ever match this hash.
+const DUMMY_PASSWORD_HASH = "$2a$12$//3lFEIjSLZ0IJAcDLbY3OYdULOnaiJRW0iPSZQah13aFg86ncMwK";
+
 export const authConfig: NextAuthConfig = {
   adapter: prismaAdapter,
   secret: process.env.AUTH_SECRET ?? process.env.NEXTAUTH_SECRET,
@@ -106,7 +113,20 @@ export const authConfig: NextAuthConfig = {
           return null;
         }
 
-        if (!user?.password) return null;
+        // Security audit 2026-09-28: this branch (no such user at all — the
+        // OAuth-only/passwordless cases already returned above) used to
+        // return null IMMEDIATELY, while a real account with a WRONG
+        // password ran a full bcrypt-12 compare first. Both produce the
+        // identical CredentialsSignin error, so the code-level response is
+        // safe — but the wall-clock time difference (a bcrypt compare is
+        // tens–low hundreds of ms; a bare Prisma miss is single-digit ms) is
+        // a genuine account-existence timing oracle. A dummy compare against
+        // a fixed hash equalizes it: every login attempt now runs exactly
+        // one bcrypt comparison, real or not.
+        if (!user?.password) {
+          await bcrypt.compare(credentials.password as string, DUMMY_PASSWORD_HASH);
+          return null;
+        }
 
         const isValid = await bcrypt.compare(
           credentials.password as string,
