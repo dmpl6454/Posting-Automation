@@ -139,9 +139,26 @@ export const authConfig: NextAuthConfig = {
       if (token.id) {
         const dbUser = await prisma.user.findUnique({
           where: { id: token.id as string },
-          select: { isBanned: true, isSuperAdmin: true, passwordChangedAt: true, appRole: true },
+          select: { isBanned: true, isSuperAdmin: true, passwordChangedAt: true, appRole: true, deletedAt: true },
         });
         if (dbUser) {
+          // Security audit 2026-09-28: isBanned/deletedAt used to only update
+          // the token's VALUE — nothing in the auth layer itself acted on it,
+          // so enforcement was entirely delegated to whatever read the field
+          // downstream (tRPC's protectedProcedure did; every non-tRPC route
+          // under apps/web/app/api/** that calls auth() directly did not, and
+          // neither did Google sign-in, which has no signIn callback at all).
+          // deletedAt was also absent from this select, so an admin-deleted
+          // user's already-issued session was never revoked anywhere by any
+          // path. Returning null here — this callback runs on every request
+          // for BOTH providers, including the very first at sign-in — kills
+          // the session for every consumer of auth() in one place, the same
+          // way the passwordChangedAt check below already forces a live
+          // re-login for a password reset.
+          if (dbUser.isBanned || dbUser.deletedAt) {
+            return null;
+          }
+
           token.isSuperAdmin = dbUser.isSuperAdmin;
           token.isBanned = dbUser.isBanned;
           // Fresh per-request: role changes made in /admin take effect on the
