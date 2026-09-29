@@ -96,6 +96,16 @@ export const authRouter = createRouter({
         where: { id: resetToken.userId },
         data: {
           password: hashedPassword,
+          // Security audit 2026-09-28: a phone number could be attached as a
+          // second login method with nothing but a hijacked session (now
+          // gated — see user.router.ts addPhone), and it survived untouched
+          // through a password reset, so the attacker could still sign in via
+          // phone-otp afterward. Clearing it here treats the phone login
+          // method as part of the credential set this reset invalidates,
+          // exactly like the password itself — any phone attached before the
+          // reset, attacker's or the owner's own, requires re-verification.
+          phone: null,
+          phoneVerified: null,
           // Stamp the change time — the JWT callback compares this against the
           // token's iat to invalidate any sessions that existed before the reset.
           passwordChangedAt: now,

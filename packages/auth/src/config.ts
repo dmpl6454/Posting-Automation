@@ -51,10 +51,18 @@ export const authConfig: NextAuthConfig = {
               isSuperAdmin: true,
               isBanned: true,
               deletedAt: true,
+              phoneVerified: true,
             },
           });
 
           if (!user || user.isBanned || user.deletedAt) return null;
+          // Security audit 2026-09-28: defense in depth. `phone` and
+          // `phoneVerified` are always written together by verifyPhone, so
+          // this should never actually diverge — but authenticating on the
+          // `phone` column match alone, with no check that it was ever
+          // verified, has no reason to hold if that invariant is ever broken
+          // elsewhere. Mirrors the check sendPhoneOtp already runs.
+          if (!user.phoneVerified) return null;
 
           return {
             id: user.id,

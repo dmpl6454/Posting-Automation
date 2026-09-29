@@ -5,6 +5,8 @@ import { createRouter, protectedProcedure, adminProtectedProcedure } from "../tr
 import { createRateLimitMiddleware } from "../middleware/rate-limit.middleware";
 import { addPhoneOtpRateLimiter } from "../middleware/rate-limit";
 import { sendSms } from "../lib/sms";
+import { sendEmail } from "../lib/email";
+import { phoneChangedEmail } from "../lib/email-templates";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 import { verifyAndConsumePhoneOtp } from "@postautomation/db";
 
@@ -121,9 +123,39 @@ export const userRouter = createRouter({
   // 🔒 Rate limited (security audit 2026-09-28): sends a real SMS to any number.
   addPhone: protectedProcedure
     .use(createRateLimitMiddleware(addPhoneOtpRateLimiter))
-    .input(z.object({ phone: z.string().min(7).max(20) }))
+    .input(z.object({ phone: z.string().min(7).max(20), currentPassword: z.string().optional() }))
     .mutation(async ({ ctx, input }) => {
       const userId = (ctx.session.user as any).id;
+
+      // Security audit 2026-09-28: replacing an already-verified phone with a
+      // DIFFERENT number used to need nothing but an active session — the
+      // traced attack was a hijacked session attaching the attacker's own
+      // phone as a durable second login method, invisible to the real owner.
+      // Step-up is required only when actually CHANGING to a different
+      // number; a first-time add or re-verifying the SAME number is
+      // unaffected. Mirrors changePassword's own currentPassword check.
+      const me = await ctx.prisma.user.findUnique({
+        where: { id: userId },
+        select: { phone: true, password: true },
+      });
+      if (me?.phone && me.phone !== input.phone) {
+        if (!me.password) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Remove your existing phone number first (Settings) before adding a new one.",
+          });
+        }
+        if (!input.currentPassword) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Current password is required to change your phone number.",
+          });
+        }
+        const isValid = await bcrypt.compare(input.currentPassword, me.password);
+        if (!isValid) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Current password is incorrect." });
+        }
+      }
 
       // Check if phone is already taken by another user
       const existing = await ctx.prisma.user.findUnique({
@@ -189,6 +221,25 @@ export const userRouter = createRouter({
       }).catch((err) => {
         console.error("audit_log_write_failed", { err: err.message, action: AUDIT_ACTIONS.USER_PHONE_ADDED });
       });
+
+      // Security audit 2026-09-28: notify the account's REAL owner — sent to
+      // ctx.session.user.email, which is always the account's registered
+      // address regardless of which session (owner's or a hijacked one) is
+      // currently acting as it, so it reaches the real owner even when a
+      // phone was attached via a stolen session. Best-effort: a mail failure
+      // must never fail the phone verification itself.
+      const accountEmail = (ctx.session.user as any).email as string | undefined;
+      if (accountEmail) {
+        const emailContent = phoneChangedEmail(input.phone);
+        sendEmail({
+          to: accountEmail,
+          subject: emailContent.subject,
+          html: emailContent.html,
+          text: emailContent.text,
+        }).catch((err: any) => {
+          console.error("phone_change_email_failed", { err: err?.message });
+        });
+      }
 
       return { success: true };
     }),
