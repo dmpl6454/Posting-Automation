@@ -18,9 +18,10 @@
  *   - `classifyStyleReference` fetches an image and runs a vision-model
  *     classification call (classifyCard) — same uncapped cost.
  *
- * Fixed by switching all three to the SAME `aiRateLimited` procedure their
- * siblings already use, closing both gaps (org membership + shared 20/min
- * limiter) in one change, consistent with the rest of this router.
+ * Fixed by putting all three on orgProcedure + a rate limit. repurpose and
+ * extractUrl share the 20/min `aiRateLimiter` with their siblings;
+ * classifyStyleReference (fired automatically by the UI) has its own limiter
+ * so it cannot exhaust the budget a user's real generations need.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -56,8 +57,12 @@ vi.mock("../middleware/plan-limit.middleware", () => ({
 }));
 
 let rateLimitResult = { success: true, remaining: 19, resetAt: new Date("2099-01-01") };
+let styleRefLimitResult = { success: true, remaining: 29, resetAt: new Date("2099-01-01") };
+const aiLimiterSpy = vi.fn((..._a: any[]) => rateLimitResult);
+const styleRefLimiterSpy = vi.fn((..._a: any[]) => styleRefLimitResult);
 vi.mock("../middleware/rate-limit", () => ({
-  aiRateLimiter: (..._a: any[]) => rateLimitResult,
+  aiRateLimiter: (...a: any[]) => aiLimiterSpy(...a),
+  classifyStyleRefRateLimiter: (...a: any[]) => styleRefLimiterSpy(...a),
 }));
 
 vi.mock("@postautomation/db", () => ({
@@ -88,12 +93,15 @@ const caller = (organizationId: string) =>
 beforeEach(() => {
   vi.clearAllMocks();
   rateLimitResult = { success: true, remaining: 19, resetAt: new Date("2099-01-01") };
+  styleRefLimitResult = { success: true, remaining: 29, resetAt: new Date("2099-01-01") };
 });
+
+const classify = (c: ReturnType<typeof caller>) =>
+  c.classifyStyleReference({ aestheticRefUrl: "https://example.com/a.png" });
 
 for (const [name, call] of [
   ["repurpose", (c: ReturnType<typeof caller>) => c.repurpose({ originalContent: "hello", targetPlatforms: ["instagram"] })],
   ["extractUrl", (c: ReturnType<typeof caller>) => c.extractUrl({ url: "https://example.com/a" })],
-  ["classifyStyleReference", (c: ReturnType<typeof caller>) => c.classifyStyleReference({ aestheticRefUrl: "https://example.com/a.png" })],
 ] as const) {
   describe(`repurpose.${name}`, () => {
     it("refuses a caller who is not a member of the org in the request header", async () => {
@@ -110,3 +118,31 @@ for (const [name, call] of [
     });
   });
 }
+
+/**
+ * classifyStyleReference fires automatically (on upload, paste and on-blur of
+ * the reference field). On the shared 20/min AI budget, a few re-blurs could
+ * 429 the user's NEXT real repurpose — so it gets its own limiter and must not
+ * consume (or be blocked by) aiRateLimiter.
+ */
+describe("repurpose.classifyStyleReference", () => {
+  it("refuses a caller who is not a member of the org in the request header", async () => {
+    await expect(classify(caller("org-foreign"))).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("is rate-limited by its OWN limiter", async () => {
+    styleRefLimitResult = { success: false, remaining: 0, resetAt: new Date("2099-01-01") };
+    await expect(classify(caller("org-mine"))).rejects.toMatchObject({ code: "TOO_MANY_REQUESTS" });
+  });
+
+  it("does not spend the shared AI budget", async () => {
+    await expect(classify(caller("org-mine"))).resolves.toBeDefined();
+    expect(styleRefLimiterSpy).toHaveBeenCalledWith("user-1");
+    expect(aiLimiterSpy).not.toHaveBeenCalled();
+  });
+
+  it("still works when the shared AI budget is exhausted", async () => {
+    rateLimitResult = { success: false, remaining: 0, resetAt: new Date("2099-01-01") };
+    await expect(classify(caller("org-mine"))).resolves.toBeDefined();
+  });
+});

@@ -5,6 +5,7 @@ import { buildCreatePostQuery } from "~/lib/repurpose-create-post-params";
 import { parseVideoReadyEvent, isVideoErrorEvent, finalizeRunningSteps } from "~/lib/parse-video-event";
 import { stripBareUrls } from "~/lib/strip-bare-urls";
 import { shouldBlockMediaLessPublish } from "~/lib/repurpose-media-guard";
+import { shouldClassifyStyleRefOnBlur } from "~/lib/style-ref-classify";
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { trpc } from "~/lib/trpc/client";
@@ -186,6 +187,8 @@ export function RepurposeTab() {
   // the paste path, defined before classifyAndPreselect, captured a stale "".)
   const accentColorRef = useRef<string>("");
   useEffect(() => { accentColorRef.current = accentColor; }, [accentColor]);
+  // Last style-reference URL sent for classification — on-blur skips it.
+  const lastClassifiedRefUrlRef = useRef<string | null>(null);
 
   // REP-2/Bug-B: snapshot of the exact LOOK inputs used for the last Generate.
   // The per-image "Regenerate" re-uses THESE (not the live picker state) so a
@@ -410,6 +413,7 @@ export function RepurposeTab() {
   // hasn't already set their own accent (don't clobber an explicit brand decision).
   const classifyAndPreselect = useCallback((refUrl: string) => {
     if (!refUrl) return;
+    lastClassifiedRefUrlRef.current = refUrl;
     classifyRef.mutate(
       { aestheticRefUrl: refUrl },
       {
@@ -658,7 +662,8 @@ export function RepurposeTab() {
 
   // T2b — classify an attached style reference and pre-select the closest creative
   // style. Fail-soft on the backend (never throws); a null suggestion is a no-op.
-  const classifyRef = trpc.repurpose.classifyStyleReference.useMutation();
+  // Fail-soft: a 429/FORBIDDEN must not reach the global error toast either.
+  const classifyRef = trpc.repurpose.classifyStyleReference.useMutation({ onError: () => {} });
 
   // E3b — per-image "Regenerate": re-roll JUST the static image / a carousel
   // slide's image without re-running the whole repurpose flow. `regenTarget`
@@ -1753,8 +1758,9 @@ export function RepurposeTab() {
                         onBlur={(e) => {
                           // T2b: a typed/pasted URL is "committed" on blur — classify it
                           // and pre-select the closest style (looks-like-a-URL only).
-                          const v = e.target.value.trim();
-                          if (/^https?:\/\//i.test(v)) classifyAndPreselect(v);
+                          if (shouldClassifyStyleRefOnBlur(e.target.value, lastClassifiedRefUrlRef.current)) {
+                            classifyAndPreselect(e.target.value.trim());
+                          }
                         }}
                         placeholder="Paste an image (Cmd/Ctrl+V) or a post URL"
                         className="h-8 min-w-0 flex-1 text-xs"
@@ -1764,7 +1770,7 @@ export function RepurposeTab() {
                           <img src={aestheticRefUrl} alt="style reference" className="h-8 w-8 rounded object-cover border shrink-0" />
                           <button
                             type="button"
-                            onClick={() => { setAestheticRefUrl(""); setAestheticRefMediaId(""); setStyleAutoSuggested(false); setReferenceMimicry(false); setSelectedTemplateId(""); }}
+                            onClick={() => { setAestheticRefUrl(""); setAestheticRefMediaId(""); setStyleAutoSuggested(false); setReferenceMimicry(false); setSelectedTemplateId(""); lastClassifiedRefUrlRef.current = null; }}
                             className="text-[10px] text-muted-foreground hover:underline shrink-0"
                           >
                             Clear

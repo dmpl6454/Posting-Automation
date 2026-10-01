@@ -12,7 +12,7 @@ import {
 } from "@postautomation/queue";
 import { toFriendlyAIError, isMissingAIKeyError, isProviderBillingError, friendlyAIMessage } from "../lib/ai-errors";
 import { requirePlan, enforcePlanLimit } from "../middleware/plan-limit.middleware";
-import { aiRateLimiter } from "../middleware/rate-limit";
+import { aiRateLimiter, classifyStyleRefRateLimiter } from "../middleware/rate-limit";
 import { createRateLimitMiddleware } from "../middleware/rate-limit.middleware";
 
 // Stability guard (2026-07-18): the two heavy AI mutations below (repurposeFromUrl,
@@ -21,6 +21,11 @@ import { createRateLimitMiddleware } from "../middleware/rate-limit.middleware";
 // aiRateLimiter instance) so a burst can't spawn unbounded Chromium in the web
 // process. Purely additive .use() — inputs/outputs unchanged.
 const aiRateLimited = orgProcedure.use(createRateLimitMiddleware(aiRateLimiter));
+
+// classifyStyleReference fires automatically (upload / paste / on-blur). On the
+// shared budget above it could 429 the user's next real repurpose, so it is
+// bounded by its own limiter instead.
+const styleRefRateLimited = orgProcedure.use(createRateLimitMiddleware(classifyStyleRefRateLimiter));
 
 // S3 helpers
 function getS3Client(): S3Client {
@@ -861,7 +866,8 @@ export const repurposeRouter = createRouter({
   // `aiRateLimited`). Each of these three runs a real LLM/vision-model call
   // or fetches an arbitrary caller-supplied URL server-side; any signed-in
   // user could hit them as fast as they wanted, regardless of org membership
-  // or plan. Now on the SAME aiRateLimited procedure as their siblings.
+  // or plan. repurpose/extractUrl are on the SAME aiRateLimited procedure as
+  // their siblings; classifyStyleReference has its own limiter (see top).
   repurpose: aiRateLimited
     .input(
       z.object({
@@ -912,7 +918,7 @@ export const repurposeRouter = createRouter({
    * (fail-closed on private/loopback/metadata hosts) — the url is user-supplied, so
    * it is NEVER fetched without these guards.
    */
-  classifyStyleReference: aiRateLimited
+  classifyStyleReference: styleRefRateLimited
     .input(z.object({ aestheticRefUrl: z.string().min(1) }))
     .mutation(
       async ({
