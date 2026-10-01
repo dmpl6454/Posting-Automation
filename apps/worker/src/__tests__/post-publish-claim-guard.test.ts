@@ -762,10 +762,22 @@ describe("pre-claim guard: a post moved to Draft/Cancelled never publishes", () 
   // re-queues carry none, and the claim admits DRAFT targets — so bulk "Move to
   // Draft" (which sets post AND targets to DRAFT) did not stop them.
   const T = 1_790_000_000_000;
-  const postReads = () =>
-    (prisma.post.findUnique.mock.calls as unknown as any[][]).filter(
-      ([a]) => a?.select?.status === true || a?.select?.scheduledAt === true
+  // Guard reads only: those made BEFORE the atomic claim. Later reads (e.g. the
+  // publish report reading the post's round once every target is final) serve
+  // a different purpose and must not count against "reads the post ONCE".
+  const postReads = () => {
+    const upd = prisma.postTarget.updateMany.mock;
+    const claimIdx = (upd.calls as unknown as any[][]).findIndex(
+      ([a]) => a?.where?.status && typeof a.where.status === "object" && "in" in a.where.status
     );
+    const claimOrder = claimIdx === -1 ? Infinity : upd.invocationCallOrder[claimIdx]!;
+    const reads = prisma.post.findUnique.mock;
+    return (reads.calls as unknown as any[][]).filter(
+      ([a], i) =>
+        reads.invocationCallOrder[i]! < claimOrder &&
+        (a?.select?.status === true || a?.select?.scheduledAt === true)
+    );
+  };
 
   it.each(["DRAFT", "CANCELLED"])("an interactive job for a %s post skips WITHOUT claiming", async (status) => {
     const publishPost = vi.fn(async () => ({ platformPostId: "ig-1", url: "https://instagram.com/p/1" }));
