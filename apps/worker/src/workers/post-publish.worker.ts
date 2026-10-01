@@ -8,6 +8,7 @@ import {
 import { QUEUE_NAMES, postPublishQueue, analyticsSyncQueue, type PostPublishJobData, createRedisConnection } from "@postautomation/queue";
 import IORedis from "ioredis";
 import { buildPublishEmail, buildPublishReportCsv } from "../lib/publish-email";
+import { publishReportFingerprint, claimPublishReport } from "../lib/publish-report-dedupe";
 import { planFacebookAnalyticsId, earlyVideoSyncDelayMs } from "../lib/fb-video-post-id";
 import { addLocalClaim, releaseLocalClaim, localClaimCount } from "../lib/local-claims";
 import { trackBackgroundTask } from "../lib/background-tasks";
@@ -106,6 +107,7 @@ async function sendPublishReportEmail(
   postId: string,
   postContent: string,
   allTargets: {
+    id: string;
     status: string;
     publishedUrl: string | null;
     publishedAt: Date | null;
@@ -118,8 +120,23 @@ async function sendPublishReportEmail(
     // no resolvable creator (e.g. system-created autopilot orphans).
     const post = await prisma.post.findUnique({
       where: { id: postId },
-      select: { createdById: true },
+      select: { createdById: true, scheduledAt: true },
     });
+
+    // Send each report ONCE per (post, round, outcome) — see publish-report-dedupe.ts.
+    // Every job that finds the post's targets all final calls this function, so
+    // several jobs left over for one target each re-sent the same report (four
+    // copies of one 240-channel report on 2026-09-29).
+    const fingerprint = publishReportFingerprint({
+      postId,
+      scheduledAt: post?.scheduledAt ?? null,
+      targets: allTargets,
+    });
+    if (!(await claimPublishReport(progressPublisher, postId, fingerprint))) {
+      console.log(`[PostPublish] publish report for post ${postId} already sent for this outcome — skipping duplicate`);
+      return;
+    }
+
     let recipients: { email: string | null }[] = [];
     if (post?.createdById) {
       const creator = await prisma.user.findUnique({
