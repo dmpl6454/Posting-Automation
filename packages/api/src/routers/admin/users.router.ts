@@ -250,10 +250,14 @@ export const adminUsersRouter = createRouter({
    * activeImpersonationJti, which is what actually revokes the token
    * (rather than the previous no-op that only told the CLIENT to delete its
    * cookie, leaving the token itself fully valid for the rest of its hour).
+   *
+   * Idempotent: with no live swap (superseded jti, demoted admin, expired
+   * token, a stale second tab) it succeeds WITHOUT touching any row, so the
+   * client can still drop its cookie instead of stranding the banner.
    */
   stopImpersonation: protectedProcedure.mutation(async ({ ctx }) => {
     if (!(ctx as any).isImpersonating || !(ctx as any).adminUserId) {
-      throw new TRPCError({ code: "BAD_REQUEST", message: "Not currently impersonating." });
+      return { success: true };
     }
     const adminUserId = (ctx as any).adminUserId as string;
 

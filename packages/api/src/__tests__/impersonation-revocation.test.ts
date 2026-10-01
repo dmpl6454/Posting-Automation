@@ -112,6 +112,44 @@ describe("impersonation verification — bound to the issuing admin's LIVE statu
   });
 });
 
+describe("impersonation verification — bound to the PRESENTING session", () => {
+  // The admin-impersonate cookie is written from JS (not HttpOnly) and
+  // survives sign-out, so another account on the same browser — or anyone
+  // replaying the cookie — presents a token whose admin row is perfectly live.
+  const OTHER_SESSION = {
+    user: { id: "user-2", email: "someone@x.com", isSuperAdmin: false, isBanned: false },
+    expires: "2099-01-01",
+  };
+
+  function callerAs(session: unknown, token: string) {
+    return createCallerFactory(whoAmIRouter)({
+      prisma: prismaMock as any,
+      session: session as any,
+      impersonationToken: token,
+    });
+  }
+
+  it("does NOT swap when a different account presents a live admin's token", async () => {
+    const token = await signToken({ impersonatedUserId: "target-1", adminUserId: "admin-1", jti: "jti-current" });
+    const res = await callerAs(OTHER_SESSION, token).whoAmI();
+    expect(res).toMatchObject({ id: "user-2", isImpersonating: false });
+    expect(res.adminUserId).toBeUndefined();
+  });
+
+  it("does NOT swap when even another SUPER admin presents the token", async () => {
+    const otherAdmin = { user: { id: "admin-2", email: "a2@x.com", isSuperAdmin: true, isBanned: false }, expires: "2099-01-01" };
+    const token = await signToken({ impersonatedUserId: "target-1", adminUserId: "admin-1", jti: "jti-current" });
+    const res = await callerAs(otherAdmin, token).whoAmI();
+    expect(res).toMatchObject({ id: "admin-2", isImpersonating: false });
+  });
+
+  it("ctx.adminUserId is the token's signed adminUserId", async () => {
+    const token = await signToken({ impersonatedUserId: "target-1", adminUserId: "admin-1", jti: "jti-current" });
+    const res = await callerAs(ADMIN_SESSION, token).whoAmI();
+    expect(res).toMatchObject({ id: "target-1", isImpersonating: true, adminUserId: "admin-1" });
+  });
+});
+
 describe("impersonation verification — revocable via jti", () => {
   it("refuses a token whose jti no longer matches the admin's current active jti (stopped/superseded)", async () => {
     const token = await signToken({ impersonatedUserId: "target-1", adminUserId: "admin-1", jti: "jti-STALE" });
