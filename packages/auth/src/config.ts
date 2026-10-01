@@ -154,6 +154,25 @@ export const authConfig: NextAuthConfig = {
     maxAge: 30 * 24 * 60 * 60, // 30 days
   },
   callbacks: {
+    // Refuse banned/soft-deleted accounts up front so Google sign-in lands on
+    // /auth/error?error=AccessDenied instead of jwt()'s null silently bouncing
+    // them to /login. `user` is the adapter row (real id) or, on a first
+    // Google link to an existing account, the provider profile, whose id is a
+    // fresh random UUID — hence the email fallback when the id finds nothing.
+    // No row at all is a brand-new signup and is allowed.
+    async signIn({ user }) {
+      const select = { isBanned: true, deletedAt: true } as const;
+      let row = user?.id
+        ? await prisma.user.findUnique({ where: { id: user.id }, select })
+        : null;
+      if (!row && user?.email) {
+        row = await prisma.user.findFirst({
+          where: { email: { equals: user.email, mode: "insensitive" } },
+          select,
+        });
+      }
+      return !(row && (row.isBanned || row.deletedAt));
+    },
     async jwt({ token, user }) {
       if (user) {
         token.id = user.id;
