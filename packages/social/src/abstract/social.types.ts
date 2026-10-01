@@ -23,6 +23,15 @@ export interface SocialPostPayload {
    * nothing has been sent to the platform yet. Every other provider ignores it.
    */
   onCheckpoint?: (patch: Record<string, unknown>) => void | Promise<void>;
+  /**
+   * A key that is the same for every attempt to publish this target, for
+   * platforms that de-duplicate creates by it. Only Mastodon uses it (sent as the
+   * Idempotency-Key header; the instance keeps it for about an hour and answers a
+   * repeat with the post it already made). The worker sets it for MASTODON only.
+   * It narrows the duplicate window; it does not replace parking an unconfirmed
+   * create, because Mastodon records the key only AFTER the post is created.
+   */
+  idempotencyKey?: string;
 }
 
 export interface SocialPostResult {
