@@ -18,6 +18,7 @@ import { isStoryModeMetadata } from "../lib/instagram-story";
 // (Redis connections) at module load, which this router has never needed.
 import { pendingPublishGates } from "@postautomation/queue/src/publish-gates";
 import { checkUsageLimit } from "../middleware/plan-limit.middleware";
+import { gatesBlockingManualPublish } from "../lib/publish-gate-scope";
 
 /**
  * Security audit 2026-09-28: csvImport had no cap on row count and never
@@ -84,8 +85,10 @@ export const bulkRouter = createRouter({
         // captions are still NULL — the shared caption reaching every channel,
         // which is precisely what the fan-out/hold machinery exists to
         // prevent. Skipped and COUNTED, never silent — same discipline as the
-        // story check below.
-        if (pendingPublishGates(post.metadata as Record<string, unknown> | null).length > 0) {
+        // story check below. Caption fan-out gates only count on a DRAFT post
+        // (a stale flag on a FAILED/CANCELLED one must not block it forever).
+        const openGates = pendingPublishGates(post.metadata as Record<string, unknown> | null);
+        if (gatesBlockingManualPublish(post.status, openGates).length > 0) {
           skippedPending++;
           continue;
         }

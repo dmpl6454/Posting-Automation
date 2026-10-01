@@ -218,10 +218,31 @@ async function notifyFanoutCreator(
 }
 
 /**
+ * The post stopped being a parked schedule while the captions were written
+ * (moved out of DRAFT, or unscheduled). Drop our gate flag and change nothing
+ * else: left set, pendingSchedule is a publish gate that makes Retry refuse
+ * forever with "will publish automatically".
+ */
+async function clearStalePendingFlag(
+  deps: Pick<CaptionFanoutDeps, "prisma">,
+  postId: string,
+  meta: Record<string, any>,
+  fanoutMeta: Record<string, any>,
+  why: string
+): Promise<void> {
+  await deps.prisma.post.update({
+    where: { id: postId },
+    data: { metadata: { ...meta, captionFanout: { ...fanoutMeta, pendingSchedule: false } } },
+  });
+  console.warn(`[caption-fanout] Post ${postId} ${why} — cleared its pending-caption flag without scheduling it`);
+}
+
+/**
  * Flip a pending-fanout post DRAFT→SCHEDULED (targets first, then the post)
- * exactly once. No-op unless the post is still DRAFT with
- * metadata.captionFanout.pendingSchedule === true — safe to call from both
- * the processor and the final-failure handler.
+ * exactly once. No-op unless metadata.captionFanout.pendingSchedule === true —
+ * safe to call from both the processor and the final-failure handler. A post
+ * no longer DRAFT, or a DRAFT with no scheduledAt (flipping it would produce a
+ * SCHEDULED post the cron never picks up), only has the flag cleared.
  *
  * On a DEGRADED flip (some/all captions fell back to the shared caption) the
  * metadata is stamped `{ degraded, degradedAt, reason }` and the post creator
@@ -235,12 +256,20 @@ export async function flipPendingFanoutPost(
 ): Promise<boolean> {
   const post = await deps.prisma.post.findFirst({
     where: { id: postId, organizationId },
-    select: { id: true, status: true, metadata: true, createdById: true },
+    select: { id: true, status: true, scheduledAt: true, metadata: true, createdById: true },
   });
   if (!post) return false;
   const meta = (post.metadata ?? {}) as Record<string, any>;
   const fanoutMeta = (meta.captionFanout ?? {}) as Record<string, any>;
-  if (post.status !== "DRAFT" || fanoutMeta.pendingSchedule !== true) return false;
+  if (fanoutMeta.pendingSchedule !== true) return false;
+  if (post.status !== "DRAFT") {
+    await clearStalePendingFlag(deps, postId, meta, fanoutMeta, `is ${post.status}, no longer a draft`);
+    return false;
+  }
+  if (!post.scheduledAt) {
+    await clearStalePendingFlag(deps, postId, meta, fanoutMeta, "has no scheduledAt any more");
+    return false;
+  }
 
   // Super-text gate: if the strip burn is still running, this post must STAY a
   // DRAFT — flipping it now would let the cron publish the ORIGINAL, un-burned
@@ -297,8 +326,9 @@ export async function flipPendingFanoutPost(
  * other worker can flip it. A human resolves it: retry the captions, or use the
  * shared caption.
  *
- * Guarded like the flip: only a DRAFT that is still pending. Returns true only
- * when THIS call held it.
+ * Guarded like the flip: only a DRAFT that is still pending (a post that left
+ * DRAFT just has the stale flag cleared). Returns true only when THIS call
+ * held it.
  */
 export async function holdPendingFanoutPost(
   deps: Pick<CaptionFanoutDeps, "prisma">,
@@ -313,7 +343,11 @@ export async function holdPendingFanoutPost(
   if (!post) return false;
   const meta = (post.metadata ?? {}) as Record<string, any>;
   const fanoutMeta = (meta.captionFanout ?? {}) as Record<string, any>;
-  if (post.status !== "DRAFT" || fanoutMeta.pendingSchedule !== true) return false;
+  if (fanoutMeta.pendingSchedule !== true) return false;
+  if (post.status !== "DRAFT") {
+    await clearStalePendingFlag(deps, postId, meta, fanoutMeta, `is ${post.status}, no longer a draft`);
+    return false;
+  }
 
   await deps.prisma.post.update({
     where: { id: postId },

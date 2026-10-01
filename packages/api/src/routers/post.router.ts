@@ -35,6 +35,7 @@ import {
   MISSING_CAPTION_MESSAGE,
 } from "../lib/caption-overrides";
 import { campaignLabelSchema, normalizeCampaignLabel } from "../lib/campaign-label";
+import { gatesBlockingManualPublish } from "../lib/publish-gate-scope";
 
 /**
  * PR-5: load a PostTarget with its parent post's org and require it to belong
@@ -988,7 +989,12 @@ export const postRouter = createRouter({
       // exists to prevent (the 2026-09-28 240-Facebook-Page incident, reached
       // through this second door). pendingPublishGates is the SAME check the
       // workers use to decide whether a post may be flipped to SCHEDULED.
-      const openGates = pendingPublishGates(post.metadata as Record<string, unknown> | null);
+      // The caption fan-out gates only apply while the post is still DRAFT
+      // (a stale flag on a FAILED/CANCELLED post must not block Retry).
+      const openGates = gatesBlockingManualPublish(
+        post.status,
+        pendingPublishGates(post.metadata as Record<string, unknown> | null)
+      );
       if (openGates.includes("superText")) {
         throw new TRPCError({
           code: "BAD_REQUEST",
