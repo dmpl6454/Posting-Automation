@@ -6,6 +6,7 @@ import {
   isStaleScheduleJob,
   classifyError,
   decideClaimMiss,
+  decidePreClaimSkip,
 } from "../../lib/publish-recovery";
 
 /**
@@ -104,5 +105,32 @@ describe("isStaleScheduleJob (Phase 2 exact-time guard)", () => {
     // publishNow sets scheduledAt = now; the orphaned creation-time job for
     // the original (future) schedule must not fire at the old time.
     expect(isStaleScheduleJob(T0 + 3_600_000, new Date(T0))).toBe(true);
+  });
+});
+
+describe("decidePreClaimSkip (pre-claim guard)", () => {
+  const T0 = 1_800_000_000_000;
+
+  // Review follow-up 2026-10-01: newsgrid/agent/publishNow/chat jobs (and their
+  // rate-limit re-queues) carry no enqueuedFor, and the claim admits DRAFT
+  // targets — so a post the user moved to Draft/Cancelled still published.
+  it.each(["DRAFT", "CANCELLED"])("skips any job — with or without enqueuedFor — for a %s post", (status) => {
+    expect(decidePreClaimSkip({ status, scheduledAt: null }, undefined)).toBe("post-withdrawn");
+    expect(decidePreClaimSkip({ status, scheduledAt: new Date(T0) }, T0)).toBe("post-withdrawn");
+  });
+
+  it.each(["SCHEDULED", "PUBLISHING", "FAILED", "PUBLISHED"])("does not skip a %s post's interactive job", (status) => {
+    expect(decidePreClaimSkip({ status, scheduledAt: null }, undefined)).toBeNull();
+  });
+
+  it("keeps the exact-time stale-schedule guard for schedule-path jobs", () => {
+    expect(decidePreClaimSkip({ status: "SCHEDULED", scheduledAt: new Date(T0) }, T0)).toBeNull();
+    expect(decidePreClaimSkip({ status: "SCHEDULED", scheduledAt: new Date(T0 + 60_000) }, T0)).toBe("stale-schedule");
+    expect(decidePreClaimSkip({ status: "PUBLISHING", scheduledAt: null }, T0)).toBe("stale-schedule");
+  });
+
+  it("a missing post is left to the existing flow: stale for a schedule-path job, otherwise the claim decides", () => {
+    expect(decidePreClaimSkip(null, T0)).toBe("stale-schedule");
+    expect(decidePreClaimSkip(null, undefined)).toBeNull();
   });
 });
