@@ -1,4 +1,12 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
+
+// resolveImageFromPageUrl checks what the page's name resolves to (2026-10-01);
+// keep these tests offline with a public answer for every name.
+vi.mock("node:dns", () => {
+  const promises = { lookup: vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]) };
+  return { promises, default: { promises } };
+});
+
 import { resolveImageFromPageUrl } from "../utils/url-extractor";
 
 /**
