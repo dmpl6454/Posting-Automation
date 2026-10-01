@@ -12,6 +12,7 @@ import { publishReportFingerprint, claimPublishReport, releasePublishReport } fr
 import { planFacebookAnalyticsId, earlyVideoSyncDelayMs } from "../lib/fb-video-post-id";
 import { addLocalClaim, releaseLocalClaim, localClaimCount } from "../lib/local-claims";
 import { trackBackgroundTask } from "../lib/background-tasks";
+import { buildPublishTokens, publishIdempotencyKey } from "../lib/publish-tokens";
 import { markTargetFailed, markTargetAmbiguous, buildPublishClaimWhere, routePublishError, shouldPreflightReconcile, buildPublishNotifications, mediaRequiredReason, isSeedNoise, decidePreClaimSkip, isHeavyPublish, planHeavyDefer, HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE, classifyError, isDefiniteAuthFailure, releaseClaimAfterPrePublishError, decideClaimMiss, countOtherActiveJobsForTarget, ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE, formatPublishTiming, type PublishJobState } from "../lib/publish-recovery";
 import { PRIORITY_RETRY, mediaOptimizeQueue, atAgeWindowsForFormat } from "@postautomation/queue";
 import { planOptimizeGate, choosePublishUrl } from "../lib/media-optimize";
@@ -507,10 +508,10 @@ export function createPostPublishWorker() {
         }
       }
 
-      const tokens = {
-        accessToken,
-        refreshToken: channel.refreshToken ?? undefined,
-      };
+      // Mastodon / self-hosted WordPress / Discord read WHERE to post from the
+      // channel's own metadata; every other platform gets exactly
+      // { accessToken, refreshToken } as before. See lib/publish-tokens.ts.
+      const tokens = buildPublishTokens(platform, accessToken, channel.refreshToken ?? undefined, channel.metadata);
 
       // Use platform-specific content variant if available.
       // PR-5: a per-target caption override (unique captions) wins over both the
@@ -957,6 +958,8 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
 
       // Auto-truncate content to platform limit
       const publishContent = truncateForPlatform(content, platform);
+      // Mastodon only (undefined elsewhere, so other payloads are unchanged).
+      const idempotencyKey = publishIdempotencyKey(platform, postTargetId, publishContent, mediaUrls);
       if (publishContent.length !== content.length) {
         console.log(`[PostPublish] Auto-truncated content from ${content.length} to ${publishContent.length} chars for ${platform}`);
       }
@@ -1055,7 +1058,7 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
         let lastErr: any;
         for (let attempt = 1; attempt <= 3 && !result; attempt++) {
           try {
-            result = await provider.publishPost(tokens, { content: publishContent, mediaUrls, mediaTypes, metadata: providerMetadata, onProgress, onCheckpoint });
+            result = await provider.publishPost(tokens, { content: publishContent, mediaUrls, mediaTypes, metadata: providerMetadata, onProgress, onCheckpoint, ...(idempotencyKey ? { idempotencyKey } : {}) });
             lastErr = null;
             break;
           } catch (e: any) {
@@ -1171,12 +1174,12 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
               });
               // Retry immediately with fresh token
               result = await provider.publishPost(
-                { accessToken: refreshed.accessToken, refreshToken: refreshed.refreshToken ?? channel.refreshToken ?? undefined },
+                buildPublishTokens(platform, refreshed.accessToken, refreshed.refreshToken ?? channel.refreshToken ?? undefined, channel.metadata),
                 // ⚠️ onCheckpoint here too: this is a SECOND publishPost call, and
                 // for a story the first one may already have created a container.
                 // providerMetadata was mutated in place by the first checkpoint, so
                 // this call resumes from it rather than creating a duplicate.
-                { content: publishContent, mediaUrls, mediaTypes, metadata: providerMetadata, onProgress: (percent: number) => reportProgress(postTargetId, percent), onCheckpoint }
+                { content: publishContent, mediaUrls, mediaTypes, metadata: providerMetadata, onProgress: (percent: number) => reportProgress(postTargetId, percent), onCheckpoint, ...(idempotencyKey ? { idempotencyKey } : {}) }
               );
               console.log(`[PostPublish] Retry with fresh token succeeded`);
             } else {

@@ -9,6 +9,14 @@ import type {
   PlatformConstraints,
 } from "../abstract/social.types";
 import { fetchT } from "../utils/fetch-timeout";
+import { userHostFetch, type UserHostInit } from "../utils/user-host-fetch";
+import {
+  DISCORD_SERVICE as SVC,
+  userHostFailure,
+  userHostStatusFailure,
+  unconfirmedCreate,
+  type UserHostPhase,
+} from "../utils/user-host-publish";
 
 export class DiscordProvider extends SocialProvider {
   readonly platform: SocialPlatform = "DISCORD";
@@ -127,6 +135,18 @@ export class DiscordProvider extends SocialProvider {
     };
   }
 
+  /** One webhook request. Throws the mapped error on failure or non-2xx. */
+  private async webhookCall(url: string, init: UserHostInit, phase: UserHostPhase): Promise<Response> {
+    let res: Response;
+    try {
+      res = await userHostFetch(url, init);
+    } catch (err) {
+      throw userHostFailure(err, SVC, phase);
+    }
+    if (!res.ok) throw await userHostStatusFailure(res, SVC, phase);
+    return res;
+  }
+
   /**
    * Webhook-based publish path used when the channel was connected via
    * a webhook URL (token-based flow). POSTs directly to the URL with
@@ -142,15 +162,19 @@ export class DiscordProvider extends SocialProvider {
       body.embeds = payload.mediaUrls.map((url) => ({ image: { url } }));
     }
 
-    const res = await fetch(`${webhookUrl}?wait=true`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    // ⚠️ Not plain fetch(): a connection lost AFTER Discord posted the message
+    // surfaced as "fetch failed", which the publish worker replays in-job and
+    // BullMQ retries — duplicate messages. userHostFetch says whether the
+    // request was sent, and the mapping parks an unknown outcome instead.
+    const res = await this.webhookCall(
+      `${webhookUrl}?wait=true`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), timeoutMs: 30_000 },
+      "create",
+    );
     const data: any = await res.json().catch(() => null);
-    if (!res.ok) {
-      throw new Error(`Discord webhook post failed: ${JSON.stringify(data)}`);
-    }
+    // With ?wait=true a 2xx carries the message; without its id we cannot
+    // record it, and retrying would post it again.
+    if (data?.id == null) throw unconfirmedCreate(SVC, "Discord's reply could not be read");
 
     const channelId = (tokens as any)?.metadata?.channelId ?? data?.channel_id ?? "";
     const guildId = (tokens as any)?.metadata?.guildId ?? data?.guild_id ?? null;
@@ -175,11 +199,16 @@ export class DiscordProvider extends SocialProvider {
     const isWebhook = (tokens as any)?.metadata?.kind === "webhook";
     if (isWebhook) {
       const webhookUrl = tokens.accessToken;
-      const res = await fetch(`${webhookUrl}/messages/${messageId}`, { method: "DELETE" });
-      if (!res.ok && res.status !== 404) {
-        const data: any = await res.json().catch(() => null);
-        throw new Error(`Discord webhook delete failed: ${JSON.stringify(data)}`);
+      let res: Response;
+      try {
+        res = await userHostFetch(`${webhookUrl}/messages/${encodeURIComponent(messageId)}`, {
+          method: "DELETE",
+          timeoutMs: 20_000,
+        });
+      } catch (err) {
+        throw userHostFailure(err, SVC, "read");
       }
+      if (!res.ok && res.status !== 404) throw await userHostStatusFailure(res, SVC, "read");
       return;
     }
 

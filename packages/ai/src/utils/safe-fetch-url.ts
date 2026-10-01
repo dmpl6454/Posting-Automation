@@ -8,8 +8,16 @@
  * are the configured S3 public/endpoint hosts. We fail closed: anything not on
  * the allowlist (and any private/loopback/link-local/metadata host) is rejected.
  *
- * Dependency-free: only Node/Web globals (URL, fetch, AbortSignal).
+ * Dependency-free: only Node built-ins and Web globals (URL, fetch, AbortSignal).
+ *
+ * ⚠️ These are STRING checks: they reject every internal address that can be
+ * written in a URL, but not a public-looking name whose DNS points inside. To
+ * actually contact a server a user named, use userHostFetch in
+ * @postautomation/social, which pins the connection to checked addresses.
  */
+import { isIP } from "node:net";
+import * as dns from "node:dns";
+import { isPrivateAddress } from "./private-address";
 
 function hostOf(value: string | undefined): string | null {
   if (!value) return null;
@@ -27,9 +35,15 @@ const IMAGE_FETCH_ALLOWED_HOSTS: Set<string> = new Set(
 );
 
 function isPrivateOrLoopbackHost(rawHost: string): boolean {
-  // Strip IPv6 brackets: "[::1]" → "::1"
-  const host = rawHost.replace(/^\[|\]$/g, "").toLowerCase();
-  if (host === "localhost" || host === "0.0.0.0" || host === "::" || host === "::1") return true;
+  // Strip IPv6 brackets ("[::1]" → "::1") and trailing dots ("localhost." → "localhost").
+  const host = rawHost.replace(/^\[|\]$/g, "").replace(/\.+$/, "").toLowerCase();
+  if (host === "localhost" || host.endsWith(".localhost") || host === "0.0.0.0" || host === "::" || host === "::1") return true;
+  // Any IP literal is judged by the full address rules (./private-address.ts).
+  // The regexes below only knew dotted IPv4, but the URL parser rewrites a
+  // mapped IPv4 into hex — "[::ffff:169.254.169.254]" arrives as
+  // "[::ffff:a9fe:a9fe]" — so loopback and the cloud metadata address passed
+  // as literals (measured 2026-10-01). NAT64, 6to4 and CGNAT passed too.
+  if (isIP(host)) return isPrivateAddress(host);
   // IPv4 private / loopback / link-local (covers cloud metadata 169.254.169.254)
   if (
     /^127\./.test(host) ||
@@ -45,6 +59,19 @@ function isPrivateOrLoopbackHost(rawHost: string): boolean {
   if (/^f[cd][0-9a-f]*:/.test(host) || /^fe[89ab][0-9a-f]*:/.test(host)) return true;
   if (/^::ffff:(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host)) return true;
   return false;
+}
+
+/**
+ * A NAME that can only mean an internal machine: a single label (Docker compose
+ * service names such as minio, web, redis, postgres) or a reserved internal
+ * suffix. Only for the PUBLIC-url guards — isAllowedImageUrl must keep
+ * accepting the configured S3_ENDPOINT, which is `minio` in production.
+ */
+function isInternalHostName(rawHost: string): boolean {
+  const host = rawHost.replace(/^\[|\]$/g, "").replace(/\.+$/, "").toLowerCase();
+  if (!host || isIP(host)) return false;
+  if (!host.includes(".")) return true;
+  return /\.(local|localhost|internal|lan|intranet|home\.arpa)$/.test(host);
 }
 
 /**
@@ -102,7 +129,7 @@ export function isPublicImageUrl(url: string): boolean {
   // TLS only — block plaintext http: even for public hosts.
   if (parsed.protocol !== "https:") return false;
   const host = parsed.hostname.toLowerCase();
-  if (isPrivateOrLoopbackHost(host)) return false;
+  if (isPrivateOrLoopbackHost(host) || isInternalHostName(host)) return false;
   // Any public host is allowed (external CDNs included). No S3 allowlist.
   return true;
 }
@@ -114,7 +141,7 @@ export function isPublicPageUrl(url: string): boolean {
   if (u.protocol !== "https:" && u.protocol !== "http:") return false;
   const host = u.hostname.replace(/\.+$/, "").toLowerCase();
   if (!host) return false;
-  if (isPrivateOrLoopbackHost(host)) return false;
+  if (isPrivateOrLoopbackHost(host) || isInternalHostName(host)) return false;
   return true;
 }
 
@@ -192,4 +219,46 @@ export async function safeFetchPublicImage(
   if (buf.byteLength > maxBytes) return null;
   const mimeType = mediaType || "image/png";
   return { base64: buf.toString("base64"), mimeType };
+}
+
+/**
+ * Does EVERY address `hostname` resolves to sit on the public internet? The
+ * string checks above cannot see a public-looking name whose DNS points inside
+ * (10.x, a Docker service address, 127.0.0.1); this can. A later fetch()
+ * resolves the name again, so an answer that flips in between is still a gap —
+ * to contact a server a user named with that closed too, use userHostFetch in
+ * @postautomation/social.
+ */
+export async function hostResolvesPublic(hostname: string): Promise<boolean> {
+  const host = hostname.replace(/^\[|\]$/g, "").replace(/\.+$/, "");
+  if (!host) return false;
+  if (isIP(host)) return !isPrivateAddress(host);
+  try {
+    const addrs = await dns.promises.lookup(host, { all: true });
+    return addrs.length > 0 && addrs.every((a) => !isPrivateAddress(a.address));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * fetch() a URL a user supplied, following redirects BY HAND: every hop must
+ * pass isPublicPageUrl and hostResolvesPublic before it is requested. With
+ * redirect:"follow" a public page could 302 to http://minio:9000/ or
+ * http://10.x/ and the reply came back to the user (repurpose URL extraction,
+ * reproduced 2026-10-01). After `maxHops` redirects the last 3xx is returned
+ * unfollowed (callers treat it as not ok).
+ */
+export async function fetchPublicUrl(url: string, init: RequestInit = {}, maxHops = 5): Promise<Response> {
+  let current = url;
+  for (let hop = 0; ; hop++) {
+    if (!isPublicPageUrl(current) || !(await hostResolvesPublic(new URL(current).hostname))) {
+      throw new Error("Refusing to fetch a URL that is not on the public internet.");
+    }
+    const res = await fetch(current, { ...init, redirect: "manual" });
+    if (res.status < 300 || res.status >= 400) return res;
+    const location = res.headers.get("location");
+    if (!location || hop >= maxHops) return res;
+    current = new URL(location, current).toString();
+  }
 }

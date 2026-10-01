@@ -405,6 +405,8 @@ export const channelRouter = createRouter({
           username: validated.username,
           avatar: validated.avatar,
           isActive: true,
+          // Revive a disconnected row (the soft delete), as every OAuth upsert does.
+          disconnectedAt: null,
         },
       });
 

@@ -3,7 +3,7 @@
  * Fetches and extracts readable content from any URL (articles, social media, videos).
  */
 
-import { isPublicPageUrl } from "./safe-fetch-url";
+import { isPublicPageUrl, hostResolvesPublic, fetchPublicUrl } from "./safe-fetch-url";
 
 export interface ExtractedContent {
   title: string;
@@ -119,7 +119,7 @@ async function followSafeRedirect(
   }
   if (res.status >= 300 && res.status < 400) {
     const location = res.headers.get("location");
-    if (location && isPublicPageUrl(location)) {
+    if (location && isPublicPageUrl(location) && (await hostResolvesPublic(new URL(location).hostname))) {
       try {
         return await fetch(location, {
           headers,
@@ -225,14 +225,18 @@ async function fetchHtmlWithFallback(
 function detectUrlType(
   url: string
 ): "youtube" | "twitter" | "instagram" | "facebook" | "linkedin" | "tiktok" | "reddit" | "article" {
-  const host = new URL(url).hostname.replace("www.", "").toLowerCase();
-  if (host.includes("youtube.com") || host.includes("youtu.be")) return "youtube";
-  if (host.includes("twitter.com") || host.includes("x.com")) return "twitter";
-  if (host.includes("instagram.com")) return "instagram";
-  if (host.includes("facebook.com") || host.includes("fb.com")) return "facebook";
-  if (host.includes("linkedin.com")) return "linkedin";
-  if (host.includes("tiktok.com")) return "tiktok";
-  if (host.includes("reddit.com")) return "reddit";
+  // EXACT host matching (the domain or a subdomain of it). Substring matching
+  // sent http://instagram.com.attacker.tld/ and netflix.com ("x.com") down the
+  // platform paths (review, 2026-10-01).
+  const host = new URL(url).hostname.toLowerCase().replace(/\.+$/, "");
+  const is = (...domains: string[]) => domains.some((d) => host === d || host.endsWith(`.${d}`));
+  if (is("youtube.com", "youtu.be")) return "youtube";
+  if (is("twitter.com", "x.com")) return "twitter";
+  if (is("instagram.com")) return "instagram";
+  if (is("facebook.com", "fb.com")) return "facebook";
+  if (is("linkedin.com")) return "linkedin";
+  if (is("tiktok.com")) return "tiktok";
+  if (is("reddit.com")) return "reddit";
   return "article";
 }
 
@@ -463,7 +467,7 @@ const MAX_PAGE_BYTES = 2 * 1024 * 1024; // ~2MB — og:image is in <head>
 export async function resolveImageFromPageUrl(url: string): Promise<string | null> {
   // SSRF: fail closed BEFORE the fetch — block private/loopback/link-local/metadata
   // hosts (e.g. 169.254.169.254, 10.x) and non-http(s) schemes on the initial hop.
-  if (!isPublicPageUrl(url)) return null;
+  if (!isPublicPageUrl(url) || !(await hostResolvesPublic(new URL(url).hostname))) return null;
   let res: Response;
   try {
     res = await fetch(url, {
@@ -549,7 +553,7 @@ async function extractYouTube(url: string): Promise<ExtractedContent> {
   let description = "";
   let body = "";
   try {
-    const res = await fetch(url, {
+    const res = await fetchPublicUrl(url, {
       headers: { "User-Agent": USER_AGENT },
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
@@ -668,7 +672,7 @@ async function extractInstagram(url: string): Promise<ExtractedContent> {
   // Method 3: Direct fetch with full browser headers
   if (!title || title === "Instagram") {
     try {
-      const res = await fetch(url, {
+      const res = await fetchPublicUrl(url, {
         headers: {
           "User-Agent": USER_AGENT,
           "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -679,7 +683,6 @@ async function extractInstagram(url: string): Promise<ExtractedContent> {
           "Sec-Fetch-Site": "none",
         },
         signal: AbortSignal.timeout(TIMEOUT_MS),
-        redirect: "follow",
       });
       if (res.ok) {
         const html = await res.text();
@@ -747,12 +750,11 @@ async function extractTwitter(url: string): Promise<ExtractedContent> {
   // Fallback: try original URL
   if (!title) {
     try {
-      const res = await fetch(url, {
+      const res = await fetchPublicUrl(url, {
         headers: {
           "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         },
         signal: AbortSignal.timeout(TIMEOUT_MS),
-        redirect: "follow",
       });
       if (res.ok) {
         const html = await res.text();
@@ -814,7 +816,7 @@ async function extractFacebook(url: string): Promise<ExtractedContent> {
   // Method 2: Direct fetch with full browser-like headers
   if (!body) {
     try {
-      const res = await fetch(url, {
+      const res = await fetchPublicUrl(url, {
         headers: {
           "User-Agent": USER_AGENT,
           "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -826,7 +828,6 @@ async function extractFacebook(url: string): Promise<ExtractedContent> {
           "Upgrade-Insecure-Requests": "1",
         },
         signal: AbortSignal.timeout(TIMEOUT_MS),
-        redirect: "follow",
       });
       if (res.ok) {
         const html = await res.text();
@@ -848,14 +849,13 @@ async function extractFacebook(url: string): Promise<ExtractedContent> {
   if (!body || body.length < 50) {
     try {
       const mobileUrl = url.replace("www.facebook.com", "m.facebook.com");
-      const res = await fetch(mobileUrl, {
+      const res = await fetchPublicUrl(mobileUrl, {
         headers: {
           "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
           "Accept": "text/html,application/xhtml+xml",
           "Accept-Language": "en-US,en;q=0.9",
         },
         signal: AbortSignal.timeout(TIMEOUT_MS),
-        redirect: "follow",
       });
       if (res.ok) {
         const html = await res.text();
@@ -904,7 +904,7 @@ async function extractLinkedIn(url: string): Promise<ExtractedContent> {
 
   // Method 1: Direct fetch with browser headers (LinkedIn serves OG tags to crawlers)
   try {
-    const res = await fetch(url, {
+    const res = await fetchPublicUrl(url, {
       headers: {
         "User-Agent": USER_AGENT,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -914,7 +914,6 @@ async function extractLinkedIn(url: string): Promise<ExtractedContent> {
         "Sec-Fetch-Site": "none",
       },
       signal: AbortSignal.timeout(TIMEOUT_MS),
-      redirect: "follow",
     });
     if (res.ok) {
       const html = await res.text();
@@ -977,7 +976,8 @@ export async function extractUrlContent(url: string): Promise<ExtractedContent> 
   } catch {
     throw new Error("Invalid URL provided");
   }
-  if (!isPublicPageUrl(url)) {
+  // The string check cannot see a public-looking name whose DNS points inside.
+  if (!isPublicPageUrl(url) || !(await hostResolvesPublic(new URL(url).hostname))) {
     throw new Error("That URL is not accessible (private or non-HTTP host).");
   }
 
@@ -1003,4 +1003,4 @@ export async function extractUrlContent(url: string): Promise<ExtractedContent> 
 }
 
 /** @internal test-only access to private extractors */
-export const __test__ = { getMeta, getTitle, stripHtml, isLikelyContentPhoto, isLikelyOgPhoto, getImages };
+export const __test__ = { getMeta, getTitle, stripHtml, isLikelyContentPhoto, isLikelyOgPhoto, getImages, detectUrlType };

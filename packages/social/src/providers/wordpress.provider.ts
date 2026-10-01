@@ -8,6 +8,28 @@ import type {
   SocialProfile,
   PlatformConstraints,
 } from "../abstract/social.types";
+import { userHostFetch, type UserHostInit } from "../utils/user-host-fetch";
+import {
+  WORDPRESS_SERVICE as SVC,
+  userHostFailure,
+  userHostStatusFailure,
+  unconfirmedCreate,
+  retryableMediaFailure,
+  type UserHostPhase,
+} from "../utils/user-host-publish";
+
+/**
+ * ⚠️ A SELF-HOSTED site is a server the USER named at connect time
+ * (Channel.metadata.siteUrl). Every request to it goes through `siteCall()`,
+ * which uses userHostFetch: DNS pinned to vetted public addresses, no
+ * redirects, a deadline, and fixed-text errors (see ../utils/user-host-fetch.ts).
+ * Plain fetch() here was an SSRF (2026-10-01). Locked by
+ * __tests__/wordpress-user-host.test.ts. The WordPress.com OAuth path talks to
+ * public-api.wordpress.com, a fixed host, and keeps plain fetch().
+ */
+const CREATE_TIMEOUT_MS = 30_000;
+const MEDIA_TIMEOUT_MS = 120_000;
+const READ_TIMEOUT_MS = 20_000;
 
 export class WordPressProvider extends SocialProvider {
   readonly platform: SocialPlatform = "WORDPRESS";
@@ -134,14 +156,11 @@ export class WordPressProvider extends SocialProvider {
     const isSelfHosted = (tokens as any)?.metadata?.kind === "self-hosted";
     if (isSelfHosted) {
       const siteUrl = (tokens as any)?.metadata?.siteUrl as string;
-      const res = await fetch(`${siteUrl}/wp-json/wp/v2/posts/${platformPostId}?force=true`, {
-        method: "DELETE",
-        headers: { Authorization: `Basic ${tokens.accessToken}` },
-      });
-      if (!res.ok) {
-        const data: any = await res.json().catch(() => null);
-        throw new Error(`WordPress self-hosted delete failed: ${JSON.stringify(data)}`);
-      }
+      await this.siteCall(
+        `${siteUrl}/wp-json/wp/v2/posts/${encodeURIComponent(platformPostId)}?force=true`,
+        { method: "DELETE", headers: { Authorization: `Basic ${tokens.accessToken}` }, timeoutMs: READ_TIMEOUT_MS },
+        "read",
+      );
       return;
     }
 
@@ -196,19 +215,20 @@ export class WordPressProvider extends SocialProvider {
     if (tags.length) body.tags = tags;
     if (featuredImageId) body.featured_media = featuredImageId;
 
-    const res = await fetch(`${siteUrl}/wp-json/wp/v2/posts`, {
-      method: "POST",
-      headers: {
-        Authorization: auth,
-        "Content-Type": "application/json",
+    const res = await this.siteCall(
+      `${siteUrl}/wp-json/wp/v2/posts`,
+      {
+        method: "POST",
+        headers: { Authorization: auth, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        timeoutMs: CREATE_TIMEOUT_MS,
       },
-      body: JSON.stringify(body),
-    });
-
-    const data: any = await res.json().catch(() => null);
-    if (!res.ok) {
-      throw new Error(`WordPress self-hosted post failed: ${JSON.stringify(data)}`);
-    }
+      "create",
+    );
+    const data: any = await this.readJson(res);
+    // A 2xx means the post was created; without an id we cannot record it, and
+    // retrying would create a second one.
+    if (data?.id == null) throw unconfirmedCreate(SVC, "the site's reply could not be read");
 
     return {
       platformPostId: String(data.id),
@@ -222,26 +242,61 @@ export class WordPressProvider extends SocialProvider {
     auth: string,
     mediaUrl: string
   ): Promise<number> {
-    const mediaRes = await fetch(mediaUrl);
-    if (!mediaRes.ok) throw new Error(`Failed to fetch media from ${mediaUrl}`);
-    const buffer = Buffer.from(await mediaRes.arrayBuffer());
-    const mediaType = mediaRes.headers.get("content-type") || "image/jpeg";
+    // The post's own media file, from OUR storage — not a user-named host.
+    let buffer: Buffer;
+    let mediaType: string;
+    try {
+      const mediaRes = await fetch(mediaUrl, { signal: AbortSignal.timeout(MEDIA_TIMEOUT_MS) });
+      if (!mediaRes.ok) throw new Error(`storage answered HTTP ${mediaRes.status}`);
+      buffer = Buffer.from(await mediaRes.arrayBuffer());
+      mediaType = mediaRes.headers.get("content-type") || "image/jpeg";
+    } catch (err) {
+      console.warn(`[WordPress] could not read media for upload: ${(err as Error)?.message}`);
+      // No status code in the message: the worker's classifier reads "403" as a permission error.
+      throw retryableMediaFailure(SVC, "the attached file could not be read from storage", err);
+    }
+    // Header-safe: a quote or line break in the stored name must not reach the header.
+    const rawName = mediaUrl.split("/").pop()?.split("?")[0] || "";
     const filename =
-      mediaUrl.split("/").pop()?.split("?")[0] || `upload.${mediaType.split("/")[1] || "jpg"}`;
+      rawName.replace(/[^\w.-]/g, "_") || `upload.${(mediaType.split("/")[1] || "jpg").replace(/[^a-z0-9]/gi, "")}`;
 
-    const res = await fetch(`${siteUrl}/wp-json/wp/v2/media`, {
-      method: "POST",
-      headers: {
-        Authorization: auth,
-        "Content-Type": mediaType,
-        "Content-Disposition": `attachment; filename="${filename}"`,
+    const res = await this.siteCall(
+      `${siteUrl}/wp-json/wp/v2/media`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: auth,
+          "Content-Type": mediaType,
+          "Content-Disposition": `attachment; filename="${filename}"`,
+        },
+        body: buffer,
+        timeoutMs: MEDIA_TIMEOUT_MS,
       },
-      body: buffer,
-    });
-
-    const data: any = await res.json().catch(() => null);
-    if (!res.ok) throw new Error(`WordPress media upload failed: ${JSON.stringify(data)}`);
+      "media",
+    );
+    const data: any = await this.readJson(res);
+    if (data?.id == null) throw retryableMediaFailure(SVC, "the reply could not be read");
     return data.id as number;
+  }
+
+  /** The one way to talk to a self-hosted site. Throws the mapped error on failure or non-2xx. */
+  private async siteCall(url: string, init: UserHostInit, phase: UserHostPhase): Promise<Response> {
+    let res: Response;
+    try {
+      res = await userHostFetch(url, init);
+    } catch (err) {
+      throw userHostFailure(err, SVC, phase);
+    }
+    if (!res.ok) throw await userHostStatusFailure(res, SVC, phase);
+    return res;
+  }
+
+  private async readJson(res: Response): Promise<any> {
+    try {
+      return await res.json();
+    } catch {
+      return null;
+    }
   }
 
   async getProfile(tokens: OAuthTokens): Promise<SocialProfile> {

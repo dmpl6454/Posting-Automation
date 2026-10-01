@@ -4,6 +4,7 @@ import { createRouter, adminOrgProcedure } from "../trpc";
 import { rssSyncQueue } from "@postautomation/queue";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 import { isPublicPageUrl } from "@postautomation/ai";
+import { userHostFetch, isUserHostError } from "@postautomation/social/src/utils/user-host-fetch";
 
 // SECURITY: every mutation/query is org-scoped via `adminOrgProcedure`. Each
 // lookup adds `organizationId: ctx.organizationId` so a user from org A
@@ -38,11 +39,14 @@ export const rssRouter = createRouter({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Feed URL must be a publicly accessible http(s) address." });
       }
       // Fix #42/#43: validate that the URL actually returns an RSS/Atom feed
+      // userHostFetch, not fetch(): isPublicPageUrl is a string check, so a
+      // public-looking name whose DNS points inside passed it (2026-10-01). This
+      // connects only to checked public addresses and never follows a redirect.
       try {
-        const res = await fetch(input.url, {
+        const res = await userHostFetch(input.url, {
           method: "GET",
-          signal: AbortSignal.timeout(5000),
-          redirect: "manual",
+          timeoutMs: 5000,
+          maxResponseBytes: 10 * 1024 * 1024,
           headers: { "User-Agent": "PostAutomation-RSS-Validator/1.0" },
         });
         if (!res.ok) {
@@ -60,6 +64,12 @@ export const rssRouter = createRouter({
         }
       } catch (err: any) {
         if (err instanceof TRPCError) throw err;
+        if (isUserHostError(err) && err.kind === "redirect") {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "That feed URL redirects somewhere else. Enter the feed's final address exactly as your browser shows it.",
+          });
+        }
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "Could not reach the feed URL. Please check it is publicly accessible.",

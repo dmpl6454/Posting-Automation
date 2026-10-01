@@ -67,6 +67,32 @@ export {
   isAmbiguousPublishError,
   isIndeterminatePublishError,
 } from "./utils/ambiguous-publish";
+// The opposite of ambiguous: refused before anything was created (2026-10-01).
+export { PublishRefusedError, isPublishRefusedError, type PublishRefusedReason } from "./utils/publish-refused";
+// SSRF-safe access to servers a USER named (Mastodon instance, self-hosted
+// WordPress site, webhook endpoint). Never contact those with plain fetch() —
+// see user-host-fetch.ts for why.
+export { isPrivateAddress, checkHostIsPublic, type HostCheck } from "./utils/public-address";
+export {
+  userHostFetch,
+  createPinnedLookup,
+  UserHostError,
+  isUserHostError,
+  type UserHostErrorKind,
+  type UserHostInit,
+} from "./utils/user-host-fetch";
+export {
+  MASTODON_SERVICE,
+  WORDPRESS_SERVICE,
+  DISCORD_SERVICE,
+  userHostFailure,
+  userHostStatusFailure,
+  unconfirmedCreate,
+  retryableMediaFailure,
+  summarizeRemoteError,
+  type UserHostService,
+  type UserHostPhase,
+} from "./utils/user-host-publish";
 export type { ExternalPostSummary, ExternalPostPage } from "./abstract/social.types";
 // Instagram comment replies (2026-09-19) — see instagram-comments.ts for the
 // current instagram_manage_comments permission status.

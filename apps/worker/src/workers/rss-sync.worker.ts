@@ -3,6 +3,7 @@ import { prisma } from "@postautomation/db";
 import { QUEUE_NAMES, type RssSyncJobData, createRedisConnection } from "@postautomation/queue";
 import { parseRssItems, type RssItem } from "@postautomation/ai/src/utils/rss-parser";
 import { resolveOrgAuthor } from "../lib/system-user";
+import { userHostFetch } from "@postautomation/social";
 
 async function generatePostFromEntry(
   entry: { title: string; summary: string },
@@ -50,13 +51,16 @@ export function createRssSyncWorker() {
           console.log(`[RssSync] Feed ${feedId} URL not public, skipping`);
           return;
         }
-        const response = await fetch(feed.url, {
+        // userHostFetch: the feed URL is user input, and the string check above
+        // passes a public-looking name whose DNS points inside. This connects only
+        // to checked public addresses and never follows a redirect (2026-10-01).
+        const response = await userHostFetch(feed.url, {
           headers: {
             "User-Agent": "PostAutomation RSS Reader/1.0",
             Accept: "application/rss+xml, application/xml, text/xml, application/atom+xml",
           },
-          signal: AbortSignal.timeout(30_000),
-          redirect: "manual",
+          timeoutMs: 30_000,
+          maxResponseBytes: 10 * 1024 * 1024,
         });
 
         if (!response.ok) {

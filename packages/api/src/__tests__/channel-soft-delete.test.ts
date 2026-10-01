@@ -83,6 +83,20 @@ describe("reconnect revives the same channel row", () => {
     // or a reconnected channel would stay invisible and unpostable.
     expect(revivals).toBe(upserts);
   });
+
+  it("connectWithToken (Telegram, Discord, Mastodon, WordPress, …) revives the row too", () => {
+    // Its update branch set isActive: true but left disconnectedAt, so a token
+    // channel reconnected after a disconnect stayed hidden from channel.list
+    // and could not be posted to (found 2026-10-01).
+    // Comments stripped: a commented-out `disconnectedAt: null,` must not satisfy the lock.
+    const src = read("packages/api/src/routers/channel.router.ts")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/.*$/gm, "");
+    const block = src.slice(src.indexOf("connectWithToken:"), src.indexOf("resolveChannelErrorsOnReconnect(ctx.prisma"));
+    const update = block.slice(block.indexOf("update: {"));
+    expect(update).toMatch(/isActive: true,/);
+    expect(update).toMatch(/disconnectedAt: null,/);
+  });
 });
 
 describe("Insights count history from paused and disconnected channels", () => {
