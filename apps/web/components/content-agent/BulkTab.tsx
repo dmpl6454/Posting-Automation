@@ -1,6 +1,7 @@
 "use client";
 
 import { humanizeError } from "~/lib/errors";
+import { bulkScheduleToast } from "~/lib/bulk-schedule-toast";
 
 import { useState, useRef, useCallback } from "react";
 import { trpc } from "~/lib/trpc/client";
@@ -86,18 +87,7 @@ function BulkScheduleSection() {
   const utils = trpc.useUtils();
   const bulkSchedule = trpc.bulk.bulkSchedule.useMutation({
     onSuccess: (result) => {
-      toast({
-        title: "Scheduled",
-        description:
-          `${result.scheduled} post(s) scheduled successfully.` +
-          // A story needs exactly one image or video; those are skipped, not
-          // silently scheduled to fail.
-          ((result as { skippedStories?: number }).skippedStories
-            ? ` ${(result as { skippedStories?: number }).skippedStories} Instagram stor${
-                (result as { skippedStories?: number }).skippedStories === 1 ? "y was" : "ies were"
-              } skipped — a story needs exactly one image or video.`
-            : ""),
-      });
+      toast(bulkScheduleToast(result));
       setSelectedIds(new Set());
       setScheduledAt("");
       utils.post.list.invalidate();

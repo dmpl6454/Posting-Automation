@@ -168,8 +168,9 @@ describe("post.publishNow — ambiguous targets are not re-published", () => {
   it("refuses to publish while a caption fan-out is still generating unique captions", async () => {
     postFindFirst.mockResolvedValue({
       id: "p1",
+      status: "DRAFT",
       metadata: { captionFanout: { requested: true, pendingSchedule: true } },
-      targets: [target(), target({ id: "t2" })],
+      targets: [target({ status: "DRAFT" }), target({ id: "t2", status: "DRAFT" })],
     });
     await expect(makeCaller().publishNow({ id: "p1" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
     expect(queueAdd).not.toHaveBeenCalled();
@@ -178,8 +179,35 @@ describe("post.publishNow — ambiguous targets are not re-published", () => {
   it("refuses to publish a post HELD because no unique caption could be generated", async () => {
     postFindFirst.mockResolvedValue({
       id: "p1",
+      status: "DRAFT",
       metadata: { captionFanout: { requested: true, pendingSchedule: false, held: true } },
-      targets: [target(), target({ id: "t2" })],
+      targets: [target({ status: "DRAFT" }), target({ id: "t2", status: "DRAFT" })],
+    });
+    await expect(makeCaller().publishNow({ id: "p1" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(queueAdd).not.toHaveBeenCalled();
+  });
+
+  // Review follow-up 2026-10-01: the caption-fanout worker only clears its flag
+  // while the post is DRAFT, so a FAILED/CANCELLED post can carry
+  // pendingSchedule/held forever — and Retry always threw a false "will publish
+  // automatically". Those gates only mean something on the parked DRAFT.
+  it.each([
+    ["FAILED", { captionFanout: { requested: true, pendingSchedule: true } }],
+    ["CANCELLED", { captionFanout: { requested: true, pendingSchedule: true } }],
+    ["FAILED", { captionFanout: { requested: true, pendingSchedule: false, held: true } }],
+    ["PUBLISHED", { captionFanout: { requested: true, pendingSchedule: true } }],
+  ])("a stale caption fan-out flag on a %s post does not block Retry", async (status, metadata) => {
+    postFindFirst.mockResolvedValue({ id: "p1", status, metadata, targets: [target()] });
+    await makeCaller().publishNow({ id: "p1" });
+    expect(queueAdd).toHaveBeenCalledTimes(1);
+  });
+
+  it("a pending super-text burn still blocks Retry whatever the post status", async () => {
+    postFindFirst.mockResolvedValue({
+      id: "p1",
+      status: "FAILED",
+      metadata: { superText: { pendingBurn: true } },
+      targets: [target()],
     });
     await expect(makeCaller().publishNow({ id: "p1" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
     expect(queueAdd).not.toHaveBeenCalled();

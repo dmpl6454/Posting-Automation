@@ -756,6 +756,69 @@ describe("defers release the claim BEFORE re-queueing", () => {
   });
 });
 
+describe("pre-claim guard: a post moved to Draft/Cancelled never publishes", () => {
+  // Review follow-up 2026-10-01. The stale-schedule guard only runs for jobs
+  // carrying enqueuedFor; newsgrid/agent/publishNow/chat jobs and their
+  // re-queues carry none, and the claim admits DRAFT targets — so bulk "Move to
+  // Draft" (which sets post AND targets to DRAFT) did not stop them.
+  const T = 1_790_000_000_000;
+  const postReads = () =>
+    (prisma.post.findUnique.mock.calls as unknown as any[][]).filter(
+      ([a]) => a?.select?.status === true || a?.select?.scheduledAt === true
+    );
+
+  it.each(["DRAFT", "CANCELLED"])("an interactive job for a %s post skips WITHOUT claiming", async (status) => {
+    const publishPost = vi.fn(async () => ({ platformPostId: "ig-1", url: "https://instagram.com/p/1" }));
+    s.provider = realProvider("INSTAGRAM", { publishPost });
+    seedTarget("t1", { status: "DRAFT" });
+    prisma.post.findUnique.mockResolvedValueOnce({ status, scheduledAt: null } as any);
+
+    await expect(s.processor!(makeJob())).resolves.toBeUndefined();
+
+    expect(prisma.postTarget.updateMany).not.toHaveBeenCalled();
+    expect(rows.get("t1")!.status).toBe("DRAFT");
+    expect(publishPost).not.toHaveBeenCalled();
+  });
+
+  it("a schedule-path job whose scheduledAt still matches is skipped too once the post is a draft", async () => {
+    const publishPost = vi.fn(async () => ({ platformPostId: "ig-1", url: "https://instagram.com/p/1" }));
+    s.provider = realProvider("INSTAGRAM", { publishPost });
+    seedTarget("t1", { status: "DRAFT" });
+    prisma.post.findUnique.mockResolvedValueOnce({ status: "DRAFT", scheduledAt: new Date(T) } as any);
+
+    await expect(s.processor!(makeJob({ data: { ...makeJob().data, enqueuedFor: T } }))).resolves.toBeUndefined();
+
+    expect(prisma.postTarget.updateMany).not.toHaveBeenCalled();
+    expect(publishPost).not.toHaveBeenCalled();
+  });
+
+  it("a live post's schedule-path job reads the post ONCE and publishes", async () => {
+    const publishPost = vi.fn(async () => ({ platformPostId: "ig-1", url: "https://instagram.com/p/1" }));
+    s.provider = realProvider("INSTAGRAM", { publishPost });
+    seedTarget("t1");
+    prisma.post.findUnique.mockResolvedValueOnce({ status: "PUBLISHING", scheduledAt: new Date(T) } as any);
+
+    await s.processor!(makeJob({ data: { ...makeJob().data, enqueuedFor: T } }));
+
+    expect(postReads()).toHaveLength(1);
+    expect(postReads()[0]![0]).toEqual({ where: { id: "post-1" }, select: { status: true, scheduledAt: true } });
+    expect(publishPost).toHaveBeenCalledTimes(1);
+    expect(rows.get("t1")).toMatchObject({ status: "PUBLISHED", publishedId: "ig-1" });
+  });
+
+  it("an interactive job for a SCHEDULED post still publishes", async () => {
+    const publishPost = vi.fn(async () => ({ platformPostId: "ig-1", url: "https://instagram.com/p/1" }));
+    s.provider = realProvider("INSTAGRAM", { publishPost });
+    seedTarget("t1");
+    prisma.post.findUnique.mockResolvedValueOnce({ status: "SCHEDULED", scheduledAt: new Date(T) } as any);
+
+    await s.processor!(makeJob());
+
+    expect(publishPost).toHaveBeenCalledTimes(1);
+    expect(rows.get("t1")!.status).toBe("PUBLISHED");
+  });
+});
+
 describe("timing log", () => {
   it("logs one [PublishTiming] line on success", async () => {
     s.provider = realProvider("INSTAGRAM", {

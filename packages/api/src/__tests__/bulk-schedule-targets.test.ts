@@ -182,6 +182,32 @@ describe("bulk.bulkSchedule — a post whose captions/super-text are still pendi
     expect((res as any).skippedPending).toBe(1);
   });
 
+  // Review follow-up 2026-10-01: the fan-out worker clears its flag only while
+  // the post is DRAFT, so a FAILED/CANCELLED post can keep a stale
+  // pendingSchedule/held forever. Those gates only mean something on the parked
+  // DRAFT; a stale one must not make the post unschedulable.
+  it.each([
+    ["FAILED", { captionFanout: { requested: true, pendingSchedule: true } }],
+    ["CANCELLED", { captionFanout: { requested: true, pendingSchedule: false, held: true } }],
+  ])("a stale caption fan-out flag on a %s post does not block scheduling", async (status, metadata) => {
+    postFindFirst.mockResolvedValueOnce({ id: "post-1", status, metadata });
+    const caller = buildCaller({ isMember: true });
+    const res = await caller.bulkSchedule({ items: [{ postId: "post-1", scheduledAt: "2099-01-01T10:00:00.000Z" }] });
+
+    expect(res.scheduled).toBe(1);
+    expect((res as any).skippedPending).toBe(0);
+  });
+
+  it("a pending super-text burn is skipped whatever the post status", async () => {
+    postFindFirst.mockResolvedValueOnce({ id: "post-1", status: "FAILED", metadata: { superText: { pendingBurn: true } } });
+    const caller = buildCaller({ isMember: true });
+    const res = await caller.bulkSchedule({ items: [{ postId: "post-1", scheduledAt: "2099-01-01T10:00:00.000Z" }] });
+
+    expect(res.scheduled).toBe(0);
+    expect((res as any).skippedPending).toBe(1);
+    expect(postUpdate).not.toHaveBeenCalled();
+  });
+
   it("still schedules normally once every gate has cleared", async () => {
     postFindFirst.mockResolvedValueOnce({
       id: "post-1",
