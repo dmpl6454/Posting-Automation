@@ -119,6 +119,11 @@ model PhoneOtp {
   // combinations, and without a counter a guesser had the whole 10-minute
   // window to try them. Nullable-free default so no backfill is needed.
   attempts  Int      @default(0)
+  // Who asked for the code and why ("login" | "add-phone"); verifiers only
+  // redeem a row matching both, so one account can't redeem a code another
+  // requested. NULL = issued before binding existed — no verifier accepts it.
+  userId    String?
+  purpose   String?
 
   @@index([phone])
 }

@@ -6,6 +6,8 @@ import { createRouter, publicProcedure, protectedProcedure } from "../trpc";
 import { sendEmail } from "../lib/email";
 import { passwordResetEmail, emailVerificationEmail } from "../lib/email-templates";
 import { sendSms } from "../lib/sms";
+import { loginOtpPerPhoneLimiter, phoneRateLimitKey } from "../middleware/rate-limit";
+import { PHONE_OTP_PURPOSE } from "@postautomation/db";
 
 export const authRouter = createRouter({
   requestPasswordReset: publicProcedure
@@ -236,15 +238,30 @@ export const authRouter = createRouter({
         return { success: true };
       }
 
-      // Clean up old OTPs
-      await ctx.prisma.phoneOtp.deleteMany({ where: { phone: input.phone } });
+      // Per-phone issuance cap — each send resets the attempt counter, so this
+      // is what bounds total guesses. Counted only for real verified numbers
+      // (bounded key set); over the cap stays silent to avoid enumeration.
+      if (!loginOtpPerPhoneLimiter(phoneRateLimitKey(input.phone)).success) {
+        return { success: true };
+      }
+
+      // Clean up old LOGIN codes only — never the owner's in-flight Settings code.
+      await ctx.prisma.phoneOtp.deleteMany({
+        where: { phone: input.phone, purpose: PHONE_OTP_PURPOSE.LOGIN },
+      });
 
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
       const hashedOtp = await bcrypt.hash(otp, 8);
       const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
       await ctx.prisma.phoneOtp.create({
-        data: { phone: input.phone, otp: hashedOtp, expiresAt },
+        data: {
+          phone: input.phone,
+          otp: hashedOtp,
+          expiresAt,
+          userId: user.id,
+          purpose: PHONE_OTP_PURPOSE.LOGIN,
+        },
       });
 
       await sendSms(

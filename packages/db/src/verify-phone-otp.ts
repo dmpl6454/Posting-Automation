@@ -23,6 +23,15 @@ import bcrypt from "bcryptjs";
 
 export const MAX_OTP_ATTEMPTS = 5;
 
+/** `PhoneOtp.purpose` values: sign-in codes vs Settings (add/re-verify/remove) codes. */
+export const PHONE_OTP_PURPOSE = {
+  LOGIN: "login",
+  ADD_PHONE: "add-phone",
+} as const;
+
+/** Restricts which row may be redeemed — see the `userId`/`purpose` columns. */
+export type PhoneOtpScope = { userId?: string; purpose?: string };
+
 type PhoneOtpPrismaClient = {
   phoneOtp: {
     findFirst: (args: any) => Promise<{ id: string; otp: string; attempts: number } | null>;
@@ -35,10 +44,22 @@ export type VerifyOtpResult = { ok: true } | { ok: false; reason: "invalid" | "l
 export async function verifyAndConsumePhoneOtp(
   prisma: PhoneOtpPrismaClient,
   phone: string,
-  code: string
+  code: string,
+  scope?: PhoneOtpScope
 ): Promise<VerifyOtpResult> {
+  // Fail closed: Prisma reads `{ userId: undefined }` as NO filter, so a caller
+  // that meant to bind but passed an empty value would silently widen the lookup.
+  const scopeWhere: Record<string, string> = {};
+  for (const key of ["userId", "purpose"] as const) {
+    if (scope && key in scope) {
+      const value = scope[key];
+      if (!value) return { ok: false, reason: "invalid" };
+      scopeWhere[key] = value;
+    }
+  }
+
   const record = await prisma.phoneOtp.findFirst({
-    where: { phone, used: false, expiresAt: { gt: new Date() } },
+    where: { phone, used: false, expiresAt: { gt: new Date() }, ...scopeWhere },
     orderBy: { createdAt: "desc" },
   });
   if (!record) return { ok: false, reason: "invalid" };

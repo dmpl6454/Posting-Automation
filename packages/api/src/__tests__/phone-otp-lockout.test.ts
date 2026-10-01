@@ -10,17 +10,26 @@ import bcrypt from "bcryptjs";
 vi.mock("../lib/sms", () => ({ sendSms: vi.fn(async () => {}) }));
 vi.mock("../lib/audit", () => ({ createAuditLog: vi.fn(async () => {}), AUDIT_ACTIONS: { USER_PHONE_ADDED: "x", USER_PHONE_REMOVED: "y" } }));
 
-const otpState: { id: string; phone: string; otp: string; attempts: number; used: boolean; expiresAt: Date } = {
+const otpState = {
   id: "otp-1",
   phone: "+15551234567",
   otp: "",
   attempts: 0,
   used: false,
   expiresAt: new Date(Date.now() + 60_000),
+  // Codes are bound to who asked for them (see phone-otp-binding.test.ts).
+  userId: "user-1",
+  purpose: "add-phone",
 };
 
 const phoneOtpFindFirst = vi.fn(async (args: any) =>
-  !otpState.used && otpState.expiresAt > new Date() && args.where.phone === otpState.phone ? { ...otpState } : null
+  !otpState.used &&
+  otpState.expiresAt > new Date() &&
+  args.where.phone === otpState.phone &&
+  (!("userId" in args.where) || args.where.userId === otpState.userId) &&
+  (!("purpose" in args.where) || args.where.purpose === otpState.purpose)
+    ? { ...otpState }
+    : null
 );
 const phoneOtpUpdateMany = vi.fn(async (args: any) => {
   if (args.where.id !== otpState.id) return { count: 0 };

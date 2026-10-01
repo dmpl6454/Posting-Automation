@@ -22,10 +22,25 @@ const sendEmail = vi.fn(async (..._a: any[]) => {});
 vi.mock("../lib/email", () => ({ sendEmail: (...a: any[]) => sendEmail(...a) }));
 
 const PHONE = "+15551234567";
-const otpState = { id: "otp-1", phone: PHONE, otp: "", attempts: 0, used: false, expiresAt: new Date(Date.now() + 60_000) };
+const otpState = {
+  id: "otp-1",
+  phone: PHONE,
+  otp: "",
+  attempts: 0,
+  used: false,
+  expiresAt: new Date(Date.now() + 60_000),
+  userId: "user-1",
+  purpose: "add-phone",
+};
 
 const phoneOtpFindFirst = vi.fn(async (args: any) =>
-  !otpState.used && otpState.expiresAt > new Date() && args.where.phone === otpState.phone ? { ...otpState } : null
+  !otpState.used &&
+  otpState.expiresAt > new Date() &&
+  args.where.phone === otpState.phone &&
+  (!("userId" in args.where) || args.where.userId === otpState.userId) &&
+  (!("purpose" in args.where) || args.where.purpose === otpState.purpose)
+    ? { ...otpState }
+    : null
 );
 const phoneOtpUpdateMany = vi.fn(async (args: any) => {
   if (args.where.id !== otpState.id) return { count: 0 };

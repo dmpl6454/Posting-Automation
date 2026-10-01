@@ -89,6 +89,23 @@ export const aiRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
 export const addPhoneOtpRateLimiter = createRateLimiter({ windowMs: 60 * 60_000, max: 3 });
 
 /**
+ * Per-PHONE OTP issuance caps, keyed via phoneRateLimitKey (security review
+ * 2026-10-01). Every send mints a fresh code with attempts = 0, so without a
+ * cap send -> 5 guesses -> send reset the attempt limit forever. Keyed on the
+ * number rather than the session: sendPhoneOtp is public, so every anonymous
+ * caller would share one session bucket. Login and Settings codes have
+ * separate buckets so an anonymous caller exhausting a number's login sends
+ * can't also block its owner's Settings flow.
+ */
+export const loginOtpPerPhoneLimiter = createRateLimiter({ windowMs: 60 * 60_000, max: 5 });
+export const addPhoneOtpPerPhoneLimiter = createRateLimiter({ windowMs: 60 * 60_000, max: 5 });
+
+/** Digits only, so formatting variants of one number share a bucket. */
+export function phoneRateLimitKey(phone: string): string {
+  return phone.replace(/\D/g, "") || phone.trim();
+}
+
+/**
  * 5 per hour — emailed analytics reports go to an ARBITRARY recipient address,
  * so keep the relay-abuse surface tightly bounded (also audit-logged).
  */
