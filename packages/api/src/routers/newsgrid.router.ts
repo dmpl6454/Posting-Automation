@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { createRouter, adminOrgProcedure } from "../trpc";
 import { PUBLIC_CHANNEL_SELECT } from "../lib/public-channel";
+import { toNewsgridProfile } from "../lib/newsgrid-profile";
 import { TRPCError } from "@trpc/server";
 import { postPublishQueue } from "@postautomation/queue";
 import { requirePlan, enforcePlanLimit } from "../middleware/plan-limit.middleware";
@@ -725,6 +726,7 @@ Requirements:
       orderBy: { name: "asc" },
       select:  { id: true, name: true, username: true, platform: true, avatar: true, metadata: true },
     });
-    return channels;
+    // Raw metadata carries platform credentials (e.g. a Discord webhook URL).
+    return channels.map((ch) => ({ ...ch, metadata: toNewsgridProfile(ch.metadata) }));
   }),
 });

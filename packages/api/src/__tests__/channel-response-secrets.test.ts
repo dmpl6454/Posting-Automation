@@ -161,8 +161,13 @@ describe("no router returns a full channel row through a relation", () => {
         if (entry.isDirectory()) walk(p);
         else if (p.endsWith(".ts")) {
           // Strip comments: a note that QUOTES the banned shape must not fail the lock.
-          const src = readFileSync(p, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
-          if (/\bchannel:\s*true\b/.test(src)) offenders.push(p.slice(dir.length + 1));
+          // Then strip `_count: { select: { ... } }` — there `channels: true` is a count.
+          const src = readFileSync(p, "utf8")
+            .replace(/\/\*[\s\S]*?\*\//g, "")
+            .replace(/\/\/.*$/gm, "")
+            .replace(/_count:\s*\{\s*select:\s*\{[^{}]*\}\s*,?\s*\}/g, "");
+          // `channels: true` (the plural relation, e.g. on Organization) returns full rows too.
+          if (/\bchannels?:\s*true\b/.test(src)) offenders.push(p.slice(dir.length + 1));
         }
       }
     };
