@@ -428,6 +428,10 @@ export function RepurposeTab() {
           if (r.theme) { setTheme(r.theme); touched = true; }
           if (touched) setStyleAutoSuggested(true);
         },
+        // A failed classification (429, network) must stay retryable on re-blur.
+        onError: () => {
+          if (lastClassifiedRefUrlRef.current === refUrl) lastClassifiedRefUrlRef.current = null;
+        },
       },
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1503,6 +1507,7 @@ export function RepurposeTab() {
                                         setAestheticRefUrl("");
                                         setAestheticRefMediaId("");
                                         setReferenceMimicry(false);
+                                        lastClassifiedRefUrlRef.current = null;
                                       }}
                                       className="text-muted-foreground hover:text-foreground"
                                     >
@@ -1754,7 +1759,7 @@ export function RepurposeTab() {
                       <Input
                         type="url"
                         value={aestheticRefUrl}
-                        onChange={(e) => { setAestheticRefUrl(e.target.value); setAestheticRefMediaId(""); }}
+                        onChange={(e) => { setAestheticRefUrl(e.target.value); setAestheticRefMediaId(""); if (!e.target.value.trim()) lastClassifiedRefUrlRef.current = null; }}
                         onPaste={handleRefPaste}
                         onBlur={(e) => {
                           // T2b: a typed/pasted URL is "committed" on blur — classify it

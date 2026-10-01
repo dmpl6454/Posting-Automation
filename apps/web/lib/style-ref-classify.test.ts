@@ -42,4 +42,17 @@ describe("RepurposeTab classifyStyleReference wiring", () => {
     expect(src).toMatch(/lastClassifiedRefUrlRef\.current = refUrl/);
     expect(src).toMatch(/shouldClassifyStyleRefOnBlur\(\s*e\.target\.value,\s*lastClassifiedRefUrlRef\.current\s*\)/);
   });
+
+  it("forgets a URL whose classification failed, so re-blurring it retries (429, network)", () => {
+    const fn = src.slice(src.indexOf("const classifyAndPreselect = useCallback("), src.indexOf("const startProgress"));
+    expect(fn).toMatch(/onError:\s*\(\)\s*=>\s*\{[^}]*lastClassifiedRefUrlRef\.current\s*=\s*null/);
+  });
+
+  it("forgets the last URL whenever the reference field is emptied", () => {
+    // Typing the field empty, or unselecting a saved style, then entering the
+    // same URL again must classify again.
+    expect(src).toMatch(/onChange=\{\(e\) => \{[^}]*if \(!e\.target\.value\.trim\(\)\) lastClassifiedRefUrlRef\.current = null/);
+    const unselect = src.slice(src.indexOf('title="Unselect this style"'), src.indexOf('title="Unselect this style"') + 500);
+    expect(unselect).toMatch(/lastClassifiedRefUrlRef\.current = null/);
+  });
 });
