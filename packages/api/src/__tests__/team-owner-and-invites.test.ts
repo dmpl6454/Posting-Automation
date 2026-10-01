@@ -68,7 +68,7 @@ import { createCallerFactory } from "../trpc";
 import { teamRouter } from "../routers/team.router";
 import { prisma as prismaMock } from "@postautomation/db";
 
-const caller = (role: "OWNER" | "ADMIN" = "OWNER") =>
+const caller = (role: "OWNER" | "ADMIN" | "MEMBER" = "OWNER") =>
   createCallerFactory(teamRouter)({
     prisma: { ...prismaMock, organizationMember: { ...prismaMock.organizationMember, findUnique: vi.fn(async () => ({ id: "m-caller", userId: "user-1", organizationId: "org-1", role })) } } as any,
     organizationId: "org-1",
@@ -139,7 +139,23 @@ describe("team.listInvites / team.revokeInvite", () => {
   });
 
   it("ADMIN (not just OWNER) can list and revoke, matching the invite gate", async () => {
+    inviteFindMany.mockResolvedValue([{ id: "inv-1", email: "x@y.com", role: "MEMBER" }]);
+    await expect(caller("ADMIN").listInvites()).resolves.toEqual([{ id: "inv-1", email: "x@y.com", role: "MEMBER" }]);
     inviteFindFirst.mockResolvedValue({ id: "inv-1", organizationId: "org-1", email: "x@y.com", acceptedAt: null });
     await expect(caller("ADMIN").revokeInvite({ inviteId: "inv-1" })).resolves.toEqual({ success: true });
+  });
+
+  // adminOrgProcedure only checks the APP role (User.appRole); a plain org
+  // MEMBER with an app-admin account must not read pending invite emails.
+  it("an org MEMBER cannot list invites (same org-role gate as invite/revokeInvite)", async () => {
+    inviteFindMany.mockResolvedValue([{ id: "inv-1", email: "x@y.com", role: "MEMBER" }]);
+    await expect(caller("MEMBER").listInvites()).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(inviteFindMany).not.toHaveBeenCalled();
+  });
+
+  it("an org MEMBER cannot revoke an invite", async () => {
+    inviteFindFirst.mockResolvedValue({ id: "inv-1", organizationId: "org-1", email: "x@y.com", acceptedAt: null });
+    await expect(caller("MEMBER").revokeInvite({ inviteId: "inv-1" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(inviteDelete).not.toHaveBeenCalled();
   });
 });
