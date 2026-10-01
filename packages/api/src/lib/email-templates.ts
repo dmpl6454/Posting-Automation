@@ -51,34 +51,6 @@ export function emailVerificationEmail(verifyUrl: string): { subject: string; ht
 }
 
 /**
- * Sent instead of a distinguishable API response when someone submits the
- * registration form for an email that already has an account (security audit
- * 2026-09-28 — account enumeration). /api/auth/register used to return a
- * distinct HTTP status (409 vs 200) and, for an OAuth-only email, name the
- * exact provider in the response body — a direct, unauthenticated existence
- * (and provider-fingerprinting) oracle. The route now always responds
- * identically whether or not the email exists, and tells a REAL owner what
- * happened over email instead — mirroring requestPasswordReset's existing
- * "never leak via the API response" invariant.
- */
-export function accountAlreadyExistsEmail(oauthProviders: string[]): { subject: string; html: string; text: string } {
-  const hasOAuth = oauthProviders.length > 0;
-  const providerNames = oauthProviders.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(" or ");
-  const howToSignIn = hasOAuth
-    ? `sign in with ${providerNames}`
-    : `sign in with your password, or use "Forgot password" if you don't remember it`;
-  return {
-    subject: `You already have a ${APP_NAME} account`,
-    html: baseTemplate(`
-      <h2 style="margin:0 0 16px;font-size:18px;color:#18181b;">You Already Have an Account</h2>
-      <p style="color:#3f3f46;line-height:1.6;">Someone just tried to sign up for ${APP_NAME} using this email address, but an account already exists. If that was you, please ${howToSignIn}.</p>
-      <p style="color:#71717a;font-size:13px;line-height:1.5;">If this wasn't you, no action is needed — your account is safe.</p>
-    `),
-    text: `Someone just tried to sign up for ${APP_NAME} using this email address, but an account already exists. If that was you, please ${howToSignIn}.\n\nIf this wasn't you, no action is needed.`,
-  };
-}
-
-/**
  * Security notification (2026-09-28 security audit — closes the gap where a
  * phone login method could be attached to an account with zero signal to the
  * account owner). Sent to the account's REGISTERED email — not whichever
