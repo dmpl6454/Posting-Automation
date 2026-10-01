@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "~/lib/auth";
 import { prisma } from "@postautomation/db";
+import { resolveActiveOrganizationId } from "~/lib/upload-org";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 
 export const dynamic = "force-dynamic";
@@ -35,24 +36,11 @@ export async function POST(req: Request) {
 
   const userId = session.user.id as string;
 
-  // Prefer org ID from header (set by client), fall back to first membership
-  const headerOrgId = req.headers.get("x-organization-id");
+  // The client sends its active workspace (orgHeaders()); it is honoured only
+  // for a real member, else the same default org orgProcedure would pick.
+  const organizationId = await resolveActiveOrganizationId(prisma, userId, req.headers.get("x-organization-id"));
 
-  let membership;
-  if (headerOrgId) {
-    membership = await prisma.organizationMember.findUnique({
-      where: { userId_organizationId: { userId, organizationId: headerOrgId } },
-      select: { organizationId: true },
-    });
-  }
-  if (!membership) {
-    membership = await prisma.organizationMember.findFirst({
-      where: { userId },
-      select: { organizationId: true },
-    });
-  }
-
-  if (!membership) {
+  if (!organizationId) {
     return NextResponse.json({ error: "No organization found" }, { status: 403 });
   }
 
@@ -81,8 +69,7 @@ export async function POST(req: Request) {
   }
 
   const ext = file.name.split(".").pop() || "bin";
-  const orgId = membership.organizationId;
-  const key = `${orgId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+  const key = `${organizationId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
 
   let buffer: Buffer;
   try {
@@ -126,7 +113,7 @@ export async function POST(req: Request) {
 
   const media = await prisma.media.create({
     data: {
-      organizationId: membership.organizationId,
+      organizationId,
       uploadedById: userId,
       fileName: file.name,
       fileType: file.type,

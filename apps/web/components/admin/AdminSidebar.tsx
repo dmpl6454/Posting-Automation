@@ -19,6 +19,7 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "~/lib/utils";
+import { clearImpersonationCookie } from "~/lib/impersonation-client";
 
 interface AdminSidebarProps {
   /** Mobile drawer open state. On lg+ the rail is always shown regardless. */
@@ -105,7 +106,10 @@ export function AdminSidebar({ open = false, onClose }: AdminSidebarProps) {
           Back to Dashboard
         </Link>
         <button
-          onClick={() => signOut({ callbackUrl: "/" })}
+          onClick={() => {
+            clearImpersonationCookie();
+            void signOut({ callbackUrl: "/" });
+          }}
           className="flex w-full items-center gap-[9px] rounded-[7px] px-[11px] py-[9px] text-[13px] font-medium leading-none text-muted-foreground transition-colors hover:bg-hover hover:text-foreground"
         >
           <LogOut className="h-[15px] w-[15px] shrink-0" />

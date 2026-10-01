@@ -2,6 +2,7 @@
 import { RequireAppAdmin } from "~/components/auth/require-app-admin";
 
 import { humanizeError } from "~/lib/errors";
+import { orgHeaders } from "~/lib/org-header";
 
 import { useRef, useState } from "react";
 import { trpc } from "~/lib/trpc/client";
@@ -146,7 +147,7 @@ function LogoLibraryPageInner() {
       formData.append("file", file);
       formData.append("category", "logo");
       try {
-        const res = await fetch("/api/upload", { method: "POST", body: formData });
+        const res = await fetch("/api/upload", { method: "POST", headers: orgHeaders(), body: formData });
         if (!res.ok) {
           const err = await res.json().catch(() => ({ error: "Upload failed" }));
           toast({ title: "Upload failed", description: err.error, variant: "destructive" });

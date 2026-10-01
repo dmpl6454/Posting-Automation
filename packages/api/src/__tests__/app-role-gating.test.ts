@@ -110,9 +110,11 @@ describe("wiring lock — mixed routers keep the USER/ADMIN split", () => {
     expect(src).toMatch(/me: protectedProcedure/);
   });
 
-  it("notification: create admin; list stays USER (notification bell)", () => {
+  it("notification: create is REMOVED (security audit 2026-09-28); list stays USER (notification bell)", () => {
     const src = read("notification.router.ts");
-    expect(src).toMatch(/create: adminProtectedProcedure/);
+    // Nothing in the UI ever called it, and it had no org-membership check on
+    // the target user — a plain removal is safer than any gate.
+    expect(src).not.toMatch(/create: adminProtectedProcedure/);
     expect(src).toMatch(/list: protectedProcedure/);
   });
 

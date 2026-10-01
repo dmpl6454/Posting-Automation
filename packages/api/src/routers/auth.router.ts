@@ -6,6 +6,8 @@ import { createRouter, publicProcedure, protectedProcedure } from "../trpc";
 import { sendEmail } from "../lib/email";
 import { passwordResetEmail, emailVerificationEmail } from "../lib/email-templates";
 import { sendSms } from "../lib/sms";
+import { loginOtpPerPhoneLimiter, phoneRateLimitKey } from "../middleware/rate-limit";
+import { PHONE_OTP_PURPOSE } from "@postautomation/db";
 
 export const authRouter = createRouter({
   requestPasswordReset: publicProcedure
@@ -96,6 +98,16 @@ export const authRouter = createRouter({
         where: { id: resetToken.userId },
         data: {
           password: hashedPassword,
+          // Security audit 2026-09-28: a phone number could be attached as a
+          // second login method with nothing but a hijacked session (now
+          // gated — see user.router.ts addPhone), and it survived untouched
+          // through a password reset, so the attacker could still sign in via
+          // phone-otp afterward. Clearing it here treats the phone login
+          // method as part of the credential set this reset invalidates,
+          // exactly like the password itself — any phone attached before the
+          // reset, attacker's or the owner's own, requires re-verification.
+          phone: null,
+          phoneVerified: null,
           // Stamp the change time — the JWT callback compares this against the
           // token's iat to invalidate any sessions that existed before the reset.
           passwordChangedAt: now,
@@ -112,7 +124,8 @@ export const authRouter = createRouter({
         where: { userId: resetToken.userId },
       });
 
-      return { success: true };
+      // Lets the success screen say phone sign-in was removed, only when it was.
+      return { success: true, phoneRemoved: Boolean(resetToken.user?.phone) };
     }),
 
   verifyEmail: publicProcedure
@@ -226,15 +239,30 @@ export const authRouter = createRouter({
         return { success: true };
       }
 
-      // Clean up old OTPs
-      await ctx.prisma.phoneOtp.deleteMany({ where: { phone: input.phone } });
+      // Per-phone issuance cap — each send resets the attempt counter, so this
+      // is what bounds total guesses. Counted only for real verified numbers
+      // (bounded key set); over the cap stays silent to avoid enumeration.
+      if (!loginOtpPerPhoneLimiter(phoneRateLimitKey(input.phone)).success) {
+        return { success: true };
+      }
+
+      // Clean up old LOGIN codes only — never the owner's in-flight Settings code.
+      await ctx.prisma.phoneOtp.deleteMany({
+        where: { phone: input.phone, purpose: PHONE_OTP_PURPOSE.LOGIN },
+      });
 
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
       const hashedOtp = await bcrypt.hash(otp, 8);
       const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
       await ctx.prisma.phoneOtp.create({
-        data: { phone: input.phone, otp: hashedOtp, expiresAt },
+        data: {
+          phone: input.phone,
+          otp: hashedOtp,
+          expiresAt,
+          userId: user.id,
+          purpose: PHONE_OTP_PURPOSE.LOGIN,
+        },
       });
 
       await sendSms(

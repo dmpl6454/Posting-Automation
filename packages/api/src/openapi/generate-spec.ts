@@ -379,7 +379,7 @@ export const openApiSpec: OpenApiSpec = {
             },
           },
         },
-        responses: { "200": { description: "Updated channel" } },
+        responses: { "200": { description: "The channel's public fields (id, platform, name, username, avatar, isActive, ...). Never includes credentials." } },
       },
     },
 
@@ -684,31 +684,6 @@ export const openApiSpec: OpenApiSpec = {
           { name: "input", in: "query", schema: { type: "object", properties: { limit: { type: "integer" }, cursor: { type: "string" }, type: { type: "string", enum: ["image", "video", "all"] } } } },
         ],
         responses: { "200": { description: "Paginated media items" } },
-      },
-    },
-    "/media.getUploadUrl": {
-      post: {
-        tags: ["Media"],
-        summary: "Get presigned upload URL",
-        description: "Generates a presigned S3 PUT URL for uploading a media file. Validates file type and size (max 50MB).",
-        operationId: "media.getUploadUrl",
-        security: [{ session: [], organization: [] }],
-        requestBody: {
-          content: {
-            "application/json": {
-              schema: {
-                type: "object",
-                required: ["fileName", "fileType", "fileSize"],
-                properties: {
-                  fileName: { type: "string" },
-                  fileType: { type: "string" },
-                  fileSize: { type: "integer", maximum: 52428800 },
-                },
-              },
-            },
-          },
-        },
-        responses: { "200": { description: "Upload URL, public URL, and media ID" } },
       },
     },
     "/media.confirmUpload": {

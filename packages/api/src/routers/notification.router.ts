@@ -79,31 +79,14 @@ export const notificationRouter = createRouter({
     return { success: true };
   }),
 
-  create: adminProtectedProcedure
-    .input(
-      z.object({
-        userId: z.string(),
-        organizationId: z.string(),
-        type: z.string(),
-        title: z.string(),
-        body: z.string(),
-        link: z.string().optional(),
-        metadata: z.record(z.unknown()).optional(),
-      })
-    )
-    .mutation(async ({ ctx, input }) => {
-      const notification = await ctx.prisma.notification.create({
-        data: {
-          userId: input.userId,
-          organizationId: input.organizationId,
-          type: input.type,
-          title: input.title,
-          body: input.body,
-          link: input.link,
-          metadata: input.metadata ? (input.metadata as Record<string, string>) : undefined,
-        },
-      });
-
-      return notification;
-    }),
+  // 🔒 REMOVED (security audit 2026-09-28). This wrote a notification for any
+  // userId + organizationId pair with NO check that the target user is a member
+  // of that org, and `link` was never validated — any app-ADMIN (35 users are
+  // grandfathered to ADMIN, or every user under RBAC_DISABLED) could plant a
+  // notification in a stranger's feed in any workspace, with a link that ran
+  // whatever `window.location.href`/`router.push` would do with it. Nothing in
+  // the UI ever called it: every real producer (approval.router, post-publish,
+  // caption-fanout, publish-recovery) writes through Prisma directly. Do not
+  // re-add a client-facing create without an org-membership check on userId
+  // AND link validation via isSafeInAppLink's same rule.
 });

@@ -52,6 +52,15 @@ function buildCaller() {
   }));
   const notificationCreate = vi.fn(async () => ({ id: "notif-1" }));
 
+  // Security audit 2026-09-28: submit must verify every reviewerId is an
+  // actual member of the org before creating steps/notifications for them.
+  // Default roster: "u1" and "u2" are real org members. A test can override
+  // this mock's resolved value to prove a foreign id is rejected.
+  const organizationMemberFindMany = vi.fn(async (args: any) => {
+    const requested: string[] = args?.where?.userId?.in ?? [];
+    return requested.filter((id) => ["u1", "u2"].includes(id)).map((userId) => ({ userId }));
+  });
+
   const prisma = {
     // orgProcedure membership gate
     organizationMember: {
@@ -60,6 +69,7 @@ function buildCaller() {
         organizationId: ORG_ID,
         role: "OWNER",
       })),
+      findMany: organizationMemberFindMany,
     },
     // submit: org-owned post exists
     post: {
@@ -92,7 +102,7 @@ function buildCaller() {
     organizationId: ORG_ID,
   });
 
-  return { caller, approvalRequestCreate, notificationCreate };
+  return { caller, approvalRequestCreate, notificationCreate, organizationMemberFindMany };
 }
 
 describe("approval.submit resolver behaviour (APPR-1)", () => {
@@ -115,5 +125,30 @@ describe("approval.submit resolver behaviour (APPR-1)", () => {
     expect(notifArg.data.type).toBe("approval.requested");
 
     expect(result.id).toBe("req-1");
+  });
+
+  it("refuses a reviewerId that is not a member of this org (security audit 2026-09-28)", async () => {
+    // The submitter names a real userId who belongs to a DIFFERENT org — with
+    // no membership check, submit would create a notification and a review
+    // step for a stranger to this workspace, and the request could never be
+    // approved (that user can never pass orgProcedure's own gate for it),
+    // wedging the post in PENDING with no way to re-submit.
+    const { caller, approvalRequestCreate, notificationCreate, organizationMemberFindMany } = buildCaller();
+    organizationMemberFindMany.mockResolvedValueOnce([{ userId: "u1" }]); // "u-stranger" is NOT returned
+
+    await expect(caller.submit({ postId: "p1", reviewerIds: ["u1", "u-stranger"] })).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+    });
+    expect(approvalRequestCreate).not.toHaveBeenCalled();
+    expect(notificationCreate).not.toHaveBeenCalled();
+  });
+
+  it("verifies membership for every reviewer, deduped, scoped to this org", async () => {
+    const { caller, organizationMemberFindMany } = buildCaller();
+    await caller.submit({ postId: "p1", reviewerIds: ["u1", "u2", "u1"] });
+
+    const args = organizationMemberFindMany.mock.calls[0]![0];
+    expect(args.where.organizationId).toBe(ORG_ID);
+    expect(new Set(args.where.userId.in)).toEqual(new Set(["u1", "u2"]));
   });
 });

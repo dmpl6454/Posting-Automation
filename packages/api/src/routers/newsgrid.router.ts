@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { createRouter, adminOrgProcedure } from "../trpc";
+import { PUBLIC_CHANNEL_SELECT } from "../lib/public-channel";
+import { toNewsgridProfile } from "../lib/newsgrid-profile";
 import { TRPCError } from "@trpc/server";
 import { postPublishQueue } from "@postautomation/queue";
 import { requirePlan, enforcePlanLimit } from "../middleware/plan-limit.middleware";
@@ -457,7 +459,7 @@ Requirements:
               },
             },
           },
-          include: { targets: { include: { channel: true } } },
+          include: { targets: { include: { channel: { select: PUBLIC_CHANNEL_SELECT } } } },
         });
 
         // Attach the preview image (from news grid) so the SAME image gets published
@@ -673,6 +675,14 @@ Requirements:
         select: { url: true, channelId: true },
       });
 
+      // 🔒 Security audit 2026-09-28: the delete below ran on the BARE
+      // client-supplied id with no organizationId filter, so an org-scoped
+      // `findFirst` returning null (a foreign media row) did not stop it —
+      // any app-ADMIN could delete another workspace's Media row by id.
+      if (!media) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Logo not found." });
+      }
+
       if (media?.channelId) {
         // The media row is directly associated with a channel — clear the logo_path
         const channel = await ctx.prisma.channel.findFirst({
@@ -716,6 +726,7 @@ Requirements:
       orderBy: { name: "asc" },
       select:  { id: true, name: true, username: true, platform: true, avatar: true, metadata: true },
     });
-    return channels;
+    // Raw metadata carries platform credentials (e.g. a Discord webhook URL).
+    return channels.map((ch) => ({ ...ch, metadata: toNewsgridProfile(ch.metadata) }));
   }),
 });

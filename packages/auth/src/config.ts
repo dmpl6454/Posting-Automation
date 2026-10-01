@@ -5,12 +5,19 @@ import type { Adapter } from "next-auth/adapters";
 import GoogleProvider from "next-auth/providers/google";
 import CredentialsProvider from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
-import { ensurePersonalOrg } from "@postautomation/db";
+import { ensurePersonalOrg, verifyAndConsumePhoneOtp, PHONE_OTP_PURPOSE } from "@postautomation/db";
 
 // Wrap PrismaAdapter to skip createUser/createSession for credentials provider
 // This is required because NextAuth v5 beta + PrismaAdapter tries to create
 // a database session even when strategy is "jwt", causing CredentialsSignin errors.
 const prismaAdapter = PrismaAdapter(prisma) as Adapter;
+
+// Security audit 2026-09-28: a fixed bcrypt-12 hash of an arbitrary string,
+// compared against on every "no such user" login attempt so a real account
+// lookup miss takes the same wall-clock time as a genuine wrong-password
+// compare — see the authorize() branch below. Never a real password; there
+// is no matching account, and nothing needs to ever match this hash.
+const DUMMY_PASSWORD_HASH = "$2a$12$//3lFEIjSLZ0IJAcDLbY3OYdULOnaiJRW0iPSZQah13aFg86ncMwK";
 
 export const authConfig: NextAuthConfig = {
   adapter: prismaAdapter,
@@ -37,25 +44,6 @@ export const authConfig: NextAuthConfig = {
           const otp = credentials.otp as string;
           if (!phone || !otp) return null;
 
-          const otpRecord = await prisma.phoneOtp.findFirst({
-            where: {
-              phone,
-              used: false,
-              expiresAt: { gt: new Date() },
-            },
-            orderBy: { createdAt: "desc" },
-          });
-
-          if (!otpRecord) return null;
-
-          const isValid = await bcrypt.compare(otp, otpRecord.otp);
-          if (!isValid) return null;
-
-          await prisma.phoneOtp.update({
-            where: { id: otpRecord.id },
-            data: { used: true },
-          });
-
           const user = await prisma.user.findUnique({
             where: { phone },
             select: {
@@ -66,10 +54,27 @@ export const authConfig: NextAuthConfig = {
               isSuperAdmin: true,
               isBanned: true,
               deletedAt: true,
+              phoneVerified: true,
             },
           });
 
           if (!user || user.isBanned || user.deletedAt) return null;
+          // Security audit 2026-09-28: defense in depth. `phone` and
+          // `phoneVerified` are always written together by verifyPhone, so
+          // this should never actually diverge — but authenticating on the
+          // `phone` column match alone, with no check that it was ever
+          // verified, has no reason to hold if that invariant is ever broken
+          // elsewhere. Mirrors the check sendPhoneOtp already runs.
+          if (!user.phoneVerified) return null;
+
+          // 🔒 Attempt-limited (security audit 2026-09-28) — see verify-phone-otp.ts.
+          // Only a LOGIN code issued (by sendPhoneOtp) to this phone's owner —
+          // never a Settings code, nor one minted for a previous owner.
+          const verified = await verifyAndConsumePhoneOtp(prisma, phone, otp, {
+            userId: user.id,
+            purpose: PHONE_OTP_PURPOSE.LOGIN,
+          });
+          if (!verified.ok) return null;
 
           return {
             id: user.id,
@@ -113,7 +118,20 @@ export const authConfig: NextAuthConfig = {
           return null;
         }
 
-        if (!user?.password) return null;
+        // Security audit 2026-09-28: this branch (no such user at all — the
+        // OAuth-only/passwordless cases already returned above) used to
+        // return null IMMEDIATELY, while a real account with a WRONG
+        // password ran a full bcrypt-12 compare first. Both produce the
+        // identical CredentialsSignin error, so the code-level response is
+        // safe — but the wall-clock time difference (a bcrypt compare is
+        // tens–low hundreds of ms; a bare Prisma miss is single-digit ms) is
+        // a genuine account-existence timing oracle. A dummy compare against
+        // a fixed hash equalizes it: every login attempt now runs exactly
+        // one bcrypt comparison, real or not.
+        if (!user?.password) {
+          await bcrypt.compare(credentials.password as string, DUMMY_PASSWORD_HASH);
+          return null;
+        }
 
         const isValid = await bcrypt.compare(
           credentials.password as string,
@@ -141,6 +159,25 @@ export const authConfig: NextAuthConfig = {
     maxAge: 30 * 24 * 60 * 60, // 30 days
   },
   callbacks: {
+    // Refuse banned/soft-deleted accounts up front so Google sign-in lands on
+    // /auth/error?error=AccessDenied instead of jwt()'s null silently bouncing
+    // them to /login. `user` is the adapter row (real id) or, on a first
+    // Google link to an existing account, the provider profile, whose id is a
+    // fresh random UUID — hence the email fallback when the id finds nothing.
+    // No row at all is a brand-new signup and is allowed.
+    async signIn({ user }) {
+      const select = { isBanned: true, deletedAt: true } as const;
+      let row = user?.id
+        ? await prisma.user.findUnique({ where: { id: user.id }, select })
+        : null;
+      if (!row && user?.email) {
+        row = await prisma.user.findFirst({
+          where: { email: { equals: user.email, mode: "insensitive" } },
+          select,
+        });
+      }
+      return !(row && (row.isBanned || row.deletedAt));
+    },
     async jwt({ token, user }) {
       if (user) {
         token.id = user.id;
@@ -154,9 +191,26 @@ export const authConfig: NextAuthConfig = {
       if (token.id) {
         const dbUser = await prisma.user.findUnique({
           where: { id: token.id as string },
-          select: { isBanned: true, isSuperAdmin: true, passwordChangedAt: true, appRole: true },
+          select: { isBanned: true, isSuperAdmin: true, passwordChangedAt: true, appRole: true, deletedAt: true },
         });
         if (dbUser) {
+          // Security audit 2026-09-28: isBanned/deletedAt used to only update
+          // the token's VALUE — nothing in the auth layer itself acted on it,
+          // so enforcement was entirely delegated to whatever read the field
+          // downstream (tRPC's protectedProcedure did; every non-tRPC route
+          // under apps/web/app/api/** that calls auth() directly did not, and
+          // neither did Google sign-in, which has no signIn callback at all).
+          // deletedAt was also absent from this select, so an admin-deleted
+          // user's already-issued session was never revoked anywhere by any
+          // path. Returning null here — this callback runs on every request
+          // for BOTH providers, including the very first at sign-in — kills
+          // the session for every consumer of auth() in one place, the same
+          // way the passwordChangedAt check below already forces a live
+          // re-login for a password reset.
+          if (dbUser.isBanned || dbUser.deletedAt) {
+            return null;
+          }
+
           token.isSuperAdmin = dbUser.isSuperAdmin;
           token.isBanned = dbUser.isBanned;
           // Fresh per-request: role changes made in /admin take effect on the

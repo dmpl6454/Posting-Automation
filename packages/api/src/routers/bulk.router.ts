@@ -9,10 +9,27 @@
 // strong as the membership check that produced that id.
 import { z } from "zod";
 import { createRouter, orgProcedure } from "../trpc";
+import { PUBLIC_CHANNEL_SELECT } from "../lib/public-channel";
 import { prisma } from "@postautomation/db";
 import { TRPCError } from "@trpc/server";
 import Papa from "papaparse";
 import { isStoryModeMetadata } from "../lib/instagram-story";
+// By FILE, not the package root: the root also builds every BullMQ queue
+// (Redis connections) at module load, which this router has never needed.
+import { pendingPublishGates } from "@postautomation/queue/src/publish-gates";
+import { checkUsageLimit } from "../middleware/plan-limit.middleware";
+import { gatesBlockingManualPublish } from "../lib/publish-gate-scope";
+
+/**
+ * Security audit 2026-09-28: csvImport had no cap on row count and never
+ * checked the postsPerMonth plan quota — every other post-creation path
+ * (post.create, chat's schedule_post/bulk_schedule) calls enforcePlanLimit
+ * first. A single pasted CSV could create an unbounded number of Post +
+ * PostTarget rows in one synchronous request: a complete quota bypass, and
+ * independent of plan, a resource-exhaustion vector (the loop below awaits
+ * one prisma.post.create per row, sequentially, inside a single request).
+ */
+export const MAX_CSV_IMPORT_ROWS = 1000;
 
 export const bulkRouter = createRouter({
   /**
@@ -52,6 +69,7 @@ export const bulkRouter = createRouter({
 
       let scheduled = 0;
       let skippedStories = 0;
+      let skippedPending = 0;
 
       for (const item of input.items) {
         const post = await prisma.post.findFirst({
@@ -59,6 +77,21 @@ export const bulkRouter = createRouter({
           include: { _count: { select: { mediaAttachments: true } } },
         });
         if (!post) continue;
+
+        // 🔒 Security audit 2026-09-28: the Bulk tab lists exactly the DRAFT
+        // posts a caption fan-out is still writing, or HELD because no unique
+        // caption could be generated at all (packages/queue/publish-gates.ts).
+        // Arming one here would flip its targets to SCHEDULED while their
+        // captions are still NULL — the shared caption reaching every channel,
+        // which is precisely what the fan-out/hold machinery exists to
+        // prevent. Skipped and COUNTED, never silent — same discipline as the
+        // story check below. Caption fan-out gates only count on a DRAFT post
+        // (a stale flag on a FAILED/CANCELLED one must not block it forever).
+        const openGates = pendingPublishGates(post.metadata as Record<string, unknown> | null);
+        if (gatesBlockingManualPublish(post.status, openGates).length > 0) {
+          skippedPending++;
+          continue;
+        }
 
         // An Instagram Story needs exactly ONE image or video. Story drafts may be
         // saved media-less (the user attaches later), and this tab lists every
@@ -96,7 +129,7 @@ export const bulkRouter = createRouter({
         scheduled++;
       }
 
-      return { scheduled, skippedStories };
+      return { scheduled, skippedStories, skippedPending };
     }),
 
   /**
@@ -140,14 +173,52 @@ export const bulkRouter = createRouter({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Organization ID required" });
       }
 
+      // 🔒 Security audit 2026-09-28: this used to relabel Post.status alone.
+      // post.create/update enqueue per-target DELAYED BullMQ jobs at save time
+      // (packages/queue/src/schedule-publish.ts); the worker's pre-claim guard
+      // (isStaleScheduleJob, apps/worker/src/lib/publish-recovery.ts) skips one
+      // of those jobs ONLY when the post's CURRENT scheduledAt no longer
+      // matches what it was enqueued with. Never touching scheduledAt meant a
+      // post the operator had just cancelled or drafted still published on
+      // schedule — the status change was cosmetic against an already-queued job.
+      //
+      // Never touch a post that is already PUBLISHED, or mid-flight PUBLISHING
+      // — rewriting either backward would corrupt state while its targets are
+      // live or in flight, the same rule publishNow/bulkSchedule already keep.
+      const eligible = await prisma.post.findMany({
+        where: { id: { in: input.postIds }, organizationId, status: { notIn: ["PUBLISHED", "PUBLISHING"] } },
+        select: { id: true },
+      });
+      const eligibleIds = eligible.map((p) => p.id);
+      if (eligibleIds.length === 0) {
+        return { updated: 0 };
+      }
+
       const result = await prisma.post.updateMany({
-        where: {
-          id: { in: input.postIds },
-          organizationId,
-        },
+        where: { id: { in: eligibleIds }, organizationId },
         data: {
           status: input.status,
+          // Kills any already-queued delayed publish job via isStaleScheduleJob
+          // — the SAME mechanism post.update's own "Cancel Schedule" path
+          // (scheduledAt: null with the status left alone) already relies on.
+          scheduledAt: null,
         },
+      });
+
+      // Flip the posts' own targets too — mirroring bulkSchedule's discipline
+      // in the opposite direction: SCHEDULED/DRAFT/FAILED are the only statuses
+      // a stray delayed job could still act on, PUBLISHED/PUBLISHING must never
+      // be touched, and a target whose outcome is UNKNOWN (ambiguousAt) is left
+      // alone entirely — that is the operator's separate "did it actually
+      // publish?" decision (post.clearPublishAmbiguity) and must not be
+      // silently overridden by a bulk status change.
+      await prisma.postTarget.updateMany({
+        where: {
+          postId: { in: eligibleIds },
+          status: { in: ["SCHEDULED", "DRAFT", "FAILED"] },
+          ambiguousAt: null,
+        },
+        data: { status: input.status },
       });
 
       return { updated: result.count };
@@ -193,6 +264,25 @@ export const bulkRouter = createRouter({
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "CSV must have a header row and at least one data row",
+        });
+      }
+
+      if (rows.length > MAX_CSV_IMPORT_ROWS) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `CSV has ${rows.length} rows — the limit is ${MAX_CSV_IMPORT_ROWS} per import. Split it into smaller files.`,
+        });
+      }
+
+      // Security audit 2026-09-28: check the monthly posts quota BEFORE
+      // creating anything, and against the WHOLE batch (current + rows.length)
+      // — checking one row at a time would let a single oversized CSV blow
+      // straight through the limit before the first over-quota row is hit.
+      const usage = await checkUsageLimit(organizationId, "postsPerMonth", ctx.isSuperAdmin);
+      if (usage.limit !== -1 && usage.current + rows.length > usage.limit) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: `Plan limit reached: ${usage.planName} plan allows ${usage.limit} posts this month (currently ${usage.current}, this import would add ${rows.length}). Upgrade your plan or import fewer rows.`,
         });
       }
 
@@ -306,7 +396,7 @@ export const bulkRouter = createRouter({
       const posts = await prisma.post.findMany({
         where,
         include: {
-          targets: { include: { channel: true } },
+          targets: { include: { channel: { select: PUBLIC_CHANNEL_SELECT } } },
         },
         orderBy: { createdAt: "desc" },
       });

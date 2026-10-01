@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
 import { handleStripeWebhook } from "@postautomation/billing";
+import { isStripeWebhookConfigured } from "~/lib/stripe-webhook-config";
 
 export const dynamic = "force-dynamic";
 
@@ -12,6 +13,17 @@ function getStripe() {
 }
 
 export async function POST(req: Request) {
+  // 🔒 Fail closed (security audit 2026-09-28). Node's HMAC accepts an empty
+  // key, so an unset STRIPE_WEBHOOK_SECRET — which docker-compose.prod.yml's
+  // `${VAR}` substitution turns into a literal "" when the key is absent from
+  // .env.prod, and Stripe credentials are one of the sets documented as
+  // intentionally left blank in this deployment — would otherwise let anyone
+  // who can compute HMAC-SHA256 with an empty key forge an accepted event.
+  if (!isStripeWebhookConfigured(process.env.STRIPE_SECRET_KEY, process.env.STRIPE_WEBHOOK_SECRET)) {
+    console.error("Stripe webhook received but STRIPE_SECRET_KEY/STRIPE_WEBHOOK_SECRET is not configured");
+    return NextResponse.json({ error: "Webhook not configured" }, { status: 500 });
+  }
+
   const body = await req.text();
   const signature = req.headers.get("stripe-signature") as string;
 

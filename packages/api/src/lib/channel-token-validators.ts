@@ -16,6 +16,8 @@
  */
 
 import { TRPCError } from "@trpc/server";
+import { isPublicPageUrl } from "@postautomation/ai";
+import { checkHostIsPublic } from "./public-host";
 
 export type TokenPlatform =
   | "TELEGRAM"
@@ -295,6 +297,47 @@ function badRequest(message: string): never {
   throw new TRPCError({ code: "BAD_REQUEST", message });
 }
 
+// ── SSRF guard for servers the USER names (Mastodon instance, WordPress site) ──
+
+const USER_SERVER_FETCH_TIMEOUT_MS = 10_000;
+
+/**
+ * Cheap hostname-string check first, then every address the name resolves to:
+ * the string check alone passes Docker service names (http://minio:9000) and
+ * any domain pointed at a private IP.
+ */
+async function assertPublicServer(url: string, notPublicMessage: string): Promise<void> {
+  if (!isPublicPageUrl(url)) badRequest(notPublicMessage);
+  const host = new URL(url).hostname;
+  const verdict = await checkHostIsPublic(host);
+  if (verdict === "unresolved") badRequest(`Couldn't find a server at ${host}. Check the URL for typos.`);
+  if (verdict === "private") badRequest(notPublicMessage);
+}
+
+/** Never follow a redirect: a public host could bounce the request to an internal one. */
+function userServerFetchInit(init: RequestInit = {}): RequestInit {
+  return { ...init, redirect: "manual", signal: AbortSignal.timeout(USER_SERVER_FETCH_TIMEOUT_MS) };
+}
+
+function isRedirectResponse(res: Response): boolean {
+  return res.type === "opaqueredirect" || res.status === 0 || (res.status >= 300 && res.status < 400);
+}
+
+async function fetchUserServer(
+  url: string,
+  init: RequestInit,
+  messages: { unreachable: string; redirected: string },
+): Promise<Response> {
+  let res: Response;
+  try {
+    res = await fetch(url, userServerFetchInit(init));
+  } catch {
+    badRequest(messages.unreachable);
+  }
+  if (isRedirectResponse(res)) badRequest(messages.redirected);
+  return res;
+}
+
 async function validateTelegram(creds: Record<string, string>): Promise<ValidatedChannel> {
   const botToken = creds.botToken?.trim();
   const chatIdRaw = creds.chatId?.trim();
@@ -420,10 +463,18 @@ async function validateMastodon(creds: Record<string, string>): Promise<Validate
   if (!/^https:\/\/[\w.-]+\.[a-z]{2,}$/i.test(instance)) {
     badRequest("Instance URL must look like https://mastodon.social — no path or trailing slash.");
   }
+  // The format check above matches any domain-shaped name, including an
+  // internal one or a domain pointed at a private IP (security audit 2026-09-28).
+  await assertPublicServer(instance, "That instance URL is not reachable — it must be a public Mastodon instance.");
 
-  const res = await fetch(`${instance}/api/v1/accounts/verify_credentials`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  const res = await fetchUserServer(
+    `${instance}/api/v1/accounts/verify_credentials`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+    {
+      unreachable: "Couldn't reach that Mastodon instance. Check the URL and that the instance is online.",
+      redirected: "That instance URL redirects somewhere else. Enter the instance's own address, e.g. https://mastodon.social.",
+    },
+  );
   const data: any = await res.json().catch(() => null);
   if (!res.ok || !data?.id) {
     badRequest(
@@ -454,14 +505,23 @@ async function validateWordPress(creds: Record<string, string>): Promise<Validat
   if (!/^https?:\/\/[\w.-]+/.test(siteUrl)) {
     badRequest("Site URL must include http:// or https://");
   }
+  // The format check above matches localhost, private IPs, metadata addresses
+  // and internal service names (security audit 2026-09-28).
+  await assertPublicServer(siteUrl, "That site URL is not reachable — it must be a public WordPress site.");
 
   // WordPress UI shows the app password with spaces — strip them before use.
   const appPassword = appPasswordRaw.replace(/\s+/g, "");
   const auth = Buffer.from(`${username}:${appPassword}`).toString("base64");
 
-  const res = await fetch(`${siteUrl}/wp-json/wp/v2/users/me?context=edit`, {
-    headers: { Authorization: `Basic ${auth}` },
-  });
+  const res = await fetchUserServer(
+    `${siteUrl}/wp-json/wp/v2/users/me?context=edit`,
+    { headers: { Authorization: `Basic ${auth}` } },
+    {
+      unreachable: "Couldn't reach that WordPress site. Check the URL and that the site is online.",
+      redirected:
+        "That site URL redirects somewhere else (for example http → https, or adding www). Enter the site's final address exactly as your browser shows it.",
+    },
+  );
   if (!res.ok) {
     if (res.status === 401 || res.status === 403) {
       badRequest("WordPress rejected those credentials. Make sure you're using an Application Password (Users → Profile), not your login password.");
@@ -474,7 +534,8 @@ async function validateWordPress(creds: Record<string, string>): Promise<Validat
   // Fetch the site name (best-effort)
   let siteName = siteUrl.replace(/^https?:\/\//, "");
   try {
-    const siteRes = await fetch(`${siteUrl}/wp-json`);
+    // Best-effort: a redirect here is simply not followed (not ok → hostname).
+    const siteRes = await fetch(`${siteUrl}/wp-json`, userServerFetchInit());
     if (siteRes.ok) {
       const siteData = await siteRes.json();
       if (siteData?.name) siteName = String(siteData.name);

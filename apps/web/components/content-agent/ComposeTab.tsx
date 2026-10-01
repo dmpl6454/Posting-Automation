@@ -1,6 +1,7 @@
 "use client";
 
 import { humanizeError } from "~/lib/errors";
+import { orgHeaders } from "~/lib/org-header";
 import { withNormalizedVideoMime } from "~/lib/video-mime";
 import { withPosterHint } from "~/lib/video-poster";
 import { prepareThumbnail } from "~/lib/thumbnail-image";
@@ -679,7 +680,6 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
       toast({ title: "Error", description: humanizeError(err), variant: "destructive" });
     },
   });
-  const getUploadUrl = trpc.media.getUploadUrl.useMutation();
   const saveGeneratedImage = trpc.image.saveGenerated.useMutation();
   const generateAI = trpc.ai.generateContent.useMutation();
   const { data: aiConfig } = trpc.ai.getConfig.useQuery();
@@ -1108,7 +1108,7 @@ ${content}`;
     if (file.size <= MULTIPART_THRESHOLD) {
       const form = new FormData();
       form.append("file", file);
-      const res = await fetch("/api/upload", { method: "POST", body: form, signal });
+      const res = await fetch("/api/upload", { method: "POST", headers: orgHeaders(), body: form, signal });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error((err as any).error || "Upload failed");

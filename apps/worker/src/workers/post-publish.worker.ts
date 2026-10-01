@@ -12,7 +12,7 @@ import { publishReportFingerprint, claimPublishReport, releasePublishReport } fr
 import { planFacebookAnalyticsId, earlyVideoSyncDelayMs } from "../lib/fb-video-post-id";
 import { addLocalClaim, releaseLocalClaim, localClaimCount } from "../lib/local-claims";
 import { trackBackgroundTask } from "../lib/background-tasks";
-import { markTargetFailed, markTargetAmbiguous, buildPublishClaimWhere, routePublishError, shouldPreflightReconcile, buildPublishNotifications, mediaRequiredReason, isSeedNoise, isStaleScheduleJob, isHeavyPublish, planHeavyDefer, HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE, classifyError, isDefiniteAuthFailure, releaseClaimAfterPrePublishError, decideClaimMiss, countOtherActiveJobsForTarget, ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE, formatPublishTiming, type PublishJobState } from "../lib/publish-recovery";
+import { markTargetFailed, markTargetAmbiguous, buildPublishClaimWhere, routePublishError, shouldPreflightReconcile, buildPublishNotifications, mediaRequiredReason, isSeedNoise, decidePreClaimSkip, isHeavyPublish, planHeavyDefer, HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE, classifyError, isDefiniteAuthFailure, releaseClaimAfterPrePublishError, decideClaimMiss, countOtherActiveJobsForTarget, ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE, formatPublishTiming, type PublishJobState } from "../lib/publish-recovery";
 import { PRIORITY_RETRY, mediaOptimizeQueue, atAgeWindowsForFormat } from "@postautomation/queue";
 import { planOptimizeGate, choosePublishUrl } from "../lib/media-optimize";
 import { buildSnapshotMetadata } from "../lib/snapshot-metadata";
@@ -303,22 +303,27 @@ export function createPostPublishWorker() {
       const { postTargetId, channelId, platform } = job.data;
       console.log(`[PostPublish] Processing job ${job.id} for target ${postTargetId} (attempt ${job.attemptsMade + 1})`);
 
-      // Phase 2 exact-time guard — schedule-path jobs only (enqueuedFor set).
-      // A rescheduled/unscheduled post keeps its target ids, so this job may
-      // be an orphan of the OLD schedule; skip WITHOUT claiming when the
-      // post's current scheduledAt no longer matches the enqueue snapshot
-      // (the new schedule has its own sched:{targetId}:{epoch} jobs).
-      // Interactive publishNow/chat/newsgrid/agent jobs carry no enqueuedFor
-      // and are never guarded.
-      if (job.data.enqueuedFor != null) {
-        const schedPost = await prisma.post.findUnique({
-          where: { id: job.data.postId },
-          select: { scheduledAt: true },
-        });
-        if (isStaleScheduleJob(job.data.enqueuedFor, schedPost?.scheduledAt ?? null)) {
-          console.log(`[PostPublish] Skipping stale schedule job ${job.id} for ${postTargetId} (post rescheduled/unscheduled/deleted)`);
-          return;
-        }
+      // Pre-claim guards, from ONE read of the parent post (decidePreClaimSkip):
+      //  - a post moved to DRAFT/CANCELLED is skipped for EVERY job — the
+      //    claim admits DRAFT targets, and interactive/re-queued jobs carry no
+      //    enqueuedFor, so nothing else stops them;
+      //  - Phase 2 exact-time guard (enqueuedFor set): a rescheduled/
+      //    unscheduled post keeps its target ids, so this job may be an orphan
+      //    of the OLD schedule (the new schedule has its own
+      //    sched:{targetId}:{epoch} jobs).
+      // Both skip WITHOUT claiming.
+      const preClaimPost = await prisma.post.findUnique({
+        where: { id: job.data.postId },
+        select: { status: true, scheduledAt: true },
+      });
+      const preClaimSkip = decidePreClaimSkip(preClaimPost, job.data.enqueuedFor);
+      if (preClaimSkip === "post-withdrawn") {
+        console.log(`[PostPublish] Skipping job ${job.id} for ${postTargetId} (post moved to ${preClaimPost?.status})`);
+        return;
+      }
+      if (preClaimSkip === "stale-schedule") {
+        console.log(`[PostPublish] Skipping stale schedule job ${job.id} for ${postTargetId} (post rescheduled/unscheduled/deleted)`);
+        return;
       }
 
       // 0. Atomic idempotency claim — only transitions SCHEDULED/FAILED/DRAFT → PUBLISHING.

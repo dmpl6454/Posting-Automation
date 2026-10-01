@@ -50,6 +50,37 @@ export function emailVerificationEmail(verifyUrl: string): { subject: string; ht
   };
 }
 
+/**
+ * Security notification (2026-09-28 security audit — closes the gap where a
+ * phone login method could be attached to an account with zero signal to the
+ * account owner). Sent to the account's REGISTERED email — not whichever
+ * session is currently acting as the account — so it reaches the real owner
+ * even if the phone was added by someone else via a hijacked session. Only
+ * the last 4 digits are shown, matching the common "ending in ####" pattern
+ * for this kind of alert.
+ */
+export function phoneChangedEmail(
+  phone: string,
+  { hasPassword = true }: { hasPassword?: boolean } = {}
+): { subject: string; html: string; text: string } {
+  const last4 = phone.replace(/\D/g, "").slice(-4);
+  // A password reset removes the phone too. Removing it from Settings needs a
+  // code sent to that (possibly attacker's) phone, and requestPasswordReset
+  // does nothing for an account with no password — hence the two variants.
+  const remedy = hasPassword
+    ? "reset your password now with Forgot password on the sign-in page — that also removes this phone number."
+    : "set a password in Settings, then use Forgot password on the sign-in page — that also removes this phone number.";
+  return {
+    subject: `A phone number was added to your ${APP_NAME} account`,
+    html: baseTemplate(`
+      <h2 style="margin:0 0 16px;font-size:18px;color:#18181b;">Phone Number Added</h2>
+      <p style="color:#3f3f46;line-height:1.6;">A phone number ending in <strong>${last4}</strong> was just added as a sign-in method on your account.</p>
+      <p style="color:#71717a;font-size:13px;line-height:1.5;">If this was you, no action is needed. If you don't recognize this change, ${remedy}</p>
+    `),
+    text: `A phone number ending in ${last4} was just added as a sign-in method on your ${APP_NAME} account.\n\nIf this wasn't you, ${remedy}`,
+  };
+}
+
 export function teamInviteEmail(inviterName: string, orgName: string, loginUrl: string): { subject: string; html: string; text: string } {
   return {
     subject: `You've been invited to ${orgName} on ${APP_NAME}`,

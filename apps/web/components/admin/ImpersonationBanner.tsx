@@ -4,30 +4,27 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "~/components/ui/button";
 import { trpc } from "~/lib/trpc/client";
+import {
+  clearImpersonationClientState,
+  hasImpersonationCookie,
+} from "~/lib/impersonation-client";
 
 export function ImpersonationBanner() {
   const [isImpersonating, setIsImpersonating] = useState(false);
   const router = useRouter();
   const stopImpersonation = trpc.admin.users.stopImpersonation.useMutation({
-    onSuccess: () => {
-      document.cookie =
-        "admin-impersonate=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
-      // While impersonating, OrgInit stored the impersonated user's org in
-      // localStorage. If we leave it, the admin's own subsequent requests keep
-      // sending that stale org as x-organization-id — which then mismatches the
-      // admin's real channels and breaks publishing ("channels do not belong to
-      // this organization"). Clear it so OrgInit re-seeds the admin's own org.
-      localStorage.removeItem("currentOrgId");
+    // onSettled, not onSuccess: a failed call (network, server refusal) must
+    // not strand the banner and a cookie the server no longer honours. Also
+    // drops the impersonated user's currentOrgId (see the helper).
+    onSettled: () => {
+      clearImpersonationClientState();
       setIsImpersonating(false);
       router.push("/admin/users");
     },
   });
 
   useEffect(() => {
-    const hasImpersonateCookie = document.cookie
-      .split(";")
-      .some((c) => c.trim().startsWith("admin-impersonate="));
-    setIsImpersonating(hasImpersonateCookie);
+    setIsImpersonating(hasImpersonationCookie(document.cookie));
   }, []);
 
   if (!isImpersonating) return null;

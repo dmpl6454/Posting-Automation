@@ -5,6 +5,7 @@ import { signIn } from "next-auth/react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { trpc } from "~/lib/trpc/client";
+import { safeCallbackPath } from "~/lib/safe-redirect";
 import {
   AuthShell,
   AuthHeader,
@@ -43,7 +44,10 @@ function tabStyle(active: boolean): CSSProperties {
 
 export default function LoginPage() {
   const searchParams = useSearchParams();
-  const callbackUrl = searchParams.get("callbackUrl") || "/dashboard";
+  // 🔒 Same-origin paths only (audit 2026-09-28). This value is assigned to
+  // window.location.href below, so an unchecked "?callbackUrl=javascript:..."
+  // ran script on our origin right after a genuine login.
+  const callbackUrl = safeCallbackPath(searchParams.get("callbackUrl"));
   const invite = searchParams.get("invite");
   // If an invite token is present it takes priority: after auth send the user
   // back to /invite/<token> so acceptInvite fires. Otherwise use callbackUrl.

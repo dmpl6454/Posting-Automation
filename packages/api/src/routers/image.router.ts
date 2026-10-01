@@ -10,6 +10,7 @@ import {
 import { createRateLimitMiddleware } from "../middleware/rate-limit.middleware";
 import { aiRateLimiter } from "../middleware/rate-limit";
 import { uploadBase64ToS3 } from "../lib/s3";
+import { sniffImageMime, IMAGE_EXTENSIONS } from "../lib/media-content-type";
 import { mediaProcessQueue } from "@postautomation/queue";
 import { enforcePlanLimit } from "../middleware/plan-limit.middleware";
 import { toFriendlyAIError } from "../lib/ai-errors";
@@ -174,14 +175,19 @@ export const imageRouter = createRouter({
     .mutation(async ({ ctx, input }) => {
       const userId = (ctx.session.user as any).id;
 
-      // Derive file extension from mime type
-      const extMap: Record<string, string> = {
-        "image/png": "png",
-        "image/jpeg": "jpg",
-        "image/webp": "webp",
-        "image/gif": "gif",
-      };
-      const ext = extMap[input.mimeType] || "png";
+      // 🔒 The BYTES decide the type, not the client's `mimeType` (audit
+      // 2026-09-28). It used to be copied straight into the stored Content-Type,
+      // and /media/ is served from our own origin — so "text/html" rendered as a
+      // page there. Detecting from the bytes also absorbs provider variants such
+      // as "image/jpg" that an allowlist on the string would wrongly reject.
+      const detected = sniffImageMime(Buffer.from(input.imageBase64, "base64"));
+      if (!detected) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "That doesn't look like a PNG, JPEG, WebP or GIF image, so it can't be saved.",
+        });
+      }
+      const ext = IMAGE_EXTENSIONS[detected];
 
       // Generate a unique S3 key
       const timestamp = Date.now();
@@ -194,7 +200,7 @@ export const imageRouter = createRouter({
       // Upload the base64 image to S3
       const publicUrl = await uploadBase64ToS3({
         base64: input.imageBase64,
-        mimeType: input.mimeType,
+        mimeType: detected,
         key: s3Key,
       });
 
@@ -204,7 +210,7 @@ export const imageRouter = createRouter({
           organizationId: ctx.organizationId,
           uploadedById: userId,
           fileName: input.fileName,
-          fileType: input.mimeType,
+          fileType: detected,
           fileSize,
           url: publicUrl,
         },

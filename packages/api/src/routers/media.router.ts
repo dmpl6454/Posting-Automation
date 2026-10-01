@@ -1,30 +1,12 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { createRouter, orgProcedure } from "../trpc";
-import { getS3Client, BUCKET, getPublicUrl } from "../lib/s3";
+import { getS3Client, BUCKET } from "../lib/s3";
 
-const MAX_IMAGE_SIZE = 50 * 1024 * 1024;         // 50MB for images
-// Phase 4: creators post 3–4GB Shorts/Reels source files. These go direct to
-// S3 via presigned multipart (this router) — they NEVER pass through the web
-// container or nginx (the proxied /api/upload route caps videos at 64MB
-// app-side / 100M at nginx; useSmartUpload routes >8MB files here), and
-// the publish worker streams them to platforms chunk-by-chunk (ranged-media),
-// so raising this ceiling doesn't add any per-request memory anywhere.
-const MAX_VIDEO_SIZE = 4 * 1024 * 1024 * 1024;   // 4GB for videos
-const MAX_FILE_SIZE = MAX_VIDEO_SIZE;
-const ALLOWED_TYPES = [
-  "image/jpeg",
-  "image/png",
-  "image/gif",
-  "image/webp",
-  "image/avif", // modern phone exports / CDN downloads — browsers + Chrome render it
-  "video/mp4",
-  "video/quicktime",
-  "video/webm",
-  "video/x-m4v", // Apple alias for the MP4 container (.m4v) — keep in sync with upload.router.ts
-];
+// Upload size and type limits live in upload.router.ts (the presigned multipart
+// path every upload uses). The copies that were here served only the removed
+// media.getUploadUrl route (security audit 2026-09-28).
 
 export const mediaRouter = createRouter({
   list: orgProcedure
@@ -104,70 +86,13 @@ export const mediaRouter = createRouter({
       return { ownedIds: rows.map((r) => r.id) };
     }),
 
-  getUploadUrl: orgProcedure
-    .input(
-      z.object({
-        fileName: z.string().min(1).max(255),
-        fileType: z.string(),
-        fileSize: z.number().min(1).max(MAX_FILE_SIZE),
-      })
-    )
-    .mutation(async ({ ctx, input }) => {
-      // Validate file type
-      if (!ALLOWED_TYPES.includes(input.fileType)) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `File type '${input.fileType}' is not allowed. Supported: ${ALLOWED_TYPES.join(", ")}`,
-        });
-      }
-
-      // Per-type size validation
-      const isVideo = input.fileType.startsWith("video/");
-      const sizeLimit = isVideo ? MAX_VIDEO_SIZE : MAX_IMAGE_SIZE;
-      if (input.fileSize > sizeLimit) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `File too large. ${isVideo ? "Videos" : "Images"} must be under ${isVideo ? "4GB" : "50MB"}.`,
-        });
-      }
-
-      // Generate unique S3 key
-      const ext = input.fileName.split(".").pop() || "bin";
-      const key = `${ctx.organizationId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-
-      // Generate presigned PUT URL
-      const s3 = getS3Client();
-      const command = new PutObjectCommand({
-        Bucket: BUCKET,
-        Key: key,
-        ContentType: input.fileType,
-        ContentLength: input.fileSize,
-      });
-
-      const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 3600 });
-
-      // Construct the public URL for accessing the file after upload
-      const publicUrl = getPublicUrl(key);
-
-      // Create media record in DB
-      const media = await ctx.prisma.media.create({
-        data: {
-          organizationId: ctx.organizationId,
-          uploadedById: (ctx.session.user as any).id,
-          fileName: input.fileName,
-          fileType: input.fileType,
-          fileSize: input.fileSize,
-          url: publicUrl,
-        },
-      });
-
-      return {
-        uploadUrl,
-        publicUrl,
-        mediaId: media.id,
-        key,
-      };
-    }),
+  // 🔒 media.getUploadUrl was REMOVED (security audit 2026-09-28). Its presigned
+  // PUT could not bind Content-Type (the presigner treats it as unsignable), it
+  // took the key's file extension from the client's filename, and it created the
+  // Media row before anything was uploaded — so any user could store HTML under
+  // an .html key on our own origin. Nothing in the UI called it. All uploads go
+  // through upload.initiate/signPart/complete, which fixes the type server-side
+  // and HEADs the object before registering it.
 
   confirmUpload: orgProcedure
     .input(z.object({ mediaId: z.string() }))

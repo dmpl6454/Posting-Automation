@@ -62,6 +62,7 @@ function statefulPrisma(post: {
   metadata: Record<string, unknown> | null;
   targets: MockTarget[];
   createdById?: string | null;
+  scheduledAt?: Date | null;
 }) {
   const state = {
     post: { createdById: "creator-1", ...post, targets: post.targets.map((t) => ({ ...t })) },
@@ -109,12 +110,15 @@ function statefulPrisma(post: {
   return { prisma, state };
 }
 
+// A parked post ALWAYS has scheduledAt in production: planCaptionFanout only
+// sets pendingSchedule when scheduledAt != null.
 const pendingFanoutPost = (targets: MockTarget[]) => ({
   id: "post-1",
   organizationId: "org-1",
   status: "DRAFT",
+  scheduledAt: new Date("2099-01-01T10:00:00.000Z") as Date | null,
   content: "Big launch today — our new feature is live!",
-  metadata: { captionFanout: { requested: true, pendingSchedule: true } },
+  metadata: { captionFanout: { requested: true, pendingSchedule: true } } as Record<string, unknown> | null,
   targets,
 });
 
@@ -493,16 +497,30 @@ describe("runCaptionFanout", () => {
 });
 
 describe("holdPendingFanoutPost", () => {
-  it("only holds a DRAFT that is still pending — never a post already scheduled or published", async () => {
-    for (const post of [
-      { ...pendingFanoutPost([target("t1", "BLUESKY")]), status: "SCHEDULED" },
-      { ...pendingFanoutPost([target("t1", "BLUESKY")]), metadata: { captionFanout: { requested: true, pendingSchedule: false } } },
-    ]) {
-      const { prisma } = statefulPrisma(post as any);
-      await expect(holdPendingFanoutPost({ prisma: prisma as any }, "post-1", "org-1", HELD_REASON_FAILED)).resolves.toBe(false);
-      expect(prisma.post.update).not.toHaveBeenCalled();
-    }
+  it("never holds a post whose fan-out is not pending (no write at all)", async () => {
+    const { prisma } = statefulPrisma({
+      ...pendingFanoutPost([target("t1", "BLUESKY")]),
+      metadata: { captionFanout: { requested: true, pendingSchedule: false } },
+    });
+    await expect(holdPendingFanoutPost({ prisma: prisma as any }, "post-1", "org-1", HELD_REASON_FAILED)).resolves.toBe(false);
+    expect(prisma.post.update).not.toHaveBeenCalled();
   });
+
+  // Review follow-up 2026-10-01: leaving pendingSchedule set on a post that
+  // left DRAFT made it a permanent publish gate (Retry refused forever).
+  it.each(["SCHEDULED", "FAILED", "CANCELLED", "PUBLISHED"])(
+    "a %s post is never held, but its stale pending flag is cleared",
+    async (status) => {
+      const { prisma, state } = statefulPrisma({ ...pendingFanoutPost([target("t1", "BLUESKY")]), status });
+      await expect(holdPendingFanoutPost({ prisma: prisma as any }, "post-1", "org-1", HELD_REASON_FAILED)).resolves.toBe(false);
+
+      const fanoutMeta = (state.post.metadata as any).captionFanout;
+      expect(fanoutMeta.pendingSchedule).toBe(false);
+      expect(fanoutMeta.held).toBeUndefined();
+      expect(state.post.status).toBe(status);
+      expect(state.notifications).toHaveLength(0);
+    }
+  );
 
   it("is org-scoped: a foreign organization can never hold the post", async () => {
     const { prisma } = statefulPrisma(pendingFanoutPost([target("t1", "BLUESKY")]));
@@ -512,13 +530,63 @@ describe("holdPendingFanoutPost", () => {
 });
 
 describe("flipPendingFanoutPost", () => {
-  it("no-ops for a post that is not DRAFT-pending-fanout", async () => {
+  it("no-ops (no write) for a post whose fan-out is not pending", async () => {
     const { prisma } = statefulPrisma({
       ...pendingFanoutPost([target("t1", "TWITTER")]),
-      status: "SCHEDULED",
+      metadata: { captionFanout: { requested: true, pendingSchedule: false } },
     });
     await expect(flipPendingFanoutPost({ prisma: prisma as any }, "post-1", "org-1")).resolves.toBe(false);
     expect(prisma.post.update).not.toHaveBeenCalled();
+  });
+
+  // Review follow-up 2026-10-01: a post moved out of DRAFT (bulk Cancel, a
+  // publish that already ran) kept pendingSchedule:true forever, and Retry
+  // refused it with a false "will publish automatically".
+  it.each(["SCHEDULED", "FAILED", "CANCELLED", "PUBLISHED"])(
+    "a %s post is never flipped, but its stale pending flag is cleared",
+    async (status) => {
+      const { prisma, state } = statefulPrisma({ ...pendingFanoutPost([target("t1", "TWITTER")]), status });
+      await expect(
+        flipPendingFanoutPost({ prisma: prisma as any }, "post-1", "org-1", { degraded: true })
+      ).resolves.toBe(false);
+
+      expect(state.post.status).toBe(status);
+      expect(prisma.postTarget.updateMany).not.toHaveBeenCalled();
+      expect((state.post.metadata as any).captionFanout.pendingSchedule).toBe(false);
+      // Nothing is going to publish from here, so no "will publish" notification.
+      expect(state.notifications).toHaveLength(0);
+    }
+  );
+
+  // A DRAFT whose schedule was removed while captions were being written
+  // (bulk "Move to Draft" clears scheduledAt). Flipping it would produce a
+  // SCHEDULED post with no scheduledAt, which the cron never picks up.
+  it("a DRAFT with no scheduledAt is not flipped; its pending flag is cleared", async () => {
+    const { prisma, state } = statefulPrisma({ ...pendingFanoutPost([target("t1", "TWITTER")]), scheduledAt: null });
+    await expect(
+      flipPendingFanoutPost({ prisma: prisma as any }, "post-1", "org-1", { degraded: true })
+    ).resolves.toBe(false);
+
+    expect(state.post.status).toBe("DRAFT");
+    expect(state.post.targets[0]!.status).toBe("DRAFT");
+    expect(prisma.postTarget.updateMany).not.toHaveBeenCalled();
+    expect((state.post.metadata as any).captionFanout.pendingSchedule).toBe(false);
+    expect(state.notifications).toHaveLength(0);
+  });
+
+  it("end to end: a post cancelled mid fan-out keeps its captions, is not scheduled, and loses the stale flag", async () => {
+    const { prisma, state } = statefulPrisma({ ...pendingFanoutPost([target("t1", "TWITTER")]), status: "CANCELLED" });
+    const generateText = vi.fn(async () => '[{"index":0,"caption":"Unique"}]');
+
+    const result = await runCaptionFanout(
+      { postId: "post-1", organizationId: "org-1" },
+      { prisma: prisma as any, generateText, charLimitFor }
+    );
+
+    expect(result).toMatchObject({ generated: 1, flipped: false });
+    expect(state.post.status).toBe("CANCELLED");
+    expect(state.post.targets[0]!.contentOverride).toBe("Unique");
+    expect((state.post.metadata as any).captionFanout.pendingSchedule).toBe(false);
   });
 
   it("with NO super-text metadata the flip is unchanged (byte-identical legacy path)", async () => {

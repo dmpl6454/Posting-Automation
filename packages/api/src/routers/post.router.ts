@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
-import { postPublishQueue, captionFanoutQueue, superTextQueue, enqueueScheduledPublishJobs, buildPublishNowJobId } from "@postautomation/queue";
+import { PUBLIC_CHANNEL_SELECT } from "../lib/public-channel";
+import { postPublishQueue, captionFanoutQueue, superTextQueue, enqueueScheduledPublishJobs, buildPublishNowJobId, pendingPublishGates } from "@postautomation/queue";
 import { superTextMapSchema } from "@postautomation/super-text";
 import { planSuperText, superTextJobId, type SuperTextPlan } from "../lib/super-text";
 import {
@@ -15,7 +16,9 @@ import {
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import crypto from "crypto";
-import { enforcePlanLimit } from "../middleware/plan-limit.middleware";
+import { enforcePlanLimit, checkUsageLimit } from "../middleware/plan-limit.middleware";
+import { createRateLimitMiddleware } from "../middleware/rate-limit.middleware";
+import { carouselRateLimiter } from "../middleware/rate-limit";
 import { assertMediaOwned, assertMediaForPlatforms } from "./chat.router";
 import {
   planCaptionFanout,
@@ -34,6 +37,7 @@ import {
   MISSING_CAPTION_MESSAGE,
 } from "../lib/caption-overrides";
 import { campaignLabelSchema, normalizeCampaignLabel } from "../lib/campaign-label";
+import { gatesBlockingManualPublish } from "../lib/publish-gate-scope";
 
 /**
  * PR-5: load a PostTarget with its parent post's org and require it to belong
@@ -124,7 +128,7 @@ export const postRouter = createRouter({
           archivedAt: input.archived ? { not: null } : null,
         },
         include: {
-          targets: { include: { channel: true } },
+          targets: { include: { channel: { select: PUBLIC_CHANNEL_SELECT } } },
           mediaAttachments: { include: { media: true } },
           tags: true,
         },
@@ -148,7 +152,7 @@ export const postRouter = createRouter({
       const post = await ctx.prisma.post.findFirst({
         where: { id: input.id, organizationId: ctx.organizationId },
         include: {
-          targets: { include: { channel: true } },
+          targets: { include: { channel: { select: PUBLIC_CHANNEL_SELECT } } },
           mediaAttachments: { include: { media: true }, orderBy: { order: "asc" } },
           tags: true,
         },
@@ -529,7 +533,7 @@ export const postRouter = createRouter({
           }),
         },
         include: {
-          targets: { include: { channel: true } },
+          targets: { include: { channel: { select: PUBLIC_CHANNEL_SELECT } } },
           mediaAttachments: { include: { media: true } },
           tags: true,
         },
@@ -815,7 +819,7 @@ export const postRouter = createRouter({
           }),
         },
         include: {
-          targets: { include: { channel: true } },
+          targets: { include: { channel: { select: PUBLIC_CHANNEL_SELECT } } },
           mediaAttachments: { include: { media: true } },
           tags: true,
         },
@@ -952,7 +956,7 @@ export const postRouter = createRouter({
       const post = await ctx.prisma.post.findFirst({
         where: { id: input.id, organizationId: ctx.organizationId },
         include: {
-          targets: { include: { channel: true } },
+          targets: { include: { channel: { select: PUBLIC_CHANNEL_SELECT } } },
           _count: { select: { mediaAttachments: true } },
         },
       });
@@ -977,15 +981,41 @@ export const postRouter = createRouter({
         if (storyError) throw new TRPCError({ code: "BAD_REQUEST", message: storyError });
       }
 
-      // Super text: refuse to publish while the burn is still in flight —
-      // otherwise this path would push the ORIGINAL, un-burned video and the
-      // user's placed text would silently never appear. The worker flips the
-      // post to SCHEDULED itself the moment the burn lands.
-      if ((post.metadata as any)?.superText?.pendingBurn === true) {
+      // 🔒 Refuse to publish while ANY parking gate is open (security audit
+      // 2026-09-28). This used to check ONLY superText.pendingBurn — a post
+      // mid caption fan-out, or HELD because no unique caption could be
+      // generated (packages/queue/src/publish-gates.ts), still had every
+      // target sitting DRAFT, which the implicit FAILED/DRAFT/SCHEDULED filter
+      // below happily picked up: publishNow would push the SHARED caption to
+      // every channel right now, the exact outcome the fan-out/hold machinery
+      // exists to prevent (the 2026-09-28 240-Facebook-Page incident, reached
+      // through this second door). pendingPublishGates is the SAME check the
+      // workers use to decide whether a post may be flipped to SCHEDULED.
+      // The caption fan-out gates only apply while the post is still DRAFT
+      // (a stale flag on a FAILED/CANCELLED post must not block Retry).
+      const openGates = gatesBlockingManualPublish(
+        post.status,
+        pendingPublishGates(post.metadata as Record<string, unknown> | null)
+      );
+      if (openGates.includes("superText")) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message:
             "Super text is still being applied to your video. This post will publish automatically as soon as it's ready.",
+        });
+      }
+      if (openGates.includes("captionFanout")) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Unique captions are still being generated for each channel. This post will publish automatically once they're ready.",
+        });
+      }
+      if (openGates.includes("captionFanoutHeld")) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Unique captions couldn't be generated for this post, so it was held. Open the post to retry, or publish with your shared caption instead.",
         });
       }
 
@@ -1222,6 +1252,7 @@ export const postRouter = createRouter({
 
   /** Generate Instagram carousel slides from text content */
   generateCarousel: orgProcedure
+    .use(createRateLimitMiddleware(carouselRateLimiter))
     .input(
       z.object({
         content: z.string().min(10).max(10000),
@@ -1233,6 +1264,17 @@ export const postRouter = createRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // Security audit 2026-09-28: up to 10 AI images per call. Checked against
+      // the WHOLE batch — enforcePlanLimit's `current < limit` would let a
+      // 10-slide carousel through on one image of headroom.
+      const usage = await checkUsageLimit(ctx.organizationId, "aiImagesPerMonth", ctx.isSuperAdmin);
+      if (usage.limit !== -1 && usage.current + input.slideCount > usage.limit) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: `Plan limit reached: ${usage.planName} plan allows ${usage.limit} AI images this month (currently ${usage.current}, this carousel would add ${input.slideCount}). Upgrade your plan or generate fewer slides.`,
+        });
+      }
+
       const { generateContent, generateImage: generateGeminiImage, generateCarouselImages } = await import("@postautomation/ai");
       const userId = (ctx.session.user as any).id as string;
 
@@ -1254,7 +1296,7 @@ export const postRouter = createRouter({
         return `${process.env.S3_ENDPOINT || "https://s3.amazonaws.com"}/${bucket}/${key}`;
       }
 
-      async function uploadAndCreateMedia(imageBase64: string, mimeType: string, prefix: string) {
+      async function uploadAndCreateMedia(imageBase64: string, mimeType: string, prefix: string, aiGenerated: boolean) {
         const s3 = getS3();
         const ext = mimeType.includes("png") ? "png" : "jpg";
         const contentType = mimeType.includes("png") ? "image/png" : "image/jpeg";
@@ -1266,7 +1308,10 @@ export const postRouter = createRouter({
           data: {
             organizationId: ctx.organizationId,
             uploadedById: userId,
-            fileName: `carousel-slide-${prefix}.${ext}`,
+            // The aiImagesPerMonth counter counts Media rows whose fileName
+            // starts with "ai-" (plan-limit.middleware.ts). Template slides
+            // are not AI images and stay un-prefixed.
+            fileName: `${aiGenerated ? "ai-" : ""}carousel-slide-${prefix}.${ext}`,
             fileType: contentType,
             fileSize: buf.length,
             url,
@@ -1301,7 +1346,9 @@ Return ONLY the JSON array, no other text.`;
         );
         const cleaned = slideResponse.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
         const arrMatch = cleaned.match(/\[[\s\S]*\]/);
-        if (arrMatch) slideData = JSON.parse(arrMatch[0]);
+        // Capped: the quota above was checked against input.slideCount images,
+        // and the model can return more points than it was asked for.
+        if (arrMatch) slideData = (JSON.parse(arrMatch[0]) as typeof slideData).slice(0, input.slideCount - 2);
       } catch (e) {
         console.warn(`[Carousel] AI slide generation failed, using fallback:`, (e as Error).message);
       }
@@ -1329,7 +1376,7 @@ Return ONLY the JSON array, no other text.`;
 
       // 3. Generate AI images one at a time with delay to avoid Gemini rate limits
       const DELAY_BETWEEN_SLIDES = 4000; // 4s between each slide
-      const slideImages: Array<{ imageBase64: string; mimeType: string } | null> = [];
+      const slideImages: Array<{ imageBase64: string; mimeType: string; aiGenerated: boolean } | null> = [];
 
       const slidePrompts = allSlides.map((slide, i) => {
         if (slide.type === "cover") {
@@ -1362,7 +1409,7 @@ Style: Clean readable typography, visual hierarchy, 4:5 portrait ratio. Professi
             }
             console.log(`[Carousel] Generating slide ${i + 1}/${slidePrompts.length}...`);
             const result = await generateGeminiImage({ prompt: slidePrompts[i]!, aspectRatio: "3:4" });
-            slideImages.push({ imageBase64: result.imageBase64, mimeType: result.mimeType });
+            slideImages.push({ imageBase64: result.imageBase64, mimeType: result.mimeType, aiGenerated: true });
             console.log(`[Carousel] Slide ${i + 1} generated successfully`);
             success = true;
             break;
@@ -1394,7 +1441,7 @@ Style: Clean readable typography, visual hierarchy, 4:5 portrait ratio. Professi
           // Replace all slide images with Puppeteer results
           slideImages.length = 0;
           for (const slide of carouselResult.slides) {
-            slideImages.push({ imageBase64: slide.imageBase64, mimeType: slide.mimeType });
+            slideImages.push({ imageBase64: slide.imageBase64, mimeType: slide.mimeType, aiGenerated: false });
           }
           console.log(`[Carousel] Puppeteer fallback generated ${carouselResult.slides.length} slides`);
         } catch (puppeteerErr) {
@@ -1407,7 +1454,7 @@ Style: Clean readable typography, visual hierarchy, 4:5 portrait ratio. Professi
       for (let i = 0; i < slideImages.length; i++) {
         const slide = slideImages[i];
         if (!slide) continue;
-        const result = await uploadAndCreateMedia(slide.imageBase64, slide.mimeType, `slide-${i + 1}`);
+        const result = await uploadAndCreateMedia(slide.imageBase64, slide.mimeType, `slide-${i + 1}`, slide.aiGenerated);
         mediaItems.push(result);
       }
 

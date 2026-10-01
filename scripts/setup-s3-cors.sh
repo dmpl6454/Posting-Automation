@@ -44,8 +44,15 @@ docker exec "${CONTAINER}" sh -c "
 ${CORS_JSON}
 JSON
   mc admin config set local cors_allow_origin='${ORIGINS_JSON}' || true
-  # Try S3-API style (works on MinIO RELEASE.2024+):
-  mc anonymous set download local/${BUCKET} || true
+  # 🔒 Anonymous READ of individual objects only (security audit 2026-09-28).
+  # The canned 'mc anonymous set download' policy also grants s3:ListBucket, which
+  # let anyone enumerate every workspace's files through /media/?list-type=2.
+  # Social platforms fetch media by exact URL, which needs only s3:GetObject.
+  cat > /tmp/anon-read.json <<'JSON'
+{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"AWS\":[\"*\"]},\"Action\":[\"s3:GetObject\"],\"Resource\":[\"arn:aws:s3:::${BUCKET}/*\"]}]}
+JSON
+  mc anonymous set-json /tmp/anon-read.json local/${BUCKET}
+  mc anonymous get-json local/${BUCKET}
   echo 'Done. Verify with: mc cors get local/${BUCKET}'
 "
 

@@ -80,6 +80,48 @@ export const authRateLimiter = createRateLimiter({ windowMs: 60_000, max: 10 });
 export const aiRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
 
 /**
+ * 30 per minute — repurpose.classifyStyleReference only. It fires automatically
+ * from the Repurpose UI (upload, paste, on-blur), so it must not draw from the
+ * shared aiRateLimiter budget the user's real generations need.
+ */
+export const classifyStyleRefRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
+
+/**
+ * 5 per 10 minutes, per user — post.generateCarousel only (security review
+ * 2026-10-01). One call makes up to 10 AI images over several minutes, and its
+ * quota check counts Media rows written only at the END, so parallel calls all
+ * pass it. A carousel is a deliberate, slow action; 5 in 10 minutes is far
+ * above real use and keeps the race to a few images.
+ */
+export const carouselRateLimiter = createRateLimiter({ windowMs: 10 * 60_000, max: 5 });
+
+/**
+ * 3 phone-OTP SMS sends per hour, per caller (security audit 2026-09-28).
+ * user.addPhone sends a real SMS to WHATEVER number is supplied; unlimited it
+ * is an SMS-toll-fraud primitive (drive up carrier cost by targeting
+ * premium-rate/international numbers) and a way to spam a stranger's phone.
+ * 3/hour comfortably covers a real user verifying their own number.
+ */
+export const addPhoneOtpRateLimiter = createRateLimiter({ windowMs: 60 * 60_000, max: 3 });
+
+/**
+ * Per-PHONE OTP issuance caps, keyed via phoneRateLimitKey (security review
+ * 2026-10-01). Every send mints a fresh code with attempts = 0, so without a
+ * cap send -> 5 guesses -> send reset the attempt limit forever. Keyed on the
+ * number rather than the session: sendPhoneOtp is public, so every anonymous
+ * caller would share one session bucket. Login and Settings codes have
+ * separate buckets so an anonymous caller exhausting a number's login sends
+ * can't also block its owner's Settings flow.
+ */
+export const loginOtpPerPhoneLimiter = createRateLimiter({ windowMs: 60 * 60_000, max: 5 });
+export const addPhoneOtpPerPhoneLimiter = createRateLimiter({ windowMs: 60 * 60_000, max: 5 });
+
+/** Digits only, so formatting variants of one number share a bucket. */
+export function phoneRateLimitKey(phone: string): string {
+  return phone.replace(/\D/g, "") || phone.trim();
+}
+
+/**
  * 5 per hour — emailed analytics reports go to an ARBITRARY recipient address,
  * so keep the relay-abuse surface tightly bounded (also audit-logged).
  */

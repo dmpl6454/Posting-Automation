@@ -50,6 +50,7 @@ export const AUDIT_ACTIONS = {
   MEMBER_INVITED: "member.invited",
   MEMBER_REMOVED: "member.removed",
   MEMBER_ROLE_CHANGED: "member.role_changed",
+  INVITE_REVOKED: "invite.revoked",
 
   // API Keys
   API_KEY_CREATED: "apikey.created",
@@ -127,6 +128,7 @@ export const AUDIT_ACTIONS = {
   ADMIN_USER_UNBANNED: "admin.user.unbanned",
   ADMIN_USER_DELETED: "admin.user.deleted",
   ADMIN_USER_IMPERSONATED: "admin.user.impersonated",
+  ADMIN_USER_IMPERSONATION_ENDED: "admin.user.impersonation_ended",
   ADMIN_ORG_PLAN_CHANGED: "admin.org.plan_changed",
   ADMIN_ORG_DELETED: "admin.org.deleted",
   ADMIN_TEAM_MEMBER_ADDED: "admin.team.member_added",

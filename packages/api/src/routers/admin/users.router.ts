@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { SignJWT } from "jose";
-import { createRouter, superAdminProcedure } from "../../trpc";
+import crypto from "crypto";
+import { createRouter, superAdminProcedure, protectedProcedure } from "../../trpc";
 import { createAuditLog, AUDIT_ACTIONS } from "../../lib/audit";
 
 export const adminUsersRouter = createRouter({
@@ -205,17 +206,31 @@ export const adminUsersRouter = createRouter({
         });
       }
 
+      const adminId = (ctx.session.user as any).id as string;
+      // Security audit 2026-09-28: a single-slot revocation marker. Writing
+      // it onto the admin's OWN row (a) makes stopImpersonation an actual
+      // server-side kill switch (trpc.ts's verifier requires payload.jti to
+      // match this value) and (b) auto-invalidates any earlier dangling
+      // token from the same admin — there is only ever one live token per
+      // admin by construction.
+      const jti = crypto.randomUUID();
+      await ctx.prisma.user.update({
+        where: { id: adminId },
+        data: { activeImpersonationJti: jti },
+      });
+
       const secret = new TextEncoder().encode(process.env.NEXTAUTH_SECRET);
       const token = await new SignJWT({
         impersonatedUserId: input.userId,
-        adminUserId: (ctx.session.user as any).id,
+        adminUserId: adminId,
       })
         .setProtectedHeader({ alg: "HS256" })
+        .setJti(jti)
         .setExpirationTime("1h")
         .sign(secret);
 
       createAuditLog({
-        userId: (ctx.session.user as any).id,
+        userId: adminId,
         action: AUDIT_ACTIONS.ADMIN_USER_IMPERSONATED,
         entityType: "User",
         entityId: input.userId,
@@ -224,7 +239,40 @@ export const adminUsersRouter = createRouter({
       return { token };
     }),
 
-  stopImpersonation: superAdminProcedure.mutation(() => {
+  /**
+   * Security audit 2026-09-28: was `superAdminProcedure`, which made this
+   * mutation UNREACHABLE in its one real use case. protectedProcedure's
+   * session swap (trpc.ts) runs BEFORE superAdminProcedure's own gate in the
+   * middleware chain, and the swapped session's isSuperAdmin is always false
+   * (buildImpersonatedSession) — so calling this WHILE impersonating always
+   * threw FORBIDDEN before the body ever ran. Now protectedProcedure, gated
+   * on ctx.isImpersonating instead: it clears the issuing admin's
+   * activeImpersonationJti, which is what actually revokes the token
+   * (rather than the previous no-op that only told the CLIENT to delete its
+   * cookie, leaving the token itself fully valid for the rest of its hour).
+   *
+   * Idempotent: with no live swap (superseded jti, demoted admin, expired
+   * token, a stale second tab) it succeeds WITHOUT touching any row, so the
+   * client can still drop its cookie instead of stranding the banner.
+   */
+  stopImpersonation: protectedProcedure.mutation(async ({ ctx }) => {
+    if (!(ctx as any).isImpersonating || !(ctx as any).adminUserId) {
+      return { success: true };
+    }
+    const adminUserId = (ctx as any).adminUserId as string;
+
+    await ctx.prisma.user.update({
+      where: { id: adminUserId },
+      data: { activeImpersonationJti: null },
+    });
+
+    createAuditLog({
+      userId: adminUserId,
+      action: AUDIT_ACTIONS.ADMIN_USER_IMPERSONATION_ENDED,
+      entityType: "User",
+      entityId: (ctx.session.user as any).id,
+    }).catch(() => {});
+
     return { success: true };
   }),
 });

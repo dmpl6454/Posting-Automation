@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { trpc } from "~/lib/trpc/client";
+import { orgHeaders } from "~/lib/org-header";
 import { useSmartUpload } from "~/lib/use-smart-upload";
 import { Button } from "~/components/ui/button";
 import { Badge } from "~/components/ui/badge";
@@ -302,7 +303,7 @@ export default function SuperAgentPage() {
     try {
       const res = await fetch("/api/chat/stream", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...orgHeaders() },
         body: JSON.stringify({ threadId: tid }),
         signal: controller.signal,
       });

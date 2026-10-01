@@ -216,6 +216,53 @@ ensure_minio_lifecycle() {
   done
 }
 
+# ── nginx.conf changes ───────────────────────────────────────────
+# docker-compose.prod.yml bind-mounts the single FILE docker/nginx/nginx.conf. git
+# replaces that file (new inode) on pull/checkout and a file bind mount keeps the
+# inode it was created with, so the running nginx keeps the OLD config — and
+# `up -d --no-deps nginx` is a no-op because the service definition is unchanged.
+# Detect by comparing what the running container sees with the file on disk. A git
+# diff of the pulled range would miss a retry after a failed deploy, a plain
+# `deploy`, the `git checkout main` that ends a rollback, and the release that ships
+# this check (its own `update` runs the old copy of this script, see above).
+NGINX_CONF_CHANGED=false
+
+nginx_conf_changed() {
+  local running
+  # Unreadable (nginx not running?) counts as changed: validate + recreate is harmless.
+  running=$(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" \
+    exec -T nginx cat /etc/nginx/nginx.conf 2>/dev/null) || return 0
+  [ "$running" != "$(cat docker/nginx/nginx.conf)" ]
+}
+
+# Runs BEFORE anything is rebuilt or restarted, so a bad config fails the deploy
+# while the old nginx keeps serving. `nginx -t` runs as a one-off container of the
+# nginx service itself (compose run): that gives it the service's own mounts — the
+# new nginx.conf and the certbot_certs volume whose certificates `nginx -t` loads —
+# and the compose network, where upstream hostnames must resolve. A standalone
+# `docker run nginx -t` has neither and would reject a good config. No ports are
+# published (no --service-ports), so it cannot clash with the running nginx.
+check_nginx_conf() {
+  NGINX_CONF_CHANGED=false
+  nginx_conf_changed || return 0
+  log "docker/nginx/nginx.conf differs from the running nginx — validating it..."
+  if ! docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" \
+      run --rm --no-deps -T nginx nginx -t; then
+    error "docker/nginx/nginx.conf FAILED 'nginx -t' (output above). Nothing was restarted; the running nginx keeps its old config. Fix nginx.conf and redeploy."
+  fi
+  success "nginx.conf is valid"
+  NGINX_CONF_CHANGED=true
+}
+
+restart_nginx() {
+  if [ "$NGINX_CONF_CHANGED" = true ]; then
+    log "Recreating nginx to load the new nginx.conf..."
+    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --no-deps --force-recreate nginx
+  else
+    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --no-deps nginx
+  fi
+}
+
 cmd_deploy() {
   log "Deploying PostAutomation..."
   check_prereqs
@@ -223,6 +270,8 @@ cmd_deploy() {
 
   log "Deploying version v${APP_VERSION} (${COMMIT_HASH})..."
   log "Commit: ${COMMIT_MSG}"
+
+  check_nginx_conf
 
   # Tag current images for rollback
   log "Saving current state for rollback..."
@@ -242,7 +291,7 @@ cmd_deploy() {
   docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --no-deps web
   sleep 5
   docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --no-deps --timeout "$WORKER_STOP_TIMEOUT" worker
-  docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --no-deps nginx
+  restart_nginx
 
   # Cap Docker build-cache / stale-image growth. Every deploy leaves the previous
   # images' layers and the full builder cache behind; measured 2026-08-31 these had
@@ -415,6 +464,8 @@ cmd_rollback() {
     error "Could not checkout commit ${target_commit}"
   }
 
+  check_nginx_conf
+
   # Rebuild and deploy
   log "Rebuilding from ${target_commit}..."
   docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" build web worker migrate
@@ -424,7 +475,7 @@ cmd_rollback() {
   docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --no-deps web
   sleep 5
   docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --no-deps --timeout "$WORKER_STOP_TIMEOUT" worker
-  docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --no-deps nginx
+  restart_nginx
 
   # Go back to main branch
   git checkout main 2>/dev/null || true

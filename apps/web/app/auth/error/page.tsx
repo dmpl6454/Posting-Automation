@@ -12,7 +12,8 @@ const ERROR_MESSAGES: Record<string, { title: string; description: string }> = {
   },
   AccessDenied: {
     title: "Access denied",
-    description: "Your account does not have permission to sign in here.",
+    description:
+      "Your account may have been suspended, or it does not have permission to sign in here. Contact support if you think this is a mistake.",
   },
   Verification: {
     title: "Verification failed",

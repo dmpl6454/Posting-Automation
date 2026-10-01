@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure, isAppAdmin } from "../trpc";
+import { PUBLIC_CHANNEL_SELECT } from "../lib/public-channel";
 import { agentRunQueue, postPublishQueue, captionFanoutQueue } from "@postautomation/queue";
 import { requirePlan, enforcePlanLimit } from "../middleware/plan-limit.middleware";
 import { planCaptionFanout, captionFanoutJobId } from "../lib/caption-fanout";
@@ -283,6 +284,18 @@ export const chatRouter = createRouter({
     .mutation(async ({ ctx, input }) => {
       const userId = (ctx.session.user as any).id;
 
+      // 🔒 Security audit 2026-09-28: agentId was written into the thread's FK
+      // with no check that the agent belongs to this org.
+      if (input.agentId) {
+        const agent = await ctx.prisma.agent.findFirst({
+          where: { id: input.agentId, organizationId: ctx.organizationId },
+          select: { id: true },
+        });
+        if (!agent) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Agent not found" });
+        }
+      }
+
       return ctx.prisma.chatThread.create({
         data: {
           organizationId: ctx.organizationId,
@@ -322,6 +335,13 @@ export const chatRouter = createRouter({
       if (!thread) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Thread not found" });
       }
+
+      // 🔒 Security audit 2026-09-28: attachmentMediaIds went straight into the
+      // create with no ownership check — a member of this org could attach
+      // (and have rendered inline, url/thumbnailUrl/fileName included) any
+      // Media row from ANY other organization. Same guard the post-action
+      // paths (publish_now/schedule_post/bulk_schedule) already apply.
+      await assertMediaOwned(ctx.prisma as any, ctx.organizationId, input.attachmentMediaIds ?? []);
 
       const message = await ctx.prisma.chatMessage.create({
         data: {
@@ -646,7 +666,7 @@ export const chatRouter = createRouter({
                 },
               }),
             },
-            include: { targets: { include: { channel: true } } },
+            include: { targets: { include: { channel: { select: PUBLIC_CHANNEL_SELECT } } } },
           });
 
           if (captionFanout.enabled) {

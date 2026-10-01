@@ -1,10 +1,12 @@
 "use client";
 
 import { humanizeError } from "~/lib/errors";
+import { orgHeaders } from "~/lib/org-header";
 import { buildCreatePostQuery } from "~/lib/repurpose-create-post-params";
 import { parseVideoReadyEvent, isVideoErrorEvent, finalizeRunningSteps } from "~/lib/parse-video-event";
 import { stripBareUrls } from "~/lib/strip-bare-urls";
 import { shouldBlockMediaLessPublish } from "~/lib/repurpose-media-guard";
+import { shouldClassifyStyleRefOnBlur } from "~/lib/style-ref-classify";
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { trpc } from "~/lib/trpc/client";
@@ -186,6 +188,8 @@ export function RepurposeTab() {
   // the paste path, defined before classifyAndPreselect, captured a stale "".)
   const accentColorRef = useRef<string>("");
   useEffect(() => { accentColorRef.current = accentColor; }, [accentColor]);
+  // Last style-reference URL sent for classification — on-blur skips it.
+  const lastClassifiedRefUrlRef = useRef<string | null>(null);
 
   // REP-2/Bug-B: snapshot of the exact LOOK inputs used for the last Generate.
   // The per-image "Regenerate" re-uses THESE (not the live picker state) so a
@@ -393,7 +397,7 @@ export function RepurposeTab() {
     const fd = new FormData();
     fd.append("file", file);
     fd.append("category", "aesthetic-ref");
-    const res = await fetch("/api/upload", { method: "POST", body: fd });
+    const res = await fetch("/api/upload", { method: "POST", headers: orgHeaders(), body: fd });
     if (res.ok) {
       const { id, url } = await res.json();
       setAestheticRefUrl(url);
@@ -410,6 +414,7 @@ export function RepurposeTab() {
   // hasn't already set their own accent (don't clobber an explicit brand decision).
   const classifyAndPreselect = useCallback((refUrl: string) => {
     if (!refUrl) return;
+    lastClassifiedRefUrlRef.current = refUrl;
     classifyRef.mutate(
       { aestheticRefUrl: refUrl },
       {
@@ -422,6 +427,10 @@ export function RepurposeTab() {
           if (r.accentColor && !accentColorRef.current) { setAccentColor(r.accentColor); touched = true; }
           if (r.theme) { setTheme(r.theme); touched = true; }
           if (touched) setStyleAutoSuggested(true);
+        },
+        // A failed classification (429, network) must stay retryable on re-blur.
+        onError: () => {
+          if (lastClassifiedRefUrlRef.current === refUrl) lastClassifiedRefUrlRef.current = null;
         },
       },
     );
@@ -658,7 +667,8 @@ export function RepurposeTab() {
 
   // T2b — classify an attached style reference and pre-select the closest creative
   // style. Fail-soft on the backend (never throws); a null suggestion is a no-op.
-  const classifyRef = trpc.repurpose.classifyStyleReference.useMutation();
+  // Fail-soft: a 429/FORBIDDEN must not reach the global error toast either.
+  const classifyRef = trpc.repurpose.classifyStyleReference.useMutation({ onError: () => {} });
 
   // E3b — per-image "Regenerate": re-roll JUST the static image / a carousel
   // slide's image without re-running the whole repurpose flow. `regenTarget`
@@ -1235,7 +1245,7 @@ export function RepurposeTab() {
                                       if (!file) return;
                                       const fd = new FormData();
                                       fd.append("file", file);
-                                      const res = await fetch("/api/upload", { method: "POST", body: fd });
+                                      const res = await fetch("/api/upload", { method: "POST", headers: orgHeaders(), body: fd });
                                       if (!res.ok) {
                                         toast({ title: "Image upload failed", variant: "destructive" });
                                         return;
@@ -1497,6 +1507,7 @@ export function RepurposeTab() {
                                         setAestheticRefUrl("");
                                         setAestheticRefMediaId("");
                                         setReferenceMimicry(false);
+                                        lastClassifiedRefUrlRef.current = null;
                                       }}
                                       className="text-muted-foreground hover:text-foreground"
                                     >
@@ -1578,7 +1589,7 @@ export function RepurposeTab() {
                         const fd = new FormData();
                         fd.append("file", file);
                         fd.append("category", "logo");
-                        const res = await fetch("/api/upload", { method: "POST", body: fd });
+                        const res = await fetch("/api/upload", { method: "POST", headers: orgHeaders(), body: fd });
                         if (res.ok) {
                           const { id, url } = await res.json();
                           setLogoUrl(url); setLogoMediaId(id);
@@ -1730,7 +1741,7 @@ export function RepurposeTab() {
                         const fd = new FormData();
                         fd.append("file", file);
                         fd.append("category", "aesthetic-ref");
-                        const res = await fetch("/api/upload", { method: "POST", body: fd });
+                        const res = await fetch("/api/upload", { method: "POST", headers: orgHeaders(), body: fd });
                         if (res.ok) {
                           const { id, url } = await res.json();
                           setAestheticRefUrl(url);
@@ -1748,13 +1759,14 @@ export function RepurposeTab() {
                       <Input
                         type="url"
                         value={aestheticRefUrl}
-                        onChange={(e) => { setAestheticRefUrl(e.target.value); setAestheticRefMediaId(""); }}
+                        onChange={(e) => { setAestheticRefUrl(e.target.value); setAestheticRefMediaId(""); if (!e.target.value.trim()) lastClassifiedRefUrlRef.current = null; }}
                         onPaste={handleRefPaste}
                         onBlur={(e) => {
                           // T2b: a typed/pasted URL is "committed" on blur — classify it
                           // and pre-select the closest style (looks-like-a-URL only).
-                          const v = e.target.value.trim();
-                          if (/^https?:\/\//i.test(v)) classifyAndPreselect(v);
+                          if (shouldClassifyStyleRefOnBlur(e.target.value, lastClassifiedRefUrlRef.current)) {
+                            classifyAndPreselect(e.target.value.trim());
+                          }
                         }}
                         placeholder="Paste an image (Cmd/Ctrl+V) or a post URL"
                         className="h-8 min-w-0 flex-1 text-xs"
@@ -1764,7 +1776,7 @@ export function RepurposeTab() {
                           <img src={aestheticRefUrl} alt="style reference" className="h-8 w-8 rounded object-cover border shrink-0" />
                           <button
                             type="button"
-                            onClick={() => { setAestheticRefUrl(""); setAestheticRefMediaId(""); setStyleAutoSuggested(false); setReferenceMimicry(false); setSelectedTemplateId(""); }}
+                            onClick={() => { setAestheticRefUrl(""); setAestheticRefMediaId(""); setStyleAutoSuggested(false); setReferenceMimicry(false); setSelectedTemplateId(""); lastClassifiedRefUrlRef.current = null; }}
                             className="text-[10px] text-muted-foreground hover:underline shrink-0"
                           >
                             Clear
@@ -2657,7 +2669,7 @@ export function RepurposeTab() {
                           const fd = new FormData();
                           fd.append("file", blob, "hero-crop.png");
                           fd.append("category", "hero");
-                          const resp = await fetch("/api/upload", { method: "POST", body: fd });
+                          const resp = await fetch("/api/upload", { method: "POST", headers: orgHeaders(), body: fd });
                           if (!resp.ok) throw new Error("Upload failed");
                           const { id, url: uploadedUrl } = await resp.json();
                           setImageAssignments((prev) => ({ ...prev, background: { mediaId: id, url: uploadedUrl } }));
@@ -2753,7 +2765,7 @@ export function RepurposeTab() {
                                     const fd = new FormData();
                                     fd.append("file", file);
                                     fd.append("category", "hero");
-                                    const resp = await fetch("/api/upload", { method: "POST", body: fd });
+                                    const resp = await fetch("/api/upload", { method: "POST", headers: orgHeaders(), body: fd });
                                     if (!resp.ok) throw new Error("Upload failed");
                                     const { id: uploadedId, url: uploadedUrl } = await resp.json();
                                     // Load the data URL into the cropper (taint-safe).

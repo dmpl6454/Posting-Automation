@@ -13,6 +13,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar";
 import { LogOut, User, Settings, Menu, ShieldCheck, ChevronDown, Activity } from "lucide-react";
 import Link from "next/link";
 import { cn } from "~/lib/utils";
+import { clearImpersonationCookie } from "~/lib/impersonation-client";
 import { NotificationBell } from "~/components/notifications/notification-bell";
 import { ThemeToggle } from "~/components/layout/theme-toggle";
 
@@ -174,7 +175,12 @@ export function Header({
             <DropdownMenuSeparator className="bg-border" />
             <DropdownMenuItem
               className="cursor-pointer rounded-[7px] px-2.5 py-2 text-[12px] font-medium leading-none text-destructive focus:text-destructive"
-              onClick={() => signOut({ callbackUrl: "/" })}
+              onClick={() => {
+                // An admin signing out mid-impersonation lands here (the
+                // swap only lives in tRPC, so they are on /dashboard).
+                clearImpersonationCookie();
+                void signOut({ callbackUrl: "/" });
+              }}
             >
               <LogOut className="mr-2 h-[13px] w-[13px]" />
               Sign Out

@@ -108,9 +108,39 @@ export const protectedProcedure = t.procedure.use(async ({ ctx, next }) => {
         select: { id: true, email: true, name: true, image: true },
       });
 
-      if (impersonatedUser) {
-        // Capture the admin id BEFORE the swap (for the banner / audit trail).
-        adminUserId = (session.user as any).id;
+      // Security audit 2026-09-28: signature + unexpired `exp` alone used to be
+      // sufficient for the token's whole 1-hour lifetime — completely
+      // independent of the issuing admin's CURRENT status, and with no way to
+      // revoke it before expiry. Three checks now gate the swap, two against
+      // the admin's LIVE row (payload.adminUserId was signed but never read
+      // before this fix):
+      //   1. The admin must STILL be a live, non-banned superadmin — a
+      //      demoted/banned admin's outstanding token dies on the next request.
+      //   2. payload.jti must match User.activeImpersonationJti — a single-
+      //      slot marker written on mint and cleared by stopImpersonation, so
+      //      "Exit" is a real server-side kill switch, and a superseded token
+      //      (a later impersonate() overwrote the slot) stops working too.
+      // A token with no jti (the pre-fix shape) can never match a real slot
+      // value, so it fails closed rather than needing a special case.
+      //   3. The PRESENTING session must be the issuing admin. The cookie is
+      //      JS-set (not HttpOnly) and survives sign-out, so another account
+      //      on the same browser, or a replayed cookie, would otherwise be
+      //      swapped into the target with a perfectly live admin row.
+      const adminId = payload.adminUserId as string | undefined;
+      const presentedBy = (session.user as any).id as string | undefined;
+      const admin = adminId && adminId === presentedBy
+        ? await prisma.user.findUnique({
+            where: { id: adminId },
+            select: { isSuperAdmin: true, isBanned: true, activeImpersonationJti: true },
+          })
+        : null;
+      const jtiMatches =
+        typeof payload.jti === "string" && !!admin?.activeImpersonationJti && payload.jti === admin.activeImpersonationJti;
+
+      if (impersonatedUser && admin?.isSuperAdmin && !admin.isBanned && jtiMatches) {
+        // The signed id, not the session's: it names the row whose jti slot
+        // stopImpersonation clears.
+        adminUserId = adminId;
         isImpersonating = true;
         session = buildImpersonatedSession(session, impersonatedUser);
       }

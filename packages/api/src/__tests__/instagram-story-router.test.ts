@@ -155,6 +155,10 @@ describe("bulk.bulkSchedule — a story without exactly one media is skipped, no
   });
 
   it("reports how many were skipped instead of skipping silently", () => {
-    expect(bulkRouter).toMatch(/return \{ scheduled, skippedStories \}/);
+    // skippedPending was added 2026-09-28 (security audit: a post whose caption
+    // fan-out is still generating, or HELD, must be skipped-and-counted the same
+    // way a story without media already was) — the assertion widens to match,
+    // the invariant it locks (skips are counted, never silent) is unchanged.
+    expect(bulkRouter).toMatch(/return \{ scheduled, skippedStories, skippedPending \}/);
   });
 });

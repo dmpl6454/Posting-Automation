@@ -610,6 +610,31 @@ export function isStaleScheduleJob(
 }
 
 /**
+ * Pre-claim decision for a publish job, from ONE read of the parent post.
+ *
+ * "post-withdrawn": the post is DRAFT or CANCELLED (bulk "Move to Draft" /
+ * Cancel, or a save-as-draft). Applies to EVERY job — newsgrid, agent,
+ * publishNow, chat and the worker's own re-queues carry no enqueuedFor, and the
+ * claim admits DRAFT targets, so without this they published a post the user
+ * had just withdrawn. Every producer flips the post out of DRAFT before it
+ * enqueues, so a live job never sees DRAFT legitimately.
+ *
+ * "stale-schedule": isStaleScheduleJob for schedule-path jobs (enqueuedFor set).
+ * A missing post is left to the existing flow (stale for a schedule-path job,
+ * otherwise the atomic claim decides).
+ */
+export type PreClaimSkip = "post-withdrawn" | "stale-schedule" | null;
+
+export function decidePreClaimSkip(
+  post: { status: string; scheduledAt: Date | null } | null | undefined,
+  enqueuedFor: number | null | undefined
+): PreClaimSkip {
+  if (post && (post.status === "DRAFT" || post.status === "CANCELLED")) return "post-withdrawn";
+  if (enqueuedFor != null && isStaleScheduleJob(enqueuedFor, post?.scheduledAt ?? null)) return "stale-schedule";
+  return null;
+}
+
+/**
  * Heavy-upload lane (scenario batch 2026-07-20). Streamed publishes
  * (YouTube/X/LinkedIn) hold a worker slot for their entire chunk loop, so
  * only HEAVY_MEDIA_CONCURRENCY may run at once; the excess is DEFERRED via

@@ -192,6 +192,19 @@ export const teamRouter = createRouter({
         where: { id: input.memberId, organizationId: ctx.organizationId },
       });
       if (!target) throw new TRPCError({ code: "NOT_FOUND", message: "Member not found." });
+      // Security audit 2026-09-28: this input only accepts ADMIN|MEMBER, so
+      // changing an OWNER's role always strictly LOSES the org's owner — there
+      // is no way to name a replacement here. An org with zero OWNER rows
+      // breaks removeMember's "cannot remove the owner" guard (nothing left to
+      // protect) and makes ownership-only actions unreachable for everyone.
+      // transferOwnership is the real remedy (it keeps exactly one OWNER at
+      // all times); this must refuse ANY owner, not just the caller's own row.
+      if (target.role === "OWNER") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Cannot change the owner's role this way — transfer ownership to someone else first.",
+        });
+      }
       const updated = await ctx.prisma.organizationMember.update({
         where: { id: target.id },
         data: { role: input.role },
@@ -284,6 +297,62 @@ export const teamRouter = createRouter({
         entityId: input.memberId,
       }).catch((err) => {
         console.error("audit_log_write_failed", { err: err.message, action: AUDIT_ACTIONS.MEMBER_REMOVED });
+      });
+
+      return { success: true };
+    }),
+
+  /**
+   * List this org's pending (unaccepted) email invites — security audit
+   * 2026-09-28. Until now a sent invite had no UI/API path back to it at
+   * all: an admin who mistyped an address, or whose inviting colleague was
+   * later removed, had no way to even SEE the outstanding token, let alone
+   * kill it. Org-scoped so one workspace can never enumerate another's.
+   */
+  listInvites: adminOrgProcedure.query(async ({ ctx }) => {
+    // adminOrgProcedure gates on the APP role only; pending invite emails are
+    // org-admin data, so apply the same org-role gate as invite/revokeInvite.
+    if (ctx.membership.role !== "OWNER" && ctx.membership.role !== "ADMIN") {
+      throw new TRPCError({ code: "FORBIDDEN", message: "Only owners and admins can view pending invites" });
+    }
+    return ctx.prisma.organizationInvite.findMany({
+      where: { organizationId: ctx.organizationId, acceptedAt: null },
+      select: { id: true, email: true, role: true, expiresAt: true, createdAt: true, invitedById: true },
+      orderBy: { createdAt: "desc" },
+    });
+  }),
+
+  /**
+   * Revoke a pending invite before it is accepted (security audit
+   * 2026-09-28). Previously a wrong-address or no-longer-wanted invite
+   * stayed valid for the full 7-day window with no way to shorten it — the
+   * token is a bearer credential (acceptInvite only re-checks the signed-in
+   * user's email, not who currently administers the org). Gated the same
+   * way `invite` is, and org-scoped via the `findFirst` lookup so an id from
+   * another workspace can never match.
+   */
+  revokeInvite: adminOrgProcedure
+    .input(z.object({ inviteId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.membership.role !== "OWNER" && ctx.membership.role !== "ADMIN") {
+        throw new TRPCError({ code: "FORBIDDEN" });
+      }
+      const invite = await ctx.prisma.organizationInvite.findFirst({
+        where: { id: input.inviteId, organizationId: ctx.organizationId, acceptedAt: null },
+      });
+      if (!invite) throw new TRPCError({ code: "NOT_FOUND", message: "Invite not found." });
+
+      await ctx.prisma.organizationInvite.delete({ where: { id: invite.id } });
+
+      createAuditLog({
+        organizationId: ctx.organizationId,
+        userId: (ctx.session.user as any).id,
+        action: AUDIT_ACTIONS.INVITE_REVOKED,
+        entityType: "OrganizationInvite",
+        entityId: input.inviteId,
+        metadata: { email: invite.email },
+      }).catch((err) => {
+        console.error("audit_log_write_failed", { err: err.message, action: AUDIT_ACTIONS.INVITE_REVOKED });
       });
 
       return { success: true };

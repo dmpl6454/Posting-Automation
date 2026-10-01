@@ -28,6 +28,14 @@ model User {
   phone         String?   @unique
   phoneVerified DateTime?
   deletedAt     DateTime?
+  /// Single-slot revocation marker for this admin's IN-FLIGHT impersonation
+  /// token (security audit 2026-09-28, "impersonation token not bound to the
+  /// issuing admin / not revocable"). Written on mint (impersonate), matched
+  /// against the token's `jti` on every verification (packages/api/src/trpc.ts),
+  /// and cleared on stopImpersonation. A new impersonate() overwrites this,
+  /// which also auto-invalidates any earlier dangling token from the same
+  /// admin — there is only ever one live token per admin by construction.
+  activeImpersonationJti String?
 
   accounts    Account[]
   sessions    Session[]
@@ -107,6 +115,15 @@ model PhoneOtp {
   expiresAt DateTime
   used      Boolean  @default(false)
   createdAt DateTime @default(now())
+  // Brute-force guard (security audit 2026-09-28): a 6-digit code has 1M
+  // combinations, and without a counter a guesser had the whole 10-minute
+  // window to try them. Nullable-free default so no backfill is needed.
+  attempts  Int      @default(0)
+  // Who asked for the code and why ("login" | "add-phone"); verifiers only
+  // redeem a row matching both, so one account can't redeem a code another
+  // requested. NULL = issued before binding existed — no verifier accepts it.
+  userId    String?
+  purpose   String?
 
   @@index([phone])
 }

@@ -1,5 +1,6 @@
 import { auth } from "~/lib/auth";
 import { prisma } from "@postautomation/db";
+import { resolveActiveOrganizationId } from "~/lib/upload-org";
 import { streamChatAgent, parseActions, cleanResponseText, withIdempotencyKey, fetchTrendingNews, detectTrendingIntent, routeProvider } from "@postautomation/ai";
 import type { AIChatMessage, AIProvider } from "@postautomation/ai";
 
@@ -25,19 +26,18 @@ export async function POST(req: Request) {
     return new Response("threadId is required", { status: 400 });
   }
 
-  // Get user's org
-  const membership = await prisma.organizationMember.findFirst({
-    where: { userId },
-    select: { organizationId: true },
-  });
+  // The caller's ACTIVE workspace (the x-organization-id the client sends,
+  // honoured only for a real member). An unordered default-org lookup here
+  // meant threads created in any other workspace were "not found".
+  const organizationId = await resolveActiveOrganizationId(prisma, userId, req.headers.get("x-organization-id"));
 
-  if (!membership) {
+  if (!organizationId) {
     return new Response("No organization found", { status: 403 });
   }
 
   // Verify thread belongs to user's org
   const thread = await prisma.chatThread.findFirst({
-    where: { id: body.threadId, organizationId: membership.organizationId },
+    where: { id: body.threadId, organizationId },
     include: {
       agent: { select: { aiProvider: true, niche: true } },
     },
@@ -82,42 +82,42 @@ export async function POST(req: Request) {
   // Load full platform context for the agent
   const [channels, agents, campaigns, listeningQueries, influencers, recentPosts, postStats, org] = await Promise.all([
     prisma.channel.findMany({
-      where: { organizationId: membership.organizationId },
+      where: { organizationId: organizationId },
       select: { id: true, name: true, platform: true, username: true },
     }),
     prisma.agent.findMany({
-      where: { organizationId: membership.organizationId },
+      where: { organizationId: organizationId },
       select: { id: true, name: true, niche: true, isActive: true, postsPerDay: true, totalPosts: true },
     }),
     prisma.campaign.findMany({
-      where: { organizationId: membership.organizationId },
+      where: { organizationId: organizationId },
       select: { id: true, name: true, status: true, _count: { select: { brandTrackers: true } } },
       take: 10,
     }),
     prisma.listeningQuery.findMany({
-      where: { organizationId: membership.organizationId, isActive: true },
+      where: { organizationId: organizationId, isActive: true },
       select: { id: true, name: true, keywords: true, platforms: true },
       take: 10,
     }),
     prisma.influencer.findMany({
-      where: { organizationId: membership.organizationId },
+      where: { organizationId: organizationId },
       select: { id: true, name: true, platform: true, handle: true, status: true, followers: true },
       orderBy: { relevanceScore: "desc" },
       take: 20,
     }),
     prisma.post.findMany({
-      where: { organizationId: membership.organizationId },
+      where: { organizationId: organizationId },
       orderBy: { createdAt: "desc" },
       take: 5,
       select: { id: true, content: true, status: true, createdAt: true },
     }),
     Promise.all([
-      prisma.post.count({ where: { organizationId: membership.organizationId } }),
-      prisma.post.count({ where: { organizationId: membership.organizationId, status: "PUBLISHED" } }),
-      prisma.post.count({ where: { organizationId: membership.organizationId, status: "SCHEDULED" } }),
+      prisma.post.count({ where: { organizationId: organizationId } }),
+      prisma.post.count({ where: { organizationId: organizationId, status: "PUBLISHED" } }),
+      prisma.post.count({ where: { organizationId: organizationId, status: "SCHEDULED" } }),
     ]),
     prisma.organization.findUnique({
-      where: { id: membership.organizationId },
+      where: { id: organizationId },
       select: { name: true, logo: true },
     }),
   ]);
