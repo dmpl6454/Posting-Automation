@@ -47,7 +47,7 @@ const phoneOtpUpdateMany = vi.fn(async (args: any) => {
   if (args.data.used) otpState.used = true;
   return { count: 1 };
 });
-const userUpdate = vi.fn(async () => ({}));
+const userUpdate = vi.fn(async (..._a: any[]): Promise<{ password?: string | null }> => ({}));
 
 import { createCallerFactory } from "../trpc";
 import { userRouter } from "../routers/user.router";
@@ -83,5 +83,25 @@ describe("user.verifyPhone — notifies the account's real owner", () => {
   it("a mail failure never fails the phone verification itself", async () => {
     sendEmail.mockRejectedValueOnce(new Error("smtp down"));
     await expect(caller().verifyPhone({ phone: PHONE, otp: "482913" })).resolves.toMatchObject({ success: true });
+  });
+
+  // The remedy is a password reset (it also removes the phone) — but
+  // requestPasswordReset silently does nothing for an account without a
+  // password, so that account must be told to set one first.
+  it("points an account WITH a password at Forgot password", async () => {
+    userUpdate.mockResolvedValueOnce({ password: "hash" });
+    await caller().verifyPhone({ phone: PHONE, otp: "482913" });
+    const { text } = sendEmail.mock.calls[0]![0];
+    expect(text).toMatch(/forgot password/i);
+    expect(text).not.toMatch(/set a password/i);
+  });
+
+  it("tells an account WITHOUT a password to set one in Settings first", async () => {
+    userUpdate.mockResolvedValueOnce({ password: null });
+    await caller().verifyPhone({ phone: PHONE, otp: "482913" });
+    const { text, html } = sendEmail.mock.calls[0]![0];
+    expect(text).toMatch(/set a password in Settings/i);
+    expect(text).toMatch(/forgot password/i);
+    expect(html).toMatch(/set a password in Settings/i);
   });
 });

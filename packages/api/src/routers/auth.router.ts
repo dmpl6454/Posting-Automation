@@ -124,7 +124,8 @@ export const authRouter = createRouter({
         where: { userId: resetToken.userId },
       });
 
-      return { success: true };
+      // Lets the success screen say phone sign-in was removed, only when it was.
+      return { success: true, phoneRemoved: Boolean(resetToken.user?.phone) };
     }),
 
   verifyEmail: publicProcedure

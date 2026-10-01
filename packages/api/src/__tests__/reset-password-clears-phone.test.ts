@@ -59,4 +59,32 @@ describe("auth.resetPassword clears any attached phone login method", () => {
     expect(data.password).toBeTruthy();
     expect(data.passwordChangedAt).toBeInstanceOf(Date);
   });
+
+  // The removal used to be silent — the success screen now says so, but only
+  // when there was actually a phone to remove.
+  it("reports phoneRemoved: true when the account had a phone", async () => {
+    passwordResetTokenFindUnique.mockResolvedValueOnce({
+      id: "tok-1",
+      userId: "user-1",
+      expiresAt: new Date(Date.now() + 60_000),
+      user: { id: "user-1", phone: "+15551234567" },
+    });
+    await expect(caller().resetPassword({ token: "tok-1", password: "new-password-123" })).resolves.toEqual({
+      success: true,
+      phoneRemoved: true,
+    });
+  });
+
+  it("reports phoneRemoved: false when there was no phone", async () => {
+    passwordResetTokenFindUnique.mockResolvedValueOnce({
+      id: "tok-1",
+      userId: "user-1",
+      expiresAt: new Date(Date.now() + 60_000),
+      user: { id: "user-1", phone: null },
+    });
+    await expect(caller().resetPassword({ token: "tok-1", password: "new-password-123" })).resolves.toEqual({
+      success: true,
+      phoneRemoved: false,
+    });
+  });
 });

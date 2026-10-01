@@ -229,9 +229,10 @@ export const userRouter = createRouter({
       }
 
       // Update user's phone and mark as verified
-      await ctx.prisma.user.update({
+      const updated = await ctx.prisma.user.update({
         where: { id: userId },
         data: { phone: input.phone, phoneVerified: new Date() },
+        select: { password: true },
       });
 
       // Fix #78: audit log for phone addition
@@ -252,7 +253,7 @@ export const userRouter = createRouter({
       // must never fail the phone verification itself.
       const accountEmail = (ctx.session.user as any).email as string | undefined;
       if (accountEmail) {
-        const emailContent = phoneChangedEmail(input.phone);
+        const emailContent = phoneChangedEmail(input.phone, { hasPassword: Boolean(updated?.password) });
         sendEmail({
           to: accountEmail,
           subject: emailContent.subject,

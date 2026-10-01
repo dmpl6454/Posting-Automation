@@ -1,6 +1,7 @@
 "use client";
 
 import { humanizeError } from "~/lib/errors";
+import { phoneCardMode } from "~/lib/phone-settings";
 
 import { trpc } from "~/lib/trpc/client";
 import { AccentPicker } from "~/components/layout/accent-picker";
@@ -151,6 +152,8 @@ export default function SettingsPage() {
     onSuccess: () => {
       toast({ title: "Password updated!" });
       setCurrentPassword(""); setNewPassword(""); setConfirmPassword("");
+      // hasPassword drives both this card and the phone card's change/remove mode.
+      refetch();
     },
     onError: (err) => toast({ title: "Error", description: humanizeError(err), variant: "destructive" }),
   });
@@ -174,6 +177,8 @@ export default function SettingsPage() {
   const newPhone = countryCode + localPhone.replace(/\D/g, "");
   const [phoneOtp, setPhoneOtp] = useState("");
   const [phoneStep, setPhoneStep] = useState<"idle" | "verify">("idle");
+  // Step-up for replacing a verified number — separate from the Password card's field.
+  const [phoneCurrentPassword, setPhoneCurrentPassword] = useState("");
   // Fix #95: phone removal OTP re-challenge state
   const [showRemoveDialog, setShowRemoveDialog] = useState(false);
   const [removeOtp, setRemoveOtp] = useState("");
@@ -182,6 +187,7 @@ export default function SettingsPage() {
     onSuccess: () => {
       toast({ title: "OTP sent!", description: "Enter the 6-digit code sent to your phone." });
       setPhoneStep("verify");
+      setPhoneCurrentPassword("");
     },
     onError: (err) => toast({ title: "Error", description: humanizeError(err), variant: "destructive" }),
   });
@@ -221,6 +227,21 @@ export default function SettingsPage() {
     .slice(0, 2);
 
   const userAny = user as any;
+  const phoneMode = phoneCardMode(userAny);
+
+  // Fix #95: phone removal requires OTP re-confirmation — sent to the phone
+  // being removed (via addPhone with the same number), then the dialog opens.
+  const removePhoneButton = userAny?.phone ? (
+    <Button
+      variant="outline"
+      size="sm"
+      className="text-destructive hover:text-destructive"
+      onClick={() => requestRemovePhone.mutate({ phone: userAny.phone })}
+      disabled={requestRemovePhone.isPending || removePhone.isPending}
+    >
+      {requestRemovePhone.isPending ? "Sending OTP…" : "Remove Number"}
+    </Button>
+  ) : null;
 
   return (
     <div className="w-full">
@@ -494,12 +515,22 @@ export default function SettingsPage() {
                     </Button>
                   </div>
                 </div>
+              ) : phoneMode === "remove-only" ? (
+                /* Changing a verified number needs the current password
+                   (addPhone step-up); without one, removal is the only path. */
+                <div className="space-y-3">
+                  <p className="text-xs text-muted-foreground">
+                    To use a different number, remove this one first. Changing it needs a password, and
+                    this account doesn&apos;t have one yet.
+                  </p>
+                  <div className="flex gap-2">{removePhoneButton}</div>
+                </div>
               ) : (
                 /* Add / change phone form */
                 <div className="space-y-3">
                   <div className="space-y-1.5">
                     <Label htmlFor="newPhone">
-                      {userAny?.phone ? "Change Number" : "Mobile Number"}
+                      {phoneMode === "change" ? "Change Number" : "Mobile Number"}
                     </Label>
                     <div className="flex gap-2">
                       <Select value={countryCode} onValueChange={setCountryCode}>
@@ -528,11 +559,34 @@ export default function SettingsPage() {
                       Select your country code, then enter your number.
                     </p>
                   </div>
+                  {phoneMode === "change" && (
+                    <div className="space-y-1.5">
+                      <Label htmlFor="phoneCurrentPassword">Current Password</Label>
+                      <Input
+                        id="phoneCurrentPassword"
+                        type="password"
+                        autoComplete="current-password"
+                        value={phoneCurrentPassword}
+                        onChange={(e) => setPhoneCurrentPassword(e.target.value)}
+                        placeholder="Required to change your number"
+                      />
+                    </div>
+                  )}
                   <div className="flex gap-2">
                     <Button
                       size="sm"
-                      onClick={() => addPhone.mutate({ phone: newPhone })}
-                      disabled={addPhone.isPending || !localPhone.trim()}
+                      onClick={() =>
+                        addPhone.mutate(
+                          phoneMode === "change"
+                            ? { phone: newPhone, currentPassword: phoneCurrentPassword }
+                            : { phone: newPhone }
+                        )
+                      }
+                      disabled={
+                        addPhone.isPending ||
+                        !localPhone.trim() ||
+                        (phoneMode === "change" && !phoneCurrentPassword)
+                      }
                     >
                       {addPhone.isPending ? "Sending..." : (
                         <>
@@ -541,21 +595,7 @@ export default function SettingsPage() {
                         </>
                       )}
                     </Button>
-                    {/* Fix #95: phone removal requires OTP re-confirmation */}
-                    {userAny?.phone && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="text-destructive hover:text-destructive"
-                        onClick={() => {
-                          // Send OTP to the phone being removed, then show dialog
-                          requestRemovePhone.mutate({ phone: userAny.phone });
-                        }}
-                        disabled={requestRemovePhone.isPending || removePhone.isPending}
-                      >
-                        {requestRemovePhone.isPending ? "Sending OTP…" : "Remove Number"}
-                      </Button>
-                    )}
+                    {removePhoneButton}
                   </div>
                 </div>
               )}
