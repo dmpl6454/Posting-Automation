@@ -228,12 +228,22 @@ export const userRouter = createRouter({
         });
       }
 
-      // Update user's phone and mark as verified
-      const updated = await ctx.prisma.user.update({
-        where: { id: userId },
-        data: { phone: input.phone, phoneVerified: new Date() },
-        select: { password: true },
-      });
+      // Update user's phone and mark as verified. Two accounts can now hold
+      // pending codes for the same unowned number (codes are per-user), so the
+      // second verify can hit User.phone's unique constraint — say so plainly.
+      let updated: { password: string | null };
+      try {
+        updated = await ctx.prisma.user.update({
+          where: { id: userId },
+          data: { phone: input.phone, phoneVerified: new Date() },
+          select: { password: true },
+        });
+      } catch (err: any) {
+        if (err?.code === "P2002") {
+          throw new TRPCError({ code: "CONFLICT", message: "This phone number is already linked to another account" });
+        }
+        throw err;
+      }
 
       // Fix #78: audit log for phone addition
       createAuditLog({

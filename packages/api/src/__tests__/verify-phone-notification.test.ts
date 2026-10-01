@@ -80,6 +80,17 @@ describe("user.verifyPhone — notifies the account's real owner", () => {
     expect(call.subject.toLowerCase()).toContain("phone");
   });
 
+  it("a number another account verified first comes back as CONFLICT, not a 500", async () => {
+    // Codes are per-user now, so two accounts can each hold a valid code for
+    // the same unowned number; the second save hits User.phone's unique index.
+    userUpdate.mockRejectedValueOnce(Object.assign(new Error("Unique constraint failed"), { code: "P2002" }));
+    await expect(caller().verifyPhone({ phone: PHONE, otp: "482913" })).rejects.toMatchObject({
+      code: "CONFLICT",
+      message: expect.stringContaining("already linked"),
+    });
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+
   it("a mail failure never fails the phone verification itself", async () => {
     sendEmail.mockRejectedValueOnce(new Error("smtp down"));
     await expect(caller().verifyPhone({ phone: PHONE, otp: "482913" })).resolves.toMatchObject({ success: true });
