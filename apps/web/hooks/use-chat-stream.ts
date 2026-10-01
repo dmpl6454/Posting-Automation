@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useRef } from "react";
 import { trpc } from "~/lib/trpc/client";
+import { orgHeaders } from "~/lib/org-header";
 // Pure utility — no React deps; also imported by ChatView.tsx and MessageBubble.tsx
 export { actionKey } from "~/lib/chat-action-key";
 import { actionKey } from "~/lib/chat-action-key";
@@ -95,7 +96,7 @@ export function useChatStream(threadId: string | null) {
       try {
         const response = await fetch("/api/chat/stream", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...orgHeaders() },
           body: JSON.stringify({ threadId }),
           signal: controller.signal,
         });

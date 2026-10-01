@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "~/lib/auth";
 import { prisma } from "@postautomation/db";
-import { resolveUploadOrganizationId } from "~/lib/upload-org";
+import { resolveActiveOrganizationId } from "~/lib/upload-org";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 
 export const dynamic = "force-dynamic";
@@ -38,7 +38,7 @@ export async function POST(req: Request) {
 
   // The client sends its active workspace (orgHeaders()); it is honoured only
   // for a real member, else the same default org orgProcedure would pick.
-  const organizationId = await resolveUploadOrganizationId(prisma, userId, req.headers.get("x-organization-id"));
+  const organizationId = await resolveActiveOrganizationId(prisma, userId, req.headers.get("x-organization-id"));
 
   if (!organizationId) {
     return NextResponse.json({ error: "No organization found" }, { status: 403 });

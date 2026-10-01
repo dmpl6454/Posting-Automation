@@ -72,8 +72,29 @@ function uploadFetchCalls(src: string): string[] {
   return calls;
 }
 
+// hooks/ too: use-chat-stream.ts makes plain fetches to org-scoped routes.
+const SCANNED_FILES = ["app", "components", "lib", "hooks"].flatMap((d) => walk(join(WEB, d)));
+
+/** Every `fetch("<path>", …)` call in `src`, as text, balanced on parentheses. */
+function fetchCalls(src: string, path: string): string[] {
+  const calls: string[] = [];
+  const re = new RegExp(`fetch\\(\\s*(["'\`])${path.replace(/\//g, "\\/")}\\1`, "g");
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src))) {
+    const open = m.index + "fetch".length;
+    let depth = 0;
+    let i = open;
+    for (; i < src.length; i++) {
+      if (src[i] === "(") depth++;
+      else if (src[i] === ")" && --depth === 0) break;
+    }
+    calls.push(src.slice(open, i + 1));
+  }
+  return calls;
+}
+
 describe("every client fetch to /api/upload sends the active org", () => {
-  const files = [...walk(join(WEB, "app")), ...walk(join(WEB, "components")), ...walk(join(WEB, "lib"))];
+  const files = SCANNED_FILES;
   const sites = files.flatMap((f) => {
     const rel = relative(join(WEB, "..", ".."), f);
     return uploadFetchCalls(readSourceWithoutComments(rel)).map((call) => ({ file: rel, call }));
@@ -94,5 +115,24 @@ describe("every client fetch to /api/upload sends the active org", () => {
       const literals = src.match(/(["'`])\/api\/upload\1/g) ?? [];
       expect({ file: rel, count: literals.length }).toEqual({ file: rel, count: uploadFetchCalls(src).length });
     }
+  });
+});
+
+// The chat stream route resolves the thread inside the caller's ACTIVE
+// workspace (same membership-checked lookup as /api/upload). Without the header
+// it fell back to the default workspace, so in any other workspace the thread
+// was "not found" and every reply failed to stream.
+describe("every client fetch to /api/chat/stream sends the active org", () => {
+  const sites = SCANNED_FILES.flatMap((f) => {
+    const rel = relative(join(WEB, "..", ".."), f);
+    return fetchCalls(readSourceWithoutComments(rel), "/api/chat/stream").map((call) => ({ file: rel, call }));
+  });
+
+  it("finds the known call sites", () => {
+    expect(sites.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it.each(sites.map((s) => [s.file, s.call] as const))("%s spreads orgHeaders() into its headers", (_file, call) => {
+    expect(call).toMatch(/\.\.\.orgHeaders\(\)/);
   });
 });

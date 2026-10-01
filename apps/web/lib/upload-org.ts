@@ -13,12 +13,13 @@ interface MembershipLookup {
 }
 
 /**
- * Org a /api/upload Media row is filed under. The client's x-organization-id is
+ * The caller's active workspace for a plain (non-tRPC) API route — /api/upload
+ * files Media under it, /api/chat/stream looks the thread up in it. The client's x-organization-id is
  * honoured only after a real membership check; otherwise fall back to the same
  * default org orgProcedure picks (OWNER first, then oldest membership) — an
  * unordered findFirst could land the file in a workspace tRPC never resolves to.
  */
-export async function resolveUploadOrganizationId(
+export async function resolveActiveOrganizationId(
   prisma: MembershipLookup,
   userId: string,
   headerOrgId: string | null | undefined,
