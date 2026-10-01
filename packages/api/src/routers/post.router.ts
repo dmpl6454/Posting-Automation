@@ -17,6 +17,8 @@ import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import crypto from "crypto";
 import { enforcePlanLimit, checkUsageLimit } from "../middleware/plan-limit.middleware";
+import { createRateLimitMiddleware } from "../middleware/rate-limit.middleware";
+import { carouselRateLimiter } from "../middleware/rate-limit";
 import { assertMediaOwned, assertMediaForPlatforms } from "./chat.router";
 import {
   planCaptionFanout,
@@ -1250,6 +1252,7 @@ export const postRouter = createRouter({
 
   /** Generate Instagram carousel slides from text content */
   generateCarousel: orgProcedure
+    .use(createRateLimitMiddleware(carouselRateLimiter))
     .input(
       z.object({
         content: z.string().min(10).max(10000),

@@ -87,6 +87,15 @@ export const aiRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
 export const classifyStyleRefRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
 
 /**
+ * 5 per 10 minutes, per user — post.generateCarousel only (security review
+ * 2026-10-01). One call makes up to 10 AI images over several minutes, and its
+ * quota check counts Media rows written only at the END, so parallel calls all
+ * pass it. A carousel is a deliberate, slow action; 5 in 10 minutes is far
+ * above real use and keeps the race to a few images.
+ */
+export const carouselRateLimiter = createRateLimiter({ windowMs: 10 * 60_000, max: 5 });
+
+/**
  * 3 phone-OTP SMS sends per hour, per caller (security audit 2026-09-28).
  * user.addPhone sends a real SMS to WHATEVER number is supplied; unlimited it
  * is an SMS-toll-fraud primitive (drive up carrier cost by targeting

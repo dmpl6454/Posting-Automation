@@ -27,6 +27,14 @@ const generateCarouselImages = vi.fn(async (..._a: any[]): Promise<{ slides: Arr
 }));
 const withTextProviderFallback = vi.fn(async (..._a: any[]) => '[{"title":"One","body":"First point"}]');
 
+// The per-user carousel limiter (5 / 10 min) is covered by
+// post-generate-carousel-rate-limit.test.ts; this suite calls generateCarousel
+// more often than that, so let every request through.
+vi.mock("../middleware/rate-limit.middleware", () => ({
+  createRateLimitMiddleware: () =>
+    ({ next }: { next: () => Promise<any> }) => next(),
+}));
+
 vi.mock("@postautomation/ai", () => ({
   generateContent: (...a: any[]) => generateContent(...a),
   generateImage: (...a: any[]) => generateImage(...a),
