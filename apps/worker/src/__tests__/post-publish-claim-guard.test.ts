@@ -847,6 +847,63 @@ describe("timing log", () => {
   });
 });
 
+describe("channel-routed platforms publish where the CHANNEL says (2026-10-01)", () => {
+  // Mastodon / self-hosted WordPress / Discord webhooks read their destination
+  // from tokens.metadata. Without it, Mastodon posted to mastodon.social with
+  // another instance's token, and the other two always failed.
+  const channelMeta = { instance: "https://hachyderm.io", siteUrl: "https://blog.example.com", kind: "self-hosted" };
+
+  it.each(["MASTODON", "WORDPRESS", "DISCORD"])("%s: publishPost gets the channel's own metadata", async (platform) => {
+    const publishPost = vi.fn(async (..._a: any[]) => ({ platformPostId: "p1", url: "https://example.com/p1" }));
+    s.provider = realProvider(platform, { publishPost });
+    seedChannel(platform);
+    s.channel.metadata = channelMeta;
+    seedPost([]);
+    seedTarget("t1");
+
+    await s.processor!(makeJob({ data: { ...makeJob().data, platform } }));
+
+    expect(publishPost).toHaveBeenCalledTimes(1);
+    const [tokens, payload] = publishPost.mock.calls[0]!;
+    expect(tokens).toEqual({ accessToken: "tok", refreshToken: "rt", metadata: channelMeta });
+    if (platform === "MASTODON") expect(payload.idempotencyKey).toMatch(/^pa-t1-[0-9a-f]{16}$/);
+    else expect("idempotencyKey" in payload).toBe(false);
+    expect(rows.get("t1")).toMatchObject({ status: "PUBLISHED", publishedId: "p1" });
+  });
+
+  it("the token-refresh re-publish carries the channel metadata and the SAME idempotency key", async () => {
+    const publishPost = vi
+      .fn(async (..._a: any[]): Promise<any> => ({ platformPostId: "p1", url: "https://example.com/p1" }))
+      .mockRejectedValueOnce(new Error("HTTP 401: access token invalid")); // classifies as token_expired
+    s.provider = realProvider("MASTODON", { publishPost, refreshAccessToken: vi.fn(async () => ({ accessToken: "fresh" })) });
+    seedChannel("MASTODON");
+    s.channel.metadata = channelMeta;
+    seedPost([]);
+    seedTarget("t1");
+
+    await s.processor!(makeJob({ data: { ...makeJob().data, platform: "MASTODON" } }));
+
+    expect(publishPost).toHaveBeenCalledTimes(2);
+    const [, firstPayload] = publishPost.mock.calls[0]!;
+    const [retryTokens, retryPayload] = publishPost.mock.calls[1]!;
+    expect(retryTokens).toEqual({ accessToken: "fresh", refreshToken: "rt", metadata: channelMeta });
+    expect(retryPayload.idempotencyKey).toMatch(/^pa-t1-/);
+    expect(retryPayload.idempotencyKey).toBe(firstPayload.idempotencyKey);
+  });
+
+  it("every other platform receives exactly the tokens and payload keys it did before", async () => {
+    const publishPost = vi.fn(async (..._a: any[]) => ({ platformPostId: "ig-1", url: "https://instagram.com/p/1" }));
+    s.provider = realProvider("INSTAGRAM", { publishPost });
+    seedTarget("t1");
+
+    await s.processor!(makeJob());
+
+    const [tokens, payload] = publishPost.mock.calls[0]!;
+    expect(Object.keys(tokens)).toEqual(["accessToken", "refreshToken"]);
+    expect(Object.keys(payload).sort()).toEqual(["content", "mediaTypes", "mediaUrls", "metadata", "onCheckpoint", "onProgress"]);
+  });
+});
+
 describe("wiring — the ordering the behaviour above depends on", () => {
   async function workerSource(): Promise<string> {
     const { readFileSync } = await import("node:fs");
