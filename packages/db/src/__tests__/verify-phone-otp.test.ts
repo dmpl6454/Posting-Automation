@@ -17,7 +17,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import bcrypt from "bcryptjs";
-import { verifyAndConsumePhoneOtp, MAX_OTP_ATTEMPTS } from "../verify-phone-otp";
+import { verifyAndConsumePhoneOtp, MAX_OTP_ATTEMPTS, PHONE_OTP_PURPOSE } from "../verify-phone-otp";
 
 function mockPrisma(record: { id: string; otp: string; attempts: number; used: boolean; expiresAt: Date } | null) {
   const state = record ? { ...record } : null;
@@ -129,6 +129,40 @@ describe("verifyAndConsumePhoneOtp", () => {
     expect(where.used).toBe(false);
     expect(where.expiresAt.gt).toBeInstanceOf(Date);
     expect(findFirst.mock.calls[0]![0].orderBy).toEqual({ createdAt: "desc" });
+  });
+
+  it("applies the userId/purpose scope to the lookup, so a code is only redeemable by whoever it was issued to", async () => {
+    const { prisma, findFirst } = mockPrisma({
+      id: "otp-1",
+      otp: hash,
+      attempts: 0,
+      used: false,
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    await verifyAndConsumePhoneOtp(prisma, PHONE, realOtp, { userId: "user-1", purpose: PHONE_OTP_PURPOSE.ADD_PHONE });
+    const where = findFirst.mock.calls[0]![0].where;
+    expect(where.userId).toBe("user-1");
+    expect(where.purpose).toBe("add-phone");
+    expect(where.phone).toBe(PHONE);
+  });
+
+  it("fails CLOSED when a scope key is present but empty — Prisma reads `userId: undefined` as NO filter", async () => {
+    const { prisma, findFirst, updateMany } = mockPrisma({
+      id: "otp-1",
+      otp: hash,
+      attempts: 0,
+      used: false,
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    expect(
+      await verifyAndConsumePhoneOtp(prisma, PHONE, realOtp, { userId: undefined, purpose: PHONE_OTP_PURPOSE.ADD_PHONE })
+    ).toEqual({ ok: false, reason: "invalid" });
+    expect(await verifyAndConsumePhoneOtp(prisma, PHONE, realOtp, { purpose: "" })).toEqual({
+      ok: false,
+      reason: "invalid",
+    });
+    expect(findFirst).not.toHaveBeenCalled();
+    expect(updateMany).not.toHaveBeenCalled();
   });
 
   it("a wrong guess does NOT mark the record used — a later correct guess can still land", async () => {

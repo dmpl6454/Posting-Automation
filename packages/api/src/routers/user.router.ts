@@ -3,12 +3,16 @@ import { TRPCError } from "@trpc/server";
 import bcrypt from "bcryptjs";
 import { createRouter, protectedProcedure, adminProtectedProcedure } from "../trpc";
 import { createRateLimitMiddleware } from "../middleware/rate-limit.middleware";
-import { addPhoneOtpRateLimiter } from "../middleware/rate-limit";
+import {
+  addPhoneOtpRateLimiter,
+  addPhoneOtpPerPhoneLimiter,
+  phoneRateLimitKey,
+} from "../middleware/rate-limit";
 import { sendSms } from "../lib/sms";
 import { sendEmail } from "../lib/email";
 import { phoneChangedEmail } from "../lib/email-templates";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
-import { verifyAndConsumePhoneOtp } from "@postautomation/db";
+import { verifyAndConsumePhoneOtp, PHONE_OTP_PURPOSE } from "@postautomation/db";
 
 export const userRouter = createRouter({
   me: protectedProcedure.query(async ({ ctx }) => {
@@ -170,15 +174,27 @@ export const userRouter = createRouter({
         });
       }
 
-      // Clean up old OTPs for this phone
-      await ctx.prisma.phoneOtp.deleteMany({ where: { phone: input.phone } });
+      // Per-number cap on top of the per-user one: many accounts can't each
+      // send their 3/hour to the same stranger's phone.
+      if (!addPhoneOtpPerPhoneLimiter(phoneRateLimitKey(input.phone)).success) {
+        throw new TRPCError({
+          code: "TOO_MANY_REQUESTS",
+          message: "Too many codes sent to this number. Please try again later.",
+        });
+      }
+
+      // Replace only the caller's own pending Settings code for this number —
+      // not another user's, and not a login code.
+      await ctx.prisma.phoneOtp.deleteMany({
+        where: { phone: input.phone, userId, purpose: PHONE_OTP_PURPOSE.ADD_PHONE },
+      });
 
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
       const hashedOtp = await bcrypt.hash(otp, 8);
       const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
       await ctx.prisma.phoneOtp.create({
-        data: { phone: input.phone, otp: hashedOtp, expiresAt },
+        data: { phone: input.phone, otp: hashedOtp, expiresAt, userId, purpose: PHONE_OTP_PURPOSE.ADD_PHONE },
       });
 
       await sendSms(
@@ -195,7 +211,13 @@ export const userRouter = createRouter({
       const userId = (ctx.session.user as any).id;
 
       // 🔒 Attempt-limited (security audit 2026-09-28) — see verify-phone-otp.ts.
-      const verified = await verifyAndConsumePhoneOtp(ctx.prisma as any, input.phone, input.otp);
+      // Bound to a code THIS user requested via addPhone: otherwise a hijacked
+      // session could redeem a code the attacker's own account requested and
+      // attach that number without passing addPhone's step-up.
+      const verified = await verifyAndConsumePhoneOtp(ctx.prisma as any, input.phone, input.otp, {
+        userId,
+        purpose: PHONE_OTP_PURPOSE.ADD_PHONE,
+      });
       if (!verified.ok) {
         throw new TRPCError({
           code: "BAD_REQUEST",
@@ -207,9 +229,10 @@ export const userRouter = createRouter({
       }
 
       // Update user's phone and mark as verified
-      await ctx.prisma.user.update({
+      const updated = await ctx.prisma.user.update({
         where: { id: userId },
         data: { phone: input.phone, phoneVerified: new Date() },
+        select: { password: true },
       });
 
       // Fix #78: audit log for phone addition
@@ -230,7 +253,7 @@ export const userRouter = createRouter({
       // must never fail the phone verification itself.
       const accountEmail = (ctx.session.user as any).email as string | undefined;
       if (accountEmail) {
-        const emailContent = phoneChangedEmail(input.phone);
+        const emailContent = phoneChangedEmail(input.phone, { hasPassword: Boolean(updated?.password) });
         sendEmail({
           to: accountEmail,
           subject: emailContent.subject,
@@ -259,9 +282,13 @@ export const userRouter = createRouter({
         throw new TRPCError({ code: "BAD_REQUEST", message: "No phone number to remove." });
       }
 
-      // Verify OTP sent to this phone
+      // Verify OTP sent to this phone. Settings' "Remove Number" requests it via
+      // addPhone with the same number, so it is this user's add-phone code.
       // 🔒 Attempt-limited (security audit 2026-09-28) — see verify-phone-otp.ts.
-      const verifiedRemove = await verifyAndConsumePhoneOtp(ctx.prisma as any, user.phone, input.otp);
+      const verifiedRemove = await verifyAndConsumePhoneOtp(ctx.prisma as any, user.phone, input.otp, {
+        userId,
+        purpose: PHONE_OTP_PURPOSE.ADD_PHONE,
+      });
       if (!verifiedRemove.ok) {
         throw new TRPCError({
           code: "BAD_REQUEST",

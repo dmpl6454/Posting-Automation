@@ -22,6 +22,7 @@ vi.mock("@postautomation/db", () => ({
   },
   ensurePersonalOrg: vi.fn(),
   verifyAndConsumePhoneOtp: (...a: any[]) => verifyAndConsumePhoneOtp(...a),
+  PHONE_OTP_PURPOSE: { LOGIN: "login", ADD_PHONE: "add-phone" },
 }));
 
 import { authConfig } from "../config";
@@ -64,5 +65,10 @@ describe("Credentials phone-otp authorize() requires phoneVerified", () => {
     const result = await authorize({ loginType: "phone-otp", phone: "+15551234567", otp: "123456" });
     expect(result).not.toBeNull();
     expect((result as any).id).toBe("user-1");
+    // Only a login code issued to this account (phone-otp-purpose-binding.test.ts).
+    expect(verifyAndConsumePhoneOtp).toHaveBeenCalledWith(expect.anything(), "+15551234567", "123456", {
+      userId: "user-1",
+      purpose: "login",
+    });
   });
 });

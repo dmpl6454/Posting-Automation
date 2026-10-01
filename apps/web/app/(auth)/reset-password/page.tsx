@@ -17,9 +17,13 @@ export default function ResetPasswordPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);
+  const [phoneRemoved, setPhoneRemoved] = useState(false);
 
   const resetPassword = trpc.auth.resetPassword.useMutation({
-    onSuccess: () => setSuccess(true),
+    onSuccess: (data) => {
+      setPhoneRemoved(Boolean(data?.phoneRemoved));
+      setSuccess(true);
+    },
     onError: (err: any) =>
       setError(err.message || "Failed to reset password. The link may have expired."),
   });
@@ -71,6 +75,12 @@ export default function ResetPasswordPage() {
         <p className="mt-2 text-sm text-muted-foreground">
           Your password has been updated. You can now sign in with your new password.
         </p>
+        {/* auth.resetPassword also clears the phone login method. */}
+        {phoneRemoved && (
+          <p className="mt-2 text-sm text-muted-foreground">
+            For your security, phone sign-in was removed. Re-add your number in Settings if you use it.
+          </p>
+        )}
         <Link href="/login" className="mt-6 block">
           <Button className="h-11 w-full rounded-xl bg-foreground text-background hover:bg-foreground/90">
             <ArrowRight className="mr-2 h-4 w-4" />

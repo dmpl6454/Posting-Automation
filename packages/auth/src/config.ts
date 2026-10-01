@@ -5,7 +5,7 @@ import type { Adapter } from "next-auth/adapters";
 import GoogleProvider from "next-auth/providers/google";
 import CredentialsProvider from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
-import { ensurePersonalOrg, verifyAndConsumePhoneOtp } from "@postautomation/db";
+import { ensurePersonalOrg, verifyAndConsumePhoneOtp, PHONE_OTP_PURPOSE } from "@postautomation/db";
 
 // Wrap PrismaAdapter to skip createUser/createSession for credentials provider
 // This is required because NextAuth v5 beta + PrismaAdapter tries to create
@@ -44,10 +44,6 @@ export const authConfig: NextAuthConfig = {
           const otp = credentials.otp as string;
           if (!phone || !otp) return null;
 
-          // 🔒 Attempt-limited (security audit 2026-09-28) — see verify-phone-otp.ts.
-          const verified = await verifyAndConsumePhoneOtp(prisma, phone, otp);
-          if (!verified.ok) return null;
-
           const user = await prisma.user.findUnique({
             where: { phone },
             select: {
@@ -70,6 +66,15 @@ export const authConfig: NextAuthConfig = {
           // verified, has no reason to hold if that invariant is ever broken
           // elsewhere. Mirrors the check sendPhoneOtp already runs.
           if (!user.phoneVerified) return null;
+
+          // 🔒 Attempt-limited (security audit 2026-09-28) — see verify-phone-otp.ts.
+          // Only a LOGIN code issued (by sendPhoneOtp) to this phone's owner —
+          // never a Settings code, nor one minted for a previous owner.
+          const verified = await verifyAndConsumePhoneOtp(prisma, phone, otp, {
+            userId: user.id,
+            purpose: PHONE_OTP_PURPOSE.LOGIN,
+          });
+          if (!verified.ok) return null;
 
           return {
             id: user.id,
