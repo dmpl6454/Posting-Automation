@@ -16,7 +16,7 @@ import {
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import crypto from "crypto";
-import { enforcePlanLimit } from "../middleware/plan-limit.middleware";
+import { enforcePlanLimit, checkUsageLimit } from "../middleware/plan-limit.middleware";
 import { assertMediaOwned, assertMediaForPlatforms } from "./chat.router";
 import {
   planCaptionFanout,
@@ -1255,11 +1255,16 @@ export const postRouter = createRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      // Security audit 2026-09-28: this generates up to 10 AI images per call
-      // (image.router.ts's own `generate` — ONE image per call — already
-      // gates on this same resource) but had no plan check at all, unlike
-      // every other AI-image-generation path in this codebase.
-      await enforcePlanLimit(ctx.organizationId, "aiImagesPerMonth", ctx.isSuperAdmin);
+      // Security audit 2026-09-28: up to 10 AI images per call. Checked against
+      // the WHOLE batch — enforcePlanLimit's `current < limit` would let a
+      // 10-slide carousel through on one image of headroom.
+      const usage = await checkUsageLimit(ctx.organizationId, "aiImagesPerMonth", ctx.isSuperAdmin);
+      if (usage.limit !== -1 && usage.current + input.slideCount > usage.limit) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: `Plan limit reached: ${usage.planName} plan allows ${usage.limit} AI images this month (currently ${usage.current}, this carousel would add ${input.slideCount}). Upgrade your plan or generate fewer slides.`,
+        });
+      }
 
       const { generateContent, generateImage: generateGeminiImage, generateCarouselImages } = await import("@postautomation/ai");
       const userId = (ctx.session.user as any).id as string;
@@ -1282,7 +1287,7 @@ export const postRouter = createRouter({
         return `${process.env.S3_ENDPOINT || "https://s3.amazonaws.com"}/${bucket}/${key}`;
       }
 
-      async function uploadAndCreateMedia(imageBase64: string, mimeType: string, prefix: string) {
+      async function uploadAndCreateMedia(imageBase64: string, mimeType: string, prefix: string, aiGenerated: boolean) {
         const s3 = getS3();
         const ext = mimeType.includes("png") ? "png" : "jpg";
         const contentType = mimeType.includes("png") ? "image/png" : "image/jpeg";
@@ -1294,7 +1299,10 @@ export const postRouter = createRouter({
           data: {
             organizationId: ctx.organizationId,
             uploadedById: userId,
-            fileName: `carousel-slide-${prefix}.${ext}`,
+            // The aiImagesPerMonth counter counts Media rows whose fileName
+            // starts with "ai-" (plan-limit.middleware.ts). Template slides
+            // are not AI images and stay un-prefixed.
+            fileName: `${aiGenerated ? "ai-" : ""}carousel-slide-${prefix}.${ext}`,
             fileType: contentType,
             fileSize: buf.length,
             url,
@@ -1329,7 +1337,9 @@ Return ONLY the JSON array, no other text.`;
         );
         const cleaned = slideResponse.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
         const arrMatch = cleaned.match(/\[[\s\S]*\]/);
-        if (arrMatch) slideData = JSON.parse(arrMatch[0]);
+        // Capped: the quota above was checked against input.slideCount images,
+        // and the model can return more points than it was asked for.
+        if (arrMatch) slideData = (JSON.parse(arrMatch[0]) as typeof slideData).slice(0, input.slideCount - 2);
       } catch (e) {
         console.warn(`[Carousel] AI slide generation failed, using fallback:`, (e as Error).message);
       }
@@ -1357,7 +1367,7 @@ Return ONLY the JSON array, no other text.`;
 
       // 3. Generate AI images one at a time with delay to avoid Gemini rate limits
       const DELAY_BETWEEN_SLIDES = 4000; // 4s between each slide
-      const slideImages: Array<{ imageBase64: string; mimeType: string } | null> = [];
+      const slideImages: Array<{ imageBase64: string; mimeType: string; aiGenerated: boolean } | null> = [];
 
       const slidePrompts = allSlides.map((slide, i) => {
         if (slide.type === "cover") {
@@ -1390,7 +1400,7 @@ Style: Clean readable typography, visual hierarchy, 4:5 portrait ratio. Professi
             }
             console.log(`[Carousel] Generating slide ${i + 1}/${slidePrompts.length}...`);
             const result = await generateGeminiImage({ prompt: slidePrompts[i]!, aspectRatio: "3:4" });
-            slideImages.push({ imageBase64: result.imageBase64, mimeType: result.mimeType });
+            slideImages.push({ imageBase64: result.imageBase64, mimeType: result.mimeType, aiGenerated: true });
             console.log(`[Carousel] Slide ${i + 1} generated successfully`);
             success = true;
             break;
@@ -1422,7 +1432,7 @@ Style: Clean readable typography, visual hierarchy, 4:5 portrait ratio. Professi
           // Replace all slide images with Puppeteer results
           slideImages.length = 0;
           for (const slide of carouselResult.slides) {
-            slideImages.push({ imageBase64: slide.imageBase64, mimeType: slide.mimeType });
+            slideImages.push({ imageBase64: slide.imageBase64, mimeType: slide.mimeType, aiGenerated: false });
           }
           console.log(`[Carousel] Puppeteer fallback generated ${carouselResult.slides.length} slides`);
         } catch (puppeteerErr) {
@@ -1435,7 +1445,7 @@ Style: Clean readable typography, visual hierarchy, 4:5 portrait ratio. Professi
       for (let i = 0; i < slideImages.length; i++) {
         const slide = slideImages[i];
         if (!slide) continue;
-        const result = await uploadAndCreateMedia(slide.imageBase64, slide.mimeType, `slide-${i + 1}`);
+        const result = await uploadAndCreateMedia(slide.imageBase64, slide.mimeType, `slide-${i + 1}`, slide.aiGenerated);
         mediaItems.push(result);
       }
 
