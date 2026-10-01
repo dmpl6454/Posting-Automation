@@ -5,6 +5,7 @@ import { createRouter, adminOrgProcedure } from "../trpc";
 import { requirePlan } from "../middleware/plan-limit.middleware";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 import { webhookUrlSchema } from "../lib/url-safety";
+import { checkHostIsPublic } from "../lib/public-host";
 
 function requireOwnerOrAdmin(role: string | undefined) {
   if (role !== "OWNER" && role !== "ADMIN") {
@@ -35,6 +36,20 @@ export const webhookRouter = createRouter({
       // Professional+ integration capability; enforce here so a lower-plan user
       // can't create one via a direct tRPC call. (Superadmins bypass.)
       await requirePlan(ctx.organizationId, "PROFESSIONAL", "Webhooks", ctx.isSuperAdmin);
+      // The schema is a hostname regex: it misses domains pointed at private
+      // addresses, every IPv6 form and CGNAT. Check what the name resolves to.
+      // Delivery re-checks at connect time (userHostFetch), so this is for a
+      // clear message now rather than a failed delivery later.
+      const verdict = await checkHostIsPublic(new URL(input.url).hostname);
+      if (verdict === "private") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "That webhook URL points to a private or internal address. Use a public HTTPS endpoint.",
+        });
+      }
+      if (verdict === "unresolved") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Couldn't find a server at that webhook URL. Check it for typos." });
+      }
       const secret = crypto.randomBytes(32).toString("hex");
       const webhook = await ctx.prisma.webhook.create({
         data: {
