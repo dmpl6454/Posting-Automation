@@ -8,7 +8,7 @@ import {
 import { QUEUE_NAMES, postPublishQueue, analyticsSyncQueue, type PostPublishJobData, createRedisConnection } from "@postautomation/queue";
 import IORedis from "ioredis";
 import { buildPublishEmail, buildPublishReportCsv } from "../lib/publish-email";
-import { publishReportFingerprint, claimPublishReport } from "../lib/publish-report-dedupe";
+import { publishReportFingerprint, claimPublishReport, releasePublishReport } from "../lib/publish-report-dedupe";
 import { planFacebookAnalyticsId, earlyVideoSyncDelayMs } from "../lib/fb-video-post-id";
 import { addLocalClaim, releaseLocalClaim, localClaimCount } from "../lib/local-claims";
 import { trackBackgroundTask } from "../lib/background-tasks";
@@ -113,29 +113,30 @@ async function sendPublishReportEmail(
     publishedAt: Date | null;
     ambiguousAt: Date | null;
     channel: { platform: string; name: string; username: string | null };
-  }[]
+  }[],
+  // Post.scheduledAt read by the caller BEFORE it snapshotted allTargets — see
+  // the call sites. Reading it here instead could pair an old round's outcome
+  // with a new round's marker when a Retry lands in between.
+  roundScheduledAt: Date | null
 ) {
+  // Send each report ONCE per (post, round, outcome) — see publish-report-dedupe.ts.
+  // Every job that finds the post's targets all final calls this function, so
+  // several jobs left over for one target each re-sent the same report (four
+  // copies of one 240-channel report on 2026-09-29).
+  const fingerprint = publishReportFingerprint({ postId, scheduledAt: roundScheduledAt, targets: allTargets });
+  if (!(await claimPublishReport(progressPublisher, postId, fingerprint))) {
+    console.log(`[PostPublish] publish report for post ${postId} already sent for this outcome — skipping duplicate`);
+    return;
+  }
+  let delivered = 0;
+
   try {
     // Recipient: the post creator. Fall back to org OWNERs only if the post has
     // no resolvable creator (e.g. system-created autopilot orphans).
     const post = await prisma.post.findUnique({
       where: { id: postId },
-      select: { createdById: true, scheduledAt: true },
+      select: { createdById: true },
     });
-
-    // Send each report ONCE per (post, round, outcome) — see publish-report-dedupe.ts.
-    // Every job that finds the post's targets all final calls this function, so
-    // several jobs left over for one target each re-sent the same report (four
-    // copies of one 240-channel report on 2026-09-29).
-    const fingerprint = publishReportFingerprint({
-      postId,
-      scheduledAt: post?.scheduledAt ?? null,
-      targets: allTargets,
-    });
-    if (!(await claimPublishReport(progressPublisher, postId, fingerprint))) {
-      console.log(`[PostPublish] publish report for post ${postId} already sent for this outcome — skipping duplicate`);
-      return;
-    }
 
     let recipients: { email: string | null }[] = [];
     if (post?.createdById) {
@@ -219,10 +220,15 @@ async function sendPublishReportEmail(
       } else {
         console.log(`[PostPublish] [Email Preview] To: ${r.email} | Subject: ${subject}`);
       }
+      delivered++;
     }
   } catch (emailErr: any) {
     // Never let email failure break the publish flow
     console.warn(`[PostPublish] Email report failed:`, emailErr.message);
+    // Nothing went out, so free the claim: a later identical completion (e.g. a
+    // leftover job) may still deliver it. Not released after a partial send —
+    // retrying would duplicate it for the recipients who already have it.
+    if (delivered === 0) await releasePublishReport(progressPublisher, postId, fingerprint);
   }
 }
 
@@ -1412,6 +1418,11 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
 
       // 5. Check if all targets are published and update parent post (best-effort)
       try {
+        // Round marker for the publish report, read BEFORE the target snapshot.
+        const reportRound = await prisma.post.findUnique({
+          where: { id: postTarget.postId },
+          select: { scheduledAt: true },
+        });
         const allTargets = await prisma.postTarget.findMany({
           where: { postId: postTarget.postId },
           include: { channel: { select: { platform: true, name: true, username: true } } },
@@ -1425,7 +1436,7 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
           });
 
           // Send email report with all published links
-          await sendPublishReportEmail(postTarget.post.organizationId, postTarget.postId, postTarget.post.content, allTargets);
+          await sendPublishReportEmail(postTarget.post.organizationId, postTarget.postId, postTarget.post.content, allTargets, reportRound?.scheduledAt ?? null);
         } else if (allTerminal) {
           // Mixed outcome where the LAST terminal event is a SUCCESS (a
           // sibling already failed terminally): mirror the failed-handler's
@@ -1436,7 +1447,7 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
             where: { id: postTarget.postId },
             data: { status: "PUBLISHED", publishedAt: new Date() },
           });
-          await sendPublishReportEmail(postTarget.post.organizationId, postTarget.postId, postTarget.post.content, allTargets);
+          await sendPublishReportEmail(postTarget.post.organizationId, postTarget.postId, postTarget.post.content, allTargets, reportRound?.scheduledAt ?? null);
         }
       } catch (aggregateErr: any) {
         console.warn(`[PostPublish] Post aggregation step failed for ${postTargetId}: ${aggregateErr.message}`);
@@ -1603,6 +1614,11 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
               "FAILED"
             );
 
+            // Round marker for the publish report, read BEFORE the target snapshot.
+            const reportRound = await prisma.post.findUnique({
+              where: { id: postTarget.postId },
+              select: { scheduledAt: true },
+            });
             const allTargets = await prisma.postTarget.findMany({
               where: { postId: postTarget.postId },
               include: { channel: { select: { platform: true, name: true, username: true } } },
@@ -1616,7 +1632,7 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
               });
 
               // Send email report with publish results (including failures)
-              await sendPublishReportEmail(postTarget.post.organizationId, postTarget.postId, postTarget.post.content, allTargets);
+              await sendPublishReportEmail(postTarget.post.organizationId, postTarget.postId, postTarget.post.content, allTargets, reportRound?.scheduledAt ?? null);
             }
           }
         } catch (finalErr: any) {

@@ -19,7 +19,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { publishReportFingerprint, claimPublishReport, publishReportKey } from "./publish-report-dedupe";
+import { publishReportFingerprint, claimPublishReport, publishReportKey, releasePublishReport } from "./publish-report-dedupe";
 
 const t = (id: string, status: string, publishedUrl: string | null = null, ambiguousAt: Date | null = null) => ({
   id,
@@ -103,9 +103,25 @@ describe("claimPublishReport", () => {
   });
 });
 
+describe("releasePublishReport", () => {
+  it("deletes the claim so a later identical completion can deliver", async () => {
+    const del = vi.fn(async (..._a: any[]) => 1);
+    await releasePublishReport({ del }, "p1", "abc");
+    expect(del).toHaveBeenCalledWith("publish-report:p1:abc");
+  });
+
+  it("never throws — it runs inside an error path", async () => {
+    const del = vi.fn(async (..._a: any[]) => {
+      throw new Error("redis down");
+    });
+    await expect(releasePublishReport({ del }, "p1", "abc")).resolves.toBeUndefined();
+  });
+});
+
 describe("the worker claims before it sends (source lock — the worker module opens Redis at load)", () => {
-  const src = readFileSync(join(__dirname, "../workers/post-publish.worker.ts"), "utf8");
-  const fn = src.slice(src.indexOf("async function sendPublishReportEmail("), src.indexOf("// ── In-app notifications"));
+  const raw = readFileSync(join(__dirname, "../workers/post-publish.worker.ts"), "utf8");
+  const src = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+  const fn = src.slice(src.indexOf("async function sendPublishReportEmail("), src.indexOf("async function notifyPublishOutcome("));
 
   it("sendPublishReportEmail computes a fingerprint and claims it", () => {
     expect(fn).toMatch(/publishReportFingerprint\(/);
@@ -117,7 +133,26 @@ describe("the worker claims before it sends (source lock — the worker module o
     expect(fn.indexOf("claimPublishReport(")).toBeLessThan(fn.indexOf("sendMail("));
   });
 
-  it("the post read includes scheduledAt (the round marker)", () => {
-    expect(fn).toMatch(/scheduledAt:\s*true/);
+  it("releases the claim when nothing was delivered because of an error", () => {
+    expect(fn).toMatch(/releasePublishReport\(/);
+  });
+
+  it("the round marker is read BEFORE the target snapshot at every call site", () => {
+    // A Retry (publishNow) writes scheduledAt and then resets the targets in a
+    // separate statement. Reading the round AFTER the targets could file the
+    // old round's outcome under the new round and swallow the retry's report.
+    const snapshot = "const allTargets = await prisma.postTarget.findMany(";
+    const sites: number[] = [];
+    for (let i = src.indexOf(snapshot); i !== -1; i = src.indexOf(snapshot, i + 1)) sites.push(i);
+    expect(sites.length).toBe(2);
+    for (const at of sites) {
+      const before = src.slice(Math.max(0, at - 500), at);
+      expect(before).toMatch(/const reportRound = await prisma\.post\.findUnique\(/);
+      expect(before).toMatch(/scheduledAt:\s*true/);
+    }
+    const calls = src.match(/sendPublishReportEmail\([^)]*\)/g) ?? [];
+    const callSites = calls.filter((c) => !c.includes("organizationId: string"));
+    expect(callSites.length).toBe(3);
+    for (const c of callSites) expect(c).toMatch(/reportRound/);
   });
 });

@@ -72,3 +72,20 @@ export async function claimPublishReport(
     return true;
   }
 }
+
+/**
+ * Undo a claim when the report it reserved was not delivered (SMTP/DB error),
+ * so a later identical completion — e.g. a leftover job — can still deliver it.
+ * Best-effort and never throws: it runs inside an error path.
+ */
+export async function releasePublishReport(
+  redis: { del: (...args: any[]) => Promise<unknown> },
+  postId: string,
+  fingerprint: string
+): Promise<void> {
+  try {
+    await redis.del(publishReportKey(postId, fingerprint));
+  } catch (err: any) {
+    console.warn(`[PostPublish] could not release publish-report claim for post ${postId}: ${err?.message}`);
+  }
+}
