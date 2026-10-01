@@ -121,16 +121,67 @@ describe("admin.users.stopImpersonation — a real server-side kill switch", () 
     expect(userUpdate).toHaveBeenCalledWith({ where: { id: ADMIN_ID }, data: { activeImpersonationJti: null } });
   });
 
-  it("refuses when not currently impersonating (no free-standing revoke-anyone primitive)", async () => {
-    // No impersonationToken at all — protectedProcedure's middleware never
-    // sets ctx.isImpersonating true in this case (it's a fresh local
-    // variable per request, so there's nothing to spoof from the caller side).
+  // Idempotent when no swap happened (no token, superseded jti, demoted admin,
+  // expired token, a stale second tab): it must SUCCEED so the client can
+  // clear its cookie instead of stranding the banner — but it must not clear
+  // anyone's slot (no free-standing revoke-anyone primitive).
+  it("succeeds without clearing any slot when there is no impersonation token", async () => {
     const caller = createCallerFactory(adminUsersRouter)({
       prisma: prismaMock as any,
       session: { user: { id: ADMIN_ID, email: "admin@x.com", isSuperAdmin: true, isBanned: false }, expires: "2099-01-01" } as any,
     } as any);
 
-    await expect(caller.stopImpersonation()).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(caller.stopImpersonation()).resolves.toEqual({ success: true });
+    expect(userUpdate).not.toHaveBeenCalled();
+    expect(auditLogCreate).not.toHaveBeenCalled();
+  });
+
+  it("succeeds without clearing when the presented token is superseded (stale second tab)", async () => {
+    userFindUnique.mockImplementation(async (args: any) => {
+      const id = args.where.id as string;
+      if (id === TARGET_ID) return { id: TARGET_ID, email: "target@x.com", name: "Target", image: null };
+      if (id === ADMIN_ID) return { isSuperAdmin: true, isBanned: false, activeImpersonationJti: "jti-NEWER" };
+      return null;
+    });
+    const secret = new TextEncoder().encode(process.env.NEXTAUTH_SECRET);
+    const impersonationToken = await new SignJWT({ impersonatedUserId: TARGET_ID, adminUserId: ADMIN_ID })
+      .setProtectedHeader({ alg: "HS256" })
+      .setJti("jti-OLD")
+      .setExpirationTime("1h")
+      .sign(secret);
+
+    const caller = createCallerFactory(adminUsersRouter)({
+      prisma: prismaMock as any,
+      session: { user: { id: ADMIN_ID, email: "admin@x.com", isSuperAdmin: true, isBanned: false }, expires: "2099-01-01" } as any,
+      impersonationToken,
+    } as any);
+
+    await expect(caller.stopImpersonation()).resolves.toEqual({ success: true });
+    // The newer, live session from another tab must survive.
+    expect(userUpdate).not.toHaveBeenCalled();
+  });
+
+  it("a DIFFERENT account presenting the admin's token clears nothing", async () => {
+    userFindUnique.mockImplementation(async (args: any) => {
+      const id = args.where.id as string;
+      if (id === TARGET_ID) return { id: TARGET_ID, email: "target@x.com", name: "Target", image: null };
+      if (id === ADMIN_ID) return { isSuperAdmin: true, isBanned: false, activeImpersonationJti: "jti-live" };
+      return null;
+    });
+    const secret = new TextEncoder().encode(process.env.NEXTAUTH_SECRET);
+    const impersonationToken = await new SignJWT({ impersonatedUserId: TARGET_ID, adminUserId: ADMIN_ID })
+      .setProtectedHeader({ alg: "HS256" })
+      .setJti("jti-live")
+      .setExpirationTime("1h")
+      .sign(secret);
+
+    const caller = createCallerFactory(adminUsersRouter)({
+      prisma: prismaMock as any,
+      session: { user: { id: "user-2", email: "u2@x.com", isSuperAdmin: false, isBanned: false }, expires: "2099-01-01" } as any,
+      impersonationToken,
+    } as any);
+
+    await expect(caller.stopImpersonation()).resolves.toEqual({ success: true });
     expect(userUpdate).not.toHaveBeenCalled();
   });
 });
