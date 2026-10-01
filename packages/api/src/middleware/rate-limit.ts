@@ -80,6 +80,13 @@ export const authRateLimiter = createRateLimiter({ windowMs: 60_000, max: 10 });
 export const aiRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
 
 /**
+ * 30 per minute — repurpose.classifyStyleReference only. It fires automatically
+ * from the Repurpose UI (upload, paste, on-blur), so it must not draw from the
+ * shared aiRateLimiter budget the user's real generations need.
+ */
+export const classifyStyleRefRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
+
+/**
  * 3 phone-OTP SMS sends per hour, per caller (security audit 2026-09-28).
  * user.addPhone sends a real SMS to WHATEVER number is supplied; unlimited it
  * is an SMS-toll-fraud primitive (drive up carrier cost by targeting

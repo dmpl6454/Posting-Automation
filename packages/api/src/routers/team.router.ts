@@ -310,6 +310,11 @@ export const teamRouter = createRouter({
    * kill it. Org-scoped so one workspace can never enumerate another's.
    */
   listInvites: adminOrgProcedure.query(async ({ ctx }) => {
+    // adminOrgProcedure gates on the APP role only; pending invite emails are
+    // org-admin data, so apply the same org-role gate as invite/revokeInvite.
+    if (ctx.membership.role !== "OWNER" && ctx.membership.role !== "ADMIN") {
+      throw new TRPCError({ code: "FORBIDDEN", message: "Only owners and admins can view pending invites" });
+    }
     return ctx.prisma.organizationInvite.findMany({
       where: { organizationId: ctx.organizationId, acceptedAt: null },
       select: { id: true, email: true, role: true, expiresAt: true, createdAt: true, invitedById: true },
