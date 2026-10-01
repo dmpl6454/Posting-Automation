@@ -1,6 +1,7 @@
 "use client";
 
 import { humanizeError } from "~/lib/errors";
+import { orgHeaders } from "~/lib/org-header";
 import { buildCreatePostQuery } from "~/lib/repurpose-create-post-params";
 import { parseVideoReadyEvent, isVideoErrorEvent, finalizeRunningSteps } from "~/lib/parse-video-event";
 import { stripBareUrls } from "~/lib/strip-bare-urls";
@@ -396,7 +397,7 @@ export function RepurposeTab() {
     const fd = new FormData();
     fd.append("file", file);
     fd.append("category", "aesthetic-ref");
-    const res = await fetch("/api/upload", { method: "POST", body: fd });
+    const res = await fetch("/api/upload", { method: "POST", headers: orgHeaders(), body: fd });
     if (res.ok) {
       const { id, url } = await res.json();
       setAestheticRefUrl(url);
@@ -1240,7 +1241,7 @@ export function RepurposeTab() {
                                       if (!file) return;
                                       const fd = new FormData();
                                       fd.append("file", file);
-                                      const res = await fetch("/api/upload", { method: "POST", body: fd });
+                                      const res = await fetch("/api/upload", { method: "POST", headers: orgHeaders(), body: fd });
                                       if (!res.ok) {
                                         toast({ title: "Image upload failed", variant: "destructive" });
                                         return;
@@ -1583,7 +1584,7 @@ export function RepurposeTab() {
                         const fd = new FormData();
                         fd.append("file", file);
                         fd.append("category", "logo");
-                        const res = await fetch("/api/upload", { method: "POST", body: fd });
+                        const res = await fetch("/api/upload", { method: "POST", headers: orgHeaders(), body: fd });
                         if (res.ok) {
                           const { id, url } = await res.json();
                           setLogoUrl(url); setLogoMediaId(id);
@@ -1735,7 +1736,7 @@ export function RepurposeTab() {
                         const fd = new FormData();
                         fd.append("file", file);
                         fd.append("category", "aesthetic-ref");
-                        const res = await fetch("/api/upload", { method: "POST", body: fd });
+                        const res = await fetch("/api/upload", { method: "POST", headers: orgHeaders(), body: fd });
                         if (res.ok) {
                           const { id, url } = await res.json();
                           setAestheticRefUrl(url);
@@ -2663,7 +2664,7 @@ export function RepurposeTab() {
                           const fd = new FormData();
                           fd.append("file", blob, "hero-crop.png");
                           fd.append("category", "hero");
-                          const resp = await fetch("/api/upload", { method: "POST", body: fd });
+                          const resp = await fetch("/api/upload", { method: "POST", headers: orgHeaders(), body: fd });
                           if (!resp.ok) throw new Error("Upload failed");
                           const { id, url: uploadedUrl } = await resp.json();
                           setImageAssignments((prev) => ({ ...prev, background: { mediaId: id, url: uploadedUrl } }));
@@ -2759,7 +2760,7 @@ export function RepurposeTab() {
                                     const fd = new FormData();
                                     fd.append("file", file);
                                     fd.append("category", "hero");
-                                    const resp = await fetch("/api/upload", { method: "POST", body: fd });
+                                    const resp = await fetch("/api/upload", { method: "POST", headers: orgHeaders(), body: fd });
                                     if (!resp.ok) throw new Error("Upload failed");
                                     const { id: uploadedId, url: uploadedUrl } = await resp.json();
                                     // Load the data URL into the cropper (taint-safe).

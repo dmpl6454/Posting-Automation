@@ -7,6 +7,7 @@ import superjson from "superjson";
 import { trpc } from "./client";
 import { toast } from "~/hooks/use-toast";
 import { humanizeError } from "~/lib/errors";
+import { getCurrentOrgId, ORG_HEADER } from "../org-header";
 
 function getBaseUrl() {
   if (typeof window !== "undefined") return "";
@@ -98,11 +99,8 @@ export function TRPCProvider({ children }: { children: React.ReactNode }) {
           transformer: superjson,
           fetch: guardedFetch,
           headers() {
-            const orgId = typeof window !== "undefined"
-              ? localStorage.getItem("currentOrgId") || ""
-              : "";
             return {
-              "x-organization-id": orgId,
+              [ORG_HEADER]: getCurrentOrgId(),
             };
           },
         }),

@@ -10,6 +10,7 @@
  */
 import { useCallback } from "react";
 import { trpc } from "~/lib/trpc/client";
+import { orgHeaders } from "~/lib/org-header";
 
 const MULTIPART_THRESHOLD = 8 * 1024 * 1024;
 
@@ -35,7 +36,7 @@ export function useSmartUpload() {
         const form = new FormData();
         form.append("file", file);
         if (opts?.category) form.append("category", opts.category);
-        const res = await fetch("/api/upload", { method: "POST", body: form, signal: opts?.signal });
+        const res = await fetch("/api/upload", { method: "POST", headers: orgHeaders(), body: form, signal: opts?.signal });
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
           // Non-JSON failures (HTML 413/502 pages) have no .error — surface the
