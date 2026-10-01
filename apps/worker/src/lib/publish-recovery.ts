@@ -158,6 +158,20 @@ export function classifyError(errMsg: string): PublishErrorType {
   // 11-image post (2026-09-16) was reported as "Platform rate limit hit. Will
   // retry automatically." for a post that can never publish as it stands.
   if (msg.trimStart().startsWith("validation failed")) return "unknown";
+  // ⚠️ MUST run before the generic `code":368` match below. Code 368 is
+  // Meta's broad "abusive/disallowed action" bucket, and NOT every subcode
+  // under it is a transient throttle. subcode 1404112 ("your account has
+  // limited access to the site for a few days") is a DEFINITE, multi-day
+  // account-level restriction that no retry cadence on our side can resolve.
+  // Measured on prod (2026-09-28/29): one target retried every 30 minutes for
+  // 9+ hours straight under the old classification, all identical
+  // code:368/subcode:1404112, none ever succeeding — and because the
+  // publish-report email only sends once EVERY target on a post reaches a
+  // terminal state, this silently withheld the report for 235 OTHER channels
+  // that had already published successfully hours earlier.
+  if (msg.includes("code\":368") && (msg.includes("subcode\":1404112") || msg.includes("limited access to the site"))) {
+    return "permission";
+  }
   // ⚠️ "request limit reached" is Meta's wording for the THROTTLE family —
   // (#4) Application / (#17) User / (#32) Page / (#341) Application limit. None
   // of the patterns beside it matched: Meta says "request limit", not "rate
