@@ -2,6 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, superAdminProcedure } from "../../trpc";
 import { createAuditLog, AUDIT_ACTIONS } from "../../lib/audit";
+import { PUBLIC_CHANNEL_SELECT, toPublicChannel } from "../../lib/public-channel";
 import { getSocialProvider, resolvePlatformCredentials } from "@postautomation/social";
 import type { SocialPlatform } from "@postautomation/db";
 
@@ -16,10 +17,15 @@ export const adminChannelsRouter = createRouter({
     .query(async ({ ctx, input }) => {
       const { limit, cursor } = input;
 
+      // A direct channel read decrypts the tokens and this page spans every org,
+      // so select the public fields only; refreshToken is read solely to derive
+      // hasRefreshToken and never returned.
       const items = await ctx.prisma.channel.findMany({
         take: limit + 1,
         ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-        include: {
+        select: {
+          ...PUBLIC_CHANNEL_SELECT,
+          refreshToken: true,
           organization: { select: { id: true, name: true } },
         },
         orderBy: { createdAt: "desc" },
@@ -48,7 +54,8 @@ export const adminChannelsRouter = createRouter({
           }
         }
         return {
-          ...ch,
+          ...toPublicChannel(ch),
+          organization: { id: ch.organization.id, name: ch.organization.name },
           tokenStatus,
           hasRefreshToken: !!ch.refreshToken,
         };

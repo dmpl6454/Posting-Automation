@@ -2,6 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, superAdminProcedure } from "../../trpc";
 import { createAuditLog, AUDIT_ACTIONS } from "../../lib/audit";
+import { PUBLIC_CHANNEL_SELECT, toPublicChannel } from "../../lib/public-channel";
 import { listAllMetaApps, isKnownMetaAppId } from "@postautomation/social";
 
 export const adminOrgsRouter = createRouter({
@@ -58,7 +59,7 @@ export const adminOrgsRouter = createRouter({
               },
             },
           },
-          channels: true,
+          channels: { select: PUBLIC_CHANNEL_SELECT },
           posts: {
             take: 10,
             orderBy: { createdAt: "desc" },
@@ -66,7 +67,7 @@ export const adminOrgsRouter = createRouter({
         },
       });
       if (!org) throw new TRPCError({ code: "NOT_FOUND" });
-      return org;
+      return { ...org, channels: org.channels.map(toPublicChannel) };
     }),
 
   changePlan: superAdminProcedure
