@@ -18,6 +18,7 @@
 import { TRPCError } from "@trpc/server";
 import { isPublicPageUrl } from "@postautomation/ai";
 import { checkHostIsPublic } from "./public-host";
+import { userHostFetch, isUserHostError, type UserHostInit } from "@postautomation/social/src/utils/user-host-fetch";
 
 export type TokenPlatform =
   | "TELEGRAM"
@@ -314,28 +315,27 @@ async function assertPublicServer(url: string, notPublicMessage: string): Promis
   if (verdict === "private") badRequest(notPublicMessage);
 }
 
-/** Never follow a redirect: a public host could bounce the request to an internal one. */
-function userServerFetchInit(init: RequestInit = {}): RequestInit {
-  return { ...init, redirect: "manual", signal: AbortSignal.timeout(USER_SERVER_FETCH_TIMEOUT_MS) };
-}
-
-function isRedirectResponse(res: Response): boolean {
-  return res.type === "opaqueredirect" || res.status === 0 || (res.status >= 300 && res.status < 400);
-}
-
+/**
+ * Every request to a user-named server goes through userHostFetch: the socket
+ * connects only to addresses that were checked (so a DNS answer that changes
+ * after assertPublicServer cannot reach an internal host), redirects are never
+ * followed, and there is a deadline. Plain fetch() resolved the name a second
+ * time, which left exactly that gap (2026-10-01).
+ */
 async function fetchUserServer(
   url: string,
-  init: RequestInit,
-  messages: { unreachable: string; redirected: string },
+  init: UserHostInit,
+  messages: { unreachable: string; redirected: string; notPublic: string },
 ): Promise<Response> {
-  let res: Response;
   try {
-    res = await fetch(url, userServerFetchInit(init));
-  } catch {
+    return await userHostFetch(url, { ...init, timeoutMs: USER_SERVER_FETCH_TIMEOUT_MS });
+  } catch (err) {
+    if (isUserHostError(err)) {
+      if (err.kind === "redirect") badRequest(messages.redirected);
+      if (err.kind === "blocked" || err.kind === "bad_url") badRequest(messages.notPublic);
+    }
     badRequest(messages.unreachable);
   }
-  if (isRedirectResponse(res)) badRequest(messages.redirected);
-  return res;
 }
 
 async function validateTelegram(creds: Record<string, string>): Promise<ValidatedChannel> {
@@ -459,13 +459,32 @@ async function validateMastodon(creds: Record<string, string>): Promise<Validate
   if (!instanceRaw) badRequest("Instance URL is required (e.g. https://mastodon.social).");
   if (!accessToken) badRequest("Access token is required.");
 
-  const instance = instanceRaw.replace(/\/+$/, "").replace(/^http:\/\//, "https://");
-  if (!/^https:\/\/[\w.-]+\.[a-z]{2,}$/i.test(instance)) {
-    badRequest("Instance URL must look like https://mastodon.social — no path or trailing slash.");
+  const formatMessage = "Instance URL must look like https://mastodon.social — no path or trailing slash.";
+  let parsedInstance: URL;
+  try {
+    parsedInstance = new URL(instanceRaw);
+  } catch {
+    badRequest(formatMessage);
   }
+  if (
+    (parsedInstance.protocol !== "https:" && parsedInstance.protocol !== "http:") ||
+    parsedInstance.username ||
+    parsedInstance.password ||
+    parsedInstance.port ||
+    parsedInstance.search ||
+    parsedInstance.hash ||
+    parsedInstance.pathname.replace(/\/+$/, "") !== ""
+  ) {
+    badRequest(formatMessage);
+  }
+  // Normalised (lower-case host, https, no trailing dot) because it is part of
+  // the channel's key below: "HTTPS://Mastodon.Social" must update the same row.
+  const instance = `https://${parsedInstance.hostname.replace(/\.+$/, "")}`;
+  if (!/^https:\/\/[\w.-]+\.[a-z]{2,}$/i.test(instance)) badRequest(formatMessage);
   // The format check above matches any domain-shaped name, including an
   // internal one or a domain pointed at a private IP (security audit 2026-09-28).
-  await assertPublicServer(instance, "That instance URL is not reachable — it must be a public Mastodon instance.");
+  const notPublic = "That instance URL is not reachable — it must be a public Mastodon instance.";
+  await assertPublicServer(instance, notPublic);
 
   const res = await fetchUserServer(
     `${instance}/api/v1/accounts/verify_credentials`,
@@ -473,6 +492,7 @@ async function validateMastodon(creds: Record<string, string>): Promise<Validate
     {
       unreachable: "Couldn't reach that Mastodon instance. Check the URL and that the instance is online.",
       redirected: "That instance URL redirects somewhere else. Enter the instance's own address, e.g. https://mastodon.social.",
+      notPublic,
     },
   );
   const data: any = await res.json().catch(() => null);
@@ -483,7 +503,11 @@ async function validateMastodon(creds: Record<string, string>): Promise<Validate
   }
 
   return {
-    platformId: String(data.id),
+    // The instance is part of the key. Account ids are only unique per
+    // instance, and the user picks the instance — so a member running their own
+    // could answer with a teammate's id and the upsert would overwrite that
+    // teammate's channel. WordPress already keys on its site URL.
+    platformId: `${instance}#${data.id}`,
     name: (data.display_name as string) || (data.username as string),
     username: data.acct as string,
     avatar: (data.avatar as string) || null,
@@ -501,13 +525,26 @@ async function validateWordPress(creds: Record<string, string>): Promise<Validat
   if (!username) badRequest("Username is required.");
   if (!appPasswordRaw) badRequest("Application password is required.");
 
-  const siteUrl = siteUrlRaw.replace(/\/+$/, "");
-  if (!/^https?:\/\/[\w.-]+/.test(siteUrl)) {
+  let parsed: URL;
+  try {
+    parsed = new URL(siteUrlRaw);
+  } catch {
     badRequest("Site URL must include http:// or https://");
   }
-  // The format check above matches localhost, private IPs, metadata addresses
-  // and internal service names (security audit 2026-09-28).
-  await assertPublicServer(siteUrl, "That site URL is not reachable — it must be a public WordPress site.");
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    badRequest("Site URL must include http:// or https://");
+  }
+  // Login details in the URL would be sent as a Basic credential; ? and # have
+  // no place in a site address that /wp-json paths are appended to.
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+    badRequest("Site URL must be just the site's address, like https://yourblog.com — no login details, ? or #.");
+  }
+  // Stored normalised: scheme://host[:port][/subdirectory], no trailing slash.
+  const siteUrl = `${parsed.origin}${parsed.pathname.replace(/\/+$/, "")}`;
+  // The checks above accept localhost, private IPs, metadata addresses and
+  // internal service names (security audit 2026-09-28).
+  const notPublic = "That site URL is not reachable — it must be a public WordPress site.";
+  await assertPublicServer(siteUrl, notPublic);
 
   // WordPress UI shows the app password with spaces — strip them before use.
   const appPassword = appPasswordRaw.replace(/\s+/g, "");
@@ -520,6 +557,7 @@ async function validateWordPress(creds: Record<string, string>): Promise<Validat
       unreachable: "Couldn't reach that WordPress site. Check the URL and that the site is online.",
       redirected:
         "That site URL redirects somewhere else (for example http → https, or adding www). Enter the site's final address exactly as your browser shows it.",
+      notPublic,
     },
   );
   if (!res.ok) {
@@ -534,8 +572,12 @@ async function validateWordPress(creds: Record<string, string>): Promise<Validat
   // Fetch the site name (best-effort)
   let siteName = siteUrl.replace(/^https?:\/\//, "");
   try {
-    // Best-effort: a redirect here is simply not followed (not ok → hostname).
-    const siteRes = await fetch(`${siteUrl}/wp-json`, userServerFetchInit());
+    // Best-effort: a redirect or any failure here falls back to the hostname.
+    // Only the name: a plugin-heavy site's full REST index can pass the size cap.
+    const siteRes = await userHostFetch(`${siteUrl}/wp-json/?_fields=name`, {
+      timeoutMs: USER_SERVER_FETCH_TIMEOUT_MS,
+      maxResponseBytes: 8 * 1024 * 1024,
+    });
     if (siteRes.ok) {
       const siteData = await siteRes.json();
       if (siteData?.name) siteName = String(siteData.name);

@@ -37,6 +37,7 @@ import {
   MISSING_CAPTION_MESSAGE,
 } from "../lib/caption-overrides";
 import { campaignLabelSchema, normalizeCampaignLabel } from "../lib/campaign-label";
+import { stripChannelRoutingKeys } from "../lib/client-post-metadata";
 import { gatesBlockingManualPublish } from "../lib/publish-gate-scope";
 
 /**
@@ -474,7 +475,9 @@ export const postRouter = createRouter({
               instagramStory: _rawStory,
               ...rest
             } = (input.metadata ?? {}) as Record<string, unknown>;
-            const out: Record<string, unknown> = { ...rest };
+            // Destination keys (siteUrl, instance, blog_id, …) only ever come
+            // from the channel row — see client-post-metadata.ts.
+            const out: Record<string, unknown> = stripChannelRoutingKeys(rest);
             if (videoThumbnail) out.videoThumbnail = videoThumbnail;
             if (isStory) out.instagramStory = { mentions: storyMentions };
             if (captionFanout.enabled) {
