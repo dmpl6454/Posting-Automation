@@ -1612,3 +1612,114 @@ model Deployment {
   @@index([createdAt])
   @@index([commitHash])
 }
+
+// ==================== MCP OAUTH (inbound: WE are the authorization server) ====================
+//
+// An MCP client (Claude Desktop, ChatGPT, Claude Code, any MCP-capable agent)
+// connects to our hosted MCP server. Per the MCP authorization spec the server
+// is an OAuth 2.1 **resource server**, and the authorization server may be
+// hosted alongside it — which is what these models implement, reusing the
+// existing NextAuth login for the human consent step.
+//
+// ⚠️ NOT to be confused with the OUTBOUND platform OAuth in
+// apps/web/app/api/oauth/callback — that is us acting as a CLIENT of Facebook,
+// Google and friends. This is the opposite direction.
+//
+// ⚠️ Every secret here is stored HASHED, never in plaintext, matching the
+// existing ApiKey model. A token that leaks from the database is then useless.
+
+/// An MCP client that has registered with us. Populated by Dynamic Client
+/// Registration (RFC 7591) — the draft spec now marks DCR deprecated in favour
+/// of Client ID Metadata Documents, but every shipping MCP client today still
+/// registers dynamically, so it is required for interop.
+model McpOAuthClient {
+  id       String @id @default(cuid())
+  clientId String @unique
+
+  /// NULL for a PUBLIC client (the normal MCP case — a desktop app cannot keep
+  /// a secret). PKCE, not the secret, is what protects those.
+  clientSecretHash String?
+
+  clientName   String
+  redirectUris String[]
+  grantTypes   String[] @default(["authorization_code", "refresh_token"])
+  scopes       String[] @default([])
+
+  /// Free-form registration metadata as submitted, for audit.
+  metadata Json?
+
+  createdAt DateTime  @default(now())
+  revokedAt DateTime?
+
+  @@index([revokedAt])
+}
+
+/// A one-time authorization code. Exchanged at the token endpoint for an access
+/// token, and never reusable.
+model McpAuthCode {
+  id       String @id @default(cuid())
+  /// sha256 of the code. The plaintext is only ever in the redirect URL.
+  codeHash String @unique
+
+  clientId String
+  /// The acting identity. ⚠️ BOTH are required: every tRPC procedure derives
+  /// membership, role and createdById from a user, and the organization decides
+  /// which workspace the token can touch.
+  userId         String
+  organizationId String
+
+  scopes      String[]
+  redirectUri String
+
+  /// PKCE (RFC 7636). Required — these are public clients.
+  codeChallenge       String
+  codeChallengeMethod String @default("S256")
+
+  /// RFC 8707 resource indicator: the canonical URI of the MCP server this code
+  /// may mint a token for. Carried through to the token so the audience check
+  /// at the resource server has something to compare against.
+  resource String
+
+  expiresAt DateTime
+  /// Single-use. Set on first exchange; a second attempt is refused AND should
+  /// revoke the tokens already issued from it (OAuth 2.1 replay handling).
+  usedAt    DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
+}
+
+/// An issued access token (and its refresh token). Both stored hashed.
+model McpAccessToken {
+  id        String  @id @default(cuid())
+  tokenHash String  @unique
+  /// NULL when the client was not granted a refresh token.
+  refreshTokenHash String? @unique
+
+  clientId       String
+  userId         String
+  organizationId String
+
+  scopes String[]
+
+  /// 🔴 THE AUDIENCE. The MCP spec requires the resource server to validate that
+  /// a token was issued specifically FOR IT — "MCP servers MUST only accept
+  /// tokens that are valid for use with their own resources" and "MUST NOT
+  /// accept or transit any other tokens". Without this column that check is
+  /// impossible and the server becomes a confused deputy for any token we ever
+  /// issued.
+  resource String
+
+  expiresAt        DateTime
+  refreshExpiresAt DateTime?
+  revokedAt        DateTime?
+  lastUsedAt       DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([organizationId])
+  @@index([expiresAt])
+  @@index([revokedAt])
+}

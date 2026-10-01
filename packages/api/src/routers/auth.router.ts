@@ -112,6 +112,22 @@ export const authRouter = createRouter({
         where: { userId: resetToken.userId },
       });
 
+      /**
+       * 🔴 AI CONNECTORS ARE SESSIONS TOO. An MCP grant survives independently
+       * of the web session — its own bearer token, its own 30-day refresh chain
+       * — so deleting Session rows alone would leave an assistant able to
+       * publish to live accounts after the very reset the user performed to lock
+       * an attacker out.
+       *
+       * verifyMcpToken also compares `passwordChangedAt` on every request, so
+       * this is defence in depth; doing it here makes the cut-off immediate and
+       * visible in the Connected apps list rather than lazy.
+       */
+      await ctx.prisma.mcpAccessToken.updateMany({
+        where: { userId: resetToken.userId, revokedAt: null },
+        data: { revokedAt: now },
+      });
+
       return { success: true };
     }),
 

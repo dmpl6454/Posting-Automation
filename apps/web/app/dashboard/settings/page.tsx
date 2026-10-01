@@ -30,7 +30,7 @@ import { useSession } from "next-auth/react";
 import {
   User, CreditCard, Webhook, Save, Lock,
   Smartphone, CheckCircle2, AlertCircle, Eye, EyeOff, Phone, Camera, Loader2,
-  Sparkles, Video, ImageIcon, MessageSquare
+  Sparkles, Video, ImageIcon, MessageSquare, Bot
 } from "lucide-react";
 import Link from "next/link";
 
@@ -713,6 +713,23 @@ export default function SettingsPage() {
             <p className="text-[13px] font-medium leading-[1.3]">Webhooks</p>
             <p className="mt-[3px] text-[11px] leading-[1.3] text-muted-foreground">
               Configure event notifications
+            </p>
+          </div>
+        </Link>
+        {/* The revoke surface for AI connectors. Visible to every user, not
+            gated behind an admin role: an MCP grant is personal, and the person
+            who approved it must be able to take it back. */}
+        <Link
+          href="/dashboard/settings/connections"
+          className="flex items-center gap-3.5 rounded-[14px] border border-border bg-card p-5 transition-colors hover:bg-hover"
+        >
+          <div className="flex h-[38px] w-[38px] flex-none items-center justify-center rounded-[10px] bg-accent/[0.12] text-accent">
+            <Bot className="h-[17px] w-[17px]" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-[13px] font-medium leading-[1.3]">Connected apps</p>
+            <p className="mt-[3px] text-[11px] leading-[1.3] text-muted-foreground">
+              Review or revoke AI assistant access
             </p>
           </div>
         </Link>
