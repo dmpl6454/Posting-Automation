@@ -3200,6 +3200,78 @@ Reply). Fixes, each load-bearing:
   [comment-reply-outcome.test.ts](apps/web/lib/comment-reply-outcome.test.ts),
   [graph-time.test.ts](apps/web/lib/graph-time.test.ts).
 
+## 🛡️ Servers a USER names — userHostFetch only (2026-10-01) — read before contacting any user-supplied host
+
+A Mastodon instance, a self-hosted WordPress site, a Discord webhook, an outbound-webhook endpoint
+and an RSS feed are all URLs a user typed in. **Contact them only through `userHostFetch`**
+([user-host-fetch.ts](packages/social/src/utils/user-host-fetch.ts)) — never plain `fetch()`.
+Plain fetch resolved the name AGAIN after the connect-time check (DNS rebinding to 10.x / 172.18.x
+Docker services / 169.254.169.254), followed redirects into the network, had no deadline, and the
+providers put the response body into user-visible errors.
+
+- **What it does:** `node:http(s)` with OUR `lookup` — resolve once, refuse if ANY answer is
+  non-public, connect only to the checked addresses (SNI/cert stay on the hostname). IP literals are
+  checked up front (`net.connect` never calls `lookup` for them). `agent: false` (a pooled socket
+  that skipped the lookup is never reused). No redirects (3xx = error). Deadline + size cap
+  (`truncateAtCap` opt-in for status-only callers). URLs with `user:pass@` are refused.
+- **Every error is a `UserHostError` with FIXED text** — no hostname, address or body, because
+  `classifyError()` substring-matches (`token-invalid.example` reads as "token expired",
+  `fd00::401` as a 401) — and carries **`requestSent`**, which is what lets a publish tell
+  "nothing was sent" from "the post may exist".
+- **Publish outcomes** ([user-host-publish.ts](packages/social/src/utils/user-host-publish.ts),
+  shared by Mastodon, self-hosted WordPress and Discord webhooks): a create that reached the server
+  and then failed (or 5xx, or a 2xx with no readable id) → `AmbiguousPublishError` ("Needs check");
+  never sent → plain retryable error; media failures are never ambiguous (no post exists yet);
+  401/403/redirect/private address/other 4xx → **`PublishRefusedError`, whose `name` is
+  deliberately `"UnrecoverableError"`** so routePublishError and BullMQ treat it as final with no
+  worker change — do not rename it. Retryable texts never say "will retry" (the same text is stored
+  on the final attempt). Locked against the REAL classifier by
+  [user-host-publish-classification.test.ts](apps/worker/src/__tests__/user-host-publish-classification.test.ts).
+- **The publish worker now passes `Channel.metadata` in tokens for MASTODON / WORDPRESS / DISCORD
+  only** ([publish-tokens.ts](apps/worker/src/lib/publish-tokens.ts)). Before, none got it: Mastodon
+  posted to mastodon.social **with another instance's token**, self-hosted WordPress always took the
+  WordPress.com path, Discord webhooks the bot path — all three always failed. Every other platform
+  gets byte-identical `{ accessToken, refreshToken }` (test-locked). Both token sites (main + the
+  token_expired re-publish) use `buildPublishTokens`. Mastodon also gets an `Idempotency-Key`
+  (`pa-{targetId}-{sha256(content+media)}`) — it narrows the duplicate window but does NOT replace
+  parking, because Mastodon records the key only AFTER creating the post.
+- **The address classifier lives in TWO places**: canonical
+  [public-address.ts](packages/social/src/utils/public-address.ts) and a replica in
+  [packages/ai/src/utils/private-address.ts](packages/ai/src/utils/private-address.ts) (ai has no
+  workspace deps). [private-address-parity.test.ts](packages/api/src/__tests__/private-address-parity.test.ts)
+  compares them on every IPv4/IPv6 range boundary plus seeded samples — never edit one alone.
+- **The `ai` string guards** (`isPublicPageUrl` / `isPublicImageUrl`) now judge IP literals with the
+  full rules (they used to ACCEPT `[::ffff:a9fe:a9fe]` = the metadata address, NAT64, 6to4, CGNAT)
+  and reject single-label names (`minio`, `web`, `redis`) and `.internal/.local/.localhost`.
+  `isAllowedImageUrl` keeps accepting the configured `S3_ENDPOINT` (`minio` in prod). They are still
+  STRING checks: use `hostResolvesPublic` / `fetchPublicUrl` (ai) or `userHostFetch` (social) to
+  actually fetch.
+- **Repurpose URL extraction**: platform detection is EXACT host matching (substring matching sent
+  `instagram.com.attacker.tld` down the Instagram path), and every request to the user's URL uses
+  `fetchPublicUrl` (redirects followed by hand, each hop checked by string AND DNS). Fixed third-party
+  helpers (oEmbed, r.jina.ai, fxtwitter, ddinstagram) keep plain fetch.
+- **Connect-time** (channel-token-validators): Mastodon `platformId` is `"<instance>#<accountId>"`
+  (account ids are only unique per instance; the instance is normalised to lower-case https first);
+  WordPress `siteUrl` is stored normalised (no userinfo/query/hash). Zero rows of either existed when
+  this shipped. `connectWithToken`'s update branch now clears `disconnectedAt`. `post.create` strips
+  `blog_id/siteUrl/instance/service/webhookUrl/kind` from client metadata.
+- **Known residual (follow-up):** the `ai` fetchers (repurpose extractor, `safeFetchPublicImage`,
+  image proxy, NewsGrid background, `extractDominantColor`) check DNS but then `fetch()` resolves
+  again, so a fast-flipping DNS answer is not closed there — `ai` cannot import the pinned client.
+
+Tests: [user-host-fetch.test.ts](packages/social/src/__tests__/user-host-fetch.test.ts),
+[user-host-publish.test.ts](packages/social/src/__tests__/user-host-publish.test.ts),
+[mastodon-user-host.test.ts](packages/social/src/__tests__/mastodon-user-host.test.ts),
+[wordpress-user-host.test.ts](packages/social/src/__tests__/wordpress-user-host.test.ts),
+[discord-webhook.test.ts](packages/social/src/__tests__/discord-webhook.test.ts),
+[publish-tokens.test.ts](apps/worker/src/lib/publish-tokens.test.ts),
+[webhook-delivery-ssrf.test.ts](apps/worker/src/__tests__/webhook-delivery-ssrf.test.ts),
+[channel-token-validators-ssrf.test.ts](packages/api/src/__tests__/channel-token-validators-ssrf.test.ts),
+[webhook-create-ssrf.test.ts](packages/api/src/__tests__/webhook-create-ssrf.test.ts),
+[rss-feed-ssrf.test.ts](packages/api/src/__tests__/rss-feed-ssrf.test.ts),
+[public-url-guard.test.ts](packages/ai/src/__tests__/public-url-guard.test.ts),
+[url-extractor-redirect-ssrf.test.ts](packages/ai/src/__tests__/url-extractor-redirect-ssrf.test.ts).
+
 ## ⚠️ NEVER commit a macOS `" 2"` duplicate file — and there is exactly ONE CLAUDE.md
 
 Finder appends `" 2"` when resolving a filename collision (duplicate-on-copy, or a sync client reconciling two versions). These are **never** intentional source files, and three have already reached this repo:
