@@ -26,11 +26,25 @@ describe("planSuperText", () => {
   it("is inert when no config is supplied — normal posting is untouched", () => {
     expect(
       planSuperText({ superText: undefined, mediaRows: [video("a")], scheduledAt: new Date() })
-    ).toEqual({ enabled: false, parkedSchedule: false, byMediaId: {}, oversized: [] });
+    ).toEqual({ enabled: false, parkedSchedule: false, byMediaId: {}, oversized: [], perChannel: false });
 
     expect(
       planSuperText({ superText: null, mediaRows: [video("a")], scheduledAt: null })
-    ).toEqual({ enabled: false, parkedSchedule: false, byMediaId: {}, oversized: [] });
+    ).toEqual({ enabled: false, parkedSchedule: false, byMediaId: {}, oversized: [], perChannel: false });
+  });
+
+  it("perChannel needs the toggle, a burnable config AND more than one channel", () => {
+    const on = (extra: Partial<Parameters<typeof planSuperText>[0]>) =>
+      planSuperText({ superText: { a: cfg }, mediaRows: [video("a")], scheduledAt: null, ...extra }).perChannel;
+    expect(on({ uniqueSuperText: true, channelCount: 3 })).toBe(true);
+    expect(on({ uniqueSuperText: true, channelCount: 1 })).toBe(false);
+    expect(on({ uniqueSuperText: false, channelCount: 3 })).toBe(false);
+    expect(on({ channelCount: 3 })).toBe(false);
+    // No burnable video ⇒ nothing to vary, whatever the toggle says.
+    expect(
+      planSuperText({ superText: { a: cfg }, mediaRows: [image("a")], scheduledAt: null, uniqueSuperText: true, channelCount: 3 })
+        .perChannel
+    ).toBe(false);
   });
 
   it("applies only to VIDEO media actually attached to this post", () => {

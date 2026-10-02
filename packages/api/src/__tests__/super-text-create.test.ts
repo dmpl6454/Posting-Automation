@@ -148,6 +148,43 @@ beforeEach(() => {
   });
 });
 
+describe("post.create — per-channel super text (uniqueSuperText)", () => {
+  it("writes perChannel:true only with the toggle AND >1 channel; still ONE burn job", async () => {
+    await makeCaller().create({
+      content: "hello",
+      channelIds: [CHANNEL_A, CHANNEL_B],
+      scheduledAt: FUTURE,
+      mediaIds: ["media-1"],
+      uniqueSuperText: true,
+      metadata: { superText: { "media-1": cfg } },
+    });
+    const data = createdData();
+    expect(data.status).toBe("DRAFT");
+    expect(data.metadata.superText).toMatchObject({ pendingBurn: true, perChannel: true });
+    expect(superTextAdd).toHaveBeenCalledTimes(1);
+  });
+
+  it("is dropped for a single channel, and absent from the metadata when off", async () => {
+    await makeCaller().create({
+      content: "hello",
+      channelIds: [CHANNEL_A],
+      mediaIds: ["media-1"],
+      uniqueSuperText: true,
+      metadata: { superText: { "media-1": cfg } },
+    });
+    expect(createdData().metadata.superText.perChannel).toBeUndefined();
+
+    postCreate.mockClear();
+    await makeCaller().create({
+      content: "hello",
+      channelIds: [CHANNEL_A, CHANNEL_B],
+      mediaIds: ["media-1"],
+      metadata: { superText: { "media-1": cfg } },
+    });
+    expect("perChannel" in createdData().metadata.superText).toBe(false);
+  });
+});
+
 describe("post.create — super text parks the post and enqueues ONE burn job", () => {
   it("scheduled + video config → DRAFT, pendingBurn metadata, deduped burn job, no publish enqueue", async () => {
     await makeCaller().create({

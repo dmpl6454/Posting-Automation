@@ -685,6 +685,21 @@ export default function PostDetailPage() {
                     )}
                   </div>
                   </div>
+                  {/* Per-channel super text (2026-10-02): this channel publishes its
+                      own burned video with the line AI wrote for it. */}
+                  {(() => {
+                    const own = Object.values((target.metadata?.superTextMedia ?? {}) as Record<string, { text?: unknown }>)
+                      .map((e) => (typeof e?.text === "string" ? e.text : ""))
+                      .filter(Boolean);
+                    return own.length > 0 ? (
+                      <div className="rounded-md bg-muted/50 p-2">
+                        <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                          Super text on this channel&apos;s video
+                        </span>
+                        <p className="mt-0.5 text-xs text-muted-foreground">{own.join(" · ")}</p>
+                      </div>
+                    ) : null;
+                  })()}
                   {/* PR-5: per-channel caption (contentOverride wins over the shared content) */}
                   {editingCaptionTargetId === target.id ? (
                     <div className="space-y-2">

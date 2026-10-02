@@ -2967,6 +2967,47 @@ so the publish precedence `contentOverride ?? contentVariants?.[platform] ?? pos
 - Tests: [caption-overrides.test.ts](packages/api/src/__tests__/caption-overrides.test.ts),
   [caption-overrides-payload.test.ts](apps/web/lib/caption-overrides-payload.test.ts).
 
+## 🎞️ Different SUPER TEXT per channel (AI) — one burned video per channel (2026-10-02)
+
+The on-video text strip now has the same per-channel mode as captions: Compose shows a
+**"Different super text per channel (AI)"** switch (only when a video tile carries super text
+AND >1 channel is selected). `post.create` input `uniqueSuperText` → `planSuperText(...).perChannel`
+→ `metadata.superText.perChannel: true` (written ONLY when on — an ordinary super-text post keeps
+its metadata byte-for-byte). Still ONE `supertext:{postId}:v1` job.
+
+- **The user's own line is variant 0 = the ordinary shared burn** (repoints PostMedia exactly as
+  before). AI writes N−1 further lines ([super-text-variants.ts](apps/worker/src/lib/super-text-variants.ts):
+  same hook, ≤ `variantCharLimit(base)` chars, de-duplicated against the base and each other,
+  per-word highlight colours carried by POSITION, position/size/font/colours unchanged) and
+  [super-text-per-channel.ts](apps/worker/src/lib/super-text-per-channel.ts) burns each one through
+  the SAME `burnConfig` as the base (one encode contract), assigning targets **round-robin**.
+- **Every variant is one more ffmpeg encode** on the 4-core box, serial (worker concurrency 1).
+  Distinct variants are therefore CAPPED — `SUPER_TEXT_MAX_VARIANTS` (default 40); beyond it
+  channels reuse variants. A 53-channel reel ≈ 40 encodes before the post can flip; the Compose
+  copy says so. Do NOT raise the cap to "finish faster": that is the 2026-08-07 per-target-encode
+  incident shape.
+- **Per-target media lives on the TARGET**: `PostTarget.metadata.superTextMedia[sourceMediaId] =
+  { mediaId, text, variant }`. The publish worker swaps it in right after loading the target
+  ([per-target-media.ts](apps/worker/src/lib/per-target-media.ts), step 2a) — BEFORE the optimize
+  gate / `choosePublishUrl` / video prep, so everything downstream sees one ordinary Media row.
+  ⚠️ The match goes through the derived row's `metadata.superText.sourceMediaId`, because by
+  publish time the shared attachment already points at the BASE burn, not the source. A target
+  with no map gets the SAME attachments array back (test-locked); a derived row that fails to load
+  degrades to the shared burn, never fails the publish.
+- **Degrade, never lose, never un-burned**: a variant that fails to generate or burn leaves its
+  targets on the user's own strip (`perChannelDegraded: true` + a `post.supertext_degraded`
+  notification). Lines are persisted (`superText.perChannelState[mediaId].texts`) BEFORE the first
+  burn so a BullMQ retry burns the same words; each variant result is persisted as it lands; a
+  variant marked `failed` is not retried. Unlike captions this does NOT hold the post — the fallback
+  is still the text the user wrote.
+- Retry subtlety: after the base burn the attachment no longer carries the source id, so the
+  per-channel pass loads the ORIGINAL Media row by id (never deleted). Each derived row gets the
+  standard `optimize:{id}:v1` job like any upload.
+- Tests: [super-text-variants.test.ts](apps/worker/src/lib/super-text-variants.test.ts),
+  [super-text-per-channel.test.ts](apps/worker/src/lib/super-text-per-channel.test.ts) (state machine
+  with injected burn/model), [per-target-media.test.ts](apps/worker/src/lib/per-target-media.test.ts),
+  plus the perChannel cases in `super-text-plan.test.ts` / `super-text-create.test.ts`.
+
 ## ⏸️ Caption fan-out HOLDS on total failure; "out of credit" is final (2026-09-28)
 
 **Incident:** a DASHMANI post to **240 Facebook Pages** with per-channel AI captions sat as a DRAFT

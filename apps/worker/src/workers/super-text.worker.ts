@@ -18,10 +18,14 @@ import {
   buildSuperTextFrameHtml,
   superTextConfigSchema,
   resolveSuperTextFont,
+  type SuperTextConfig,
 } from "@postautomation/super-text";
 import { launchCreativeBrowser } from "@postautomation/ai";
 import { buildSuperTextCompositeArgs, durationIntegrityOk } from "../lib/super-text-burn";
 import { flipParkedPostIfReady } from "../lib/publish-gates";
+import { runPerChannelSuperText, type PerChannelState } from "../lib/super-text-per-channel";
+import { baseTextOf } from "../lib/super-text-variants";
+import { SUPER_TEXT_MEDIA_KEY } from "../lib/per-target-media";
 
 /**
  * super-text worker: burns the user's positioned text strip into their video
@@ -293,6 +297,219 @@ export async function markSuperTextFailed(
   });
 }
 
+/**
+ * Per-channel state is nested under superText.perChannelState[mediaId]; merge it
+ * from a FRESH read so two media entries can never clobber each other.
+ */
+async function stampPerChannelState(postId: string, mediaId: string, state: PerChannelState) {
+  const post = await prisma.post.findUnique({ where: { id: postId }, select: { metadata: true } });
+  const meta = ((post?.metadata as Record<string, unknown>) ?? {});
+  const st = ((meta.superText as Record<string, unknown>) ?? {});
+  const all = ((st.perChannelState as Record<string, unknown>) ?? {});
+  await prisma.post.update({
+    where: { id: postId },
+    data: {
+      metadata: { ...meta, superText: { ...st, perChannelState: { ...all, [mediaId]: state } } } as any,
+    },
+  });
+}
+
+/**
+ * Record a target's own burned copy. Read-merge-write on the target's metadata,
+ * preserving sibling keys (nothing else writes target metadata before the flip;
+ * igStoryContainer / fbStoryMedia land at publish time, after this).
+ */
+async function writeTargetSuperTextMedia(
+  targetId: string,
+  sourceMediaId: string,
+  entry: { mediaId: string; text: string; variant: number }
+) {
+  const target = await prisma.postTarget.findUnique({ where: { id: targetId }, select: { metadata: true } });
+  const meta = ((target?.metadata as Record<string, unknown>) ?? {});
+  const map = ((meta[SUPER_TEXT_MEDIA_KEY] as Record<string, unknown>) ?? {});
+  await prisma.postTarget.update({
+    where: { id: targetId },
+    data: { metadata: { ...meta, [SUPER_TEXT_MEDIA_KEY]: { ...map, [sourceMediaId]: entry } } as any },
+  });
+}
+
+/** Best-effort in-app note to the creator when some channels fell back to the shared strip. */
+async function notifyPerChannelDegraded(
+  postId: string,
+  organizationId: string,
+  createdById: string | null | undefined,
+  detail: string
+) {
+  try {
+    let recipients: string[] = createdById ? [createdById] : [];
+    if (recipients.length === 0) {
+      const owners = await prisma.organizationMember.findMany({
+        where: { organizationId, role: "OWNER" },
+        select: { userId: true },
+      });
+      recipients = owners.map((m) => m.userId);
+    }
+    for (const userId of recipients) {
+      await prisma.notification.create({
+        data: {
+          userId,
+          organizationId,
+          type: "post.supertext_degraded",
+          title: "Some channels use your original super text",
+          body: `A different super text could not be prepared for every channel (${detail}). Those channels publish the video with the text you wrote.`,
+          link: `/dashboard/posts/${postId}`,
+          metadata: { postId, reason: detail },
+        },
+      });
+    }
+  } catch (e: any) {
+    console.warn(`[super-text] degraded notification failed for ${postId}:`, e?.message ?? e);
+  }
+}
+
+/** Provider-chain text generation for the per-channel variant lines (lazy-loaded @postautomation/ai). */
+async function loadVariantTextGen() {
+  const { generateContent, withTextProviderFallback, isProviderCreditExhausted } = await import("@postautomation/ai");
+  return {
+    generateText: (prompt: string) =>
+      withTextProviderFallback(
+        undefined,
+        (provider) =>
+          generateContent({
+            provider: provider as Parameters<typeof generateContent>[0]["provider"],
+            platform: "INSTAGRAM",
+            charLimit: 4000,
+            tone: "punchy, spoken-language",
+            userPrompt: prompt,
+          }),
+        (failed, next, e) =>
+          console.warn(
+            `[super-text] Provider ${failed} failed (${e instanceof Error ? e.message.slice(0, 80) : e}), trying ${next}`
+          )
+      ),
+    isCreditExhausted: isProviderCreditExhausted,
+  };
+}
+
+interface BurnContext {
+  organizationId: string;
+  createdById: string;
+  tmpDir: string;
+  /** Source Media row (the ORIGINAL upload, never a derived row). */
+  source: { id: string; url: string; fileName: string; duration: number | null };
+  srcProbe: Probe;
+  width: number;
+  height: number;
+  /** Local copy of the source — downloaded once per media, shared by every burn. */
+  inputPath: string;
+  downloaded: { done: boolean };
+}
+
+/**
+ * ONE burn: strip PNG → ffmpeg composite → integrity check → S3 → derived Media
+ * row (+ the standard optimize job). Shared by the base burn and every
+ * per-channel variant, so there is exactly one encode contract.
+ */
+async function burnConfig(
+  ctx: BurnContext,
+  cfg: SuperTextConfig,
+  /** 0 = the user's own text (shared burn); k ≥ 1 = per-channel variant k. */
+  variant: number
+): Promise<{ derivedId: string; out: Probe }> {
+  const label = variant === 0 ? ctx.source.id : `${ctx.source.id}-v${variant}`;
+  const stripPath = path.join(ctx.tmpDir, `strip-${label}.png`);
+  const outputPath = path.join(ctx.tmpDir, `out-${label}.mp4`);
+
+  try {
+    // Guard on a non-empty payload so a missing generated font file skips the
+    // wait rather than burning FONT_READY_TIMEOUT_MS on a face that never arrives.
+    const fontSpec = resolveSuperTextFont(cfg.font);
+    const embeddedFamily = fontSpec.embedded?.base64 ? fontSpec.embedded.family : null;
+    await renderStripPng(
+      buildSuperTextFrameHtml(cfg, ctx.width, ctx.height),
+      ctx.width,
+      ctx.height,
+      stripPath,
+      embeddedFamily
+    );
+    if (!ctx.downloaded.done) {
+      await downloadToFile(ctx.source.url, ctx.inputPath);
+      ctx.downloaded.done = true;
+    }
+    await execFileAsync(
+      "ffmpeg",
+      buildSuperTextCompositeArgs({ inputPath: ctx.inputPath, overlayPngPath: stripPath, outputPath }),
+      { timeout: BURN_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024 }
+    );
+
+    const out = await probe(outputPath);
+    if (!durationIntegrityOk(ctx.srcProbe.durationSec, out.durationSec)) {
+      throw new Error(
+        `burn output truncated (${out.durationSec ?? "?"}s vs source ${ctx.srcProbe.durationSec ?? "?"}s)`
+      );
+    }
+
+    // Config hash in the key: re-burning after an edit writes a NEW object
+    // instead of silently serving a stale cached one.
+    const hash = crypto.createHash("sha1").update(JSON.stringify(cfg)).digest("hex").slice(0, 8);
+    const key = `supertext/${ctx.organizationId}/${label}-${hash}.mp4`;
+    const size = (await fsp.stat(outputPath)).size;
+    await s3.send(
+      new PutObjectCommand({
+        Bucket: S3_BUCKET,
+        Key: key,
+        Body: createReadStream(outputPath),
+        ContentLength: size,
+        ContentType: "video/mp4",
+      })
+    );
+    const url = `${S3_BASE_URL}/${key}`;
+
+    const derived = await prisma.media.create({
+      data: {
+        organizationId: ctx.organizationId,
+        uploadedById: ctx.createdById,
+        fileName: `supertext-${ctx.source.fileName}`,
+        fileType: "video/mp4",
+        fileSize: size,
+        url,
+        width: out.width ?? ctx.width,
+        height: out.height ?? ctx.height,
+        duration: out.durationSec ? Math.round(out.durationSec) : ctx.source.duration,
+        metadata: {
+          superText: {
+            sourceMediaId: ctx.source.id,
+            burnedAt: new Date().toISOString(),
+            ...(variant > 0 ? { variant, text: baseTextOf(cfg) } : {}),
+          },
+          // Hand the derived file to the STANDARD optimize pipeline exactly like
+          // a fresh upload, so IG still gets its 1080×1920 rendition.
+          optimize: { status: "pending", enqueuedAt: new Date().toISOString() },
+        } as any,
+      },
+    });
+
+    await mediaOptimizeQueue
+      .add(
+        "optimize",
+        { mediaId: derived.id },
+        {
+          jobId: `optimize:${derived.id}:v1`,
+          attempts: 2,
+          backoff: { type: "exponential", delay: 60_000 },
+          removeOnComplete: { age: 3600 },
+          removeOnFail: { age: 24 * 3600 },
+        }
+      )
+      .catch((e) => console.warn("[super-text] optimize enqueue failed:", e?.message ?? e));
+
+    return { derivedId: derived.id, out };
+  } finally {
+    await fsp.rm(stripPath, { force: true }).catch(() => undefined);
+    await fsp.rm(outputPath, { force: true }).catch(() => undefined);
+  }
+}
+
 export async function runSuperTextBurn(
   data: SuperTextBurnJobData
 ): Promise<{ burned: number; skipped: number; flipped: boolean } | { skipped: string }> {
@@ -313,6 +530,14 @@ export async function runSuperTextBurn(
 
   const byMediaId = (st.byMediaId ?? {}) as Record<string, unknown>;
   const results: Record<string, any> = { ...(st.results ?? {}) };
+  // Per-channel super text (2026-10-02): AI writes a different strip line per
+  // channel and each channel gets its own burn. The user's own text stays the
+  // shared burn (variant 0), so every channel has a strip even if a variant
+  // fails. See lib/super-text-per-channel.ts for the state machine.
+  const perChannel = st.perChannel === true;
+  const perChannelState = ((st.perChannelState ?? {}) as Record<string, PerChannelState>);
+  let perChannelDegraded = false;
+  const perChannelSummary: string[] = [];
   let burned = 0;
   let skipped = 0;
 
@@ -321,7 +546,8 @@ export async function runSuperTextBurn(
     for (const [mediaId, rawCfg] of Object.entries(byMediaId)) {
       // Retry idempotency: a BullMQ retry never re-burns an entry that already
       // produced a derived Media row (the swap below is not reversible).
-      if (results[mediaId]?.status === "done") {
+      const baseDone = results[mediaId]?.status === "done";
+      if (baseDone && !perChannel) {
         skipped++;
         continue;
       }
@@ -329,8 +555,14 @@ export async function runSuperTextBurn(
       const parsed = superTextConfigSchema.safeParse(rawCfg);
       if (!parsed.success) throw new Error(`invalid super-text config for media ${mediaId}`);
 
+      // The base burn repoints PostMedia at the derived row, so on a retry the
+      // attachment no longer carries the source id — load the ORIGINAL row
+      // directly for the per-channel variants (it is never deleted).
       const attachment = post.mediaAttachments.find((a) => a.mediaId === mediaId);
-      const media = attachment?.media;
+      const media = baseDone
+        ? await prisma.media.findFirst({ where: { id: mediaId, organizationId } })
+        : attachment?.media ?? null;
+
       // Config for media that is no longer attached (user removed it after
       // saving) is skipped, not fatal.
       if (!media || !media.fileType.startsWith("video/")) {
@@ -346,112 +578,95 @@ export async function runSuperTextBurn(
       const src = await probe(media.url);
       const width = src.width && src.width >= 16 ? src.width : 1080;
       const height = src.height && src.height >= 16 ? src.height : 1920;
-
-      const stripPath = path.join(tmpDir, `strip-${mediaId}.png`);
-      const inputPath = path.join(tmpDir, `in-${mediaId}.mp4`);
-      const outputPath = path.join(tmpDir, `out-${mediaId}.mp4`);
-
-      // Guard on a non-empty payload so a missing generated font file skips the
-      // wait rather than burning FONT_READY_TIMEOUT_MS on a face that never arrives.
-      const fontSpec = resolveSuperTextFont(parsed.data.font);
-      const embeddedFamily = fontSpec.embedded?.base64 ? fontSpec.embedded.family : null;
-      await renderStripPng(
-        buildSuperTextFrameHtml(parsed.data, width, height),
+      const ctx: BurnContext = {
+        organizationId,
+        createdById: post.createdById,
+        tmpDir,
+        source: { id: mediaId, url: media.url, fileName: media.fileName, duration: media.duration },
+        srcProbe: src,
         width,
         height,
-        stripPath,
-        embeddedFamily
-      );
-      await downloadToFile(media.url, inputPath);
-      await execFileAsync(
-        "ffmpeg",
-        buildSuperTextCompositeArgs({ inputPath, overlayPngPath: stripPath, outputPath }),
-        { timeout: BURN_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024 }
-      );
+        inputPath: path.join(tmpDir, `in-${mediaId}.mp4`),
+        downloaded: { done: false },
+      };
 
-      const out = await probe(outputPath);
-      if (!durationIntegrityOk(src.durationSec, out.durationSec)) {
-        throw new Error(
-          `burn output truncated (${out.durationSec ?? "?"}s vs source ${src.durationSec ?? "?"}s)`
-        );
+      try {
+        if (!baseDone) {
+          const { derivedId } = await burnConfig(ctx, parsed.data, 0);
+
+          // Repoint the post at the burned video. The join row keeps its `order`, so
+          // carousel/slide ordering is untouched — only which Media it points at.
+          await prisma.postMedia.updateMany({
+            where: { postId, mediaId },
+            data: { mediaId: derivedId },
+          });
+
+          results[mediaId] = { status: "done", derivedMediaId: derivedId };
+          // Persist per entry so a crash mid-loop never re-burns finished work.
+          await stampSuperText(postId, { results });
+          burned++;
+        } else {
+          skipped++;
+        }
+
+        if (perChannel) {
+          const gen = await loadVariantTextGen();
+          const outcome = await runPerChannelSuperText(
+            {
+              loadTargets: () =>
+                prisma.postTarget.findMany({
+                  where: { postId, status: { in: ["DRAFT", "SCHEDULED"] } },
+                  orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+                  select: { id: true, channel: { select: { name: true, username: true, platform: true } } },
+                }),
+              generateText: gen.generateText,
+              isCreditExhausted: gen.isCreditExhausted,
+              burn: async (cfg, k) => {
+                const { derivedId } = await burnConfig(ctx, cfg, k);
+                burned++;
+                return { derivedMediaId: derivedId };
+              },
+              writeTargetMedia: (targetId, entry) => writeTargetSuperTextMedia(targetId, mediaId, entry),
+              persist: (state) => stampPerChannelState(postId, mediaId, state),
+            },
+            {
+              sourceMediaId: mediaId,
+              baseCfg: parsed.data,
+              postContent: post.content ?? "",
+              state: perChannelState[mediaId],
+            }
+          );
+          perChannelState[mediaId] = outcome.state;
+          if (outcome.degraded) perChannelDegraded = true;
+          perChannelSummary.push(
+            `${mediaId}: targets=${outcome.targets} unique=${outcome.unique} base=${outcome.onBase} fallback=${outcome.fallback}` +
+              (outcome.state.outOfCredit ? " (AI out of credit)" : outcome.state.generationFailed ? " (AI generation failed)" : "")
+          );
+        }
+      } finally {
+        await fsp.rm(ctx.inputPath, { force: true }).catch(() => undefined);
       }
-
-      // Config hash in the key: re-burning after an edit writes a NEW object
-      // instead of silently serving a stale cached one.
-      const hash = crypto
-        .createHash("sha1")
-        .update(JSON.stringify(parsed.data))
-        .digest("hex")
-        .slice(0, 8);
-      const key = `supertext/${organizationId}/${mediaId}-${hash}.mp4`;
-      const size = (await fsp.stat(outputPath)).size;
-      await s3.send(
-        new PutObjectCommand({
-          Bucket: S3_BUCKET,
-          Key: key,
-          Body: createReadStream(outputPath),
-          ContentLength: size,
-          ContentType: "video/mp4",
-        })
-      );
-      const url = `${S3_BASE_URL}/${key}`;
-
-      const derived = await prisma.media.create({
-        data: {
-          organizationId,
-          uploadedById: post.createdById,
-          fileName: `supertext-${media.fileName}`,
-          fileType: "video/mp4",
-          fileSize: size,
-          url,
-          width: out.width ?? width,
-          height: out.height ?? height,
-          duration: out.durationSec ? Math.round(out.durationSec) : media.duration,
-          metadata: {
-            superText: { sourceMediaId: mediaId, burnedAt: new Date().toISOString() },
-            // Hand the derived file to the STANDARD optimize pipeline exactly like
-            // a fresh upload, so IG still gets its 1080×1920 rendition.
-            optimize: { status: "pending", enqueuedAt: new Date().toISOString() },
-          } as any,
-        },
-      });
-
-      await mediaOptimizeQueue
-        .add(
-          "optimize",
-          { mediaId: derived.id },
-          {
-            jobId: `optimize:${derived.id}:v1`,
-            attempts: 2,
-            backoff: { type: "exponential", delay: 60_000 },
-            removeOnComplete: { age: 3600 },
-            removeOnFail: { age: 24 * 3600 },
-          }
-        )
-        .catch((e) => console.warn("[super-text] optimize enqueue failed:", e?.message ?? e));
-
-      // Repoint the post at the burned video. The join row keeps its `order`, so
-      // carousel/slide ordering is untouched — only which Media it points at.
-      await prisma.postMedia.updateMany({
-        where: { postId, mediaId },
-        data: { mediaId: derived.id },
-      });
-
-      results[mediaId] = { status: "done", derivedMediaId: derived.id };
-      // Persist per entry so a crash mid-loop never re-burns finished work.
-      await stampSuperText(postId, { results });
-      burned++;
-
-      await fsp.rm(stripPath, { force: true }).catch(() => undefined);
-      await fsp.rm(inputPath, { force: true }).catch(() => undefined);
-      await fsp.rm(outputPath, { force: true }).catch(() => undefined);
     }
 
     await stampSuperText(postId, {
       pendingBurn: false,
       completedAt: new Date().toISOString(),
       results,
+      ...(perChannel ? { perChannelDegraded } : {}),
     });
+
+    if (perChannel) {
+      console.log(`[super-text] Post ${postId} per-channel: ${perChannelSummary.join(" | ")}`);
+      if (perChannelDegraded) {
+        const anyOutOfCredit = Object.values(perChannelState).some((s) => s?.outOfCredit);
+        await notifyPerChannelDegraded(
+          postId,
+          organizationId,
+          post.createdById,
+          anyOutOfCredit ? "every AI provider is out of credit" : "some lines could not be generated or burned"
+        );
+      }
+    }
 
     // Flip only if every gate (e.g. a concurrent caption-fanout) is clear.
     const flipped = await flipParkedPostIfReady(prisma as any, postId, organizationId);
