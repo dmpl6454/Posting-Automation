@@ -10,6 +10,7 @@ export * from "./constants";
 export {
   buildStripInnerHtml,
   buildSuperTextFrameHtml,
+  superTextAnchorCss,
   buildSuperTextFontFaceCss,
   buildAllSuperTextFontFaceCss,
   safeHexColor,

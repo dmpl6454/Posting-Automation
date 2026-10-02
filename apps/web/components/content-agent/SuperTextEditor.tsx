@@ -21,8 +21,14 @@ import {
   SUPER_TEXT_FONTS,
   SUPER_TEXT_FONT_KEYS,
   DEFAULT_SUPER_TEXT_FONT,
+  DEFAULT_SUPER_TEXT_LAYOUT,
+  DEFAULT_SUPER_TEXT_SCOPE,
+  DEFAULT_INTRO_SECONDS,
+  SUPER_TEXT_SCOPES,
   type SuperTextConfig,
   type SuperTextFontKey,
+  type SuperTextLayoutKey,
+  type SuperTextScope,
 } from "@postautomation/super-text";
 import { SuperTextFontFaces } from "./super-text-font-faces";
 import { withPosterHint } from "~/lib/video-poster";
@@ -77,7 +83,21 @@ export function SuperTextEditor({
   const [stripColor, setStripColor] = useState(initial?.stripColor ?? SUPER_TEXT_DEFAULTS.stripColor);
   const [textColor, setTextColor] = useState(initial?.textColor ?? SUPER_TEXT_DEFAULTS.textColor);
   const [fontSizePct, setFontSizePct] = useState(initial?.fontSizePct ?? SUPER_TEXT_DEFAULTS.fontSizePct);
-  const [font, setFont] = useState<SuperTextFontKey>(initial?.font ?? DEFAULT_SUPER_TEXT_FONT);
+  // A NEW strip takes the reference-clip defaults (sans + insta layout); a strip
+  // being re-edited keeps exactly what it had — `initial.font` / `initial.layout`
+  // absent means the classic look, and it must stay that way.
+  const [font, setFont] = useState<SuperTextFontKey>(
+    initial ? (initial.font ?? DEFAULT_SUPER_TEXT_FONT) : SUPER_TEXT_DEFAULTS.font
+  );
+  const [layout] = useState<SuperTextLayoutKey>(
+    initial ? (initial.layout ?? DEFAULT_SUPER_TEXT_LAYOUT) : SUPER_TEXT_DEFAULTS.layout
+  );
+  // Where the strip shows. New strips default to the COVER (owner decision
+  // 2026-10-02); a re-edited strip keeps its stored scope (absent = whole video).
+  const [scope, setScope] = useState<SuperTextScope>(
+    initial ? (initial.scope ?? DEFAULT_SUPER_TEXT_SCOPE) : SUPER_TEXT_DEFAULTS.scope
+  );
+  const [introSeconds, setIntroSeconds] = useState<number>(initial?.introSeconds ?? DEFAULT_INTRO_SECONDS);
   const [xPct, setXPct] = useState(initial?.xPct ?? SUPER_TEXT_DEFAULTS.xPct);
   const [yPct, setYPct] = useState(initial?.yPct ?? SUPER_TEXT_DEFAULTS.yPct);
   const [aspect, setAspect] = useState<number | null>(null);
@@ -142,10 +162,29 @@ export function SuperTextEditor({
       // worker's S3 burn-cache hash — identical to every pre-picker config, so
       // existing videos are never needlessly re-burned.
       ...(font !== DEFAULT_SUPER_TEXT_FONT ? { font } : {}),
+      // Same rule for the layout preset: omitted when classic.
+      ...(layout !== DEFAULT_SUPER_TEXT_LAYOUT ? { layout } : {}),
+      // And for the scope: omitted when "video" (the pre-2026-10-02 behaviour).
+      ...(scope !== DEFAULT_SUPER_TEXT_SCOPE ? { scope } : {}),
+      ...(scope === "intro" ? { introSeconds } : {}),
     };
     const parsed = superTextConfigSchema.safeParse(candidate);
     return parsed.success ? parsed.data : null;
-  }, [words, wordColors, stripColor, textColor, xPct, yPct, fontSizePct, font]);
+  }, [words, wordColors, stripColor, textColor, xPct, yPct, fontSizePct, font, layout, scope, introSeconds]);
+
+  const SCOPE_LABELS: Record<SuperTextScope, string> = {
+    cover: "Cover only",
+    intro: "First seconds",
+    video: "Whole video",
+  };
+
+  // Size buttons highlight the NEAREST preset: a strip saved under the old
+  // S/M/L values (3.2/4.2/5.4) still shows a selected size instead of none.
+  const nearestSizeKey = (Object.keys(FONT_SIZE_PRESETS) as Array<keyof typeof FONT_SIZE_PRESETS>).reduce(
+    (best, k) =>
+      Math.abs(FONT_SIZE_PRESETS[k] - fontSizePct) < Math.abs(FONT_SIZE_PRESETS[best] - fontSizePct) ? k : best,
+    "M" as keyof typeof FONT_SIZE_PRESETS
+  );
 
   const moveTo = (clientX: number, clientY: number) => {
     const rect = stageRef.current?.getBoundingClientRect();
@@ -296,6 +335,48 @@ export function SuperTextEditor({
             </div>
           )}
 
+          {/* Where the strip shows (2026-10-02). Cover = composited onto the
+              video's cover image (your uploaded cover, else an auto-picked early
+              frame) and set as the thumbnail — the video itself plays clean. */}
+          <div className="space-y-1">
+            <div className="flex flex-wrap items-center gap-1 text-sm">
+              <span className="mr-1 text-xs text-muted-foreground">Show on</span>
+              {SUPER_TEXT_SCOPES.map((k) => (
+                <Button
+                  key={k}
+                  type="button"
+                  size="sm"
+                  variant={scope === k ? "default" : "outline"}
+                  onClick={() => setScope(k)}
+                >
+                  {SCOPE_LABELS[k]}
+                </Button>
+              ))}
+              {scope === "intro" && (
+                <label className="ml-1 flex items-center gap-1 text-xs text-muted-foreground">
+                  for
+                  <Input
+                    type="number"
+                    min={1}
+                    max={30}
+                    step={1}
+                    value={introSeconds}
+                    onChange={(e) => setIntroSeconds(Math.min(30, Math.max(1, Number(e.target.value) || 1)))}
+                    className="h-7 w-14 px-1 text-xs"
+                  />
+                  s
+                </label>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {scope === "cover"
+                ? "Goes on the video's cover image — your uploaded cover if you set one, otherwise a clear early frame — and becomes the thumbnail on Instagram, Facebook and YouTube. The video plays without it. Stories use the whole video."
+                : scope === "intro"
+                  ? "Burned into the opening seconds only, then the video plays clean. Re-encodes the video."
+                  : "Burned into every frame. Re-encodes the video."}
+            </p>
+          </div>
+
           {/* Typeface. Each button previews its own face, so the choice is
               visible before it is made. */}
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
@@ -346,7 +427,7 @@ export function SuperTextEditor({
                   key={k}
                   type="button"
                   size="sm"
-                  variant={fontSizePct === FONT_SIZE_PRESETS[k] ? "default" : "outline"}
+                  variant={nearestSizeKey === k ? "default" : "outline"}
                   onClick={() => setFontSizePct(FONT_SIZE_PRESETS[k])}
                 >
                   {k}

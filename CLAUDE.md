@@ -2981,11 +2981,11 @@ its metadata byte-for-byte). Still ONE `supertext:{postId}:v1` job.
   per-word highlight colours carried by POSITION, position/size/font/colours unchanged) and
   [super-text-per-channel.ts](apps/worker/src/lib/super-text-per-channel.ts) burns each one through
   the SAME `burnConfig` as the base (one encode contract), assigning targets **round-robin**.
-- **Every variant is one more ffmpeg encode** on the 4-core box, serial (worker concurrency 1).
-  Distinct variants are therefore CAPPED — `SUPER_TEXT_MAX_VARIANTS` (default 40); beyond it
-  channels reuse variants. A 53-channel reel ≈ 40 encodes before the post can flip; the Compose
-  copy says so. Do NOT raise the cap to "finish faster": that is the 2026-08-07 per-target-encode
-  incident shape.
+- **In `video`/`intro` scope every variant is one more ffmpeg encode** on the 4-core box, serial
+  (worker concurrency 1). Distinct variants are therefore CAPPED — `SUPER_TEXT_MAX_VARIANTS`
+  (default 40); beyond it channels reuse variants. Do NOT raise the cap to "finish faster": that
+  is the 2026-08-07 per-target-encode incident shape. In the default **`cover` scope** a variant
+  is one composited JPEG (`SUPER_TEXT_MAX_COVER_VARIANTS`, default 250) — see the next section.
 - **Per-target media lives on the TARGET**: `PostTarget.metadata.superTextMedia[sourceMediaId] =
   { mediaId, text, variant }`. The publish worker swaps it in right after loading the target
   ([per-target-media.ts](apps/worker/src/lib/per-target-media.ts), step 2a) — BEFORE the optimize
@@ -3007,6 +3007,79 @@ its metadata byte-for-byte). Still ONE `supertext:{postId}:v1` job.
   [super-text-per-channel.test.ts](apps/worker/src/lib/super-text-per-channel.test.ts) (state machine
   with injected burn/model), [per-target-media.test.ts](apps/worker/src/lib/per-target-media.test.ts),
   plus the perChannel cases in `super-text-plan.test.ts` / `super-text-create.test.ts`.
+
+## 🎞️ Super text: the reference LOOK (`layout: "insta"`), the COVER scope, and the frame choice (2026-10-02)
+
+Same day, same branch as the per-channel section above. The owner sent a reference reel
+(`90adac81-…MOV`, 1080×1920): a white two-line pill, bold sans, black text with orange highlight
+words, lower third. Everything below was MEASURED on its frames with sharp and verified by
+re-rendering the same words over the same frame in the preinstalled Chromium — not eyeballed.
+
+- **Measured geometry (1080 frame):** pill rows 1550–1701 (152px for two lines), x 87→994
+  (84.1%, CENTRED, the shorter first line sharing the same LEFT edge), cap height 37px, text
+  inset 33–39px, highlight ≈ `#D8501B`, text `#111`. ⇒ a centred block up to ~84% wide with
+  `text-align:left`, font 4.6% of width (the embedded sans hits a 37px cap exactly there; 4.8
+  gave 39), line-height 1.5, padding `0.1em 0.68em`, radius 0.24em.
+- **It is an opt-in preset — `SuperTextConfig.layout: "insta"`** ([constants.ts](packages/super-text/src/constants.ts)
+  `SUPER_TEXT_LAYOUTS`, `resolveSuperTextLayout` — array `includes`, never `in`). Absent ⇒
+  classic ⇒ the pre-preset CSS **byte-for-byte**; the golden gate passed with its 4 classic
+  snapshots unchanged (2 NEW insta snapshots added). `superTextAnchorCss()` is shared by the burn
+  frame AND the React preview so the two cannot disagree about wrapping.
+- **🔴 `width: max-content` is load-bearing for insta.** An absolutely positioned block at
+  `left:50%` shrink-wraps to the space on its RIGHT (50% of the frame) and wrapped the strip at
+  ~540px. The classic layout has always done this; it is left alone for byte-identity.
+- **⚠️ Chromium line-breaking with `box-decoration-break: clone` counts a fragment's START
+  padding but not its END padding** (width matrix, 78–86%): subtracting both pads from the block
+  wrapped a word early, subtracting none let the pill overflow the block on the right by one pad.
+  The anchor is therefore `calc(maxWidthPct% - padXem)`. `maxWidthPct` is 86, not the measured
+  84, because at an identical cap height the embedded face sets the reference's second line
+  ~2.4% wider than Instagram Sans.
+- **Sans tracking dial is now 0** (was −0.02em): at the same cap height −0.02 left the same two
+  lines 6% narrower than the reference (853 vs 908px); 0 lands within 2%. A zero dial emits no
+  `letter-spacing` at all. `FONT_SIZE_PRESETS` moved to S 3.6 / M 4.6 / L 5.6 and the editor
+  highlights the NEAREST preset so old 3.2/4.2/5.4 strips still show a selected size.
+- **New-strip defaults** (`SUPER_TEXT_DEFAULTS`): `layout:"insta"`, `font:"sans"`,
+  `scope:"cover"`, `yPct:84`; `HIGHLIGHT_ORANGE` is the first accent swatch. A strip being
+  RE-EDITED keeps exactly what it stored (absent keys = classic / video).
+
+### `scope` — cover / intro / video (owner: "only for thumbnail, not the whole video")
+
+- **`cover` (default for new strips): no video encode at all.** The strip is rendered at the
+  COVER's pixel size, composited with sharp ([super-text-cover.ts](apps/worker/src/lib/super-text-cover.ts)
+  `prepareCoverBase` → `composeCoverJpeg`, JPEG under 8MB, long edge ≤1920), uploaded to
+  `supertext/{org}/{label}-{hash}-cover.jpg` as an IMAGE Media row, and written to
+  **`Post.metadata.videoThumbnail`** — the exact path the providers already apply (IG
+  `cover_url` on REELS, FB `/thumbnails`, YT `thumbnails.set`; see the thumbnails section).
+  The video file and PostMedia are untouched. Per-channel variants write
+  **`PostTarget.metadata.videoThumbnail`**, which wins because the publish worker spreads target
+  metadata over post metadata when building the provider payload — zero worker change; the
+  per-target entry carries NO `mediaId`, so `per-target-media.ts` never swaps the video.
+  Per-channel cap for covers: `SUPER_TEXT_MAX_COVER_VARIANTS` (default 250) — one JPEG each.
+- **Which frame?** The user's uploaded Compose cover wins when present (`planCoverBase`; a cover
+  WE generated on an earlier attempt is recognised by `videoThumbnail.superText` and never
+  stacked on). Otherwise `coverCandidateTimes` samples a few EARLY moments (0.2s, 1s, 2s, ≤4s /
+  25% of the duration; never past the end), `scoreCoverCandidate` scores Laplacian sharpness ×
+  contrast with a 10× penalty for near-black/blown-out frames, and `pickBestCover` keeps the
+  EARLIER frame unless a later one beats it by >10%, so the cover still reads as the opening. The
+  grab is `ffmpeg -ss t -i <url> -frames:v 1` (input seek = a short read, not the long http
+  encode PR #144 forbids); ffmpeg applies the rotation tag so the frame is display-oriented, and
+  the strip is rendered at the FRAME's size, not the probe's coded size.
+- **A cover is a still image: it has no duration.** It shows in the profile grid / reels tab and
+  as the poster before playback; the video plays WITHOUT the text in the feed. That is the honest
+  trade of "cover only" — the reference reel itself had the text in every frame. For text that
+  must be seen while playing use **`intro`** (burned into the first `introSeconds`, 1–30, default
+  3, via `overlay=…:enable='lte(t,N)'` — still a full re-encode, same cost as `video`) or
+  **`video`** (every frame, the original behaviour, absent key).
+- **Story-mode posts force `cover` → `video`** (Meta rejects `cover_url` on a STORIES
+  container). Platforms with no cover concept (X, LinkedIn, …) simply get the plain video in
+  cover scope — stated in the editor copy.
+- `scope`/`introSeconds` never reach the CSS (test-locked), so they do not change the strip
+  render or the burn-cache hash of a config that omits them.
+- Tests: [super-text-cover.test.ts](apps/worker/src/lib/super-text-cover.test.ts) (real pixels:
+  black vs textured frame scoring, tie rule, size cap, composite, mismatch refusal),
+  [super-text-burn-intro.test.ts](apps/worker/src/lib/super-text-burn-intro.test.ts), the layout /
+  scope block in [super-text.test.ts](packages/super-text/src/__tests__/super-text.test.ts), and
+  the insta additions in the golden gate.
 
 ## ⏸️ Caption fan-out HOLDS on total failure; "out of credit" is final (2026-09-28)
 

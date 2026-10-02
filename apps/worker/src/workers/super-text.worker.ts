@@ -18,7 +18,10 @@ import {
   buildSuperTextFrameHtml,
   superTextConfigSchema,
   resolveSuperTextFont,
+  resolveSuperTextScope,
+  DEFAULT_INTRO_SECONDS,
   type SuperTextConfig,
+  type SuperTextScope,
 } from "@postautomation/super-text";
 import { launchCreativeBrowser } from "@postautomation/ai";
 import { buildSuperTextCompositeArgs, durationIntegrityOk } from "../lib/super-text-burn";
@@ -26,6 +29,16 @@ import { flipParkedPostIfReady } from "../lib/publish-gates";
 import { runPerChannelSuperText, type PerChannelState } from "../lib/super-text-per-channel";
 import { baseTextOf } from "../lib/super-text-variants";
 import { SUPER_TEXT_MEDIA_KEY } from "../lib/per-target-media";
+import {
+  buildFrameGrabArgs,
+  composeCoverJpeg,
+  coverCandidateTimes,
+  pickBestCover,
+  planCoverBase,
+  prepareCoverBase,
+  scoreCoverCandidate,
+  type CoverBase,
+} from "../lib/super-text-cover";
 
 /**
  * super-text worker: burns the user's positioned text strip into their video
@@ -74,6 +87,22 @@ const PROBE_TIMEOUT_MS = 60_000;
 const BURN_TIMEOUT_MS = Number(process.env.SUPER_TEXT_TIMEOUT_MS || 30 * 60 * 1000);
 /** Re-check of the create-time cap (SUPER_TEXT_MAX_SOURCE_BYTES in packages/api). */
 const MAX_SOURCE_BYTES = 950 * 1024 * 1024;
+
+/**
+ * Story MODE marker (packages/api `isStoryModeMetadata` — same rule, kept local
+ * so the worker does not import the API package): the `instagramStory` object
+ * is written only by post.create's `story` input.
+ */
+function isStoryModeMeta(meta: Record<string, unknown> | null | undefined): boolean {
+  const m = meta?.instagramStory;
+  return !!m && typeof m === "object" && !Array.isArray(m);
+}
+
+/** Distinct per-channel COVER variants per video (each is one composited JPEG). */
+function maxCoverVariants(): number {
+  const raw = Number(process.env.SUPER_TEXT_MAX_COVER_VARIANTS);
+  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 250;
+}
 
 export const SUPER_TEXT_FAIL_MESSAGE =
   "Super text could not be applied to your video. Edit the post to try again, or remove the super text.";
@@ -322,15 +351,101 @@ async function stampPerChannelState(postId: string, mediaId: string, state: PerC
 async function writeTargetSuperTextMedia(
   targetId: string,
   sourceMediaId: string,
-  entry: { mediaId: string; text: string; variant: number }
+  entry: { mediaId: string; text: string; variant: number },
+  scope: SuperTextScope
 ) {
   const target = await prisma.postTarget.findUnique({ where: { id: targetId }, select: { metadata: true } });
   const meta = ((target?.metadata as Record<string, unknown>) ?? {});
   const map = ((meta[SUPER_TEXT_MEDIA_KEY] as Record<string, unknown>) ?? {});
+  if (scope === "cover") {
+    // The per-channel COVER rides the existing videoThumbnail path: the publish
+    // worker spreads PostTarget.metadata over Post.metadata when it builds the
+    // provider payload, so a target-level videoThumbnail wins with no worker
+    // change. The entry keeps the text for the post page but carries NO
+    // `mediaId`, so per-target-media.ts never swaps the video itself.
+    const cover = await prisma.media.findUnique({ where: { id: entry.mediaId }, select: { id: true, url: true } });
+    if (!cover) throw new Error(`cover media ${entry.mediaId} not found`);
+    await prisma.postTarget.update({
+      where: { id: targetId },
+      data: {
+        metadata: {
+          ...meta,
+          videoThumbnail: { mediaId: cover.id, url: cover.url, superText: { sourceMediaId, variant: entry.variant } },
+          [SUPER_TEXT_MEDIA_KEY]: {
+            ...map,
+            [sourceMediaId]: { text: entry.text, variant: entry.variant, coverMediaId: cover.id },
+          },
+        } as any,
+      },
+    });
+    return;
+  }
   await prisma.postTarget.update({
     where: { id: targetId },
     data: { metadata: { ...meta, [SUPER_TEXT_MEDIA_KEY]: { ...map, [sourceMediaId]: entry } } as any },
   });
+}
+
+/** Set the post-level cover (variant 0, cover scope). Fresh read → top-level merge. */
+async function stampPostCover(postId: string, cover: { mediaId: string; url: string; sourceMediaId: string }) {
+  const post = await prisma.post.findUnique({ where: { id: postId }, select: { metadata: true } });
+  const meta = ((post?.metadata as Record<string, unknown>) ?? {});
+  await prisma.post.update({
+    where: { id: postId },
+    data: {
+      metadata: {
+        ...meta,
+        videoThumbnail: { mediaId: cover.mediaId, url: cover.url, superText: { sourceMediaId: cover.sourceMediaId } },
+      } as any,
+    },
+  });
+}
+
+/** Download a (public S3) image into memory — covers are small by construction. */
+async function fetchBuffer(url: string, maxBytes = 25 * 1024 * 1024): Promise<Buffer> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`cover source download failed: HTTP ${res.status}`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  if (buf.length > maxBytes) throw new Error(`cover source too large (${buf.length} bytes)`);
+  return buf;
+}
+
+/**
+ * Resolve the image the cover starts from: the user's uploaded cover, else the
+ * best of a few early frames of the video (see super-text-cover.ts).
+ */
+async function resolveCoverBase(
+  postMetadata: unknown,
+  sourceUrl: string,
+  durationSec: number | undefined,
+  tmpDir: string,
+  label: string
+): Promise<{ base: CoverBase; from: string }> {
+  const plan = planCoverBase(postMetadata);
+  if (plan.kind === "user-cover") {
+    try {
+      return { base: await prepareCoverBase(await fetchBuffer(plan.url)), from: "user-cover" };
+    } catch (e: any) {
+      console.warn(`[super-text] user cover unusable (${e?.message ?? e}) — picking a frame instead`);
+    }
+  }
+  const scored: Array<{ t: number; png: Buffer; score: number }> = [];
+  for (const t of coverCandidateTimes(durationSec)) {
+    const out = path.join(tmpDir, `frame-${label}-${t}.png`);
+    try {
+      await execFileAsync("ffmpeg", buildFrameGrabArgs(sourceUrl, out, t), { timeout: PROBE_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024 });
+      const png = await fsp.readFile(out);
+      const { score } = await scoreCoverCandidate(png);
+      scored.push({ t, png, score });
+    } catch (e: any) {
+      console.warn(`[super-text] frame grab at ${t}s failed: ${e?.message ?? e}`);
+    } finally {
+      await fsp.rm(out, { force: true }).catch(() => undefined);
+    }
+  }
+  const best = pickBestCover(scored);
+  if (!best) throw new Error("could not grab any frame for the cover");
+  return { base: await prepareCoverBase(best.png), from: `frame@${best.t}s` };
 }
 
 /** Best-effort in-app note to the creator when some channels fell back to the shared strip. */
@@ -403,6 +518,12 @@ interface BurnContext {
   /** Local copy of the source — downloaded once per media, shared by every burn. */
   inputPath: string;
   downloaded: { done: boolean };
+  /** Where the strip goes for THIS media (story-mode posts are forced to `video`). */
+  scope: SuperTextScope;
+  /** Post metadata at job start — names the user's uploaded cover, if any. */
+  postMetadata: unknown;
+  /** Cover scope: the base image, resolved once per media and reused per variant. */
+  coverBase: { value: CoverBase | null; from: string };
 }
 
 /**
@@ -425,6 +546,47 @@ async function burnConfig(
     // wait rather than burning FONT_READY_TIMEOUT_MS on a face that never arrives.
     const fontSpec = resolveSuperTextFont(cfg.font);
     const embeddedFamily = fontSpec.embedded?.base64 ? fontSpec.embedded.family : null;
+
+    if (ctx.scope === "cover") {
+      // ── Cover only: no video encode. Strip is rendered at the COVER's size
+      // (the user's cover may not match the video's pixel size), composited
+      // with sharp, uploaded as a JPEG, and stored as an IMAGE Media row.
+      if (!ctx.coverBase.value) {
+        const resolved = await resolveCoverBase(ctx.postMetadata, ctx.source.url, ctx.srcProbe.durationSec, ctx.tmpDir, ctx.source.id);
+        ctx.coverBase = { value: resolved.base, from: resolved.from };
+        console.log(`[super-text] cover base for ${ctx.source.id}: ${resolved.from} (${resolved.base.width}x${resolved.base.height})`);
+      }
+      const base = ctx.coverBase.value!;
+      await renderStripPng(buildSuperTextFrameHtml(cfg, base.width, base.height), base.width, base.height, stripPath, embeddedFamily);
+      const jpeg = await composeCoverJpeg(base, await fsp.readFile(stripPath));
+      const hash = crypto.createHash("sha1").update(JSON.stringify(cfg)).digest("hex").slice(0, 8);
+      const key = `supertext/${ctx.organizationId}/${label}-${hash}-cover.jpg`;
+      await s3.send(new PutObjectCommand({ Bucket: S3_BUCKET, Key: key, Body: jpeg, ContentLength: jpeg.length, ContentType: "image/jpeg" }));
+      const url = `${S3_BASE_URL}/${key}`;
+      const derived = await prisma.media.create({
+        data: {
+          organizationId: ctx.organizationId,
+          uploadedById: ctx.createdById,
+          fileName: `supertext-cover-${ctx.source.fileName.replace(/\.[^.]+$/, "")}.jpg`,
+          fileType: "image/jpeg",
+          fileSize: jpeg.length,
+          url,
+          width: base.width,
+          height: base.height,
+          metadata: {
+            superText: {
+              sourceMediaId: ctx.source.id,
+              cover: true,
+              coverFrom: ctx.coverBase.from,
+              burnedAt: new Date().toISOString(),
+              ...(variant > 0 ? { variant, text: baseTextOf(cfg) } : {}),
+            },
+          } as any,
+        },
+      });
+      return { derivedId: derived.id, out: { width: base.width, height: base.height } };
+    }
+
     await renderStripPng(
       buildSuperTextFrameHtml(cfg, ctx.width, ctx.height),
       ctx.width,
@@ -438,7 +600,13 @@ async function burnConfig(
     }
     await execFileAsync(
       "ffmpeg",
-      buildSuperTextCompositeArgs({ inputPath: ctx.inputPath, overlayPngPath: stripPath, outputPath }),
+      buildSuperTextCompositeArgs({
+        inputPath: ctx.inputPath,
+        overlayPngPath: stripPath,
+        outputPath,
+        // Intro scope: strip on screen for the first N seconds only.
+        ...(ctx.scope === "intro" ? { showForSeconds: cfg.introSeconds ?? DEFAULT_INTRO_SECONDS } : {}),
+      }),
       { timeout: BURN_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024 }
     );
 
@@ -588,20 +756,34 @@ export async function runSuperTextBurn(
         height,
         inputPath: path.join(tmpDir, `in-${mediaId}.mp4`),
         downloaded: { done: false },
+        // A story has no cover (Meta rejects cover_url on a STORIES container), so
+        // a cover-scoped strip on a story-mode post is burned into the video.
+        scope: isStoryModeMeta(meta) && resolveSuperTextScope(parsed.data.scope) === "cover"
+          ? "video"
+          : resolveSuperTextScope(parsed.data.scope),
+        postMetadata: meta,
+        coverBase: { value: null, from: "" },
       };
 
       try {
         if (!baseDone) {
           const { derivedId } = await burnConfig(ctx, parsed.data, 0);
 
-          // Repoint the post at the burned video. The join row keeps its `order`, so
-          // carousel/slide ordering is untouched — only which Media it points at.
-          await prisma.postMedia.updateMany({
-            where: { postId, mediaId },
-            data: { mediaId: derivedId },
-          });
-
-          results[mediaId] = { status: "done", derivedMediaId: derivedId };
+          if (ctx.scope === "cover") {
+            // The video is untouched; the composited frame becomes the post's
+            // cover (videoThumbnail), which every provider already applies.
+            const cover = await prisma.media.findUniqueOrThrow({ where: { id: derivedId }, select: { url: true } });
+            await stampPostCover(postId, { mediaId: derivedId, url: cover.url, sourceMediaId: mediaId });
+            results[mediaId] = { status: "done", coverMediaId: derivedId, scope: "cover" };
+          } else {
+            // Repoint the post at the burned video. The join row keeps its `order`, so
+            // carousel/slide ordering is untouched — only which Media it points at.
+            await prisma.postMedia.updateMany({
+              where: { postId, mediaId },
+              data: { mediaId: derivedId },
+            });
+            results[mediaId] = { status: "done", derivedMediaId: derivedId, scope: ctx.scope };
+          }
           // Persist per entry so a crash mid-loop never re-burns finished work.
           await stampSuperText(postId, { results });
           burned++;
@@ -626,8 +808,11 @@ export async function runSuperTextBurn(
                 burned++;
                 return { derivedMediaId: derivedId };
               },
-              writeTargetMedia: (targetId, entry) => writeTargetSuperTextMedia(targetId, mediaId, entry),
+              writeTargetMedia: (targetId, entry) => writeTargetSuperTextMedia(targetId, mediaId, entry, ctx.scope),
               persist: (state) => stampPerChannelState(postId, mediaId, state),
+              // A cover variant is one small JPEG, not an encode — the cap can be
+              // generous there. Video/intro variants keep the encode cap.
+              ...(ctx.scope === "cover" ? { maxVariants: maxCoverVariants() } : {}),
             },
             {
               sourceMediaId: mediaId,

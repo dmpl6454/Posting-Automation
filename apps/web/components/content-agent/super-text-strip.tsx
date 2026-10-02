@@ -1,6 +1,6 @@
 "use client";
 
-import { buildStripInnerHtml, STRIP_MAX_WIDTH_PCT, type SuperTextConfig } from "@postautomation/super-text";
+import { buildStripInnerHtml, superTextAnchorCss, type SuperTextConfig } from "@postautomation/super-text";
 
 /**
  * Live preview of the strip that will be BURNED into the video.
@@ -28,6 +28,10 @@ export function SuperTextStrip({
   stageWidth: number;
 }) {
   const fontPx = (config.fontSizePct / 100) * stageWidth;
+  // Width + alignment come from the SAME helper the burn frame uses, so a
+  // layout preset (e.g. "insta": centred block, left-aligned lines) wraps at
+  // the same words on the preview stage and on the video.
+  const anchor = superTextAnchorCss(config);
   return (
     <div
       style={{
@@ -35,8 +39,9 @@ export function SuperTextStrip({
         left: `${config.xPct}%`,
         top: `${config.yPct}%`,
         transform: "translate(-50%,-50%)",
-        maxWidth: `${STRIP_MAX_WIDTH_PCT}%`,
-        textAlign: "center",
+        ...(anchor.width ? { width: anchor.width } : {}),
+        maxWidth: anchor.maxWidth,
+        textAlign: anchor.textAlign,
         fontSize: `${fontPx}px`,
         pointerEvents: "none",
       }}

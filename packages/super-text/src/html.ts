@@ -1,13 +1,9 @@
 import type { SuperTextConfig } from "./schema";
 import {
   SUPER_TEXT_EMOJI_STACK,
-  STRIP_PAD_Y_EM,
-  STRIP_PAD_X_EM,
-  STRIP_RADIUS_EM,
-  STRIP_LINE_HEIGHT,
-  STRIP_MAX_WIDTH_PCT,
   SUPER_TEXT_FONT_KEYS,
   resolveSuperTextFont,
+  resolveSuperTextLayout,
 } from "./constants";
 
 const HEX6 = /^#[0-9a-fA-F]{6}$/;
@@ -79,6 +75,8 @@ export function buildStripInnerHtml(config: SuperTextConfig): string {
   const stripColor = safeHexColor(config.stripColor, "#FFFFFF");
   // Looked up BY KEY from a closed registry — config.font is never interpolated.
   const font = resolveSuperTextFont(config.font);
+  // Same discipline for the layout preset; absent ⇒ classic ⇒ the pre-preset CSS.
+  const layout = resolveSuperTextLayout(config.layout);
   const words = config.segments
     .map((seg) => {
       const color = seg.color ? safeHexColor(seg.color, textColor) : textColor;
@@ -94,9 +92,9 @@ export function buildStripInnerHtml(config: SuperTextConfig): string {
     // Omitted entirely when 0 so the classic output stays byte-identical —
     // even `letter-spacing:0em` would be a change vs the pre-picker render.
     (font.letterSpacingEm ? `letter-spacing:${font.letterSpacingEm}em;` : "") +
-    `line-height:${STRIP_LINE_HEIGHT};` +
-    `padding:${STRIP_PAD_Y_EM}em ${STRIP_PAD_X_EM}em;` +
-    `border-radius:${STRIP_RADIUS_EM}em;` +
+    `line-height:${layout.lineHeight};` +
+    `padding:${layout.padYEm}em ${layout.padXEm}em;` +
+    `border-radius:${layout.radiusEm}em;` +
     `-webkit-box-decoration-break:clone;box-decoration-break:clone;` +
     `white-space:pre-wrap;">${words}</span>`
   );
@@ -108,6 +106,38 @@ export function buildStripInnerHtml(config: SuperTextConfig): string {
  * at `overlay=0:0`. Keeping the position maths in this CSS (rather than in ffmpeg
  * `x=`/`y=` expressions) means preview and burn share ONE positioning model.
  */
+/**
+ * The anchor box's layout-dependent CSS, shared by the burn frame below and the
+ * React preview (super-text-strip.tsx) so the two cannot disagree about where
+ * the text sits or where it wraps.
+ *
+ * `maxWidth` is the PILL's width budget. Measured in Chromium (a width matrix
+ * over the reference text): with `box-decoration-break: clone` the line breaker
+ * counts a fragment's START padding but not its END padding, so a line's painted
+ * pill can exceed the block by exactly one pad. Subtracting ONE pad from the
+ * block keeps every pill within `maxWidthPct`; subtracting two wrapped a word
+ * early, subtracting none let the pill overflow the block on the right.
+ */
+export function superTextAnchorCss(config: Pick<SuperTextConfig, "layout">): {
+  maxWidth: string;
+  textAlign: "center" | "left";
+  /** `max-content` for presets; undefined (not emitted) for classic. */
+  width?: "max-content";
+} {
+  const layout = resolveSuperTextLayout(config.layout);
+  const isClassic = layout === resolveSuperTextLayout(undefined);
+  if (isClassic) return { maxWidth: `${layout.maxWidthPct}%`, textAlign: layout.textAlign };
+  return {
+    // Without an explicit width an abs-positioned box at left:50% shrink-wraps to
+    // the 50% of the frame on its right and wraps far too early (measured: a
+    // 524px pill on a 1080px frame). max-content + max-width is what lets the
+    // block grow to the pill width and then wrap there.
+    width: "max-content",
+    maxWidth: `calc(${layout.maxWidthPct}% - ${layout.padXEm}em)`,
+    textAlign: layout.textAlign,
+  };
+}
+
 export function buildSuperTextFrameHtml(
   config: SuperTextConfig,
   videoWidth: number,
@@ -118,6 +148,7 @@ export function buildSuperTextFrameHtml(
   const fontPx = Math.round((config.fontSizePct / 100) * w);
   const xPct = Math.min(95, Math.max(5, config.xPct));
   const yPct = Math.min(95, Math.max(5, config.yPct));
+  const anchor = superTextAnchorCss(config);
   return (
     `<!DOCTYPE html><html><head><meta charset="utf-8"><style>` +
     // @font-face FIRST in the stylesheet — declared before the rules that use
@@ -125,7 +156,8 @@ export function buildSuperTextFrameHtml(
     buildSuperTextFontFaceCss(config.font) +
     `html,body{margin:0;padding:0;background:transparent;width:${w}px;height:${h}px;overflow:hidden}` +
     `.anchor{position:absolute;left:${xPct}%;top:${yPct}%;transform:translate(-50%,-50%);` +
-    `max-width:${STRIP_MAX_WIDTH_PCT}%;text-align:center;font-size:${fontPx}px}` +
+    (anchor.width ? `width:${anchor.width};` : "") +
+    `max-width:${anchor.maxWidth};text-align:${anchor.textAlign};font-size:${fontPx}px}` +
     `</style></head><body><div class="anchor">${buildStripInnerHtml(config)}</div></body></html>`
   );
 }

@@ -2599,7 +2599,7 @@ ${content}`;
                       Different super text per channel (AI)
                     </Label>
                     <p className="mt-0.5 text-xs text-muted-foreground">
-                      AI rewrites your line for every channel (same position, size and colours) and burns one video per channel. Each extra channel is one more video encode, so a large fan-out takes longer before it publishes. Channels whose line can&apos;t be prepared use the text you wrote.
+                      AI rewrites your line for every channel (same position, size and colours). With &quot;Cover only&quot; each channel gets its own cover image in seconds; with &quot;First seconds&quot; or &quot;Whole video&quot; each channel is a separate video encode, so a large fan-out takes longer before it publishes. Channels whose line can&apos;t be prepared use the text you wrote.
                     </p>
                   </div>
                   <Switch

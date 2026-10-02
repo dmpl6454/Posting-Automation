@@ -16,6 +16,10 @@ import {
   safeHexColor,
   escapeHtml,
   SUPER_TEXT_DEFAULTS,
+  superTextAnchorCss,
+  resolveSuperTextLayout,
+  resolveSuperTextScope,
+  SUPER_TEXT_LAYOUTS,
   type SuperTextConfig,
 } from "../index";
 
@@ -160,5 +164,69 @@ describe("helpers", () => {
   it("defaults are a valid config when combined with text", () => {
     const cfg = { version: 1 as const, segments: [{ text: "hi" }], ...SUPER_TEXT_DEFAULTS };
     expect(superTextConfigSchema.safeParse(cfg).success).toBe(true);
+  });
+});
+
+/* ─── Layout preset + scope (2026-10-02) ─────────────────────────────────── */
+describe("layout preset — byte identity and the insta geometry", () => {
+  it("a config with NO layout renders identically to layout:'classic'", () => {
+    expect(buildStripInnerHtml(base)).toBe(buildStripInnerHtml({ ...base, layout: "classic" }));
+    expect(buildSuperTextFrameHtml(base, 1080, 1920)).toBe(
+      buildSuperTextFrameHtml({ ...base, layout: "classic" }, 1080, 1920)
+    );
+  });
+
+  it("classic anchor css is exactly the pre-preset values (no width key)", () => {
+    expect(superTextAnchorCss({})).toEqual({ maxWidth: "88%", textAlign: "center" });
+    expect(superTextAnchorCss({ layout: "classic" })).toEqual({ maxWidth: "88%", textAlign: "center" });
+  });
+
+  it("insta: centred block, LEFT-aligned lines, max-content width, pill budget minus one pad", () => {
+    const spec = SUPER_TEXT_LAYOUTS.insta;
+    expect(superTextAnchorCss({ layout: "insta" })).toEqual({
+      width: "max-content",
+      maxWidth: `calc(${spec.maxWidthPct}% - ${spec.padXEm}em)`,
+      textAlign: "left",
+    });
+    const html = buildSuperTextFrameHtml({ ...base, layout: "insta" }, 1080, 1920);
+    expect(html).toContain("width:max-content;");
+    expect(html).toContain("text-align:left;");
+    // The block is still anchored by its CENTRE — dragging in the editor is unchanged.
+    expect(html).toContain("transform:translate(-50%,-50%)");
+    const strip = buildStripInnerHtml({ ...base, layout: "insta" });
+    expect(strip).toContain(`line-height:${spec.lineHeight};`);
+    expect(strip).toContain(`padding:${spec.padYEm}em ${spec.padXEm}em;`);
+    expect(strip).toContain(`border-radius:${spec.radiusEm}em;`);
+  });
+
+  it("resolves by allowlist — unknown, injected and prototype keys fall back to classic", () => {
+    const classic = resolveSuperTextLayout("classic");
+    for (const k of [undefined, null, "", "bogus", "insta;}</style>", "__proto__", "constructor", "toString"]) {
+      expect(resolveSuperTextLayout(k as any)).toBe(classic);
+    }
+    expect(resolveSuperTextLayout("insta")).toBe(SUPER_TEXT_LAYOUTS.insta);
+  });
+
+  it("schema: layout/scope/introSeconds are optional, closed enums, never injected", () => {
+    const parsed = superTextConfigSchema.parse(base);
+    expect("layout" in parsed).toBe(false);
+    expect("scope" in parsed).toBe(false);
+    expect(superTextConfigSchema.safeParse({ ...base, layout: "insta", scope: "cover" }).success).toBe(true);
+    expect(superTextConfigSchema.safeParse({ ...base, scope: "intro", introSeconds: 4 }).success).toBe(true);
+    expect(superTextConfigSchema.safeParse({ ...base, layout: "weird" }).success).toBe(false);
+    expect(superTextConfigSchema.safeParse({ ...base, scope: "thumbnail" }).success).toBe(false);
+    expect(superTextConfigSchema.safeParse({ ...base, scope: "intro", introSeconds: 0 }).success).toBe(false);
+    expect(superTextConfigSchema.safeParse({ ...base, scope: "intro", introSeconds: 31 }).success).toBe(false);
+  });
+
+  it("scope resolves to 'video' (the original burn) for anything but a known key", () => {
+    expect(resolveSuperTextScope(undefined)).toBe("video");
+    expect(resolveSuperTextScope("cover")).toBe("cover");
+    expect(resolveSuperTextScope("intro")).toBe("intro");
+    expect(resolveSuperTextScope("__proto__")).toBe("video");
+  });
+
+  it("new-strip defaults follow the reference clip: insta layout, sans, cover scope, lower third", () => {
+    expect(SUPER_TEXT_DEFAULTS).toMatchObject({ layout: "insta", font: "sans", scope: "cover", yPct: 84 });
   });
 });
