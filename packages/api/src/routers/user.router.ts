@@ -12,6 +12,7 @@ import { sendSms } from "../lib/sms";
 import { sendEmail } from "../lib/email";
 import { phoneChangedEmail } from "../lib/email-templates";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
+import { PUBLIC_USER_SELECT } from "../lib/user-select";
 import { verifyAndConsumePhoneOtp, PHONE_OTP_PURPOSE } from "@postautomation/db";
 
 export const userRouter = createRouter({
@@ -32,7 +33,9 @@ export const userRouter = createRouter({
       },
     });
     if (!user) return null;
-    const { password, ...rest } = user;
+    // Never the hash or the internal markers; apps/ios decodes the rest, so the
+    // shape is otherwise unchanged.
+    const { password, activeImpersonationJti: _jti, passwordChangedAt: _changed, ...rest } = user;
     return { ...rest, hasPassword: !!password };
   }),
 
@@ -45,9 +48,11 @@ export const userRouter = createRouter({
     )
     .mutation(async ({ ctx, input }) => {
       const userId = (ctx.session.user as any).id;
+      // Explicit fields: a bare update returns the whole row, password hash included.
       const updated = await ctx.prisma.user.update({
         where: { id: userId },
         data: input,
+        select: PUBLIC_USER_SELECT,
       });
       // Fix #78: audit log for profile update
       createAuditLog({
