@@ -4,6 +4,7 @@ import { SignJWT } from "jose";
 import crypto from "crypto";
 import { createRouter, superAdminProcedure, protectedProcedure } from "../../trpc";
 import { createAuditLog, AUDIT_ACTIONS } from "../../lib/audit";
+import { PUBLIC_USER_SELECT } from "../../lib/user-select";
 
 export const adminUsersRouter = createRouter({
   list: superAdminProcedure
@@ -55,9 +56,11 @@ export const adminUsersRouter = createRouter({
   getById: superAdminProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
+      // select, not include: include returns every User column, password hash included.
       const user = await ctx.prisma.user.findUnique({
         where: { id: input.id },
-        include: {
+        select: {
+          ...PUBLIC_USER_SELECT,
           memberships: {
             include: {
               organization: {
@@ -96,6 +99,7 @@ export const adminUsersRouter = createRouter({
       const updated = await ctx.prisma.user.update({
         where: { id: input.userId },
         data: { isSuperAdmin: !user.isSuperAdmin },
+        select: PUBLIC_USER_SELECT,
       });
 
       createAuditLog({
@@ -151,6 +155,7 @@ export const adminUsersRouter = createRouter({
       const updated = await ctx.prisma.user.update({
         where: { id: input.userId },
         data: { isBanned: !user.isBanned },
+        select: PUBLIC_USER_SELECT,
       });
 
       createAuditLog({
