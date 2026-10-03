@@ -1,7 +1,11 @@
 "use client";
 
+import type { SuperTextConfig } from "@postautomation/super-text";
 import { Card, CardContent } from "~/components/ui/card";
-import { PreviewMedia, type MediaKind } from "./preview-media";
+import { PreviewMedia, classifyMediaUrl, type MediaKind } from "./preview-media";
+import { ReelSafeZone } from "./reel-safe-zone";
+import { SuperTextOverlay } from "./super-text-overlay";
+import { REEL_FRAME_ASPECT, REEL_SAFE_ZONE, isSingleReel, superTextScopeLabel } from "../../lib/reel-safe-area";
 import { Avatar, AvatarImage, AvatarFallback } from "~/components/ui/avatar";
 import {
   Heart,
@@ -21,6 +25,14 @@ export interface PostPreviewProps {
   timestamp?: Date;
   /** Custom video cover (image url) — applied by PreviewMedia on VIDEO renders only. */
   videoPosterUrl?: string;
+  /**
+   * The super-text strip on the post's first VIDEO (2026-10-03). Previews draw
+   * it over the video through SuperTextOverlay — the same renderer the burn
+   * uses — so the sidebar shows the strip the worker will produce.
+   */
+  superText?: SuperTextConfig | null;
+  /** w/h of the first video (probed by Compose); places the strip inside the video's own frame. */
+  videoAspect?: number | null;
 }
 
 function formatTimestamp(date?: Date): string {
@@ -58,8 +70,15 @@ export function InstagramPreview({
   authorAvatar,
   timestamp,
   videoPosterUrl,
+  superText,
+  videoAspect,
 }: PostPreviewProps) {
   const username = authorHandle || authorName.toLowerCase().replace(/\s+/g, "");
+  // Exactly one video publishes as a REEL (two or more = carousel, an image =
+  // feed post), and a reel is viewed on a 9:16 screen with Instagram's UI
+  // over it — so it gets its own frame, not the 4:5 feed box.
+  const firstKind = mediaUrls?.[0] ? classifyMediaUrl(mediaUrls[0], mediaKinds?.[0]) : undefined;
+  const isReel = isSingleReel(mediaUrls, firstKind);
 
   return (
     <Card className="overflow-hidden border border-zinc-200 dark:border-zinc-800">
@@ -86,7 +105,43 @@ export function InstagramPreview({
           <MoreHorizontal className="h-5 w-5 flex-shrink-0 text-foreground" />
         </div>
 
-        {/* Image area */}
+        {/* Reel: a 9:16 screen. The video is CONTAINED (letterboxed) exactly as
+            the reel viewer shows a non-9:16 upload; Instagram's own UI zones are
+            shaded (ReelSafeZone, Meta's figures) and the super-text strip is
+            drawn inside the VIDEO's rect (SuperTextOverlay), where the burn
+            puts it. (2026-10-03, owner ask.) */}
+        {isReel && mediaUrls?.[0] ? (
+          <div className="bg-black">
+            <div
+              className="relative mx-auto w-full max-w-[300px] overflow-hidden bg-black"
+              style={{ aspectRatio: `${REEL_FRAME_ASPECT}` }}
+              data-testid="reel-frame"
+            >
+              <PreviewMedia
+                poster={videoPosterUrl}
+                url={mediaUrls[0]}
+                kind="video"
+                className="h-full w-full object-contain"
+              />
+              <ReelSafeZone />
+              {superText ? (
+                <SuperTextOverlay config={superText} containerAspect={REEL_FRAME_ASPECT} videoAspect={videoAspect} />
+              ) : null}
+              <span className="absolute left-2 top-2 rounded-full bg-black/60 px-2 py-0.5 text-[10px] font-semibold text-white">
+                Reel
+              </span>
+              {superText ? (
+                <span className="absolute bottom-2 left-2 rounded-full bg-black/60 px-2 py-0.5 text-[10px] font-medium text-white">
+                  {superTextScopeLabel(superText)}
+                </span>
+              ) : null}
+            </div>
+            <p className="px-3 py-1.5 text-center text-[10px] leading-snug text-zinc-400">
+              Shaded = where Instagram&apos;s own UI sits (Meta&apos;s reel safe zone: top {REEL_SAFE_ZONE.topPct}%,
+              bottom {REEL_SAFE_ZONE.bottomPct}%, sides {REEL_SAFE_ZONE.sidePct}%).
+            </p>
+          </div>
+        ) : (
         <div className="relative aspect-[4/5] w-full bg-zinc-100 dark:bg-zinc-800">
           {mediaUrls && mediaUrls.length > 0 ? (
             <>
@@ -127,6 +182,7 @@ export function InstagramPreview({
             </div>
           )}
         </div>
+        )}
 
         {/* Action icons */}
         <div className="flex items-center justify-between px-3 pt-2.5">

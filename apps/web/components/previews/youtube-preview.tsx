@@ -5,6 +5,7 @@ import { Avatar, AvatarImage, AvatarFallback } from "~/components/ui/avatar";
 import { Play, ThumbsUp, ThumbsDown, Share2, Bookmark, MoreHorizontal, AlertCircle } from "lucide-react";
 import type { PostPreviewProps } from "./twitter-preview";
 import { PreviewMedia, classifyMediaUrl, type MediaKind } from "./preview-media";
+import { SuperTextOverlay } from "./super-text-overlay";
 
 function getInitials(name: string): string {
   return name.split(" ").map((n) => n[0]).join("").toUpperCase().slice(0, 2);
@@ -40,6 +41,8 @@ export function YouTubePreview({
   authorAvatar,
   timestamp,
   videoPosterUrl,
+  superText,
+  videoAspect,
 }: PostPreviewProps) {
   const hasMedia = mediaUrls && mediaUrls.length > 0;
   const firstMedia = hasMedia ? mediaUrls[0] : null;
@@ -100,6 +103,11 @@ export function YouTubePreview({
               <p className="text-xs">Attach a video to preview</p>
             </div>
           )}
+          {/* The super-text strip, inside the CONTAINED video rect of the 16:9
+              player (YouTube receives the burned video too). 2026-10-03. */}
+          {firstMedia && isVideo && superText ? (
+            <SuperTextOverlay config={superText} containerAspect={16 / 9} videoAspect={videoAspect} />
+          ) : null}
         </div>
 
         {/* Title */}

@@ -562,6 +562,22 @@ Optional Instagram-style text strip (emoji + per-word colours + free positioning
   - **No Dockerfile change:** embedding is what makes preview/burn parity structural (verified: local Chromium and the Alpine worker Chromium produce IDENTICAL layout — classic 2 lines 545×162, sans 2 lines 571×168), and it sidesteps quirk #10 / the empty `.dockerignore`. `font-noto-emoji` + `ttf-liberation` are still required (above); only the **latin** subset is embedded, so non-Latin still falls through to Noto exactly as before.
   - **🔒 Golden gate:** [super-text-render-golden.test.ts](packages/super-text/src/__tests__/super-text-render-golden.test.ts) snapshots the default render. It must pass with **0 snapshots written** — that is the byte-identity proof for existing posts. Never `-u` it blindly. Plan: [docs/superpowers/plans/2026-07-28-super-text-instagram-fonts.md](docs/superpowers/plans/2026-07-28-super-text-instagram-fonts.md).
 - **Limits (v1):** configured at compose time only (no editing super text on an existing post), one strip per video, source ≤950MB (matches `OPTIMIZE_SIZE_BYTES`, refused at create with a friendly message). YouTube receives the burned video too — intended ("post it everywhere").
+- **Sidebar preview shows the REEL safe area and the strip (2026-10-03, owner ask).** On the Instagram
+  card, exactly ONE video (= a reel; two or more is a carousel, an image a feed post —
+  `isSingleReel`) renders in a 9:16 frame instead of the 4:5 box: the video is CONTAINED (never
+  cropped, as the reel viewer letterboxes a non-9:16 upload), [reel-safe-zone.tsx](apps/web/components/previews/reel-safe-zone.tsx)
+  shades **Meta's published safe zone — top 14%, bottom 35%, sides 6%** (`REEL_SAFE_ZONE` in
+  [reel-safe-area.ts](apps/web/lib/reel-safe-area.ts), source linked there; zones are of the SCREEN,
+  not the video), and [super-text-overlay.tsx](apps/web/components/previews/super-text-overlay.tsx)
+  draws the first video tile's strip INSIDE the video's contained rect (`containedRect`) through the
+  ONE shared `SuperTextStrip` renderer, measuring that rect's width so the font is `fontSizePct` of
+  the VIDEO width like the burn. YouTube's 16:9 player gets the same overlay (pillarboxed). A chip
+  names the scope ("cover only" / "first Ns" / "whole video") so a cover-scoped strip is not read as
+  playback. `PostPreviewProps` gained `superText` + `videoAspect` (all five copies + the switcher's
+  explicit rebuild); Compose passes `postMedia.find(isVideoMediaItem)?.superText` and the probed
+  `videoAspect`. Browser-verified in Chromium: frame 0.5625, strip centre at 84.0% of the video rect
+  for 9:16, letterboxed 16:9 and the YouTube pillarbox, font 14.4px at a 300px frame. Tests:
+  [reel-safe-area.test.ts](apps/web/lib/reel-safe-area.test.ts), [reel-preview-contract.test.ts](apps/web/lib/reel-preview-contract.test.ts).
 
 ## 🔴🔴 DUPLICATE POSTS after Retry — a transient error is NOT a failed write (2026-08-18)
 
