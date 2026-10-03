@@ -672,11 +672,20 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
       setCaptionOverrides({});
       setPostMedia([]);
       // Mentions are per-story. Carrying them over would silently re-tag the
-      // previous story's people on the next one. The MODE is kept deliberately:
-      // someone posting a story usually has another to post.
+      // previous story's people on the next one.
       setStoryMentions([]);
       setStoryMentionInput("");
       setStoryMentionError(null);
+      // ⚠️ The MODE and the per-channel Reel/Story picker reset too (2026-10-03).
+      // They used to be kept ("someone posting a story usually has another to
+      // post"), and the owner's next video went out as a 24-hour STORY instead
+      // of a reel: nothing in the form had asked again, and the only signs were
+      // the small tab and the button label. A format that silently carries into
+      // the next post is a quiet loss of the user's intent — the same class as
+      // the stale-picker trap sanitizeFormatByChannelId closes server-side. A
+      // fresh post starts as a Post; choosing Story is one click.
+      setPostType("post");
+      setFormatByChannelId({});
       removeTask(TASK_ID);
       onPostCreated?.();
       // Open the post's detail page so the live upload/publish progress and final
@@ -1462,12 +1471,32 @@ ${content}`;
                 </button>
               ))}
             </div>
-            {isStoryMode && (
-              <p className="min-w-0 text-[11px] leading-snug text-muted-foreground">
-                Story · one image or video · Instagram &amp; Facebook · disappears after 24 hours
-              </p>
-            )}
           </div>
+          {/* ⚠️ Story mode is LOUD (2026-10-03). A muted one-liner under the tab was
+              the only in-form cue, and a video went out as a 24-hour story when
+              the owner meant a reel. This banner names what will happen and offers
+              the way back in one click; it sits above every card so it cannot
+              scroll out of view with the media tile. */}
+          {isStoryMode && (
+            <div
+              role="status"
+              data-testid="story-mode-banner"
+              className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-200"
+            >
+              <AlertCircle className="h-4 w-4 flex-shrink-0" />
+              <span className="min-w-0 flex-1 leading-snug">
+                <span className="font-semibold">Story mode.</span> This publishes a 24-hour story on
+                Instagram &amp; Facebook — not a reel or feed post. One image or video, no caption.
+              </span>
+              <button
+                type="button"
+                onClick={() => switchPostType("post")}
+                className="flex-none rounded-md border border-amber-400 bg-background px-2.5 py-1 text-xs font-semibold text-amber-900 hover:bg-amber-100 dark:text-amber-100 dark:hover:bg-amber-900/40"
+              >
+                Switch to Post
+              </button>
+            </div>
+          )}
 
           {!isStoryMode && (
           <>

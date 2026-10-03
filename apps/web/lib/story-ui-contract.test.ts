@@ -118,9 +118,28 @@ describe("mentions", () => {
     expect(compose).toMatch(/onBlur=\{commitMentionInput\}/);
   });
 
-  it("clears mentions after a successful create, but keeps the mode", () => {
-    expect(compose).toMatch(/setStoryMentions\(\[\]\);/);
-    expect(compose).not.toMatch(/setPostType\("post"\);\s*\n\s*removeTask/);
+  /**
+   * 2026-10-03: REVERSED. The mode used to be kept across a publish ("someone
+   * posting a story usually has another to post") and the owner's next video
+   * went out as a 24-hour STORY instead of a reel. A fresh post starts as a
+   * Post; the per-channel Reel/Story picker is wiped for the same reason.
+   */
+  it("clears mentions, the MODE and the per-channel format picker after a successful create", () => {
+    const success = compose.slice(compose.indexOf("const createPost = trpc.post.create.useMutation"));
+    const body = success.slice(0, success.indexOf("onError:"));
+    expect(body).toMatch(/setStoryMentions\(\[\]\);/);
+    expect(body).toMatch(/setPostType\("post"\);/);
+    expect(body).toMatch(/setFormatByChannelId\(\{\}\);/);
+    // Both resets happen BEFORE the draft is removed and the page navigates, so
+    // the persist effect cannot write a story-mode draft on the way out.
+    expect(body.indexOf('setPostType("post")')).toBeLessThan(body.indexOf("removeTask(TASK_ID)"));
+  });
+
+  it("announces Story mode with a visible banner that offers the way back", () => {
+    expect(compose).toMatch(/data-testid="story-mode-banner"/);
+    expect(compose).toMatch(/not a reel or feed post/);
+    const banner = compose.slice(compose.indexOf('data-testid="story-mode-banner"'));
+    expect(banner.slice(0, 1500)).toMatch(/onClick=\{\(\) => switchPostType\("post"\)\}/);
   });
 
   it("persists postType and mentions with a STRING signature, never an array identity", () => {
