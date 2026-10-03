@@ -63,7 +63,12 @@ export function PostPreviewSwitcher({
   authorAvatar,
   timestamp,
   videoPosterUrl,
+  superText,
+  videoAspect,
 }: PostPreviewSwitcherProps) {
+  // ⚠️ EXPLICIT rebuild: a new PostPreviewProps field must be added to BOTH the
+  // destructure above and this object, or it silently never reaches a preview
+  // (that bit the video-cover work; locked by the ui-contract tests).
   const previewProps: PostPreviewProps = {
     content,
     mediaUrls,
@@ -73,6 +78,8 @@ export function PostPreviewSwitcher({
     authorAvatar,
     timestamp,
     videoPosterUrl,
+    superText,
+    videoAspect,
   };
 
   const availablePlatforms = platforms ?? (platform ? [platform] : ["instagram", "facebook", "twitter", "linkedin", "youtube"]);

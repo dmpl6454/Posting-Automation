@@ -2808,6 +2808,11 @@ ${content}`;
             // Same rule as submit (post.create takes the FIRST tile with a
             // cover), so what the preview shows is what actually publishes.
             videoPosterUrl={postMedia.find((m) => m.thumbnail)?.thumbnail?.url}
+            // The strip on the FIRST video tile — the one the previews render —
+            // and that video's probed aspect, so the strip sits in the video's
+            // own frame inside the preview (2026-10-03).
+            superText={postMedia.find((m) => isVideoMediaItem(m))?.superText ?? null}
+            videoAspect={videoAspect}
           />
           )}
           {!isStoryMode && !content && selectedPlatforms.length === 0 && (

@@ -1,5 +1,6 @@
 "use client";
 
+import type { SuperTextConfig } from "@postautomation/super-text";
 import { Card, CardContent } from "~/components/ui/card";
 import { PreviewMedia, type MediaKind } from "./preview-media";
 import { Avatar, AvatarImage, AvatarFallback } from "~/components/ui/avatar";
@@ -16,6 +17,14 @@ export interface PostPreviewProps {
   timestamp?: Date;
   /** Custom video cover (image url) — applied by PreviewMedia on VIDEO renders only. */
   videoPosterUrl?: string;
+  /**
+   * The super-text strip on the post's first VIDEO (2026-10-03). Previews draw
+   * it over the video through SuperTextOverlay — the same renderer the burn
+   * uses — so the sidebar shows the strip the worker will produce.
+   */
+  superText?: SuperTextConfig | null;
+  /** w/h of the first video (probed by Compose); places the strip inside the video's own frame. */
+  videoAspect?: number | null;
 }
 
 interface GenericPreviewProps extends PostPreviewProps {
