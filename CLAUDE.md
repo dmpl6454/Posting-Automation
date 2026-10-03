@@ -2677,6 +2677,35 @@ Measured on prod 2026-08-06: **329 PUBLISHED + 1262 FAILED + 91 DRAFT posts alre
 - Metric caveats (platform APIs, NOT bugs — don't "fix"): views ride on `impressions` (YT/Threads/IG-Reels/DevTo/Reddit); Twitter metrics 0 on free tier; IG never fills clicks (Reels DO fill shares/saved); **FB impressions/reach are GONE (Meta deleted the metrics — see the metric-reality section above), render "—"**. `—` = "not reported by this platform / not synced", NOT zero.
 - **CSV export is formula-injection-hardened** ([csv.ts](apps/web/lib/csv.ts)): string cells starting `= + - @ \t \r` get a neutralizing `'` prefix (numbers like `-7` unaffected). Test: [csv.test.ts](apps/web/lib/csv.test.ts). Don't remove.
 
+## 📄 Reports: ONE post = one report (2026-10-03)
+
+Owner, from a 10-channel fan-out whose Reports export was the whole window: "there should be an
+individual campaign report, not all". The optional `Post.campaignLabel` (2026-09-21) could not
+isolate it — most posts carry none (the screenshot's Campaign column was all "—").
+
+- **`analytics.postReports` / `emailReport` take an optional `postId`**, applied server-side in
+  `fetchPostReportRows` as a FOURTH positional filter (`$1` org, `$2` boundary, then platform,
+  campaign, post — pushed and interpolated UNCONDITIONALLY on BOTH union arms; the external arm
+  goes empty under a post filter, a direct post is not one of ours). Same reasoning as the platform
+  filter: the query is capped, so a client-side filter would silently drop rows past the cap.
+- **`analytics.reportPosts({window, mode})`** feeds the Reports tab's **Post** picker — the posts
+  with a PUBLISHED target inside the window, with the in-window published-channel count. It uses the
+  SAME `reportWindowBoundary` + current/at_age comparison as the rows query, so a listed post always
+  has rows and an unlisted one never does. Never derive the picker from the rows on screen.
+- UI: Post `<select>` (+ a per-row filter icon on hover), a scope banner ("Export CSV and Email
+  report cover only this post", with "All posts" to clear), `?post=<id>` deep link (its own
+  Suspense-wrapped reader, like the page's `?tab=`; widens to 30d ONCE when the post is outside the
+  current window), and a **"Report for this post"** button on the post page whenever a channel
+  published. Downloaded AND emailed CSVs are named by scope via `reportFileScope`
+  ([api lib](packages/api/src/lib/report-file-scope.ts) + a deliberate web replica
+  [apps/web/lib/report-file-scope.ts](apps/web/lib/report-file-scope.ts), parity-tested):
+  `post-<id tail>-` / `<campaign slug>-` / unchanged when unfiltered. The emailed CSV also gained
+  the **Campaign** column the downloaded one already had.
+- Browser-verified with stubbed tRPC: 16 rows → 4 after the row filter, filename
+  `postautomation-report-post-0bbbb222-7d-current-…csv`, email payload carries `postId`, deep link
+  selects the post. Tests: [report-post-filter.test.ts](packages/api/src/__tests__/report-post-filter.test.ts),
+  [report-post-filter-contract.test.ts](apps/web/lib/report-post-filter-contract.test.ts).
+
 ## Admin gate + Channel Groups + Insights groupStats + Durable Logos + 429 toast (2026-07-18, branch `feat/groups-insights-admin-logos-2026-07-17`)
 
 Five owner-reported issues, all fixed on one branch (off main @152a287), adversarially reviewed (5-lens workflow — every CONFIRMED finding fixed) and verified locally: a 17-assertion **real-Postgres** analytics e2e (`createCaller` against the actual SQL) + Playwright browser flows + 1437 tests green + web build 0. See memory `project-admin-groups-insights-logos-2026-07-18`.

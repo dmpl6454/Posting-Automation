@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { trpc } from "~/lib/trpc/client";
 import { Button } from "~/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card";
@@ -17,8 +18,9 @@ import {
 } from "~/components/ui/dialog";
 import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
-import { Download, ExternalLink, Info, Loader2, Mail } from "lucide-react";
+import { Download, ExternalLink, Filter, Info, Loader2, Mail, X } from "lucide-react";
 import { toCsv, downloadCsv } from "~/lib/csv";
+import { reportFileScope } from "~/lib/report-file-scope";
 import { useToast } from "~/hooks/use-toast";
 import { humanizeError } from "~/lib/errors";
 
@@ -71,6 +73,28 @@ const CSV_HEADER_FIXED = [
 ];
 
 /**
+ * ?post= deep-link reader (the post page's "Report for this post" button). Its
+ * own Suspense-wrapped child, like the page's ?tab= reader, so useSearchParams()
+ * never opts the whole Insights page out of static generation.
+ */
+function ReportPostDeepLink({ onPost }: { onPost: (id: string) => void }) {
+  const searchParams = useSearchParams();
+  useEffect(() => {
+    const id = searchParams.get("post");
+    if (id) onPost(id);
+  }, [searchParams, onPost]);
+  return null;
+}
+
+/** Option label for the post picker: enough text to recognise the post, plus its size. */
+function postOptionLabel(p: { contentPreview: string; publishedTargets: number; campaignLabel: string | null }): string {
+  const text = p.contentPreview.replace(/\s+/g, " ").trim() || "(no text)";
+  const head = text.length > 48 ? `${text.slice(0, 48)}…` : text;
+  const tag = p.campaignLabel ? ` [${p.campaignLabel}]` : "";
+  return `${head}${tag} · ${p.publishedTargets} channel${p.publishedTargets === 1 ? "" : "s"}`;
+}
+
+/**
  * Insights → Reports (2026-07-17): structured, extractable per-post table.
  * "Current" = every post × channel published WITHIN the selected window, with
  * its latest synced metrics. "At publish-age" = posts OLD ENOUGH to have
@@ -87,6 +111,14 @@ export function ReportsTab() {
   // Per-platform view. `null` = All.
   const [platformView, setPlatformView] = useState<string | null>(null);
   const [campaignView, setCampaignView] = useState<string | null>(null);
+  // Single-post view (2026-10-03, owner: "there should be an individual campaign
+  // report, not all"). One fan-out = one report; a campaignLabel is optional and
+  // most posts have none, so this is the control that isolates one post's CSV.
+  const [postView, setPostView] = useState<string | null>(null);
+  // A ?post= deep link may name a post outside the default 7-day window. Widen
+  // ONCE to 30 days when the list for the current window does not contain it,
+  // instead of silently showing "all posts" under a link that promised one.
+  const widenedForDeepLink = useRef(false);
 
   const { toast } = useToast();
   const utils = trpc.useUtils();
@@ -104,8 +136,28 @@ export function ReportsTab() {
   const campaignFilter =
     campaignView && (orgCampaigns ?? []).includes(campaignView) ? campaignView : undefined;
 
+  // Posts the current window can be narrowed to. Server-side and window-scoped
+  // (the rows query is capped, so a list built from the rows on screen could
+  // omit a post whose channels all sit past the cap).
+  const { data: windowPosts } = trpc.analytics.reportPosts.useQuery(
+    { window: win, mode },
+    { staleTime: 60 * 1000, placeholderData: (prev) => prev }
+  );
+  const postFilter =
+    postView && (windowPosts ?? []).some((p) => p.id === postView) ? postView : undefined;
+  const selectedPost = postFilter ? windowPosts?.find((p) => p.id === postFilter) : undefined;
+
+  useEffect(() => {
+    if (!postView || !windowPosts || widenedForDeepLink.current) return;
+    if (windowPosts.some((p) => p.id === postView)) return;
+    if (win !== "30d") {
+      widenedForDeepLink.current = true;
+      setWin("30d");
+    }
+  }, [postView, windowPosts, win]);
+
   const { data, isLoading } = trpc.analytics.postReports.useQuery(
-    { window: win, mode, platform: platformFilter, campaign: campaignFilter },
+    { window: win, mode, platform: platformFilter, campaign: campaignFilter, postId: postFilter },
     // A new `platform` in the key is a NEW query — without placeholderData the
     // table collapses to skeletons on every pill click.
     { staleTime: 60 * 1000, placeholderData: (prev) => prev }
@@ -153,7 +205,7 @@ export function ReportsTab() {
     if (!to || emailReport.isPending) return;
     // ⚠️ campaign too — an email covering a DIFFERENT population than the table
     // on screen is the exact drift this file has already seen twice.
-    emailReport.mutate({ to, window: win, mode, platform: platformFilter, campaign: campaignFilter });
+    emailReport.mutate({ to, window: win, mode, platform: platformFilter, campaign: campaignFilter, postId: postFilter });
   };
 
   const onExport = async () => {
@@ -170,6 +222,7 @@ export function ReportsTab() {
         // past the on-screen filter is a different report than the one asked for.
         platform: platformFilter,
         campaign: campaignFilter,
+        postId: postFilter,
         window: win,
         mode,
         limit: EXPORT_LIMIT + 1,
@@ -202,8 +255,10 @@ export function ReportsTab() {
       // impressions metric at all), so gate the column on either being reportable.
       const includeEng = inCsv("impressions") || inCsv("views");
 
+      // Named for what it covers (one post / one campaign), unchanged when unfiltered.
+      const scope = reportFileScope({ campaign: campaignFilter, postId: postFilter });
       downloadCsv(
-        `postautomation-report-${win}-${mode}-${new Date().toISOString().slice(0, 10)}${truncated}.csv`,
+        `postautomation-report-${scope}${win}-${mode}-${new Date().toISOString().slice(0, 10)}${truncated}.csv`,
         toCsv(
           [
             ...CSV_HEADER_FIXED,
@@ -240,13 +295,17 @@ export function ReportsTab() {
 
   return (
     <>
+    <Suspense fallback={null}>
+      <ReportPostDeepLink onPost={setPostView} />
+    </Suspense>
     <Dialog open={emailOpen} onOpenChange={(open) => { if (!emailReport.isPending) setEmailOpen(open); }}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Email this report</DialogTitle>
           <DialogDescription>
             Sends the current view ({WINDOWS.find((w) => w.value === win)?.label},{" "}
-            {mode === "at_age" ? "at publish-age" : "current metrics"}) as a CSV attachment.
+            {mode === "at_age" ? "at publish-age" : "current metrics"}
+            {selectedPost ? ", one post only" : ""}) as a CSV attachment.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-2">
@@ -390,12 +449,34 @@ export function ReportsTab() {
               </>
             )}
 
+            {/* Single-post view: one fan-out's report instead of every campaign's.
+                Rendered once the window has at least one post. */}
+            {(windowPosts?.length ?? 0) > 0 && (
+              <label className="ml-auto flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+                Post
+                <select
+                  aria-label="Show only one post"
+                  data-testid="report-post-filter"
+                  value={postFilter ?? ""}
+                  onChange={(e) => setPostView(e.target.value || null)}
+                  className="max-w-[260px] rounded-md border bg-background px-2 py-0.5 text-[11px] font-medium"
+                >
+                  <option value="">All posts</option>
+                  {windowPosts!.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {postOptionLabel(p)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+
             {/* Internal campaign view. A <select> rather than pills: labels are
                 free text and there can be many, so pills would wrap unboundedly.
                 Rendered only once at least one campaign exists, so orgs that
                 never use the field see no extra control. */}
             {(orgCampaigns?.length ?? 0) > 0 && (
-              <label className="ml-auto flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+              <label className={`flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground ${(windowPosts?.length ?? 0) > 0 ? "" : "ml-auto"}`}>
                 Campaign
                 <select
                   aria-label="Filter by internal campaign"
@@ -414,6 +495,28 @@ export function ReportsTab() {
             )}
           </div>
         </div>
+
+        {selectedPost && (
+          <div
+            role="status"
+            data-testid="report-post-scope"
+            className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs"
+          >
+            <Filter className="h-3.5 w-3.5 shrink-0" />
+            <span className="min-w-0 flex-1">
+              Showing <strong>one post</strong> ({selectedPost.publishedTargets} channel
+              {selectedPost.publishedTargets === 1 ? "" : "s"}): “{selectedPost.contentPreview.replace(/\s+/g, " ").trim() || "(no text)"}”.
+              Export CSV and Email report cover only this post.
+            </span>
+            <button
+              type="button"
+              onClick={() => setPostView(null)}
+              className="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-medium hover:bg-muted/50"
+            >
+              <X className="h-3 w-3" /> All posts
+            </button>
+          </div>
+        )}
 
         <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
           <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
@@ -539,18 +642,31 @@ export function ReportsTab() {
                 {rows.map((r, idx) => (
                   <tr
                     key={r.targetId}
-                    className={`border-b last:border-0 hover:bg-muted/40 transition-colors ${
+                    className={`group border-b last:border-0 hover:bg-muted/40 transition-colors ${
                       idx % 2 === 0 ? "" : "bg-muted/10"
                     }`}
                   >
                     <td className="max-w-[280px] py-2.5 pr-3">
-                      <Link
-                        href={`/dashboard/posts/${r.postId}`}
-                        className="line-clamp-2 hover:underline"
-                        title={r.contentPreview}
-                      >
-                        {r.contentPreview || "(no text)"}
-                      </Link>
+                      <div className="flex items-start gap-1.5">
+                        <Link
+                          href={`/dashboard/posts/${r.postId}`}
+                          className="line-clamp-2 min-w-0 hover:underline"
+                          title={r.contentPreview}
+                        >
+                          {r.contentPreview || "(no text)"}
+                        </Link>
+                        {!postFilter && !r.isExternal && (
+                          <button
+                            type="button"
+                            aria-label="Show only this post"
+                            title="Show only this post (its own report + CSV)"
+                            onClick={() => setPostView(r.postId)}
+                            className="mt-0.5 shrink-0 rounded p-0.5 text-muted-foreground opacity-60 hover:bg-muted hover:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
+                          >
+                            <Filter className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
                     </td>
                     <td className="whitespace-nowrap py-2.5 pr-3">
                       <div className="flex items-center gap-1.5">
