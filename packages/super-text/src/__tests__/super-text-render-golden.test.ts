@@ -44,3 +44,40 @@ describe("golden render gate — default (classic) path", () => {
     expect(buildStripInnerHtml({ ...golden, font: "classic" })).toMatchSnapshot();
   });
 });
+
+/**
+ * ADDITIONS (2026-10-02): the `insta` layout preset + `scope`/`introSeconds` keys.
+ * Separate snapshots — the classic block above must still pass with 0 written.
+ */
+describe("golden render gate — insta layout preset (opt-in)", () => {
+  const insta: SuperTextConfig = {
+    ...golden,
+    font: "sans",
+    layout: "insta",
+    scope: "cover",
+    yPct: 84,
+    fontSizePct: 4.6,
+    segments: [
+      { text: "Anil", color: "#D8501B" },
+      { text: "Kapoor", color: "#D8501B" },
+      { text: "exits" },
+      { text: "from" },
+      { text: "Juhu" },
+      { text: "PVR" },
+    ],
+  };
+
+  it("strip inner html for insta is pinned", () => {
+    expect(buildStripInnerHtml(insta)).toMatchSnapshot();
+  });
+
+  it("burn frame html for insta is pinned at 1080x1920 (the @font-face payload stripped)", () => {
+    const html = buildSuperTextFrameHtml(insta, 1080, 1920).replace(/base64,[A-Za-z0-9+/=]+/, "base64,<payload>");
+    expect(html).toMatchSnapshot();
+  });
+
+  it("scope and introSeconds never reach the CSS — same strip html whatever the scope", () => {
+    expect(buildStripInnerHtml({ ...insta, scope: "video" })).toBe(buildStripInnerHtml(insta));
+    expect(buildStripInnerHtml({ ...insta, scope: "intro", introSeconds: 5 })).toBe(buildStripInnerHtml(insta));
+  });
+});

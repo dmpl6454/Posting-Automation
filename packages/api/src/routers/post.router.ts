@@ -191,6 +191,12 @@ export const postRouter = createRouter({
         // the parked DRAFT to SCHEDULED). Only meaningful with >1 channel —
         // false / single-channel keeps today's shared-caption path untouched.
         uniqueCaptions: z.boolean().default(false),
+        // Per-channel SUPER TEXT (2026-10-02): AI writes a different strip line
+        // per selected channel and the super-text worker burns one video per
+        // channel (PostTarget.metadata.superTextMedia). Only meaningful with a
+        // burnable `metadata.superText` config AND >1 channel; false / absent
+        // keeps the single shared burn exactly as before.
+        uniqueSuperText: z.boolean().default(false),
         // Manual per-channel captions (channelId → caption) from Compose's
         // "Different caption per channel" editor (2026-09-18). Written to
         // PostTarget.contentOverride — the same column the AI fanout and the post
@@ -370,6 +376,7 @@ export const postRouter = createRouter({
         parkedSchedule: false,
         byMediaId: {},
         oversized: [],
+        perChannel: false,
       };
       if (input.metadata?.superText && input.mediaIds?.length) {
         const stRows = await ctx.prisma.media.findMany({
@@ -385,6 +392,8 @@ export const postRouter = createRouter({
             fileSize: Number(r.fileSize),
           })),
           scheduledAt: input.scheduledAt ?? null,
+          uniqueSuperText: input.uniqueSuperText,
+          channelCount: input.channelIds.length,
         });
         if (superTextPlan.oversized.length > 0) {
           throw new TRPCError({
@@ -492,6 +501,9 @@ export const postRouter = createRouter({
                 pendingBurn: true,
                 parkedSchedule: superTextPlan.parkedSchedule,
                 byMediaId: superTextPlan.byMediaId,
+                // Written ONLY when on — an ordinary super-text post keeps the
+                // pre-feature metadata shape byte-for-byte.
+                ...(superTextPlan.perChannel ? { perChannel: true } : {}),
               };
             }
             return (Object.keys(out).length > 0 ? out : undefined) as any;

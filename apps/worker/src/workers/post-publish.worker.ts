@@ -14,6 +14,7 @@ import { addLocalClaim, releaseLocalClaim, localClaimCount } from "../lib/local-
 import { trackBackgroundTask } from "../lib/background-tasks";
 import { buildPublishTokens, publishIdempotencyKey } from "../lib/publish-tokens";
 import { markTargetFailed, markTargetAmbiguous, buildPublishClaimWhere, routePublishError, shouldPreflightReconcile, buildPublishNotifications, mediaRequiredReason, isSeedNoise, decidePreClaimSkip, isHeavyPublish, planHeavyDefer, HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE, classifyError, isDefiniteAuthFailure, releaseClaimAfterPrePublishError, decideClaimMiss, countOtherActiveJobsForTarget, ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE, formatPublishTiming, type PublishJobState } from "../lib/publish-recovery";
+import { collectPerTargetMediaIds, substitutePerTargetMedia } from "../lib/per-target-media";
 import { PRIORITY_RETRY, mediaOptimizeQueue, atAgeWindowsForFormat } from "@postautomation/queue";
 import { planOptimizeGate, choosePublishUrl } from "../lib/media-optimize";
 import { buildSnapshotMetadata } from "../lib/snapshot-metadata";
@@ -430,6 +431,32 @@ export function createPostPublishWorker() {
           },
         }),
       ]);
+
+      // 2a. Per-channel super text (2026-10-02): this target may carry its OWN
+      // burned copy of a video (PostTarget.metadata.superTextMedia, written by
+      // the super-text worker). Swap it in HERE, before anything reads the
+      // attachments, so the optimize gate, choosePublishUrl, video prep and the
+      // provider all see one ordinary Media row. A target with no map (every
+      // pre-feature target) gets the SAME attachments array back — nothing
+      // downstream changes. A derived row that fails to load degrades to the
+      // shared burn; it never fails the publish.
+      const perTargetMediaIds = collectPerTargetMediaIds(postTarget.metadata);
+      if (perTargetMediaIds.length > 0) {
+        try {
+          const derivedRows = await prisma.media.findMany({
+            where: { id: { in: perTargetMediaIds }, organizationId: job.data.organizationId },
+          });
+          const swapped = substitutePerTargetMedia(postTarget.post.mediaAttachments, postTarget.metadata, derivedRows);
+          if (swapped !== postTarget.post.mediaAttachments) {
+            postTarget.post.mediaAttachments = swapped;
+            console.log(`[PostPublish] target ${postTargetId} publishes its own super-text video (${perTargetMediaIds.join(",")})`);
+          } else {
+            console.warn(`[PostPublish] target ${postTargetId} names per-channel super-text media that did not load — publishing the shared video`);
+          }
+        } catch (e: any) {
+          console.warn(`[PostPublish] per-channel super-text lookup failed for ${postTargetId}: ${e?.message ?? e} — publishing the shared video`);
+        }
+      }
 
       // 2b. publishedId short-circuit — if already published in a previous attempt, skip provider call
       if (postTarget.publishedId) {

@@ -23,12 +23,23 @@ export function buildSuperTextCompositeArgs(opts: {
   inputPath: string;
   overlayPngPath: string;
   outputPath: string;
+  /**
+   * Intro scope (2026-10-02): keep the strip on screen only for the first N
+   * seconds. Absent ⇒ the original every-frame overlay, byte-identical argv.
+   * N is a NUMBER we format ourselves — never user text — so the ffmpeg
+   * expression cannot be injected into.
+   */
+  showForSeconds?: number;
 }): string[] {
+  const window =
+    typeof opts.showForSeconds === "number" && Number.isFinite(opts.showForSeconds) && opts.showForSeconds > 0
+      ? `:enable='lte(t,${Math.min(3600, Math.max(0.1, opts.showForSeconds)).toFixed(2)})'`
+      : "";
   return [
     "-y",
     "-i", opts.inputPath,
     "-i", opts.overlayPngPath,
-    "-filter_complex", "[0:v][1:v]overlay=0:0:format=auto[vout]",
+    "-filter_complex", `[0:v][1:v]overlay=0:0:format=auto${window}[vout]`,
     "-map", "[vout]",
     "-map", "0:a?",
     "-c:v", "libx264",

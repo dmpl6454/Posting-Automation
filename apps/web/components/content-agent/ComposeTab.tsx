@@ -168,6 +168,10 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   const [scheduledAt, setScheduledAt] = useState("");
   // PR-5: unique caption per channel (AI) — only meaningful with >1 channel.
   const [uniqueCaptions, setUniqueCaptions] = useState(false);
+  // Per-channel SUPER TEXT (2026-10-02): AI writes a different strip line per
+  // channel and each channel publishes its own burned video. Sent only when a
+  // video actually carries super text and >1 channel is selected.
+  const [uniqueSuperText, setUniqueSuperText] = useState(false);
   // Manual per-channel captions (2026-09-18): channelId → caption, edited under
   // the Captions card when `customCaptions` is on. The map is never pruned on
   // deselect; buildCaptionOverridesPayload sends only STILL-selected channels.
@@ -1302,6 +1306,9 @@ ${content}`;
         // PR-5: only sent on the schedule/publish path (draft-save keeps it off).
         // Never for a story — it displays no caption to vary.
         ...(!isStoryMode && uniqueCaptions && selectedChannels.length > 1 && { uniqueCaptions: true }),
+        // Per-channel super text: only meaningful when a strip is actually
+        // configured on a video AND the post fans out to >1 channel.
+        ...(uniqueSuperText && selectedChannels.length > 1 && Object.keys(superTextByMediaId).length > 0 && { uniqueSuperText: true }),
         ...(mediaIds.length > 0 && { mediaIds }),
         // The per-channel picker is a Post-mode control, and its map is never
         // pruned. The server forces STORY on every story target anyway; not
@@ -2573,6 +2580,38 @@ ${content}`;
             </Card>
           )}
 
+          {/* Per-channel super text (2026-10-02) — shown only when a video tile
+              carries super text and >1 channel is selected. The user's line stays
+              on one channel; AI writes a different line for each of the others and
+              every channel publishes its own burned video. */}
+          {selectedChannels.length > 1 && postMedia.some((m) => m.superText) && (
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle>Super text</CardTitle>
+                <CardDescription>
+                  Give each of your {selectedChannels.length} selected channels its own on-video text
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <Label htmlFor="unique-super-text" className="text-sm">
+                      Different super text per channel (AI)
+                    </Label>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      AI rewrites your line for every channel (same position, size and colours). With &quot;Cover only&quot; each channel gets its own cover image in seconds; with &quot;First seconds&quot; or &quot;Whole video&quot; each channel is a separate video encode, so a large fan-out takes longer before it publishes. Channels whose line can&apos;t be prepared use the text you wrote.
+                    </p>
+                  </div>
+                  <Switch
+                    id="unique-super-text"
+                    checked={uniqueSuperText}
+                    onCheckedChange={setUniqueSuperText}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           {/* Actions */}
           <Separator />
           <div className="flex flex-col gap-2 pb-8 sm:flex-row sm:justify-end sm:gap-3">
@@ -2605,6 +2644,9 @@ ${content}`;
                     channelIds: selectedChannels.length > 0 ? selectedChannels : [],
                     ...(Object.keys(manualCaptions).length > 0 && { captionOverrides: manualCaptions }),
                     ...(campaignLabel.trim() && { campaignLabel: campaignLabel.trim() }),
+                    // A saved draft burns its per-channel variants now too, so scheduling it
+                    // later needs no further wait.
+                    ...(uniqueSuperText && selectedChannels.length > 1 && Object.keys(superTextByMediaId).length > 0 && { uniqueSuperText: true }),
                     ...(mediaIds.length > 0 && { mediaIds }),
                     // ⚠️ The draft must carry the story marker too. Without it the
                     // server stores an ordinary post, and scheduling that draft

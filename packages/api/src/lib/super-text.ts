@@ -31,12 +31,22 @@ export interface SuperTextPlan {
   byMediaId: Record<string, SuperTextConfig>;
   /** Attached videos whose config was dropped for exceeding the size cap. */
   oversized: string[];
+  /**
+   * Per-channel super text (2026-10-02): AI writes a DIFFERENT strip line per
+   * channel and the worker burns one video per channel. Only meaningful with a
+   * burnable config AND >1 channel; false keeps the single shared burn.
+   */
+  perChannel: boolean;
 }
 
 export function planSuperText(input: {
   superText: SuperTextMap | undefined | null;
   mediaRows: { id: string; fileType: string; fileSize: number }[];
   scheduledAt: string | Date | null | undefined;
+  /** "Different super text per channel (AI)" toggle. */
+  uniqueSuperText?: boolean;
+  /** Selected channels — one channel has nothing to vary. */
+  channelCount?: number;
 }): SuperTextPlan {
   const byMediaId: Record<string, SuperTextConfig> = {};
   const oversized: string[] = [];
@@ -64,6 +74,7 @@ export function planSuperText(input: {
     parkedSchedule: enabled && input.scheduledAt != null,
     byMediaId,
     oversized,
+    perChannel: enabled && input.uniqueSuperText === true && (input.channelCount ?? 0) > 1,
   };
 }
 

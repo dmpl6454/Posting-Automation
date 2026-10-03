@@ -209,10 +209,13 @@ describe("font application — byte identity and parity", () => {
     expect(buildStripInnerHtml(baseConfig)).not.toContain("letter-spacing");
   });
 
-  it("sans applies the embedded family and the tightened tracking", () => {
+  it("sans applies the embedded family at its natural tracking (dial = 0 since 2026-10-02)", () => {
+    // Measured against the owner's reference clip at an identical cap height:
+    // -0.02em left the same two lines 6% narrower than the reference; 0 lands
+    // within 2%. A zero dial emits NO letter-spacing declaration.
     const html = buildStripInnerHtml({ ...baseConfig, font: "sans" });
     expect(html).toContain(EMBEDDED_SANS_FAMILY);
-    expect(html).toContain("letter-spacing:-0.02em");
+    expect(html).not.toContain("letter-spacing");
   });
 
   it("EVERY font key still appends the emoji stack (or emoji burn as tofu)", () => {
