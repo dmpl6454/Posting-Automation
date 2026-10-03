@@ -2,7 +2,9 @@
 
 import type { SuperTextConfig } from "@postautomation/super-text";
 import { Card, CardContent } from "~/components/ui/card";
-import { PreviewMedia, type MediaKind } from "./preview-media";
+import { PreviewMedia, classifyMediaUrl, type MediaKind } from "./preview-media";
+import { ReelFrame } from "./reel-frame";
+import { isSingleReel } from "../../lib/reel-safe-area";
 import { Avatar, AvatarImage, AvatarFallback } from "~/components/ui/avatar";
 import {
   ThumbsUp,
@@ -66,7 +68,13 @@ export function FacebookPreview({
   authorAvatar,
   timestamp,
   videoPosterUrl,
+  superText,
+  videoAspect,
 }: PostPreviewProps) {
+  // One video = a Facebook reel: a 9:16 screen, not the 16:9 feed box
+  // (2026-10-03, owner ask — same rule as the Instagram card).
+  const firstKind = mediaUrls?.[0] ? classifyMediaUrl(mediaUrls[0], mediaKinds?.[0]) : undefined;
+  const isReel = isSingleReel(mediaUrls, firstKind);
   return (
     <Card className="overflow-hidden border border-zinc-200 dark:border-zinc-700">
       <CardContent className="p-0">
@@ -109,7 +117,15 @@ export function FacebookPreview({
         {/* Media */}
         {mediaUrls && mediaUrls.length > 0 && (
           <div className="mt-1">
-            {mediaUrls.length === 1 ? (
+            {isReel && mediaUrls[0] ? (
+              <ReelFrame
+                url={mediaUrls[0]}
+                poster={videoPosterUrl}
+                superText={superText}
+                videoAspect={videoAspect}
+                platformName="Facebook"
+              />
+            ) : mediaUrls.length === 1 ? (
               <div className="relative aspect-video w-full bg-zinc-100 dark:bg-zinc-800">
                 <PreviewMedia
                   poster={videoPosterUrl}

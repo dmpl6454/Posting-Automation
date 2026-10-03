@@ -3,9 +3,8 @@
 import type { SuperTextConfig } from "@postautomation/super-text";
 import { Card, CardContent } from "~/components/ui/card";
 import { PreviewMedia, classifyMediaUrl, type MediaKind } from "./preview-media";
-import { ReelSafeZone } from "./reel-safe-zone";
-import { SuperTextOverlay } from "./super-text-overlay";
-import { REEL_FRAME_ASPECT, REEL_SAFE_ZONE, isSingleReel, superTextScopeLabel } from "../../lib/reel-safe-area";
+import { ReelFrame } from "./reel-frame";
+import { isSingleReel } from "../../lib/reel-safe-area";
 import { Avatar, AvatarImage, AvatarFallback } from "~/components/ui/avatar";
 import {
   Heart,
@@ -105,42 +104,17 @@ export function InstagramPreview({
           <MoreHorizontal className="h-5 w-5 flex-shrink-0 text-foreground" />
         </div>
 
-        {/* Reel: a 9:16 screen. The video is CONTAINED (letterboxed) exactly as
-            the reel viewer shows a non-9:16 upload; Instagram's own UI zones are
-            shaded (ReelSafeZone, Meta's figures) and the super-text strip is
-            drawn inside the VIDEO's rect (SuperTextOverlay), where the burn
-            puts it. (2026-10-03, owner ask.) */}
+        {/* Reel: one video is a 9:16 reel screen (ReelFrame — shared with the
+            Facebook card): contained media, Meta's safe zone, the strip
+            inside the video's rect. (2026-10-03, owner ask.) */}
         {isReel && mediaUrls?.[0] ? (
-          <div className="bg-black">
-            <div
-              className="relative mx-auto w-full max-w-[300px] overflow-hidden bg-black"
-              style={{ aspectRatio: `${REEL_FRAME_ASPECT}` }}
-              data-testid="reel-frame"
-            >
-              <PreviewMedia
-                poster={videoPosterUrl}
-                url={mediaUrls[0]}
-                kind="video"
-                className="h-full w-full object-contain"
-              />
-              <ReelSafeZone />
-              {superText ? (
-                <SuperTextOverlay config={superText} containerAspect={REEL_FRAME_ASPECT} videoAspect={videoAspect} />
-              ) : null}
-              <span className="absolute left-2 top-2 rounded-full bg-black/60 px-2 py-0.5 text-[10px] font-semibold text-white">
-                Reel
-              </span>
-              {superText ? (
-                <span className="absolute bottom-2 left-2 rounded-full bg-black/60 px-2 py-0.5 text-[10px] font-medium text-white">
-                  {superTextScopeLabel(superText)}
-                </span>
-              ) : null}
-            </div>
-            <p className="px-3 py-1.5 text-center text-[10px] leading-snug text-zinc-400">
-              Shaded = where Instagram&apos;s own UI sits (Meta&apos;s reel safe zone: top {REEL_SAFE_ZONE.topPct}%,
-              bottom {REEL_SAFE_ZONE.bottomPct}%, sides {REEL_SAFE_ZONE.sidePct}%).
-            </p>
-          </div>
+          <ReelFrame
+            url={mediaUrls[0]}
+            poster={videoPosterUrl}
+            superText={superText}
+            videoAspect={videoAspect}
+            platformName="Instagram"
+          />
         ) : (
         <div className="relative aspect-[4/5] w-full bg-zinc-100 dark:bg-zinc-800">
           {mediaUrls && mediaUrls.length > 0 ? (

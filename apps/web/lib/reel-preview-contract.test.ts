@@ -15,6 +15,8 @@ const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
 const compose = read("apps/web/components/content-agent/ComposeTab.tsx");
 const switcher = read("apps/web/components/previews/post-preview-switcher.tsx");
 const instagram = read("apps/web/components/previews/instagram-preview.tsx");
+const facebook = read("apps/web/components/previews/facebook-preview.tsx");
+const reelFrame = read("apps/web/components/previews/reel-frame.tsx");
 const youtube = read("apps/web/components/previews/youtube-preview.tsx");
 const overlay = read("apps/web/components/previews/super-text-overlay.tsx");
 const safeZone = read("apps/web/components/previews/reel-safe-zone.tsx");
@@ -44,31 +46,48 @@ describe("Compose hands the preview the FIRST VIDEO tile's strip and the probed 
   });
 });
 
-describe("Instagram: one video is a 9:16 reel with the safe zone and the strip", () => {
-  it("decides reel-ness with isSingleReel over the classified first kind", () => {
-    expect(instagram).toMatch(/const isReel = isSingleReel\(mediaUrls, firstKind\)/);
-    expect(instagram).toMatch(/classifyMediaUrl\(mediaUrls\[0\], mediaKinds\?\.\[0\]\)/);
+describe("Instagram AND Facebook: one video is a 9:16 reel, through the ONE shared ReelFrame", () => {
+  it("both cards decide reel-ness with isSingleReel over the classified first kind", () => {
+    for (const src of [instagram, facebook]) {
+      expect(src).toMatch(/const isReel = isSingleReel\(mediaUrls, firstKind\)/);
+      expect(src).toMatch(/classifyMediaUrl\(mediaUrls\[0\], mediaKinds\?\.\[0\]\)/);
+    }
   });
 
-  it("renders the reel frame at the reel aspect with CONTAINED media, the safe zone, and the overlay", () => {
-    const frame = instagram.slice(instagram.indexOf('data-testid="reel-frame"'));
-    const block = frame.slice(0, frame.indexOf("</div>\n            <p"));
-    expect(instagram).toMatch(/style=\{\{ aspectRatio: `\$\{REEL_FRAME_ASPECT\}` \}\}/);
+  it("both cards render <ReelFrame> for a reel, naming their platform, and never a private copy of the frame", () => {
+    // The Facebook card kept its 16:9 feed box for an hour after the Instagram
+    // frame shipped — a per-card copy is exactly what lets the two drift.
+    expect(instagram).toMatch(/\{isReel && mediaUrls\?\.\[0\] \? \(\s*<ReelFrame[\s\S]*?platformName="Instagram"/);
+    expect(facebook).toMatch(/\{isReel && mediaUrls\[0\] \? \(\s*<ReelFrame[\s\S]*?platformName="Facebook"/);
+    for (const src of [instagram, facebook]) {
+      expect(src).not.toContain('data-testid="reel-frame"');
+      expect(src).not.toContain("<ReelSafeZone");
+      expect(src).not.toContain("<SuperTextOverlay");
+    }
+    // Facebook's reel branch is tested BEFORE the single-media 16:9 box.
+    expect(facebook.indexOf("{isReel && mediaUrls[0] ? (")).toBeLessThan(facebook.indexOf("mediaUrls.length === 1 ? ("));
+  });
+
+  it("ReelFrame renders at the reel aspect with CONTAINED media, the safe zone, and the overlay", () => {
+    const frame = reelFrame.slice(reelFrame.indexOf('data-testid="reel-frame"'));
+    const block = frame.slice(0, frame.indexOf("</div>\n      <p"));
+    expect(reelFrame).toMatch(/style=\{\{ aspectRatio: `\$\{REEL_FRAME_ASPECT\}` \}\}/);
     expect(block).toMatch(/className="h-full w-full object-contain"/);
     expect(block).toContain("<ReelSafeZone />");
     expect(block).toMatch(/<SuperTextOverlay config=\{superText\} containerAspect=\{REEL_FRAME_ASPECT\} videoAspect=\{videoAspect\} \/>/);
     expect(block).toContain("superTextScopeLabel(superText)");
   });
 
-  it("the legend quotes the constants, never hand-typed percentages", () => {
-    expect(instagram).toContain("REEL_SAFE_ZONE.topPct");
-    expect(instagram).toContain("REEL_SAFE_ZONE.bottomPct");
-    expect(instagram).toContain("REEL_SAFE_ZONE.sidePct");
+  it("the legend quotes the constants and the platform prop, never hand-typed values", () => {
+    expect(reelFrame).toContain("REEL_SAFE_ZONE.topPct");
+    expect(reelFrame).toContain("REEL_SAFE_ZONE.bottomPct");
+    expect(reelFrame).toContain("REEL_SAFE_ZONE.sidePct");
+    expect(reelFrame).toMatch(/Shaded = where \{platformName\}/);
   });
 
-  it("the reel branch still renders media only through PreviewMedia (no bare <img>, no bare <video>)", () => {
-    const frame = instagram.slice(instagram.indexOf('data-testid="reel-frame"'));
-    const block = frame.slice(0, frame.indexOf("</div>\n            <p"));
+  it("ReelFrame renders media only through PreviewMedia (no bare <img>, no bare <video>)", () => {
+    const frame = reelFrame.slice(reelFrame.indexOf('data-testid="reel-frame"'));
+    const block = frame.slice(0, frame.indexOf("</div>\n      <p"));
     expect(block).toContain("<PreviewMedia");
     expect(block).not.toMatch(/<img\b/);
     expect(block).not.toMatch(/<video\b/);
