@@ -77,12 +77,16 @@ export function buildStripInnerHtml(config: SuperTextConfig): string {
   const font = resolveSuperTextFont(config.font);
   // Same discipline for the layout preset; absent ⇒ classic ⇒ the pre-preset CSS.
   const layout = resolveSuperTextLayout(config.layout);
-  const words = config.segments
-    .map((seg) => {
-      const color = seg.color ? safeHexColor(seg.color, textColor) : textColor;
-      return `<span style="color:${color}">${escapeHtml(seg.text)}</span>`;
-    })
-    .join(" ");
+  // Words are joined by a space, or by <br> after a word carrying a manual
+  // break. Built with reduce rather than join so a config with NO breaks
+  // produces exactly the pre-2026-10-03 string (test-locked by the golden gate).
+  const words = config.segments.reduce((html, seg, i) => {
+    const color = seg.color ? safeHexColor(seg.color, textColor) : textColor;
+    const span = `<span style="color:${color}">${escapeHtml(seg.text)}</span>`;
+    if (i === 0) return span;
+    const prev = config.segments[i - 1]!;
+    return html + (prev.break === true ? "<br>" : " ") + span;
+  }, "");
   return (
     `<span style="background:${stripColor};color:${textColor};` +
     `font-weight:${font.weight};` +

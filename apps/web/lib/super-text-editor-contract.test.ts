@@ -40,6 +40,19 @@ describe("the Apply footer is always reachable", () => {
   });
 });
 
+describe("manual line breaks (2026-10-03)", () => {
+  it("the text field is a Textarea and no longer flattens newlines to spaces", () => {
+    expect(src).toMatch(/<Textarea\s+id="super-text-input"/);
+    expect(src).not.toMatch(/replace\(\/\[\\r\\n\]\+\/g, " "\)/);
+  });
+
+  it("segments are built from tokens that carry the break, and the stored text round-trips", () => {
+    expect(src).toMatch(/textToTokens\(text\)/);
+    expect(src).toMatch(/segmentsToText\(initial\.segments\)/);
+    expect(src).toMatch(/\.\.\.\(t\.break \? \{ break: true as const \} : \{\}\)/);
+  });
+});
+
 describe("an outside click cannot silently discard the edits", () => {
   it("prevents interact-outside dismissal", () => {
     expect(src).toMatch(/onInteractOutside=\{\(e\) => e\.preventDefault\(\)\}/);

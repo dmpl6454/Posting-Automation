@@ -14,6 +14,15 @@ export const superTextSegmentSchema = z.object({
   text: z.string().min(1).max(60),
   /** Optional per-word colour override (Instagram-style highlighted words). */
   color: z.string().regex(HEX6).optional(),
+  /**
+   * A MANUAL line break AFTER this word (2026-10-03). The strip otherwise wraps
+   * wherever the width budget says; the reference reel breaks between its two
+   * sentences, which only a typed break reproduces for every sentence pair.
+   * OPTIONAL and only ever `true` — absent keeps every stored config and its
+   * burn-cache hash byte-identical. Rendered as a <br> between the word spans;
+   * the user's text itself is still escaped, so no newline reaches the markup.
+   */
+  break: z.literal(true).optional(),
 });
 
 export const superTextConfigSchema = z.object({
