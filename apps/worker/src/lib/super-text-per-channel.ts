@@ -112,44 +112,85 @@ export async function runPerChannelSuperText(
   // ── 1. Variant lines (once) ──────────────────────────────────────────────
   if (!state.texts && !state.generationFailed) {
     const chunkSize = deps.chunkSize ?? SUPER_TEXT_VARIANT_CHUNK;
-    const candidates: string[] = [];
     // Variant k is written "for" target k (round-robin puts it there); the
     // prompt names that channel so the line can lean into its audience.
     const wanted = targets.slice(1, 1 + want);
-    for (let i = 0; i < wanted.length; i += chunkSize) {
-      const chunk = wanted.slice(i, i + chunkSize);
-      try {
-        const raw = await deps.generateText(
-          buildSuperTextVariantPrompt({
-            baseText,
-            postContent: input.postContent,
-            channels: chunk.map((t, j) => ({
-              index: j,
-              platform: t.channel.platform,
-              channelName: t.channel.name || t.channel.platform,
-              username: t.channel.username,
-            })),
-            charLimit,
-          })
-        );
-        const byIndex = new Map(parseVariantArray(raw).map((v) => [v.index, v.text]));
-        for (let j = 0; j < chunk.length; j++) {
-          const text = byIndex.get(j);
-          if (text) candidates.push(text);
-        }
-      } catch (err: any) {
-        log(
-          `[super-text] variant generation failed for ${input.sourceMediaId} (chunk at ${i}): ${err?.message ?? err}`
-        );
-        if (deps.isCreditExhausted?.(err)) {
-          state.outOfCredit = true;
-          break;
+
+    /** One pass over `channels` in chunks; returns the raw candidate lines. */
+    const askModel = async (channels: PerChannelTarget[], avoid: string[], pass: number) => {
+      const candidates: string[] = [];
+      for (let i = 0; i < channels.length; i += chunkSize) {
+        const chunk = channels.slice(i, i + chunkSize);
+        try {
+          const raw = await deps.generateText(
+            buildSuperTextVariantPrompt({
+              baseText,
+              postContent: input.postContent,
+              channels: chunk.map((t, j) => ({
+                index: j,
+                platform: t.channel.platform,
+                channelName: t.channel.name || t.channel.platform,
+                username: t.channel.username,
+              })),
+              charLimit,
+              avoid,
+            })
+          );
+          const parsed = parseVariantArray(raw);
+          if (parsed.length === 0) {
+            // The array parsed but held nothing usable — show what came back so
+            // the next "all channels got the same text" report is diagnosable.
+            log(
+              `[super-text] model returned no usable items for ${input.sourceMediaId} (pass ${pass}, chunk at ${i}): ${JSON.stringify(raw.slice(0, 300))}`
+            );
+          }
+          const byIndex = new Map(parsed.map((v) => [v.index, v.text]));
+          for (let j = 0; j < chunk.length; j++) {
+            const text = byIndex.get(j);
+            if (text) candidates.push(text);
+          }
+        } catch (err: any) {
+          log(
+            `[super-text] variant generation failed for ${input.sourceMediaId} (pass ${pass}, chunk at ${i}): ${err?.message ?? err}`
+          );
+          if (deps.isCreditExhausted?.(err)) {
+            state.outOfCredit = true;
+            return candidates;
+          }
         }
       }
+      return candidates;
+    };
+
+    const firstPass = await askModel(wanted, [], 1);
+    let texts = sanitizeVariantTexts({ baseText, candidates: firstPass, charLimit, baseCfg: input.baseCfg });
+
+    // ── Second ask for the shortfall (2026-10-03) ──
+    // A model that overshoots the length, repeats itself, or echoes the base
+    // leaves fewer usable lines than channels. Before, that silently became
+    // "several channels publish the user's line" — indistinguishable, to the
+    // user, from the feature not working. One more ask, for just the missing
+    // count, naming the lines already taken. Never after an out-of-credit
+    // signal, and never a third time.
+    if (texts.length < want && !state.outOfCredit) {
+      const missing = wanted.slice(texts.length);
+      log(
+        `[super-text] ${input.sourceMediaId}: ${texts.length} usable of ${want} wanted after pass 1 (${firstPass.length} returned) — asking once more for ${missing.length}`
+      );
+      const secondPass = await askModel(missing, texts, 2);
+      texts = sanitizeVariantTexts({
+        baseText,
+        candidates: [...texts, ...secondPass],
+        charLimit,
+        baseCfg: input.baseCfg,
+      });
     }
-    const texts = sanitizeVariantTexts({ baseText, candidates, charLimit, baseCfg: input.baseCfg });
+
     if (texts.length === 0) {
       state.generationFailed = true;
+      log(
+        `[super-text] ${input.sourceMediaId}: NO usable variant line after two asks (${firstPass.length} raw candidates, limit ${charLimit} chars${state.outOfCredit ? ", provider out of credit" : ""}) — every channel keeps the user's own line`
+      );
     } else {
       state.texts = texts;
     }

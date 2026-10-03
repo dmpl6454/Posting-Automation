@@ -171,7 +171,11 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   // Per-channel SUPER TEXT (2026-10-02): AI writes a different strip line per
   // channel and each channel publishes its own burned video. Sent only when a
   // video actually carries super text and >1 channel is selected.
-  const [uniqueSuperText, setUniqueSuperText] = useState(false);
+  // ON by default (owner, 2026-10-03: the ask was "automatic" — a multi-channel
+  // video with a strip should fan out different lines without a second click;
+  // the first live post went out with one line on every channel because the
+  // switch sat off). The card stays visible so it can be turned off per post.
+  const [uniqueSuperText, setUniqueSuperText] = useState(true);
   // Manual per-channel captions (2026-09-18): channelId → caption, edited under
   // the Captions card when `customCaptions` is on. The map is never pruned on
   // deselect; buildCaptionOverridesPayload sends only STILL-selected channels.
@@ -2599,7 +2603,7 @@ ${content}`;
                       Different super text per channel (AI)
                     </Label>
                     <p className="mt-0.5 text-xs text-muted-foreground">
-                      AI rewrites your line for every channel (same position, size and colours). With &quot;Cover only&quot; each channel gets its own cover image in seconds; with &quot;First seconds&quot; or &quot;Whole video&quot; each channel is a separate video encode, so a large fan-out takes longer before it publishes. Channels whose line can&apos;t be prepared use the text you wrote.
+                      On by default. AI rewrites your line for every channel (same position, size and colours); your own line goes on the first. With &quot;Cover only&quot; each channel gets its own cover image in seconds; with &quot;First seconds&quot; or &quot;Whole video&quot; each channel is a separate video encode, so a large fan-out takes longer before it publishes. Turn off to put the same text on every channel. Channels whose line can&apos;t be prepared use the text you wrote.
                     </p>
                   </div>
                   <Switch

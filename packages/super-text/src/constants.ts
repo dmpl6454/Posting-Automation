@@ -1,4 +1,7 @@
 import { SUPER_TEXT_SANS_WOFF2_BASE64 } from "./fonts/plus-jakarta-sans-800-latin";
+import { SUPER_TEXT_INSTAGRAM_700_WOFF2_BASE64 } from "./fonts/instagram-sans-700";
+import { SUPER_TEXT_INSTAGRAM_500_WOFF2_BASE64 } from "./fonts/instagram-sans-500";
+import { SUPER_TEXT_INSTAGRAM_300_WOFF2_BASE64 } from "./fonts/instagram-sans-300";
 
 /**
  * Strip geometry is expressed in `em` off ONE font-size so the live compose
@@ -28,12 +31,15 @@ export const STRIP_FONT_WEIGHT = 700;
 
 /**
  * Editor size presets → fontSizePct (percentage of video width).
- * M = 4.6 reproduces the owner's reference clip (2026-10-02): a 37px cap height
- * on a 1080-wide frame, which the embedded sans face hits at 4.6% (measured on a
- * real Chromium render — 4.8% gave 39px). Pre-existing configs keep whatever value
- * they stored; the editor highlights the NEAREST preset.
+ * M = 4.8 reproduces the owner's reference clip with the REAL Instagram Sans
+ * Bold (2026-10-03, measured on a Chromium render over the reference frame):
+ * cap height 37px = reference 37px, pill 156px tall vs 152, and the SAME
+ * two-line break after "PVR" — at 4.6 the Bold cut still fits "Any" on line one,
+ * which the reference does not. (With the Plus Jakarta stand-in the reference
+ * cap height sat at 4.6; that face is no longer the default.) Pre-existing
+ * configs keep whatever value they stored; the editor highlights the NEAREST preset.
  */
-export const FONT_SIZE_PRESETS = { S: 3.6, M: 4.6, L: 5.6 } as const;
+export const FONT_SIZE_PRESETS = { S: 3.8, M: 4.8, L: 5.8 } as const;
 
 /* ─── Layout presets ────────────────────────────────────────────────────────
  * Geometry of the pill(s). `classic` is the pre-2026-10-02 CSS, unchanged to the
@@ -78,9 +84,11 @@ export const SUPER_TEXT_LAYOUTS: Record<SuperTextLayoutKey, SuperTextLayoutSpec>
     padXEm: 0.68,
     radiusEm: 0.24,
     lineHeight: 1.5,
-    // 86, not the measured 84: at an identical cap height the embedded face sets
-    // the reference's own second line ~2.4% wider than Instagram Sans does, so
-    // the same words need the extra room to break at the same place.
+    // 86, not the measured 84: the room the reference's own second line needs to
+    // break at the same place. Re-measured 2026-10-03 with the REAL Instagram
+    // Sans cuts at M (4.8): Bold breaks after "PVR" exactly like the reference
+    // (pill 848px); Medium's longer first line needs 920px = 85.2%, so 84 would
+    // wrap those same words to three lines.
     maxWidthPct: 86,
     textAlign: "left",
   },
@@ -125,7 +133,8 @@ export const SUPER_TEXT_DEFAULTS = {
   /** Pill centre in the reference clip: rows 1550–1701 of 1920 ⇒ 84.7%. */
   yPct: 84,
   fontSizePct: FONT_SIZE_PRESETS.M,
-  font: "sans" as const,
+  /** The real Instagram Sans Bold since 2026-10-03 (owner-supplied file; the reference reel's cut). */
+  font: "instagram" as const,
   layout: "insta" as const,
   /** Owner decision 2026-10-02: the strip lives on the cover, not the whole video. */
   scope: "cover" as const,
@@ -162,15 +171,31 @@ export const WORD_COLOR_SWATCHES = [
  *
  * Plan: docs/superpowers/plans/2026-07-28-super-text-instagram-fonts.md
  */
-export const SUPER_TEXT_FONT_KEYS = ["classic", "sans"] as const;
+export const SUPER_TEXT_FONT_KEYS = [
+  "classic",
+  "sans",
+  "instagram",
+  "instagram_medium",
+  "instagram_light",
+] as const;
 export type SuperTextFontKey = (typeof SUPER_TEXT_FONT_KEYS)[number];
 
 /**
- * Internal family name for the embedded face. Deliberately NOT "Instagram Sans":
- * the file is DM Sans (SIL OFL), and Instagram Sans is Meta's proprietary
- * typeface — naming it that in shipped CSS would be a false claim.
+ * Internal family name for the embedded Plus Jakarta face. Deliberately NOT
+ * "Instagram Sans": that file is an open-licence stand-in, and the CSS family
+ * name should not claim otherwise.
  */
 export const EMBEDDED_SANS_FAMILY = "PA Display Sans";
+
+/**
+ * The REAL Instagram Sans (2026-10-03): three static cuts — Bold 700, Medium 500,
+ * Light 300 — supplied by the owner as TTFs and embedded at their decision. ONE
+ * CSS family with one @font-face per weight, so Chromium selects the cut by
+ * `font-weight` and never synthesises. The family name is the font's own, which is
+ * accurate here. ⚠️ It is Meta's proprietary typeface — not an open-licence face.
+ * Do not publish it anywhere else (a public CDN, the marketing site, an npm package).
+ */
+export const EMBEDDED_INSTAGRAM_FAMILY = "Instagram Sans";
 
 export interface SuperTextFontSpec {
   /** Shown in the editor's picker. The only place UI wording lives. */
@@ -210,6 +235,34 @@ export const SUPER_TEXT_FONTS: Record<SuperTextFontKey, SuperTextFontSpec> = {
     // (853px vs 908px); the face's natural spacing lands within 2%.
     letterSpacingEm: 0,
     embedded: { family: EMBEDDED_SANS_FAMILY, base64: SUPER_TEXT_SANS_WOFF2_BASE64 },
+  },
+  // The real face first, then the classic stack so a glyph it lacks (Devanagari,
+  // CJK — these files are Latin-only) still resolves exactly as before. Each
+  // key's weight MUST equal its @font-face weight (test-locked): all three share
+  // one family name, and a mismatched descriptor would make Chromium pick — or
+  // synthesise — a different cut than the preview showed.
+  instagram: {
+    // Bold is the cut the owner's reference reel uses (the Medium render was
+    // visibly lighter side by side) — hence the default.
+    label: "Instagram",
+    stack: `'${EMBEDDED_INSTAGRAM_FAMILY}', ${SUPER_TEXT_FONT_STACK}`,
+    weight: 700,
+    letterSpacingEm: 0,
+    embedded: { family: EMBEDDED_INSTAGRAM_FAMILY, base64: SUPER_TEXT_INSTAGRAM_700_WOFF2_BASE64 },
+  },
+  instagram_medium: {
+    label: "Instagram Medium",
+    stack: `'${EMBEDDED_INSTAGRAM_FAMILY}', ${SUPER_TEXT_FONT_STACK}`,
+    weight: 500,
+    letterSpacingEm: 0,
+    embedded: { family: EMBEDDED_INSTAGRAM_FAMILY, base64: SUPER_TEXT_INSTAGRAM_500_WOFF2_BASE64 },
+  },
+  instagram_light: {
+    label: "Instagram Light",
+    stack: `'${EMBEDDED_INSTAGRAM_FAMILY}', ${SUPER_TEXT_FONT_STACK}`,
+    weight: 300,
+    letterSpacingEm: 0,
+    embedded: { family: EMBEDDED_INSTAGRAM_FAMILY, base64: SUPER_TEXT_INSTAGRAM_300_WOFF2_BASE64 },
   },
 };
 

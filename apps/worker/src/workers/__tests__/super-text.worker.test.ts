@@ -338,9 +338,31 @@ describe("runSuperTextBurn — embedded font path", () => {
     const res = (await runSuperTextBurn({ postId: "post-1", organizationId: "org-1" })) as any;
 
     expect(res.burned).toBe(1);
-    // Both the readiness wait and the activation probe are passed the family.
-    expect(ctl.evaluateArgs).toEqual(["PA Display Sans", "PA Display Sans"]);
+    // The readiness wait gets the family AT ITS REGISTRY WEIGHT (fonts.load
+    // resolves the face matching the descriptor); the activation probe gets the
+    // family alone.
+    expect(ctl.evaluateArgs).toEqual([{ family: "PA Display Sans", weight: 800 }, "PA Display Sans"]);
     expect(ctl.screenshotCalls).toBe(1);
+  });
+
+  it("asks fonts.load for the cut's own weight — all three Instagram cuts share one family name", async () => {
+    // One family, three @font-face weights: a wrong descriptor would resolve a
+    // DIFFERENT cut than the preview showed (or a synthesised one), and the wait
+    // would pass before the right bytes were in.
+    for (const [font, weight] of [["instagram", 700], ["instagram_medium", 500], ["instagram_light", 300]] as const) {
+      ctl.evaluateArgs = [];
+      seed({
+        superText: {
+          requested: true,
+          pendingBurn: true,
+          parkedSchedule: true,
+          byMediaId: { "media-1": { ...cfg, font } },
+        },
+      });
+      const res = (await runSuperTextBurn({ postId: "post-1", organizationId: "org-1" })) as any;
+      expect(res.burned).toBe(1);
+      expect(ctl.evaluateArgs).toEqual([{ family: "Instagram Sans", weight }, "Instagram Sans"]);
+    }
   });
 
   it("warns but still burns when the embedded face did not activate", async () => {
