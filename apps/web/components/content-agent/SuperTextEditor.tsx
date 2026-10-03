@@ -11,6 +11,7 @@ import {
 } from "~/components/ui/dialog";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
+import { Textarea } from "~/components/ui/textarea";
 import { Label } from "~/components/ui/label";
 import { Film } from "lucide-react";
 import {
@@ -29,6 +30,9 @@ import {
   type SuperTextFontKey,
   type SuperTextLayoutKey,
   type SuperTextScope,
+  textToTokens,
+  segmentsToText,
+  countStripChars,
 } from "@postautomation/super-text";
 import { SuperTextFontFaces } from "./super-text-font-faces";
 import { withPosterHint } from "~/lib/video-poster";
@@ -69,9 +73,10 @@ export function SuperTextEditor({
   initial: SuperTextConfig | null;
   onSave: (config: SuperTextConfig | null) => void;
 }) {
-  const [text, setText] = useState(() =>
-    initial ? initial.segments.map((s) => s.text).join(" ") : ""
-  );
+  // One multi-line string: Enter = a manual line break (2026-10-03), stored as
+  // `break: true` on the last word of the line. segmentsToText puts the typed
+  // breaks back in the same places when a stored strip is re-opened.
+  const [text, setText] = useState(() => (initial ? segmentsToText(initial.segments) : ""));
   const [wordColors, setWordColors] = useState<Record<number, string | undefined>>(() => {
     const map: Record<number, string | undefined> = {};
     initial?.segments.forEach((s, i) => {
@@ -106,7 +111,11 @@ export function SuperTextEditor({
   const stageRef = useRef<HTMLDivElement | null>(null);
   const draggingRef = useRef(false);
 
-  const words = useMemo(() => text.split(/\s+/).filter(Boolean), [text]);
+  // Tokens carry the manual breaks; `words` keeps the per-word colour map and
+  // chip rendering keyed on the same indexes as before.
+  const tokens = useMemo(() => textToTokens(text), [text]);
+  const words = useMemo(() => tokens.map((t) => t.text), [tokens]);
+  const stripChars = useMemo(() => countStripChars(text), [text]);
   const skipInlineVideo = !!videoFile && videoFile.size > TILE_VIDEO_PREVIEW_MAX_BYTES;
 
   // Measure the video's aspect ratio so the stage matches the real frame — a
@@ -152,7 +161,13 @@ export function SuperTextEditor({
     if (words.length === 0) return null;
     const candidate = {
       version: 1 as const,
-      segments: words.map((w, i) => ({ text: w, ...(wordColors[i] ? { color: wordColors[i] } : {}) })),
+      segments: tokens.map((t, i) => ({
+        text: t.text,
+        ...(wordColors[i] ? { color: wordColors[i] } : {}),
+        // Only ever written as `true` — an absent key keeps existing configs'
+        // JSON (and burn-cache hash) byte-identical.
+        ...(t.break ? { break: true as const } : {}),
+      })),
       stripColor,
       textColor,
       xPct,
@@ -170,7 +185,7 @@ export function SuperTextEditor({
     };
     const parsed = superTextConfigSchema.safeParse(candidate);
     return parsed.success ? parsed.data : null;
-  }, [words, wordColors, stripColor, textColor, xPct, yPct, fontSizePct, font, layout, scope, introSeconds]);
+  }, [tokens, wordColors, stripColor, textColor, xPct, yPct, fontSizePct, font, layout, scope, introSeconds]);
 
   const SCOPE_LABELS: Record<SuperTextScope, string> = {
     cover: "Cover only",
@@ -271,17 +286,30 @@ export function SuperTextEditor({
             Drag anywhere on the video to move the text.
           </p>
 
-          {/* Text — the native emoji keyboard/picker inserts 😍 as plain characters */}
+          {/* Text — the native emoji keyboard/picker inserts 😍 as plain characters.
+              A textarea so Enter inserts a MANUAL line break (2026-10-03): the
+              strip otherwise wraps wherever the width says, and a two-sentence
+              line like the reference reel's needs the break between sentences. */}
           <div className="space-y-1">
             <Label htmlFor="super-text-input">Text</Label>
-            <Input
+            <Textarea
               id="super-text-input"
               value={text}
-              onChange={(e) => setText(e.target.value.replace(/[\r\n]+/g, " ").slice(0, MAX_CHARS))}
-              placeholder="Your text here… emoji welcome 😍✨"
+              rows={2}
+              onChange={(e) => {
+                // Keep the user's newlines; cap on the WORD characters (the
+                // schema counts those), never on separators.
+                const next = e.target.value.replace(/\r\n?/g, "\n");
+                setText(countStripChars(next) <= MAX_CHARS ? next : text);
+              }}
+              placeholder={"Your text here… emoji welcome 😍✨\nPress Enter for a new line"}
+              className="min-h-0 resize-y"
             />
-            <p className="text-right text-[10px] text-muted-foreground">
-              {text.length}/{MAX_CHARS}
+            <p className="flex justify-between text-[10px] text-muted-foreground">
+              <span>Enter = new line. Leave it out and the text wraps on its own.</span>
+              <span>
+                {stripChars}/{MAX_CHARS}
+              </span>
             </p>
           </div>
 
@@ -290,18 +318,33 @@ export function SuperTextEditor({
             <div className="space-y-2">
               <Label>Colour a word</Label>
               <div className="flex flex-wrap gap-1">
-                {words.map((w, i) => (
-                  <button
-                    key={`${i}-${w}`}
-                    type="button"
-                    onClick={() => setSelectedWord(selectedWord === i ? null : i)}
-                    className={`rounded border px-1.5 py-0.5 text-xs font-semibold ${
-                      selectedWord === i ? "border-primary ring-1 ring-primary" : "border-transparent bg-muted"
-                    }`}
-                    style={wordColors[i] ? { color: wordColors[i] } : undefined}
-                  >
-                    {w}
-                  </button>
+                {tokens.map((t, i) => (
+                  <span key={`${i}-${t.text}`} className="contents">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedWord(selectedWord === i ? null : i)}
+                      className={`rounded border px-1.5 py-0.5 text-xs font-semibold ${
+                        selectedWord === i ? "border-primary ring-1 ring-primary" : "border-transparent bg-muted"
+                      }`}
+                      style={wordColors[i] ? { color: wordColors[i] } : undefined}
+                    >
+                      {t.text}
+                    </button>
+                    {/* A manual break shows where the line ends, and forces the
+                        chip row onto a new line so it reads like the strip. */}
+                    {t.break && (
+                      <>
+                        <span
+                          aria-label="line break"
+                          title="Line break (typed with Enter)"
+                          className="self-center text-[10px] text-muted-foreground"
+                        >
+                          ↵
+                        </span>
+                        <span className="basis-full" />
+                      </>
+                    )}
+                  </span>
                 ))}
               </div>
               {selectedWord !== null && (

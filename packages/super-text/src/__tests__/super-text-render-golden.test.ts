@@ -90,6 +90,18 @@ describe("golden render gate — insta layout preset (opt-in)", () => {
     expect(html.replace(/base64,[A-Za-z0-9+/=]+/, "base64,<payload>")).toMatchSnapshot();
   });
 
+  /** ADDITION (2026-10-03): a manual line break. Absent ⇒ every snapshot above is unchanged. */
+  it("strip inner html with a manual break after 'PVR' is pinned", () => {
+    expect(
+      buildStripInnerHtml({
+        ...insta,
+        font: "instagram",
+        fontSizePct: 4.8,
+        segments: [...insta.segments.slice(0, -1), { text: "PVR", break: true }, { text: "Any" }, { text: "guess?" }],
+      })
+    ).toMatchSnapshot();
+  });
+
   it("scope and introSeconds never reach the CSS — same strip html whatever the scope", () => {
     expect(buildStripInnerHtml({ ...insta, scope: "video" })).toBe(buildStripInnerHtml(insta));
     expect(buildStripInnerHtml({ ...insta, scope: "intro", introSeconds: 5 })).toBe(buildStripInnerHtml(insta));

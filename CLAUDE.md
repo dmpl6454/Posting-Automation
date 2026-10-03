@@ -3054,6 +3054,13 @@ re-rendering the same words over the same frame in the preinstalled Chromium —
   L 5.8.** At 4.8 the Bold cut reproduces the reference (cap 37px = 37, pill 156 vs 152, the same
   break after "PVR"; at 4.6 it still fits "Any" on line one); `maxWidthPct` stays 86 — Medium's
   longer first line needs 85.2%, and at 84 those words wrap to three lines.
+- **Manual line break (2026-10-03):** `SuperTextSegment.break?: true` = a line break AFTER that
+  word, rendered as `<br>` between the word spans ([html.ts](packages/super-text/src/html.ts) joins
+  with reduce so a break-less config is byte-identical — golden gate unchanged). The editor's text
+  field is a **Textarea**; Enter = break; [text.ts](packages/super-text/src/text.ts)
+  `textToTokens`/`segmentsToText` round-trip the typed breaks and `countStripChars` caps on word
+  characters only. Only ever written as `true`, never injected. AI per-channel variants carry NO
+  breaks (`variantConfigFromBase` rebuilds segments from the model's line) — they wrap naturally.
 - **New-strip defaults** (`SUPER_TEXT_DEFAULTS`): `layout:"insta"`, `font:"instagram"` (the real
   Instagram Sans Bold; was `"sans"` until 2026-10-03), `scope:"cover"`, `yPct:84`; `HIGHLIGHT_ORANGE` is the first accent swatch. A strip being
   RE-EDITED keeps exactly what it stored (absent keys = classic / video).

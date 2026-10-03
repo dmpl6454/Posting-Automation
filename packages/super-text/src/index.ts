@@ -7,6 +7,7 @@ export {
   type SuperTextMap,
 } from "./schema";
 export * from "./constants";
+export { textToTokens, segmentsToText, countStripChars, type SuperTextToken } from "./text";
 export {
   buildStripInnerHtml,
   buildSuperTextFrameHtml,
