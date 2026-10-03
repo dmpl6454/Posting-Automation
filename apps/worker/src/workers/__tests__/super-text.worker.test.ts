@@ -37,6 +37,9 @@ const { ctl, s3Send, optimizeAdd, db } = vi.hoisted(() => ({
     outputDuration: 18.3,
     sourceWidth: 720,
     sourceHeight: 1280,
+    /** Display-matrix rotation reported for the SOURCE stream (0 = none). */
+    sourceRotation: 0,
+    viewports: [] as Array<{ width: number; height: number }>,
     ffmpegCalls: 0,
     screenshotCalls: 0,
     evaluateArgs: [] as unknown[],
@@ -54,9 +57,24 @@ vi.mock("child_process", () => ({
       const target = args[args.length - 1]!;
       const isSource = target.startsWith("http");
       const duration = isSource ? ctl.sourceDuration : ctl.outputDuration;
+      // The SOURCE reports its CODED size plus any rotation (ffprobe's real
+      // shape); the burn OUTPUT is written display-oriented with no rotation, so
+      // its coded size IS the display size.
+      const rot = isSource ? ctl.sourceRotation : 0;
+      const srcRot = ((Math.round(ctl.sourceRotation / 90) % 4) + 4) % 4;
+      const swap = srcRot === 1 || srcRot === 3;
+      const codedW = isSource ? ctl.sourceWidth : swap ? ctl.sourceHeight : ctl.sourceWidth;
+      const codedH = isSource ? ctl.sourceHeight : swap ? ctl.sourceWidth : ctl.sourceHeight;
       cb(null, {
         stdout: JSON.stringify({
-          streams: [{ codec_type: "video", width: ctl.sourceWidth, height: ctl.sourceHeight }],
+          streams: [
+            {
+              codec_type: "video",
+              width: codedW,
+              height: codedH,
+              ...(rot ? { side_data_list: [{ side_data_type: "Display Matrix", rotation: rot }] } : {}),
+            },
+          ],
           format: { duration: String(duration) },
         }),
         stderr: "",
@@ -78,7 +96,9 @@ vi.mock("child_process", () => ({
 vi.mock("@postautomation/ai", () => ({
   launchCreativeBrowser: vi.fn(async () => ({
     newPage: async () => ({
-      setViewport: vi.fn(async () => {}),
+      setViewport: vi.fn(async (vp: { width: number; height: number }) => {
+        ctl.viewports.push({ width: vp.width, height: vp.height });
+      }),
       setContent: vi.fn(async () => {}),
       // The font-readiness wait and the activation probe both go through
       // page.evaluate. Recording the args is how we prove the embedded-font path
@@ -235,6 +255,8 @@ beforeEach(() => {
   ctl.outputDuration = 18.3;
   ctl.sourceWidth = 720;
   ctl.sourceHeight = 1280;
+  ctl.sourceRotation = 0;
+  ctl.viewports = [];
   ctl.ffmpegCalls = 0;
   ctl.screenshotCalls = 0;
   ctl.evaluateArgs = [];
@@ -288,6 +310,34 @@ describe("runSuperTextBurn — happy path", () => {
     expect(res.flipped).toBe(true);
     expect(db.state.post.status).toBe("SCHEDULED");
     expect(db.state.post.targets.every((t: any) => t.status === "SCHEDULED")).toBe(true);
+  });
+
+  /**
+   * 2026-10-03 incident (owner screenshot): a phone-shot story's strip sat
+   * mid-frame and ran off the right edge. The source was coded 1920×1080 with a
+   * 90° display matrix; the strip was rendered on that landscape canvas while
+   * ffmpeg overlaid it on the auto-rotated 1080×1920 frame.
+   */
+  it("renders the strip at the DISPLAY size of a rotated phone video, not the coded size", async () => {
+    ctl.sourceWidth = 1920;
+    ctl.sourceHeight = 1080;
+    ctl.sourceRotation = -90;
+    seed();
+    const res = (await runSuperTextBurn({ postId: "post-1", organizationId: "org-1" })) as any;
+    expect(res.burned).toBe(1);
+    // The Puppeteer viewport — the PNG's pixel size — is portrait.
+    expect(ctl.viewports).toEqual([{ width: 1080, height: 1920 }]);
+    const derived = db.state.mediaCreates[0];
+    expect(derived.width).toBe(1080);
+    expect(derived.height).toBe(1920);
+    expect(logSpy.mock.calls.some((c) => String(c[0]).includes("270° rotation"))).toBe(true);
+  });
+
+  it("an un-rotated source keeps the coded size as the canvas (byte-identical path)", async () => {
+    seed();
+    await runSuperTextBurn({ postId: "post-1", organizationId: "org-1" });
+    expect(ctl.viewports).toEqual([{ width: 720, height: 1280 }]);
+    expect(logSpy.mock.calls.some((c) => String(c[0]).includes("rotation"))).toBe(false);
   });
 
   it("uploads to an org-scoped, config-hashed key so an edited strip never reuses a stale object", async () => {
