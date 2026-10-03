@@ -43,10 +43,16 @@ export function baseTextOf(cfg: Pick<SuperTextConfig, "segments">): string {
  * How long a variant may be. Anchored on the user's own line (a strip wraps, so a
  * much longer variant lands differently on the frame), with a floor so a 3-word
  * base still leaves room for a real alternative, and the schema cap as ceiling.
+ *
+ * ⚠️ 2× / floor 60, not 1.6× / floor 40 (2026-10-03). Models routinely overshoot
+ * "roughly the length of the user's overlay" by a few words; under the tighter
+ * limit a short base ("Wait for it", limit 40) could see EVERY candidate dropped,
+ * and the only visible result was every channel publishing the same line. A
+ * line that wraps to one more row is a far cheaper failure than no variant.
  */
 export function variantCharLimit(baseText: string): number {
   const len = [...baseText.trim()].length;
-  return Math.min(STRIP_MAX_CHARS, Math.max(40, Math.round(len * 1.6)));
+  return Math.min(STRIP_MAX_CHARS, Math.max(60, Math.round(len * 2)));
 }
 
 export interface VariantChannel {
@@ -62,6 +68,8 @@ export function buildSuperTextVariantPrompt(opts: {
   postContent: string;
   channels: VariantChannel[];
   charLimit: number;
+  /** Lines already accepted (a second ask for the shortfall must not repeat them). */
+  avoid?: string[];
 }): string {
   const lines = opts.channels
     .map(
@@ -71,6 +79,7 @@ export function buildSuperTextVariantPrompt(opts: {
     .join("\n");
   const caption = opts.postContent.trim();
   const hasEmoji = /\p{Extended_Pictographic}/u.test(opts.baseText);
+  const avoid = (opts.avoid ?? []).filter((s) => s.trim());
 
   return `Write ${opts.channels.length} alternative on-video text overlays ("super text") for ONE short social video — one per channel listed below.
 
@@ -78,7 +87,11 @@ The user's own overlay is:
 """
 ${opts.baseText}
 """
-${caption ? `\nThe post caption, for context only (do not copy it):\n"""\n${caption.slice(0, 1500)}\n"""\n` : ""}
+${caption ? `\nThe post caption, for context only (do not copy it):\n"""\n${caption.slice(0, 1500)}\n"""\n` : ""}${
+    avoid.length
+      ? `\nThese overlays are already taken — every new one must differ clearly from ALL of them too:\n${avoid.map((a) => `- ${a}`).join("\n")}\n`
+      : ""
+  }
 Rules:
 - Each overlay must carry the SAME hook/meaning as the user's overlay. Do NOT invent facts, names, numbers or claims.
 - Every overlay must be clearly DIFFERENT in wording from the user's overlay and from each other.

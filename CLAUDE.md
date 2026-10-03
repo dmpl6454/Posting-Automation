@@ -2994,6 +2994,18 @@ its metadata byte-for-byte). Still ONE `supertext:{postId}:v1` job.
   publish time the shared attachment already points at the BASE burn, not the source. A target
   with no map gets the SAME attachments array back (test-locked); a derived row that fails to load
   degrades to the shared burn, never fails the publish.
+- **The Compose switch is ON by default (2026-10-03).** The first live post went out with the same
+  line on every channel because the switch sat off and the owner's ask was "automatic". It is still
+  sent only when a video carries a strip and >1 channel is selected; the card stays visible to turn
+  it off per post.
+- **Generation asks TWICE before giving up (2026-10-03).** Pass 1 asks for N−1 lines; whatever the
+  sanitizer drops (echo of the base, duplicates, over the length cap, unrepresentable) is asked for
+  ONCE more, for just the missing count, with the accepted lines listed as "already taken". Never a
+  third ask, never after an out-of-credit signal. `variantCharLimit` is **2× the base, floor 60**
+  (was 1.6× / 40): under the tighter cap a short base could see EVERY candidate dropped, and the
+  only visible symptom was "all channels got the same text". An empty parse logs the raw model
+  output (first 300 chars) and a total failure logs a `NO usable variant line` line — grep
+  `[super-text]` in the worker log when this is reported again.
 - **Degrade, never lose, never un-burned**: a variant that fails to generate or burn leaves its
   targets on the user's own strip (`perChannelDegraded: true` + a `post.supertext_degraded`
   notification). Lines are persisted (`superText.perChannelState[mediaId].texts`) BEFORE the first

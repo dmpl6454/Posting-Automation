@@ -141,22 +141,62 @@ describe("runPerChannelSuperText", () => {
     expect(out.degraded).toBe(false);
   });
 
-  it("drops duplicate / copied lines and flags the shortfall as degraded", async () => {
-    const { deps } = makeDeps({
-      generateText: vi.fn(async () =>
-        JSON.stringify([
-          { index: 0, text: "wait for it" }, // the base
-          { index: 1, text: "Fresh take" },
-          { index: 2, text: "FRESH take!" }, // dup
-        ])
-      ),
-    });
+  it("drops duplicate / copied lines, asks ONCE more for the shortfall, then flags what is still missing", async () => {
+    const generateText = vi.fn(async (_prompt: string) =>
+      JSON.stringify([
+        { index: 0, text: "wait for it" }, // the base
+        { index: 1, text: "Fresh take" },
+        { index: 2, text: "FRESH take!" }, // dup
+      ])
+    );
+    const { deps } = makeDeps({ generateText });
     const out = await runPerChannelSuperText(deps, input());
+    // Pass 1 yields one usable line of 3 wanted; pass 2 (same answer) adds nothing new.
+    expect(generateText).toHaveBeenCalledTimes(2);
+    expect(generateText.mock.calls[1]![0]).toContain("already taken");
+    expect(generateText.mock.calls[1]![0]).toContain("- Fresh take");
     expect(out.state.texts).toEqual(["Fresh take"]);
     expect(deps.burn).toHaveBeenCalledTimes(1);
     // 4 targets, 1 usable variant ⇒ t0 base, t1 variant, t2 wanted its own line
     // but falls back to the shared burn, t3 variant — every target has a strip.
     expect(out).toMatchObject({ unique: 2, onBase: 1, fallback: 1, degraded: true });
+  });
+
+  it("the second ask fills the shortfall so every channel gets its own line (not degraded)", async () => {
+    const generateText = vi
+      .fn()
+      .mockResolvedValueOnce(
+        JSON.stringify([
+          { index: 0, text: "Fresh take" },
+          { index: 1, text: "fresh TAKE" }, // dup
+          { index: 2, text: "This candidate is far longer than the sixty character limit allows for a strip" },
+        ])
+      )
+      .mockResolvedValueOnce(JSON.stringify([{ index: 0, text: "Hold on tight" }, { index: 1, text: "Keep watching" }]));
+    const { deps, written } = makeDeps({ generateText });
+    const out = await runPerChannelSuperText(deps, input());
+    expect(generateText).toHaveBeenCalledTimes(2);
+    // The second prompt is for exactly the 2 missing channels.
+    expect((generateText.mock.calls[1]![0] as string).match(/^\d+\. platform=/gm)).toHaveLength(2);
+    expect(out.state.texts).toEqual(["Fresh take", "Hold on tight", "Keep watching"]);
+    expect(written.map((w) => w.variant)).toEqual([1, 2, 3]);
+    expect(out).toMatchObject({ unique: 3, onBase: 1, fallback: 0, degraded: false });
+  });
+
+  it("does not ask again once a provider is out of credit, and logs the empty outcome", async () => {
+    const logs: string[] = [];
+    const generateText = vi.fn(async () => {
+      throw Object.assign(new Error("credit_balance_exhausted"), { code: "credit_balance_exhausted" });
+    });
+    const { deps } = makeDeps({
+      generateText,
+      isCreditExhausted: (e: any) => e?.code === "credit_balance_exhausted",
+      log: (m) => logs.push(m),
+    });
+    const out = await runPerChannelSuperText(deps, input());
+    expect(generateText).toHaveBeenCalledTimes(1);
+    expect(out.state).toMatchObject({ outOfCredit: true, generationFailed: true });
+    expect(logs.some((l) => /NO usable variant line/.test(l) && /out of credit/.test(l))).toBe(true);
   });
 
   it("single target: nothing to vary, nothing generated", async () => {

@@ -90,10 +90,25 @@ describe("sanitizeVariantTexts", () => {
 });
 
 describe("limits + assignment", () => {
-  it("variantCharLimit tracks the base length within [40, 150]", () => {
-    expect(variantCharLimit("hi")).toBe(40);
-    expect(variantCharLimit("x".repeat(50))).toBe(80);
+  it("variantCharLimit is 2× the base within [60, 150] — room for a model that overshoots", () => {
+    expect(variantCharLimit("hi")).toBe(60);
+    expect(variantCharLimit("x".repeat(50))).toBe(100);
     expect(variantCharLimit("x".repeat(150))).toBe(150);
+  });
+
+  it("the prompt lists already-accepted lines to avoid on a second ask", () => {
+    const prompt = buildSuperTextVariantPrompt({
+      baseText: "Wait for it",
+      postContent: "",
+      charLimit: 60,
+      channels: [{ index: 0, platform: "INSTAGRAM", channelName: "A", username: null }],
+      avoid: ["Hold on tight", " "],
+    });
+    expect(prompt).toContain("already taken");
+    expect(prompt).toContain("- Hold on tight");
+    expect(
+      buildSuperTextVariantPrompt({ baseText: "Wait for it", postContent: "", charLimit: 60, channels: [] })
+    ).not.toContain("already taken");
   });
 
   it("assignVariantIndexes is round-robin starting at the base (0)", () => {
