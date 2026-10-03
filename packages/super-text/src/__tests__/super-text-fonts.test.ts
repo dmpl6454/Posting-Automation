@@ -40,19 +40,30 @@ const baseConfig = {
 };
 
 describe("super text font registry", () => {
-  it("exposes exactly the three supported keys", () => {
-    expect(SUPER_TEXT_FONT_KEYS).toEqual(["classic", "sans", "instagram"]);
+  it("exposes exactly the five supported keys", () => {
+    expect(SUPER_TEXT_FONT_KEYS).toEqual(["classic", "sans", "instagram", "instagram_medium", "instagram_light"]);
   });
 
-  it("instagram is the real Instagram Sans Medium: weight 500, embedded, classic fallback", () => {
-    const ig = SUPER_TEXT_FONTS.instagram;
-    expect(ig.weight).toBe(500);
-    expect(ig.embedded?.family).toBe("Instagram Sans");
-    expect(ig.embedded?.base64.length).toBeGreaterThan(20_000);
-    expect(ig.stack.startsWith("'Instagram Sans',")).toBe(true);
-    expect(ig.stack).toContain(SUPER_TEXT_FONT_STACK);
-    // The payload is a real woff2 file ("wOF2" signature), not a TTF or garbage.
-    expect(Buffer.from(ig.embedded!.base64, "base64").subarray(0, 4).toString("ascii")).toBe("wOF2");
+  it("the three Instagram cuts are the real face at 700 / 500 / 300, one family, classic fallback, distinct bytes", () => {
+    const cuts = [
+      ["instagram", 700],
+      ["instagram_medium", 500],
+      ["instagram_light", 300],
+    ] as const;
+    const payloads = new Set<string>();
+    for (const [key, weight] of cuts) {
+      const spec = SUPER_TEXT_FONTS[key];
+      expect(spec.weight).toBe(weight);
+      expect(spec.embedded?.family).toBe("Instagram Sans");
+      expect(spec.embedded?.base64.length).toBeGreaterThan(20_000);
+      expect(spec.stack.startsWith("'Instagram Sans',")).toBe(true);
+      expect(spec.stack).toContain(SUPER_TEXT_FONT_STACK);
+      // A real woff2 file ("wOF2" signature), not a TTF or garbage.
+      expect(Buffer.from(spec.embedded!.base64, "base64").subarray(0, 4).toString("ascii")).toBe("wOF2");
+      payloads.add(spec.embedded!.base64);
+    }
+    // Three different files — not one cut declared at three weights.
+    expect(payloads.size).toBe(3);
   });
 
   it("defaults to classic", () => {
@@ -104,13 +115,15 @@ describe("super text font registry", () => {
     }
   });
 
-  it("the two stand-in faces stay bold-or-heavier; instagram is the owner's Medium cut", () => {
-    // classic/sans exist to read as bold on a video. `instagram` is the real
-    // typeface at the weight the owner supplied (500); its only hard rule is the
-    // one below — the declared weight must match the embedded face exactly.
+  it("the default faces are bold-or-heavier; the lighter Instagram cuts are explicit opt-ins", () => {
+    // classic/sans/instagram (the default) read as bold on a video. Medium and
+    // Light are the real typeface at the weights the owner supplied; their only
+    // hard rule is the one below — declared weight must match the embedded face.
     expect(SUPER_TEXT_FONTS.classic.weight).toBeGreaterThanOrEqual(700);
     expect(SUPER_TEXT_FONTS.sans.weight).toBeGreaterThanOrEqual(700);
-    expect(SUPER_TEXT_FONTS.instagram.weight).toBe(500);
+    expect(SUPER_TEXT_FONTS.instagram.weight).toBe(700);
+    expect(SUPER_TEXT_FONTS.instagram_medium.weight).toBe(500);
+    expect(SUPER_TEXT_FONTS.instagram_light.weight).toBe(300);
   });
 
   it("an embedded face's @font-face weight MATCHES the spec weight (no synthetic bold)", () => {

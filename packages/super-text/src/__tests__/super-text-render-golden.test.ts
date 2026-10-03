@@ -84,9 +84,9 @@ describe("golden render gate — insta layout preset (opt-in)", () => {
     expect(buildStripInnerHtml({ ...insta, font: "instagram", fontSizePct: 4.8 })).toMatchSnapshot();
   });
 
-  it("burn frame for the instagram face declares its @font-face at weight 500", () => {
+  it("burn frame for the instagram face declares its @font-face at weight 700 (the Bold cut)", () => {
     const html = buildSuperTextFrameHtml({ ...insta, font: "instagram", fontSizePct: 4.8 }, 1080, 1920);
-    expect(html).toContain("font-family:'Instagram Sans';font-style:normal;font-weight:500;");
+    expect(html).toContain("font-family:'Instagram Sans';font-style:normal;font-weight:700;");
     expect(html.replace(/base64,[A-Za-z0-9+/=]+/, "base64,<payload>")).toMatchSnapshot();
   });
 

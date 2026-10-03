@@ -1,10 +1,12 @@
 # Super Text embedded fonts
 
-Two generated files live here — never hand-edit either:
+Four generated files live here — never hand-edit any of them:
 
 | file | face | weight | regenerate with |
 |---|---|---|---|
-| `instagram-sans-500.ts` | **Instagram Sans Medium** (the real one) | 500 | `python3 scripts/gen-super-text-font-instagram.py <path to Instagram Sans Medium.ttf>` |
+| `instagram-sans-700.ts` | **Instagram Sans Bold** (the real one; default) | 700 | `python3 scripts/gen-super-text-font-instagram.py InstagramSans-Bold.ttf 700` |
+| `instagram-sans-500.ts` | Instagram Sans Medium | 500 | `python3 scripts/gen-super-text-font-instagram.py "Instagram Sans Medium.ttf" 500` |
+| `instagram-sans-300.ts` | Instagram Sans Light | 300 | `python3 scripts/gen-super-text-font-instagram.py InstagramSans-Light.ttf 300` |
 | `plus-jakarta-sans-800-latin.ts` | Plus Jakarta Sans (SIL OFL stand-in) | 800 | `node scripts/gen-super-text-font.mjs` |
 
 ## Why embedded rather than installed in the worker image
@@ -25,17 +27,22 @@ The consequence to remember: because the font is a webfont, the worker **must**
 wait for it before screenshotting. `page.setContent(html, { waitUntil: "load" })`
 does *not* wait for `@font-face`. See `renderStripPng` in
 `apps/worker/src/workers/super-text.worker.ts` — it asks `document.fonts.load()`
-for the face **at the registry's declared weight**. Asking for `700` when the only
-`@font-face` is 500 reports a synthesised match, the wait passes early, and the
-fallback face is baked.
+for the face **at the registry's declared weight**. The three Instagram cuts share
+one family name with one `@font-face` per weight, so a wrong descriptor would
+resolve a *different* cut than the preview showed (or a synthesised one) and the
+wait would pass before the right bytes were in.
 
-## Instagram Sans (2026-10-03) — the owner's file, the owner's decision
+## Instagram Sans (2026-10-03) — the owner's files, the owner's decision
 
-`instagram-sans-500.ts` is the real **Instagram Sans Medium** (`InstagramSans-Medium`,
-version 4.002, OS/2 weight 500, `fsType 0`), supplied by the owner as a TTF and
-converted whole to woff2 (~24KB). It is Latin + Latin-1 + Latin Extended-A only
-(746 glyphs, **no Devanagari**): Hindi text falls through per-glyph to the classic
-stack / Noto exactly as before.
+The three `instagram-sans-*.ts` files are the real **Instagram Sans** static cuts
+(`InstagramSans-Bold` / `-Medium` / `-Light`, version 4.002, OS/2 weights 700 /
+500 / 300, `fsType 0`), supplied by the owner as TTFs and converted whole to woff2
+(~24–26KB each). They are Latin + Latin-1 + Latin Extended-A only (no Devanagari):
+Hindi text falls through per-glyph to the classic stack / Noto exactly as before.
+
+Registry keys: `instagram` (Bold — the **default for new strips**, and the cut the
+owner's reference reel uses; Medium rendered visibly lighter side by side),
+`instagram_medium`, `instagram_light`.
 
 **Licence position, stated plainly:** Instagram Sans is Meta's proprietary typeface.
 Meta publishes it for content made for Instagram; its terms do not cover embedding it
@@ -44,10 +51,19 @@ widen its exposure: it must not be served from a public CDN, used on the marketi
 site, or published in any package. It ships only inside the strip HTML (preview and
 burn) and the compose bundle.
 
-It is the **default for new strips** (`SUPER_TEXT_DEFAULTS.font`) and the face the
-`insta` layout and the `M` size preset are now measured against: at `fontSizePct`
-4.8 on a 1080-wide frame it reproduces the owner's reference clip — cap height 37px
-(reference 37), pill 156px tall (152), 920px wide (908), same two-line break.
+### Measured against the reference reel (1080×1920)
+
+Rendered over the reference frame with the same words and compared pixel-wise:
+
+| cut @ `fontSizePct` | cap height | pill height | line break |
+|---|---|---|---|
+| reference | 37px | 152px | after "PVR" |
+| **Bold @ 4.8** | **37px** | 156px | **after "PVR"** |
+| Bold @ 4.6 | 36px | 150px | "Any" stays on line 1 |
+| Medium @ 4.8 | 37px | 156px | "Any" stays on line 1 |
+
+Hence `FONT_SIZE_PRESETS.M = 4.8` and `insta.maxWidthPct = 86` (Medium's longer
+first line needs 85.2%; at 84 it wraps to three lines).
 
 ## Why Plus Jakarta Sans is still here
 
@@ -73,14 +89,15 @@ do not reason about it.
 The `@font-face` weight and `SUPER_TEXT_FONTS.<key>.weight` must stay equal for
 every embedded face, or Chromium synthesises a weight, and synthetic rasterisation
 differs between macOS and Alpine — test-locked. `sans` is 800 (700 sat too close to
-Arial Bold); `instagram` is 500 because that is the cut the owner supplied.
+Arial Bold); the Instagram cuts declare their files' own weights, and the generator
+refuses a file whose OS/2 weight disagrees with the weight you ask it to declare.
 
 Tracking per face is `SUPER_TEXT_FONTS.<key>.letterSpacingEm` in `../constants.ts`
-— the only fidelity dial. Both embedded faces sit at 0 (no declaration emitted).
+— the only fidelity dial. Every embedded face sits at 0 (no declaration emitted).
 
 ## Coverage
 
-Only Latin is embedded for both faces. Non-Latin text (Devanagari, Arabic, CJK)
+Only Latin is embedded for every face. Non-Latin text (Devanagari, Arabic, CJK)
 falls through per-glyph to the rest of the stack — `font-noto` in the worker
 image, the OS font in the browser — which is exactly what happens with the
 classic Arial/Liberation Sans stack, so this is not a regression. If Hindi super
@@ -98,5 +115,5 @@ text becomes common, add a second embedded entry with a `unicode-range`.
    scripts in the 2026-10-02/03 sessions did this with Playwright + sharp) and
    confirm cap height, pill size and the line-break words.
 
-Existing `font` enum values (`classic` / `sans` / `instagram`) must **not** be
-renamed or removed — posts and drafts reference them.
+Existing `font` enum values must **not** be renamed or removed — posts and drafts
+reference them.
