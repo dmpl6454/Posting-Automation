@@ -563,8 +563,12 @@ Optional Instagram-style text strip (emoji + per-word colours + free positioning
   - **🔒 Golden gate:** [super-text-render-golden.test.ts](packages/super-text/src/__tests__/super-text-render-golden.test.ts) snapshots the default render. It must pass with **0 snapshots written** — that is the byte-identity proof for existing posts. Never `-u` it blindly. Plan: [docs/superpowers/plans/2026-07-28-super-text-instagram-fonts.md](docs/superpowers/plans/2026-07-28-super-text-instagram-fonts.md).
 - **Limits (v1):** configured at compose time only (no editing super text on an existing post), one strip per video, source ≤950MB (matches `OPTIMIZE_SIZE_BYTES`, refused at create with a friendly message). YouTube receives the burned video too — intended ("post it everywhere").
 - **Sidebar preview shows the REEL safe area and the strip (2026-10-03, owner ask).** On the Instagram
-  card, exactly ONE video (= a reel; two or more is a carousel, an image a feed post —
-  `isSingleReel`) renders in a 9:16 frame instead of the 4:5 box: the video is CONTAINED (never
+  AND Facebook cards, exactly ONE video (= a reel; two or more is a carousel/grid, an image a feed post —
+  `isSingleReel`) renders in a 9:16 frame instead of the 4:5 / 16:9 box — through the ONE shared
+  [reel-frame.tsx](apps/web/components/previews/reel-frame.tsx) (`ReelFrame`, `platformName` prop for the
+  legend). ⚠️ Never give a card its own copy of the frame: Facebook kept its 16:9 box for an hour after the
+  Instagram frame shipped because the frame was inlined there; the contract test now refuses a private
+  `data-testid="reel-frame"` / `<ReelSafeZone` / `<SuperTextOverlay` inside either card. In the frame: the video is CONTAINED (never
   cropped, as the reel viewer letterboxes a non-9:16 upload), [reel-safe-zone.tsx](apps/web/components/previews/reel-safe-zone.tsx)
   shades **Meta's published safe zone — top 14%, bottom 35%, sides 6%** (`REEL_SAFE_ZONE` in
   [reel-safe-area.ts](apps/web/lib/reel-safe-area.ts), source linked there; zones are of the SCREEN,

@@ -11,13 +11,13 @@
 import type { SuperTextConfig } from "@postautomation/super-text";
 
 /**
- * Meta's published safe zone for Reels: keep key elements out of the top 14%,
- * the bottom 35% and 6% on each side of the frame, or the profile icon,
- * caption and call-to-action may cover them.
+ * Meta's published safe zone for Facebook AND Instagram Reels: keep key
+ * elements out of the top 14%, the bottom 35% and 6% on each side of the
+ * frame, or the profile icon, caption and call-to-action may cover them.
  * Source: https://www.facebook.com/business/help/980593475366490/
  *
  * ⚠️ These are Meta's figures for the FULL 9:16 screen, not for the video's
- * own frame — Instagram's UI is laid out over the screen, so a 4:5 video
+ * own frame — the reel viewer's UI is laid out over the screen, so a 4:5 video
  * letterboxed inside the reel viewer still has the same zones around it.
  */
 export const REEL_SAFE_ZONE = { topPct: 14, bottomPct: 35, sidePct: 6 } as const;
