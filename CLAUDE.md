@@ -1000,6 +1000,18 @@ user's story never goes out. Instead:
   return, so the same click did or didn't depending on query timing).
 - The story blocker is rendered in the amber banner, not only in the buttons' `title` — a touch
   device never shows a tooltip, so both buttons were disabled with no visible reason.
+- **🔴 Story mode does NOT survive a publish, and it is LOUD (2026-10-03).** Owner report: "I posted a
+  reel but it went as a story." Server side a target gets `STORY` only from story MODE or the
+  per-channel Reel/Story picker — both Compose state — and the create-success handler reset content,
+  channels, media, captions and mentions but deliberately KEPT the mode ("someone posting a story
+  usually has another to post") and never touched `formatByChannelId`. The only in-form cues were the
+  small Post|Story tab, a muted 11px line and the button label. Now `setPostType("post")` +
+  `setFormatByChannelId({})` run in `onSuccess` (before `removeTask`, so the persist effect cannot
+  write a story draft on the way out), and story mode shows an amber banner above every card
+  ("Story mode. This publishes a 24-hour story … not a reel or feed post") with a one-click
+  **Switch to Post**. A draft saved IN story mode still restores as a story — that is the user's own
+  in-progress choice, not a leak. Locked in [story-ui-contract.test.ts](apps/web/lib/story-ui-contract.test.ts)
+  (the previous "keeps the mode" assertion was the bug, and was reversed).
 - Hidden AND kept out of the payload: the per-channel Post Format card, unique captions, the
   carousel generator, "Create with AI", the AI image panel, the video cover. A cover already set
   in Post mode is **not even displayed** — showing it would promise something the publish drops.
