@@ -35,6 +35,7 @@ import {
   RotateCcw,
   Ban,
   Plus,
+  BarChart3,
 } from "lucide-react";
 import { format } from "date-fns";
 
@@ -1162,6 +1163,19 @@ export default function PostDetailPage() {
                 <RotateCcw className="mr-2 h-4 w-4" />
               )}
               Retry All Failed
+            </Button>
+          )}
+
+          {/* This post's own Insights report (2026-10-03): the Reports tab opened
+              pre-filtered to this one fan-out, so its CSV covers only these
+              channels — not every campaign in the window. Shown whenever at
+              least one channel published (a partly-failed post still has rows). */}
+          {post.targets.some((t: any) => t.status === "PUBLISHED") && (
+            <Button variant="outline" asChild>
+              <Link href={`/dashboard/analytics?tab=reports&post=${encodeURIComponent(post.id)}`}>
+                <BarChart3 className="mr-2 h-4 w-4" />
+                Report for this post
+              </Link>
             </Button>
           )}
 

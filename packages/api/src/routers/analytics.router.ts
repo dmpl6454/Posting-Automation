@@ -23,6 +23,7 @@ import {
 } from "../lib/platform-metrics";
 import { evaluateChannelInsightsStatus, summarizeChannelStatuses } from "../lib/insights-health";
 import { toCsv } from "../lib/report-csv";
+import { reportFileScope } from "../lib/report-file-scope";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 
 /**
@@ -537,6 +538,16 @@ export function gatePostReportRow(r: PostReportRow): PostReportRow {
 }
 
 /**
+ * The window's boundary instant. ONE definition shared by the report rows and
+ * the post picker (reportPosts), so the dropdown can never offer a post the
+ * table would then filter out, or hide one it shows.
+ */
+function reportWindowBoundary(window: ReportWindow): Date {
+  const hours = { "24h": 24, "7d": 168, "15d": 360, "30d": 720 }[window];
+  return new Date(Date.now() - hours * 3_600_000);
+}
+
+/**
  * Shared row-builder for Insights → Reports (postReports query + emailReport
  * mutation). Extracted VERBATIM from postReports 2026-07-18 — the SQL, window
  * semantics, and normalization are byte-identical to the pre-extraction query.
@@ -552,10 +563,16 @@ async function fetchPostReportRows(
   /** Optional per-platform view. Undefined ⇒ every platform (unchanged). */
   platform?: string,
   /** Optional internal-campaign view. Undefined ⇒ every campaign (unchanged). */
-  campaign?: string
+  campaign?: string,
+  /**
+   * Optional single-POST view (2026-10-03, owner: "there should be an individual
+   * campaign report, not all"). One post fanned out to N channels is what the
+   * owner calls a campaign, and most posts carry no campaignLabel, so the label
+   * filter alone could not isolate one. Undefined ⇒ every post (unchanged).
+   */
+  postId?: string
 ): Promise<PostReportRow[]> {
-  const hours = { "24h": 24, "7d": 168, "15d": 360, "30d": 720 }[window];
-  const boundary = new Date(Date.now() - hours * 3_600_000);
+  const boundary = reportWindowBoundary(window);
 
   // Row selector: "current" = published WITHIN the window; "at_age" =
   // published AT LEAST one window ago (old enough for the checkpoint to
@@ -624,6 +641,15 @@ async function fetchPostReportRows(
   // A direct post has no label, so any campaign filter excludes the whole arm.
   const campaignFilterExt = `AND $${campaignIdx}::text IS NULL`;
 
+  // Optional single-post view. Same contract as the two filters above: pushed
+  // AND interpolated unconditionally, on BOTH arms, appended AFTER campaign so
+  // no earlier placeholder moves. A direct post is not one of our posts, so any
+  // post filter excludes that arm entirely.
+  params.push(postId ?? null);
+  const postIdx = params.length;
+  const postFilterApp = `AND ($${postIdx}::text IS NULL OR p.id = $${postIdx})`;
+  const postFilterExt = `AND $${postIdx}::text IS NULL`;
+
   // Platform-native posts (not published through us) are unioned in ONLY when the
   // population switch is on AND the mode is "current".
   //
@@ -679,7 +705,8 @@ async function fetchPostReportRows(
        AND ep."postTargetId" IS NULL
        AND ep."publishedAt" >= $2
        ${platformFilterExt}
-       ${campaignFilterExt}`
+       ${campaignFilterExt}
+       ${postFilterExt}`
       : "";
 
   const rows: PostReportRow[] = await (prisma.$queryRawUnsafe as any)(
@@ -747,6 +774,7 @@ async function fetchPostReportRows(
        ${storyAtAgeFilter}
        ${platformFilterApp}
        ${campaignFilterApp}
+       ${postFilterApp}
      ${externalUnion}
      ) combined
      ORDER BY "publishedAt" DESC
@@ -1748,6 +1776,8 @@ export const analyticsRouter = createRouter({
         platform: z.string().optional(),
         /** Optional internal-campaign view. Same server-side reasoning as platform. */
         campaign: z.string().optional(),
+        /** Optional single-post view (one fan-out = one report). Same reasoning. */
+        postId: z.string().optional(),
       })
     )
     .query(async ({ ctx, input }) => {
@@ -1758,7 +1788,8 @@ export const analyticsRouter = createRouter({
         input.mode,
         input.limit,
         input.platform,
-        input.campaign
+        input.campaign,
+        input.postId
       );
 
       return {
@@ -1811,6 +1842,52 @@ export const analyticsRouter = createRouter({
   }),
 
   /**
+   * The posts a Reports view can be narrowed to — the options for the "Post"
+   * picker (2026-10-03). One post fanned out to N channels is what the owner
+   * calls a campaign, and most posts carry no campaignLabel, so a per-post view
+   * is the only way to download ONE fan-out's report instead of everything.
+   *
+   * Server-side and window-scoped on purpose: the rows query is capped (500 on
+   * screen), so a list derived from the rows on screen would silently omit a
+   * post whose channels all sit past the cap. The window predicate is the SAME
+   * one fetchPostReportRows applies (reportWindowBoundary + the current/at_age
+   * comparison), so a listed post always has rows and an unlisted one never does.
+   */
+  reportPosts: orgProcedure
+    .input(
+      z.object({
+        window: z.enum(["24h", "7d", "15d", "30d"]),
+        mode: z.enum(["current", "at_age"]).default("current"),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const boundary = reportWindowBoundary(input.window);
+      const publishedAt = input.mode === "current" ? { gte: boundary } : { lte: boundary };
+      const posts = await ctx.prisma.post.findMany({
+        where: {
+          organizationId: ctx.organizationId,
+          targets: { some: { status: "PUBLISHED", publishedAt } },
+        },
+        select: {
+          id: true,
+          content: true,
+          campaignLabel: true,
+          createdAt: true,
+          _count: { select: { targets: { where: { status: "PUBLISHED", publishedAt } } } },
+        },
+        orderBy: { createdAt: "desc" },
+        take: 300,
+      });
+      return posts.map((p) => ({
+        id: p.id,
+        contentPreview: p.content.slice(0, 80),
+        campaignLabel: p.campaignLabel ?? null,
+        createdAt: p.createdAt,
+        publishedTargets: p._count.targets,
+      }));
+    }),
+
+  /**
    * Email the current filtered report (same rows as postReports) as a CSV
    * attachment to an arbitrary address. Recipient is UNTRUSTED input: the
    * mutation is rate-limited (5/hour/user), audit-logged, and the address is
@@ -1828,6 +1905,8 @@ export const analyticsRouter = createRouter({
         /** Same reason as platform — omit it and the email covers a DIFFERENT
          *  population than the table the user is looking at. */
         campaign: z.string().optional(),
+        /** Same reason again: the email must cover exactly the post on screen. */
+        postId: z.string().optional(),
         limit: z.number().min(1).max(1000).default(1000),
       })
     )
@@ -1839,7 +1918,8 @@ export const analyticsRouter = createRouter({
         input.mode,
         input.limit,
         input.platform,
-        input.campaign
+        input.campaign,
+        input.postId
       );
 
       if (rows.length === 0) {
@@ -1896,6 +1976,9 @@ export const analyticsRouter = createRouter({
           "Platform",
           "Published At (UTC)",
           "Post URL",
+          // Same position as the downloaded CSV (ReportsTab CSV_HEADER_FIXED), so
+          // the two files from one report family stay column-compatible.
+          "Campaign",
           ...metricCols.map((c) => c.header),
           ...(includeSaves ? ["Saves"] : []),
           ...(includeEng ? ["Engagement %"] : []),
@@ -1908,6 +1991,7 @@ export const analyticsRouter = createRouter({
           r.platform,
           r.publishedAt ? new Date(r.publishedAt).toISOString() : "",
           r.publishedUrl ?? "",
+          r.campaignLabel ?? "",
           ...metricCols.map((c) => c.get(r)),
           ...(includeSaves ? [r.saved] : []),
           // A suppressed rate carries a reason token so an owner reconciling the
@@ -1919,7 +2003,11 @@ export const analyticsRouter = createRouter({
 
       const day = new Date().toISOString().slice(0, 10);
       const truncated = rows.length >= input.limit;
-      const filename = `postautomation-report-${input.window}-${input.mode}-${day}${truncated ? "-truncated" : ""}.csv`;
+      // A filtered report is named for what it covers, so a folder of downloads
+      // is not ten identical "postautomation-report-7d-current-…" files. The
+      // unfiltered name is byte-identical to before.
+      const scope = reportFileScope({ campaign: input.campaign, postId: input.postId });
+      const filename = `postautomation-report-${scope}${input.window}-${input.mode}-${day}${truncated ? "-truncated" : ""}.csv`;
       const modeLabel = input.mode === "at_age" ? "At publish-age" : "Current metrics";
 
       // All interpolations escaped (enum values today, but never interpolate raw).
