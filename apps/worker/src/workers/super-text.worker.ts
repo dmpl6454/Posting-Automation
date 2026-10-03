@@ -24,7 +24,12 @@ import {
   type SuperTextScope,
 } from "@postautomation/super-text";
 import { launchCreativeBrowser } from "@postautomation/ai";
-import { buildSuperTextCompositeArgs, durationIntegrityOk } from "../lib/super-text-burn";
+import {
+  buildSuperTextCompositeArgs,
+  displayDimensions,
+  durationIntegrityOk,
+  type ProbeVideoStream,
+} from "../lib/super-text-burn";
 import { flipParkedPostIfReady } from "../lib/publish-gates";
 import { runPerChannelSuperText, type PerChannelState } from "../lib/super-text-per-channel";
 import { baseTextOf } from "../lib/super-text-variants";
@@ -108,8 +113,17 @@ export const SUPER_TEXT_FAIL_MESSAGE =
   "Super text could not be applied to your video. Edit the post to try again, or remove the super text.";
 
 interface Probe {
+  /**
+   * DISPLAY size — after the rotation ffmpeg applies on decode — NOT the coded
+   * size ffprobe prints as width/height. The strip is rendered at this size and
+   * composited at 0:0, so it must match the decoded frame (2026-10-03 incident:
+   * a phone video coded 1920×1080 + 90° put the strip mid-frame and off the
+   * right edge; see displayDimensions).
+   */
   width?: number;
   height?: number;
+  /** Quarter-turn rotation ffprobe reported (log/diagnostic only). */
+  rotation?: 0 | 90 | 180 | 270;
   durationSec?: number;
 }
 
@@ -120,13 +134,15 @@ async function probe(target: string): Promise<Probe> {
     { timeout: PROBE_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024 }
   );
   const data = JSON.parse(stdout) as {
-    streams?: Array<{ codec_type?: string; width?: number; height?: number }>;
+    streams?: Array<{ codec_type?: string } & ProbeVideoStream>;
     format?: { duration?: string };
   };
   const v = data.streams?.find((s) => s.codec_type === "video");
+  const dims = displayDimensions(v);
   return {
-    width: v?.width,
-    height: v?.height,
+    width: dims.width,
+    height: dims.height,
+    rotation: dims.rotation,
     durationSec: data.format?.duration ? parseFloat(data.format.duration) || undefined : undefined,
   };
 }
@@ -756,6 +772,12 @@ export async function runSuperTextBurn(
       const src = await probe(media.url);
       const width = src.width && src.width >= 16 ? src.width : 1080;
       const height = src.height && src.height >= 16 ? src.height : 1920;
+      if (src.rotation) {
+        // Phone footage: the strip canvas is the DISPLAY size, not the coded one.
+        console.log(
+          `[super-text] source ${mediaId} carries a ${src.rotation}° rotation — strip canvas is the display size ${width}x${height}`
+        );
+      }
       const ctx: BurnContext = {
         organizationId,
         createdById: post.createdById,
