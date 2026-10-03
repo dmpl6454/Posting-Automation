@@ -18,9 +18,11 @@ import {
 } from "~/components/ui/dialog";
 import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
-import { Download, ExternalLink, Filter, Info, Loader2, Mail, X } from "lucide-react";
+import { Download, ExternalLink, FileArchive, Filter, Info, Loader2, Mail, X } from "lucide-react";
 import { toCsv, downloadCsv } from "~/lib/csv";
 import { reportFileScope } from "~/lib/report-file-scope";
+import { buildReportBundle } from "~/lib/report-bundle";
+import { buildZip, downloadZip } from "~/lib/zip";
 import { useToast } from "~/hooks/use-toast";
 import { humanizeError } from "~/lib/errors";
 
@@ -106,6 +108,7 @@ export function ReportsTab() {
   const [win, setWin] = useState<ReportWindow>("7d");
   const [mode, setMode] = useState<ReportMode>("current");
   const [exporting, setExporting] = useState(false);
+  const [bundling, setBundling] = useState(false);
   const [emailOpen, setEmailOpen] = useState(false);
   const [recipient, setRecipient] = useState("");
   // Per-platform view. `null` = All.
@@ -208,79 +211,88 @@ export function ReportsTab() {
     emailReport.mutate({ to, window: win, mode, platform: platformFilter, campaign: campaignFilter, postId: postFilter });
   };
 
+  /**
+   * Refetch the SAME rows the table shows at the full export cap and build the
+   * capability-filtered columns. Shared by "Export CSV" and "Download per
+   * campaign" so the per-campaign files are column-identical to the single
+   * download — two column builders would drift (this file has seen it).
+   */
+  const fetchExportRows = async () => {
+    // Refetch at the full export cap — the on-screen query is capped at 500.
+    // Fetch ONE extra row so we can distinguish "exactly EXPORT_LIMIT rows
+    // (complete)" from "more than EXPORT_LIMIT (truncated)" — the old
+    // `=== EXPORT_LIMIT` check falsely labeled a complete 1000-row dataset
+    // as truncated.
+    const full = await utils.analytics.postReports.fetch({
+      // Export the SAME rows the table shows — a CSV that silently widens
+      // past the on-screen filter is a different report than the one asked for.
+      platform: platformFilter,
+      campaign: campaignFilter,
+      postId: postFilter,
+      window: win,
+      mode,
+      limit: EXPORT_LIMIT + 1,
+    });
+    // Export mirrors what the table shows: a column dropped for being
+    // structurally unreportable must not reappear as an all-empty CSV column.
+    const exportReportable = new Set<string>(full?.reportableMetrics ?? data?.reportableMetrics ?? []);
+    const inCsv = (key: string) => exportReportable.size === 0 || exportReportable.has(key);
+    const fetched = full?.rows ?? rows;
+    const truncated = fetched.length > EXPORT_LIMIT;
+    const exportRows = fetched.slice(0, EXPORT_LIMIT);
+    // Metric columns, filtered to what is actually reportable, so the header
+    // and every row stay index-aligned.
+    type ExportRow = (typeof exportRows)[number];
+    const allMetricCols: Array<{ key: string; header: string; get: (r: ExportRow) => any }> = [
+      // Header is plain "Impressions" now: Views has its own column, so the
+      // old "Views/Impressions" conflation is no longer needed (and was the
+      // symptom of five platforms storing views in the impressions slot).
+      { key: "impressions", header: "Impressions", get: (r: ExportRow) => r.impressions },
+      { key: "views", header: "Views", get: (r: ExportRow) => (r as any).views },
+      { key: "clicks", header: "Clicks", get: (r: ExportRow) => r.clicks },
+      { key: "likes", header: "Likes", get: (r: ExportRow) => r.likes },
+      { key: "comments", header: "Comments", get: (r: ExportRow) => r.comments },
+      { key: "shares", header: "Shares", get: (r: ExportRow) => r.shares },
+      { key: "reach", header: "Reach", get: (r: ExportRow) => r.reach },
+    ];
+    const metricCols = allMetricCols.filter((c) => inCsv(c.key));
+    const includeSaves = exportRows.some((r) => r.saved != null);
+    // The rate's denominator is impressions OR views (five platforms have no
+    // impressions metric at all), so gate the column on either being reportable.
+    const includeEng = inCsv("impressions") || inCsv("views");
+    const header = [
+      ...CSV_HEADER_FIXED,
+      ...metricCols.map((c) => c.header),
+      ...(includeSaves ? ["Saves"] : []),
+      ...(includeEng ? ["Engagement %"] : []),
+      "Metric captured at (UTC)",
+    ];
+    const toRow = (r: ExportRow) => [
+      r.contentPreview,
+      r.channelName,
+      r.channelUsername ?? "",
+      r.platform,
+      r.publishedAt ? new Date(r.publishedAt).toISOString() : "",
+      r.publishedUrl ?? "",
+      r.campaignLabel ?? "",
+      ...metricCols.map((c) => c.get(r)),
+      ...(includeSaves ? [r.saved] : []),
+      ...(includeEng ? [r.engagementRate] : []),
+      r.snapshotAt ? new Date(r.snapshotAt).toISOString() : "",
+    ];
+    return { exportRows, truncated, header, toRow, date: new Date().toISOString().slice(0, 10) };
+  };
+
   const onExport = async () => {
     if (!rows.length || exporting) return;
     setExporting(true);
     try {
-      // Refetch at the full export cap — the on-screen query is capped at 500.
-      // Fetch ONE extra row so we can distinguish "exactly EXPORT_LIMIT rows
-      // (complete)" from "more than EXPORT_LIMIT (truncated)" — the old
-      // `=== EXPORT_LIMIT` check falsely labeled a complete 1000-row dataset
-      // as truncated.
-      const full = await utils.analytics.postReports.fetch({
-        // Export the SAME rows the table shows — a CSV that silently widens
-        // past the on-screen filter is a different report than the one asked for.
-        platform: platformFilter,
-        campaign: campaignFilter,
-        postId: postFilter,
-        window: win,
-        mode,
-        limit: EXPORT_LIMIT + 1,
-      });
-      // Export mirrors what the table shows: a column dropped for being
-      // structurally unreportable must not reappear as an all-empty CSV column.
-      const exportReportable = new Set<string>(full?.reportableMetrics ?? data?.reportableMetrics ?? []);
-      const inCsv = (key: string) => exportReportable.size === 0 || exportReportable.has(key);
-      const fetched = full?.rows ?? rows;
-      const truncated = fetched.length > EXPORT_LIMIT ? "-truncated" : "";
-      const exportRows = fetched.slice(0, EXPORT_LIMIT);
-      // Metric columns, filtered to what is actually reportable, so the header
-      // and every row stay index-aligned.
-      type ExportRow = (typeof exportRows)[number];
-      const allMetricCols: Array<{ key: string; header: string; get: (r: ExportRow) => any }> = [
-        // Header is plain "Impressions" now: Views has its own column, so the
-        // old "Views/Impressions" conflation is no longer needed (and was the
-        // symptom of five platforms storing views in the impressions slot).
-        { key: "impressions", header: "Impressions", get: (r: ExportRow) => r.impressions },
-        { key: "views", header: "Views", get: (r: ExportRow) => (r as any).views },
-        { key: "clicks", header: "Clicks", get: (r: ExportRow) => r.clicks },
-        { key: "likes", header: "Likes", get: (r: ExportRow) => r.likes },
-        { key: "comments", header: "Comments", get: (r: ExportRow) => r.comments },
-        { key: "shares", header: "Shares", get: (r: ExportRow) => r.shares },
-        { key: "reach", header: "Reach", get: (r: ExportRow) => r.reach },
-      ];
-      const metricCols = allMetricCols.filter((c) => inCsv(c.key));
-      const includeSaves = exportRows.some((r) => r.saved != null);
-      // The rate's denominator is impressions OR views (five platforms have no
-      // impressions metric at all), so gate the column on either being reportable.
-      const includeEng = inCsv("impressions") || inCsv("views");
-
+      const { exportRows, truncated, header, toRow, date } = await fetchExportRows();
       // Named for what it covers (one post / one campaign), unchanged when unfiltered.
       const scope = reportFileScope({ campaign: campaignFilter, postId: postFilter });
       downloadCsv(
-        `postautomation-report-${scope}${win}-${mode}-${new Date().toISOString().slice(0, 10)}${truncated}.csv`,
-        toCsv(
-          [
-            ...CSV_HEADER_FIXED,
-            ...metricCols.map((c) => c.header),
-            ...(includeSaves ? ["Saves"] : []),
-            ...(includeEng ? ["Engagement %"] : []),
-            "Metric captured at (UTC)",
-          ],
-          exportRows.map((r) => [
-            r.contentPreview,
-            r.channelName,
-            r.channelUsername ?? "",
-            r.platform,
-            r.publishedAt ? new Date(r.publishedAt).toISOString() : "",
-            r.publishedUrl ?? "",
-            r.campaignLabel ?? "",
-            ...metricCols.map((c) => c.get(r)),
-            ...(includeSaves ? [r.saved] : []),
-            ...(includeEng ? [r.engagementRate] : []),
-            r.snapshotAt ? new Date(r.snapshotAt).toISOString() : "",
-          ])
-        )
+        `postautomation-report-${scope}${win}-${mode}-${date}${truncated ? "-truncated" : ""}.csv`,
+        toCsv(header, exportRows.map(toRow))
       );
     } catch (err) {
       toast({
@@ -290,6 +302,36 @@ export function ReportsTab() {
       });
     } finally {
       setExporting(false);
+    }
+  };
+
+  /**
+   * "Download per campaign" (owner, 2026-10-03): ONE ZIP holding one CSV per
+   * campaign label — or per post when the post carries no label — plus an
+   * index.csv with each group's totals. Same rows, same filters, same columns
+   * as Export CSV; only the split differs.
+   */
+  const onDownloadBundle = async () => {
+    if (!rows.length || bundling) return;
+    setBundling(true);
+    try {
+      const { exportRows, truncated, header, toRow, date } = await fetchExportRows();
+      const bundle = buildReportBundle({ rows: exportRows, header, toRow, window: win, mode, date, truncated });
+      downloadZip(bundle.zipName, buildZip(bundle.files.map((f) => ({ name: f.name, data: f.content }))));
+      toast({
+        title: "Per-campaign reports ready",
+        description: `${bundle.groups} report${bundle.groups === 1 ? "" : "s"} in the ZIP, plus index.csv${
+          truncated ? ` (first ${EXPORT_LIMIT} rows only)` : ""
+        }.`,
+      });
+    } catch (err) {
+      toast({
+        title: "Download failed",
+        description: humanizeError(err),
+        variant: "destructive",
+      });
+    } finally {
+      setBundling(false);
     }
   };
 
@@ -374,6 +416,21 @@ export function ReportsTab() {
                 <Download className="mr-1.5 h-3.5 w-3.5" />
               )}
               Export CSV
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={onDownloadBundle}
+              disabled={!rows.length || bundling}
+              data-testid="report-download-per-campaign"
+              title="One CSV per campaign (or per post when it has no campaign label), zipped with an index"
+            >
+              {bundling ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <FileArchive className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              Download per campaign
             </Button>
           </div>
         </div>

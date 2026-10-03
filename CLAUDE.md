@@ -2706,6 +2706,32 @@ isolate it — most posts carry none (the screenshot's Campaign column was all "
   selects the post. Tests: [report-post-filter.test.ts](packages/api/src/__tests__/report-post-filter.test.ts),
   [report-post-filter-contract.test.ts](apps/web/lib/report-post-filter-contract.test.ts).
 
+## 📦 Reports: "Download per campaign" ZIP (2026-10-03)
+
+Owner, same day as the per-post filter: "campaign wise report download". ONE click on the Reports
+tab produces `postautomation-reports-by-campaign-<window>-<mode>-<date>.zip` holding **one CSV per
+campaign label** (`campaigns/<slug>.csv`, every post carrying that label), **one CSV per unlabelled
+post** (`posts/post-<id tail>-<caption slug>.csv` — most posts carry no label, and a fan-out IS the
+owner's "campaign"), plus `index.csv` (type, posts, channels published, summed metrics, file).
+
+- **ONE fetch + column builder for both downloads.** `fetchExportRows` in
+  [ReportsTab.tsx](apps/web/components/analytics/ReportsTab.tsx) refetches the on-screen filters
+  (platform/campaign/post) at `EXPORT_LIMIT + 1` and builds the capability-filtered header + row
+  mapper; Export CSV and the bundle both consume it, so a per-campaign file is column-identical to
+  the single download (browser-verified: same header incl. BOM, same row multiset). Never give the
+  bundle its own column list. Contract-locked in
+  [report-post-filter-contract.test.ts](apps/web/lib/report-post-filter-contract.test.ts).
+- [report-bundle.ts](apps/web/lib/report-bundle.ts) is pure: `groupReportRows` (first-appearance
+  order, slug dedup with `-2`), `buildIndexRows` (a metric NO row reported stays blank, never 0;
+  reach is labelled "Reach (summed)" for the usual per-post-unique reason), `buildReportBundle`.
+  Every file gets the same `\uFEFF` BOM `downloadCsv` adds, or Excel shows emoji/Devanagari
+  captions as mojibake. `slugify` cuts on a word boundary.
+- [zip.ts](apps/web/lib/zip.ts) is a ~90-line **store-only** ZIP writer (CRC-32, UTF-8 name flag,
+  central directory, EOCD) — no dependency added; CSVs are small. Verified against Python's
+  `zipfile` and `unzip -t`. It cannot write >4GB or >65535 entries (no ZIP64), which the 1000-row
+  export cap makes unreachable.
+- Tests: [report-bundle.test.ts](apps/web/lib/report-bundle.test.ts), [zip.test.ts](apps/web/lib/zip.test.ts).
+
 ## Admin gate + Channel Groups + Insights groupStats + Durable Logos + 429 toast (2026-07-18, branch `feat/groups-insights-admin-logos-2026-07-17`)
 
 Five owner-reported issues, all fixed on one branch (off main @152a287), adversarially reviewed (5-lens workflow — every CONFIRMED finding fixed) and verified locally: a 17-assertion **real-Postgres** analytics e2e (`createCaller` against the actual SQL) + Playwright browser flows + 1437 tests green + web build 0. See memory `project-admin-groups-insights-logos-2026-07-18`.

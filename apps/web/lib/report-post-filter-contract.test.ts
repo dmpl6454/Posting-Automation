@@ -34,7 +34,7 @@ describe("ReportsTab — the post filter reaches every server call", () => {
 
   it("the downloaded file is named for its scope and unchanged when unfiltered", () => {
     expect(tab).toContain("const scope = reportFileScope({ campaign: campaignFilter, postId: postFilter });");
-    expect(tab).toContain("`postautomation-report-${scope}${win}-${mode}-${new Date().toISOString().slice(0, 10)}${truncated}.csv`");
+    expect(tab).toContain("`postautomation-report-${scope}${win}-${mode}-${date}${truncated ? \"-truncated\" : \"\"}.csv`");
   });
 
   it("the ?post= deep link is read inside its own Suspense boundary and can widen the window once", () => {
@@ -58,5 +58,29 @@ describe("post page → its own report", () => {
   it("links to the Reports tab pre-filtered to this post whenever a channel published", () => {
     expect(postPage).toMatch(/post\.targets\.some\(\(t: any\) => t\.status === "PUBLISHED"\) && \(/);
     expect(postPage).toContain("href={`/dashboard/analytics?tab=reports&post=${encodeURIComponent(post.id)}`}");
+  });
+});
+
+describe("Download per campaign (ZIP bundle)", () => {
+  it("Export CSV and the bundle share ONE fetch + column builder, so per-campaign files cannot drift from the single download", () => {
+    expect(tab.match(/const fetchExportRows = async \(\) =>/g)).toHaveLength(1);
+    expect(tab.match(/await fetchExportRows\(\)/g)).toHaveLength(2);
+    // Exactly one place builds the metric columns / header / row mapper.
+    expect(tab.match(/const allMetricCols/g)).toHaveLength(1);
+    expect(tab.match(/"Metric captured at \(UTC\)"/g)).toHaveLength(1);
+  });
+
+  it("the shared fetch carries every on-screen filter and the full export cap", () => {
+    expect(tab).toMatch(
+      /utils\.analytics\.postReports\.fetch\(\{[\s\S]*?platform: platformFilter,\s*campaign: campaignFilter,\s*postId: postFilter,\s*window: win,\s*mode,\s*limit: EXPORT_LIMIT \+ 1,/
+    );
+    expect(tab.match(/utils\.analytics\.postReports\.fetch\(/g)).toHaveLength(1);
+  });
+
+  it("the bundle is built from the shared header/toRow and downloaded as a ZIP", () => {
+    expect(tab).toContain("buildReportBundle({ rows: exportRows, header, toRow, window: win, mode, date, truncated })");
+    expect(tab).toContain("downloadZip(bundle.zipName, buildZip(bundle.files.map((f) => ({ name: f.name, data: f.content }))))");
+    expect(tab).toContain('data-testid="report-download-per-campaign"');
+    expect(tab).toMatch(/onClick=\{onDownloadBundle\}\s*disabled=\{!rows\.length \|\| bundling\}/);
   });
 });
