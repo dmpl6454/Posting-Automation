@@ -40,8 +40,19 @@ const baseConfig = {
 };
 
 describe("super text font registry", () => {
-  it("exposes exactly the two supported keys", () => {
-    expect(SUPER_TEXT_FONT_KEYS).toEqual(["classic", "sans"]);
+  it("exposes exactly the three supported keys", () => {
+    expect(SUPER_TEXT_FONT_KEYS).toEqual(["classic", "sans", "instagram"]);
+  });
+
+  it("instagram is the real Instagram Sans Medium: weight 500, embedded, classic fallback", () => {
+    const ig = SUPER_TEXT_FONTS.instagram;
+    expect(ig.weight).toBe(500);
+    expect(ig.embedded?.family).toBe("Instagram Sans");
+    expect(ig.embedded?.base64.length).toBeGreaterThan(20_000);
+    expect(ig.stack.startsWith("'Instagram Sans',")).toBe(true);
+    expect(ig.stack).toContain(SUPER_TEXT_FONT_STACK);
+    // The payload is a real woff2 file ("wOF2" signature), not a TTF or garbage.
+    expect(Buffer.from(ig.embedded!.base64, "base64").subarray(0, 4).toString("ascii")).toBe("wOF2");
   });
 
   it("defaults to classic", () => {
@@ -93,10 +104,13 @@ describe("super text font registry", () => {
     }
   });
 
-  it("every registry entry declares a bold-or-heavier weight", () => {
-    for (const key of SUPER_TEXT_FONT_KEYS) {
-      expect(SUPER_TEXT_FONTS[key].weight).toBeGreaterThanOrEqual(700);
-    }
+  it("the two stand-in faces stay bold-or-heavier; instagram is the owner's Medium cut", () => {
+    // classic/sans exist to read as bold on a video. `instagram` is the real
+    // typeface at the weight the owner supplied (500); its only hard rule is the
+    // one below — the declared weight must match the embedded face exactly.
+    expect(SUPER_TEXT_FONTS.classic.weight).toBeGreaterThanOrEqual(700);
+    expect(SUPER_TEXT_FONTS.sans.weight).toBeGreaterThanOrEqual(700);
+    expect(SUPER_TEXT_FONTS.instagram.weight).toBe(500);
   });
 
   it("an embedded face's @font-face weight MATCHES the spec weight (no synthetic bold)", () => {

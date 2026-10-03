@@ -76,6 +76,20 @@ describe("golden render gate — insta layout preset (opt-in)", () => {
     expect(html).toMatchSnapshot();
   });
 
+  /**
+   * ADDITION (2026-10-03): the real Instagram Sans Medium at the new M preset.
+   * The `sans` snapshots above stay byte-identical — this is a further block.
+   */
+  it("strip inner html for the instagram face at M (4.8) is pinned", () => {
+    expect(buildStripInnerHtml({ ...insta, font: "instagram", fontSizePct: 4.8 })).toMatchSnapshot();
+  });
+
+  it("burn frame for the instagram face declares its @font-face at weight 500", () => {
+    const html = buildSuperTextFrameHtml({ ...insta, font: "instagram", fontSizePct: 4.8 }, 1080, 1920);
+    expect(html).toContain("font-family:'Instagram Sans';font-style:normal;font-weight:500;");
+    expect(html.replace(/base64,[A-Za-z0-9+/=]+/, "base64,<payload>")).toMatchSnapshot();
+  });
+
   it("scope and introSeconds never reach the CSS — same strip html whatever the scope", () => {
     expect(buildStripInnerHtml({ ...insta, scope: "video" })).toBe(buildStripInnerHtml(insta));
     expect(buildStripInnerHtml({ ...insta, scope: "intro", introSeconds: 5 })).toBe(buildStripInnerHtml(insta));

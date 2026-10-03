@@ -227,6 +227,6 @@ describe("layout preset — byte identity and the insta geometry", () => {
   });
 
   it("new-strip defaults follow the reference clip: insta layout, sans, cover scope, lower third", () => {
-    expect(SUPER_TEXT_DEFAULTS).toMatchObject({ layout: "insta", font: "sans", scope: "cover", yPct: 84 });
+    expect(SUPER_TEXT_DEFAULTS).toMatchObject({ layout: "insta", font: "instagram", scope: "cover", yPct: 84 });
   });
 });

@@ -170,9 +170,17 @@ async function renderStripPng(
   width: number,
   height: number,
   outPath: string,
-  /** Embedded family to await, or null when the font needs no loading. */
-  embeddedFamily: string | null
+  /**
+   * Embedded face to await, or null when the font needs no loading. The WEIGHT
+   * must be the registry's declared weight: fonts.load() resolves the face that
+   * matches the descriptor, and asking for `700` when the only @font-face is
+   * 500 (Instagram Sans Medium, 2026-10-03) reports a synthesised match — the
+   * wait then passes before the real bytes are in and the fallback is baked.
+   */
+  embedded: { family: string; weight: number } | null
 ) {
+  const embeddedFamily = embedded?.family ?? null;
+  const embeddedWeight = embedded?.weight ?? 700;
   const browser = await launchCreativeBrowser();
   try {
     const page = await browser.newPage();
@@ -200,7 +208,7 @@ async function renderStripPng(
           // NOTE: this callback body executes INSIDE the browser page, so `document`
           // exists at runtime — but the worker's tsconfig has no DOM lib, so reach it
           // through globalThis with a narrow local type rather than a bare identifier.
-          page.evaluate(async (family: string) => {
+          page.evaluate(async ({ family, weight }: { family: string; weight: number }) => {
             const { fonts } = (
               globalThis as unknown as {
                 document: {
@@ -212,12 +220,12 @@ async function renderStripPng(
               // Explicitly kick the load: fonts.ready only settles work already
               // triggered by layout, so asking for the exact face is the reliable
               // way to know it resolved.
-              await fonts.load(`700 100px "${family}"`);
+              await fonts.load(`${weight} 100px "${family}"`);
             } catch {
               /* fall through to fonts.ready */
             }
             await fonts.ready;
-          }, embeddedFamily),
+          }, { family: embeddedFamily, weight: embeddedWeight }),
           timer.promise,
         ]);
       } catch (err) {
@@ -545,7 +553,9 @@ async function burnConfig(
     // Guard on a non-empty payload so a missing generated font file skips the
     // wait rather than burning FONT_READY_TIMEOUT_MS on a face that never arrives.
     const fontSpec = resolveSuperTextFont(cfg.font);
-    const embeddedFamily = fontSpec.embedded?.base64 ? fontSpec.embedded.family : null;
+    const embeddedFamily = fontSpec.embedded?.base64
+      ? { family: fontSpec.embedded.family, weight: fontSpec.weight }
+      : null;
 
     if (ctx.scope === "cover") {
       // ── Cover only: no video encode. Strip is rendered at the COVER's size
