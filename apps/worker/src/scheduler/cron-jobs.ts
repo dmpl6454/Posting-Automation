@@ -1,5 +1,5 @@
 import { prisma } from "@postautomation/db";
-import { tokenRefreshQueue, analyticsSyncQueue, agentRunQueue, trendDiscoverQueue, listeningSyncQueue, campaignAnalyticsSyncQueue, brandContentSyncQueue, outreachPollQueue, rssSyncQueue, avatarCacheQueue, externalPostSyncQueue, externalPostFloor, insightsIncludeExternalPosts } from "@postautomation/queue";
+import { tokenRefreshQueue, analyticsSyncQueue, agentRunQueue, trendDiscoverQueue, listeningSyncQueue, campaignAnalyticsSyncQueue, brandContentSyncQueue, outreachPollQueue, rssSyncQueue, avatarCacheQueue, externalPostSyncQueue, externalPostFloor, insightsIncludeExternalPosts, listeningSyncJobId, LISTENING_SYNC_INTERVAL_MS } from "@postautomation/queue";
 import { groupIntoAccounts, selectShard } from "../lib/external-sync-accounts";
 import { planFbAnalyticsRun } from "../lib/fb-analytics-budget";
 import {
@@ -944,27 +944,29 @@ export async function scheduleExternalPostSync() {
 
 /**
  * Sync listening queries: fetch new mentions for active queries.
- * Run every 30 minutes.
+ * Run every 30 minutes (LISTENING_SYNC_INTERVAL_MS).
+ *
+ * The job id is bucketed to the interval (listeningSyncJobId), so a worker
+ * that was down for two hours wakes up to ONE queued job per query, not four
+ * — the old `-${Date.now()}` suffix defeated BullMQ's dedupe entirely. All
+ * jobs go in one addBulk round trip.
  */
 export async function scheduleListeningSync() {
   const activeQueries = await prisma.listeningQuery.findMany({
     where: { isActive: true },
     select: { id: true, organizationId: true },
   });
+  if (activeQueries.length === 0) return;
 
-  let queued = 0;
-  for (const query of activeQueries) {
-    await listeningSyncQueue.add(
-      `listening-sync-cron-${query.id}`,
-      { listeningQueryId: query.id, organizationId: query.organizationId },
-      { jobId: `listening-sync-cron-${query.id}-${Date.now()}`, removeOnComplete: true, removeOnFail: 100 }
-    );
-    queued++;
-  }
-
-  if (queued > 0) {
-    console.log(`[Cron] Queued ${queued} listening sync jobs`);
-  }
+  const now = Date.now();
+  await listeningSyncQueue.addBulk(
+    activeQueries.map((query) => ({
+      name: `listening-sync-cron-${query.id}`,
+      data: { listeningQueryId: query.id, organizationId: query.organizationId },
+      opts: { jobId: listeningSyncJobId(query.id, "cron", now), removeOnComplete: true, removeOnFail: 100 },
+    }))
+  );
+  console.log(`[Cron] Queued ${activeQueries.length} listening sync jobs`);
 }
 
 /**
@@ -1572,7 +1574,7 @@ export function startCronJobs() {
   setTimeout(triggerAutopilotPipeline, 60 * 1000); // Start after 1 minute warmup
 
   // Listening sync every 30 minutes
-  setInterval(scheduleListeningSync, 30 * 60 * 1000);
+  setInterval(scheduleListeningSync, LISTENING_SYNC_INTERVAL_MS);
   setTimeout(scheduleListeningSync, 2 * 60 * 1000); // Start after 2 min warmup
 
   // RSS sync every 5 minutes (honors per-feed checkInterval)

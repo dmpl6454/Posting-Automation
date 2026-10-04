@@ -1249,12 +1249,19 @@ model Mention {
   reach            Int           @default(0)
   engagements      Int           @default(0)
   metadata         Json?
+  /// Stable identity of the mention WITHIN its query (platform post id, else the
+  /// permalink, else a content hash) — see apps/worker/src/lib/listening-sync-plan.ts.
+  /// The unique index below is what lets the sync worker insert a whole batch
+  /// with ONE createMany(skipDuplicates) instead of a findFirst per mention.
+  /// NULL on rows written before 2026-10-04 (Postgres treats NULLs as distinct).
+  dedupKey         String?
 
   listeningQuery ListeningQuery @relation(fields: [listeningQueryId], references: [id], onDelete: Cascade)
 
   mentionedAt DateTime
   createdAt   DateTime @default(now())
 
+  @@unique([listeningQueryId, dedupKey])
   @@index([listeningQueryId, mentionedAt])
   @@index([listeningQueryId, sentiment])
   @@index([source])

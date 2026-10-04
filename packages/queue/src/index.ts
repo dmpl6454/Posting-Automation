@@ -1,5 +1,7 @@
 export { redisConnection, createRedisConnection } from "./connection";
 export { QUEUE_NAMES, postPublishQueue, tokenRefreshQueue, analyticsSyncQueue, mediaProcessQueue, webhookDeliveryQueue, rssSyncQueue, notificationSendQueue, agentRunQueue, trendDiscoverQueue, trendScoreQueue, contentGenerateQueue, autopilotScheduleQueue, listeningSyncQueue, sentimentAnalysisQueue, campaignAnalyticsSyncQueue, brandContentSyncQueue, outreachSendQueue, outreachPollQueue, repurposeVideoQueue, avatarCacheQueue, captionFanoutQueue, mediaOptimizeQueue, superTextQueue, externalPostSyncQueue } from "./queues";
+export type { SentimentMentionInput } from "./types";
+export { SENTIMENT_BATCH_SIZE } from "./types";
 export type { PostPublishJobData, TokenRefreshJobData, AnalyticsSyncJobData, MediaProcessJobData, WebhookDeliveryJobData, RssSyncJobData, NotificationSendJobData, AgentRunJobData, TrendDiscoverJobData, TrendScoreJobData, ContentGenerateJobData, AutopilotScheduleJobData, ListeningSyncJobData, SentimentAnalysisJobData, CampaignAnalyticsSyncJobData, BrandContentSyncJobData, OutreachSendJobData, OutreachPollJobData, RepurposeVideoJobData, AvatarCacheJobData, CaptionFanoutJobData, MediaOptimizeJobData, SuperTextBurnJobData, ExternalPostSyncJobData } from "./types";
 export { scopedProgressId, pushProgress, getProgress, finishProgress } from "./progress";
 export type { ProgressStep, StepStatus } from "./progress";
@@ -30,3 +32,4 @@ export {
 export { buildScheduledPublishJobs, enqueueScheduledPublishJobs } from "./schedule-publish";
 export type { SchedulablePublishTarget, ScheduledPublishArgs, ScheduledPublishJobSpec } from "./schedule-publish";
 export { pendingPublishGates, wasParkedForSchedule, flipParkedPostIfReady } from "./publish-gates";
+export { listeningSyncJobId, LISTENING_SYNC_INTERVAL_MS, type ListeningSyncJobKind } from "./listening-jobs";

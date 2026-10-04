@@ -3445,6 +3445,61 @@ Reply). Fixes, each load-bearing:
   [comment-reply-outcome.test.ts](apps/web/lib/comment-reply-outcome.test.ts),
   [graph-time.test.ts](apps/web/lib/graph-time.test.ts).
 
+## 👂 Social listening sync — efficiency pass (2026-10-04) — read before touching listening-sync, sentiment-analysis or `Mention`
+
+Owner: "finetune social listening tools … make it more efficient". Every change below was found by
+reading the worker, not by guessing; the shape of a run is in the header of
+[listening-sync.worker.ts](apps/worker/src/workers/listening-sync.worker.ts) and all decisions are
+pure in [listening-sync-plan.ts](apps/worker/src/lib/listening-sync-plan.ts).
+
+- **`Mention.dedupKey` + `@@unique([listeningQueryId, dedupKey])`** is the idempotency guarantee.
+  Key precedence: platform post id → normalised permalink (fragment + `utm_*`/`fbclid`/`gclid`/
+  `igshid`/`ref` stripped) → sha1 of the normalised text; anything over 200 chars is hashed. The
+  worker now does ONE `findMany` over the candidate keys/urls, one in-memory `planMentionBatch`, and
+  ONE `createManyAndReturn(skipDuplicates)` per 500 rows — it used to run a `findFirst` per fetched
+  mention and skipped the check entirely for a url-less mention. **LinkedIn posts had no URL and were
+  re-inserted every 30 minutes** (the long-standing lead in the 2026-07-27 audit); they now carry the
+  `urn:li:…` id and a real `linkedin.com/feed/update/<urn>/` permalink. NULL on pre-existing rows (the
+  legacy `sourceUrl` check still covers those); no backfill, applied by `prisma db push`.
+- **Requests per run collapsed.** Twitter, Reddit and Google News take ONE request per keyword
+  CHUNK (`a OR "b c"`, ≤5 keywords / ≤400 chars via `chunkKeywords`; result caps scale with the chunk);
+  TikTok's `IN` takes every keyword in one query; LinkedIn reads each Page ONCE and matches keywords
+  locally; Reddit/TikTok app tokens are **cached** for their lifetime (they were minted per keyword
+  per query per run). `query.language` now reaches Twitter's `lang:` and News' `hl=` (both were
+  hardcoded `en`).
+- **🔴 Instagram hashtag search runs on ONE account, not every channel.** A hashtag's `recent_media`
+  is global, so sweeping it on each of an org's IG channels (110 on this org ⇒ 220 Graph calls per
+  keyword per run) only burned the Meta app quota the publish worker shares — and Meta caps hashtag
+  lookups at 30 per account per week. `IG_PROBE_CHANNELS` (3, freshest token first) is the fallback
+  depth when a token is refused; a hashtag that does not exist stops after the first account.
+- **Sentiment is scored `SENTIMENT_BATCH_SIZE` (20) mentions per model call**, enqueued with ONE
+  `addBulk`. `scoreMentionsBatch` keeps the single path's contract: a verdict the model returned is
+  written as-is, a skipped mention / unparseable reply / all-providers-failed persists NEUTRAL/0 (the
+  all-failed case logs the same greppable `[Sentiment] scoring unavailable` line). Items are matched by
+  the model's `i` field, position as fallback; prompt lines are JSON string literals so a quote or
+  newline inside a tweet cannot break the numbering. Legacy `{mentionId, content}` jobs still drain.
+- **Alerts have a 24h cooldown per type** (`alertOnCooldown`; a sustained surge used to raise 48
+  identical alerts a day), and the negative-spike ratio counts **scored** mentions only — the rows the
+  same run just inserted are NEUTRAL placeholders until their sentiment job lands and were diluting
+  every ratio. Both still require `hasSurgeBaseline`.
+- **Deterministic job ids** ([listening-jobs.ts](packages/queue/src/listening-jobs.ts), 3 colon
+  segments): cron `listening:{id}:cron-{30min bucket}` (the old `-${Date.now()}` suffix defeated BullMQ
+  dedupe, so a worker that was down two hours woke to four stacked sweeps per query), manual
+  `…:manual-{minute}`, create `…:create`. Cron enqueues with one `addBulk`. Chat's
+  `create_listening_query` now kicks the same first sync the UI does (it told the user to wait for
+  the next cycle).
+- `listening.sentimentOverview` is 2 statements (groupBy + aggregate) instead of 7; the page polls
+  every 60s instead of 15s (mentions arrive every 30 min; Sync Now invalidates directly).
+  `volumeOverTime` deliberately keeps its `findMany` shape — the IDOR lock in
+  `listening-campaign-idor.test.ts` asserts it.
+- Facebook stays excluded from listening (needs `public_content`; shares the publish quota) — the
+  dead fetcher was removed. Per-run accounting is one log line: `[ListeningSync] query=… requests=N
+  raw=N new=N skipped(excluded/dup/stored) alerts=N …ms [twitter=12/830ms …]`.
+- Tests: [listening-sync-plan.test.ts](apps/worker/src/lib/listening-sync-plan.test.ts) (24),
+  [sentiment-batch.test.ts](apps/worker/src/workers/__tests__/sentiment-batch.test.ts) (10),
+  [listening-jobs.test.ts](packages/queue/src/__tests__/listening-jobs.test.ts) (4); the pre-existing
+  single-mention sentiment suite is unchanged and green.
+
 ## 📝 WordPress ARTICLE mode in Compose (2026-10-04) — read before touching the WordPress provider, Compose modes or `metadata.wordpressArticle`
 
 Owner: "build the article mode for wordpress". Compose has a third tab, **Post | Story | Article**.
