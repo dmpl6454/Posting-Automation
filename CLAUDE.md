@@ -3452,15 +3452,28 @@ reading the worker, not by guessing; the shape of a run is in the header of
 [listening-sync.worker.ts](apps/worker/src/workers/listening-sync.worker.ts) and all decisions are
 pure in [listening-sync-plan.ts](apps/worker/src/lib/listening-sync-plan.ts).
 
-- **`Mention.dedupKey` + `@@unique([listeningQueryId, dedupKey])`** is the idempotency guarantee.
+- **`Mention.dedupKey` + `@@index([listeningQueryId, dedupKey])`** carries the identity.
   Key precedence: platform post id → normalised permalink (fragment + `utm_*`/`fbclid`/`gclid`/
   `igshid`/`ref` stripped) → sha1 of the normalised text; anything over 200 chars is hashed. The
   worker now does ONE `findMany` over the candidate keys/urls, one in-memory `planMentionBatch`, and
-  ONE `createManyAndReturn(skipDuplicates)` per 500 rows — it used to run a `findFirst` per fetched
-  mention and skipped the check entirely for a url-less mention. **LinkedIn posts had no URL and were
+  ONE `createManyAndReturn` per 500 rows — it used to run a `findFirst` per fetched mention and
+  skipped the check entirely for a url-less mention. **LinkedIn posts had no URL and were
   re-inserted every 30 minutes** (the long-standing lead in the 2026-07-27 audit); they now carry the
   `urn:li:…` id and a real `linkedin.com/feed/update/<urn>/` permalink. NULL on pre-existing rows (the
   legacy `sourceUrl` check still covers those); no backfill, applied by `prisma db push`.
+  - **🔴 It is a plain index, NOT `@@unique` — deploy #284 failed on exactly that.** `prisma db push`
+    refuses to ADD a unique constraint to a populated table without `--accept-data-loss` ("if there
+    are existing duplicate values, this will fail" — it cannot see that every existing row is NULL),
+    and that flag would also wave through any unrelated destructive diff (quirk #2's stale-schema
+    table drops). Concurrent sweeps of one query are kept apart by the bucketed job ids plus an
+    in-process `inFlightQueries` set in the worker (a second job for a query already syncing is
+    skipped with `reason: "already_running"`; prod runs ONE worker). `skipDuplicates: true` stays on
+    the insert so that, once the index is made unique by hand, it does its job with no code change:
+    `CREATE UNIQUE INDEX CONCURRENTLY "Mention_listeningQueryId_dedupKey_key" ON "Mention"
+    ("listeningQueryId", "dedupKey");` — under Prisma's own name, so flipping the schema to
+    `@@unique` afterwards is a no-op diff. ⚠️ The migrate step runs BEFORE `up`, so a failed push
+    leaves prod on the previous images with the DB untouched — that is what happened; nothing was
+    half-applied.
 - **Requests per run collapsed.** Twitter, Reddit and Google News take ONE request per keyword
   CHUNK (`a OR "b c"`, ≤5 keywords / ≤400 chars via `chunkKeywords`; result caps scale with the chunk);
   TikTok's `IN` takes every keyword in one query; LinkedIn reads each Page ONCE and matches keywords
