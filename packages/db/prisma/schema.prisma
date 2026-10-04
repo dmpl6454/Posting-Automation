@@ -1251,9 +1251,17 @@ model Mention {
   metadata         Json?
   /// Stable identity of the mention WITHIN its query (platform post id, else the
   /// permalink, else a content hash) — see apps/worker/src/lib/listening-sync-plan.ts.
-  /// The unique index below is what lets the sync worker insert a whole batch
-  /// with ONE createMany(skipDuplicates) instead of a findFirst per mention.
-  /// NULL on rows written before 2026-10-04 (Postgres treats NULLs as distinct).
+  /// The sync worker reads every candidate key in ONE findMany and inserts the
+  /// batch with ONE createMany. NULL on rows written before 2026-10-04.
+  ///
+  /// ⚠️ Deliberately a plain @@index, NOT @@unique: `prisma db push` (the prod
+  /// migrate step) refuses to ADD a unique constraint to a populated table
+  /// without --accept-data-loss (deploy #284 failed exactly there), and that
+  /// flag would also accept any unrelated destructive diff. To get DB-enforced
+  /// uniqueness, create the index by hand under Prisma's own name — then the
+  /// schema can flip to @@unique with a no-op diff:
+  ///   CREATE UNIQUE INDEX CONCURRENTLY "Mention_listeningQueryId_dedupKey_key"
+  ///     ON "Mention" ("listeningQueryId", "dedupKey");
   dedupKey         String?
 
   listeningQuery ListeningQuery @relation(fields: [listeningQueryId], references: [id], onDelete: Cascade)
@@ -1261,7 +1269,7 @@ model Mention {
   mentionedAt DateTime
   createdAt   DateTime @default(now())
 
-  @@unique([listeningQueryId, dedupKey])
+  @@index([listeningQueryId, dedupKey])
   @@index([listeningQueryId, mentionedAt])
   @@index([listeningQueryId, sentiment])
   @@index([source])

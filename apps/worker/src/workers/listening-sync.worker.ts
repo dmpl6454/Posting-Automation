@@ -32,12 +32,18 @@ import {
  *      for Twitter / Reddit / Google News / TikTok; one posts read per
  *      LinkedIn Page; one hashtag lookup per keyword on ONE Instagram account)
  *   2. one DB read for what is already stored, one planning pass in memory
- *   3. one createMany(skipDuplicates) — the (listeningQueryId, dedupKey)
- *      unique index is the idempotency guarantee, not a per-row findFirst
+ *   3. one createMany per 500 rows — the dedupKey lookup in step 2 is the
+ *      idempotency check, not a per-row findFirst
  *   4. sentiment jobs added in BULK, SENTIMENT_BATCH_SIZE mentions per job
  *   5. alerts, with a 24h cooldown per type
  *
  * Fetchers never throw: a platform that fails logs and contributes nothing.
+ *
+ * ⚠️ (listeningQueryId, dedupKey) is a plain index, not unique — see the
+ * schema comment on Mention.dedupKey for why — so two sweeps of the SAME query
+ * running at once could each pass step 2 and both insert. The job ids are
+ * bucketed (listening-jobs.ts) so that is rare, and `inFlightQueries` below
+ * makes it impossible inside one worker process (prod runs exactly one).
  */
 
 // ---------------------------------------------------------------------------
@@ -469,11 +475,43 @@ const DEFAULT_PLATFORMS = ["twitter", "reddit", "instagram", "linkedin", "tiktok
 /** Rows per createMany statement (keeps one statement's parameter list bounded). */
 const INSERT_CHUNK = 500;
 
+/**
+ * Queries with a sweep in progress in THIS process. A second job for the same
+ * query (a manual Sync Now landing during the cron sweep) is skipped rather
+ * than run concurrently — the sweep it would duplicate finished seconds ago.
+ */
+const inFlightQueries = new Set<string>();
+
 export function createListeningSyncWorker() {
   const worker = new Worker<ListeningSyncJobData>(
     QUEUE_NAMES.LISTENING_SYNC,
     async (job: Job<ListeningSyncJobData>) => {
       const { listeningQueryId, organizationId } = job.data;
+      if (inFlightQueries.has(listeningQueryId)) {
+        console.log(`[ListeningSync] query ${listeningQueryId} already syncing in this process — skipping job ${job.id}`);
+        return { skipped: true, reason: "already_running" };
+      }
+      inFlightQueries.add(listeningQueryId);
+      try {
+        return await syncListeningQuery(listeningQueryId, organizationId);
+      } finally {
+        inFlightQueries.delete(listeningQueryId);
+      }
+    },
+    {
+      connection: createRedisConnection(),
+      concurrency: 5,
+    }
+  );
+
+  worker.on("failed", (job, err) => {
+    console.error(`[ListeningSync] Job ${job?.id} failed:`, err.message);
+  });
+
+  return worker;
+}
+
+async function syncListeningQuery(listeningQueryId: string, organizationId: string) {
       const startedAt = Date.now();
       const requestsBefore = requestCounter;
 
@@ -549,8 +587,9 @@ export function createListeningSyncWorker() {
 
       const plan = planMentionBatch(raws, { excludeWords: query.excludeWords, existingKeys, existingUrls });
 
-      // 3. ONE insert per 500 rows; the unique index drops a concurrent duplicate
-      //    (two jobs for the same query racing) instead of a second row.
+      // 3. ONE insert per 500 rows. skipDuplicates is inert until the dedupKey
+      //    index is made unique by hand (schema comment) — the in-process lock
+      //    and the bucketed job ids are what keep concurrent sweeps apart today.
       const created: SentimentMentionInput[] = [];
       for (const rows of chunk(plan.rows, INSERT_CHUNK)) {
         const inserted = await prisma.mention.createManyAndReturn({
@@ -653,16 +692,4 @@ export function createListeningSyncWorker() {
         `alerts=${alertsCreated} ${Date.now() - startedAt}ms [${summary}]`
       );
       return { mentionsCreated: created.length, alertsCreated };
-    },
-    {
-      connection: createRedisConnection(),
-      concurrency: 5,
-    }
-  );
-
-  worker.on("failed", (job, err) => {
-    console.error(`[ListeningSync] Job ${job?.id} failed:`, err.message);
-  });
-
-  return worker;
 }
