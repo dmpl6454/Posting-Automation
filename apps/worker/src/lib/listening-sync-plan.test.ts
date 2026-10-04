@@ -15,6 +15,8 @@ import {
   cleanKeywords,
   DEDUP_KEY_MAX,
   chunk,
+  uniqueByPlatformId,
+  rotateWindow,
 } from "./listening-sync-plan";
 
 describe("mentionDedupKey — platform id, then permalink, then content", () => {
@@ -128,6 +130,28 @@ describe("alertOnCooldown", () => {
   it("an alert inside the window suppresses a repeat; one outside does not", () => {
     expect(alertOnCooldown(new Date(now.getTime() - ALERT_COOLDOWN_MS + 1), now)).toBe(true);
     expect(alertOnCooldown(new Date(now.getTime() - ALERT_COOLDOWN_MS), now)).toBe(false);
+  });
+});
+
+describe("uniqueByPlatformId / rotateWindow", () => {
+  const pages = ["a", "b", "c", "d", "e"].map((platformId) => ({ platformId }));
+  it("keeps the first row per Page id", () => {
+    const rows = [{ platformId: "p1", id: 1 }, { platformId: "p2", id: 2 }, { platformId: "p1", id: 3 }];
+    expect(uniqueByPlatformId(rows).map((r) => r.id)).toEqual([1, 2]);
+  });
+  it("walks the whole list across consecutive buckets and wraps", () => {
+    expect(rotateWindow(pages, 2, 0)).toEqual(pages.slice(0, 2));
+    expect(rotateWindow(pages, 2, 1)).toEqual(pages.slice(2, 4));
+    expect(rotateWindow(pages, 2, 2)).toEqual(pages.slice(4));
+    expect(rotateWindow(pages, 2, 3)).toEqual(pages.slice(0, 2));
+    const covered = new Set([0, 1, 2].flatMap((b) => rotateWindow(pages, 2, b).map((p) => p.platformId)));
+    expect(covered.size).toBe(5);
+  });
+  it("cap at or above the list size reads everything; a zero cap reads nothing", () => {
+    expect(rotateWindow(pages, 5, 7)).toBe(pages);
+    expect(rotateWindow(pages, 99, 7)).toBe(pages);
+    expect(rotateWindow(pages, 0, 1)).toEqual([]);
+    expect(rotateWindow([], 3, 1)).toEqual([]);
   });
 });
 

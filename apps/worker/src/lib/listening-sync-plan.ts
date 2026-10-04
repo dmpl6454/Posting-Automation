@@ -220,6 +220,35 @@ export function alertOnCooldown(
   return now.getTime() - lastTriggeredAt.getTime() < cooldownMs;
 }
 
+/**
+ * One row per Facebook Page: the same Page is connected in many workspaces /
+ * several times in one org, and `/tagged` is a property of the PAGE, so a
+ * second channel row for it would spend a Graph call on an identical answer.
+ * The first occurrence wins — callers pass freshest-token-first.
+ */
+export function uniqueByPlatformId<T extends { platformId: string }>(items: T[]): T[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (seen.has(item.platformId)) return false;
+    seen.add(item.platformId);
+    return true;
+  });
+}
+
+/**
+ * The slice of `items` a run handles when only `perRun` of them may be read
+ * per run: window `bucket` of the rotation, wrapping around, so every item is
+ * reached within ceil(n / perRun) consecutive runs without storing a cursor.
+ * `perRun <= 0` reads nothing; `perRun >= n` reads everything.
+ */
+export function rotateWindow<T>(items: T[], perRun: number, bucket: number): T[] {
+  if (perRun <= 0 || items.length === 0) return [];
+  if (perRun >= items.length) return items;
+  const windows = Math.ceil(items.length / perRun);
+  const start = (((Math.floor(bucket) % windows) + windows) % windows) * perRun;
+  return items.slice(start, start + perRun);
+}
+
 export function chunk<T>(items: T[], size: number): T[][] {
   if (size <= 0) throw new Error("chunk size must be positive");
   const out: T[][] = [];

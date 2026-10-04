@@ -8,6 +8,7 @@ import {
   type ListeningSyncJobData,
   type SentimentMentionInput,
   createRedisConnection,
+  LISTENING_SYNC_INTERVAL_MS,
 } from "@postautomation/queue";
 import { hasSurgeBaseline } from "./lib/surge-guard";
 import {
@@ -21,6 +22,8 @@ import {
   matchesAnyKeyword,
   orQuery,
   planMentionBatch,
+  rotateWindow,
+  uniqueByPlatformId,
 } from "../lib/listening-sync-plan";
 
 /**
@@ -30,7 +33,8 @@ import {
  * shape of a run is now:
  *   1. keywords → as FEW requests as each platform allows (OR-combined chunks
  *      for Twitter / Reddit / Google News / TikTok; one posts read per
- *      LinkedIn Page; one hashtag lookup per keyword on ONE Instagram account)
+ *      LinkedIn Page; one hashtag lookup per keyword on ONE Instagram account;
+ *      one /tagged read per connected Facebook Page, a rotating window per run)
  *   2. one DB read for what is already stored, one planning pass in memory
  *   3. one createMany per 500 rows — the dedupKey lookup in step 2 is the
  *      idempotency check, not a per-row findFirst
@@ -116,16 +120,33 @@ export function __resetListeningTokenCache() {
 // Platform fetchers
 // ---------------------------------------------------------------------------
 
-/** Google News RSS — free, no auth. ONE request per keyword chunk, `hl` = the query's language. */
+/**
+ * Google News RSS — free, no auth. ONE request per keyword chunk, `hl` = the
+ * query's language. Google answers a bare `hl=` with a 302 to the full locale
+ * URL (`hl=en-US&gl=US&ceid=US:en`); fetch follows it. Every non-feed outcome
+ * is LOGGED: before 2026-10-04 a non-200 was a silent `continue`, so "news
+ * returns nothing" could not be told apart from "news was never asked".
+ */
 const fetchGoogleNews: Fetcher = async ({ keywords, language }) => {
   const mentions: RawMention[] = [];
   for (const group of chunkKeywords(keywords)) {
     try {
       const rssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(orQuery(group))}&hl=${encodeURIComponent(language || "en")}`;
-      const response = await timedFetch(rssUrl);
-      if (!response.ok) continue;
+      const response = await timedFetch(rssUrl, {
+        redirect: "follow",
+        headers: { Accept: "application/rss+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.5" },
+      });
+      if (!response.ok) {
+        console.warn(`[ListeningSync:GoogleNews] HTTP ${response.status} for ${JSON.stringify(group)} (${response.url || rssUrl})`);
+        continue;
+      }
       const xml = await response.text();
       const items = xml.match(/<item>([\s\S]*?)<\/item>/g) || [];
+      if (items.length === 0) {
+        // A consent/interstitial page or a block comes back as HTML with a 200.
+        const head = xml.slice(0, 160).replace(/\s+/g, " ");
+        console.warn(`[ListeningSync:GoogleNews] 0 items for ${JSON.stringify(group)} (${response.url || rssUrl}); body starts: ${head}`);
+      }
 
       for (const item of items.slice(0, 10 * group.length)) {
         const title = item.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/)?.[1]
@@ -396,6 +417,94 @@ const fetchLinkedInMentions: Fetcher = async ({ keywords, channels }) => {
   return mentions;
 };
 
+/** Facebook Pages whose /tagged edge is read per run; the rest rotate in on the following runs. */
+const FB_LISTENING_PAGES_PER_RUN = (() => {
+  const n = Number.parseInt(process.env.FB_LISTENING_PAGES_PER_RUN ?? "", 10);
+  return Number.isFinite(n) && n >= 0 ? n : 20;
+})();
+
+const FB_TAGGED_FIELDS_FULL =
+  "id,message,story,created_time,tagged_time,permalink_url,from{id,name,picture{url}},shares,reactions.summary(true),comments.summary(true)";
+const FB_TAGGED_FIELDS_MINIMAL = "id,message,story,created_time,tagged_time,permalink_url";
+
+/**
+ * Facebook has NO keyword search for anyone — Graph's post search needs
+ * Public Content Access, which Meta stopped granting. What a Page token CAN
+ * read is the Page's own `/tagged` edge: "all public posts in which the page
+ * has been tagged" (pages_read_user_content + pages_show_list — both approved
+ * for the live app on 2026-08-06, so no App Review and no reconnect). That is
+ * brand monitoring in the literal sense: other people's public posts that
+ * name the Page.
+ *
+ * A post counts when a keyword matches its text OR the Page's own name (a
+ * query about "Acme" on the Acme Page wants every post tagging it). ONE Graph
+ * call per Page per run, Pages deduped by id (the same Page sits in several
+ * channel rows), and only FB_LISTENING_PAGES_PER_RUN Pages per run in a
+ * rotating window — these calls count against the Meta app quota the publish
+ * worker shares, and this org alone has hundreds of Pages. A dead token or a
+ * Page whose connecting user lacks the MODERATE task answers with an error and
+ * contributes nothing. Two-rung field ladder: Graph only validates field names
+ * on a NON-empty edge, so a renamed field surfaces late — on `#100 nonexisting
+ * field` retry once with the minimal set.
+ */
+const fetchFacebookTagged: Fetcher = async ({ keywords, channels }) => {
+  const mentions: RawMention[] = [];
+  const kws = cleanKeywords(keywords);
+  if (kws.length === 0) return [];
+  const pages = uniqueByPlatformId((await channels()).filter((c) => c.platform === "FACEBOOK"));
+  if (pages.length === 0) return [];
+  const bucket = Math.floor(Date.now() / LISTENING_SYNC_INTERVAL_MS);
+
+  for (const page of rotateWindow(pages, FB_LISTENING_PAGES_PER_RUN, bucket)) {
+    try {
+      let posts: any[] | null = null;
+      for (const fields of [FB_TAGGED_FIELDS_FULL, FB_TAGGED_FIELDS_MINIMAL]) {
+        const url = `https://graph.facebook.com/v18.0/${encodeURIComponent(page.platformId)}/tagged?fields=${encodeURIComponent(fields)}&limit=25&access_token=${encodeURIComponent(page.accessToken)}`;
+        const res = await timedFetch(url);
+        const body = (await res.json().catch(() => ({}))) as any;
+        if (res.ok) {
+          posts = Array.isArray(body?.data) ? body.data : [];
+          break;
+        }
+        const err = body?.error ?? {};
+        const fieldError = err.code === 100 && /nonexisting field|tried accessing/i.test(String(err.message ?? ""));
+        if (fieldError && fields === FB_TAGGED_FIELDS_FULL) {
+          console.warn(`[ListeningSync:Facebook] field set rejected for Page ${page.platformId} — retrying minimal: ${err.message}`);
+          continue;
+        }
+        console.warn(`[ListeningSync:Facebook] /tagged refused for Page ${page.platformId} (${page.name}): HTTP ${res.status} code=${err.code ?? "?"} sub=${err.error_subcode ?? "-"} ${String(err.message ?? "").slice(0, 160)}`);
+        break;
+      }
+      if (!posts) continue;
+
+      for (const post of posts) {
+        const text = [post.message, post.story].filter((t) => typeof t === "string" && t.trim()).join(" ");
+        if (!matchesAnyKeyword(`${text} ${page.name}`, kws)) continue;
+        const reactions = post.reactions?.summary?.total_count ?? 0;
+        const comments = post.comments?.summary?.total_count ?? 0;
+        const shares = post.shares?.count ?? 0;
+        mentions.push({
+          source: "FACEBOOK",
+          platformPostId: typeof post.id === "string" ? post.id : null,
+          sourceUrl: typeof post.permalink_url === "string" ? post.permalink_url : null,
+          // `from` is only returned for the requester's own posts; a stranger's post has no author here.
+          authorName: post.from?.name ?? null,
+          authorHandle: null,
+          authorAvatar: post.from?.picture?.data?.url ?? null,
+          content: (text || `Tagged ${page.name}`).slice(0, 500),
+          mentionedAt: new Date(post.tagged_time || post.created_time || Date.now()),
+          reach: 0,
+          engagements: (reactions || 0) + (comments || 0) + (shares || 0),
+          metadata: { platform: "facebook", taggedPageId: page.platformId, taggedPageName: page.name },
+        });
+      }
+    } catch (err) {
+      console.warn(`[ListeningSync:Facebook] Failed for Page ${page.platformId}:`, err);
+    }
+  }
+  return mentions;
+};
+
 /** TikTok Research API — client token (cached) + ONE query carrying every keyword (`IN` takes a list). */
 const fetchTikTokMentions: Fetcher = async ({ keywords }) => {
   const clientKey = process.env.TIKTOK_CLIENT_ID || process.env.TIKTOK_CLIENT_KEY;
@@ -458,19 +567,23 @@ const fetchTikTokMentions: Fetcher = async ({ keywords }) => {
 // Main worker
 // ---------------------------------------------------------------------------
 
-// Facebook is deliberately absent: graph.facebook.com/search?type=post needs
-// the `public_content` permission (not granted), and every call would count
-// against the shared Meta app quota the publish worker depends on.
+// Facebook is NOT a keyword search (graph.facebook.com/search?type=post needs
+// Public Content Access, which Meta no longer grants) — it is the connected
+// Pages' own /tagged edge; see fetchFacebookTagged.
 const PLATFORM_FETCHERS: Record<string, Fetcher> = {
   twitter: fetchTwitterMentions,
   x: fetchTwitterMentions,
   reddit: fetchRedditMentions,
   instagram: fetchInstagramMentions,
+  facebook: fetchFacebookTagged,
   linkedin: fetchLinkedInMentions,
   tiktok: fetchTikTokMentions,
   news: fetchGoogleNews,
 };
-const DEFAULT_PLATFORMS = ["twitter", "reddit", "instagram", "linkedin", "tiktok", "news"];
+const DEFAULT_PLATFORMS = ["twitter", "reddit", "instagram", "facebook", "linkedin", "tiktok", "news"];
+
+/** Test seam: the per-platform fetchers, callable with a hand-built context. */
+export const __listeningFetchers = { news: fetchGoogleNews, facebook: fetchFacebookTagged };
 
 /** Rows per createMany statement (keeps one statement's parameter list bounded). */
 const INSERT_CHUNK = 500;
@@ -529,7 +642,7 @@ async function syncListeningQuery(listeningQueryId: string, organizationId: stri
       // Resolve each platform name ONCE (x ⇒ twitter) so a query listing both does not sweep Twitter twice.
       const platformsToSearch = [...new Set(
         (query.platforms.length > 0 ? query.platforms.map((p) => p.toLowerCase()) : DEFAULT_PLATFORMS)
-          .filter((p) => p !== "facebook" && PLATFORM_FETCHERS[p])
+          .filter((p) => PLATFORM_FETCHERS[p])
           .map((p) => (p === "x" ? "twitter" : p))
       )];
 
@@ -542,7 +655,7 @@ async function syncListeningQuery(listeningQueryId: string, organizationId: stri
             organizationId,
             isActive: true,
             disconnectedAt: null,
-            platform: { in: ["INSTAGRAM", "LINKEDIN"] },
+            platform: { in: ["INSTAGRAM", "FACEBOOK", "LINKEDIN"] },
           },
           select: { id: true, platform: true, platformId: true, name: true, accessToken: true },
           // Most recently (re)connected first — the freshest token leads the IG probe order.
