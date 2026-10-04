@@ -139,7 +139,7 @@ describe("post.router wiring (source-level contract)", () => {
 
   it("runs the sanitiser against the post's OWN channelIds and shared content, never for a story", () => {
     expect(src).toMatch(
-      /const overrides = isStory\s*\?\s*undefined\s*:\s*sanitizeCaptionOverrides\(input\.captionOverrides, input\.channelIds, input\.content\)/
+      /const overrides = isStory \|\| isArticle\s*\?\s*undefined\s*:\s*sanitizeCaptionOverrides\(input\.captionOverrides, input\.channelIds, input\.content\)/
     );
   });
 

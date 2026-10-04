@@ -93,6 +93,17 @@ export {
   type UserHostService,
   type UserHostPhase,
 } from "./utils/user-host-publish";
+// WordPress ARTICLE posts (2026-10-04): the metadata shape Compose's Article
+// mode writes and the safe Markdown renderer the provider and preview share.
+export {
+  readWordPressArticle,
+  imageFiguresHtml,
+  WORDPRESS_ARTICLE_STATUSES,
+  type WordPressArticleMeta,
+  type WordPressArticleStatus,
+  type WordPressSiteTaxonomy,
+} from "./utils/wordpress-article";
+export { markdownToHtml, markdownToExcerpt } from "./utils/markdown-lite";
 export type { ExternalPostSummary, ExternalPostPage } from "./abstract/social.types";
 // Instagram comment replies (2026-09-19) — see instagram-comments.ts for the
 // current instagram_manage_comments permission status.

@@ -39,7 +39,7 @@ describe("Story mode is one derived flag, not scattered conditions", () => {
     // 2026-09-21: the chain gained `?? captionBlock` (the missing-caption reason)
     // on both buttons. storyBlock still precedes it, so a story's reason wins.
     expect(
-      compose.match(/youtubeBlockReason \?\? storyBlock \?\? captionBlock \?\? undefined/g) ?? []
+      compose.match(/youtubeBlockReason \?\? storyBlock \?\? articleBlock \?\? captionBlock \?\? undefined/g) ?? []
     ).toHaveLength(2);
   });
 });
@@ -52,8 +52,8 @@ describe("a story can only reach Instagram", () => {
   it("IGNORES the platform filter in story mode rather than resetting it", () => {
     // The pills that clear it are hidden; a leftover filter would empty the list
     // with no way to recover, and a reset would discard the Post-mode filter.
-    expect(compose).toMatch(/filterByPlatform\(modeScoped, isStoryMode \? null : platformFilter\)/);
-    expect(compose).toMatch(/if \(isStoryMode \|\| counts\.length < 2\) return null/);
+    expect(compose).toMatch(/filterByPlatform\(modeScoped, isStoryMode \|\| isArticleMode \? null : platformFilter\)/);
+    expect(compose).toMatch(/if \(isStoryMode \|\| isArticleMode \|\| counts\.length < 2\) return null/);
   });
 
   it("makes a Groups pill act on Instagram members only", () => {
@@ -70,17 +70,17 @@ describe("a story can only reach Instagram", () => {
   it("silences the YouTube gate in story mode", () => {
     // A story cannot target YouTube, so naming it would point at a platform the
     // picker no longer shows.
-    expect(compose).toMatch(/const hasYouTube = !isStoryMode && selectedPlatforms\.includes\("youtube"\)/);
+    expect(compose).toMatch(/const hasYouTube = !isStoryMode && !isArticleMode && selectedPlatforms\.includes\("youtube"\)/);
   });
 });
 
 describe("Post-mode controls never leak into a story payload", () => {
   it("does not send formatByChannelId — the server forces STORY", () => {
-    expect(compose).toMatch(/!isStoryMode && Object\.keys\(formatByChannelId\)\.length > 0 && \{ formatByChannelId \}/);
+    expect(compose).toMatch(/!isStoryMode && !isArticleMode && Object\.keys\(formatByChannelId\)\.length > 0 && \{ formatByChannelId \}/);
   });
 
   it("does not send uniqueCaptions or a video cover", () => {
-    expect(compose).toMatch(/!isStoryMode && uniqueCaptions && selectedChannels\.length > 1/);
+    expect(compose).toMatch(/!isStoryMode && !isArticleMode && uniqueCaptions && selectedChannels\.length > 1/);
     // Cover branch: story metadata carries superText only.
     expect(compose).toMatch(/const md = isStoryMode/);
   });
@@ -104,7 +104,7 @@ describe("Post-mode controls never leak into a story payload", () => {
   it("hides the carousel generator, the Post Format card and the captions card", () => {
     expect(compose).toMatch(/!hasYouTube && !hasVideoAttached && !isStoryMode/);
     expect(compose).toMatch(/!isStoryMode && \(\(hasYouTube && hasVideoAttached\)/);
-    expect(compose).toMatch(/!isStoryMode && selectedChannels\.length > 1 && \(/);
+    expect(compose).toMatch(/!isStoryMode && !isArticleMode && selectedChannels\.length > 1 && \(/);
   });
 });
 
@@ -149,7 +149,7 @@ describe("mentions", () => {
     // 2026-09-21: campaignLabel joined it — already a plain string, so the rule
     // ("never key on an array/object identity") holds without a signature.
     expect(compose).toMatch(
-      /\[content, selectedChannels, draftMediaSignature, postType, storyMentionsSignature, captionOverridesSignature, campaignLabel\]/
+      /\[content, selectedChannels, draftMediaSignature, postType, storyMentionsSignature, captionOverridesSignature, campaignLabel, articleSignature\]/
     );
   });
 });
@@ -183,7 +183,7 @@ describe("self-review fixes", () => {
     // Clicking Story before channel.list resolves would otherwise wipe every
     // pick and toast that it removed them.
     expect(compose).toMatch(
-      /if \(next !== "story"\) return;[\s\S]{0,400}?if \(!channels\) return;[\s\S]{0,120}?pruneSelectionForStory\(selectedChannels, channels as any\[\]\)/
+      /if \(next === "post"\) return;[\s\S]{0,400}?if \(!channels\) return;[\s\S]{0,200}?pruneSelectionForStory\(selectedChannels, channels as any\[\]\)/
     );
   });
 
@@ -193,7 +193,7 @@ describe("self-review fixes", () => {
     // shared caption is allowed once every channel has its own). The STORY branch
     // — the thing this test guards — is unchanged.
     expect(compose).toMatch(
-      /isStoryMode\s*\?\s*\(postMedia\.length === 0 && !content\) \|\| postMedia\.length > 1\s*:\s*needsSharedCaption/
+      /isStoryMode\s*\?\s*\(postMedia\.length === 0 && !content\) \|\| postMedia\.length > 1\s*:\s*isArticleMode\s*\?\s*!article\.title\.trim\(\)\s*:\s*needsSharedCaption/
     );
   });
 
@@ -221,9 +221,9 @@ describe("diff-review fixes", () => {
     // reason (a touch device never shows a tooltip). It is gated on having picked
     // a channel so an untouched composer does not nag.
     expect(compose).toMatch(
-      /\{\(youtubeBlockReason \|\| storyBlock \|\| \(captionBlock && selectedChannels\.length > 0\)\) && \(/
+      /\{\(youtubeBlockReason \|\| storyBlock \|\| \(articleBlock && [\s\S]*?\)\) \|\| \(captionBlock && selectedChannels\.length > 0\)\) && \(/
     );
-    expect(compose).toMatch(/\{youtubeBlockReason \?\? storyBlock \?\? captionBlock\}/);
+    expect(compose).toMatch(/\{youtubeBlockReason \?\? storyBlock \?\? articleBlock \?\? captionBlock\}/);
   });
 });
 

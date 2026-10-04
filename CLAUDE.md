@@ -3437,6 +3437,65 @@ Reply). Fixes, each load-bearing:
   [comment-reply-outcome.test.ts](apps/web/lib/comment-reply-outcome.test.ts),
   [graph-time.test.ts](apps/web/lib/graph-time.test.ts).
 
+## 📝 WordPress ARTICLE mode in Compose (2026-10-04) — read before touching the WordPress provider, Compose modes or `metadata.wordpressArticle`
+
+Owner: "build the article mode for wordpress". Compose has a third tab, **Post | Story | Article**.
+Article mode publishes ONE blog post — title, **Markdown body** (`Post.content`), excerpt, WordPress
+status (publish / draft / pending), existing categories & tags per site, new tag names, every image
+(first = featured, rest appended as figures) — to one or more **self-hosted WordPress** channels.
+Before this the provider posted the social caption with its first line as the title.
+
+- **Marker = `Post.metadata.wordpressArticle`** `{ title, excerpt?, status, newTags, taxonomyBySite }`,
+  written ONLY by `post.create`'s `article` input ([wordpress-article.ts](packages/api/src/lib/wordpress-article.ts));
+  the client passthrough strips the key, exactly like `instagramStory`. Its PRESENCE is what makes
+  the publish an article: [wordpress.provider.ts](packages/social/src/providers/wordpress.provider.ts)
+  `readWordPressArticle` → `publishSelfHostedArticle`; absent ⇒ the legacy caption path **byte-for-byte**
+  (the exact body is locked in `wordpress-user-host.test.ts`). The worker needed ZERO changes — it
+  already spreads post metadata into the provider payload.
+- **🔴 Term ids are PER SITE.** A category id from one install means nothing on another, so the
+  client sends `taxonomyByChannelId` (the only handle it has) and the server re-keys it by the
+  channel's `metadata.siteUrl` (`buildStoredArticle`) — only for channels this post targets. The
+  provider looks its own site up and never sends another site's ids. Tag NAMES (`newTags`) are
+  created or reused on EVERY target site (`POST /wp/v2/tags`; 400 `term_exists` ⇒ reuse
+  `data.term_id`); a tag that cannot be resolved is dropped, never fails the publish. Media and tags
+  are written BEFORE the post, so those failures are pre-create and plainly retryable.
+- **Markdown → HTML is [markdown-lite.ts](packages/social/src/utils/markdown-lite.ts)**, a small
+  safe subset: the input is escaped as TEXT first (no raw HTML ever reaches the site — the worker
+  posts with an editor credential), links/images allow http(s)/mailto only, refused images are
+  protected from the link pass. ⚠️ **An IDENTICAL replica lives at
+  [apps/web/lib/markdown-lite.ts](apps/web/lib/markdown-lite.ts)** so the Compose preview renders the
+  SAME HTML the site receives; [markdown-lite-parity.test.ts](packages/api/src/__tests__/markdown-lite-parity.test.ts)
+  demands byte identity — edit both or it fails. The preview's `dangerouslySetInnerHTML` is safe
+  ONLY because of that converter.
+- **Server rules** (`validateArticlePost`): WordPress-only channels (named on refusal), a title
+  always (≤200), a body to publish (a DRAFT may be body-less). `post.update` refuses adding a
+  non-WordPress channel to an article; the post page's "Add channel" offers WordPress only. An
+  article never gets caption fan-out, per-channel captions or a per-channel format; story and
+  article are mutually exclusive.
+- **`channel.wordpressTaxonomies({channelId})`** lists a site's categories/tags for the picker:
+  DIRECT `channel.findUnique` (the decrypting shape), org re-checked, `userHostFetch` only (a server
+  the user named), fixed-text errors, rate-limited 30/min. Cached 5 min client-side.
+- **Compose** ([ComposeTab.tsx](apps/web/components/content-agent/ComposeTab.tsx)): `isArticleMode`
+  is the one derived flag; `articleBlock` is the ONE predicate feeding submit, both buttons and the
+  visible banner; the channel list is WordPress-only (platform filter ignored, pills hidden, pruned
+  on mode switch with a toast AND whenever the channel list resolves); hidden: Create with AI,
+  carousel generator, video upload, captions card. Draft persistence keys on a STRING signature
+  (OOM dep rule) and the restore re-validates (`sanitizeRestoredArticle`). Article fields reset with
+  the mode after a successful create. Per-site pickers: [ArticleTaxonomyPicker.tsx](apps/web/components/content-agent/ArticleTaxonomyPicker.tsx);
+  preview: [wordpress-article-preview.tsx](apps/web/components/previews/wordpress-article-preview.tsx).
+- **Browser-verified in Chromium** (stubbed tRPC): switching with an Instagram channel selected
+  prunes it with a toast; the list shows the two WordPress sites only; the preview renders
+  h1/strong/link/list/quote from the Markdown; two per-site pickers load; the create payload carried
+  `article` with `taxonomyByChannelId: { w1: { categoryIds: [7], tagIds: [11] } }` and nothing for
+  the untouched site; the draft task persisted the article block.
+- **Still a gap:** no live publish to a real WordPress site has been confirmed yet (prod had zero
+  WordPress channels when the self-hosted path was fixed on 2026-10-01). Treat the first real
+  article as a smoke test. WordPress.com OAuth remains dormant (token-only platform, no client id).
+- Tests: [markdown-lite.test.ts](packages/social/src/__tests__/markdown-lite.test.ts),
+  [wordpress-article.test.ts](packages/social/src/__tests__/wordpress-article.test.ts) (provider),
+  [wordpress-article.test.ts](packages/api/src/__tests__/wordpress-article.test.ts) (api + router contract),
+  [wordpress-article.test.ts](apps/web/lib/wordpress-article.test.ts), [article-ui-contract.test.ts](apps/web/lib/article-ui-contract.test.ts).
+
 ## 🛡️ Servers a USER names — userHostFetch only (2026-10-01) — read before contacting any user-supplied host
 
 A Mastodon instance, a self-hosted WordPress site, a Discord webhook, an outbound-webhook endpoint

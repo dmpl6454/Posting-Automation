@@ -13,6 +13,14 @@ import {
   sanitizeFormatByChannelId,
   formatForReplacedTarget,
 } from "../lib/instagram-story";
+import {
+  articleInputSchema,
+  validateArticlePost,
+  isArticleModeMetadata,
+  buildStoredArticle,
+  channelSiteUrl,
+  type StoredWordPressArticle,
+} from "../lib/wordpress-article";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import crypto from "crypto";
@@ -211,6 +219,11 @@ export const postRouter = createRouter({
         // Instagram, exactly one media is required to publish, and the mentions
         // become `user_tags` on the STORIES container.
         story: storyInputSchema.optional(),
+        // WordPress Article mode (2026-10-04). Its PRESENCE makes this an
+        // article: WordPress-only channels, a title, the body (`content`) as
+        // Markdown, plus excerpt / status / taxonomy — stored under
+        // `metadata.wordpressArticle` and rendered by the provider.
+        article: articleInputSchema.optional(),
         metadata: z.object({
           title: z.string().optional(),
           tags: z.array(z.string()).optional(),
@@ -238,12 +251,19 @@ export const postRouter = createRouter({
       // Story mode. `content` is optional ONLY here — Instagram shows no caption
       // on a story, so the note may be blank. Everything else keeps the old rule.
       const isStory = !!input.story;
+      // Article mode: the body may be empty on a DRAFT (validated below with the
+      // article's own rules), and a post is never both a story and an article.
+      const isArticle = !!input.article;
+      if (isStory && isArticle) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "A post cannot be both a story and an article." });
+      }
       // ...and when every selected channel supplies its OWN caption. The publish
       // worker never falls through to the shared caption in that case, so nothing
       // can publish blank. Partial coverage still fails: one uncovered channel
       // would publish empty text.
       if (
         !isStory &&
+        !isArticle &&
         input.content.trim().length === 0 &&
         !everyChannelHasOwnCaption(input.captionOverrides, input.channelIds, input.content)
       ) {
@@ -317,6 +337,30 @@ export const postRouter = createRouter({
         if (storyError) throw new TRPCError({ code: "BAD_REQUEST", message: storyError });
       }
 
+      // Article rules: WordPress-only channels, a title, a body to publish. Term
+      // ids arrive keyed by channel id and are re-keyed by that channel's SITE
+      // URL (ids are per install) — only for channels this post actually targets.
+      let storedArticle: StoredWordPressArticle | undefined;
+      if (isArticle) {
+        const articleError = validateArticlePost({
+          channels: ownedChannels,
+          title: input.article!.title,
+          bodyLength: input.content.trim().length,
+          scheduling: !!input.scheduledAt,
+        });
+        if (articleError) throw new TRPCError({ code: "BAD_REQUEST", message: articleError });
+        const siteRows = ownedChannels.length
+          ? await ctx.prisma.channel.findMany({
+              where: { id: { in: ownedChannels.map((c) => c.id) } },
+              select: { id: true, metadata: true },
+            })
+          : [];
+        storedArticle = buildStoredArticle(
+          input.article!,
+          Object.fromEntries(siteRows.map((r) => [r.id, channelSiteUrl(r.metadata)]))
+        );
+      }
+
       // Reject any mediaId that doesn't belong to this organization.
       // Mirrors the channel ownership guard above — prevents a user from
       // attaching another org's Media row to their post (cross-org IDOR).
@@ -363,7 +407,8 @@ export const postRouter = createRouter({
       const captionFanout = planCaptionFanout({
         // A story shows no caption, so per-channel caption generation would spend
         // AI calls on text nobody ever sees.
-        uniqueCaptions: isStory ? false : input.uniqueCaptions,
+        // An article has one body, not a caption to vary per channel.
+        uniqueCaptions: isStory || isArticle ? false : input.uniqueCaptions,
         channelCount: input.channelIds.length,
         scheduledAt: input.scheduledAt ?? null,
       });
@@ -482,6 +527,8 @@ export const postRouter = createRouter({
               // validation) while still being treated as a story downstream. The
               // only writer is the `story` input below.
               instagramStory: _rawStory,
+              // Same rule for the article marker: only the `article` input writes it.
+              wordpressArticle: _rawArticle,
               ...rest
             } = (input.metadata ?? {}) as Record<string, unknown>;
             // Destination keys (siteUrl, instance, blog_id, …) only ever come
@@ -489,6 +536,7 @@ export const postRouter = createRouter({
             const out: Record<string, unknown> = stripChannelRoutingKeys(rest);
             if (videoThumbnail) out.videoThumbnail = videoThumbnail;
             if (isStory) out.instagramStory = { mentions: storyMentions };
+            if (storedArticle) out.wordpressArticle = storedArticle;
             if (captionFanout.enabled) {
               out.captionFanout = {
                 requested: true,
@@ -513,7 +561,7 @@ export const postRouter = createRouter({
               // Story mode forces STORY on every target. Otherwise the per-channel
               // picker value survives only if it can be true — see
               // sanitizeFormatByChannelId for the stale-picker trap it closes.
-              const formats = isStory
+              const formats = isStory || isArticle
                 ? undefined
                 : sanitizeFormatByChannelId(input.formatByChannelId, ownedChannels, hasVideoMedia);
               // Manual per-channel captions. A story displays no caption, so none
@@ -522,7 +570,7 @@ export const postRouter = createRouter({
               // be stored (it would block a later shared-caption edit from reaching
               // that channel). The key is spread in ONLY when present so a post
               // without custom captions writes the pre-feature row.
-              const overrides = isStory
+              const overrides = isStory || isArticle
                 ? undefined
                 : sanitizeCaptionOverrides(input.captionOverrides, input.channelIds, input.content);
               return input.channelIds.map((channelId) => ({
@@ -720,6 +768,7 @@ export const postRouter = createRouter({
       // and every channel edit, with no way out. The provider already draws the
       // same line (isStoryModePost vs isStoryFormat).
       const isStoryPost = isStoryModeMetadata(existing.metadata);
+      const isArticlePost = isArticleModeMetadata(existing.metadata);
 
       // Same rule as create: an empty shared caption is allowed only while every
       // target carries its own. Derived from the RESULTING target set, so adding
@@ -791,6 +840,22 @@ export const postRouter = createRouter({
           scheduling: !!effectiveScheduledAt,
         });
         if (storyError) throw new TRPCError({ code: "BAD_REQUEST", message: storyError });
+      }
+
+      // An article only ever goes to WordPress sites — the post page's "Add
+      // channel" must not be able to send a Markdown body to a Facebook Page.
+      if (isArticlePost && channelIds) {
+        const articleChannels = await ctx.prisma.channel.findMany({
+          where: { id: { in: channelIds }, organizationId: ctx.organizationId },
+          select: { id: true, platform: true, name: true },
+        });
+        const articleError = validateArticlePost({
+          channels: articleChannels,
+          title: String((existing.metadata as { wordpressArticle?: { title?: unknown } }).wordpressArticle?.title ?? ""),
+          bodyLength: 1,
+          scheduling: false,
+        });
+        if (articleError) throw new TRPCError({ code: "BAD_REQUEST", message: articleError });
       }
 
       if (effectiveScheduledAt) {

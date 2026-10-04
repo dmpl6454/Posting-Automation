@@ -66,6 +66,21 @@ import {
 } from "~/lib/instagram-story";
 import { captionBlockReason } from "~/lib/caption-coverage";
 import { InstagramStoryPreview } from "~/components/previews/instagram-story-preview";
+import {
+  type ArticleState,
+  EMPTY_ARTICLE,
+  ARTICLE_TITLE_MAX,
+  ARTICLE_EXCERPT_MAX,
+  ARTICLE_STATUSES,
+  ARTICLE_STATUS_LABELS,
+  pruneSelectionForArticle,
+  articleBlockReason,
+  addArticleTags,
+  buildArticlePayload,
+  sanitizeRestoredArticle,
+} from "~/lib/wordpress-article";
+import { WordPressArticlePreview } from "~/components/previews/wordpress-article-preview";
+import { ArticleTaxonomyPicker } from "~/components/content-agent/ArticleTaxonomyPicker";
 
 const MediaEditor = dynamic(
   () => import("~/components/media-editor/MediaEditor").then((m) => ({ default: m.MediaEditor })),
@@ -227,6 +242,14 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   // is false.
   const [postType, setPostType] = useState<PostType>("post");
   const isStoryMode = postType === "story";
+  // Article mode (2026-10-04): ONE blog post (title + Markdown body + excerpt +
+  // status + categories/tags) to WordPress sites only. `content` is the body.
+  const isArticleMode = postType === "article";
+  const [article, setArticle] = useState<ArticleState>(EMPTY_ARTICLE);
+  const [articleTagInput, setArticleTagInput] = useState("");
+  // Stable string for the draft-persist effect (the OOM dep rule: never key an
+  // effect on an object identity that is rebuilt per keystroke).
+  const articleSignature = JSON.stringify(article);
   const [storyMentions, setStoryMentions] = useState<string[]>([]);
   const [storyMentionInput, setStoryMentionInput] = useState("");
   const [storyMentionError, setStoryMentionError] = useState<string | null>(null);
@@ -297,6 +320,11 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
     // Pruning the channel list to Instagram is left to the effect below, which
     // also covers the (common) case of the channel query resolving after this.
     if (saved.draft.postType === "story") setPostType("story");
+    if (saved.draft.postType === "article") {
+      setPostType("article");
+      const restoredArticle = sanitizeRestoredArticle(saved.draft.article);
+      if (restoredArticle) setArticle(restoredArticle);
+    }
     const restoredMentions = sanitizeRestoredMentions(saved.draft.storyMentions);
     if (restoredMentions.length > 0) setStoryMentions(restoredMentions);
     // Per-channel captions: re-validated (a malformed entry from an older build
@@ -405,13 +433,17 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
       content.trim().length > 0 ||
       selectedChannels.length > 0 ||
       postMedia.length > 0 ||
-      storyMentions.length > 0
+      storyMentions.length > 0 ||
+      article.title.trim().length > 0
     ) {
       addTask({
         id: TASK_ID,
         type: "compose",
-        label: isStoryMode ? "Composing story" : "Composing post",
-        description: content.slice(0, 60) || (isStoryMode ? "New story" : "New post"),
+        label: isStoryMode ? "Composing story" : isArticleMode ? "Composing article" : "Composing post",
+        description:
+          (isArticleMode ? article.title.slice(0, 60) : "") ||
+          content.slice(0, 60) ||
+          (isStoryMode ? "New story" : isArticleMode ? "New article" : "New post"),
         href: "/dashboard/content-agent?tab=compose",
         draft: {
           content,
@@ -423,6 +455,9 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
           ...(customCaptions && Object.keys(captionOverrides).length > 0 ? { captionOverrides } : {}),
           // Same rule: only when set, so an older-build draft restores unchanged.
           ...(campaignLabel.trim() ? { campaignLabel } : {}),
+          // Article fields only in article mode — an older-build draft (key
+          // absent) restores exactly as before.
+          ...(isArticleMode ? { article } : {}),
           mediaUrls: postMedia.map((m) => m.url),
           // Only losslessly-restorable items (library picks, AI images,
           // completed uploads) — blob-only tiles can't survive a remount.
@@ -443,7 +478,7 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
     // postMedia is read in the body but deliberately keyed via its persisted
     // signature — see the comment above draftMediaSignature. Same for mentions.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [content, selectedChannels, draftMediaSignature, postType, storyMentionsSignature, captionOverridesSignature, campaignLabel]);
+  }, [content, selectedChannels, draftMediaSignature, postType, storyMentionsSignature, captionOverridesSignature, campaignLabel, articleSignature]);
 
   useEffect(() => {
     if (initialContent) setContent(initialContent);
@@ -508,6 +543,10 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
     const liveIds = new Set((channels as any[]).map((c) => c.id));
     setSelectedChannels((prev) => {
       const reconciled = prev.filter((id) => liveIds.has(id));
+      if (postType === "article") {
+        const { next } = pruneSelectionForArticle(reconciled, channels as any[]);
+        return next.length === prev.length ? prev : next;
+      }
       if (postType !== "story") {
         return reconciled.length === prev.length ? prev : reconciled;
       }
@@ -686,6 +725,9 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
       // fresh post starts as a Post; choosing Story is one click.
       setPostType("post");
       setFormatByChannelId({});
+      // Article fields are per article — the next one starts blank.
+      setArticle(EMPTY_ARTICLE);
+      setArticleTagInput("");
       removeTask(TASK_ID);
       onPostCreated?.();
       // Open the post's detail page so the live upload/publish progress and final
@@ -831,18 +873,24 @@ ${content}`;
   const switchPostType = (next: PostType) => {
     if (next === postType) return;
     setPostType(next);
-    if (next !== "story") return;
+    if (next === "post") return;
     // ⚠️ Only prune against a LOADED list. With `channels` still undefined the
     // helper sees zero Instagram ids and would wipe the whole selection — then
     // toast that it removed them. The [channels, postType] effect below prunes
     // for real once the query resolves.
     if (!channels) return;
-    const { next: pruned, removed } = pruneSelectionForStory(selectedChannels, channels as any[]);
+    const { next: pruned, removed } =
+      next === "story"
+        ? pruneSelectionForStory(selectedChannels, channels as any[])
+        : pruneSelectionForArticle(selectedChannels, channels as any[]);
     if (removed > 0) {
       setSelectedChannels(pruned);
       toast({
-        title: "Switched to Story",
-        description: `${removed} channel${removed === 1 ? "" : "s"} removed — stories publish to Instagram and Facebook only.`,
+        title: next === "story" ? "Switched to Story" : "Switched to Article",
+        description:
+          next === "story"
+            ? `${removed} channel${removed === 1 ? "" : "s"} removed — stories publish to Instagram and Facebook only.`
+            : `${removed} channel${removed === 1 ? "" : "s"} removed — articles publish to WordPress sites only.`,
       });
     }
     // ⚠️ Deliberately NOT resetting platformFilter or uniqueCaptions here. Both
@@ -1254,7 +1302,9 @@ ${content}`;
         title: "Missing required fields",
         description: isStoryMode
           ? "Select at least one Instagram or Facebook channel."
-          : selectedChannels.length === 0
+          : isArticleMode
+            ? "Select at least one WordPress site."
+            : selectedChannels.length === 0
             ? "Select at least one channel."
             : // Names the actual way out when per-channel captions are half-filled,
               // e.g. "1 of 3 channels still have no caption."
@@ -1272,6 +1322,11 @@ ${content}`;
 
     if (storyBlock) {
       toast({ title: "Story not ready", description: storyBlock, variant: "destructive" });
+      return;
+    }
+
+    if (articleBlock) {
+      toast({ title: "Article not ready", description: articleBlock, variant: "destructive" });
       return;
     }
 
@@ -1296,7 +1351,7 @@ ${content}`;
       // Manual per-channel captions: only still-selected channels, only captions
       // that actually differ from the shared one. Never for a story (no caption).
       const manualCaptions =
-        !isStoryMode && customCaptions
+        !isStoryMode && !isArticleMode && customCaptions
           ? buildCaptionOverridesPayload(captionOverrides, selectedChannels, content)
           : {};
 
@@ -1318,7 +1373,7 @@ ${content}`;
             : undefined,
         // PR-5: only sent on the schedule/publish path (draft-save keeps it off).
         // Never for a story — it displays no caption to vary.
-        ...(!isStoryMode && uniqueCaptions && selectedChannels.length > 1 && { uniqueCaptions: true }),
+        ...(!isStoryMode && !isArticleMode && uniqueCaptions && selectedChannels.length > 1 && { uniqueCaptions: true }),
         // Per-channel super text: only meaningful when a strip is actually
         // configured on a video AND the post fans out to >1 channel.
         ...(uniqueSuperText && selectedChannels.length > 1 && Object.keys(superTextByMediaId).length > 0 && { uniqueSuperText: true }),
@@ -1326,8 +1381,11 @@ ${content}`;
         // The per-channel picker is a Post-mode control, and its map is never
         // pruned. The server forces STORY on every story target anyway; not
         // sending it keeps a stale REEL/SHORT out of the story payload entirely.
-        ...(!isStoryMode && Object.keys(formatByChannelId).length > 0 && { formatByChannelId }),
+        ...(!isStoryMode && !isArticleMode && Object.keys(formatByChannelId).length > 0 && { formatByChannelId }),
         ...(isStoryMode && { story: { mentions: effectiveStoryMentions } }),
+        // Article mode: title/excerpt/status/taxonomy. Its PRESENCE makes the
+        // post an article server-side (WordPress-only channels enforced there too).
+        ...(isArticleMode && { article: buildArticlePayload(article, selectedChannels) }),
         ...(() => {
           // ONE cover per post: the platforms each have exactly one (a reel
           // cover, a Facebook video thumbnail, a YouTube thumbnail), and keying
@@ -1339,7 +1397,8 @@ ${content}`;
           // and YouTube metadata is meaningless. Super text still applies — it is
           // burned into the video before anything publishes.
           const cover = postMedia.find((m) => m.thumbnail)?.thumbnail;
-          const md = isStoryMode
+          // An article takes neither a video cover nor YouTube metadata.
+          const md = isStoryMode || isArticleMode
             ? { ...(Object.keys(superTextByMediaId).length > 0 ? { superText: superTextByMediaId } : {}) }
             : {
                 ...ytMetadata,
@@ -1374,7 +1433,7 @@ ${content}`;
   // still sitting in the selection is stale state the prune effect is about to
   // clear — surfacing "YouTube requires a video" there would name a platform the
   // user cannot even see in the picker.
-  const hasYouTube = !isStoryMode && selectedPlatforms.includes("youtube");
+  const hasYouTube = !isStoryMode && !isArticleMode && selectedPlatforms.includes("youtube");
   const hasInstagram = selectedPlatforms.includes("instagram");
   // ⚠️ Tags only mean something on Instagram, and only while an Instagram
   // channel is actually selected. The raw state is KEPT (re-selecting Instagram
@@ -1413,7 +1472,7 @@ ${content}`;
   // fine once EVERY selected channel carries its own — see lib/caption-coverage.
   // One predicate feeds the submit handler AND all three buttons, so the gate and
   // its message cannot disagree (same shape as storyBlock below).
-  const captionBlock = isStoryMode
+  const captionBlock = isStoryMode || isArticleMode
     ? null
     : captionBlockReason({ content, customCaptions, selectedChannels, captionOverrides });
   const needsSharedCaption = !!captionBlock;
@@ -1423,6 +1482,17 @@ ${content}`;
   const storyBlock = isStoryMode
     ? storyBlockReason({
         mediaCount: postMedia.length,
+        selectedCount: selectedChannels.length,
+        uploading: mediaBusy,
+      })
+    : null;
+
+  // Why the article cannot be submitted yet, or null. Same single-predicate
+  // shape: submit handler, both buttons and the visible banner read this one.
+  const articleBlock = isArticleMode
+    ? articleBlockReason({
+        title: article.title,
+        bodyLength: content.trim().length,
         selectedCount: selectedChannels.length,
         uploading: mediaBusy,
       })
@@ -1454,7 +1524,7 @@ ${content}`;
               aria-label="Post type"
               className="inline-flex flex-none rounded-lg border bg-muted/40 p-1"
             >
-              {(["post", "story"] as PostType[]).map((t) => (
+              {(["post", "story", "article"] as PostType[]).map((t) => (
                 <button
                   key={t}
                   role="tab"
@@ -1467,7 +1537,7 @@ ${content}`;
                       : "text-muted-foreground hover:text-foreground"
                   }`}
                 >
-                  {t === "post" ? "Post" : "Story"}
+                  {t === "post" ? "Post" : t === "story" ? "Story" : "Article"}
                 </button>
               ))}
             </div>
@@ -1497,8 +1567,29 @@ ${content}`;
               </button>
             </div>
           )}
+          {isArticleMode && (
+            <div
+              role="status"
+              data-testid="article-mode-banner"
+              className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-sky-300 bg-sky-50 px-3 py-2 text-xs text-sky-900 dark:border-sky-900/40 dark:bg-sky-950/30 dark:text-sky-200"
+            >
+              <AlertCircle className="h-4 w-4 flex-shrink-0" />
+              <span className="min-w-0 flex-1 leading-snug">
+                <span className="font-semibold">Article mode.</span> This publishes a blog post to your
+                WordPress site(s): title, Markdown body, excerpt, categories and tags. The first image is the
+                featured image.
+              </span>
+              <button
+                type="button"
+                onClick={() => switchPostType("post")}
+                className="flex-none rounded-md border border-sky-400 bg-background px-2.5 py-1 text-xs font-semibold text-sky-900 hover:bg-sky-100 dark:text-sky-100 dark:hover:bg-sky-900/40"
+              >
+                Switch to Post
+              </button>
+            </div>
+          )}
 
-          {!isStoryMode && (
+          {!isStoryMode && !isArticleMode && (
           <>
           {/* Create with AI — the design's first compose card. Plain `--card`
               surface on a `--border` hairline: the pre-restyle blue gradient
@@ -1560,14 +1651,14 @@ ${content}`;
           <Card>
             <CardHeader className="pb-3">
               <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2">
-                <CardTitle>{isStoryMode ? "Note (optional)" : "Content"}</CardTitle>
+                <CardTitle>{isStoryMode ? "Note (optional)" : isArticleMode ? "Article" : "Content"}</CardTitle>
                 <div className="flex items-center gap-2">
-                  {!isStoryMode && aiConfig?.anyConfigured && (
+                  {!isStoryMode && !isArticleMode && aiConfig?.anyConfigured && (
                     <span className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground">
                       via {aiConfig.anthropic ? "Claude" : aiConfig.openai ? "GPT-4" : "Gemini"}
                     </span>
                   )}
-                  {!isStoryMode && (
+                  {!isStoryMode && !isArticleMode && (
                   <Button
                     variant="outline"
                     size="sm"
@@ -1593,15 +1684,34 @@ ${content}`;
               )}
             </CardHeader>
             <CardContent className="space-y-3">
+              {isArticleMode && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="article-title">Title</Label>
+                  <Input
+                    id="article-title"
+                    data-testid="article-title"
+                    value={article.title}
+                    maxLength={ARTICLE_TITLE_MAX}
+                    onChange={(e) => setArticle((a) => ({ ...a, title: e.target.value }))}
+                    placeholder="Article headline"
+                    className="bg-background text-base font-semibold"
+                  />
+                  <p className="text-[11px] text-muted-foreground">
+                    Body below — Markdown works: # headings, **bold**, lists, [links](https://…), &gt; quotes.
+                  </p>
+                </div>
+              )}
               <Textarea
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
                 placeholder={
                   isStoryMode
                     ? "Optional note for your own records — it is not shown on the story."
-                    : "Write your post here, or use 'Create with AI' above to generate content..."
+                    : isArticleMode
+                      ? "Write the article body in Markdown…"
+                      : "Write your post here, or use 'Create with AI' above to generate content..."
                 }
-                className={isStoryMode ? "min-h-[90px] resize-none" : "min-h-[200px] resize-none"}
+                className={isStoryMode ? "min-h-[90px] resize-none" : isArticleMode ? "min-h-[360px] font-mono text-[13px]" : "min-h-[200px] resize-none"}
               />
               <div className="flex items-center justify-end text-xs">
                 <span className="tabular-nums text-muted-foreground">
@@ -1610,6 +1720,117 @@ ${content}`;
               </div>
             </CardContent>
           </Card>
+
+          {/* Article details — article mode only (2026-10-04). Excerpt, WordPress
+              status, new tag names, and per-site categories/tags (term ids are
+              per install, so each selected site gets its own picker). */}
+          {isArticleMode && (
+            <Card data-testid="article-details">
+              <CardHeader className="pb-3">
+                <CardTitle>Article details</CardTitle>
+                <CardDescription>How WordPress files and shows this article.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-1.5">
+                  <Label htmlFor="article-excerpt">Excerpt (optional)</Label>
+                  <Textarea
+                    id="article-excerpt"
+                    value={article.excerpt}
+                    maxLength={ARTICLE_EXCERPT_MAX}
+                    onChange={(e) => setArticle((a) => ({ ...a, excerpt: e.target.value }))}
+                    placeholder="One or two sentences shown in listings and previews. Left blank, WordPress derives one from the body."
+                    className="min-h-[70px] resize-none"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Status on the site</Label>
+                  <div className="flex flex-wrap gap-2">
+                    {ARTICLE_STATUSES.map((st) => (
+                      <button
+                        key={st}
+                        type="button"
+                        aria-pressed={article.status === st}
+                        data-testid={`article-status-${st}`}
+                        onClick={() => setArticle((a) => ({ ...a, status: st }))}
+                        className={`rounded-md border px-2.5 py-1 text-xs transition-colors ${
+                          article.status === st ? "border-primary bg-primary/10 font-semibold" : "text-muted-foreground hover:text-foreground"
+                        }`}
+                      >
+                        {ARTICLE_STATUS_LABELS[st]}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    “Publish” goes live when this post publishes. “Draft” and “Pending” create the article on the site
+                    without publishing it, for editing there.
+                  </p>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="article-tags">New tags</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      id="article-tags"
+                      data-testid="article-tag-input"
+                      value={articleTagInput}
+                      onChange={(e) => setArticleTagInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === ",") {
+                          e.preventDefault();
+                          if (!articleTagInput.trim()) return;
+                          setArticle((a) => ({ ...a, newTags: addArticleTags(a.newTags, articleTagInput) }));
+                          setArticleTagInput("");
+                        }
+                      }}
+                      onBlur={() => {
+                        if (!articleTagInput.trim()) return;
+                        setArticle((a) => ({ ...a, newTags: addArticleTags(a.newTags, articleTagInput) }));
+                        setArticleTagInput("");
+                      }}
+                      placeholder="Type a tag and press Enter (created on every selected site)"
+                      className="bg-background"
+                    />
+                  </div>
+                  {article.newTags.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {article.newTags.map((t) => (
+                        <span key={t} className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs">
+                          {t}
+                          <button
+                            type="button"
+                            aria-label={`Remove tag ${t}`}
+                            onClick={() => setArticle((a) => ({ ...a, newTags: a.newTags.filter((x) => x !== t) }))}
+                            className="text-muted-foreground hover:text-foreground"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <Label>Existing categories &amp; tags</Label>
+                  {selectedChannels.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">Select a WordPress site below to pick from its categories and tags.</p>
+                  ) : (
+                    ((channels as any[]) ?? [])
+                      .filter((c: any) => selectedChannels.includes(c.id))
+                      .map((c: any) => (
+                        <ArticleTaxonomyPicker
+                          key={c.id}
+                          channelId={c.id}
+                          siteName={c.name}
+                          selection={article.taxonomyByChannelId[c.id] ?? { categoryIds: [], tagIds: [] }}
+                          onChange={(next) =>
+                            setArticle((a) => ({ ...a, taxonomyByChannelId: { ...a.taxonomyByChannelId, [c.id]: next } }))
+                          }
+                        />
+                      ))
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           {/* AI Image Generation — Post mode only. A story is the user's own
               photo or clip; the publish worker refuses to generate one for a
@@ -1655,7 +1876,9 @@ ${content}`;
               <CardDescription>
                 {isStoryMode
                   ? "One image or video · 9:16 recommended · image up to 8MB, video 3–60s up to 100MB"
-                  : hasYouTube
+                  : isArticleMode
+                    ? "Images only. The first becomes the featured image; the rest are added at the end of the article."
+                    : hasYouTube
                     ? "YouTube requires a video upload (MP4, WebM, or MOV)"
                     : "Attach images or videos to your post"}
               </CardDescription>
@@ -1707,6 +1930,7 @@ ${content}`;
                     Image
                   </Button>
                 )}
+                {!isArticleMode && (
                 <Button
                   variant={hasYouTube ? "default" : "outline"}
                   size="sm"
@@ -1716,6 +1940,7 @@ ${content}`;
                   <Video className="h-3.5 w-3.5" />
                   Video
                 </Button>
+                )}
                 <Button
                   variant="outline"
                   size="sm"
@@ -1731,7 +1956,7 @@ ${content}`;
                   produces image slides, and image-slides-plus-a-video is not a
                   publishable combination (owner flagged the button's presence beside
                   an uploaded video as a bug, 2026-09-01). */}
-              {!hasYouTube && !hasVideoAttached && !isStoryMode && (
+              {!hasYouTube && !hasVideoAttached && !isStoryMode && !isArticleMode && (
               <div className="flex items-center gap-2">
                 <Button
                   variant="outline"
@@ -2081,7 +2306,7 @@ ${content}`;
                     // Nothing to filter with a single platform — don't add chrome
                     // that can only ever be a no-op. Hidden in story mode too:
                     // the list is already Instagram-only there.
-                    if (isStoryMode || counts.length < 2) return null;
+                    if (isStoryMode || isArticleMode || counts.length < 2) return null;
                     const totalCount = ((channels as any[]) ?? []).length;
                     return (
                       <div className="flex min-w-0 flex-wrap items-center gap-1.5">
@@ -2190,7 +2415,7 @@ ${content}`;
                     // would throw away the user's Post-mode filter when they
                     // switch back.
                     const modeScoped = storySelectableChannels((channels as any[]) ?? [], postType);
-                    const platformScoped = filterByPlatform(modeScoped, isStoryMode ? null : platformFilter);
+                    const platformScoped = filterByPlatform(modeScoped, isStoryMode || isArticleMode ? null : platformFilter);
                     const allFiltered = platformScoped.filter((channel: any) => {
                       const matchesSearch =
                         !channelSearch ||
@@ -2219,8 +2444,11 @@ ${content}`;
                       <>
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <span className="text-xs text-muted-foreground">
-                          {sorted.length} {isStoryMode ? "story " : ""}channel{sorted.length === 1 ? "" : "s"}
-                          {!isStoryMode && platformFilter ? ` · ${platformFilter}` : ""}
+                          {sorted.length}{" "}
+                          {isArticleMode
+                            ? `WordPress site${sorted.length === 1 ? "" : "s"}`
+                            : `${isStoryMode ? "story " : ""}channel${sorted.length === 1 ? "" : "s"}`}
+                          {!isStoryMode && !isArticleMode && platformFilter ? ` · ${platformFilter}` : ""}
                           {selectedVisibleCount > 0 ? ` · ${selectedVisibleCount} selected` : ""}
                         </span>
                         <Button
@@ -2244,7 +2472,9 @@ ${content}`;
                           <p className="p-3 text-center text-xs text-muted-foreground">
                             {isStoryMode && !channelSearch
                               ? "No Instagram accounts or Facebook Pages connected — connect one on the Channels page"
-                              : "No channels found"}
+                              : isArticleMode && !channelSearch
+                                ? "No WordPress site connected — add one on the Channels page (WordPress · self-hosted, application password)"
+                                : "No channels found"}
                           </p>
                         ) : (
                           sorted.map((channel: any) => {
@@ -2497,7 +2727,7 @@ ${content}`;
 
           {/* Unique captions (PR-5) — shown only when >1 channel is selected.
               Never in story mode: a story displays no caption to vary. */}
-          {!isStoryMode && selectedChannels.length > 1 && (
+          {!isStoryMode && !isArticleMode && selectedChannels.length > 1 && (
             <Card>
               <CardHeader className="pb-3">
                 <CardTitle>Captions</CardTitle>
@@ -2669,7 +2899,7 @@ ${content}`;
                   // A draft carries the per-channel captions too, so they are
                   // already on the post page when it is scheduled later.
                   const manualCaptions =
-                    !isStoryMode && customCaptions
+                    !isStoryMode && !isArticleMode && customCaptions
                       ? buildCaptionOverridesPayload(captionOverrides, selectedChannels, content)
                       : {};
                   createPost.mutate({
@@ -2687,9 +2917,12 @@ ${content}`;
                     // "never post a normal post to this channel" rule this mode
                     // exists to keep.
                     ...(isStoryMode && { story: { mentions: effectiveStoryMentions } }),
+                    // The draft carries the article marker too, or scheduling it
+                    // later would publish the Markdown body as a plain post.
+                    ...(isArticleMode && { article: buildArticlePayload(article, selectedChannels) }),
                     ...(() => {
                       const cover = postMedia.find((m) => m.thumbnail)?.thumbnail;
-                      const md = isStoryMode
+                      const md = isStoryMode || isArticleMode
                         ? {
                             ...(Object.keys(superTextByMediaId).length > 0
                               ? { superText: superTextByMediaId }
@@ -2719,7 +2952,9 @@ ${content}`;
               disabled={
                 (isStoryMode
                   ? (postMedia.length === 0 && !content) || postMedia.length > 1
-                  : needsSharedCaption) ||
+                  : isArticleMode
+                    ? !article.title.trim()
+                    : needsSharedCaption) ||
                 createPost.isPending ||
                 isUploading
               }
@@ -2732,25 +2967,25 @@ ${content}`;
               className="w-full sm:w-auto"
               onClick={() => handleSubmit(false)}
               disabled={
-                needsSharedCaption || selectedChannels.length === 0 || !scheduledAt || createPost.isPending || isUploading || !!youtubeBlockReason || !!storyBlock
+                needsSharedCaption || selectedChannels.length === 0 || !scheduledAt || createPost.isPending || isUploading || !!youtubeBlockReason || !!storyBlock || !!articleBlock
               }
-              title={youtubeBlockReason ?? storyBlock ?? captionBlock ?? undefined}
+              title={youtubeBlockReason ?? storyBlock ?? articleBlock ?? captionBlock ?? undefined}
             >
               <Clock className="mr-2 h-4 w-4" />
-              {isStoryMode ? "Schedule story" : "Schedule"}
+              {isStoryMode ? "Schedule story" : isArticleMode ? "Schedule article" : "Schedule"}
             </Button>
             <Button
               className="w-full sm:w-auto"
               onClick={() => handleSubmit(true)}
-              disabled={needsSharedCaption || selectedChannels.length === 0 || createPost.isPending || isUploading || !!youtubeBlockReason || !!storyBlock}
-              title={youtubeBlockReason ?? storyBlock ?? captionBlock ?? undefined}
+              disabled={needsSharedCaption || selectedChannels.length === 0 || createPost.isPending || isUploading || !!youtubeBlockReason || !!storyBlock || !!articleBlock}
+              title={youtubeBlockReason ?? storyBlock ?? articleBlock ?? captionBlock ?? undefined}
             >
               {(createPost.isPending || isUploading) ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : (
                 <Send className="mr-2 h-4 w-4" />
               )}
-              {isUploading ? "Uploading..." : isStoryMode ? "Publish story" : "Publish Now"}
+              {isUploading ? "Uploading..." : isStoryMode ? "Publish story" : isArticleMode ? "Publish article" : "Publish Now"}
             </Button>
           </div>
           {/* The disabled buttons explain themselves only through `title`, which a
@@ -2759,9 +2994,9 @@ ${content}`;
               would nag about a caption the user has not started writing. A touch
               device never shows a `title` tooltip, so a disabled button needs a
               visible reason or it reads as broken. */}
-          {(youtubeBlockReason || storyBlock || (captionBlock && selectedChannels.length > 0)) && (
+          {(youtubeBlockReason || storyBlock || (articleBlock && (article.title.trim() || selectedChannels.length > 0)) || (captionBlock && selectedChannels.length > 0)) && (
             <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-300">
-              {youtubeBlockReason ?? storyBlock ?? captionBlock}
+              {youtubeBlockReason ?? storyBlock ?? articleBlock ?? captionBlock}
             </div>
           )}
           </>
@@ -2775,9 +3010,9 @@ ${content}`;
           <div className="flex items-center gap-2.5">
             <Eye className="h-[15px] w-[15px] flex-none text-gold" />
             <h2 className="min-w-0 flex-1 text-[12.5px] font-semibold leading-[1.2] text-foreground">
-              {isStoryMode ? "Story Preview" : "Post Preview"}
+              {isStoryMode ? "Story Preview" : isArticleMode ? "Article Preview" : "Post Preview"}
             </h2>
-            {!isStoryMode && selectedPlatforms.length > 0 && (
+            {!isStoryMode && !isArticleMode && selectedPlatforms.length > 0 && (
               <span className="flex-none text-[9px] font-medium uppercase leading-none tracking-[0.16em] text-muted-foreground">
                 {selectedPlatforms.length}{" "}
                 {selectedPlatforms.length === 1 ? "platform" : "platforms"}
@@ -2798,6 +3033,23 @@ ${content}`;
                 .map((c: any) => ({ name: c.name, username: c.username, avatar: c.avatar }))}
               note={content}
             />
+          ) : isArticleMode ? (
+            // A blog post, rendered with the SAME Markdown converter the publish
+            // uses — see wordpress-article-preview.tsx. Rendered INSTEAD of the
+            // switcher, like the story frame.
+            <WordPressArticlePreview
+              title={article.title}
+              body={content}
+              excerpt={article.excerpt}
+              status={article.status}
+              mediaUrls={postMedia.length > 0 ? postMedia.map((m) => m.url) : undefined}
+              mediaKinds={postMedia.length > 0 ? postMedia.map((m) => (isVideoMediaItem(m) ? "video" : "image")) : undefined}
+              sites={((channels as any[]) ?? [])
+                .filter((c: any) => selectedChannels.includes(c.id))
+                .map((c: any) => ({ name: c.name, username: c.username }))}
+              tagNames={article.newTags}
+              timestamp={scheduledAt ? new Date(scheduledAt) : new Date()}
+            />
           ) : (
           <PostPreviewSwitcher
             content={content}
@@ -2815,7 +3067,7 @@ ${content}`;
             videoAspect={videoAspect}
           />
           )}
-          {!isStoryMode && !content && selectedPlatforms.length === 0 && (
+          {!isStoryMode && !isArticleMode && !content && selectedPlatforms.length === 0 && (
             <p className="text-center text-xs text-muted-foreground">
               Start typing and select channels to see platform previews
             </p>

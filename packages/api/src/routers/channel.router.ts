@@ -8,7 +8,11 @@ import {
   signState,
   isMetaPlatform,
   resolveMetaCredentials,
+  userHostFetch,
 } from "@postautomation/social";
+import { channelSiteUrl } from "../lib/wordpress-article";
+import { createRateLimitMiddleware } from "../middleware/rate-limit.middleware";
+import { wordpressTaxonomyRateLimiter } from "../middleware/rate-limit";
 import { resolveChannelErrorsOnReconnect, DISCONNECTED_TOKEN } from "@postautomation/db";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 import { evaluateChannelInsightsStatus } from "../lib/insights-health";
@@ -112,6 +116,61 @@ export const channelRouter = createRouter({
    * CLIENT_ID/SECRET env vars. For token platforms, returns the field spec
    * the dialog should render.
    */
+  /**
+   * Categories and tags of a connected self-hosted WordPress site, for Compose's
+   * Article mode (2026-10-04). Read-only. The channel row is loaded with a
+   * DIRECT findUnique (the only shape that decrypts `accessToken`) and its org
+   * re-checked; the site is contacted through userHostFetch only (it is a server
+   * the user named — see user-host-fetch.ts). Errors carry fixed text, never the
+   * site's reply.
+   */
+  wordpressTaxonomies: orgProcedure
+    .use(createRateLimitMiddleware(wordpressTaxonomyRateLimiter))
+    .input(z.object({ channelId: z.string().min(1) }))
+    .query(async ({ ctx, input }) => {
+      const channel = await ctx.prisma.channel.findUnique({ where: { id: input.channelId } });
+      if (!channel || channel.organizationId !== ctx.organizationId || channel.disconnectedAt) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Channel not found" });
+      }
+      if (channel.platform !== "WORDPRESS") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Categories and tags are available for WordPress sites only." });
+      }
+      const siteUrl = channelSiteUrl(channel.metadata);
+      if (!siteUrl) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Reconnect this WordPress site to load its categories and tags." });
+      }
+      const headers = { Authorization: `Basic ${channel.accessToken}` };
+      const load = async (kind: "categories" | "tags") => {
+        let res: Response;
+        try {
+          res = await userHostFetch(
+            `${siteUrl}/wp-json/wp/v2/${kind}?per_page=100&orderby=count&order=desc&_fields=id,name,parent,count`,
+            { headers, timeoutMs: 15_000, maxResponseBytes: 2 * 1024 * 1024 }
+          );
+        } catch {
+          throw new TRPCError({ code: "BAD_GATEWAY", message: "Couldn't reach the WordPress site to load its categories and tags." });
+        }
+        if (res.status === 401 || res.status === 403) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "WordPress rejected the saved credentials. Reconnect this site." });
+        }
+        if (!res.ok) {
+          throw new TRPCError({ code: "BAD_GATEWAY", message: "The WordPress site could not list its categories and tags." });
+        }
+        const data: unknown = await res.json().catch(() => null);
+        if (!Array.isArray(data)) return [];
+        return data
+          .filter((t: any) => t && typeof t.id === "number" && typeof t.name === "string")
+          .map((t: any) => ({
+            id: t.id as number,
+            name: t.name as string,
+            parent: typeof t.parent === "number" ? (t.parent as number) : 0,
+            count: typeof t.count === "number" ? (t.count as number) : 0,
+          }));
+      };
+      const [categories, tags] = await Promise.all([load("categories"), load("tags")]);
+      return { channelId: channel.id, siteName: channel.name, siteUrl, categories, tags };
+    }),
+
   platformAuthInfo: orgProcedure.query(async ({ ctx }) => {
     // Meta platforms are "configured" only if the app THIS ORG connects
     // through is configured — an org pinned to an app whose credentials are
