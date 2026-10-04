@@ -66,6 +66,9 @@ const PLATFORMS = [
   { id: "reddit", label: "Reddit" },
   { id: "tiktok", label: "TikTok" },
   { id: "news", label: "Google News" },
+  // Facebook has no keyword search for anyone; this reads the public posts that
+  // TAG your connected Pages (Graph /{page}/tagged) — brand mentions, not a web search.
+  { id: "facebook", label: "Facebook (posts tagging your Pages)" },
 ];
 
 /**
@@ -338,8 +341,9 @@ function ListeningPageInner() {
           <span className="mt-1 block text-[11px] leading-[1.6] text-faint">
             Google News works out of the box. Twitter/X, Reddit, TikTok and Instagram/LinkedIn only
             return mentions when their API keys are configured (or, for IG/LinkedIn, a channel is
-            connected) — otherwise those sources are simply skipped. Facebook isn’t supported for
-            listening.
+            connected) — otherwise those sources are simply skipped. Facebook has no keyword search:
+            the Facebook source lists public posts that tag one of your connected Pages (when a keyword
+            matches the post or the Page name), a rotating batch of Pages per sync.
           </span>
         </p>
       </div>

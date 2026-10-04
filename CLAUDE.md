@@ -3505,10 +3505,27 @@ pure in [listening-sync-plan.ts](apps/worker/src/lib/listening-sync-plan.ts).
   every 60s instead of 15s (mentions arrive every 30 min; Sync Now invalidates directly).
   `volumeOverTime` deliberately keeps its `findMany` shape — the IDOR lock in
   `listening-campaign-idor.test.ts` asserts it.
-- Facebook stays excluded from listening (needs `public_content`; shares the publish quota) — the
-  dead fetcher was removed. Per-run accounting is one log line: `[ListeningSync] query=… requests=N
-  raw=N new=N skipped(excluded/dup/stored) alerts=N …ms [twitter=12/830ms …]`.
-- Tests: [listening-sync-plan.test.ts](apps/worker/src/lib/listening-sync-plan.test.ts) (24),
+- **Facebook = the connected Pages' `/tagged` edge, NOT a keyword search (2026-10-04, owner: "no
+  data from facebook").** Graph post search needs Public Content Access, which Meta no longer grants
+  to anyone, so the old search fetcher was dead and was removed. `GET /{page}/tagged` ("all public
+  posts in which the page has been tagged") needs only `pages_read_user_content` + `pages_show_list`
+  — approved for the live app since 2026-08-06, so no App Review, no reconnect. `fetchFacebookTagged`:
+  a post counts when a keyword matches its text OR the Page's own name; ONE call per Page per run,
+  Pages deduped by `platformId` (`uniqueByPlatformId`), and only `FB_LISTENING_PAGES_PER_RUN` (20)
+  Pages per run in a stateless rotating window (`rotateWindow`, bucketed on the 30-min cron) because
+  these calls count against the Meta app quota the publish worker shares and this org has hundreds of
+  Pages. `from` is only returned for the requester's own posts (Meta's rule), so a stranger's post has
+  no author. Two-rung field ladder (`#100 nonexisting field` ⇒ minimal fields) — Graph validates
+  field names only on a non-empty edge. The UI lists it as "Facebook (posts tagging your Pages)".
+- **Google News logs every non-feed outcome** (HTTP status; a 200 with 0 `<item>`s prints the first
+  160 chars of the body — Google's consent/interstitial page is HTML with a 200). Before 2026-10-04 a
+  non-200 was a silent `continue`, so "no news data" was undiagnosable from the log. Google answers a
+  bare `hl=` with a 302 to the full locale URL; fetch follows it (verified: 100 items for an OR query).
+  To see what prod gets: `docker logs postautomation-worker-1 --since 6h 2>&1 | grep ListeningSync`.
+  Per-run accounting is one log line: `[ListeningSync] query=… requests=N raw=N new=N
+  skipped(excluded/dup/stored) alerts=N …ms [twitter=12/830ms news=… facebook=… ]`.
+- Tests: [listening-sync-plan.test.ts](apps/worker/src/lib/listening-sync-plan.test.ts) (27),
+  [listening-fetchers.test.ts](apps/worker/src/workers/__tests__/listening-fetchers.test.ts) (6, stubbed fetch),
   [sentiment-batch.test.ts](apps/worker/src/workers/__tests__/sentiment-batch.test.ts) (10),
   [listening-jobs.test.ts](packages/queue/src/__tests__/listening-jobs.test.ts) (4); the pre-existing
   single-mention sentiment suite is unchanged and green.
