@@ -9,6 +9,8 @@ import type {
   PlatformConstraints,
 } from "../abstract/social.types";
 import { userHostFetch, type UserHostInit } from "../utils/user-host-fetch";
+import { markdownToHtml } from "../utils/markdown-lite";
+import { readWordPressArticle, imageFiguresHtml, type WordPressArticleMeta } from "../utils/wordpress-article";
 import {
   WORDPRESS_SERVICE as SVC,
   userHostFailure,
@@ -195,10 +197,15 @@ export class WordPressProvider extends SocialProvider {
 
     const auth = `Basic ${tokens.accessToken}`;
 
+    // Article mode (2026-10-04): Compose wrote `metadata.wordpressArticle`.
+    // Absent ⇒ the legacy caption path below, byte-for-byte (test-locked).
+    const article = readWordPressArticle(payload.metadata);
+    if (article) return this.publishSelfHostedArticle(siteUrl, auth, payload, article);
+
     let featuredImageId: number | undefined;
     if (payload.mediaUrls?.length) {
       const first = payload.mediaUrls[0]!;
-      featuredImageId = await this.uploadSelfHostedMedia(siteUrl, auth, first);
+      featuredImageId = (await this.uploadSelfHostedMedia(siteUrl, auth, first)).id;
     }
 
     const title = (payload.metadata?.title as string) || (payload.content.split("\n")[0] ?? "").slice(0, 200);
@@ -237,11 +244,116 @@ export class WordPressProvider extends SocialProvider {
     };
   }
 
+  /**
+   * Article publish (self-hosted). Title/excerpt/status come from Compose's
+   * Article mode; the body is Markdown rendered by markdown-lite (input is
+   * escaped text — never raw HTML, see that file). EVERY image is uploaded to
+   * the site's media library: the first becomes the featured image, the rest
+   * are appended to the body as figures. Term ids are looked up by this site's
+   * URL (ids are per install); tag NAMES are created or reused first.
+   *
+   * Order is load-bearing: media and tags are written BEFORE the post, so a
+   * failure there is pre-create and plainly retryable; only the final POST can
+   * leave an unknown outcome, and it goes through the same `create` phase
+   * mapping as the legacy path (unconfirmed ⇒ "Needs check", never a retry).
+   */
+  private async publishSelfHostedArticle(
+    siteUrl: string,
+    auth: string,
+    payload: SocialPostPayload,
+    article: WordPressArticleMeta
+  ): Promise<SocialPostResult> {
+    const urls = payload.mediaUrls ?? [];
+    const types = payload.mediaTypes ?? [];
+    const isImage = (i: number) => {
+      const t = types[i];
+      if (t) return t.startsWith("image/");
+      return /\.(jpe?g|png|gif|webp)(\?|$)/i.test(urls[i] ?? "");
+    };
+
+    let featuredImageId: number | undefined;
+    const bodyImages: string[] = [];
+    for (let i = 0; i < urls.length; i++) {
+      if (!isImage(i)) {
+        console.warn(`[WordPress] article: skipping non-image attachment #${i + 1} (only images are placed in an article)`);
+        continue;
+      }
+      const uploaded = await this.uploadSelfHostedMedia(siteUrl, auth, urls[i]!);
+      if (featuredImageId === undefined) featuredImageId = uploaded.id;
+      else if (uploaded.sourceUrl) bodyImages.push(uploaded.sourceUrl);
+    }
+
+    const tax = article.taxonomyBySite[siteUrl] ?? article.taxonomyBySite[siteUrl.toLowerCase()];
+    const tagIds = new Set<number>(tax?.tagIds ?? []);
+    for (const name of article.newTags) {
+      const id = await this.ensureSelfHostedTag(siteUrl, auth, name);
+      if (id) tagIds.add(id);
+    }
+
+    const figures = imageFiguresHtml(bodyImages);
+    const html = markdownToHtml(payload.content);
+    const body: Record<string, unknown> = {
+      title: article.title,
+      content: figures ? `${html}\n${figures}` : html,
+      status: article.status,
+    };
+    if (article.excerpt) body.excerpt = article.excerpt;
+    if (tax?.categoryIds.length) body.categories = tax.categoryIds;
+    if (tagIds.size) body.tags = [...tagIds];
+    if (featuredImageId) body.featured_media = featuredImageId;
+
+    const res = await this.siteCall(
+      `${siteUrl}/wp-json/wp/v2/posts`,
+      {
+        method: "POST",
+        headers: { Authorization: auth, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        timeoutMs: CREATE_TIMEOUT_MS,
+      },
+      "create",
+    );
+    const data: any = await this.readJson(res);
+    if (data?.id == null) throw unconfirmedCreate(SVC, "the site's reply could not be read");
+
+    return {
+      platformPostId: String(data.id),
+      url: data.link,
+      metadata: { id: data.id, slug: data.slug, status: data.status, siteUrl, article: true },
+    };
+  }
+
+  /**
+   * Create a tag by name, or reuse the existing one (WordPress answers
+   * 400 `term_exists` with the existing id). Best-effort: a tag that cannot be
+   * resolved is dropped from the post, never fails the publish.
+   */
+  private async ensureSelfHostedTag(siteUrl: string, auth: string, name: string): Promise<number | null> {
+    try {
+      const res = await userHostFetch(`${siteUrl}/wp-json/wp/v2/tags`, {
+        method: "POST",
+        headers: { Authorization: auth, "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+        timeoutMs: READ_TIMEOUT_MS,
+      });
+      const data: any = await this.readJson(res);
+      if (res.ok && typeof data?.id === "number") return data.id;
+      if (res.status === 400 && data?.code === "term_exists") {
+        const existing = data?.data?.term_id;
+        return typeof existing === "number" ? existing : null;
+      }
+      console.warn(`[WordPress] article: could not create tag (HTTP ${res.status}) — publishing without it`);
+      return null;
+    } catch (err) {
+      console.warn(`[WordPress] article: tag request failed — publishing without it: ${(err as Error)?.message}`);
+      return null;
+    }
+  }
+
   private async uploadSelfHostedMedia(
     siteUrl: string,
     auth: string,
     mediaUrl: string
-  ): Promise<number> {
+  ): Promise<{ id: number; sourceUrl?: string }> {
     // The post's own media file, from OUR storage — not a user-named host.
     let buffer: Buffer;
     let mediaType: string;
@@ -276,7 +388,7 @@ export class WordPressProvider extends SocialProvider {
     );
     const data: any = await this.readJson(res);
     if (data?.id == null) throw retryableMediaFailure(SVC, "the reply could not be read");
-    return data.id as number;
+    return { id: data.id as number, sourceUrl: typeof data.source_url === "string" ? data.source_url : undefined };
   }
 
   /** The one way to talk to a self-hosted site. Throws the mapped error on failure or non-2xx. */

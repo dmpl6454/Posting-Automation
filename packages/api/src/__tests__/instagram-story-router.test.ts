@@ -56,7 +56,7 @@ describe("post.create — story mode", () => {
   });
 
   it("turns off unique captions for a story — it displays none", () => {
-    expect(postRouter).toMatch(/uniqueCaptions: isStory \? false : input\.uniqueCaptions/);
+    expect(postRouter).toMatch(/uniqueCaptions: isStory \|\| isArticle \? false : input\.uniqueCaptions/);
   });
 
   it("allows empty content for a story, or when every channel has its own caption", () => {
@@ -65,7 +65,7 @@ describe("post.create — story mode", () => {
     // EVERY selected channel carries its own (owner-reported: per-channel captions
     // filled in, shared box empty, no way to publish). A non-story post with
     // neither is still refused, which is what this test exists to protect.
-    expect(postRouter).toMatch(/!isStory &&\s*input\.content\.trim\(\)\.length === 0/);
+    expect(postRouter).toMatch(/!isStory &&\s*!isArticle &&\s*input\.content\.trim\(\)\.length === 0/);
     expect(postRouter).toMatch(/!everyChannelHasOwnCaption\(/);
   });
 });

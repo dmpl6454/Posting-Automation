@@ -24,7 +24,7 @@ export interface ActiveTask {
      * Compose's post type (2026-09-15). ABSENT ⇒ "post", so every draft written by
      * an earlier build restores exactly as it did before.
      */
-    postType?: "post" | "story";
+    postType?: "post" | "story" | "article";
     /**
      * Instagram Story mentions (usernames, no `@`). Kept as `string[]` but
      * re-validated on restore — one malformed username reaching post.create
@@ -44,6 +44,12 @@ export interface ActiveTask {
      * which restores exactly as before.
      */
     campaignLabel?: string;
+    /**
+     * WordPress article fields (2026-10-04): title, excerpt, status, tag names,
+     * per-channel term ids. Kept as `unknown` — ComposeTab re-validates it on
+     * restore. ABSENT ⇒ an earlier build's draft, which restores unchanged.
+     */
+    article?: unknown;
   };
   createdAt: number;
 }

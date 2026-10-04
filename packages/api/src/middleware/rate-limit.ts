@@ -141,6 +141,8 @@ export const commentReplyRateLimiter = createRateLimiter({ windowMs: 60_000, max
  * the same budget the publish worker spends on that Page.
  */
 export const commentReadRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
+/** Compose Article mode: category/tag listing of a user's own WordPress site. */
+export const wordpressTaxonomyRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
 
 /**
  * Per-PAGE ceilings, keyed on `${platform}:${platformId}` across ALL users and

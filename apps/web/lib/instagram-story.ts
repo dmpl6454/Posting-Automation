@@ -9,7 +9,13 @@
  * regex, and both server layers re-validate anyway. Keep the three in step.
  */
 
-export type PostType = "post" | "story";
+/** Compose's mode. "article" (2026-10-04) publishes a blog post to WordPress sites only. */
+export type PostType = "post" | "story" | "article";
+
+/** WordPress-only — see lib/wordpress-article.ts for the article rules. */
+function isArticleChannelLocal(channel: { platform: string }): boolean {
+  return channel.platform === "WORDPRESS";
+}
 
 export const IG_USERNAME_RE = /^[A-Za-z0-9._]{1,30}$/;
 export const STORY_MAX_MENTIONS = 20;
@@ -30,13 +36,18 @@ export function isStoryChannel(channel: { platform: string }): boolean {
   return (STORY_PLATFORMS as readonly string[]).includes(channel.platform);
 }
 
-/** In Story mode only Instagram and Facebook channels are selectable; Post mode is untouched. */
+/**
+ * The channels Compose offers in each mode: Story ⇒ Instagram + Facebook,
+ * Article ⇒ WordPress sites only, Post ⇒ everything (untouched).
+ */
 export function storySelectableChannels<T extends { platform: string }>(
   channels: T[] | undefined | null,
   postType: PostType
 ): T[] {
   const list = channels ?? [];
-  return postType === "story" ? list.filter(isStoryChannel) : list;
+  if (postType === "story") return list.filter(isStoryChannel);
+  if (postType === "article") return list.filter(isArticleChannelLocal);
+  return list;
 }
 
 /**
@@ -72,7 +83,9 @@ export function groupSelectableIds(
 ): string[] {
   return (group.channels ?? [])
     .filter((c) => c.isActive && liveIds.has(c.id))
-    .filter((c) => postType === "post" || isStoryChannel(c))
+    .filter((c) =>
+      postType === "post" ? true : postType === "story" ? isStoryChannel(c) : isArticleChannelLocal(c)
+    )
     .map((c) => c.id);
 }
 

@@ -163,10 +163,15 @@ export default function PostDetailPage() {
   const isStoryPost =
     !!(post?.metadata as { instagramStory?: unknown } | null)?.instagramStory ||
     ((post?.targets ?? []) as any[]).some((t: any) => t.format === "STORY");
+  // A WordPress article (Compose → Article mode) only goes to WordPress sites —
+  // the server refuses anything else, so don't offer a button that can only fail.
+  const articleMeta = (post?.metadata as { wordpressArticle?: { title?: string; status?: string } } | null)?.wordpressArticle;
+  const isArticlePost = typeof articleMeta?.title === "string";
   const addableChannels = (allChannels ?? []).filter(
     (c: any) =>
       !targetedChannelIds.has(c.id) &&
-      (!isStoryPost || c.platform === "INSTAGRAM" || c.platform === "FACEBOOK")
+      (!isStoryPost || c.platform === "INSTAGRAM" || c.platform === "FACEBOOK") &&
+      (!isArticlePost || c.platform === "WORDPRESS")
   );
 
   const handleAddChannel = (channelId: string) => {
@@ -499,6 +504,14 @@ export default function PostDetailPage() {
             </>
           ) : (
             <div className="whitespace-pre-wrap rounded-lg bg-muted/50 p-4 text-sm leading-relaxed">
+              {isArticlePost && (
+                <div className="mb-3 border-b pb-2">
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    WordPress article · {articleMeta?.status ?? "publish"} · body is Markdown
+                  </span>
+                  <h3 className="text-base font-bold leading-snug">{articleMeta?.title}</h3>
+                </div>
+              )}
               {/* A story's note is optional and Instagram never displays it, so an
                   empty one must read as "no note", not as a blank panel. */}
               {post.content || (

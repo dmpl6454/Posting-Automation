@@ -91,6 +91,6 @@ describe("ComposeTab wiring (source-level contract)", () => {
     // `!isStoryMode && !content && selectedPlatforms.length === 0` renders the
     // "start typing" empty state. It is not a gate: swapping it would hide the
     // placeholder as soon as per-channel captions covered every channel.
-    expect(compose).toMatch(/!isStoryMode && !content && selectedPlatforms\.length === 0/);
+    expect(compose).toMatch(/!isStoryMode && !isArticleMode && !content && selectedPlatforms\.length === 0/);
   });
 });
