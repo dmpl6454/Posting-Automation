@@ -286,6 +286,7 @@ export default function ChannelsPage() {
       if (group?.id) {
         highlightScrolledRef.current = false;
         setHighlightedGroupId(group.id);
+        setExpandedGroupIds((prev) => new Set(prev).add(group.id));
       }
     },
   });
@@ -389,6 +390,21 @@ export default function ChannelsPage() {
   // card filters independently — a filter shared across cards would silently
   // change what a "Select all" in a *different* card acts on.
   const [groupPlatformFilter, setGroupPlatformFilter] = useState<Record<string, string | null>>({});
+
+  // Which group cards are OPEN. Collapsed by default (owner ask 2026-10-04):
+  // every card used to render the full channel picker — 493 rows per group —
+  // so a page with a handful of groups painted thousands of checkboxes and
+  // the list of groups itself was unreadable. The picker renders ONLY for an
+  // expanded group; the header is the toggle. A just-created group opens
+  // itself so the "Add channels to it below" toast stays true.
+  const [expandedGroupIds, setExpandedGroupIds] = useState<Set<string>>(new Set());
+  const toggleGroupExpanded = (groupId: string) =>
+    setExpandedGroupIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupId)) next.delete(groupId);
+      else next.add(groupId);
+      return next;
+    });
 
   // Which group card currently has a batch write in flight — used to disable
   // that card's buttons only, so a slow 300-channel write can't be double-fired
@@ -1070,9 +1086,35 @@ export default function ChannelsPage() {
                   }`}
                 >
                   <CardContent className="pt-4">
-                    {/* Group header */}
-                    <div className="mb-3 flex items-center gap-2">
-                      <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: group.color }} />
+                    {/* Group header — the toggle. Click anywhere on the name
+                        row to open/close the picker; the edit + delete
+                        buttons stop propagation so they never flip it. */}
+                    <div className={`flex items-center gap-2 ${expandedGroupIds.has(group.id) ? "mb-3" : ""}`}>
+                      {editingGroupId !== group.id && (
+                        <button
+                          type="button"
+                          aria-expanded={expandedGroupIds.has(group.id)}
+                          aria-controls={`channel-group-panel-${group.id}`}
+                          aria-label={`${expandedGroupIds.has(group.id) ? "Collapse" : "Expand"} group ${group.name}`}
+                          data-testid="channel-group-toggle"
+                          onClick={() => toggleGroupExpanded(group.id)}
+                          className="flex min-w-0 flex-1 items-center gap-2 rounded-md text-left transition-colors hover:text-foreground"
+                        >
+                          {expandedGroupIds.has(group.id) ? (
+                            <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+                          ) : (
+                            <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                          )}
+                          <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: group.color }} />
+                          <span className="min-w-0 flex-1 truncate text-sm font-medium">{group.name}</span>
+                          <Badge variant="outline" className="shrink-0 text-[10px]">
+                            {(group.channels ?? []).length} channels
+                          </Badge>
+                        </button>
+                      )}
+                      {editingGroupId === group.id && (
+                        <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: group.color }} />
+                      )}
                       {editingGroupId === group.id ? (
                         <div className="flex flex-1 items-center gap-2">
                           <Input
@@ -1100,15 +1142,12 @@ export default function ChannelsPage() {
                         </div>
                       ) : (
                         <>
-                          <span className="flex-1 text-sm font-medium">{group.name}</span>
-                          <Badge variant="outline" className="text-[10px]">
-                            {(group.channels ?? []).length} channels
-                          </Badge>
                           <Button
                             size="icon"
                             variant="ghost"
                             className="h-7 w-7"
-                            onClick={() => { setEditingGroupId(group.id); setEditingGroupName(group.name); }}
+                            aria-label={`Rename group ${group.name}`}
+                            onClick={(e) => { e.stopPropagation(); setEditingGroupId(group.id); setEditingGroupName(group.name); }}
                           >
                             <Pencil className="h-3.5 w-3.5" />
                           </Button>
@@ -1116,13 +1155,20 @@ export default function ChannelsPage() {
                             size="icon"
                             variant="ghost"
                             className="h-7 w-7 text-destructive hover:text-destructive"
-                            onClick={() => { if (confirm("Delete this group?")) deleteGroup.mutate({ id: group.id }); }}
+                            aria-label={`Delete group ${group.name}`}
+                            onClick={(e) => { e.stopPropagation(); if (confirm("Delete this group?")) deleteGroup.mutate({ id: group.id }); }}
                           >
                             <Trash2 className="h-3.5 w-3.5" />
                           </Button>
                         </>
                       )}
                     </div>
+
+                    {/* Picker — rendered ONLY while this group is open. Not
+                        merely hidden: 493 rows × N groups is the paint cost
+                        the collapse exists to remove. */}
+                    {expandedGroupIds.has(group.id) && (
+                    <div id={`channel-group-panel-${group.id}`} data-testid="channel-group-panel">
 
                     {/* Platform filter + batch select-all for this group.
                         The filter scopes BOTH the checkbox list below and the
@@ -1255,6 +1301,8 @@ export default function ChannelsPage() {
                         );
                       })}
                     </div>
+                    </div>
+                    )}
                   </CardContent>
                 </Card>
               ))}
