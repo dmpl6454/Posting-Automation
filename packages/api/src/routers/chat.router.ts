@@ -2,7 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure, isAppAdmin } from "../trpc";
 import { PUBLIC_CHANNEL_SELECT } from "../lib/public-channel";
-import { agentRunQueue, postPublishQueue, captionFanoutQueue } from "@postautomation/queue";
+import { agentRunQueue, postPublishQueue, captionFanoutQueue, listeningSyncQueue, listeningSyncJobId } from "@postautomation/queue";
 import { requirePlan, enforcePlanLimit } from "../middleware/plan-limit.middleware";
 import { planCaptionFanout, captionFanoutJobId } from "../lib/caption-fanout";
 import type { PrismaClient } from "@postautomation/db";
@@ -905,11 +905,23 @@ export const chatRouter = createRouter({
             },
           });
 
+          // Same first-sync kick the listening router gives a UI-created query
+          // (best-effort — the 30-minute cron covers a queue blip).
+          try {
+            await listeningSyncQueue.add(
+              `listening-sync-${listeningQuery.id}`,
+              { listeningQueryId: listeningQuery.id, organizationId: ctx.organizationId },
+              { jobId: listeningSyncJobId(listeningQuery.id, "create"), removeOnComplete: true, removeOnFail: 100 }
+            );
+          } catch (err) {
+            console.warn(`[chat.create_listening_query] initial sync enqueue failed for ${listeningQuery.id}:`, err);
+          }
+
           await ctx.prisma.chatMessage.create({
             data: {
               threadId: input.threadId,
               role: "system",
-              content: `Listening query "${listeningQuery.name}" created. Monitoring ${listeningQuery.platforms.join(", ")} for: ${listeningQuery.keywords.join(", ")}. First results will appear after the next sync cycle.`,
+              content: `Listening query "${listeningQuery.name}" created. Monitoring ${listeningQuery.platforms.join(", ")} for: ${listeningQuery.keywords.join(", ")}. The first sync is running now; later syncs run every 30 minutes.`,
               metadata: { type: "listening_created", queryId: listeningQuery.id },
             },
           });

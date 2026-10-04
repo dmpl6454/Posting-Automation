@@ -136,6 +136,14 @@ function formatCompact(n: number): string {
   return String(n);
 }
 
+/**
+ * New mentions arrive from a 30-minute sync (plus a manual "Sync now", whose
+ * onSuccess invalidates directly), so polling three endpoints every 15s per
+ * open tab bought nothing but load. 60s keeps a background tab roughly
+ * current; focus/reconnect refetches are React Query defaults and still fire.
+ */
+const LISTENING_POLL_MS = 60_000;
+
 function ListeningPageInner() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [name, setName] = useState("");
@@ -146,14 +154,14 @@ function ListeningPageInner() {
 
   const { data: queries, isLoading: queriesLoading } = trpc.listening.listQueries.useQuery(
     undefined,
-    { refetchInterval: 15_000 }
+    { refetchInterval: LISTENING_POLL_MS }
   );
   const { data: overview, isLoading: overviewLoading } = trpc.listening.sentimentOverview.useQuery(
     {
       queryId: selectedQuery,
       days: 30,
     },
-    { refetchInterval: 15_000 }
+    { refetchInterval: LISTENING_POLL_MS }
   );
   const { data: mentions, isLoading: mentionsLoading } = trpc.listening.mentions.useQuery({
     queryId: selectedQuery,
@@ -164,7 +172,7 @@ function ListeningPageInner() {
       queryId: selectedQuery,
       unreadOnly: true,
     },
-    { refetchInterval: 15_000 }
+    { refetchInterval: LISTENING_POLL_MS }
   );
   const { data: sources } = trpc.listening.sourceBreakdown.useQuery({
     queryId: selectedQuery,

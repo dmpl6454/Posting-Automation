@@ -3,6 +3,7 @@ import { prisma, type Sentiment } from "@postautomation/db";
 import {
   QUEUE_NAMES,
   type SentimentAnalysisJobData,
+  type SentimentMentionInput,
   createRedisConnection,
 } from "@postautomation/queue";
 
@@ -94,16 +95,122 @@ Text: "${content.slice(0, 500)}"`;
   }
 }
 
+const VALID_SENTIMENTS = ["POSITIVE", "NEGATIVE", "NEUTRAL", "MIXED"] as const;
+
+function coerceVerdict(parsed: unknown): { sentiment: Sentiment; score: number } | null {
+  if (!parsed || typeof parsed !== "object") return null;
+  const p = parsed as { sentiment?: unknown; score?: unknown };
+  const sentiment: Sentiment = (VALID_SENTIMENTS as readonly string[]).includes(p.sentiment as string)
+    ? (p.sentiment as Sentiment)
+    : "NEUTRAL";
+  const score = typeof p.score === "number" && Number.isFinite(p.score) ? Math.max(-1, Math.min(1, p.score)) : 0;
+  return { sentiment, score };
+}
+
+/**
+ * Build the batch prompt: one numbered line per mention, each as a JSON
+ * string literal so quotes and newlines inside a tweet cannot break the
+ * numbering or escape the instruction. Exported for the test.
+ */
+export function buildBatchSentimentPrompt(items: SentimentMentionInput[]): string {
+  const lines = items.map((m, i) => `${i}: ${JSON.stringify(m.content.slice(0, 500))}`).join("\n");
+  return `Classify the sentiment of EACH numbered text below. Respond with ONLY a JSON array (no markdown, no explanation) containing exactly one object per text, in the same order:
+[{"i": <number>, "sentiment": "POSITIVE" | "NEGATIVE" | "NEUTRAL" | "MIXED", "score": <number from -1.0 to 1.0>}, ...]
+
+${lines}`;
+}
+
+/**
+ * Parse the model's array. Verdicts are matched by their "i" field, falling
+ * back to array position when "i" is missing. Returns a sparse map — a text
+ * the model skipped is simply absent, and the caller decides what that means.
+ */
+export function parseBatchSentimentResponse(raw: string, count: number): Map<number, { sentiment: Sentiment; score: number }> {
+  const out = new Map<number, { sentiment: Sentiment; score: number }>();
+  const start = raw.indexOf("[");
+  const end = raw.lastIndexOf("]");
+  if (start === -1 || end === -1 || end <= start) return out;
+  let arr: unknown;
+  try {
+    arr = JSON.parse(raw.slice(start, end + 1));
+  } catch {
+    return out;
+  }
+  if (!Array.isArray(arr)) return out;
+  arr.forEach((entry, position) => {
+    const verdict = coerceVerdict(entry);
+    if (!verdict) return;
+    const i = entry && typeof (entry as { i?: unknown }).i === "number" ? Number((entry as { i: number }).i) : position;
+    if (!Number.isInteger(i) || i < 0 || i >= count || out.has(i)) return;
+    out.set(i, verdict);
+  });
+  return out;
+}
+
+/**
+ * Score up to SENTIMENT_BATCH_SIZE mentions in ONE model call (2026-10-04).
+ * Before this, every mention was its own job and its own call — a 3-keyword
+ * query's first sync produced ~200 calls. Same persistence contract as the
+ * single path: a verdict the model returned is written as-is; a mention it
+ * skipped, or a response that cannot be parsed, or a chain where every
+ * provider failed, persists NEUTRAL/0 (and the all-failed case logs the same
+ * greppable line as scoreMentionSentiment).
+ */
+export async function scoreMentionsBatch(
+  items: SentimentMentionInput[],
+  deps: ScoreSentimentDeps,
+): Promise<{ scored: number; defaulted: number; error?: true }> {
+  if (items.length === 0) return { scored: 0, defaulted: 0 };
+  if (items.length === 1) {
+    const one = await scoreMentionSentiment(items[0]!.mentionId, items[0]!.content, deps);
+    return one.error ? { scored: 0, defaulted: 1, error: true } : { scored: 1, defaulted: 0 };
+  }
+
+  let verdicts = new Map<number, { sentiment: Sentiment; score: number }>();
+  let error: true | undefined;
+  try {
+    const result = await deps.generateContentWithFallback(buildBatchSentimentPrompt(items));
+    verdicts = parseBatchSentimentResponse(result, items.length);
+  } catch (err) {
+    error = true;
+    const chainDesc = deps.providersAttempted.length > 0
+      ? `all providers (${deps.providersAttempted.join(", ")}) failed`
+      : "all providers failed";
+    console.error(
+      `[Sentiment] scoring unavailable for ${items.length} mentions (batch) — ${chainDesc}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+
+  let scored = 0;
+  let defaulted = 0;
+  await Promise.all(
+    items.map(async (m, i) => {
+      const v = verdicts.get(i);
+      if (v) {
+        scored++;
+        await deps.updateMention(m.mentionId, v.sentiment, v.score);
+      } else {
+        defaulted++;
+        await deps.updateMention(m.mentionId, "NEUTRAL", 0);
+      }
+    }),
+  );
+  if (!error && defaulted > 0) {
+    console.warn(`[Sentiment] batch of ${items.length}: model returned no verdict for ${defaulted}; persisted NEUTRAL/0 for those`);
+  }
+  return error ? { scored, defaulted, error } : { scored, defaulted };
+}
+
 export function createSentimentAnalysisWorker() {
   const worker = new Worker<SentimentAnalysisJobData>(
     QUEUE_NAMES.SENTIMENT_ANALYSIS,
     async (job: Job<SentimentAnalysisJobData>) => {
-      const { mentionId, content } = job.data;
-
       const { buildTextProviderChain } = await import("@postautomation/ai");
       const providersAttempted = buildTextProviderChain("anthropic");
 
-      return scoreMentionSentiment(mentionId, content, {
+      const deps: ScoreSentimentDeps = {
         generateContentWithFallback: async (prompt) => {
           const { generateContent, withTextProviderFallback } = await import("@postautomation/ai");
           return withTextProviderFallback(
@@ -129,7 +236,14 @@ export function createSentimentAnalysisWorker() {
             data: { sentiment, sentimentScore: score },
           }),
         providersAttempted,
-      });
+      };
+
+      // Batch jobs (listening-sync since 2026-10-04) and legacy single-mention
+      // jobs (anything still queued from the previous build) are both served.
+      if ("mentions" in job.data) {
+        return scoreMentionsBatch(job.data.mentions, deps);
+      }
+      return scoreMentionSentiment(job.data.mentionId, job.data.content, deps);
     },
     {
       connection: createRedisConnection(),

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, adminOrgProcedure } from "../trpc";
-import { listeningSyncQueue } from "@postautomation/queue";
+import { listeningSyncQueue, listeningSyncJobId } from "@postautomation/queue";
 import { requirePlan } from "../middleware/plan-limit.middleware";
 
 export const listeningRouter = createRouter({
@@ -47,12 +47,17 @@ export const listeningRouter = createRouter({
         },
       });
 
-      // Trigger initial sync
-      await listeningSyncQueue.add(
-        `listening-sync-${query.id}`,
-        { listeningQueryId: query.id, organizationId: ctx.organizationId },
-        { removeOnComplete: true, removeOnFail: 100 }
-      );
+      // Trigger initial sync — best-effort: a queue blip must not fail the
+      // create; the 30-minute cron picks the query up regardless.
+      try {
+        await listeningSyncQueue.add(
+          `listening-sync-${query.id}`,
+          { listeningQueryId: query.id, organizationId: ctx.organizationId },
+          { jobId: listeningSyncJobId(query.id, "create"), removeOnComplete: true, removeOnFail: 100 }
+        );
+      } catch (err) {
+        console.warn(`[listening.createQuery] initial sync enqueue failed for ${query.id}:`, err);
+      }
 
       return query;
     }),
@@ -138,45 +143,39 @@ export const listeningRouter = createRouter({
         ? { listeningQueryId: input.queryId, listeningQuery: { organizationId: ctx.organizationId } }
         : { listeningQuery: { organizationId: ctx.organizationId } };
 
-      const [positive, negative, neutral, mixed, total] = await Promise.all([
-        ctx.prisma.mention.count({
-          where: { ...queryFilter, sentiment: "POSITIVE", mentionedAt: { gte: since } },
-        }),
-        ctx.prisma.mention.count({
-          where: { ...queryFilter, sentiment: "NEGATIVE", mentionedAt: { gte: since } },
-        }),
-        ctx.prisma.mention.count({
-          where: { ...queryFilter, sentiment: "NEUTRAL", mentionedAt: { gte: since } },
-        }),
-        ctx.prisma.mention.count({
-          where: { ...queryFilter, sentiment: "MIXED", mentionedAt: { gte: since } },
-        }),
-        ctx.prisma.mention.count({
+      // Two statements instead of seven: one GROUP BY sentiment for the
+      // counts, one aggregate for the sums/average. The page polls this, so
+      // the round trips were paid every 15s per open tab.
+      const [bySentiment, totals] = await Promise.all([
+        ctx.prisma.mention.groupBy({
+          by: ["sentiment"],
           where: { ...queryFilter, mentionedAt: { gte: since } },
+          _count: { _all: true },
+        }),
+        ctx.prisma.mention.aggregate({
+          where: { ...queryFilter, mentionedAt: { gte: since } },
+          _sum: { reach: true, engagements: true },
+          // _avg ignores NULL sentimentScore (unscored rows) by SQL semantics,
+          // so this equals the old `sentimentScore: { not: null }` average.
+          _avg: { sentimentScore: true },
         }),
       ]);
-
-      // Avg sentiment score
-      const avgResult = await ctx.prisma.mention.aggregate({
-        where: { ...queryFilter, mentionedAt: { gte: since }, sentimentScore: { not: null } },
-        _avg: { sentimentScore: true },
-      });
-
-      // Total reach & engagements
-      const engagementResult = await ctx.prisma.mention.aggregate({
-        where: { ...queryFilter, mentionedAt: { gte: since } },
-        _sum: { reach: true, engagements: true },
-      });
+      const countOf = (s: "POSITIVE" | "NEGATIVE" | "NEUTRAL" | "MIXED") =>
+        bySentiment.find((g) => g.sentiment === s)?._count._all ?? 0;
+      const positive = countOf("POSITIVE");
+      const negative = countOf("NEGATIVE");
+      const neutral = countOf("NEUTRAL");
+      const mixed = countOf("MIXED");
 
       return {
         positive,
         negative,
         neutral,
         mixed,
-        total,
-        avgSentimentScore: avgResult._avg.sentimentScore ?? 0,
-        totalReach: engagementResult._sum.reach ?? 0,
-        totalEngagements: engagementResult._sum.engagements ?? 0,
+        total: positive + negative + neutral + mixed,
+        avgSentimentScore: totals._avg.sentimentScore ?? 0,
+        totalReach: totals._sum.reach ?? 0,
+        totalEngagements: totals._sum.engagements ?? 0,
       };
     }),
 
@@ -298,10 +297,12 @@ export const listeningRouter = createRouter({
       await ctx.prisma.listeningQuery.findFirstOrThrow({
         where: { id: input.queryId, organizationId: ctx.organizationId },
       });
+      // Minute-bucketed id: a double click (or two users) inside one minute
+      // is ONE sweep of the platform APIs, not two.
       await listeningSyncQueue.add(
         `listening-sync-manual-${input.queryId}`,
         { listeningQueryId: input.queryId, organizationId: ctx.organizationId },
-        { removeOnComplete: true, removeOnFail: 100 }
+        { jobId: listeningSyncJobId(input.queryId, "manual"), removeOnComplete: true, removeOnFail: 100 }
       );
       return { queued: true };
     }),

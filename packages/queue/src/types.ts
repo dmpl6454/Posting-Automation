@@ -124,10 +124,22 @@ export interface ListeningSyncJobData {
   organizationId: string;
 }
 
-export interface SentimentAnalysisJobData {
+export interface SentimentMentionInput {
   mentionId: string;
   content: string;
 }
+
+/**
+ * One sentiment job scores EITHER a single mention (legacy shape, still
+ * accepted so jobs queued by an older build drain cleanly after a deploy) OR
+ * a batch of up to SENTIMENT_BATCH_SIZE mentions in ONE model call.
+ */
+export type SentimentAnalysisJobData =
+  | SentimentMentionInput
+  | { mentions: SentimentMentionInput[] };
+
+/** Mentions scored per model call. Bounded so one bad item cannot sink a 200-mention prompt. */
+export const SENTIMENT_BATCH_SIZE = 20;
 
 export interface CampaignAnalyticsSyncJobData {
   campaignId: string;
