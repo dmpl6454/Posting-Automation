@@ -444,3 +444,46 @@ person edits and clicks Send. The comment and caption are passed to the model as
 **Done** hides a comment from the queue in that browser only (localStorage, 45 days); nothing
 is stored server-side.
 
+
+## 11. Auto-hide rules and new-comment alerts (2026-10-05)
+
+Settings live on the Comments page, **Automation** tab (`?view=automation`), one row per
+workspace in `CommentAutomation`. Only workspace OWNERs and ADMINs can change them.
+
+**How it runs.** The worker's cron leader calls `runCommentSweep`
+(`apps/worker/src/lib/comment-sweep.ts`) every 15 minutes. It only looks at workspaces that
+switched a feature on, and only at their published, non-story Facebook/Instagram posts from the
+last 3 days. For each post it reads the first page of comments once:
+
+- **Auto-hide** hides comments that match a blocked word or phrase, or contain a link when that
+  box is ticked, as the Page or account. The matcher is `matchCommentRule`
+  (`packages/social/src/utils/comment-rules.ts`): case-insensitive, NFKC-folded, whole-word for a
+  plain word in any script, substring for phrases and emoji. It never touches the account's own
+  comments or ones already hidden, and it checks embedded replies too. Each hide is recorded in
+  `CommentAutoAction`, and **a recorded comment is never acted on again**, so a person who
+  unhides it keeps it visible. Unhiding from the log (or the thread) marks the row `UNHIDDEN`.
+- **Alerts** compare each post's newest comment with a watermark in
+  `PostTarget.metadata.commentSweep` (`checkedAt`, `lastSeenAt`, written with an atomic jsonb
+  merge). The first look at a post only sets the watermark. New visible comments produce ONE
+  in-app notification per workspace per run (type `comment.new`) for owners and admins, linking
+  to the Unanswered queue.
+
+**Budget** (same Meta app quota as publishing): 40 posts per run in total, 15 per workspace,
+interleaved across workspaces, stalest first; at most 50 hides per workspace per run; one read at
+a time; Facebook posts are skipped for the rest of a run once Meta's reported app usage reaches
+75% (`facebookAppUsagePeak`). Comment reads use the clamped interactive Graph options. A run
+skips its turn if the previous one is still going. Every step is idempotent, so a deploy mid-run
+is harmless.
+
+**Env (worker, plumbed in `docker-compose.prod.yml`, all optional):**
+`COMMENT_AUTOMATION_ENABLED=false` stops the sweep entirely (workspaces still opt in
+individually); `COMMENT_SWEEP_MAX_POSTS`, `COMMENT_SWEEP_MAX_POSTS_PER_ORG`,
+`COMMENT_SWEEP_LOOKBACK_DAYS`, `COMMENT_SWEEP_FB_USAGE_CEILING`, `COMMENT_AUTOHIDE_MAX_PER_RUN`.
+Grep the worker log for `[CommentSweep]` — every run prints one accounting line.
+
+**Permissions.** Hiding needs `pages_manage_engagement` (Facebook) or
+`instagram_manage_comments` (Instagram) on the channel's token. When the recorded grant lacks it,
+the sweep doesn't try; the tab names those accounts, and the run summary lists them.
+
+**Limits.** Only the first page of comments per post is checked (Facebook: newest 25); a large
+fan-out is covered gradually, a few posts per workspace per run; alerts are in-app only (no email).

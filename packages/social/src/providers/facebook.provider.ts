@@ -112,6 +112,18 @@ const usageCache: {
   lastRequest: 0,
 };
 
+/**
+ * The highest of the app-level usage percentages Meta last reported in
+ * x-app-usage (call count, CPU time, total time), 0 before any call. Background
+ * work that is NOT publishing (the comment-automation sweep) reads this and
+ * backs off well before the 95% mark at which every publish Graph call starts
+ * sleeping 60s — the same module-global cache the publish path shares.
+ */
+export function facebookAppUsagePeak(): number {
+  const a = usageCache.app;
+  return Math.max(a.call_count || 0, a.total_cputime || 0, a.total_time || 0);
+}
+
 // Minimum ms between sequential Graph API requests (soft spacing)
 const MIN_REQUEST_GAP_MS = 300;
 

@@ -4,7 +4,7 @@ import { Suspense, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { format } from "date-fns";
-import { ImageIcon, Inbox, ListTree, Loader2, MessageSquare, Search, Video } from "lucide-react";
+import { ImageIcon, Inbox, ListTree, Loader2, MessageSquare, Search, Settings2, Video } from "lucide-react";
 import { trpc } from "~/lib/trpc/client";
 import { humanizeError } from "~/lib/errors";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card";
@@ -20,6 +20,7 @@ import {
   type CommentPlatform,
 } from "~/components/comments/comment-thread";
 import { UnansweredQueue } from "~/components/comments/unanswered-queue";
+import { CommentAutomation } from "~/components/comments/comment-automation";
 import { cn } from "~/lib/utils";
 
 /**
@@ -31,7 +32,8 @@ import { cn } from "~/lib/utils";
  *
  * Deep link: /dashboard/comments?channel=<channelId>&post=<postTargetId>
  * (the post detail page links here). `?view=unanswered` opens the queue of
- * comments nobody has replied to yet across recent posts (2026-10-05).
+ * comments nobody has replied to yet across recent posts (2026-10-05), and
+ * `?view=automation` the auto-hide rules and new-comment alerts.
  */
 export default function CommentsPage() {
   return (
@@ -46,7 +48,8 @@ function CommentsInbox() {
   const searchParams = useSearchParams();
   const channelParam = searchParams.get("channel");
   const postParam = searchParams.get("post");
-  const view = searchParams.get("view") === "unanswered" ? "unanswered" : "posts";
+  const viewParam = searchParams.get("view");
+  const view = viewParam === "unanswered" || viewParam === "automation" ? viewParam : "posts";
   const [search, setSearch] = useState("");
   const threadRef = useRef<HTMLDivElement>(null);
 
@@ -78,10 +81,10 @@ function CommentsInbox() {
     );
   }, [accounts, search]);
 
-  const showView = (next: "posts" | "unanswered") => {
+  const showView = (next: "posts" | "unanswered" | "automation") => {
     const params = new URLSearchParams(searchParams.toString());
-    if (next === "unanswered") params.set("view", "unanswered");
-    else params.delete("view");
+    if (next === "posts") params.delete("view");
+    else params.set("view", next);
     router.replace(`/dashboard/comments${params.toString() ? `?${params.toString()}` : ""}`, { scroll: false });
   };
 
@@ -137,6 +140,17 @@ function CommentsInbox() {
           >
             <Inbox className="mr-1 h-3.5 w-3.5" /> Unanswered
           </Button>
+          <Button
+            size="sm"
+            variant={view === "automation" ? "secondary" : "ghost"}
+            className="h-7 px-3 text-xs"
+            role="tab"
+            aria-selected={view === "automation"}
+            onClick={() => showView("automation")}
+            data-testid="view-automation"
+          >
+            <Settings2 className="mr-1 h-3.5 w-3.5" /> Automation
+          </Button>
         </div>
       )}
 
@@ -155,6 +169,12 @@ function CommentsInbox() {
             <Button asChild size="sm">
               <Link href="/dashboard/channels">Go to Channels</Link>
             </Button>
+          </CardContent>
+        </Card>
+      ) : view === "automation" ? (
+        <Card>
+          <CardContent className="p-4">
+            <CommentAutomation />
           </CardContent>
         </Card>
       ) : view === "unanswered" ? (

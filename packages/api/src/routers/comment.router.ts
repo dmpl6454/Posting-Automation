@@ -19,6 +19,9 @@ import {
   type SocialComment,
   type SocialCommentPage,
   selectUnanswered,
+  normalizeBlockedWords,
+  MAX_BLOCKED_WORDS,
+  MAX_BLOCKED_WORD_LENGTH,
 } from "@postautomation/social";
 import { createRateLimitMiddleware } from "../middleware/rate-limit.middleware";
 import {
@@ -790,6 +793,19 @@ export const commentRouter = createRouter({
         metadata: { platform: t.platform, channelId: t.account.channelId, commentId: input.commentId },
       });
 
+      // A comment the automation hid and a person just unhid: record it, so the
+      // log says so. (The sweep never acts on a logged comment again either way.)
+      if (input.action === "unhide") {
+        try {
+          await (ctx.prisma as any).commentAutoAction.updateMany({
+            where: { organizationId: ctx.organizationId, commentId: input.commentId },
+            data: { status: "UNHIDDEN" },
+          });
+        } catch {
+          // Bookkeeping only — the unhide itself already succeeded.
+        }
+      }
+
       // After the action is confirmed and audited: a failed re-read only means
       // the UI keeps its current number, never that the like failed.
       if (igLike) {
@@ -1116,6 +1132,160 @@ export const commentRouter = createRouter({
         if (e instanceof TRPCError) throw e;
         throw toFriendlyAIError(e);
       }
+    }),
+  /**
+   * Comment automation settings for this workspace (auto-hide rules and
+   * new-comment alerts), the accounts they can cover, and what the last sweep
+   * did. A workspace that never saved settings gets the all-off defaults.
+   */
+  automationSettings: orgProcedure.query(async ({ ctx }) => {
+    const [row, channels] = await Promise.all([
+      (ctx.prisma as any).commentAutomation.findUnique({ where: { organizationId: ctx.organizationId } }),
+      ctx.prisma.channel.findMany({
+        where: { organizationId: ctx.organizationId, disconnectedAt: null, platform: { in: ["FACEBOOK", "INSTAGRAM"] } },
+        select: { id: true, platform: true, name: true, username: true, avatar: true, isActive: true, metadata: true },
+        orderBy: { name: "asc" },
+      }),
+    ]);
+    const role = (ctx as any).membership?.role;
+    return {
+      settings: {
+        autoHideEnabled: row?.autoHideEnabled ?? false,
+        blockedWords: (row?.blockedWords ?? []) as string[],
+        hideLinks: row?.hideLinks ?? false,
+        alertsEnabled: row?.alertsEnabled ?? false,
+        channelIds: (row?.channelIds ?? []) as string[],
+      },
+      lastRunAt: row?.lastRunAt ?? null,
+      lastRunSummary: (row?.lastRunSummary ?? null) as Record<string, unknown> | null,
+      canEdit: role === "OWNER" || role === "ADMIN",
+      accounts: channels.map(({ metadata, ...c }) => ({
+        ...c,
+        // Whether the recorded grant lets the automation HIDE on this account.
+        canModerate: commentCapabilities(
+          c.platform as CommentPlatform,
+          cachedGrantedScopes(metadata as Record<string, unknown> | null)
+        ).canModerate,
+      })),
+      limits: { maxWords: MAX_BLOCKED_WORDS, maxWordLength: MAX_BLOCKED_WORD_LENGTH },
+    };
+  }),
+
+  /**
+   * Save the automation settings. Owners and admins only — the automation acts
+   * unattended, as the workspace's Pages and accounts.
+   */
+  updateAutomation: orgProcedure
+    .input(
+      z.object({
+        autoHideEnabled: z.boolean(),
+        blockedWords: z.array(z.string().max(200)).max(1000),
+        hideLinks: z.boolean(),
+        alertsEnabled: z.boolean(),
+        channelIds: z.array(z.string()).max(1000),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const role = (ctx as any).membership?.role;
+      if (role !== "OWNER" && role !== "ADMIN") {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Only workspace owners and admins can change comment automation." });
+      }
+      const blockedWords = normalizeBlockedWords(input.blockedWords);
+      // Only this workspace's live FB/IG channels — a foreign or stale id is dropped, never stored.
+      const requested = [...new Set(input.channelIds)];
+      const owned =
+        requested.length === 0
+          ? []
+          : await ctx.prisma.channel.findMany({
+              where: {
+                id: { in: requested },
+                organizationId: ctx.organizationId,
+                disconnectedAt: null,
+                platform: { in: ["FACEBOOK", "INSTAGRAM"] },
+              },
+              select: { id: true },
+            });
+      const channelIds = owned.map((c: { id: string }) => c.id);
+      if (input.autoHideEnabled && blockedWords.length === 0 && !input.hideLinks) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Add at least one blocked word, or turn on hiding links, before switching auto-hide on.",
+        });
+      }
+      const userId = (ctx.session?.user as any)?.id ?? null;
+      const data = {
+        autoHideEnabled: input.autoHideEnabled,
+        blockedWords,
+        hideLinks: input.hideLinks,
+        alertsEnabled: input.alertsEnabled,
+        channelIds,
+        updatedById: userId,
+      };
+      await (ctx.prisma as any).commentAutomation.upsert({
+        where: { organizationId: ctx.organizationId },
+        create: { organizationId: ctx.organizationId, ...data },
+        update: data,
+      });
+      await createAuditLog({
+        organizationId: ctx.organizationId,
+        userId,
+        action: AUDIT_ACTIONS.COMMENT_AUTOMATION_UPDATED,
+        entityType: "Organization",
+        entityId: ctx.organizationId,
+        metadata: {
+          autoHideEnabled: input.autoHideEnabled,
+          hideLinks: input.hideLinks,
+          alertsEnabled: input.alertsEnabled,
+          blockedWordCount: blockedWords.length,
+          channelCount: channelIds.length,
+        },
+      });
+      return { ok: true as const, blockedWords, channelIds };
+    }),
+
+  /** The comments the automation hid most recently, newest first, with where they were. */
+  autoHideLog: orgProcedure
+    .input(z.object({ limit: z.number().int().min(1).max(100).default(50) }).default({}))
+    .query(async ({ ctx, input }) => {
+      const rows: any[] = await (ctx.prisma as any).commentAutoAction.findMany({
+        where: { organizationId: ctx.organizationId },
+        orderBy: { createdAt: "desc" },
+        take: input.limit,
+      });
+      if (rows.length === 0) return { items: [] };
+      const [channels, targets] = await Promise.all([
+        ctx.prisma.channel.findMany({
+          where: { id: { in: [...new Set(rows.map((r) => r.channelId))] }, organizationId: ctx.organizationId },
+          select: { id: true, name: true, platform: true },
+        }),
+        ctx.prisma.postTarget.findMany({
+          where: { id: { in: [...new Set(rows.map((r) => r.postTargetId))] }, post: { organizationId: ctx.organizationId } },
+          select: { id: true, publishedUrl: true, contentOverride: true, post: { select: { content: true } } },
+        }),
+      ]);
+      const channelById = new Map(channels.map((c: any) => [c.id, c]));
+      const targetById = new Map(targets.map((t: any) => [t.id, t]));
+      return {
+        items: rows.map((r) => {
+          const ch: any = channelById.get(r.channelId);
+          const t: any = targetById.get(r.postTargetId);
+          return {
+            id: r.id as string,
+            commentId: r.commentId as string,
+            postTargetId: r.postTargetId as string,
+            platform: r.platform as CommentPlatform,
+            channelId: r.channelId as string,
+            channelName: (ch?.name ?? null) as string | null,
+            postCaption: ((t?.contentOverride ?? t?.post?.content ?? "") as string).slice(0, 120),
+            publishedUrl: (t?.publishedUrl ?? null) as string | null,
+            commentText: r.commentText as string,
+            authorLabel: (r.authorLabel ?? null) as string | null,
+            reason: r.reason as string,
+            status: r.status as string,
+            createdAt: r.createdAt as Date,
+          };
+        }),
+      };
     }),
 });
 

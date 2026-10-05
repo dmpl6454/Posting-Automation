@@ -179,6 +179,8 @@ model Organization {
   influencers             Influencer[]
   celebrityBrandSignals   CelebrityBrandSignal[]
   dailyDigests            DailyDigest[]
+  commentAutomation       CommentAutomation?
+  commentAutoActions      CommentAutoAction[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1643,4 +1645,60 @@ model Deployment {
   @@index([status])
   @@index([createdAt])
   @@index([commitHash])
+}
+
+// ==================== COMMENT AUTOMATION (2026-10-05) ====================
+
+/// Per-workspace comment automation: auto-hide rules + new-comment alerts.
+/// Read by the worker's comment sweep (apps/worker/src/lib/comment-sweep.ts),
+/// which checks recent published Facebook/Instagram posts on a budget. A
+/// workspace with no row, or with both switches off, is never swept.
+model CommentAutomation {
+  id              String   @id @default(cuid())
+  organizationId  String   @unique
+  /// Hide matching comments as the Page / account (needs the write permission).
+  autoHideEnabled Boolean  @default(false)
+  /// Words or phrases, matched case-insensitively (whole words for plain words).
+  blockedWords    String[] @default([])
+  /// Also hide comments that contain a link.
+  hideLinks       Boolean  @default(false)
+  /// In-app notification to owners/admins when new comments arrive.
+  alertsEnabled   Boolean  @default(false)
+  /// Empty = every Facebook Page and Instagram account in the workspace.
+  channelIds      String[] @default([])
+  /// When the sweep last looked at this workspace, and what it found.
+  lastRunAt       DateTime?
+  lastRunSummary  Json?
+  updatedById     String?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// One comment the automation hid. Its existence is what stops the sweep from
+/// acting on that comment again — so a person who unhides it keeps it visible.
+model CommentAutoAction {
+  id             String         @id @default(cuid())
+  organizationId String
+  postTargetId   String
+  channelId      String
+  platform       SocialPlatform
+  commentId      String
+  /// The comment as it read when hidden (truncated), so the log shows what was hidden.
+  commentText    String         @db.Text
+  authorLabel    String?
+  /// Why it matched: "word:<term>" or "link".
+  reason         String
+  /// HIDDEN, or UNHIDDEN once someone unhid it from PostAutomation.
+  status         String         @default("HIDDEN")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, commentId])
+  @@index([organizationId, createdAt])
 }
