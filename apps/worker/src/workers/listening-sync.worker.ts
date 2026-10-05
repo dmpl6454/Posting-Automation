@@ -25,6 +25,24 @@ import {
   rotateWindow,
   uniqueByPlatformId,
 } from "../lib/listening-sync-plan";
+import {
+  YT_UNITS,
+  isQuotaError,
+  isPerVideoCommentError,
+  isYouTubeTurn,
+  pickRedditThreads,
+  quotaDay,
+  readYouTubeListeningConfig,
+  redditCommentsFromListing,
+  reserveYouTubeUnits,
+  youtubeCommentsFromThreads,
+  youtubeQuery,
+  youtubeStatsById,
+  youtubeVideoMention,
+  youtubeVideosFromSearch,
+  type RedditPostRef,
+  type UnitCounter,
+} from "../lib/listening-comments";
 
 /**
  * Listening sync (2026-10-04 rewrite — read apps/worker/src/lib/listening-sync-plan.ts first).
@@ -80,6 +98,10 @@ interface FetchContext {
   keywords: string[];
   language: string;
   organizationId: string;
+  /** The query being swept (YouTube spreads its runs by this id). */
+  queryId: string;
+  /** A person asked for this sweep (Sync Now / a new query), not the cron. */
+  interactive: boolean;
   /** Lazily loaded once per job; only the platforms that need a token read it. */
   channels: () => Promise<ListeningChannel[]>;
 }
@@ -233,6 +255,7 @@ const fetchRedditMentions: Fetcher = async ({ keywords }) => {
   if (!clientId || !clientSecret) return [];
 
   const mentions: RawMention[] = [];
+  const threads: RedditPostRef[] = [];
   try {
     const token = await cachedToken("reddit", async () => {
       const tokenRes = await timedFetch("https://www.reddit.com/api/v1/access_token", {
@@ -267,6 +290,15 @@ const fetchRedditMentions: Fetcher = async ({ keywords }) => {
         for (const child of data.data?.children || []) {
           const p = child.data;
           if (p.stickied) continue;
+          if (p.id && p.permalink) {
+            threads.push({
+              id: String(p.id),
+              title: String(p.title ?? ""),
+              permalink: String(p.permalink),
+              subreddit: String(p.subreddit ?? ""),
+              numComments: Number(p.num_comments) || 0,
+            });
+          }
           mentions.push({
             source: "REDDIT",
             platformPostId: p.name || p.id || null,
@@ -285,8 +317,184 @@ const fetchRedditMentions: Fetcher = async ({ keywords }) => {
         console.warn(`[ListeningSync:Reddit] Failed for ${JSON.stringify(group)}:`, err);
       }
     }
+
+    // Comments (2026-10-05): open the most-discussed matching posts and keep
+    // the comments that name a keyword (or sit under a post whose title does).
+    // One request per post, REDDIT_COMMENT_THREADS posts per sweep.
+    const seen = new Set<string>();
+    const unique = threads.filter((t) => (seen.has(t.id) ? false : (seen.add(t.id), true)));
+    for (const post of pickRedditThreads(unique, REDDIT_COMMENT_THREADS)) {
+      try {
+        const url = `https://oauth.reddit.com/comments/${encodeURIComponent(post.id)}?limit=100&depth=2&sort=new&raw_json=1`;
+        const response = await timedFetch(url, {
+          headers: { Authorization: `Bearer ${token}`, "User-Agent": "PostAutomation/1.0" },
+        });
+        if (response.status === 401) {
+          tokenCache.delete("reddit");
+          break;
+        }
+        if (!response.ok) {
+          console.warn(`[ListeningSync:Reddit] comments HTTP ${response.status} for post ${post.id}`);
+          continue;
+        }
+        mentions.push(...redditCommentsFromListing(await response.json(), post, keywords));
+      } catch (err) {
+        console.warn(`[ListeningSync:Reddit] comments failed for post ${post.id}:`, err);
+      }
+    }
   } catch (err) {
     console.warn(`[ListeningSync:Reddit] Failed:`, err);
+  }
+  return mentions;
+};
+
+/** Matching Reddit posts whose comments are read per sweep (one request each). */
+const REDDIT_COMMENT_THREADS = 5;
+
+// ---------------------------------------------------------------------------
+// YouTube (2026-10-05) — videos matching the keywords, and their comments.
+// See listening-comments.ts for the quota rules: a daily unit cap shared with
+// nothing else in listening, a 6-hour cadence per query, fail-closed.
+// ---------------------------------------------------------------------------
+
+let ytRedis: ReturnType<typeof createRedisConnection> | null = null;
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([p, new Promise<T>((_, reject) => setTimeout(() => reject(new Error("timeout")), ms))]);
+}
+const ytUnitCounter: UnitCounter = {
+  async incrBy(day, units) {
+    ytRedis ??= createRedisConnection();
+    const key = `listening:yt-units:${day}`;
+    const total = await withTimeout(ytRedis.incrby(key, units), 2_000);
+    void ytRedis.expire(key, 2 * 24 * 60 * 60).catch(() => {});
+    return total;
+  },
+  async decrBy(day, units) {
+    ytRedis ??= createRedisConnection();
+    await withTimeout(ytRedis.decrby(`listening:yt-units:${day}`, units), 2_000);
+  },
+};
+/** Set when Google answers quotaExceeded — no more YouTube calls that Pacific day. */
+let ytQuotaExhaustedDay: string | null = null;
+
+/** Test seam. */
+export function __setYouTubeUnitCounter(counter: UnitCounter | null) {
+  Object.assign(ytUnitCounterOverride, { counter });
+  ytQuotaExhaustedDay = null;
+}
+const ytUnitCounterOverride: { counter: UnitCounter | null } = { counter: null };
+
+type YtAuth = { kind: "key"; key: string } | { kind: "token"; token: string; channelId: string };
+
+function ytUrl(path: string, params: Record<string, string>, auth: YtAuth): string {
+  const qs = new URLSearchParams(params);
+  if (auth.kind === "key") qs.set("key", auth.key);
+  return `https://www.googleapis.com/youtube/v3/${path}?${qs.toString()}`;
+}
+
+function ytHeaders(auth: YtAuth): Record<string, string> {
+  return auth.kind === "token" ? { Authorization: `Bearer ${auth.token}` } : {};
+}
+
+const fetchYouTubeMentions: Fetcher = async ({ keywords, language, queryId, interactive, channels }) => {
+  const cfg = readYouTubeListeningConfig();
+  const now = new Date();
+  if (cfg.dailyUnits <= 0) return [];
+  if (ytQuotaExhaustedDay === quotaDay(now)) return [];
+  const bucket = Math.floor(Date.now() / LISTENING_SYNC_INTERVAL_MS);
+  if (!isYouTubeTurn(queryId, bucket, cfg.everyRuns, interactive)) return [];
+
+  // Auth: a configured API key, else the workspace's connected YouTube
+  // channels' tokens (youtube.readonly), freshest first, falling over on 401.
+  const auths: YtAuth[] = [];
+  if (process.env.YOUTUBE_API_KEY) auths.push({ kind: "key", key: process.env.YOUTUBE_API_KEY });
+  for (const ch of (await channels()).filter((c) => c.platform === "YOUTUBE").slice(0, 3)) {
+    auths.push({ kind: "token", token: ch.accessToken, channelId: ch.id });
+  }
+  if (auths.length === 0) return [];
+
+  const counter = ytUnitCounterOverride.counter ?? ytUnitCounter;
+  const reserve = (units: number) => reserveYouTubeUnits(counter, units, cfg.dailyUnits, now);
+  let authIndex = 0;
+
+  /** One call with auth fall-over on 401; null = give up on YouTube for this sweep. */
+  const call = async (path: string, params: Record<string, string>, units: number): Promise<{ ok: boolean; body: any } | null> => {
+    if (!(await reserve(units))) {
+      console.warn(`[ListeningSync:YouTube] daily unit cap (${cfg.dailyUnits}) reached or unavailable — skipping`);
+      return null;
+    }
+    while (authIndex < auths.length) {
+      const auth = auths[authIndex]!;
+      const response = await timedFetch(ytUrl(path, params, auth), { headers: ytHeaders(auth) });
+      const body: any = await response.json().catch(() => null);
+      if (response.status === 401) {
+        authIndex++;
+        continue;
+      }
+      if (isQuotaError(body)) {
+        ytQuotaExhaustedDay = quotaDay(now);
+        console.warn(`[ListeningSync:YouTube] Google reports the project's YouTube quota is used up for today — stopping`);
+        return null;
+      }
+      return { ok: response.ok, body };
+    }
+    console.warn(`[ListeningSync:YouTube] no working credential (API key or connected YouTube channel) — skipping`);
+    return null;
+  };
+
+  const mentions: RawMention[] = [];
+  const publishedAfter = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const lang = /^[a-z]{2}$/i.test(language) ? language.toLowerCase() : "en";
+  try {
+    for (const group of chunkKeywords(keywords, { maxPerChunk: 5, maxChars: 400 })) {
+      const search = await call(
+        "search",
+        {
+          part: "snippet",
+          type: "video",
+          q: youtubeQuery(group),
+          order: "date",
+          publishedAfter,
+          relevanceLanguage: lang,
+          maxResults: String(cfg.videosPerSearch),
+        },
+        YT_UNITS.search
+      );
+      if (!search) break;
+      if (!search.ok) {
+        console.warn(`[ListeningSync:YouTube] search failed: ${JSON.stringify(search.body?.error?.errors?.[0] ?? search.body?.error ?? null)}`);
+        continue;
+      }
+      const videos = youtubeVideosFromSearch(search.body);
+      if (videos.length === 0) continue;
+
+      const statsRes = await call("videos", { part: "statistics", id: videos.map((v) => v.id).join(",") }, YT_UNITS.videos);
+      const stats = statsRes?.ok ? youtubeStatsById(statsRes.body) : new Map();
+      for (const v of videos) mentions.push(youtubeVideoMention(v, stats.get(v.id)));
+      if (!statsRes) break;
+
+      const withComments = [...videos]
+        .filter((v) => (stats.get(v.id)?.comments ?? 1) > 0)
+        .sort((a, b) => (stats.get(b.id)?.comments ?? 0) - (stats.get(a.id)?.comments ?? 0))
+        .slice(0, cfg.commentVideos);
+      for (const v of withComments) {
+        const threads = await call(
+          "commentThreads",
+          { part: "snippet", videoId: v.id, maxResults: "50", order: "time", textFormat: "plainText" },
+          YT_UNITS.commentThreads
+        );
+        if (!threads) return mentions;
+        if (!threads.ok) {
+          if (!isPerVideoCommentError(threads.body)) {
+            console.warn(`[ListeningSync:YouTube] comments failed for ${v.id}: ${JSON.stringify(threads.body?.error?.errors?.[0] ?? null)}`);
+          }
+          continue;
+        }
+        mentions.push(...youtubeCommentsFromThreads(threads.body, v, keywords));
+      }
+    }
+  } catch (err) {
+    console.warn(`[ListeningSync:YouTube] Failed:`, err);
   }
   return mentions;
 };
@@ -577,13 +785,19 @@ const PLATFORM_FETCHERS: Record<string, Fetcher> = {
   instagram: fetchInstagramMentions,
   facebook: fetchFacebookTagged,
   linkedin: fetchLinkedInMentions,
+  youtube: fetchYouTubeMentions,
   tiktok: fetchTikTokMentions,
   news: fetchGoogleNews,
 };
-const DEFAULT_PLATFORMS = ["twitter", "reddit", "instagram", "facebook", "linkedin", "tiktok", "news"];
+const DEFAULT_PLATFORMS = ["twitter", "reddit", "instagram", "facebook", "linkedin", "tiktok", "news", "youtube"];
 
 /** Test seam: the per-platform fetchers, callable with a hand-built context. */
-export const __listeningFetchers = { news: fetchGoogleNews, facebook: fetchFacebookTagged };
+export const __listeningFetchers = {
+  news: fetchGoogleNews,
+  facebook: fetchFacebookTagged,
+  reddit: fetchRedditMentions,
+  youtube: fetchYouTubeMentions,
+};
 
 /** Rows per createMany statement (keeps one statement's parameter list bounded). */
 const INSERT_CHUNK = 500;
@@ -606,7 +820,9 @@ export function createListeningSyncWorker() {
       }
       inFlightQueries.add(listeningQueryId);
       try {
-        return await syncListeningQuery(listeningQueryId, organizationId);
+        // A person asked (Sync Now / new query) — see listening-jobs.ts for the id shapes.
+        const interactive = /:(manual-|create$)/.test(String(job.id ?? ""));
+        return await syncListeningQuery(listeningQueryId, organizationId, interactive);
       } finally {
         inFlightQueries.delete(listeningQueryId);
       }
@@ -624,7 +840,7 @@ export function createListeningSyncWorker() {
   return worker;
 }
 
-async function syncListeningQuery(listeningQueryId: string, organizationId: string) {
+async function syncListeningQuery(listeningQueryId: string, organizationId: string, interactive = false) {
       const startedAt = Date.now();
       const requestsBefore = requestCounter;
 
@@ -655,7 +871,7 @@ async function syncListeningQuery(listeningQueryId: string, organizationId: stri
             organizationId,
             isActive: true,
             disconnectedAt: null,
-            platform: { in: ["INSTAGRAM", "FACEBOOK", "LINKEDIN"] },
+            platform: { in: ["INSTAGRAM", "FACEBOOK", "LINKEDIN", "YOUTUBE"] },
           },
           select: { id: true, platform: true, platformId: true, name: true, accessToken: true },
           // Most recently (re)connected first — the freshest token leads the IG probe order.
@@ -664,7 +880,14 @@ async function syncListeningQuery(listeningQueryId: string, organizationId: stri
         return channelsPromise;
       };
 
-      const ctx: FetchContext = { keywords, language: query.language || "en", organizationId, channels };
+      const ctx: FetchContext = {
+        keywords,
+        language: query.language || "en",
+        organizationId,
+        queryId: listeningQueryId,
+        interactive,
+        channels,
+      };
 
       // 1. Fetch — all selected platforms in parallel, each as few requests as it allows.
       const perPlatform = await Promise.all(
