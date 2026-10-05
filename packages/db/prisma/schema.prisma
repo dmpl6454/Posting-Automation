@@ -181,6 +181,7 @@ model Organization {
   dailyDigests            DailyDigest[]
   commentAutomation       CommentAutomation?
   commentAutoActions      CommentAutoAction[]
+  commentPrivateReplies   CommentPrivateReply[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1701,4 +1702,30 @@ model CommentAutoAction {
 
   @@unique([organizationId, commentId])
   @@index([organizationId, createdAt])
+}
+
+/// A private reply sent to the person who left a comment (2026-10-05). Meta
+/// allows ONE private message per comment, so this row is how the UI shows
+/// "sent" and how a second send is refused before reaching Meta. UNCONFIRMED =
+/// the send's outcome was unknown (a retry is safe: Meta itself refuses a
+/// second message for the same comment). The text is not stored.
+model CommentPrivateReply {
+  id             String         @id @default(cuid())
+  organizationId String
+  postTargetId   String
+  channelId      String
+  platform       SocialPlatform
+  commentId      String
+  /// SENT or UNCONFIRMED.
+  status         String
+  messageId      String?
+  sentById       String?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, commentId])
+  @@index([postTargetId])
 }

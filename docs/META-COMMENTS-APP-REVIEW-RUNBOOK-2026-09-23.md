@@ -487,3 +487,56 @@ the sweep doesn't try; the tab names those accounts, and the run summary lists t
 
 **Limits.** Only the first page of comments per post is checked (Facebook: newest 25); a large
 fan-out is covered gradually, a few posts per workspace per run; alerts are in-app only (no email).
+
+## 12. Private replies and the Messages inbox (2026-10-05)
+
+**What it does.** A **Reply privately** action on each comment sends ONE private message to the
+person who wrote it, and **Messages** (`/dashboard/messages`) lists the Messenger conversations of a
+Facebook Page and the Instagram Direct conversations of an Instagram account, with a composer.
+
+**Meta's rules (enforced by Meta, mirrored in the UI and the API):**
+- One private reply per comment, within 7 days of the comment. On Instagram it lands in the
+  person's inbox, or in Requests if they don't follow the account.
+- A message in a conversation can only be sent within 24 hours of the person's last message
+  (the "standard messaging window"). The composer shows the time left and disables itself after.
+- Message details are readable for the newest 20 messages of a conversation only.
+- Text limits: Messenger 2,000 characters, Instagram 1,000 bytes of UTF-8.
+
+**Permissions.**
+
+| | needs | App A (everyone) | App B |
+|---|---|---|---|
+| Facebook private reply | `pages_messaging` | not requested before; now requested | now requested |
+| Instagram private reply | `instagram_basic` + `instagram_manage_comments` + `pages_read_engagement` | **approved** | approved |
+| Facebook inbox | `pages_messaging` + `pages_manage_metadata` + `pages_read_engagement` | now requested | now requested |
+| Instagram inbox | `instagram_basic` + `instagram_manage_messages` + `pages_manage_metadata` | now requested | now requested |
+
+So an **Instagram private reply already works for anyone** whose channel was reconnected after
+`instagram_manage_comments` was approved. Everything else needs App Review. All four new scopes were
+probed on both apps' live login dialog before being requested: 302 five times each (a bogus scope
+returns 500). One isolated 500 on App B's Facebook dialog did not repeat in 15 tries.
+
+**The person also needs a role on the Page that can manage messages** (the MESSAGING task); for an
+Instagram account, on the Facebook Page it is linked to.
+
+**How it works.**
+- Every call uses a Page token on graph.facebook.com. An Instagram channel stores the Facebook
+  user token, so the API looks up the linked Page and its token (`resolveInstagramPage`), remembers
+  the Page id on the channel (`metadata.linkedPageId`, atomic jsonb merge), and caches the Page token
+  in memory for 30 minutes. The Page token is never written to the database.
+- Private replies are recorded in `CommentPrivateReply` (`SENT` / `UNCONFIRMED`). A `SENT` row
+  refuses a second send before reaching Meta. An `UNCONFIRMED` row may be retried, because Meta itself
+  refuses a second message for the same comment.
+- Sending is not idempotent: a timeout, a 5xx, a transient error or an OK without an id is reported
+  as "may already have been sent", never as a failure, and is never retried automatically.
+- The only client value that reaches a Graph path is the conversation id. It is shape-checked
+  (numeric node ids refused), encoded, and the conversation must include the account. The recipient
+  of a send is read from the conversation on the server.
+- Reads share the per-Page comment budget. The thread polls every 30 seconds and the list every
+  60 seconds while open.
+
+**App Review steps.** Reconnect a test Page and a test Instagram account with *Edit settings*, then
+make one successful call for each permission: send a private reply from Comments (Facebook:
+`pages_messaging`), open Messages for the Page and the Instagram account (`pages_manage_metadata`,
+`instagram_manage_messages`), and send one message inside the 24-hour window. Screencast the
+comment, the private reply arriving in Messenger / Instagram, the Messages list, a thread and a reply.

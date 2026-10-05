@@ -9,6 +9,7 @@ import {
   EyeOff,
   Heart,
   Loader2,
+  Mail,
   MessageCircle,
   MessageSquareOff,
   Pencil,
@@ -23,6 +24,7 @@ import { humanizeError } from "~/lib/errors";
 import { parseGraphTimestamp } from "~/lib/graph-time";
 import { classifyReplyFailure } from "~/lib/comment-reply-outcome";
 import { applyModeration } from "~/lib/comment-moderation-patch";
+import { privateMessageLength, privateReplyState, type PrivateReplyRecord } from "~/lib/private-reply";
 import { useToast } from "~/hooks/use-toast";
 import { Button } from "~/components/ui/button";
 import { Badge } from "~/components/ui/badge";
@@ -115,14 +117,14 @@ export function authorLabel(c: SocialComment, platform: CommentPlatform, namesHi
   return c.author.name ?? "Facebook user";
 }
 
-export function RelativeTime({ value }: { value: string }) {
+export function RelativeTime({ value, className }: { value: string; className?: string }) {
   const d = parseGraphTimestamp(value);
   if (!d) return null;
   // Clock skew between Meta and the viewer's device can put a just-posted
   // reply a few seconds in the "future" — "in 1 minute" reads as a bug.
   const shown = d.getTime() > Date.now() ? new Date() : d;
   return (
-    <time dateTime={d.toISOString()} title={d.toLocaleString()} className="text-[11px] text-muted-foreground">
+    <time dateTime={d.toISOString()} title={d.toLocaleString()} className={cn("text-[11px] text-muted-foreground", className)}>
       {formatDistanceToNow(shown, { addSuffix: true })}
     </time>
   );
@@ -174,6 +176,9 @@ export function CommentThread({
   const [likedHere, setLikedHere] = useState<Record<string, boolean>>({});
   const [postLiked, setPostLiked] = useState<boolean | null>(null);
   const [confirmCommentsOff, setConfirmCommentsOff] = useState(false);
+  // Private reply composer (one message per comment, see private-reply.ts).
+  const [privateTo, setPrivateTo] = useState<string | null>(null);
+  const [privateDrafts, setPrivateDrafts] = useState<Record<string, string>>({});
   const utils = trpc.useUtils();
 
   const query = trpc.comment.list.useInfiniteQuery(
@@ -216,6 +221,46 @@ export function CommentThread({
     return out;
   }, [query.data]);
 
+  // Private replies already recorded for the comments on the loaded pages.
+  const privateReplies = useMemo(() => {
+    const out: Record<string, { status: string; at: string }> = {};
+    for (const page of query.data?.pages ?? []) Object.assign(out, (page as any).privateReplies ?? {});
+    return out;
+  }, [query.data]);
+
+  const sendPrivate = trpc.comment.privateReply.useMutation({
+    onSuccess: (_res, variables) => {
+      toast({
+        title: "Private reply sent",
+        description:
+          platform === "INSTAGRAM"
+            ? "It's in their Instagram inbox (in Requests if they don't follow you). Continue in Messages once they answer."
+            : "It's in their Messenger inbox. Continue in Messages once they answer.",
+      });
+      setPrivateDrafts((prev) => {
+        const next = { ...prev };
+        delete next[variables.commentId];
+        return next;
+      });
+      setPrivateTo(null);
+      void query.refetch();
+    },
+    onError: (err) => {
+      if (classifyReplyFailure(err as any) === "unconfirmed" || /didn't confirm the private reply/i.test(err.message)) {
+        // Meta allows one private reply per comment, so a retry after an unknown
+        // outcome cannot double-send — but say so plainly.
+        toast({
+          title: "Private reply not confirmed",
+          description: "It may already have been sent. Sending again is safe — Meta refuses a second message for the same comment.",
+        });
+        void query.refetch();
+        return;
+      }
+      toast({ title: "Couldn't send the private reply", description: humanizeError(err), variant: "destructive" });
+      if (/already been sent|hasn't granted permission/i.test(err.message)) setTimeout(() => void query.refetch(), 1500);
+    },
+  });
+
   const reply = trpc.comment.reply.useMutation({
     onSuccess: (_res, variables) => {
       toast({ title: `Reply posted as ${accountName}` });
@@ -253,6 +298,9 @@ export function CommentThread({
   // connect or lazily on first open). `false` = known missing → the UI shows
   // WHY and how to fix it instead of letting an action fail or hiding it.
   const caps = first?.capabilities;
+  const messagingCaps = (first as any)?.messaging as
+    | { known: boolean; canPrivateReply: boolean | null; missingForPrivateReply: string[] }
+    | undefined;
   const writeBlocked = caps?.known === true && caps.canReply === false;
   const namesHidden = caps?.namesHidden === true;
   // Liking has its own permission on Instagram. Separate from writeBlocked on
@@ -405,9 +453,24 @@ export function CommentThread({
     reply.mutate({ targetId, commentId, message });
   };
 
+  const sendPrivateReply = (commentId: string) => {
+    const message = (privateDrafts[commentId] ?? "").trim();
+    if (!message || sendPrivate.isPending) return;
+    sendPrivate.mutate({ targetId, commentId, message });
+  };
+
   const renderComment = (c: SocialComment, isReply: boolean) => {
     const draft = drafts[c.id] ?? "";
     const attachment = attachmentLabel(c.attachmentType);
+    const priv = privateReplyState({
+      isOwn: c.isOwn,
+      createdAt: c.createdAt,
+      platform,
+      caps: messagingCaps,
+      record: privateReplies[c.id] as PrivateReplyRecord,
+    });
+    const privDraft = privateDrafts[c.id] ?? "";
+    const privLen = privateMessageLength(platform, privDraft);
     return (
       <div key={c.id} className={cn("space-y-1", isReply ? "border-l-2 pl-3" : "")}>
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
@@ -560,8 +623,81 @@ export function CommentThread({
               <Trash2 className="h-3 w-3" /> Delete
             </button>
           )}
+          {knownPlatform && priv.show && priv.status === "sent" && (
+            <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400" title={priv.title} data-testid="private-reply-sent">
+              <Mail className="h-3 w-3" /> Sent privately
+            </span>
+          )}
+          {knownPlatform && priv.show && priv.status !== "sent" && privateTo !== c.id && (
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 font-medium hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
+              title={priv.title}
+              disabled={priv.disabled}
+              onClick={() => setPrivateTo(c.id)}
+              data-testid="private-reply-button"
+            >
+              <Mail className="h-3 w-3" /> Reply privately
+            </button>
+          )}
           {actionBusy(c.id) && <Loader2 className="h-3 w-3 animate-spin" />}
         </div>
+
+        {knownPlatform && priv.show && !priv.disabled && privateTo === c.id && (
+          <div className="space-y-1.5 rounded-md border border-dashed p-2" data-testid="private-reply-composer">
+            <p className="text-[11px] text-muted-foreground">
+              One private message to {authorLabel(c, platform, namesHidden)} as {accountName}. Meta allows only one per
+              comment; you can continue in Messages after they answer.
+            </p>
+            {priv.status === "unconfirmed" && (
+              <p className="rounded-md border border-amber-500/50 bg-amber-500/10 p-2 text-[11px] text-amber-700 dark:text-amber-400">
+                Your last private reply to this comment may already have been sent. Sending again is safe — Meta refuses a
+                second message for the same comment.
+              </p>
+            )}
+            <Textarea
+              autoFocus
+              value={privDraft}
+              rows={2}
+              placeholder="Write a private message…"
+              className="text-sm"
+              onChange={(e) => setPrivateDrafts((prev) => ({ ...prev, [c.id]: e.target.value }))}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault();
+                  sendPrivateReply(c.id);
+                }
+              }}
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                size="sm"
+                className="h-7 px-3 text-xs"
+                disabled={sendPrivate.isPending || !privDraft.trim() || privLen.used > privLen.max}
+                onClick={() => sendPrivateReply(c.id)}
+                title="Send this one private message (Ctrl/⌘+Enter)"
+              >
+                {sendPrivate.isPending && sendPrivate.variables?.commentId === c.id && (
+                  <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                )}
+                {priv.status === "unconfirmed" ? "Send again" : "Send privately"}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 px-2 text-xs"
+                disabled={sendPrivate.isPending}
+                onClick={() => setPrivateTo(null)}
+              >
+                Cancel
+              </Button>
+              <span className={cn("ml-auto text-[10px]", privLen.used > privLen.max ? "text-destructive" : "text-muted-foreground")}>
+                {privLen.used.toLocaleString()}/{privLen.max.toLocaleString()}
+                {platform === "INSTAGRAM" ? " bytes" : ""}
+              </span>
+            </div>
+          </div>
+        )}
 
         {c.canReply && !writeBlocked && replyingTo === c.id && (
           <div className="space-y-1.5 pt-1">

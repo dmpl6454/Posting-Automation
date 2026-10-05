@@ -50,13 +50,26 @@ describe("Meta insights scopes", () => {
     expect(getDefaultScopes("FACEBOOK")).not.toContain("instagram_manage_engagement");
   });
 
-  it("does not request comment scopes the feature does not use (App Review rejects unused permissions)", () => {
-    // Comments are read/replied on demand — no webhooks — so pages_manage_metadata
-    // is NOT needed, and IG never needs the Facebook-Page WRITE scope
-    // (pages_read_user_content IS requested for IG — a like dependency, above).
-    expect(getDefaultScopes("FACEBOOK")).not.toContain("pages_manage_metadata");
+  it("requests the messaging scopes the private-reply + Messages features use (2026-10-05)", () => {
+    // Facebook: private reply + send → pages_messaging; the Conversations API
+    // additionally needs pages_manage_metadata (+ pages_read_engagement).
+    // Instagram: the Conversations API needs instagram_manage_messages +
+    // pages_manage_metadata on the linked Page's token. Do not drop any of
+    // these without removing the feature (message.router.ts).
+    expect(getDefaultScopes("FACEBOOK")).toEqual(
+      expect.arrayContaining(["pages_messaging", "pages_manage_metadata", "pages_read_engagement"])
+    );
+    expect(getDefaultScopes("INSTAGRAM")).toEqual(
+      expect.arrayContaining(["instagram_manage_messages", "pages_manage_metadata", "instagram_basic"])
+    );
+  });
+
+  it("does not request scopes no feature uses (App Review rejects unused permissions)", () => {
+    // IG never needs the Facebook-Page comment WRITE scope, and Instagram DMs
+    // ride on instagram_manage_messages — not Messenger's pages_messaging.
     expect(getDefaultScopes("INSTAGRAM")).not.toContain("pages_manage_engagement");
-    expect(getDefaultScopes("INSTAGRAM")).not.toContain("pages_manage_metadata");
+    expect(getDefaultScopes("INSTAGRAM")).not.toContain("pages_messaging");
+    expect(getDefaultScopes("FACEBOOK")).not.toContain("instagram_manage_messages");
   });
 
   it("keeps the existing publishing scopes intact", () => {
