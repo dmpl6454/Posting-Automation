@@ -9,7 +9,7 @@ vi.mock("@postautomation/queue", () => ({
   createRedisConnection: () => ({}),
 }));
 
-import { __listeningFetchers, __resetListeningTokenCache, __setYouTubeUnitCounter } from "../listening-sync.worker";
+import { __listeningFetchers, __resetGdeltGate, __resetListeningTokenCache, __setYouTubeUnitCounter } from "../listening-sync.worker";
 
 type FetchMock = ReturnType<typeof vi.fn>;
 
@@ -293,5 +293,64 @@ describe("fetchYouTubeMentions", () => {
     fetchMock.mockClear();
     await __listeningFetchers.youtube({ ...ctx(["acme"], rows), interactive: true });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+// ── Public sources (2026-10-05) ────────────────────────────────────────────
+
+describe("public sources", () => {
+  afterEach(() => {
+    delete process.env.LISTENING_MASTODON_INSTANCES;
+    __resetGdeltGate();
+  });
+
+  it("Hacker News: one request per keyword, at most 5", async () => {
+    fetchMock.mockImplementation(async () => jsonResponse(200, { hits: [] }));
+    await __listeningFetchers.hackernews(ctx(["a1", "a2", "a3", "a4", "a5", "a6"], []));
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    expect(String(fetchMock.mock.calls[0]![0])).toMatch(/^https:\/\/hn\.algolia\.com\/api\/v1\/search_by_date\?query=a1/);
+    expect((fetchMock.mock.calls[0]![1] as any).headers["User-Agent"]).toMatch(/PostAutomation/);
+  });
+
+  it("Mastodon: each configured instance × each keyword-as-hashtag", async () => {
+    process.env.LISTENING_MASTODON_INSTANCES = "mastodon.social,fosstodon.org";
+    fetchMock.mockImplementation(async () => jsonResponse(200, []));
+    await __listeningFetchers.mastodon(ctx(["Acme", "Acme Phone", "x"], []));
+    expect(fetchMock.mock.calls.map((c) => String(c[0]))).toEqual([
+      "https://mastodon.social/api/v1/timelines/tag/acme?limit=40",
+      "https://mastodon.social/api/v1/timelines/tag/acmephone?limit=40",
+      "https://fosstodon.org/api/v1/timelines/tag/acme?limit=40",
+      "https://fosstodon.org/api/v1/timelines/tag/acmephone?limit=40",
+    ]);
+  });
+
+  it("a failing source logs and returns nothing (never throws)", async () => {
+    fetchMock.mockImplementation(async () => {
+      throw new Error("network down");
+    });
+    await expect(__listeningFetchers.bluesky(ctx(["acme"], []))).resolves.toEqual([]);
+    fetchMock.mockImplementation(async () => jsonResponse(503, {}));
+    await expect(__listeningFetchers.lemmy(ctx(["acme"], []))).resolves.toEqual([]);
+  });
+
+  it("GDELT: a 200 that isn't JSON (its rate-limit text) is skipped", async () => {
+    fetchMock.mockImplementation(async () => new Response("Please limit requests to one every 5 seconds", { status: 200 }));
+    await expect(__listeningFetchers.gdelt(ctx(["acme"], []))).resolves.toEqual([]);
+    expect(String(fetchMock.mock.calls[0]![0])).toMatch(/^https:\/\/api\.gdeltproject\.org\/api\/v2\/doc\/doc\?query=acme/);
+  });
+
+  it("news = Google News + Bing News + GDELT", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.startsWith("https://news.google.com")) {
+        return new Response("<rss><channel><item><title>G headline</title><link>https://g/1</link><guid>g1</guid></item></channel></rss>", { status: 200 });
+      }
+      if (url.startsWith("https://www.bing.com")) {
+        return new Response("<rss><channel><item><title>B headline</title><link>https://b.example/1</link><pubDate>Mon, 05 Oct 2026 09:55:00 GMT</pubDate></item></channel></rss>", { status: 200 });
+      }
+      return jsonResponse(200, { articles: [{ url: "https://d.example/1", title: "D headline", seendate: "20261005T171500Z", domain: "d.example" }] });
+    });
+    const out = await __listeningFetchers.allNews(ctx(["acme"], []));
+    expect(out.map((m) => m.content).sort()).toEqual(["B headline", "D headline", "G headline"]);
+    expect(out.every((m) => m.source === "NEWS")).toBe(true);
   });
 });

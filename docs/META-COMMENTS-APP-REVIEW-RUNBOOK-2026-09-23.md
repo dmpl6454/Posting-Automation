@@ -591,3 +591,24 @@ videos (an upload costs 1,600 units; a search costs 100). So YouTube listening:
 - stops for the day when Google answers `quotaExceeded`.
 
 A sweep of one keyword group costs about 106 units (100 + 1 + 5).
+
+## 15. More public sources for social listening (2026-10-05)
+
+New keyword-listening sources. All are free and public, and need no account or key:
+
+| Source | Endpoint | Per sweep | Notes |
+|---|---|---|---|
+| Hacker News | `hn.algolia.com/api/v1/search_by_date` | 1 request per keyword (max 5) | stories and comments, last 2 days |
+| Bluesky | `api.bsky.app/xrpc/app.bsky.feed.searchPosts` | 1 per keyword | `public.api.bsky.app` refuses unauthenticated search; `api.bsky.app` answers |
+| Mastodon | `{instance}/api/v1/timelines/tag/{tag}` | instances × keywords | keywords become hashtags; `LISTENING_MASTODON_INSTANCES` (default `mastodon.social`) |
+| Lemmy | `{instance}/api/v3/search` | 1 per keyword | posts and comments; `LISTENING_LEMMY_INSTANCE` (default `lemmy.world`) |
+| Bing News | `bing.com/news/search?format=rss&count=30` | 1 per keyword | joins the "News" source; Bing returns an EMPTY feed for an OR query |
+| GDELT | `api.gdeltproject.org/api/v2/doc/doc` (artlist, 1 day) | 1 per keyword group | joins "News"; one request per 6 s across the worker, skipped when the queue is longer than 20 s |
+
+Verified live on 2026-10-05 for "openai" + "anthropic": Hacker News 60, Bluesky 50, Mastodon 80,
+Lemmy 80, Bing News 28 mentions. GDELT answered the build sandbox with 503/429 (a shared address);
+it is unverified there.
+
+Queries with no platforms selected use every source, so existing "all platforms" queries pick these
+up after the deploy. That means more mentions and more sentiment scoring, at 20 mentions per AI call.
+Mastodon followers are stored in metadata, not as reach, so the Reach total stays comparable.

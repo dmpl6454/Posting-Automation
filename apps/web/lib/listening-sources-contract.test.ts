@@ -25,3 +25,16 @@ describe("listening sources", () => {
     expect(page).toMatch(/daily YouTube API budget/);
   });
 });
+
+describe("public listening sources (2026-10-05)", () => {
+  it("offers the new sources with labels and tag colours", () => {
+    for (const id of ["hackernews", "bluesky", "mastodon", "lemmy"]) {
+      expect(page).toMatch(new RegExp(`\\{ id: "${id}", label: "[^"]+" \\}`));
+    }
+    for (const e of ["HACKERNEWS", "BLUESKY", "MASTODON", "LEMMY"]) {
+      expect(page).toMatch(new RegExp(`\\n  ${e}: "#[0-9a-f]{6}",`));
+      expect(page).toMatch(new RegExp(`\\n  ${e}: "[A-Z][^"]+",`));
+    }
+    expect(page).toMatch(/\{ id: "news", label: "News \(Google News, Bing News, GDELT\)" \}/);
+  });
+});

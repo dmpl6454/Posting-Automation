@@ -1,0 +1,37 @@
+{
+ "hits": [
+  {
+   "objectID": "49968389",
+   "author": "gogurt2000",
+   "story_title": "Altman: The world should accept some bad things happening for the benefits of AI",
+   "story_url": "https://www.politico.com/news/2026/10/04/sam-altman-decoded-interview-ai-01106217",
+   "story_id": 49965786,
+   "comment_text": "From speaking with people who work for OpenAI, Meta, and xAI:<p>1) They don&#x27;t believe the harmful things they&#x27;re being warned of will affect them. They won&#x27;t believe those are real problems until those problems affect them personally.<p>2) They believe that if they don&#x27;t do the work, someone else will, so they might as well be the one getting paid for it.<p>3) They have a graduate degree in ML or AI and they don&#x27;t see a path to a similarly paying job in another field given their work experience and credentials.",
+   "created_at_i": 1791224074,
+   "created_at": "2026-10-05T18:14:34Z",
+   "_tags": [
+    "comment",
+    "author_gogurt2000",
+    "story_49965786"
+   ],
+   "parent_id": 49966089
+  },
+  {
+   "objectID": "49968105",
+   "author": "brokensegue",
+   "title": "OpenAI \"rogue\" agent activities found on Wikimedia projects",
+   "url": "https://diff.wikimedia.org/2026/10/05/openai-rogue-agent-activities-found-on-wikimedia-projects/",
+   "story_id": 49968105,
+   "points": 15,
+   "num_comments": 2,
+   "created_at_i": 1791222815,
+   "created_at": "2026-10-05T17:53:35Z",
+   "_tags": [
+    "story",
+    "author_brokensegue",
+    "story_49968105",
+    "front_page"
+   ]
+  }
+ ]
+}

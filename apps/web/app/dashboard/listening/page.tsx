@@ -69,8 +69,13 @@ const PLATFORMS = [
   // Videos matching the keywords and their comments (2026-10-05). Every 6
   // hours per query (and on Sync Now), within a daily YouTube API budget.
   { id: "youtube", label: "YouTube (videos + comments)" },
+  // Free public sources, no account needed (2026-10-05).
+  { id: "hackernews", label: "Hacker News (stories + comments)" },
+  { id: "bluesky", label: "Bluesky" },
+  { id: "mastodon", label: "Mastodon (hashtags)" },
+  { id: "lemmy", label: "Lemmy (posts + comments)" },
   { id: "tiktok", label: "TikTok" },
-  { id: "news", label: "Google News" },
+  { id: "news", label: "News (Google News, Bing News, GDELT)" },
   // Facebook has no keyword search for anyone; this reads the public posts that
   // TAG your connected Pages (Graph /{page}/tagged) — brand mentions, not a web search.
   { id: "facebook", label: "Facebook (posts tagging your Pages)" },
@@ -94,6 +99,10 @@ const SOURCE_TAG: Record<string, string> = {
   BLOG: "#9a8a5c",
   FORUM: "#a183c9",
   OTHER: "#7e8a9a",
+  HACKERNEWS: "#e08a4a",
+  BLUESKY: "#5b9bd5",
+  MASTODON: "#a183c9",
+  LEMMY: "#9a8a5c",
 };
 const SOURCE_TAG_FALLBACK = "#7e8a9a";
 
@@ -118,6 +127,10 @@ const SOURCE_LABEL: Record<string, string> = {
   BLOG: "Blog",
   FORUM: "Forum",
   OTHER: "Other",
+  HACKERNEWS: "Hacker News",
+  BLUESKY: "Bluesky",
+  MASTODON: "Mastodon",
+  LEMMY: "Lemmy",
 };
 
 /**
@@ -397,7 +410,8 @@ function ListeningPageInner() {
           mentions, and scores each one’s sentiment. Click <b className="text-foreground">Sync Now</b>{" "}
           to fetch immediately.
           <span className="mt-1 block text-[11px] leading-[1.6] text-faint">
-            Google News works out of the box. Twitter/X, Reddit, TikTok and Instagram/LinkedIn only
+            Google News, Bing News, GDELT, Hacker News, Bluesky, Mastodon and Lemmy work out of the box —
+            they are public and need no account (Mastodon follows your keywords as hashtags). Twitter/X, Reddit, TikTok and Instagram/LinkedIn only
             return mentions when their API keys are configured (or, for IG/LinkedIn, a channel is
             connected) — otherwise those sources are simply skipped. Facebook has no keyword search:
             the Facebook source lists public posts that tag one of your connected Pages (when a keyword

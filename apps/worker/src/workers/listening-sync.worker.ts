@@ -43,6 +43,26 @@ import {
   type RedditPostRef,
   type UnitCounter,
 } from "../lib/listening-comments";
+import {
+  GDELT_MIN_GAP_MS,
+  bingNewsMentions,
+  bingNewsUrl,
+  blueskyMentions,
+  blueskySearchUrl,
+  gdeltMentions,
+  gdeltQuery,
+  gdeltUrl,
+  gdeltWaitMs,
+  hackerNewsMentions,
+  hackerNewsUrl,
+  keywordToHashtag,
+  lemmyInstance,
+  lemmyMentions,
+  lemmySearchUrl,
+  mastodonInstances,
+  mastodonMentions,
+  mastodonTagUrl,
+} from "../lib/listening-public-sources";
 
 /**
  * Listening sync (2026-10-04 rewrite — read apps/worker/src/lib/listening-sync-plan.ts first).
@@ -778,6 +798,130 @@ const fetchTikTokMentions: Fetcher = async ({ keywords }) => {
 // Facebook is NOT a keyword search (graph.facebook.com/search?type=post needs
 // Public Content Access, which Meta no longer grants) — it is the connected
 // Pages' own /tagged edge; see fetchFacebookTagged.
+// ---------------------------------------------------------------------------
+// Public sources (2026-10-05) — free, no account. See listening-public-sources.ts.
+// One request per keyword (at most PUBLIC_KEYWORDS_PER_RUN), except the news
+// feeds, which take an OR query per keyword chunk.
+// ---------------------------------------------------------------------------
+
+const PUBLIC_KEYWORDS_PER_RUN = 5;
+const PUBLIC_UA = "PostAutomation/1.0 (+https://postautomation.co.in)";
+
+async function publicGet(url: string, label: string, accept = "application/json", timeoutMs = REQUEST_TIMEOUT_MS): Promise<Response | null> {
+  try {
+    const response = await timedFetch(url, {
+      headers: { "User-Agent": PUBLIC_UA, Accept: accept },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!response.ok) {
+      console.warn(`[ListeningSync:${label}] HTTP ${response.status} for ${url.split("?")[0]}`);
+      return null;
+    }
+    return response;
+  } catch (err) {
+    console.warn(`[ListeningSync:${label}] request failed:`, err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
+const fetchHackerNews: Fetcher = async ({ keywords }) => {
+  const now = Date.now();
+  const out: RawMention[] = [];
+  for (const kw of keywords.slice(0, PUBLIC_KEYWORDS_PER_RUN)) {
+    const res = await publicGet(hackerNewsUrl(kw, now), "HackerNews");
+    if (res) out.push(...hackerNewsMentions(await res.json().catch(() => null)));
+  }
+  return out;
+};
+
+const fetchBluesky: Fetcher = async ({ keywords, language }) => {
+  const now = Date.now();
+  const out: RawMention[] = [];
+  for (const kw of keywords.slice(0, PUBLIC_KEYWORDS_PER_RUN)) {
+    const res = await publicGet(blueskySearchUrl(kw, language, now), "Bluesky");
+    if (res) out.push(...blueskyMentions(await res.json().catch(() => null)));
+  }
+  return out;
+};
+
+const fetchMastodon: Fetcher = async ({ keywords }) => {
+  const now = Date.now();
+  const tags = [...new Set(keywords.map(keywordToHashtag).filter((t): t is string => !!t))].slice(0, PUBLIC_KEYWORDS_PER_RUN);
+  const out: RawMention[] = [];
+  for (const instance of mastodonInstances()) {
+    for (const tag of tags) {
+      const res = await publicGet(mastodonTagUrl(instance, tag), "Mastodon");
+      if (res) out.push(...mastodonMentions(await res.json().catch(() => null), instance, now));
+    }
+  }
+  return out;
+};
+
+const fetchLemmy: Fetcher = async ({ keywords }) => {
+  const instance = lemmyInstance();
+  if (!instance) return [];
+  const now = Date.now();
+  const out: RawMention[] = [];
+  for (const kw of keywords.slice(0, PUBLIC_KEYWORDS_PER_RUN)) {
+    const res = await publicGet(lemmySearchUrl(instance, kw), "Lemmy");
+    if (res) out.push(...lemmyMentions(await res.json().catch(() => null), keywords, now));
+  }
+  return out;
+};
+
+const fetchBingNews: Fetcher = async ({ keywords, language }) => {
+  const out: RawMention[] = [];
+  for (const kw of keywords.slice(0, PUBLIC_KEYWORDS_PER_RUN)) {
+    const res = await publicGet(bingNewsUrl(kw, language), "BingNews", "application/rss+xml, application/xml;q=0.9, */*;q=0.5");
+    if (res) out.push(...bingNewsMentions(await res.text().catch(() => "")));
+  }
+  return out;
+};
+
+/** GDELT allows one request every 5 s per IP — shared by every query in this process. */
+let gdeltNextAllowedAt = 0;
+const GDELT_MAX_WAIT_MS = 20_000;
+
+const fetchGdelt: Fetcher = async ({ keywords }) => {
+  const out: RawMention[] = [];
+  for (const group of chunkKeywords(keywords)) {
+    const q = gdeltQuery(group);
+    if (!q) continue;
+    const wait = gdeltWaitMs(gdeltNextAllowedAt, Date.now());
+    if (wait > GDELT_MAX_WAIT_MS) {
+      console.warn(`[ListeningSync:GDELT] busy (next slot in ${Math.round(wait / 1000)}s) — skipping this sweep`);
+      break;
+    }
+    gdeltNextAllowedAt = Math.max(gdeltNextAllowedAt, Date.now()) + GDELT_MIN_GAP_MS;
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    // GDELT is often slow to answer; give it longer than the other sources.
+    const res = await publicGet(gdeltUrl(q), "GDELT", "application/json", 30_000);
+    if (!res) continue;
+    const text = await res.text().catch(() => "");
+    let body: unknown = null;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      // GDELT answers some errors (rate limit, bad query) as plain text with a 200.
+      console.warn(`[ListeningSync:GDELT] not JSON: ${text.slice(0, 120).replace(/\s+/g, " ")}`);
+      continue;
+    }
+    out.push(...gdeltMentions(body));
+  }
+  return out;
+};
+
+/** News = Google News + Bing News + GDELT, each failing on its own. */
+const fetchAllNews: Fetcher = async (ctx) => {
+  const parts = await Promise.all([fetchGoogleNews(ctx), fetchBingNews(ctx), fetchGdelt(ctx)]);
+  return parts.flat();
+};
+
+/** Test seam: reset GDELT's spacing gate. */
+export function __resetGdeltGate() {
+  gdeltNextAllowedAt = 0;
+}
+
 const PLATFORM_FETCHERS: Record<string, Fetcher> = {
   twitter: fetchTwitterMentions,
   x: fetchTwitterMentions,
@@ -787,9 +931,26 @@ const PLATFORM_FETCHERS: Record<string, Fetcher> = {
   linkedin: fetchLinkedInMentions,
   youtube: fetchYouTubeMentions,
   tiktok: fetchTikTokMentions,
-  news: fetchGoogleNews,
+  news: fetchAllNews,
+  hackernews: fetchHackerNews,
+  bluesky: fetchBluesky,
+  mastodon: fetchMastodon,
+  lemmy: fetchLemmy,
 };
-const DEFAULT_PLATFORMS = ["twitter", "reddit", "instagram", "facebook", "linkedin", "tiktok", "news", "youtube"];
+const DEFAULT_PLATFORMS = [
+  "twitter",
+  "reddit",
+  "instagram",
+  "facebook",
+  "linkedin",
+  "tiktok",
+  "news",
+  "youtube",
+  "hackernews",
+  "bluesky",
+  "mastodon",
+  "lemmy",
+];
 
 /** Test seam: the per-platform fetchers, callable with a hand-built context. */
 export const __listeningFetchers = {
@@ -797,6 +958,13 @@ export const __listeningFetchers = {
   facebook: fetchFacebookTagged,
   reddit: fetchRedditMentions,
   youtube: fetchYouTubeMentions,
+  hackernews: fetchHackerNews,
+  bluesky: fetchBluesky,
+  mastodon: fetchMastodon,
+  lemmy: fetchLemmy,
+  bingNews: fetchBingNews,
+  gdelt: fetchGdelt,
+  allNews: fetchAllNews,
 };
 
 /** Rows per createMany statement (keeps one statement's parameter list bounded). */
