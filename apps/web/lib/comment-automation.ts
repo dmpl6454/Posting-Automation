@@ -24,6 +24,9 @@ export interface RunSummary {
   errors?: number;
   skippedForQuota?: number;
   hidePermissionMissing?: string[];
+  sentimentScored?: number;
+  sentimentNegative?: number;
+  sentimentPending?: number;
 }
 
 /** "Checked 12 posts · hid 2 · 5 new comments · 1 couldn't be read." */
@@ -35,6 +38,13 @@ export function describeLastRun(summary: RunSummary | null | undefined): string 
   if (summary.hidden) parts.push(`hid ${summary.hidden}`);
   if (summary.newComments) parts.push(`${summary.newComments} new ${summary.newComments === 1 ? "comment" : "comments"}`);
   if (summary.errors) parts.push(`${summary.errors} couldn't be read or hidden`);
+  if (summary.sentimentScored) {
+    parts.push(
+      `scored ${summary.sentimentScored} ${summary.sentimentScored === 1 ? "comment" : "comments"}` +
+        (summary.sentimentNegative ? ` (${summary.sentimentNegative} negative)` : "")
+    );
+  }
+  if (summary.sentimentPending) parts.push(`${summary.sentimentPending} waiting to be scored`);
   if (summary.skippedForQuota) parts.push(`${summary.skippedForQuota} Facebook ${summary.skippedForQuota === 1 ? "post" : "posts"} left for later (Meta usage high)`);
   return `${parts.join(" · ")}.`;
 }

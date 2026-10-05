@@ -1552,6 +1552,30 @@ export async function runCommentAutomationSweep(): Promise<void> {
             ? (getCommentProvider("FACEBOOK") as CommentFacebookProvider).setCommentHidden(tokens, commentId, true, pageId)
             : (getCommentProvider("INSTAGRAM") as CommentInstagramProvider).setCommentHidden(tokens, commentId, true),
         facebookUsagePeak: facebookAppUsagePeak,
+        // Comment sentiment (2026-10-05): the same batch prompt + parser and
+        // provider fallback chain as social listening's sentiment worker.
+        scoreSentimentBatch: async (texts) => {
+          const { buildBatchSentimentPrompt, parseBatchSentimentResponse } = await import(
+            "../workers/sentiment-analysis.worker"
+          );
+          const { generateContent, withTextProviderFallback } = await import("@postautomation/ai");
+          const prompt = buildBatchSentimentPrompt(texts.map((content, i) => ({ mentionId: String(i), content })));
+          const raw = await withTextProviderFallback(
+            "anthropic",
+            (provider) =>
+              generateContent({
+                provider: provider as Parameters<typeof generateContent>[0]["provider"],
+                platform: "twitter",
+                userPrompt: prompt,
+                tone: "analytical",
+              }),
+            (failed, next, e) =>
+              console.warn(
+                `[CommentSentiment] Provider ${failed} failed (${e instanceof Error ? e.message.slice(0, 80) : e}), trying ${next}`
+              )
+          );
+          return parseBatchSentimentResponse(raw, texts.length);
+        },
       },
       readCommentSweepConfig()
     );

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { Prisma } from "@postautomation/db";
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
 import {
@@ -474,6 +475,47 @@ async function privateRepliesFor(
   }
 }
 
+/**
+ * Sentiment the comment sweep scored for the comments on this page (only
+ * workspaces with comment sentiment on have any). Bookkeeping only — never
+ * fails the thread.
+ */
+async function sentimentsFor(
+  prisma: any,
+  organizationId: string,
+  comments: SocialComment[]
+): Promise<Record<string, { sentiment: string; score: number | null }>> {
+  const ids: string[] = [];
+  for (const c of comments) {
+    ids.push(c.id);
+    for (const r of c.replies) ids.push(r.id);
+  }
+  if (ids.length === 0) return {};
+  try {
+    const rows = await prisma.commentSentiment.findMany({
+      where: { organizationId, commentId: { in: ids }, sentiment: { not: null } },
+      select: { commentId: true, sentiment: true, sentimentScore: true },
+    });
+    const out: Record<string, { sentiment: string; score: number | null }> = {};
+    for (const r of rows) out[r.commentId] = { sentiment: r.sentiment, score: r.sentimentScore ?? null };
+    return out;
+  } catch (err: any) {
+    console.error("[comment] sentiment lookup failed:", err?.message ?? err);
+    return {};
+  }
+}
+
+const SENTIMENT_VALUES = ["POSITIVE", "NEGATIVE", "NEUTRAL", "MIXED"] as const;
+
+/** Comments in the window: by when they were written, or when stored if Meta gave no time. */
+function sentimentWindow(organizationId: string, since: Date, channelId?: string | null) {
+  return {
+    organizationId,
+    ...(channelId ? { channelId } : {}),
+    OR: [{ commentedAt: { gte: since } }, { commentedAt: null, createdAt: { gte: since } }],
+  };
+}
+
 export const commentRouter = createRouter({
   /**
    * The org's Facebook Pages + Instagram accounts, with how many published
@@ -644,6 +686,7 @@ export const commentRouter = createRouter({
         capabilities,
         messaging: messagingCapabilities(t.platform, scopes),
         privateReplies: await privateRepliesFor(ctx.prisma, ctx.organizationId, page.comments),
+        sentiments: await sentimentsFor(ctx.prisma, ctx.organizationId, page.comments),
         platform: t.platform,
         publishedUrl: t.publishedUrl,
         account: {
@@ -1299,6 +1342,7 @@ export const commentRouter = createRouter({
         blockedWords: (row?.blockedWords ?? []) as string[],
         hideLinks: row?.hideLinks ?? false,
         alertsEnabled: row?.alertsEnabled ?? false,
+        sentimentEnabled: row?.sentimentEnabled ?? false,
         channelIds: (row?.channelIds ?? []) as string[],
       },
       lastRunAt: row?.lastRunAt ?? null,
@@ -1327,6 +1371,8 @@ export const commentRouter = createRouter({
         blockedWords: z.array(z.string().max(200)).max(1000),
         hideLinks: z.boolean(),
         alertsEnabled: z.boolean(),
+        // Optional so an older client that doesn't know the switch can't turn it off.
+        sentimentEnabled: z.boolean().optional(),
         channelIds: z.array(z.string()).max(1000),
       })
     )
@@ -1363,6 +1409,7 @@ export const commentRouter = createRouter({
         blockedWords,
         hideLinks: input.hideLinks,
         alertsEnabled: input.alertsEnabled,
+        ...(input.sentimentEnabled !== undefined ? { sentimentEnabled: input.sentimentEnabled } : {}),
         channelIds,
         updatedById: userId,
       };
@@ -1381,11 +1428,180 @@ export const commentRouter = createRouter({
           autoHideEnabled: input.autoHideEnabled,
           hideLinks: input.hideLinks,
           alertsEnabled: input.alertsEnabled,
+          sentimentEnabled: input.sentimentEnabled,
           blockedWordCount: blockedWords.length,
           channelCount: channelIds.length,
         },
       });
       return { ok: true as const, blockedWords, channelIds };
+    }),
+
+  /**
+   * Comment sentiment on the workspace's own posts (2026-10-05): totals, a
+   * daily series, per-account split and the posts drawing the most negative
+   * comments. Database only — the sweep did the Meta reads and the scoring.
+   * Unscored comments are counted separately ("pending"), never as neutral.
+   */
+  sentimentOverview: orgProcedure
+    .input(z.object({ days: z.number().int().min(1).max(90).default(30), channelId: z.string().nullish() }))
+    .query(async ({ ctx, input }) => {
+      const prisma = ctx.prisma as any;
+      const since = new Date(Date.now() - input.days * 24 * 60 * 60 * 1000);
+      const where = sentimentWindow(ctx.organizationId, since, input.channelId);
+
+      const [automation, bySentiment, avg, byChannelRaw, negativePosts, daily] = await Promise.all([
+        prisma.commentAutomation.findUnique({
+          where: { organizationId: ctx.organizationId },
+          select: { sentimentEnabled: true, lastRunAt: true, channelIds: true },
+        }),
+        prisma.commentSentiment.groupBy({ by: ["sentiment"], where, _count: { _all: true } }),
+        prisma.commentSentiment.aggregate({ where: { ...where, sentiment: { not: null } }, _avg: { sentimentScore: true } }),
+        prisma.commentSentiment.groupBy({ by: ["channelId", "sentiment"], where, _count: { _all: true } }),
+        prisma.commentSentiment.groupBy({
+          by: ["postTargetId"],
+          where: { ...where, sentiment: "NEGATIVE" },
+          _count: { _all: true },
+          orderBy: { _count: { postTargetId: "desc" } },
+          take: 5,
+        }),
+        prisma.$queryRaw(Prisma.sql`
+          SELECT to_char(date_trunc('day', COALESCE("commentedAt", "createdAt")), 'YYYY-MM-DD') AS day,
+                 "sentiment"::text AS sentiment,
+                 COUNT(*)::int AS count
+          FROM "CommentSentiment"
+          WHERE "organizationId" = ${ctx.organizationId}
+            AND COALESCE("commentedAt", "createdAt") >= ${since}
+            ${input.channelId ? Prisma.sql`AND "channelId" = ${input.channelId}` : Prisma.empty}
+          GROUP BY 1, 2
+          ORDER BY 1
+        `) as Promise<Array<{ day: string; sentiment: string | null; count: number }>>,
+      ]);
+
+      const totals = { positive: 0, negative: 0, neutral: 0, mixed: 0, pending: 0 };
+      for (const row of bySentiment as Array<{ sentiment: string | null; _count: { _all: number } }>) {
+        const key = row.sentiment ? (row.sentiment.toLowerCase() as keyof typeof totals) : "pending";
+        if (key in totals) totals[key] += row._count._all;
+      }
+      const scored = totals.positive + totals.negative + totals.neutral + totals.mixed;
+
+      const channelIds = [...new Set((byChannelRaw as any[]).map((r) => r.channelId as string))];
+      const channels = channelIds.length
+        ? await ctx.prisma.channel.findMany({
+            where: { id: { in: channelIds }, organizationId: ctx.organizationId },
+            select: { id: true, name: true, platform: true, avatar: true },
+          })
+        : [];
+      const byChannel = new Map<string, { channelId: string; name: string; platform: string; avatar: string | null; positive: number; negative: number; neutral: number; mixed: number; pending: number }>();
+      for (const c of channels) {
+        byChannel.set(c.id, { channelId: c.id, name: c.name, platform: c.platform, avatar: c.avatar ?? null, positive: 0, negative: 0, neutral: 0, mixed: 0, pending: 0 });
+      }
+      for (const r of byChannelRaw as Array<{ channelId: string; sentiment: string | null; _count: { _all: number } }>) {
+        const entry = byChannel.get(r.channelId);
+        if (!entry) continue;
+        const key = (r.sentiment ? r.sentiment.toLowerCase() : "pending") as "positive" | "negative" | "neutral" | "mixed" | "pending";
+        entry[key] += r._count._all;
+      }
+
+      const postIds = (negativePosts as Array<{ postTargetId: string }>).map((p) => p.postTargetId);
+      const postRows = postIds.length
+        ? await ctx.prisma.postTarget.findMany({
+            where: { id: { in: postIds }, post: { organizationId: ctx.organizationId } },
+            select: { id: true, channelId: true, publishedUrl: true, publishedAt: true, post: { select: { content: true } } },
+          })
+        : [];
+      const postById = new Map(postRows.map((p: any) => [p.id, p]));
+      const channelName = new Map(channels.map((c: any) => [c.id, c.name]));
+      const worstPosts = (negativePosts as Array<{ postTargetId: string; _count: { _all: number } }>)
+        .map((p) => {
+          const row: any = postById.get(p.postTargetId);
+          if (!row) return null;
+          return {
+            targetId: row.id as string,
+            channelId: row.channelId as string,
+            channelName: (channelName.get(row.channelId) as string | undefined) ?? null,
+            caption: String(row.post?.content ?? "").slice(0, 140),
+            publishedUrl: (row.publishedUrl as string | null) ?? null,
+            publishedAt: row.publishedAt as Date | null,
+            negative: p._count._all,
+          };
+        })
+        .filter((p): p is NonNullable<typeof p> => p !== null);
+
+      const dayMap = new Map<string, { day: string; positive: number; negative: number; neutral: number; mixed: number; pending: number }>();
+      for (const r of daily) {
+        const d = dayMap.get(r.day) ?? { day: r.day, positive: 0, negative: 0, neutral: 0, mixed: 0, pending: 0 };
+        const key = (r.sentiment ? r.sentiment.toLowerCase() : "pending") as "positive" | "negative" | "neutral" | "mixed" | "pending";
+        d[key] += Number(r.count);
+        dayMap.set(r.day, d);
+      }
+
+      return {
+        enabled: automation?.sentimentEnabled === true,
+        lastRunAt: automation?.lastRunAt ?? null,
+        accountScope: (automation?.channelIds?.length ?? 0) > 0 ? "selected" : "all",
+        totals: { ...totals, scored, total: scored + totals.pending },
+        avgScore: scored > 0 ? (avg?._avg?.sentimentScore ?? null) : null,
+        daily: [...dayMap.values()].sort((a, b) => a.day.localeCompare(b.day)),
+        byChannel: [...byChannel.values()].sort(
+          (a, b) => b.positive + b.negative + b.neutral + b.mixed + b.pending - (a.positive + a.negative + a.neutral + a.mixed + a.pending)
+        ),
+        worstPosts,
+      };
+    }),
+
+  /** Scored (or still-pending) comments on the workspace's own posts, newest first. */
+  sentimentComments: orgProcedure
+    .input(
+      z.object({
+        days: z.number().int().min(1).max(90).default(30),
+        sentiment: z.enum([...SENTIMENT_VALUES, "PENDING"]).nullish(),
+        channelId: z.string().nullish(),
+        cursor: z.string().nullish(),
+        limit: z.number().int().min(1).max(50).default(20),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const since = new Date(Date.now() - input.days * 24 * 60 * 60 * 1000);
+      const where: Record<string, unknown> = sentimentWindow(ctx.organizationId, since, input.channelId);
+      if (input.sentiment === "PENDING") where.sentiment = null;
+      else if (input.sentiment) where.sentiment = input.sentiment;
+      const rows: any[] = await (ctx.prisma as any).commentSentiment.findMany({
+        where,
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: input.limit + 1,
+        ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
+        select: {
+          id: true,
+          postTargetId: true,
+          channelId: true,
+          platform: true,
+          commentId: true,
+          commentText: true,
+          authorLabel: true,
+          isReply: true,
+          commentedAt: true,
+          createdAt: true,
+          sentiment: true,
+          sentimentScore: true,
+        },
+      });
+      const hasMore = rows.length > input.limit;
+      const items = hasMore ? rows.slice(0, input.limit) : rows;
+      const channelIds = [...new Set(items.map((r) => r.channelId as string))];
+      const channels = channelIds.length
+        ? await ctx.prisma.channel.findMany({
+            where: { id: { in: channelIds }, organizationId: ctx.organizationId },
+            select: { id: true, name: true, avatar: true },
+          })
+        : [];
+      const byId = new Map(channels.map((c: any) => [c.id, c]));
+      return {
+        items: items.map((r) => {
+          const ch: any = byId.get(r.channelId);
+          return { ...r, channelName: ch?.name ?? null, channelAvatar: ch?.avatar ?? null };
+        }),
+        nextCursor: hasMore ? (items[items.length - 1]?.id ?? null) : null,
+      };
     }),
 
   /** The comments the automation hid most recently, newest first, with where they were. */

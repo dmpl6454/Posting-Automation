@@ -75,7 +75,7 @@ describe("comment.automationSettings", () => {
   it("returns all-off defaults when nothing was saved, and says who may edit", async () => {
     const { caller } = build({ role: "MEMBER", channels: CHANNELS });
     const res = await caller.automationSettings();
-    expect(res.settings).toEqual({ autoHideEnabled: false, blockedWords: [], hideLinks: false, alertsEnabled: false, channelIds: [] });
+    expect(res.settings).toEqual({ autoHideEnabled: false, blockedWords: [], hideLinks: false, alertsEnabled: false, sentimentEnabled: false, channelIds: [] });
     expect(res.canEdit).toBe(false);
     expect(res.accounts.map((a) => [a.id, a.canModerate])).toEqual([["ch-ig", true], ["ch-fb", false]]);
     expect(JSON.stringify(res)).not.toContain("grantedScopes");

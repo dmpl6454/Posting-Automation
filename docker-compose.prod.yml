@@ -357,6 +357,8 @@ services:
       COMMENT_SWEEP_LOOKBACK_DAYS: ${COMMENT_SWEEP_LOOKBACK_DAYS:-}
       COMMENT_SWEEP_FB_USAGE_CEILING: ${COMMENT_SWEEP_FB_USAGE_CEILING:-}
       COMMENT_AUTOHIDE_MAX_PER_RUN: ${COMMENT_AUTOHIDE_MAX_PER_RUN:-}
+      COMMENT_SENTIMENT_MAX_PER_RUN: ${COMMENT_SENTIMENT_MAX_PER_RUN:-}
+      COMMENT_NEGATIVE_ALERT_MIN: ${COMMENT_NEGATIVE_ALERT_MIN:-}
       # One early analytics pass for a freshly published FACEBOOK VIDEO/REEL. The
       # publish-time snapshot asks the Video node (id not yet resolved), which reports
       # nothing for a reel, and FB is excluded from both recurring passes — so without
