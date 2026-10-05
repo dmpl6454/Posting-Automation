@@ -121,6 +121,8 @@ export {
 // reply needs pages_manage_engagement. See facebook-comments.ts.
 export { FB_COMMENT_MAX_LENGTH } from "./utils/facebook-comments";
 export { commentCapabilities, COMMENT_READ_SCOPES, COMMENT_WRITE_SCOPES, COMMENT_LIKE_SCOPES } from "./utils/social-comments";
+// Unanswered-comments queue (2026-10-05) — pure "still needs a reply" rule.
+export { selectUnanswered, type UnansweredComment } from "./utils/unanswered-comments";
 export { COMMENT_NOT_ON_POST_MESSAGE, COMMENT_LIKE_PERMISSION_MESSAGE, COMMENT_LIKE_REFUSED_MESSAGE } from "./utils/instagram-comments";
 export type {
   CommentCapabilities,
