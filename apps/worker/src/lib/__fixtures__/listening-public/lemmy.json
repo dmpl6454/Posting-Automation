@@ -1,0 +1,119 @@
+{
+ "type_": "All",
+ "posts": [
+  {
+   "post": {
+    "id": 52764400,
+    "name": "OpenAI \"rogue\" agent activities found on Wikimedia projects",
+    "url": "https://diff.wikimedia.org/2026/10/05/openai-rogue-agent-activities-found-on-wikimedia-projects/",
+    "body": "[Comments](https://news.ycombinator.com/item?id=49968105)",
+    "published": "2026-10-05T18:10:01.627938Z",
+    "ap_id": "https://lemmy.bestiver.se/post/1379745"
+   },
+   "creator": {
+    "name": "rssbot",
+    "display_name": "RSS Bot",
+    "avatar": null,
+    "actor_id": "https://lemmy.bestiver.se/u/rssbot"
+   },
+   "community": {
+    "name": "hackernews",
+    "actor_id": "https://lemmy.bestiver.se/c/hackernews"
+   },
+   "counts": {
+    "post_id": 52764400,
+    "comments": 1,
+    "score": 2,
+    "upvotes": 2,
+    "downvotes": 0,
+    "published": "2026-10-05T18:10:01.627938Z",
+    "newest_comment_time": "2026-10-05T18:15:20.897845Z"
+   }
+  },
+  {
+   "post": {
+    "id": 52764262,
+    "name": "Florida woman used Claude as a diary, then Anthropic reported an entry to police",
+    "url": "https://www.techspot.com/news/114091-florida-woman-used-claude-diary-anthropic-reported-shoot.html",
+    "body": "Crossposted from https://lemmy.dbzer0.com/post/76486632\n-----\ncross-posted from: https://lemmy.dbzer0.com/post/76486627\n\n> What just happened? Another incident has taken place that illustrates the need to be careful what you tell AI. A Florida woman is facing felony charges after she used Claude as a diary and allegedly wrote that she planned to \"shoot up\" the Sheriff's office. After a human reviewer examined the statements, they were reported to police.\n> \n> According to the arrest report, Carli Michelle Heller, of Bonita Springs, Florida, wrote on September 26 that she would attack the Sheriff's office. She later said that she uses Anthropic's chatbot like a \"diary.\"\n> \n> Claude's safety systems flagged the entry and it was escalated to a human reviewer. After deciding it was a credible threat, the reviewer reported it to law enforcement.\n> \n> The company says it may share user information in limited emergencies if it believes disclosure is necessary to prevent death or serious physical injury.\n> \n> Deputies identified Heller and visited her home. She was detained without incident before an LCSO intelligence detective took over the investigation.\n> \n> Heller faces a charge of making a written threat of violence under Florida law. Florida Statute 836.10 makes it a second-degree felony to send, post, or transmit a written or electronic record threatening to kill or injure someone, carry out a mass shooting, or commit an act of terrorism. The communication must be made in a manner in which another person may view it.\n> \n> Anthropic isn't going to be taking any chances when it comes to anything it deems a potential threat. Last month, it was reported that OpenAI and Sam Altman are being sued by British Columbia over claims that the company could have prevented a mass shooting in the Canadian province.\n> \n> \n> The shooter, eighteen-year-old former pupil Jesse Van ⁠Rootselaar, had previously been flagged by OpenAI's safety team for her conversations about gun violence, but OpenAI never alerted police because the conversations did not meet the threshold for legal referral.\n> \n> In June, Florida also sued OpenAI and Altman, alleging that ChatGPT had contributed to real-world harms, including the 2025 Florida State University shooting.\n> \n> The latest incident is another reminder to think before you enter something into a chatbot that could get you into trouble. It's certainly not a private diary whose contents are for your eyes only.\n> \n> Reports last month revealed that human contractors reviewing Microsoft Copilot's image editor can see users' prompts, uploaded photos and AI-generated edits. Documents show that some of those assignments contain sexual, disturbing or potentially illegal material, though the reviewers are not there to flag the content – only to assess whether the output is accurate.",
+    "published": "2026-10-05T18:02:24.210238Z",
+    "ap_id": "https://feddit.org/post/36322496"
+   },
+   "creator": {
+    "name": "RockBottom",
+    "display_name": null,
+    "avatar": null,
+    "actor_id": "https://feddit.org/u/RockBottom"
+   },
+   "community": {
+    "name": "StopAI",
+    "actor_id": "https://thelemmy.club/c/StopAI"
+   },
+   "counts": {
+    "post_id": 52764262,
+    "comments": 0,
+    "score": 1,
+    "upvotes": 1,
+    "downvotes": 0,
+    "published": "2026-10-05T18:02:24.210238Z",
+    "newest_comment_time": "2026-10-05T18:02:24.210238Z"
+   }
+  }
+ ],
+ "comments": [
+  {
+   "comment": {
+    "id": 26177983,
+    "content": "Funny how this always happens in OpenAI’s own environments.\n\nCould it be that the human beings setting up these testing environments are criminally negligent, and should be prosecuted like if this was literally any other field of software?\n\n*Nah*. I mean, if one went to a security convention, and announced the world their automated testing script hacked and defaced Wikimedia, what would happen?\n\nWhy… the conference would blame the bash script, of course. Not its writer/executor. Makes perfect sense.",
+    "published": "2026-10-05T18:15:20.897845Z",
+    "ap_id": "https://lemmy.world/comment/26177983"
+   },
+   "creator": {
+    "name": "brucethemoose",
+    "avatar": null
+   },
+   "post": {
+    "name": "OpenAI \"rogue\" agent activities found on Wikimedia projects",
+    "ap_id": "https://lemmy.bestiver.se/post/1379745"
+   },
+   "community": {
+    "name": "hackernews"
+   },
+   "counts": {
+    "comment_id": 26177983,
+    "score": 1,
+    "upvotes": 1,
+    "downvotes": 0,
+    "published": "2026-10-05T18:15:20.897845Z",
+    "child_count": 0
+   }
+  },
+  {
+   "comment": {
+    "id": 26177819,
+    "content": "Friend sent me this steaming turd.\n\nWhat Would You Do If Your Employer Could Destroy the World? Exit interviews with defectors from OpenAI, Anthropic, and DeepMind.\nBy Clara Collier and Angela Chen\n\nhttps://nymag.com/intelligencer/article/ai-researchers-quit-openai-anthropic.html\n\nhttps://archive.li/5uwn8\n\nFeature some of our regular friends, like our new friend, Jacob Coxon, and our very good friend Kokotajlo\n\nNote that this was written by asterisk mag (peep the authors) as a collab.",
+    "published": "2026-10-05T18:03:19.198814Z",
+    "ap_id": "https://awful.systems/comment/12846652"
+   },
+   "creator": {
+    "name": "swlabr",
+    "avatar": null
+   },
+   "post": {
+    "name": "Stubsack: weekly thread for sneers not worth an entire post, week ending 11th October 2026",
+    "ap_id": "https://awful.systems/post/9941484"
+   },
+   "community": {
+    "name": "techtakes"
+   },
+   "counts": {
+    "comment_id": 26177819,
+    "score": 1,
+    "upvotes": 1,
+    "downvotes": 0,
+    "published": "2026-10-05T18:03:19.198814Z",
+    "child_count": 0
+   }
+  }
+ ]
+}

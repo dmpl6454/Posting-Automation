@@ -1,0 +1,49 @@
+{
+ "posts": [
+  {
+   "uri": "at://did:plc:3fibociwu7jy4bbdjhmm4nop/app.bsky.feed.post/3mx5jje43ns2f",
+   "author": {
+    "did": "did:plc:3fibociwu7jy4bbdjhmm4nop",
+    "handle": "mementomori4950.bsky.social",
+    "displayName": "Memento Mori",
+    "avatar": "https://cdn.bsky.app/img/avatar/plain/did:plc:3fibociwu7jy4bbdjhmm4nop/bafkreiea2alw6yruu4k2ysl5koog2be54ffp6vpuqxu3n5wpzva4dluuky"
+   },
+   "record": {
+    "$type": "app.bsky.feed.post",
+    "createdAt": "2026-10-05T18:15:40.860Z",
+    "text": "www.theverge.com/ai-artificia...",
+    "langs": [
+     "en"
+    ]
+   },
+   "replyCount": 0,
+   "repostCount": 0,
+   "likeCount": 0,
+   "quoteCount": 0,
+   "indexedAt": "2026-10-05T18:15:41.959Z"
+  },
+  {
+   "uri": "at://did:plc:bno22pfebir57htewglm6bmy/app.bsky.feed.post/3mx5jisyl5m24",
+   "author": {
+    "did": "did:plc:bno22pfebir57htewglm6bmy",
+    "handle": "milesbenjamin.bsky.social",
+    "displayName": "𝐂𝐲𝐫𝐮𝐬 𝐭𝐡𝐞 𝐑𝐞𝐝 ☭ 🇵🇸🇺🇦",
+    "avatar": "https://cdn.bsky.app/img/avatar/plain/did:plc:bno22pfebir57htewglm6bmy/bafkreicvuulkxgehqwpio3c7us2hgqzlynjsrednjr2lpb6jxplc3tsjam"
+   },
+   "record": {
+    "$type": "app.bsky.feed.post",
+    "createdAt": "2026-10-05T18:15:22.919Z",
+    "text": "It's also worth remembering that it's in the interest of the AI companies for us to discuss AI as a separate, autonomous entity, rather than a tool their develop and use.\n\nOpenAI, Anthropic and co. want nothing more than to transfer all responsibility to the boogeyman of \"super-AI\".",
+    "langs": [
+     "en"
+    ]
+   },
+   "replyCount": 0,
+   "repostCount": 0,
+   "likeCount": 0,
+   "quoteCount": 0,
+   "indexedAt": "2026-10-05T18:15:23.057Z"
+  }
+ ],
+ "cursor": "eyJzIjpbMTc5MTIyNDEyMjAwMCwiZGlkOnBsYzpibm8yMnBmZWJpcjU3aHRld2dsbTZibXkiLCIzbXg1amlzeWw1bTI0Il19"
+}

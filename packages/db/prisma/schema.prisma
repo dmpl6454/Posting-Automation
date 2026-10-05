@@ -1215,6 +1215,11 @@ enum MentionSource {
   YOUTUBE
   TIKTOK
   OTHER
+  /// Public sources added 2026-10-05 (no account needed).
+  HACKERNEWS
+  BLUESKY
+  MASTODON
+  LEMMY
 }
 
 model ListeningQuery {

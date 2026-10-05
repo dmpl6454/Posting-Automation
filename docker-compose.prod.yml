@@ -366,6 +366,10 @@ services:
       YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
       YOUTUBE_LISTENING_DAILY_UNITS: ${YOUTUBE_LISTENING_DAILY_UNITS:-}
       YOUTUBE_LISTENING_EVERY_RUNS: ${YOUTUBE_LISTENING_EVERY_RUNS:-}
+      # Public listening sources (2026-10-05): which Mastodon instances to follow
+      # keyword hashtags on (comma separated) and which Lemmy instance to search.
+      LISTENING_MASTODON_INSTANCES: ${LISTENING_MASTODON_INSTANCES:-}
+      LISTENING_LEMMY_INSTANCE: ${LISTENING_LEMMY_INSTANCE:-}
       # One early analytics pass for a freshly published FACEBOOK VIDEO/REEL. The
       # publish-time snapshot asks the Video node (id not yet resolved), which reports
       # nothing for a reel, and FB is excluded from both recurring passes — so without

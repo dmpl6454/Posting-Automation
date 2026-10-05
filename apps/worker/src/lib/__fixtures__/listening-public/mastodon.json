@@ -1,0 +1,42 @@
+[
+ {
+  "id": "117389638632218408",
+  "created_at": "2026-10-05T18:08:49.464Z",
+  "visibility": "public",
+  "language": "en",
+  "uri": "https://bsky.brid.gy/convert/ap/at://did:plc:3bybp6nqszlhuan2ch2cmv66/app.bsky.feed.post/3mx5j53rbqs2u",
+  "url": "https://fed.brid.gy/r/https://bsky.app/profile/did:plc:3bybp6nqszlhuan2ch2cmv66/post/3mx5j53rbqs2u",
+  "replies_count": 0,
+  "reblogs_count": 0,
+  "favourites_count": 1,
+  "content": "<p>Oh well, model collapse it is then… <a class=\"hashtag\" rel=\"nofollow noopener\" href=\"https://bsky.app/search?q=%23OpenAI\" target=\"_blank\">#OpenAI</a> <a class=\"hashtag\" rel=\"nofollow noopener\" href=\"https://bsky.app/search?q=%23ChatGPT\" target=\"_blank\">#ChatGPT</a><span class=\"quote-inline\"><br><br>RE: <a href=\"https://bsky.app/profile/did:plc:pko7wbcggok753hnvndxh3ni/post/3mx5f3okxjg2g\" rel=\"nofollow noopener\" target=\"_blank\">https://bsky.app/profile/did:plc:pko7wbcggok753hnvndxh3ni/post/3mx5f3okxjg2g</a></span></p>",
+  "reblog": null,
+  "account": {
+   "acct": "keithwilson.eu@bsky.brid.gy",
+   "display_name": "Dr Keith 🎃 Wilson",
+   "avatar": "https://files.mastodon.social/cache/accounts/avatars/112/854/487/430/887/103/original/c060dc986d20fe77.jpeg",
+   "url": "https://bsky.brid.gy/ap/did:plc:3bybp6nqszlhuan2ch2cmv66",
+   "followers_count": 92
+  }
+ },
+ {
+  "id": "117389635183279225",
+  "created_at": "2026-10-05T18:08:01.394Z",
+  "visibility": "public",
+  "language": "en",
+  "uri": "https://mastodon.social/users/Some_Emo_Chick/statuses/117389635183279225",
+  "url": "https://mastodon.social/@Some_Emo_Chick/117389635183279225",
+  "replies_count": 2,
+  "reblogs_count": 3,
+  "favourites_count": 3,
+  "content": "<p>Accept ‘bad things’ in return for benefits of AI, says Sam Altman </p><p>Right after we accept school shootings, loss of journalism, and no longer free speech, of course.</p><p><a href=\"https://www.theguardian.com/technology/2026/oct/05/sam-altman-open-ai-chatgpt-benefits-risks\" target=\"_blank\" rel=\"nofollow noopener\" translate=\"no\"><span class=\"invisible\">https://www.</span><span class=\"ellipsis\">theguardian.com/technology/202</span><span class=\"invisible\">6/oct/05/sam-altman-open-ai-chatgpt-benefits-risks</span></a></p><p><a href=\"https://mastodon.social/tags/news\" class=\"mention hashtag\" rel=\"tag\">#<span>news</span></a> <a href=\"https://mastodon.social/tags/tech\" class=\"mention hashtag\" rel=\"tag\">#<span>tech</span></a> <a href=\"https://mastodon.social/tags/technology\" class=\"mention hashtag\" rel=\"tag\">#<span>technology</span></a> <a href=\"https://mastodon.social/tags/AI\" class=\"mention hashtag\" rel=\"tag\">#<span>AI</span></a> <a href=\"https://mastodon.social/tags/openai\" class=\"mention hashtag\" rel=\"tag\">#<span>openai</span></a> <a href=\"https://mastodon.social/tags/samaltman\" class=\"mention hashtag\" rel=\"tag\">#<span>samaltman</span></a> <a href=\"https://mastodon.social/tags/aislop\" class=\"mention hashtag\" rel=\"tag\">#<span>aislop</span></a> <a href=\"https://mastodon.social/tags/nvidia\" class=\"mention hashtag\" rel=\"tag\">#<span>nvidia</span></a> <a href=\"https://mastodon.social/tags/AIPsychosis\" class=\"mention hashtag\" rel=\"tag\">#<span>AIPsychosis</span></a></p>",
+  "reblog": null,
+  "account": {
+   "acct": "Some_Emo_Chick",
+   "display_name": "Frankie ✅",
+   "avatar": "https://files.mastodon.social/accounts/avatars/001/021/813/original/7da54a73182dbdda.gif",
+   "url": "https://mastodon.social/@Some_Emo_Chick",
+   "followers_count": 10203
+  }
+ }
+]
