@@ -4,7 +4,7 @@ import { Suspense, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { format } from "date-fns";
-import { ImageIcon, Loader2, MessageSquare, Search, Video } from "lucide-react";
+import { ImageIcon, Inbox, ListTree, Loader2, MessageSquare, Search, Video } from "lucide-react";
 import { trpc } from "~/lib/trpc/client";
 import { humanizeError } from "~/lib/errors";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card";
@@ -19,6 +19,7 @@ import {
   PlatformGlyph,
   type CommentPlatform,
 } from "~/components/comments/comment-thread";
+import { UnansweredQueue } from "~/components/comments/unanswered-queue";
 import { cn } from "~/lib/utils";
 
 /**
@@ -29,7 +30,8 @@ import { cn } from "~/lib/utils";
  * 3. the comment thread loads LIVE from Meta; reply publicly as that Page/account
  *
  * Deep link: /dashboard/comments?channel=<channelId>&post=<postTargetId>
- * (the post detail page links here).
+ * (the post detail page links here). `?view=unanswered` opens the queue of
+ * comments nobody has replied to yet across recent posts (2026-10-05).
  */
 export default function CommentsPage() {
   return (
@@ -44,6 +46,7 @@ function CommentsInbox() {
   const searchParams = useSearchParams();
   const channelParam = searchParams.get("channel");
   const postParam = searchParams.get("post");
+  const view = searchParams.get("view") === "unanswered" ? "unanswered" : "posts";
   const [search, setSearch] = useState("");
   const threadRef = useRef<HTMLDivElement>(null);
 
@@ -75,6 +78,13 @@ function CommentsInbox() {
     );
   }, [accounts, search]);
 
+  const showView = (next: "posts" | "unanswered") => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (next === "unanswered") params.set("view", "unanswered");
+    else params.delete("view");
+    router.replace(`/dashboard/comments${params.toString() ? `?${params.toString()}` : ""}`, { scroll: false });
+  };
+
   const navigate = (channelId: string, postTargetId?: string) => {
     const params = new URLSearchParams();
     params.set("channel", channelId);
@@ -104,6 +114,32 @@ function CommentsInbox() {
         </p>
       </div>
 
+      {accounts.length > 0 && (
+        <div className="inline-flex rounded-md border p-0.5" role="tablist" aria-label="Comments view">
+          <Button
+            size="sm"
+            variant={view === "posts" ? "secondary" : "ghost"}
+            className="h-7 px-3 text-xs"
+            role="tab"
+            aria-selected={view === "posts"}
+            onClick={() => showView("posts")}
+          >
+            <ListTree className="mr-1 h-3.5 w-3.5" /> By post
+          </Button>
+          <Button
+            size="sm"
+            variant={view === "unanswered" ? "secondary" : "ghost"}
+            className="h-7 px-3 text-xs"
+            role="tab"
+            aria-selected={view === "unanswered"}
+            onClick={() => showView("unanswered")}
+            data-testid="view-unanswered"
+          >
+            <Inbox className="mr-1 h-3.5 w-3.5" /> Unanswered
+          </Button>
+        </div>
+      )}
+
       {accountsQuery.isLoading ? (
         <Skeleton className="h-64 w-full" />
       ) : accountsQuery.isError ? (
@@ -119,6 +155,12 @@ function CommentsInbox() {
             <Button asChild size="sm">
               <Link href="/dashboard/channels">Go to Channels</Link>
             </Button>
+          </CardContent>
+        </Card>
+      ) : view === "unanswered" ? (
+        <Card>
+          <CardContent className="p-4">
+            <UnansweredQueue accounts={accounts} onOpenThread={(channelId, targetId) => navigate(channelId, targetId)} />
           </CardContent>
         </Card>
       ) : (

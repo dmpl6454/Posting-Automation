@@ -10,6 +10,7 @@ import {
   Heart,
   Loader2,
   MessageCircle,
+  MessageSquareOff,
   Pencil,
   RefreshCw,
   ShieldAlert,
@@ -101,7 +102,7 @@ function attachmentLabel(type: string | null): string | null {
   return "Attachment";
 }
 
-function authorLabel(c: SocialComment, platform: CommentPlatform, namesHidden: boolean): string {
+export function authorLabel(c: SocialComment, platform: CommentPlatform, namesHidden: boolean): string {
   if (platform === "INSTAGRAM") {
     if (c.author.username) return `@${c.author.username}`;
     // Meta withholds commenter usernames unless the token holds
@@ -114,7 +115,7 @@ function authorLabel(c: SocialComment, platform: CommentPlatform, namesHidden: b
   return c.author.name ?? "Facebook user";
 }
 
-function RelativeTime({ value }: { value: string }) {
+export function RelativeTime({ value }: { value: string }) {
   const d = parseGraphTimestamp(value);
   if (!d) return null;
   // Clock skew between Meta and the viewer's device can put a just-posted
@@ -172,6 +173,7 @@ export function CommentThread({
   // remounts per post, so this never leaks across posts.
   const [likedHere, setLikedHere] = useState<Record<string, boolean>>({});
   const [postLiked, setPostLiked] = useState<boolean | null>(null);
+  const [confirmCommentsOff, setConfirmCommentsOff] = useState(false);
   const utils = trpc.useUtils();
 
   const query = trpc.comment.list.useInfiniteQuery(
@@ -356,6 +358,39 @@ export function CommentThread({
         return;
       }
       toast({ title: "Couldn't update the post like", description: humanizeError(err), variant: "destructive" });
+      if (PERMISSION_REFUSAL_RE.test(err.message)) setTimeout(() => void query.refetch(), 1500);
+    },
+  });
+
+  // Instagram only: are comments switched on for this post? One live read,
+  // made only once the thread is known to be Instagram (Facebook has no API to
+  // switch comments off on a Page post, so it never asks).
+  const settingsQuery = trpc.comment.commentSettings.useQuery(
+    { targetId },
+    { enabled: knownPlatform === "INSTAGRAM", retry: false, refetchOnWindowFocus: false, staleTime: 60_000 }
+  );
+  const commentsEnabled = settingsQuery.data?.supported ? settingsQuery.data.commentsEnabled : null;
+  const setCommentsEnabled = trpc.comment.setCommentsEnabled.useMutation({
+    onSuccess: (res) => {
+      setConfirmCommentsOff(false);
+      utils.comment.commentSettings.setData({ targetId }, (prev) =>
+        prev && prev.supported ? { ...prev, commentsEnabled: res.enabled } : prev
+      );
+      toast({
+        title: res.enabled ? "Comments turned on" : "Comments turned off",
+        description: res.enabled
+          ? "People can comment on this post again, and earlier comments are visible again."
+          : "Nobody can comment on this post now, and existing comments are hidden from viewers. Nothing was deleted.",
+      });
+    },
+    onError: (err) => {
+      setConfirmCommentsOff(false);
+      if (/didn't confirm that change/i.test(err.message)) {
+        toast({ title: "Change not confirmed", description: "Refreshing to show the post's current setting." });
+        void settingsQuery.refetch();
+        return;
+      }
+      toast({ title: "Couldn't change the comment setting", description: humanizeError(err), variant: "destructive" });
       if (PERMISSION_REFUSAL_RE.test(err.message)) setTimeout(() => void query.refetch(), 1500);
     },
   });
@@ -645,6 +680,34 @@ export function CommentThread({
               {postLiked ? "Post liked" : "Like post"}
             </Button>
           )}
+          {knownPlatform === "INSTAGRAM" && commentsEnabled !== null && (
+            <Button
+              size="sm"
+              variant="outline"
+              className={cn("h-7 px-2 text-xs", commentsEnabled === false && "border-amber-500 text-amber-700 dark:text-amber-400")}
+              onClick={() =>
+                commentsEnabled ? setConfirmCommentsOff(true) : setCommentsEnabled.mutate({ targetId, enabled: true })
+              }
+              disabled={writeBlocked || setCommentsEnabled.isPending}
+              title={
+                writeBlocked
+                  ? blockedTitle
+                  : commentsEnabled
+                    ? "Stop new comments on this post and hide the existing ones from viewers"
+                    : "Let people comment on this post again"
+              }
+              data-testid="comments-toggle"
+            >
+              {setCommentsEnabled.isPending ? (
+                <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+              ) : commentsEnabled ? (
+                <MessageCircle className="mr-1 h-3 w-3" />
+              ) : (
+                <MessageSquareOff className="mr-1 h-3 w-3" />
+              )}
+              {commentsEnabled ? "Turn comments off" : "Turn comments on"}
+            </Button>
+          )}
           <Button
             size="sm"
             variant="outline"
@@ -670,6 +733,17 @@ export function CommentThread({
           )}
         </div>
       </div>
+
+      {knownPlatform === "INSTAGRAM" && commentsEnabled === false && (
+        <p
+          className="flex items-center gap-1.5 rounded-md border border-amber-500/50 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-800 dark:text-amber-300"
+          data-testid="comments-off-note"
+        >
+          <MessageSquareOff className="h-3.5 w-3.5 shrink-0" />
+          Comments are turned off for this post. Nobody can add a comment, and viewers don&apos;t see the existing ones.
+          Turning them back on restores them.
+        </p>
+      )}
 
       {knownPlatform === "INSTAGRAM" && likeBlocked && !writeBlocked && !namesHidden && (
         // Only liking is off (its own, newer permission). A quiet line, not the
@@ -796,6 +870,15 @@ export function CommentThread({
         confirmLabel="Delete"
         isPending={!!pendingDelete && actionBusy(pendingDelete.id)}
         onConfirm={() => pendingDelete && runAction(pendingDelete, "delete")}
+      />
+      <ConfirmDialog
+        open={confirmCommentsOff}
+        onOpenChange={(open) => !open && setConfirmCommentsOff(false)}
+        title="Turn off comments on this post?"
+        description={`Nobody will be able to comment, and the existing comments will be hidden from viewers on Instagram. Nothing is deleted — turn comments back on at any time to show them again.`}
+        confirmLabel="Turn comments off"
+        isPending={setCommentsEnabled.isPending}
+        onConfirm={() => setCommentsEnabled.mutate({ targetId, enabled: false })}
       />
     </div>
   );

@@ -1745,6 +1745,45 @@ export class InstagramProvider extends SocialProvider {
     return typeof mediaId === "string" && mediaId ? mediaId : null;
   }
 
+  /**
+   * Are comments switched ON for this media? (`is_comment_enabled`, IG Media
+   * reference — "Excludes album children".) Needs instagram_manage_comments on
+   * the Facebook-Login path. Returns null when the value cannot be read; never
+   * throws, because it only decides how a switch is drawn.
+   */
+  async getMediaCommentsEnabled(tokens: OAuthTokens, mediaId: string): Promise<boolean | null> {
+    try {
+      const params = new URLSearchParams({ fields: "is_comment_enabled", access_token: tokens.accessToken });
+      const res = await fetchT(`${this.graphBaseUrl}/${this.apiVersion}/${encodeURIComponent(mediaId)}?${params.toString()}`);
+      const data: any = await res.json().catch(() => null);
+      if (!res.ok) {
+        console.warn(`[Instagram] is_comment_enabled read failed (HTTP ${res.status}):`, data === null ? "unreadable" : JSON.stringify(data?.error ?? data));
+        return null;
+      }
+      return typeof data?.is_comment_enabled === "boolean" ? data.is_comment_enabled : null;
+    } catch (err: any) {
+      console.warn(`[Instagram] is_comment_enabled read did not complete:`, err?.message ?? err);
+      return null;
+    }
+  }
+
+  /**
+   * Switch comments on or off for media this account owns —
+   * `POST /{ig-media-id} {comment_enabled}` → `{ success: true }` (IG Media
+   * reference, Updating; "Live video Instagram Media not supported").
+   * Idempotent, so an unknown outcome is reported as "not confirmed", never as
+   * a failure (same contract as hide/delete).
+   */
+  async setMediaCommentsEnabled(tokens: OAuthTokens, mediaId: string, enabled: boolean): Promise<void> {
+    try {
+      await this.igCommentAction(tokens, "POST", mediaId, { comment_enabled: enabled });
+    } catch (err: any) {
+      // The shared classifier speaks about a COMMENT; here #100/33 means the POST is gone.
+      if (err?.message === COMMENT_OBJECT_GONE_MESSAGE) throw new Error(COMMENT_MEDIA_GONE_MESSAGE);
+      throw err;
+    }
+  }
+
   /** Hide (`hidden=true`) or unhide a comment on media this account owns. */
   async setCommentHidden(tokens: OAuthTokens, commentId: string, hidden: boolean): Promise<void> {
     await this.igCommentAction(tokens, "POST", commentId, { hide: hidden });

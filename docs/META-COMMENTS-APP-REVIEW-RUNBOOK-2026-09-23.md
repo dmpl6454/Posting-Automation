@@ -398,3 +398,49 @@ rejection.
 | "…hasn't been granted permission to like (instagram_manage_engagement)…" | Meta refused the like for a missing permission | Same as above |
 | "Instagram refused this like… written by a private account…" | The account HAS the permission, but Instagram doesn't allow liking comments from private accounts | Nothing to fix; like a comment from a public account |
 | "Instagram is limiting likes for this account right now…" / "Slow down a little…" | Meta throttle, or our cap of 10 likes per 10 seconds per account (Meta locks an account for an hour above 50 in 5 s) | Wait a few seconds |
+| Amber line under the thread: "Comments are turned off for this post…" (Instagram) | Someone switched comments off for that post (from PostAutomation or the Instagram app) | Click **Turn comments on** in the thread header |
+| "Facebook doesn't let apps switch comments off on a Page post…" | The on/off switch is Instagram-only; Facebook has no API for it | Hide or delete individual comments instead |
+| Unanswered queue: amber line "…skipped — lots of comment activity on this Page right now" | That Page's shared read budget (120 reads/min across all workspaces) was used up | Refresh in a minute |
+| Unanswered queue: "May already have a reply" badge | The comment has more replies than the queue checked, so an older reply of yours may exist | Open the thread to make sure before replying |
+
+## 10. Comments on/off and the Unanswered queue (2026-10-05)
+
+Built after the second App Review approved `instagram_manage_comments`,
+`instagram_manage_engagement` and (App B only) `pages_manage_engagement`. Neither feature
+needs a new permission.
+
+**Instagram comments on/off.** The thread header shows **Turn comments off / on** for an
+Instagram post. It reads `is_comment_enabled` and writes `POST /{ig-media-id}
+{comment_enabled}` (IG Media reference; live videos are not supported). Turning comments off
+goes through a confirm dialog; it hides existing comments from viewers and blocks new ones,
+and turning them back on restores them. Nothing is deleted. Facebook has no equivalent API.
+The switch is disabled when the account lacks `instagram_manage_comments`. Audit actions:
+`comment.comments_disabled` / `comment.comments_enabled` (an unknown outcome is audited with
+`outcome: "unconfirmed"`).
+
+**Unanswered queue** (`/dashboard/comments?view=unanswered`, procedure
+`comment.unanswered`). It lists top-level comments on recent posts that the Page or account
+has not replied to, using `selectUnanswered` in
+`packages/social/src/utils/unanswered-comments.ts`:
+
+- not written by the account itself, not hidden, and none of its embedded replies is the
+  account's own;
+- `repliesPartial` when a comment has more replies than were embedded (Facebook embeds the
+  newest 25), shown as "May already have a reply".
+
+Cost limits, because every post is one live Graph read on the Page's own quota, shared with
+publishing:
+
+- loads only when the Unanswered view is opened, never in the background;
+- at most 12 posts per load (newest first, server cap 25), each read once, first page of
+  comments only; the UI says when older posts or comments were not checked;
+- every read is charged to the same per-Page read budget as the thread, and a Page over
+  budget is reported as skipped, not retried;
+- 3 reads in flight, 6 loads per user per minute; one post failing never fails the load.
+
+Replies go through the existing `comment.reply` (same on-post checks, same "may already be
+posted" handling). **Draft with AI** (`comment.suggestReply`) only fills the text box; a
+person edits and clicks Send. The comment and caption are passed to the model as quoted data.
+**Done** hides a comment from the queue in that browser only (localStorage, 45 days); nothing
+is stored server-side.
+

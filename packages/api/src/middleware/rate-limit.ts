@@ -166,3 +166,13 @@ export const commentPageModerateLimiter = createRateLimiter({ windowMs: 60_000, 
  * fixed windows stays near 20, far under Meta's 50-in-5s.
  */
 export const commentIgLikeBurstLimiter = createRateLimiter({ windowMs: 10_000, max: 10 });
+
+/**
+ * Unanswered-comments queue (2026-10-05): ONE load reads up to ~25 posts'
+ * comments live from Meta, so it is limited per user far below a single-thread
+ * read — 6 loads a minute is ample for a person working the queue.
+ */
+export const commentQueueRateLimiter = createRateLimiter({ windowMs: 60_000, max: 6 });
+
+/** AI-drafted replies — a model call each; the person still sends the reply. */
+export const commentDraftRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });

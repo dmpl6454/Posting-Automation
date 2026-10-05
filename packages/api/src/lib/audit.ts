@@ -96,6 +96,9 @@ export const AUDIT_ACTIONS = {
   COMMENT_LIKED: "comment.liked",
   COMMENT_UNLIKED: "comment.unliked",
   COMMENT_EDITED: "comment.edited",
+  // Instagram: switch comments off / on for a post (2026-10-05).
+  COMMENTS_DISABLED: "comment.comments_disabled",
+  COMMENTS_ENABLED: "comment.comments_enabled",
   // Liking the post itself from the Comments inbox (Instagram, 2026-09-23).
   POST_LIKED: "post.liked",
   POST_UNLIKED: "post.unliked",
