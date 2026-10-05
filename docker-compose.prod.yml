@@ -348,6 +348,15 @@ services:
       FB_ANALYTICS_SYNC_ENABLED: ${FB_ANALYTICS_SYNC_ENABLED:-false}
       FB_ANALYTICS_PER_RUN: ${FB_ANALYTICS_PER_RUN:-40}
       FB_ANALYTICS_MIN_STALE_HOURS: ${FB_ANALYTICS_MIN_STALE_HOURS:-48}
+      # Comment automation sweep (auto-hide rules + new-comment alerts), every
+      # 15 min, only for workspaces that switched it on. "false" stops it.
+      # Caps keep its Graph reads small next to publishing (same Meta quota).
+      COMMENT_AUTOMATION_ENABLED: ${COMMENT_AUTOMATION_ENABLED:-}
+      COMMENT_SWEEP_MAX_POSTS: ${COMMENT_SWEEP_MAX_POSTS:-}
+      COMMENT_SWEEP_MAX_POSTS_PER_ORG: ${COMMENT_SWEEP_MAX_POSTS_PER_ORG:-}
+      COMMENT_SWEEP_LOOKBACK_DAYS: ${COMMENT_SWEEP_LOOKBACK_DAYS:-}
+      COMMENT_SWEEP_FB_USAGE_CEILING: ${COMMENT_SWEEP_FB_USAGE_CEILING:-}
+      COMMENT_AUTOHIDE_MAX_PER_RUN: ${COMMENT_AUTOHIDE_MAX_PER_RUN:-}
       # One early analytics pass for a freshly published FACEBOOK VIDEO/REEL. The
       # publish-time snapshot asks the Video node (id not yet resolved), which reports
       # nothing for a reel, and FB is excluded from both recurring passes — so without

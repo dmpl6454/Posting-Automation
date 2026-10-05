@@ -11,6 +11,18 @@ import {
   listAllMetaApps,
 } from "@postautomation/social";
 import { runAutoHealerWithLogging } from "../workers/auto-healer.worker";
+import {
+  SWEEP_INTERVAL_MS as COMMENT_SWEEP_INTERVAL_MS,
+  isCommentAutomationEnabled,
+  readSweepConfig as readCommentSweepConfig,
+  runCommentSweep,
+} from "../lib/comment-sweep";
+import {
+  getSocialProvider as getCommentProvider,
+  facebookAppUsagePeak,
+  type FacebookProvider as CommentFacebookProvider,
+  type InstagramProvider as CommentInstagramProvider,
+} from "@postautomation/social";
 import { runCelebrityDetectors } from "../workers/celebrity-detect.worker";
 import { enqueueScheduledPublishJobs, excludeExpiredStoriesWhere, shouldReconcileCheckpoints } from "@postautomation/queue";
 import { HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE } from "../lib/publish-recovery";
@@ -1511,6 +1523,45 @@ export async function flushFbDeprecationWarnings() {
 /**
  * Start all cron jobs
  */
+/**
+ * Comment automation (2026-10-05): auto-hide rules + new-comment alerts for the
+ * workspaces that switched them on. Budgeted and idempotent — see
+ * lib/comment-sweep.ts. `COMMENT_AUTOMATION_ENABLED=false` stops it.
+ */
+let commentSweepRunning = false;
+export async function runCommentAutomationSweep(): Promise<void> {
+  if (!isCommentAutomationEnabled()) return;
+  if (commentSweepRunning) {
+    console.log("[CommentSweep] previous run still in progress — skipping this tick");
+    return;
+  }
+  commentSweepRunning = true;
+  try {
+    await runCommentSweep(
+      {
+        prisma,
+        readComments: (platform, tokens, objectId, account) =>
+          platform === "FACEBOOK"
+            ? (getCommentProvider("FACEBOOK") as CommentFacebookProvider).getPostComments(tokens, objectId, account.platformId)
+            : (getCommentProvider("INSTAGRAM") as CommentInstagramProvider).getMediaComments(tokens, objectId, undefined, {
+                igUserId: account.igUserId,
+                username: account.username,
+              }),
+        hideComment: (platform, tokens, commentId, pageId) =>
+          platform === "FACEBOOK"
+            ? (getCommentProvider("FACEBOOK") as CommentFacebookProvider).setCommentHidden(tokens, commentId, true, pageId)
+            : (getCommentProvider("INSTAGRAM") as CommentInstagramProvider).setCommentHidden(tokens, commentId, true),
+        facebookUsagePeak: facebookAppUsagePeak,
+      },
+      readCommentSweepConfig()
+    );
+  } catch (err: any) {
+    console.error("[CommentSweep] run failed:", err?.message ?? err);
+  } finally {
+    commentSweepRunning = false;
+  }
+}
+
 export function startCronJobs() {
   // Token refresh check every 30 minutes
   setInterval(scheduleTokenRefreshes, 30 * 60 * 1000);
@@ -1659,7 +1710,13 @@ export function startCronJobs() {
   setInterval(purgeOldErrorLogs, 24 * 60 * 60 * 1000); // every 24 hours
   setTimeout(purgeOldErrorLogs, 6 * 60 * 1000); // Start after 6 min warmup
 
+  // Comment automation sweep (auto-hide rules + new-comment alerts). 7 min
+  // warmup keeps its first Graph reads clear of the boot-time crons above.
+  setInterval(runCommentAutomationSweep, COMMENT_SWEEP_INTERVAL_MS);
+  setTimeout(runCommentAutomationSweep, 7 * 60 * 1000);
+
   console.log("[Cron]   - Auto-healer: every 10 min");
+  console.log("[Cron]   - Comment automation sweep: every 15 min");
   console.log("[Cron]   - Publishing watchdog: every 5 min");
   console.log("[Cron]   - ErrorLog purge: every 24 hours");
 }

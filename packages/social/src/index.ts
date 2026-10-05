@@ -123,6 +123,17 @@ export { FB_COMMENT_MAX_LENGTH } from "./utils/facebook-comments";
 export { commentCapabilities, COMMENT_READ_SCOPES, COMMENT_WRITE_SCOPES, COMMENT_LIKE_SCOPES } from "./utils/social-comments";
 // Unanswered-comments queue (2026-10-05) — pure "still needs a reply" rule.
 export { selectUnanswered, type UnansweredComment } from "./utils/unanswered-comments";
+// Comment automation (2026-10-05) — auto-hide rule matcher.
+export {
+  matchCommentRule,
+  normalizeBlockedWords,
+  containsLink,
+  MAX_BLOCKED_WORDS,
+  MAX_BLOCKED_WORD_LENGTH,
+  type CommentRules,
+  type RuleMatch,
+} from "./utils/comment-rules";
+export { facebookAppUsagePeak } from "./providers/facebook.provider";
 export { COMMENT_NOT_ON_POST_MESSAGE, COMMENT_LIKE_PERMISSION_MESSAGE, COMMENT_LIKE_REFUSED_MESSAGE } from "./utils/instagram-comments";
 export type {
   CommentCapabilities,
