@@ -564,3 +564,30 @@ comments: at least 5 negative, at least 40% of what it scored, at most one alert
 - `COMMENT_NEGATIVE_ALERT_MIN` (default 5) sets the alert threshold.
 
 **Log line:** `docker logs postautomation-worker-1 --since 1h 2>&1 | grep -E "CommentSweep|CommentSentiment"`
+
+## 14. Reddit comments and YouTube in social listening (2026-10-05)
+
+Keyword listening (Social Listening → Keyword mentions) now also reads:
+
+- **Reddit comments.** After the existing post search, each sweep opens the 5 most-discussed matching
+  posts (`GET /comments/{id}`, one request each, top-level comments plus one level of replies).
+  Deleted, removed, moderator and AutoModerator comments are skipped. Needs `REDDIT_CLIENT_ID` /
+  `REDDIT_CLIENT_SECRET`, like Reddit posts.
+- **YouTube videos and comments.** `search.list` for videos from the last 7 days matching the
+  keywords, `videos.list` for their view/like/comment counts, and `commentThreads.list` (newest 50)
+  on the 5 most-commented. Uses `YOUTUBE_API_KEY` when set, otherwise the workspace's connected
+  YouTube channel tokens (youtube.readonly), falling over on a 401.
+
+**Relevance rule:** a comment is kept when it names a keyword, or when the post or video it sits
+under has a keyword in its title. Comment mentions carry `metadata.kind = "comment"` with the
+parent's title and link, shown above the comment in the list.
+
+**YouTube quota:** the Data API quota belongs to the Google Cloud project that also publishes
+videos (an upload costs 1,600 units; a search costs 100). So YouTube listening:
+- runs per query about every 6 hours (`YOUTUBE_LISTENING_EVERY_RUNS`, default 12 sweeps), or when a
+  person clicks Sync Now / creates the query;
+- reserves units from a daily cap (`YOUTUBE_LISTENING_DAILY_UNITS`, default 1,500, Pacific day,
+  counted in Redis) before every call, and fails closed if Redis can't be reached;
+- stops for the day when Google answers `quotaExceeded`.
+
+A sweep of one keyword group costs about 106 units (100 + 1 + 5).

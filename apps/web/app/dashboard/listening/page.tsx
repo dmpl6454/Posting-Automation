@@ -65,7 +65,10 @@ const PLATFORMS = [
   { id: "twitter", label: "X / Twitter" },
   { id: "instagram", label: "Instagram" },
   { id: "linkedin", label: "LinkedIn" },
-  { id: "reddit", label: "Reddit" },
+  { id: "reddit", label: "Reddit (posts + comments)" },
+  // Videos matching the keywords and their comments (2026-10-05). Every 6
+  // hours per query (and on Sync Now), within a daily YouTube API budget.
+  { id: "youtube", label: "YouTube (videos + comments)" },
   { id: "tiktok", label: "TikTok" },
   { id: "news", label: "Google News" },
   // Facebook has no keyword search for anyone; this reads the public posts that
@@ -116,6 +119,17 @@ const SOURCE_LABEL: Record<string, string> = {
   FORUM: "Forum",
   OTHER: "Other",
 };
+
+/**
+ * A comment mention (Reddit / YouTube, 2026-10-05) carries the post or video
+ * it was left on. Only an https link is rendered as a link.
+ */
+function commentParent(metadata: unknown): { title: string; url: string | null } | null {
+  const m = metadata as { kind?: unknown; parentTitle?: unknown; parentUrl?: unknown } | null;
+  if (!m || m.kind !== "comment" || typeof m.parentTitle !== "string" || !m.parentTitle) return null;
+  const url = typeof m.parentUrl === "string" && /^https:\/\//i.test(m.parentUrl) ? m.parentUrl : null;
+  return { title: m.parentTitle, url };
+}
 
 /**
  * The design prints "+0.34" — a sentiment score is signed, and a bare "0.34"
@@ -387,7 +401,11 @@ function ListeningPageInner() {
             return mentions when their API keys are configured (or, for IG/LinkedIn, a channel is
             connected) — otherwise those sources are simply skipped. Facebook has no keyword search:
             the Facebook source lists public posts that tag one of your connected Pages (when a keyword
-            matches the post or the Page name), a rotating batch of Pages per sync.
+            matches the post or the Page name), a rotating batch of Pages per sync. Reddit also reads the
+            comments on the most-discussed matching posts. YouTube finds videos from the last 7 days and
+            their comments; it needs a connected YouTube channel, and runs about every 6 hours per query
+            (or when you click Sync Now) within a daily YouTube API budget. A comment counts when it names
+            a keyword or sits under a post or video whose title does.
           </span>
         </p>
       </div>
@@ -612,6 +630,23 @@ function ListeningPageInner() {
                       <SentimentIcon className="h-[13px] w-[13px]" />
                     </div>
                     <div className="min-w-0 flex-1">
+                      {commentParent(mention.metadata) && (
+                        <p className="mb-1 truncate text-[11px] leading-[1.4] text-faint" data-testid="mention-comment-on">
+                          Comment on{" "}
+                          {commentParent(mention.metadata)!.url ? (
+                            <a
+                              href={commentParent(mention.metadata)!.url!}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-muted-foreground underline hover:text-foreground"
+                            >
+                              “{commentParent(mention.metadata)!.title}”
+                            </a>
+                          ) : (
+                            <span className="text-muted-foreground">“{commentParent(mention.metadata)!.title}”</span>
+                          )}
+                        </p>
+                      )}
                       <p className="text-[12.5px] leading-[1.5]">{mention.content}</p>
                       <div className="mt-[7px] flex flex-wrap items-center gap-[9px] text-[11px] leading-none text-faint">
                         {mention.authorName && (

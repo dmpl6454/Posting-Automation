@@ -9,7 +9,7 @@ vi.mock("@postautomation/queue", () => ({
   createRedisConnection: () => ({}),
 }));
 
-import { __listeningFetchers } from "../listening-sync.worker";
+import { __listeningFetchers, __resetListeningTokenCache, __setYouTubeUnitCounter } from "../listening-sync.worker";
 
 type FetchMock = ReturnType<typeof vi.fn>;
 
@@ -24,6 +24,8 @@ const ctx = (kws: string[], rows: Parameters<typeof channels>[0]) => ({
   keywords: kws,
   language: "en",
   organizationId: "org1",
+  queryId: "q1",
+  interactive: false,
   channels: channels(rows),
 });
 
@@ -118,7 +120,7 @@ describe("fetchGoogleNews", () => {
 
   it("parses items into NEWS mentions, one request per keyword chunk, following Google's locale redirect", async () => {
     fetchMock.mockResolvedValue(new Response(rss, { status: 200 }));
-    const out = await __listeningFetchers.news({ keywords: ["acme", "acme stores"], language: "en", organizationId: "o", channels: async () => [] });
+    const out = await __listeningFetchers.news({ keywords: ["acme", "acme stores"], language: "en", organizationId: "o", queryId: "q", interactive: false, channels: async () => [] });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0]!;
     expect(decodeURIComponent(String(url))).toContain('q=acme OR "acme stores"&hl=en');
@@ -131,11 +133,165 @@ describe("fetchGoogleNews", () => {
     fetchMock
       .mockResolvedValueOnce(new Response("blocked", { status: 429 }))
       .mockResolvedValueOnce(new Response("<html><body>Before you continue to Google</body></html>", { status: 200 }));
-    const base = { language: "en", organizationId: "o", channels: async () => [] };
+    const base = { language: "en", organizationId: "o", queryId: "q", interactive: false, channels: async () => [] };
     expect(await __listeningFetchers.news({ ...base, keywords: ["acme"] })).toEqual([]);
     expect(await __listeningFetchers.news({ ...base, keywords: ["acme"] })).toEqual([]);
     const warned = (console.warn as unknown as FetchMock).mock.calls.map((c) => String(c[0]));
     expect(warned.some((w) => /GoogleNews\] HTTP 429/.test(w))).toBe(true);
     expect(warned.some((w) => /GoogleNews\] 0 items .*Before you continue/.test(w))).toBe(true);
+  });
+});
+
+// ── Reddit comments + YouTube (2026-10-05) ──────────────────────────────────
+
+
+describe("fetchRedditMentions — comments", () => {
+  beforeEach(() => {
+    __resetListeningTokenCache();
+    process.env.REDDIT_CLIENT_ID = "id";
+    process.env.REDDIT_CLIENT_SECRET = "secret";
+  });
+  afterEach(() => {
+    delete process.env.REDDIT_CLIENT_ID;
+    delete process.env.REDDIT_CLIENT_SECRET;
+  });
+
+  it("searches once, then opens the most-discussed matching posts and keeps relevant comments", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes("access_token")) return jsonResponse(200, { access_token: "RT", expires_in: 3600 });
+      if (url.includes("/search?")) {
+        return jsonResponse(200, {
+          data: {
+            children: [
+              { data: { id: "p1", name: "t3_p1", title: "Acme review", permalink: "/r/x/comments/p1/a/", subreddit: "x", num_comments: 12, created_utc: 1759600000 } },
+              { data: { id: "p2", name: "t3_p2", title: "Quiet acme post", permalink: "/r/x/comments/p2/b/", subreddit: "x", num_comments: 0, created_utc: 1759600000 } },
+            ],
+          },
+        });
+      }
+      if (url.includes("/comments/p1")) {
+        return jsonResponse(200, [
+          {},
+          { data: { children: [{ kind: "t1", data: { id: "c1", name: "t1_c1", body: "love it", author: "u1", ups: 3, created_utc: 1759600100, permalink: "/r/x/comments/p1/a/c1/" } }] } },
+        ]);
+      }
+      return jsonResponse(404, {});
+    });
+    const out = await __listeningFetchers.reddit(ctx(["acme"], []));
+    const urls = fetchMock.mock.calls.map((c) => String(c[0]));
+    expect(urls.filter((u) => u.includes("/comments/"))).toEqual([
+      "https://oauth.reddit.com/comments/p1?limit=100&depth=2&sort=new&raw_json=1",
+    ]);
+    expect(out.map((m) => m.platformPostId)).toEqual(["t3_p1", "t3_p2", "t1_c1"]);
+    expect(out[2]!.metadata).toMatchObject({ kind: "comment", parentTitle: "Acme review" });
+  });
+
+  it("does nothing without Reddit credentials", async () => {
+    delete process.env.REDDIT_CLIENT_ID;
+    expect(await __listeningFetchers.reddit(ctx(["acme"], []))).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("fetchYouTubeMentions", () => {
+  const totals = new Map<string, number>();
+  const counter = {
+    async incrBy(day: string, units: number) {
+      totals.set(day, (totals.get(day) ?? 0) + units);
+      return totals.get(day)!;
+    },
+    async decrBy(day: string, units: number) {
+      totals.set(day, (totals.get(day) ?? 0) - units);
+    },
+  };
+  beforeEach(() => {
+    totals.clear();
+    __setYouTubeUnitCounter(counter);
+  });
+  afterEach(() => {
+    __setYouTubeUnitCounter(null);
+    delete process.env.YOUTUBE_API_KEY;
+    delete process.env.YOUTUBE_LISTENING_DAILY_UNITS;
+  });
+
+  const ytRoutes = (url: string) => {
+    if (url.includes("/search?")) {
+      return jsonResponse(200, {
+        items: [
+          { id: { videoId: "v1" }, snippet: { title: "Acme unboxing", channelTitle: "Tech", publishedAt: "2026-10-04T10:00:00Z" } },
+          { id: { videoId: "v2" }, snippet: { title: "acme no comments", channelTitle: "T2", publishedAt: "2026-10-04T10:00:00Z" } },
+        ],
+      });
+    }
+    if (url.includes("/videos?")) {
+      return jsonResponse(200, {
+        items: [
+          { id: "v1", statistics: { viewCount: "500", likeCount: "20", commentCount: "4" } },
+          { id: "v2", statistics: { viewCount: "50", likeCount: "1", commentCount: "0" } },
+        ],
+      });
+    }
+    if (url.includes("/commentThreads?")) {
+      return jsonResponse(200, { items: [{ id: "t", snippet: { topLevelComment: { id: "C1", snippet: { textOriginal: "so good", authorDisplayName: "@a", publishedAt: "2026-10-04T11:00:00Z" } } } }] });
+    }
+    return jsonResponse(404, {});
+  };
+
+  it("with a connected YouTube channel: search, stats, comments on videos that have them — and counts its units", async () => {
+    fetchMock.mockImplementation(async (url: string) => ytRoutes(url));
+    const rows = [{ id: "yt1", platform: "YOUTUBE", platformId: "UC", name: "Mine" }];
+    const out = await __listeningFetchers.youtube({ ...ctx(["acme"], rows), interactive: true });
+    const calls = fetchMock.mock.calls.map((c) => [String(c[0]).split("?")[0], (c[1] as any)?.headers?.Authorization]);
+    expect(calls).toEqual([
+      ["https://www.googleapis.com/youtube/v3/search", "Bearer tok-yt1"],
+      ["https://www.googleapis.com/youtube/v3/videos", "Bearer tok-yt1"],
+      ["https://www.googleapis.com/youtube/v3/commentThreads", "Bearer tok-yt1"],
+    ]);
+    expect(out.map((m) => m.platformPostId)).toEqual(["video:v1", "video:v2", "comment:C1"]);
+    expect([...totals.values()][0]).toBe(102);
+  });
+
+  it("an API key is used as a query parameter, without a bearer token", async () => {
+    process.env.YOUTUBE_API_KEY = "KEY";
+    fetchMock.mockImplementation(async (url: string) => ytRoutes(url));
+    await __listeningFetchers.youtube({ ...ctx(["acme"], []), interactive: true });
+    expect(String(fetchMock.mock.calls[0]![0])).toContain("key=KEY");
+    expect((fetchMock.mock.calls[0]![1] as any)?.headers?.Authorization).toBeUndefined();
+  });
+
+  it("stops before calling Google when the daily unit cap is reached", async () => {
+    process.env.YOUTUBE_LISTENING_DAILY_UNITS = "50";
+    fetchMock.mockImplementation(async (url: string) => ytRoutes(url));
+    const out = await __listeningFetchers.youtube({ ...ctx(["acme"], [{ id: "yt1", platform: "YOUTUBE", platformId: "UC", name: "Mine" }]), interactive: true });
+    expect(out).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("no credential at all ⇒ nothing, no calls", async () => {
+    const out = await __listeningFetchers.youtube({ ...ctx(["acme"], []), interactive: true });
+    expect(out).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("falls over to the next channel on a 401", async () => {
+    fetchMock.mockImplementation(async (url: string, init: any) => {
+      if (init?.headers?.Authorization === "Bearer tok-dead") return jsonResponse(401, { error: { code: 401 } });
+      return ytRoutes(url);
+    });
+    const rows = [
+      { id: "dead", platform: "YOUTUBE", platformId: "UC1", name: "Old" },
+      { id: "yt2", platform: "YOUTUBE", platformId: "UC2", name: "New" },
+    ];
+    const out = await __listeningFetchers.youtube({ ...ctx(["acme"], rows), interactive: true });
+    expect(out.length).toBe(3);
+  });
+
+  it("Google's quotaExceeded stops YouTube for the day", async () => {
+    fetchMock.mockImplementation(async () => jsonResponse(403, { error: { errors: [{ reason: "quotaExceeded" }] } }));
+    const rows = [{ id: "yt1", platform: "YOUTUBE", platformId: "UC", name: "Mine" }];
+    await __listeningFetchers.youtube({ ...ctx(["acme"], rows), interactive: true });
+    fetchMock.mockClear();
+    await __listeningFetchers.youtube({ ...ctx(["acme"], rows), interactive: true });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
