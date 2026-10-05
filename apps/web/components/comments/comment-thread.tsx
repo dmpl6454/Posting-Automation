@@ -25,6 +25,7 @@ import { parseGraphTimestamp } from "~/lib/graph-time";
 import { classifyReplyFailure } from "~/lib/comment-reply-outcome";
 import { applyModeration } from "~/lib/comment-moderation-patch";
 import { privateMessageLength, privateReplyState, type PrivateReplyRecord } from "~/lib/private-reply";
+import { SENTIMENT_META, sentimentKey } from "~/lib/comment-sentiment";
 import { useToast } from "~/hooks/use-toast";
 import { Button } from "~/components/ui/button";
 import { Badge } from "~/components/ui/badge";
@@ -225,6 +226,13 @@ export function CommentThread({
   const privateReplies = useMemo(() => {
     const out: Record<string, { status: string; at: string }> = {};
     for (const page of query.data?.pages ?? []) Object.assign(out, (page as any).privateReplies ?? {});
+    return out;
+  }, [query.data]);
+
+  // Sentiment the comment sweep scored (workspaces with comment sentiment on).
+  const sentiments = useMemo(() => {
+    const out: Record<string, { sentiment: string; score: number | null }> = {};
+    for (const page of query.data?.pages ?? []) Object.assign(out, (page as any).sentiments ?? {});
     return out;
   }, [query.data]);
 
@@ -490,6 +498,21 @@ export function CommentThread({
             </Badge>
           )}
           <RelativeTime value={c.createdAt} />
+          {(() => {
+            const key = sentimentKey(sentiments[c.id]?.sentiment);
+            if (!key) return null;
+            const meta = SENTIMENT_META[key];
+            return (
+              <span
+                className="rounded px-1.5 py-px text-[10px] font-medium"
+                style={{ background: meta.tint, color: meta.color }}
+                title="Sentiment scored by AI (Comment sentiment, Automation tab)"
+                data-testid="comment-sentiment"
+              >
+                {meta.label}
+              </span>
+            );
+          })()}
         </div>
         {editingId === c.id ? (
           <div className="space-y-1.5">

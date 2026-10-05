@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
-import { AlertTriangle, Bell, EyeOff, Loader2, ShieldCheck } from "lucide-react";
+import { AlertTriangle, Bell, EyeOff, Loader2, ShieldCheck, Smile } from "lucide-react";
 import { trpc } from "~/lib/trpc/client";
 import { humanizeError } from "~/lib/errors";
 import {
@@ -38,6 +38,7 @@ export function CommentAutomation() {
   const [wordsText, setWordsText] = useState("");
   const [hideLinks, setHideLinks] = useState(false);
   const [alerts, setAlerts] = useState(false);
+  const [sentiment, setSentiment] = useState(false);
   const [allAccounts, setAllAccounts] = useState(true);
   const [picked, setPicked] = useState<Set<string>>(() => new Set());
   const [loadedOnce, setLoadedOnce] = useState(false);
@@ -50,6 +51,7 @@ export function CommentAutomation() {
     setWordsText(formatBlockedWords(data.settings.blockedWords));
     setHideLinks(data.settings.hideLinks);
     setAlerts(data.settings.alertsEnabled);
+    setSentiment(data.settings.sentimentEnabled);
     setAllAccounts(data.settings.channelIds.length === 0);
     setPicked(new Set(data.settings.channelIds));
     setLoadedOnce(true);
@@ -163,6 +165,28 @@ export function CommentAutomation() {
         <Switch checked={alerts} onCheckedChange={setAlerts} disabled={!canEdit} aria-label="New-comment alerts" data-testid="alerts-switch" />
       </section>
 
+      {/* Comment sentiment */}
+      <section className="flex items-start justify-between gap-3 rounded-md border p-4">
+        <div>
+          <h3 className="flex items-center gap-1.5 text-sm font-semibold">
+            <Smile className="h-4 w-4" /> Comment sentiment
+          </h3>
+          <p className="text-xs text-muted-foreground">
+            Scores each new comment on your recent posts as positive, neutral, mixed or negative, using the same AI
+            scoring as Social Listening. See the results in Social Listening → Comments on your posts, and as a tag on
+            each comment here. Owners and admins get one alert when a check finds a burst of negative comments (at
+            most one every 6 hours).
+          </p>
+        </div>
+        <Switch
+          checked={sentiment}
+          onCheckedChange={setSentiment}
+          disabled={!canEdit}
+          aria-label="Comment sentiment"
+          data-testid="sentiment-switch"
+        />
+      </section>
+
       {/* Scope */}
       <section className="space-y-2 rounded-md border p-4">
         <h3 className="text-sm font-semibold">Pages and accounts</h3>
@@ -213,6 +237,7 @@ export function CommentAutomation() {
               blockedWords: words,
               hideLinks,
               alertsEnabled: alerts,
+              sentimentEnabled: sentiment,
               channelIds: allAccounts ? [] : [...picked],
             })
           }

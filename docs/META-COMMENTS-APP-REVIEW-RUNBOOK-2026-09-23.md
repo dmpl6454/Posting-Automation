@@ -540,3 +540,27 @@ make one successful call for each permission: send a private reply from Comments
 `pages_messaging`), open Messages for the Page and the Instagram account (`pages_manage_metadata`,
 `instagram_manage_messages`), and send one message inside the 24-hour window. Screencast the
 comment, the private reply arriving in Messenger / Instagram, the Messages list, a thread and a reply.
+
+## 13. Comment sentiment on your own posts (2026-10-05)
+
+**What it does.** With **Comment sentiment** switched on (Comments → Automation, owners and admins),
+the 15-minute comment check also stores each new comment on your recent Facebook / Instagram posts
+and scores it as positive, neutral, mixed or negative. Results appear in **Social Listening →
+Comments on your posts** (totals, a daily chart, by account, the posts drawing the most negative
+comments, and a filterable comment list that links to each thread) and as a tag on each comment in
+the Comments inbox. Owners and admins get one alert when a check finds a burst of negative
+comments: at least 5 negative, at least 40% of what it scored, at most one alert every 6 hours.
+
+**How it works.**
+- No extra Meta calls and no new permissions: it reuses the comments the check already reads
+  (first page per post, posts of the last 3 days, up to 15 posts per workspace per run).
+- `CommentSentiment` keeps one row per comment (unique per workspace + comment id). Own comments
+  and comments without text are skipped. Text is truncated to 1,000 characters.
+- Scoring uses the same batch prompt, parser and provider fallback chain as listening sentiment,
+  20 comments per AI call, at most `COMMENT_SENTIMENT_MAX_PER_RUN` (default 200; 0 = store only)
+  per run, interleaved across workspaces.
+- A comment the AI returns no verdict for stays **unscored** and is retried on later runs (up to 3
+  times). It is shown as "Waiting", never as a guessed neutral.
+- `COMMENT_NEGATIVE_ALERT_MIN` (default 5) sets the alert threshold.
+
+**Log line:** `docker logs postautomation-worker-1 --since 1h 2>&1 | grep -E "CommentSweep|CommentSentiment"`

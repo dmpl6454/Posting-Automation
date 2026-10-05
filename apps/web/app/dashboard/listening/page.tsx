@@ -1,7 +1,9 @@
 "use client";
 import { RequireAppAdmin } from "~/components/auth/require-app-admin";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { CommentSentimentPanel } from "~/components/listening/comment-sentiment-panel";
 import { trpc } from "~/lib/trpc/client";
 import { Button } from "~/components/ui/button";
 import { Skeleton } from "~/components/ui/skeleton";
@@ -148,6 +150,19 @@ function formatCompact(n: number): string {
 const LISTENING_POLL_MS = 60_000;
 
 function ListeningPageInner() {
+  // "Keyword mentions" (listening queries) or "Comments on your posts"
+  // (comment sentiment, 2026-10-05). ?view=comments is the deep link the
+  // negative-comments alert opens.
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const view = searchParams.get("view") === "comments" ? "comments" : "mentions";
+  const showView = (next: "mentions" | "comments") => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (next === "comments") params.set("view", "comments");
+    else params.delete("view");
+    const qs = params.toString();
+    router.replace(`/dashboard/listening${qs ? `?${qs}` : ""}`, { scroll: false });
+  };
   const [dialogOpen, setDialogOpen] = useState(false);
   const [name, setName] = useState("");
   const [keywords, setKeywords] = useState("");
@@ -330,6 +345,35 @@ function ListeningPageInner() {
         </Dialog>
       </div>
 
+      <div className="flex w-fit gap-1 rounded-[11px] border border-border bg-surface1 p-1" role="tablist" aria-label="Listening view">
+        {(
+          [
+            ["mentions", "Keyword mentions"],
+            ["comments", "Comments on your posts"],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={view === id}
+            onClick={() => showView(id)}
+            className={`flex h-8 items-center whitespace-nowrap rounded-[8px] px-3.5 text-[12px] transition-colors ${
+              view === id
+                ? "pa-gold-glow bg-gold font-semibold text-[hsl(var(--gold-foreground))]"
+                : "font-medium text-muted-foreground hover:bg-hover hover:text-foreground"
+            }`}
+            data-testid={`listening-view-${id}`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {view === "comments" ? (
+        <CommentSentimentPanel />
+      ) : (
+      <>
       {/* Design: a quiet surface-1 note, not the Alert component's framing. */}
       <div className="flex items-start gap-3 rounded-[12px] border border-border bg-surface1 px-4 py-3.5">
         <Info className="mt-px h-[15px] w-[15px] shrink-0 text-muted-foreground" />
@@ -713,6 +757,8 @@ function ListeningPageInner() {
           </div>
         </div>
       </div>
+      </>
+      )}
     </div>
   );
 }
@@ -723,7 +769,10 @@ function ListeningPageInner() {
 export default function ListeningPage() {
   return (
     <RequireAppAdmin>
-      <ListeningPageInner />
+      {/* useSearchParams needs a Suspense boundary in the App Router. */}
+      <Suspense fallback={null}>
+        <ListeningPageInner />
+      </Suspense>
     </RequireAppAdmin>
   );
 }

@@ -182,6 +182,7 @@ model Organization {
   commentAutomation       CommentAutomation?
   commentAutoActions      CommentAutoAction[]
   commentPrivateReplies   CommentPrivateReply[]
+  commentSentiments       CommentSentiment[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1665,6 +1666,8 @@ model CommentAutomation {
   hideLinks       Boolean  @default(false)
   /// In-app notification to owners/admins when new comments arrive.
   alertsEnabled   Boolean  @default(false)
+  /// Store new comments on our own posts and score their sentiment (2026-10-05).
+  sentimentEnabled Boolean @default(false)
   /// Empty = every Facebook Page and Instagram account in the workspace.
   channelIds      String[] @default([])
   /// When the sweep last looked at this workspace, and what it found.
@@ -1702,6 +1705,41 @@ model CommentAutoAction {
 
   @@unique([organizationId, commentId])
   @@index([organizationId, createdAt])
+}
+
+/// A comment on one of OUR published posts, stored by the comment sweep when a
+/// workspace switches on comment sentiment (2026-10-05), and scored in batches
+/// by the same AI scorer social listening uses. `sentiment` NULL = not scored
+/// yet; `attempts` counts scoring rounds that returned no verdict (a row stops
+/// being retried after a few, and stays NULL — never a guessed NEUTRAL).
+model CommentSentiment {
+  id             String         @id @default(cuid())
+  organizationId String
+  postTargetId   String
+  channelId      String
+  platform       SocialPlatform
+  commentId      String
+  /// The comment text when stored (truncated).
+  commentText    String         @db.Text
+  authorLabel    String?
+  isReply        Boolean        @default(false)
+  /// When the comment was written (Graph created_time / timestamp).
+  commentedAt    DateTime?
+  sentiment      Sentiment?
+  /// -1.0 (most negative) to 1.0 (most positive).
+  sentimentScore Float?
+  attempts       Int            @default(0)
+  scoredAt       DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, commentId])
+  @@index([organizationId, commentedAt])
+  @@index([organizationId, sentiment])
+  @@index([postTargetId])
 }
 
 /// A private reply sent to the person who left a comment (2026-10-05). Meta

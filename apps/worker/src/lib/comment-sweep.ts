@@ -39,6 +39,13 @@ import {
   type SocialComment,
   type SocialCommentPage,
 } from "@postautomation/social";
+import {
+  readCommentSentimentConfig,
+  scorePendingCommentSentiment,
+  sentimentCandidates,
+  type CommentSentimentConfig,
+  type Sentiment,
+} from "./comment-sentiment";
 
 export const SWEEP_INTERVAL_MS = 15 * 60 * 1000;
 
@@ -197,6 +204,12 @@ export interface SweepDeps {
     pageId: string
   ) => Promise<void>;
   facebookUsagePeak: () => number;
+  /**
+   * One model call scoring up to 20 comment texts (comment sentiment). When
+   * absent, comments are still stored but left unscored until a run has it.
+   */
+  scoreSentimentBatch?: (texts: string[]) => Promise<Map<number, { sentiment: Sentiment; score: number }>>;
+  sentimentConfig?: CommentSentimentConfig;
   now?: () => Date;
   log?: Pick<Console, "log" | "warn">;
 }
@@ -210,6 +223,11 @@ export interface OrgRunSummary {
   /** Channels whose token lacks the permission to hide (auto-hide could not act). */
   hidePermissionMissing: string[];
   alerted: boolean;
+  /** Comment sentiment (only when switched on). */
+  sentimentStored?: number;
+  sentimentScored?: number;
+  sentimentNegative?: number;
+  sentimentPending?: number;
 }
 
 const NOT_A_STORY = [{ format: null }, { format: { not: "STORY" as const } }];
@@ -230,7 +248,7 @@ export async function runCommentSweep(deps: SweepDeps, cfg: SweepConfig = readSw
   const prisma = deps.prisma;
 
   const automations: any[] = await prisma.commentAutomation.findMany({
-    where: { OR: [{ autoHideEnabled: true }, { alertsEnabled: true }] },
+    where: { OR: [{ autoHideEnabled: true }, { alertsEnabled: true }, { sentimentEnabled: true }] },
   });
   if (automations.length === 0) return {};
   const automationByOrg = new Map<string, any>(automations.map((a) => [a.organizationId, a]));
@@ -281,9 +299,12 @@ export async function runCommentSweep(deps: SweepDeps, cfg: SweepConfig = readSw
       skippedForQuota: 0,
       hidePermissionMissing: [],
       alerted: false,
+      ...(a.sentimentEnabled ? { sentimentStored: 0, sentimentScored: 0, sentimentNegative: 0, sentimentPending: 0 } : {}),
     };
   }
   if (planned.length === 0) {
+    // Comments stored on an earlier run may still be waiting for a verdict.
+    await scoreSentimentForRun(deps, automations, summaries, log);
     await finishOrgs(prisma, automations, summaries, now, log);
     return summaries;
   }
@@ -389,6 +410,37 @@ export async function runCommentSweep(deps: SweepDeps, cfg: SweepConfig = readSw
       }
     }
 
+    // Comment sentiment: remember every comment on this page we haven't stored
+    // yet (comments the rules just hid included — they are still feedback).
+    if (page && automation.sentimentEnabled) {
+      const found = sentimentCandidates(page.comments, platform);
+      if (found.length > 0) {
+        try {
+          const existing: any[] = await prisma.commentSentiment.findMany({
+            where: { organizationId: target.organizationId, commentId: { in: found.map((f) => f.commentId) } },
+            select: { commentId: true },
+          });
+          const known = new Set(existing.map((e) => e.commentId));
+          const fresh = found.filter((f) => !known.has(f.commentId));
+          if (fresh.length > 0) {
+            await prisma.commentSentiment.createMany({
+              data: fresh.map((f) => ({
+                organizationId: target.organizationId,
+                postTargetId: target.id,
+                channelId: channel.id,
+                platform,
+                ...f,
+              })),
+              skipDuplicates: true,
+            });
+            summary.sentimentStored = (summary.sentimentStored ?? 0) + fresh.length;
+          }
+        } catch (err: any) {
+          log.warn(`[CommentSweep] sentiment store failed for target ${target.id}: ${String(err?.message ?? err).slice(0, 160)}`);
+        }
+      }
+    }
+
     const { lastSeenAt } = readCheckedAt(target.metadata);
     let nextWatermark = lastSeenAt;
     if (page) {
@@ -441,6 +493,7 @@ export async function runCommentSweep(deps: SweepDeps, cfg: SweepConfig = readSw
     }
   }
 
+  await scoreSentimentForRun(deps, automations, summaries, log);
   await finishOrgs(prisma, automations, summaries, now, log);
   const totals = Object.values(summaries).reduce(
     (t, s) => ({ posts: t.posts + s.postsChecked, hidden: t.hidden + s.hidden, fresh: t.fresh + s.newComments, errors: t.errors + s.errors }),
@@ -450,6 +503,33 @@ export async function runCommentSweep(deps: SweepDeps, cfg: SweepConfig = readSw
     `[CommentSweep] orgs=${automations.length} posts=${totals.posts}/${candidates.length} hidden=${totals.hidden} new=${totals.fresh} errors=${totals.errors}${fbPaused ? " fb=paused" : ""}`
   );
   return summaries;
+}
+
+/** Score what the sentiment workspaces have pending; never throws. */
+async function scoreSentimentForRun(
+  deps: SweepDeps,
+  automations: any[],
+  summaries: Record<string, OrgRunSummary>,
+  log: Pick<Console, "log" | "warn">
+): Promise<void> {
+  const orgIds = automations.filter((a) => a.sentimentEnabled).map((a) => a.organizationId as string);
+  if (orgIds.length === 0 || !deps.scoreSentimentBatch) return;
+  try {
+    const results = await scorePendingCommentSentiment(
+      { prisma: deps.prisma, scoreBatch: deps.scoreSentimentBatch, now: deps.now, log },
+      orgIds,
+      deps.sentimentConfig ?? readCommentSentimentConfig()
+    );
+    for (const [orgId, r] of Object.entries(results)) {
+      const summary = summaries[orgId];
+      if (!summary) continue;
+      summary.sentimentScored = r.scored;
+      summary.sentimentNegative = r.negative;
+      summary.sentimentPending = r.pending;
+    }
+  } catch (err: any) {
+    log.warn(`[CommentSweep] sentiment scoring failed: ${String(err?.message ?? err).slice(0, 160)}`);
+  }
 }
 
 async function finishOrgs(
