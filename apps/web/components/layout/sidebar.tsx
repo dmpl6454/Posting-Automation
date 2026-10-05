@@ -17,6 +17,7 @@ import {
   Image,
   BarChart3,
   MessageSquare,
+  Mail,
   Users,
   Settings,
   CreditCard,
@@ -65,6 +66,9 @@ const navigation: NavItem[] = [
   // Comments inbox (2026-09-23): read + reply to FB Page / IG comments. USER-visible —
   // replying is publishing-adjacent, same tier as Content Studio (comment.router is orgProcedure).
   { name: "Comments", href: "/dashboard/comments", icon: MessageSquare },
+  // Messages inbox (2026-10-05): Messenger + Instagram Direct, same tier as Comments
+  // (message.router is orgProcedure).
+  { name: "Messages", href: "/dashboard/messages", icon: Mail },
   { name: "RSS Feeds", href: "/dashboard/rss", icon: Rss, appAdminOnly: true },
   { name: "Short Links", href: "/dashboard/links", icon: Link2, appAdminOnly: true },
   // NewsGrid Bot hidden from UI 2026-06-23 — redundant with Repurpose (same render stack).

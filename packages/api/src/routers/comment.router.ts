@@ -22,6 +22,11 @@ import {
   normalizeBlockedWords,
   MAX_BLOCKED_WORDS,
   MAX_BLOCKED_WORD_LENGTH,
+  messagingCapabilities,
+  messageTextTooLong,
+  messagingFailureOf,
+  messagingFailureMessage,
+  MESSENGER_TEXT_MAX_CHARS,
 } from "@postautomation/social";
 import { createRateLimitMiddleware } from "../middleware/rate-limit.middleware";
 import {
@@ -37,6 +42,7 @@ import {
 } from "../middleware/rate-limit";
 import { toFriendlyAIError } from "../lib/ai-errors";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
+import { afterMessagingFailure, resolveMessagingAccess } from "../lib/meta-messaging-access";
 
 /**
  * Comments inbox — read and reply to comments on posts published through
@@ -437,6 +443,37 @@ function requireIgUserId(t: ResolvedCommentTarget): string {
   return id;
 }
 
+/**
+ * Private replies already sent for the comments on this page (ids of comments
+ * AND their embedded replies) — what lets the thread show "Sent privately"
+ * and keep the button from offering a second message Meta would refuse.
+ */
+async function privateRepliesFor(
+  prisma: any,
+  organizationId: string,
+  comments: SocialComment[]
+): Promise<Record<string, { status: string; at: string }>> {
+  const ids: string[] = [];
+  for (const c of comments) {
+    ids.push(c.id);
+    for (const r of c.replies) ids.push(r.id);
+  }
+  if (ids.length === 0) return {};
+  try {
+    const rows = await prisma.commentPrivateReply.findMany({
+      where: { organizationId, commentId: { in: ids } },
+      select: { commentId: true, status: true, updatedAt: true },
+    });
+    const out: Record<string, { status: string; at: string }> = {};
+    for (const r of rows) out[r.commentId] = { status: r.status, at: new Date(r.updatedAt).toISOString() };
+    return out;
+  } catch (err: any) {
+    // Bookkeeping only — never fail the thread over it.
+    console.error("[comment] private-reply lookup failed:", err?.message ?? err);
+    return {};
+  }
+}
+
 export const commentRouter = createRouter({
   /**
    * The org's Facebook Pages + Instagram accounts, with how many published
@@ -605,6 +642,8 @@ export const commentRouter = createRouter({
       const capabilities: CommentCapabilities = commentCapabilities(t.platform, scopes);
       return {
         capabilities,
+        messaging: messagingCapabilities(t.platform, scopes),
+        privateReplies: await privateRepliesFor(ctx.prisma, ctx.organizationId, page.comments),
         platform: t.platform,
         publishedUrl: t.publishedUrl,
         account: {
@@ -696,6 +735,112 @@ export const commentRouter = createRouter({
       });
 
       return { id: result.id, platform: t.platform };
+    }),
+
+  /**
+   * Send ONE private message to the person who left a comment (Meta allows
+   * exactly one per comment, within 7 days of it). It lands in their Messenger
+   * / Instagram inbox (Instagram: "Requests" unless they follow the account);
+   * further messages are possible in Messages once they answer.
+   *
+   * Facebook needs pages_messaging; Instagram only the comment scopes it
+   * already has (instagram_manage_comments) — see meta-messaging.ts.
+   */
+  privateReply: replyRateLimited
+    .input(
+      z.object({
+        targetId: z.string(),
+        // Same shape gate as reply — the id goes into the request body here,
+        // but it is still a client value proven to be on this post first.
+        commentId: z.string().regex(GRAPH_OBJECT_ID_RE, "That doesn't look like a valid comment."),
+        message: z.string().trim().min(1, "Message cannot be empty.").max(MESSENGER_TEXT_MAX_CHARS),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const t = await resolvePublishedCommentTarget(ctx.prisma as any, ctx.organizationId, input.targetId);
+      enforcePageBudget(commentPageReplyLimiter, t.platform, t.account.platformId);
+      const tooLong = messageTextTooLong(t.platform, input.message);
+      if (tooLong) throw new TRPCError({ code: "BAD_REQUEST", message: tooLong });
+
+      const existing = await ctx.prisma.commentPrivateReply.findUnique({
+        where: { organizationId_commentId: { organizationId: ctx.organizationId, commentId: input.commentId } },
+        select: { status: true },
+      });
+      if (existing?.status === "SENT") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: messagingFailureMessage(t.platform, "already_sent", "private_reply") });
+      }
+
+      await assertCommentOnTarget(ctx.prisma, t, input.commentId);
+
+      const channel = {
+        id: t.account.channelId,
+        platform: t.platform,
+        platformId: t.account.platformId,
+        accessToken: t.tokens.accessToken,
+        metaAppId: t.metaAppId,
+        metadata: t.tokens.metadata ?? null,
+      };
+      const access = await resolveMessagingAccess(ctx.prisma, channel);
+      const userId = (ctx.session?.user as any)?.id ?? null;
+
+      const record = async (status: "SENT" | "UNCONFIRMED", messageId: string | null) => {
+        try {
+          await ctx.prisma.commentPrivateReply.upsert({
+            where: { organizationId_commentId: { organizationId: ctx.organizationId, commentId: input.commentId } },
+            create: {
+              organizationId: ctx.organizationId,
+              postTargetId: input.targetId,
+              channelId: t.account.channelId,
+              platform: t.platform,
+              commentId: input.commentId,
+              status,
+              messageId,
+              sentById: userId,
+            },
+            update: { status, messageId, sentById: userId },
+          });
+        } catch (err: any) {
+          // The message may be live — a bookkeeping failure must not turn it
+          // into an error the user would retry.
+          console.error("[comment] could not record the private reply:", err?.message ?? err);
+        }
+        await createAuditLog({
+          organizationId: ctx.organizationId,
+          userId,
+          action: AUDIT_ACTIONS.COMMENT_PRIVATE_REPLIED,
+          entityType: "PostTarget",
+          entityId: input.targetId,
+          metadata: {
+            platform: t.platform,
+            channelId: t.account.channelId,
+            commentId: input.commentId,
+            outcome: status === "SENT" ? "sent" : "unconfirmed",
+            messageId,
+            length: input.message.length,
+          },
+        });
+      };
+
+      try {
+        const result = await (getSocialProvider("FACEBOOK") as FacebookProvider).sendPrivateReply({
+          platform: t.platform,
+          pageToken: access.pageToken,
+          pageId: access.pageId,
+          senderId: access.senderId,
+          commentId: input.commentId,
+          text: input.message,
+        });
+        await record("SENT", result.messageId);
+        return { messageId: result.messageId, platform: t.platform, status: "SENT" as const };
+      } catch (err: any) {
+        const failure = messagingFailureOf(err);
+        if (failure === "unconfirmed") await record("UNCONFIRMED", null);
+        // Meta says one already went out (an earlier unconfirmed attempt that
+        // did land, or one sent elsewhere) — remember it so the button stops.
+        if (failure === "already_sent") await record("SENT", null);
+        if (afterMessagingFailure(t.account.channelId, err).refreshGrant) void refreshGrantedScopes(ctx.prisma, t);
+        throw new TRPCError({ code: "BAD_REQUEST", message: err?.message ?? "Couldn't send the private reply." });
+      }
     }),
 
   /**

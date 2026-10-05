@@ -176,3 +176,12 @@ export const commentQueueRateLimiter = createRateLimiter({ windowMs: 60_000, max
 
 /** AI-drafted replies — a model call each; the person still sends the reply. */
 export const commentDraftRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
+
+/**
+ * Messages inbox (2026-10-05). Reads are LIVE Graph calls against the Page's
+ * budget (the inbox polls while open); sends are messages to real people, so
+ * they share the reply ceiling. Per-Page budgets reuse the comment ones —
+ * Meta's quota is per Page whatever the call.
+ */
+export const messageReadRateLimiter = createRateLimiter({ windowMs: 60_000, max: 90 });
+export const messageSendRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });

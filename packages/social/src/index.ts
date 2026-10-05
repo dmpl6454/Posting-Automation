@@ -134,6 +134,30 @@ export {
   type RuleMatch,
 } from "./utils/comment-rules";
 export { facebookAppUsagePeak } from "./providers/facebook.provider";
+// Private replies + Messenger / Instagram Direct (2026-10-05) — see meta-messaging.ts.
+export {
+  messagingCapabilities,
+  isValidConversationId,
+  messageTextTooLong,
+  messagingFailureOf,
+  isMessageUnconfirmedText,
+  privateReplyWindowOpen,
+  messagingFailureMessage,
+  MESSAGING_PAGE_LINK_MISSING_MESSAGE,
+  MessagingError,
+  MESSENGER_TEXT_MAX_CHARS,
+  INSTAGRAM_DM_TEXT_MAX_BYTES,
+  PRIVATE_REPLY_SCOPES,
+  INBOX_SCOPES,
+  type MessagingCapabilities,
+  type MessagingPlatform,
+  type SocialConversation,
+  type SocialConversationPage,
+  type SocialConversationThread,
+  type SocialMessage,
+  type MessageParticipant,
+  type MessageAttachment,
+} from "./utils/meta-messaging";
 export { COMMENT_NOT_ON_POST_MESSAGE, COMMENT_LIKE_PERMISSION_MESSAGE, COMMENT_LIKE_REFUSED_MESSAGE } from "./utils/instagram-comments";
 export type {
   CommentCapabilities,

@@ -75,6 +75,21 @@ import {
 } from "../utils/facebook-comments";
 import { COMMENT_OBJECT_GONE_MESSAGE, isCommentObjectGoneError } from "../utils/instagram-comments";
 import {
+  CONVERSATION_MESSAGE_DETAIL_LIMIT,
+  CONVERSATION_PAGE_SIZE,
+  MessagingError,
+  classifyMessagingError,
+  includesAccount,
+  isIndeterminateMessagingError,
+  messageUnconfirmedMessage,
+  messagingFailureMessage,
+  parseConversationThread,
+  parseConversationsPage,
+  type MessagingPlatform,
+  type SocialConversationPage,
+  type SocialConversationThread,
+} from "../utils/meta-messaging";
+import {
   COMMENT_ACTION_UNCONFIRMED_MESSAGE,
   isGraphFieldError,
   isIndeterminateReplyError,
@@ -2143,5 +2158,282 @@ export class FacebookProvider extends SocialProvider {
     return new Error(
       op === "list" ? FB_COMMENT_LIST_FAILED_MESSAGE : op === "reply" ? FB_COMMENT_REPLY_FAILED_MESSAGE : FB_COMMENT_ACTION_FAILED_MESSAGE
     );
+  }
+
+  // ── Private replies + Messenger / Instagram Direct (2026-10-05) ─────────
+  // Every call below uses a PAGE access token on graph.facebook.com — for an
+  // Instagram account, the token of the Facebook Page it is linked to — so all
+  // of them go through graphFetch's Page-aware throttle. See meta-messaging.ts
+  // for Meta's contract. Creating a message is NOT idempotent: an outcome we
+  // cannot prove reads as "may already have been sent", never as a failure,
+  // and the write path never retries automatically.
+
+  /**
+   * The Facebook Page an Instagram account is linked to, and that Page's
+   * access token, from the Facebook USER token an Instagram channel stores.
+   * `hintPageId` (remembered from an earlier lookup) is tried first — one call
+   * — before walking `me/accounts`. Returns null when no granted Page links to
+   * this account (the person untick it, or lost the Page role). Throws a
+   * MessagingError("token") for a dead user token.
+   */
+  async resolveInstagramPage(
+    userToken: string,
+    igUserId: string,
+    hintPageId?: string | null
+  ): Promise<{ pageId: string; pageToken: string } | null> {
+    const fields = "id,access_token,instagram_business_account";
+    const matches = (row: any) =>
+      row && typeof row.access_token === "string" && row.access_token && String(row?.instagram_business_account?.id ?? "") === igUserId;
+
+    if (hintPageId && /^\d+$/.test(hintPageId)) {
+      const params = new URLSearchParams({ fields, access_token: userToken });
+      try {
+        const res = await this.graphFetch(
+          `${this.graphBaseUrl}/${this.apiVersion}/${encodeURIComponent(hintPageId)}?${params.toString()}`,
+          {},
+          hintPageId,
+          INTERACTIVE_READ_GRAPH_OPTS
+        );
+        const data: any = await res.json().catch(() => null);
+        if (res.ok && matches(data)) return { pageId: String(data.id), pageToken: String(data.access_token) };
+        if (!res.ok && Number(data?.error?.code) === 190) {
+          throw new MessagingError(messagingFailureMessage("INSTAGRAM", "token", "list"), "token");
+        }
+      } catch (err) {
+        if ((err as any)?.failure === "token") throw err;
+        // Fall through to the walk — the hint may simply be stale.
+      }
+    }
+
+    let url: string | null =
+      `${this.graphBaseUrl}/${this.apiVersion}/me/accounts?` +
+      new URLSearchParams({ fields, limit: "100", access_token: userToken }).toString();
+    for (let page = 0; url && page < 10; page++) {
+      let res: Response;
+      try {
+        res = await this.graphFetch(url, {}, undefined, INTERACTIVE_READ_GRAPH_OPTS);
+      } catch (err: any) {
+        console.error(`[Messaging] linked-Page lookup did not complete:`, err?.message ?? err);
+        throw new MessagingError(messagingFailureMessage("INSTAGRAM", "other", "list"), "other");
+      }
+      const data: any = await res.json().catch(() => null);
+      if (!res.ok) {
+        const failure = classifyMessagingError(data?.error);
+        console.error(`[Messaging] linked-Page lookup failed (HTTP ${res.status}):`, data === null ? "unreadable" : JSON.stringify(data));
+        throw new MessagingError(messagingFailureMessage("INSTAGRAM", failure, "list"), failure);
+      }
+      const hit = (Array.isArray(data?.data) ? data.data : []).find(matches);
+      if (hit) return { pageId: String(hit.id), pageToken: String(hit.access_token) };
+      url = typeof data?.paging?.next === "string" ? data.paging.next : null;
+    }
+    return null;
+  }
+
+  /**
+   * Send ONE private message to the person who left a comment.
+   *   Facebook  POST /{page-id}/messages      (Page token)
+   *   Instagram POST /{ig-user-id}/messages   (linked Page's token)
+   * `commentId` is client-supplied: the router validates its shape and proves
+   * it belongs to the target post first; encodeURIComponent is not needed for
+   * it (it goes in the body) but `senderId` is DB-derived and encoded anyway.
+   */
+  async sendPrivateReply(opts: {
+    platform: MessagingPlatform;
+    pageToken: string;
+    pageId: string;
+    senderId: string;
+    commentId: string;
+    text: string;
+  }): Promise<{ messageId: string; recipientId: string | null }> {
+    let res: Response;
+    try {
+      res = await this.graphFetch(
+        `${this.graphBaseUrl}/${this.apiVersion}/${encodeURIComponent(opts.senderId)}/messages`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            recipient: { comment_id: opts.commentId },
+            message: { text: opts.text },
+            access_token: opts.pageToken,
+          }),
+        },
+        opts.pageId,
+        INTERACTIVE_WRITE_GRAPH_OPTS
+      );
+    } catch (err: any) {
+      console.error(`[Messaging] private reply request did not complete:`, err?.message ?? err);
+      throw new MessagingError(messageUnconfirmedMessage(opts.platform, "private_reply"), "unconfirmed");
+    }
+    const data: any = await res.json().catch(() => null);
+    if (!res.ok) {
+      if (data === null || isIndeterminateMessagingError(res.status, data)) {
+        console.error(`[Messaging] private reply outcome unknown (HTTP ${res.status}):`, data === null ? "unreadable" : JSON.stringify(data));
+        throw new MessagingError(messageUnconfirmedMessage(opts.platform, "private_reply"), "unconfirmed");
+      }
+      const failure = classifyMessagingError(data?.error);
+      console.error(`[Messaging] private reply refused (HTTP ${res.status}, ${failure}):`, JSON.stringify(data));
+      throw new MessagingError(messagingFailureMessage(opts.platform, failure, "private_reply"), failure);
+    }
+    const messageId = data?.message_id ?? data?.id;
+    if (!messageId) {
+      throw new MessagingError(messageUnconfirmedMessage(opts.platform, "private_reply"), "unconfirmed");
+    }
+    return { messageId: String(messageId), recipientId: data?.recipient_id != null ? String(data.recipient_id) : null };
+  }
+
+  /** One page of the Page's (or linked Instagram account's) conversations, newest first. */
+  async listConversations(opts: {
+    platform: MessagingPlatform;
+    pageToken: string;
+    pageId: string;
+    ownIds: string[];
+    after?: string;
+  }): Promise<SocialConversationPage> {
+    const full = "id,updated_time,unread_count,participants,messages.limit(1){id,message,created_time,from}";
+    const minimal = "id,updated_time,participants";
+    let { res, data } = await this.fetchConversations(opts, full);
+    if (!res.ok && isGraphFieldError(data?.error)) {
+      console.error(
+        `[Messaging] conversation field rejected — retrying with the minimal field set:`,
+        String(data?.error?.message ?? "")
+      );
+      ({ res, data } = await this.fetchConversations(opts, minimal));
+    }
+    if (!res.ok) {
+      const failure = classifyMessagingError(data?.error);
+      console.error(`[Messaging] conversation list failed (HTTP ${res.status}, ${failure}):`, data === null ? "unreadable" : JSON.stringify(data));
+      throw new MessagingError(messagingFailureMessage(opts.platform, failure, "list"), failure);
+    }
+    if (data === null) throw new MessagingError(messagingFailureMessage(opts.platform, "other", "list"), "other");
+    return parseConversationsPage(data, opts.ownIds);
+  }
+
+  private async fetchConversations(
+    opts: { platform: MessagingPlatform; pageToken: string; pageId: string; after?: string },
+    fields: string
+  ): Promise<{ res: Response; data: any }> {
+    const params = new URLSearchParams({
+      platform: opts.platform === "INSTAGRAM" ? "instagram" : "messenger",
+      fields,
+      limit: String(CONVERSATION_PAGE_SIZE),
+      access_token: opts.pageToken,
+    });
+    if (opts.after) params.set("after", opts.after);
+    let res: Response;
+    try {
+      res = await this.graphFetch(
+        `${this.graphBaseUrl}/${this.apiVersion}/${encodeURIComponent(opts.pageId)}/conversations?${params.toString()}`,
+        {},
+        opts.pageId,
+        INTERACTIVE_READ_GRAPH_OPTS
+      );
+    } catch (err: any) {
+      console.error(`[Messaging] conversation list request did not complete:`, err?.message ?? err);
+      throw new MessagingError(messagingFailureMessage(opts.platform, "other", "list"), "other");
+    }
+    return { res, data: await res.json().catch(() => null) };
+  }
+
+  /**
+   * One conversation: its participants and the newest messages Meta details.
+   * Refuses (not_found) a conversation the account is not part of — the id is
+   * client-supplied, and this is what keeps it to the account's own inbox.
+   */
+  async getConversation(opts: {
+    platform: MessagingPlatform;
+    pageToken: string;
+    pageId: string;
+    conversationId: string;
+    ownIds: string[];
+  }): Promise<SocialConversationThread> {
+    const limit = CONVERSATION_MESSAGE_DETAIL_LIMIT;
+    const full = `id,participants,messages.limit(${limit}){id,created_time,from,message,attachments{mime_type,name,image_data,video_data,file_url},shares{link}}`;
+    const minimal = `id,participants,messages.limit(${limit}){id,created_time,from,message}`;
+    let { res, data } = await this.fetchConversation(opts, full);
+    if (!res.ok && isGraphFieldError(data?.error)) {
+      console.error(`[Messaging] message field rejected — retrying with the minimal field set:`, String(data?.error?.message ?? ""));
+      ({ res, data } = await this.fetchConversation(opts, minimal));
+    }
+    if (!res.ok) {
+      const failure = classifyMessagingError(data?.error);
+      console.error(`[Messaging] conversation read failed (HTTP ${res.status}, ${failure}):`, data === null ? "unreadable" : JSON.stringify(data));
+      throw new MessagingError(messagingFailureMessage(opts.platform, failure, "thread"), failure);
+    }
+    if (data === null) throw new MessagingError(messagingFailureMessage(opts.platform, "other", "thread"), "other");
+    if (!includesAccount(data.participants, opts.ownIds)) {
+      throw new MessagingError(messagingFailureMessage(opts.platform, "not_found", "thread"), "not_found");
+    }
+    return parseConversationThread(data, opts.ownIds);
+  }
+
+  private async fetchConversation(
+    opts: { platform: MessagingPlatform; pageToken: string; pageId: string; conversationId: string },
+    fields: string
+  ): Promise<{ res: Response; data: any }> {
+    const params = new URLSearchParams({ fields, access_token: opts.pageToken });
+    let res: Response;
+    try {
+      // 🔴 encodeURIComponent is LOAD-BEARING: conversationId is client-supplied
+      // (shape-checked by isValidConversationId at the router first).
+      res = await this.graphFetch(
+        `${this.graphBaseUrl}/${this.apiVersion}/${encodeURIComponent(opts.conversationId)}?${params.toString()}`,
+        {},
+        opts.pageId,
+        INTERACTIVE_READ_GRAPH_OPTS
+      );
+    } catch (err: any) {
+      console.error(`[Messaging] conversation read did not complete:`, err?.message ?? err);
+      throw new MessagingError(messagingFailureMessage(opts.platform, "other", "thread"), "other");
+    }
+    return { res, data: await res.json().catch(() => null) };
+  }
+
+  /**
+   * Send a text message in an existing conversation, inside the 24-hour
+   * standard messaging window. `recipientId` is the PSID / IGSID the ROUTER
+   * read from the conversation's participants — never a client value.
+   */
+  async sendMessage(opts: {
+    platform: MessagingPlatform;
+    pageToken: string;
+    pageId: string;
+    recipientId: string;
+    text: string;
+  }): Promise<{ messageId: string }> {
+    let res: Response;
+    try {
+      res = await this.graphFetch(
+        `${this.graphBaseUrl}/${this.apiVersion}/${encodeURIComponent(opts.pageId)}/messages`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            recipient: { id: opts.recipientId },
+            messaging_type: "RESPONSE",
+            message: { text: opts.text },
+            access_token: opts.pageToken,
+          }),
+        },
+        opts.pageId,
+        INTERACTIVE_WRITE_GRAPH_OPTS
+      );
+    } catch (err: any) {
+      console.error(`[Messaging] send request did not complete:`, err?.message ?? err);
+      throw new MessagingError(messageUnconfirmedMessage(opts.platform, "send"), "unconfirmed");
+    }
+    const data: any = await res.json().catch(() => null);
+    if (!res.ok) {
+      if (data === null || isIndeterminateMessagingError(res.status, data)) {
+        console.error(`[Messaging] send outcome unknown (HTTP ${res.status}):`, data === null ? "unreadable" : JSON.stringify(data));
+        throw new MessagingError(messageUnconfirmedMessage(opts.platform, "send"), "unconfirmed");
+      }
+      const failure = classifyMessagingError(data?.error);
+      console.error(`[Messaging] send refused (HTTP ${res.status}, ${failure}):`, JSON.stringify(data));
+      throw new MessagingError(messagingFailureMessage(opts.platform, failure, "send"), failure);
+    }
+    const messageId = data?.message_id ?? data?.id;
+    if (!messageId) throw new MessagingError(messageUnconfirmedMessage(opts.platform, "send"), "unconfirmed");
+    return { messageId: String(messageId) };
   }
 }

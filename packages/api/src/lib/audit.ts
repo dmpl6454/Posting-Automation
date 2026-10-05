@@ -101,6 +101,9 @@ export const AUDIT_ACTIONS = {
   COMMENTS_ENABLED: "comment.comments_enabled",
   // Comment automation settings (auto-hide rules / new-comment alerts), 2026-10-05.
   COMMENT_AUTOMATION_UPDATED: "comment.automation_updated",
+  // Private replies + Messages inbox, 2026-10-05 (never the text).
+  COMMENT_PRIVATE_REPLIED: "comment.private_replied",
+  MESSAGE_SENT: "message.sent",
   // Liking the post itself from the Comments inbox (Instagram, 2026-09-23).
   POST_LIKED: "post.liked",
   POST_UNLIKED: "post.unliked",

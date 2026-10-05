@@ -668,7 +668,21 @@ function getDefaultScopes(platform: string): string[] {
     //    granted it and see an actionable "not approved yet" message. Do NOT drop
     //    it without also removing the reply feature (the 2026-06
     //    instagram_manage_comments "Disallowed Use Case" lesson, reversed).
-    FACEBOOK: ["public_profile", "pages_show_list", "pages_manage_posts", "pages_read_engagement", "pages_read_user_content", "read_insights", "pages_manage_engagement"],
+    //
+    // Messaging scopes (2026-10-05) — back private replies and the Messages
+    // inbox (message.router.ts, facebook.provider.ts sendPrivateReply /
+    // listConversations / getConversation / sendMessage):
+    //  - `pages_messaging`: send a private reply to a commenter and messages
+    //    inside the 24-hour window (POST /{page}/messages).
+    //  - `pages_manage_metadata`: required by Meta's Conversations API
+    //    (GET /{page}/conversations), together with pages_messaging and
+    //    pages_read_engagement.
+    // Both verified as recognised scopes on BOTH apps' live login dialog before
+    // being added (302 ×5 each; a bogus scope returns 500). Not approved on
+    // either app yet — the same "requested ≠ granted" pattern as above; the UI
+    // gates on the GRANTED scopes. Do not drop either without removing the
+    // feature.
+    FACEBOOK: ["public_profile", "pages_show_list", "pages_manage_posts", "pages_read_engagement", "pages_read_user_content", "read_insights", "pages_manage_engagement", "pages_messaging", "pages_manage_metadata"],
     // `instagram_manage_insights` is REQUIRED (with instagram_basic +
     // pages_read_engagement) to read /{ig-media}/insights on the Facebook-Login
     // path (Meta Media Insights Requirements table). Without it the insights
@@ -699,7 +713,15 @@ function getDefaultScopes(platform: string): string[] {
     // bogus scope returns 500) before being added. Same "requested ≠ granted"
     // pattern as above; the UI gates Like on the GRANTED scopes, separately from
     // reply/hide/delete, so a missing like grant never marks the account broken.
-    INSTAGRAM: ["public_profile", "pages_show_list", "pages_read_engagement", "instagram_basic", "instagram_content_publish", "business_management", "instagram_manage_insights", "instagram_manage_comments", "pages_read_user_content", "instagram_manage_engagement"],
+    //
+    // `instagram_manage_messages` + `pages_manage_metadata` (2026-10-05): the
+    // Instagram half of the Messages inbox — Meta's Conversations API for an
+    // Instagram professional account needs instagram_basic +
+    // instagram_manage_messages + pages_manage_metadata on the LINKED Page's
+    // token. A private reply to an Instagram commenter needs only the already-
+    // approved comment scopes (instagram_basic + instagram_manage_comments +
+    // pages_read_engagement). Verified on both apps' live login dialog first.
+    INSTAGRAM: ["public_profile", "pages_show_list", "pages_read_engagement", "instagram_basic", "instagram_content_publish", "business_management", "instagram_manage_insights", "instagram_manage_comments", "pages_read_user_content", "instagram_manage_engagement", "instagram_manage_messages", "pages_manage_metadata"],
     REDDIT: ["submit", "identity", "read"],
     // TikTok Content Posting API. `video.publish` = Direct Post (what publishPost
     // uses via PULL_FROM_URL); `video.upload` = upload-to-drafts; `user.info.basic`
