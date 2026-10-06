@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { __resetYouTubeSweepState, readYouTubeSentimentConfig, runCommentSweep, type SweepConfig } from "./comment-sweep";
+import { __resetExternalSweepState, readYouTubeSentimentConfig, runCommentSweep, type SweepConfig } from "./comment-sweep";
 import { youtubeSentimentCandidates } from "./comment-sentiment";
 
 /**
@@ -9,7 +9,7 @@ import { youtubeSentimentCandidates } from "./comment-sentiment";
  */
 
 const CFG: SweepConfig = { maxPostsPerRun: 40, maxPostsPerOrg: 15, lookbackDays: 3, fbUsageCeiling: 75, maxHidesPerOrg: 50 };
-const YT_CFG = { dailyUnits: 300, maxVideosPerRun: 20, minIntervalMs: 60 * 60 * 1000, lookbackDays: 7 };
+const YT_CFG = { dailyUnits: 300, maxPostsPerRun: 20, minIntervalMs: 60 * 60 * 1000, lookbackDays: 7 };
 const NOW = new Date("2026-10-06T12:00:00Z");
 
 const thread = (id: string, text: string, over: Record<string, unknown> = {}, replies: any[] = []) => ({
@@ -119,7 +119,7 @@ const VID_A = "dQw4w9WgXcQ";
 const VID_B = "9bZkp7q19f0";
 
 describe("runCommentSweep — YouTube comment sentiment", () => {
-  beforeEach(() => __resetYouTubeSweepState());
+  beforeEach(() => __resetExternalSweepState());
 
   it("queries only the workspace's live YouTube channels in scope, over the YouTube look-back", async () => {
     const { prisma, deps } = setup({ automation: { channelIds: ["ch-yt", "ch-ig"] } });

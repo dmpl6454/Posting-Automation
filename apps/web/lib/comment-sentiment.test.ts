@@ -1,7 +1,16 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { commentThreadHref, fillDailySeries, formatAvgScore, platformLabel, sentimentKey, sentimentPercents } from "./comment-sentiment";
+import {
+  commentThreadHref,
+  externalLinkTitle,
+  fillDailySeries,
+  formatAvgScore,
+  opensOnPlatform,
+  platformLabel,
+  sentimentKey,
+  sentimentPercents,
+} from "./comment-sentiment";
 import { describeLastRun } from "./comment-automation";
 
 describe("sentimentPercents", () => {
@@ -94,16 +103,43 @@ describe("YouTube comment sentiment (2026-10-06)", () => {
     expect(describeLastRun({ postsChecked: 2, youtubeVideosChecked: 1 })).toBe("Checked 2 posts · read comments on 1 YouTube video.");
   });
 
-  it("YouTube comments and posts open on YouTube in a new tab, not the FB/IG Comments inbox", () => {
-    expect(panel).toMatch(/c\.platform === "YOUTUBE" \?/);
+  it("YouTube (and LinkedIn) comments and posts open on the platform in a new tab, not the FB/IG Comments inbox", () => {
+    expect(panel).toMatch(/opensOnPlatform\(c\.platform\) \?/);
     expect(panel).toMatch(/href=\{c\.externalUrl\}\s+target="_blank"\s+rel="noopener noreferrer"/);
-    expect(panel).toMatch(/p\.platform === "YOUTUBE"/);
-    expect(panel).toMatch(/data-testid="sentiment-youtube-link"/);
+    expect(panel).toMatch(/if \(opensOnPlatform\(p\.platform\)\)/);
+    expect(panel).toMatch(/data-testid="sentiment-external-link"/);
   });
 
   it("the Automation tab offers YouTube channels as sentiment-only", () => {
     expect(automation).toMatch(/a\.sentimentOnly && \(/);
     expect(automation).toMatch(/Sentiment only/);
-    expect(automation).toMatch(/sentiment only — the rules above and\s+new-comment alerts don't apply there/);
+    expect(automation).toMatch(/\(sentiment\s+only — the rules above and new-comment alerts don't apply there/);
+  });
+});
+
+describe("LinkedIn Page comment sentiment (2026-10-06)", () => {
+  const panel = readFileSync(join(__dirname, "../components/listening/comment-sentiment-panel.tsx"), "utf8");
+  const automation = readFileSync(join(__dirname, "../components/comments/comment-automation.tsx"), "utf8");
+
+  it("labels LinkedIn and opens its posts on LinkedIn (no per-comment link exists)", () => {
+    expect(platformLabel("LINKEDIN")).toBe("LinkedIn");
+    expect(opensOnPlatform("LINKEDIN")).toBe(true);
+    expect(opensOnPlatform("YOUTUBE")).toBe(true);
+    expect(opensOnPlatform("FACEBOOK")).toBe(false);
+    expect(externalLinkTitle("LINKEDIN")).toBe("Open this post on LinkedIn");
+    expect(externalLinkTitle("YOUTUBE")).toBe("Open this comment on YouTube");
+  });
+
+  it("the last run counts LinkedIn posts read", () => {
+    expect(describeLastRun({ postsChecked: 0, linkedinPostsChecked: 2 })).toBe("read comments on 2 LinkedIn posts.");
+    expect(describeLastRun({ postsChecked: 1, youtubeVideosChecked: 1, linkedinPostsChecked: 1 })).toBe(
+      "Checked 1 post · read comments on 1 YouTube video · read comments on 1 LinkedIn post."
+    );
+  });
+
+  it("says LinkedIn Pages are covered and personal profiles are not", () => {
+    expect(automation).toMatch(/LinkedInIcon/);
+    expect(automation).toMatch(/LinkedIn personal profiles can't be\s+covered/);
+    expect(panel).toMatch(/LinkedIn personal profiles aren't covered/);
   });
 });

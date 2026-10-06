@@ -28,6 +28,7 @@ export interface RunSummary {
   sentimentNegative?: number;
   sentimentPending?: number;
   youtubeVideosChecked?: number;
+  linkedinPostsChecked?: number;
 }
 
 /** "Checked 12 posts · hid 2 · 5 new comments · 1 couldn't be read." */
@@ -36,9 +37,11 @@ export function describeLastRun(summary: RunSummary | null | undefined): string 
   const parts: string[] = [];
   const posts = summary.postsChecked ?? 0;
   const videos = summary.youtubeVideosChecked ?? 0;
-  if (posts === 0 && videos === 0) parts.push("No recent posts to check");
+  const liPosts = summary.linkedinPostsChecked ?? 0;
+  if (posts === 0 && videos === 0 && liPosts === 0) parts.push("No recent posts to check");
   if (posts > 0) parts.push(`Checked ${posts} ${posts === 1 ? "post" : "posts"}`);
   if (videos > 0) parts.push(`read comments on ${videos} YouTube ${videos === 1 ? "video" : "videos"}`);
+  if (liPosts > 0) parts.push(`read comments on ${liPosts} LinkedIn ${liPosts === 1 ? "post" : "posts"}`);
   if (summary.hidden) parts.push(`hid ${summary.hidden}`);
   if (summary.newComments) parts.push(`${summary.newComments} new ${summary.newComments === 1 ? "comment" : "comments"}`);
   if (summary.errors) parts.push(`${summary.errors} couldn't be read or hidden`);

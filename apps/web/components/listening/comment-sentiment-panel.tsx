@@ -12,8 +12,10 @@ import {
   SENTIMENT_META,
   SENTIMENT_ORDER,
   commentThreadHref,
+  externalLinkTitle,
   fillDailySeries,
   formatAvgScore,
+  opensOnPlatform,
   platformLabel,
   sentimentKey,
   sentimentPercents,
@@ -26,7 +28,8 @@ import { cn } from "~/lib/utils";
  *
  * Sentiment of the comments people leave on posts published through
  * PostAutomation to the workspace's Facebook Pages, Instagram accounts and
- * YouTube channels (YouTube since 2026-10-06; its comments link to YouTube).
+ * YouTube channels and LinkedIn Pages (both since 2026-10-06; their comments
+ * open on the platform, since there is no Comments inbox for them here).
  * The comment sweep stores and scores them every 15 minutes once a workspace
  * switches "Comment sentiment" on (Comments → Automation). Unscored comments
  * are shown as "waiting", never folded into neutral.
@@ -106,7 +109,7 @@ export function CommentSentimentPanel() {
           <b className="text-foreground">Comment sentiment is off for this workspace.</b>{" "}
           {totals.total > 0
             ? "Showing comments scored while it was on; no new comments are being collected."
-            : "Turn it on to score the comments people leave on your Facebook, Instagram and YouTube posts."}{" "}
+            : "Turn it on to score the comments people leave on your Facebook, Instagram, YouTube and LinkedIn Page posts."}{" "}
           An owner or admin can switch it on in{" "}
           <Link href="/dashboard/comments?view=automation" className="font-medium text-foreground underline">
             Comments → Automation
@@ -223,15 +226,15 @@ export function CommentSentimentPanel() {
                           <span>{formatDistanceToNow(new Date(c.commentedAt ?? c.createdAt), { addSuffix: true })}</span>
                         </div>
                       </div>
-                      {c.platform === "YOUTUBE" ? (
+                      {opensOnPlatform(c.platform) ? (
                         c.externalUrl && (
                           <a
                             href={c.externalUrl}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="shrink-0 text-faint hover:text-foreground"
-                            title="Open this comment on YouTube"
-                            data-testid="sentiment-youtube-link"
+                            title={externalLinkTitle(c.platform)}
+                            data-testid="sentiment-external-link"
                           >
                             <ExternalLink className="h-3.5 w-3.5" />
                           </a>
@@ -311,12 +314,12 @@ export function CommentSentimentPanel() {
                       <p className="line-clamp-2 text-[12px] leading-[1.4]">{p.caption || "(no caption)"}</p>
                       <p className="mt-1 text-[10.5px] text-faint">
                         {p.negative} negative {p.negative === 1 ? "comment" : "comments"}
-                        {p.channelName ? ` · ${p.platform === "YOUTUBE" ? "YouTube · " : ""}${p.channelName}` : ""}
+                        {p.channelName ? ` · ${opensOnPlatform(p.platform) ? `${platformLabel(p.platform)} · ` : ""}${p.channelName}` : ""}
                       </p>
                     </>
                   );
                   const cls = "rounded-[9px] border border-border px-3 py-2.5 hover:border-border2";
-                  if (p.platform === "YOUTUBE") {
+                  if (opensOnPlatform(p.platform)) {
                     return p.externalUrl ? (
                       <a key={p.targetId} href={p.externalUrl} target="_blank" rel="noopener noreferrer" className={cls}>
                         {body}
@@ -341,9 +344,10 @@ export function CommentSentimentPanel() {
 
       <p className="text-[11px] leading-[1.6] text-faint">
         Covers comments on posts published through PostAutomation to your Facebook Pages and Instagram accounts, collected
-        every 15 minutes from posts of the last 3 days (the first page of comments on each), and on videos published to your
-        YouTube channels, read about once an hour for 7 days (the newest 100 comment threads on each, within a daily
-        YouTube API budget). Sentiment is scored by AI and can be wrong on sarcasm or slang.
+        every 15 minutes from posts of the last 3 days (the first page of comments on each). Videos published to your
+        YouTube channels and posts published to your LinkedIn Pages are read about once an hour for 7 days, within a daily
+        API budget (LinkedIn personal profiles aren't covered: LinkedIn doesn't let apps read their comments). Sentiment is
+        scored by AI and can be wrong on sarcasm or slang.
       </p>
     </div>
   );

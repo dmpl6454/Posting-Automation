@@ -138,6 +138,38 @@ export function youtubeSentimentCandidates(body: unknown, ownChannelId: string |
 }
 
 /**
+ * LinkedIn (2026-10-06): the same rows from one page of
+ * `GET /rest/socialActions/{post}/comments` on one of our own Page's posts —
+ * minus the comments the Page itself wrote (actor = its organization URN).
+ * The versioned API returns actors as URNs only (no names), so the label says
+ * what kind of account commented. The id is the comment URN, unique across
+ * posts.
+ */
+export function linkedinSentimentCandidates(body: unknown, ownOrgUrn: string | null): StoredCommentInput[] {
+  const elements: any[] = Array.isArray((body as any)?.elements) ? (body as any).elements : [];
+  const str = (v: unknown) => (typeof v === "string" ? v : "");
+  const out: StoredCommentInput[] = [];
+  for (const e of elements) {
+    const object = str(e?.object);
+    const id = str(e?.commentUrn) || (str(e?.id) && object ? `urn:li:comment:(${object},${str(e.id)})` : "");
+    if (!id) continue;
+    const actor = str(e?.actor) || str(e?.created?.actor);
+    if (ownOrgUrn && actor === ownOrgUrn) continue;
+    const text = str(e?.message?.text).trim();
+    if (!text) continue;
+    const at = Number(e?.created?.time);
+    out.push({
+      commentId: id,
+      commentText: text.slice(0, COMMENT_TEXT_MAX),
+      authorLabel: actor.startsWith("urn:li:organization:") ? "LinkedIn Page" : "LinkedIn member",
+      isReply: !!str(e?.parentComment),
+      commentedAt: Number.isFinite(at) && at > 0 ? new Date(at) : null,
+    });
+  }
+  return out;
+}
+
+/**
  * Interleave each workspace's pending comments (oldest first within a
  * workspace) round-robin, up to the cap — so one busy workspace cannot use
  * the whole run's AI budget.

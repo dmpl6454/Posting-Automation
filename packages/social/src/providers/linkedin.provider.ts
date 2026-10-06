@@ -12,7 +12,9 @@ import type {
 import { fetchT } from "../utils/fetch-timeout";
 import { headRemoteMedia, fetchByteRange } from "../utils/ranged-media";
 
-const API_VERSION = "202504";
+/** Versioned REST API ("LinkedIn-Version" header) every call here uses. */
+export const LINKEDIN_API_VERSION = "202504";
+const API_VERSION = LINKEDIN_API_VERSION;
 
 function restHeaders(accessToken: string): Record<string, string> {
   return {

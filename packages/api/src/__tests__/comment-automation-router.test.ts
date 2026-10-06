@@ -83,7 +83,7 @@ describe("comment.automationSettings", () => {
 });
 
 describe("comment.updateAutomation", () => {
-  it("owners save cleaned words and only their own FB/IG/YouTube channel ids; it is audited", async () => {
+  it("owners save cleaned words and only their own FB/IG/YouTube/LinkedIn Page channel ids; it is audited", async () => {
     const { caller, automationUpsert, channelFindMany } = build({ channels: [...CHANNELS, { id: "foreign", organizationId: "org-2", platform: "INSTAGRAM" }] });
     const res = await caller.updateAutomation({
       autoHideEnabled: true,
@@ -94,7 +94,7 @@ describe("comment.updateAutomation", () => {
     });
     expect(res).toEqual({ ok: true, blockedWords: ["scam", "dm me"], channelIds: ["ch-ig"] });
     const where = channelFindMany.mock.calls[0]![0].where;
-    expect(where).toMatchObject({ organizationId: ORG, disconnectedAt: null, platform: { in: ["FACEBOOK", "INSTAGRAM", "YOUTUBE"] } });
+    expect(where).toMatchObject({ organizationId: ORG, disconnectedAt: null, ...{ OR: [{ platform: { in: ["FACEBOOK", "INSTAGRAM", "YOUTUBE"] } }, { platform: "LINKEDIN", platformId: { startsWith: "org-" } }] } });
     expect(automationUpsert).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { organizationId: ORG },
