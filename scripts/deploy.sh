@@ -33,6 +33,11 @@ ENV_FILE=".env.production"
 # `git pull` (git replaces the file; bash keeps reading the old one), so this
 # flag first applies on the deploy AFTER the one that ships it.
 WORKER_STOP_TIMEOUT=300
+# How long the health check keeps retrying before calling the site down
+# (2026-10-06). Right after a deploy the new web container needs a few seconds
+# before it answers: run 293 was marked failed by ONE check made 30 s after the
+# restart, while the site answered normally moments later.
+HEALTH_WAIT_SECONDS="${HEALTH_WAIT_SECONDS:-90}"
 
 # Colors
 RED='\033[0;31m'
@@ -361,14 +366,25 @@ cmd_status() {
   docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" ps
   echo ""
 
-  # Health check
+  # Health check — retried every 5 s for up to HEALTH_WAIT_SECONDS, so a web
+  # container that is still starting isn't reported as down.
   log "Health Check:"
-  if curl -sf "https://${DOMAIN}/api/health" >/dev/null 2>&1; then
+  local deadline=$((SECONDS + HEALTH_WAIT_SECONDS)) up=false
+  while true; do
+    if curl -sf --max-time 10 "https://${DOMAIN}/api/health" >/dev/null 2>&1; then
+      up=true
+      break
+    fi
+    if [ "$SECONDS" -ge "$deadline" ]; then break; fi
+    log "Not answering yet — retrying in 5s (up to ${HEALTH_WAIT_SECONDS}s)..."
+    sleep 5
+  done
+  if [ "$up" = true ]; then
     success "Website is UP at https://${DOMAIN}"
-  elif curl -sf "http://localhost:3000/api/health" >/dev/null 2>&1; then
+  elif curl -sf --max-time 10 "http://localhost:3000/api/health" >/dev/null 2>&1; then
     warn "App is running but HTTPS may not be configured"
   else
-    error "Website appears DOWN"
+    error "Website appears DOWN (no healthy answer within ${HEALTH_WAIT_SECONDS}s)"
   fi
 
   # Disk usage
