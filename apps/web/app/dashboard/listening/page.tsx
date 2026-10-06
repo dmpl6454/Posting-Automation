@@ -9,6 +9,9 @@ import {
   MIN_REACH_OPTIONS,
   PERIOD_OPTIONS,
   SENTIMENT_FILTER_OPTIONS,
+  SOURCE_FILTER_OPTIONS,
+  SOURCE_LABEL,
+  parseSource,
   applyFeedFilters,
   compactCount,
   isFiltered,
@@ -120,32 +123,10 @@ const SOURCE_TAG: Record<string, string> = {
 };
 const SOURCE_TAG_FALLBACK = "#7e8a9a";
 
-/**
- * Friendly source names for the Sources card. The mockup lists "Google News"
- * and "X / Twitter"; the API returns the raw `MentionSource` enum, so without
- * this the card reads NEWS / TWITTER in shouty uppercase.
- *
- * ⚠️ Deliberately NOT applied to the per-mention source tag — the mockup keeps
- * THAT one as the raw uppercase enum (TWITTER, REDDIT, NEWS), because a 9.5px
- * pill needs a short token, not a sentence.
- */
-const SOURCE_LABEL: Record<string, string> = {
-  TWITTER: "X / Twitter",
-  NEWS: "Google News",
-  REDDIT: "Reddit",
-  LINKEDIN: "LinkedIn",
-  INSTAGRAM: "Instagram",
-  FACEBOOK: "Facebook",
-  TIKTOK: "TikTok",
-  YOUTUBE: "YouTube",
-  BLOG: "Blog",
-  FORUM: "Forum",
-  OTHER: "Other",
-  HACKERNEWS: "Hacker News",
-  BLUESKY: "Bluesky",
-  MASTODON: "Mastodon",
-  LEMMY: "Lemmy",
-};
+// Friendly source names (Sources card + source filter) live in
+// ~/lib/listening-feed (SOURCE_LABEL). ⚠️ Deliberately NOT applied to the
+// per-mention source tag — the mockup keeps THAT one as the raw uppercase
+// enum (TWITTER, REDDIT, NEWS), because a 9.5px pill needs a short token.
 
 /**
  * A comment mention (Reddit / YouTube, 2026-10-05) carries the post or video
@@ -233,6 +214,7 @@ function ListeningPageInner() {
       minReach: feed.minReach,
       ...(feed.days !== null ? { days: feed.days } : {}),
       ...(feed.sentiment ? { sentiment: feed.sentiment } : {}),
+      ...(feed.source ? { source: feed.source } : {}),
       limit: 20,
     },
     { getNextPageParam: (last) => last.nextCursor ?? undefined }
@@ -704,6 +686,23 @@ function ListeningPageInner() {
               ))}
             </select>
             <select
+              value={feed.source ?? ""}
+              onChange={(e) => setFeed({ source: parseSource(e.target.value) })}
+              className="h-8 rounded-[9px] border border-border bg-card px-2 text-[12px]"
+              aria-label="Source"
+              data-testid="mention-source"
+            >
+              {SOURCE_FILTER_OPTIONS.map((o) => (
+                <option key={o.label} value={o.value ?? ""}>
+                  {o.label}
+                </option>
+              ))}
+              {/* A source only reachable by URL (BLOG / FORUM / OTHER) still shows as selected. */}
+              {feed.source && !SOURCE_FILTER_OPTIONS.some((o) => o.value === feed.source) && (
+                <option value={feed.source}>{SOURCE_LABEL[feed.source] ?? feed.source}</option>
+              )}
+            </select>
+            <select
               value={feed.days ?? ""}
               onChange={(e) => setFeed({ days: e.target.value ? Number(e.target.value) : null })}
               className="h-8 rounded-[9px] border border-border bg-card px-2 text-[12px]"
@@ -865,19 +864,35 @@ function ListeningPageInner() {
             </h2>
             <div className="flex flex-col gap-[11px] rounded-[14px] border border-border bg-card p-4 shadow-[0_6px_14px_-10px_rgba(0,0,0,.4)]">
               {sources && sources.length > 0 ? (
-                sources.map((s) => (
-                  <div key={s.source} className="flex items-center justify-between gap-3">
-                    <span className="min-w-0 truncate text-[12.5px] leading-none">
-                      {SOURCE_LABEL[s.source] ?? s.source}
-                    </span>
-                    <div className="flex shrink-0 items-center gap-2">
-                      <span className="text-[12.5px] font-semibold leading-none">{s.count}</span>
-                      <span className="text-[10px] leading-none text-faint">
-                        {formatCompact(s.reach)} reach
+                // Each row filters the mentions to that source (click again to clear).
+                sources.map((s) => {
+                  const active = feed.source === s.source;
+                  return (
+                    <button
+                      key={s.source}
+                      type="button"
+                      aria-pressed={active}
+                      onClick={() => setFeed({ source: active ? null : parseSource(s.source) })}
+                      title={active ? "Show all sources" : `Show only ${SOURCE_LABEL[s.source] ?? s.source} mentions`}
+                      className={
+                        active
+                          ? "-mx-1.5 flex items-center justify-between gap-3 rounded-[7px] bg-surface1 px-1.5 py-1 text-left font-semibold"
+                          : "-mx-1.5 flex items-center justify-between gap-3 rounded-[7px] px-1.5 py-1 text-left hover:bg-hover"
+                      }
+                      data-testid={`source-row-${s.source.toLowerCase()}`}
+                    >
+                      <span className="min-w-0 truncate text-[12.5px] leading-none">
+                        {SOURCE_LABEL[s.source] ?? s.source}
                       </span>
-                    </div>
-                  </div>
-                ))
+                      <span className="flex shrink-0 items-center gap-2">
+                        <span className="text-[12.5px] font-semibold leading-none">{s.count}</span>
+                        <span className="text-[10px] leading-none text-faint">
+                          {formatCompact(s.reach)} reach
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })
               ) : (
                 <p className="py-2 text-center text-[12px] leading-[1.5] text-muted-foreground">
                   No mentions in this range yet

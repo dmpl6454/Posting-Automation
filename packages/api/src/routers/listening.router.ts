@@ -3,6 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { createRouter, adminOrgProcedure } from "../trpc";
 import { listeningSyncQueue, listeningSyncJobId } from "@postautomation/queue";
 import { requirePlan } from "../middleware/plan-limit.middleware";
+import { MentionSource } from "@postautomation/db";
 
 export const listeningRouter = createRouter({
   // ---- Listening Queries CRUD ----
@@ -97,7 +98,8 @@ export const listeningRouter = createRouter({
       z.object({
         queryId: z.string().optional(),
         sentiment: z.enum(["POSITIVE", "NEGATIVE", "NEUTRAL", "MIXED"]).optional(),
-        source: z.string().optional(),
+        /** One source (2026-10-06: validated against the enum — a bad value is a 400, not a Prisma 500). */
+        source: z.nativeEnum(MentionSource).optional(),
         /**
          * "recent" (newest first) or "reach" (most reach/views first, 2026-10-06).
          * Reach is what the source reports — views (YouTube, TikTok),
@@ -123,7 +125,7 @@ export const listeningRouter = createRouter({
         where: {
           ...queryFilter,
           ...(input.sentiment ? { sentiment: input.sentiment } : {}),
-          ...(input.source ? { source: input.source as any } : {}),
+          ...(input.source ? { source: input.source } : {}),
           ...(input.minReach > 0 ? { reach: { gte: input.minReach } } : {}),
           ...(input.days ? { mentionedAt: { gte: new Date(Date.now() - input.days * 24 * 60 * 60 * 1000) } } : {}),
         },

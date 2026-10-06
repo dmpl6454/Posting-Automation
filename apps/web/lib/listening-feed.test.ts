@@ -3,6 +3,10 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   DEFAULT_FEED_FILTERS,
+  MENTION_SOURCES,
+  SOURCE_FILTER_OPTIONS,
+  SOURCE_LABEL,
+  parseSource,
   SENTIMENT_FILTER_OPTIONS,
   parseSentiment,
   applyFeedFilters,
@@ -18,14 +22,14 @@ const page = readFileSync(join(__dirname, "../app/dashboard/listening/page.tsx")
 describe("feed filters in the URL", () => {
   it("reads only the values on offer; anything else is the default", () => {
     expect(parseFeedFilters(new URLSearchParams(""))).toEqual(DEFAULT_FEED_FILTERS);
-    expect(parseFeedFilters(new URLSearchParams("sort=reach&minReach=10000&period=7"))).toEqual({ sort: "reach", minReach: 10000, days: 7, sentiment: null });
+    expect(parseFeedFilters(new URLSearchParams("sort=reach&minReach=10000&period=7"))).toEqual({ sort: "reach", minReach: 10000, days: 7, sentiment: null, source: null });
     expect(parseFeedFilters(new URLSearchParams("sort=views&minReach=123&period=999"))).toEqual(DEFAULT_FEED_FILTERS);
     expect(parseFeedFilters(new URLSearchParams("minReach=-5&period=abc"))).toEqual(DEFAULT_FEED_FILTERS);
   });
 
   it("writes non-defaults and keeps other params (like ?view)", () => {
     const base = new URLSearchParams("view=comments&sort=reach");
-    expect(applyFeedFilters(base, { sort: "reach", minReach: 1000, days: 30, sentiment: null }).toString()).toBe("view=comments&sort=reach&minReach=1000&period=30");
+    expect(applyFeedFilters(base, { sort: "reach", minReach: 1000, days: 30, sentiment: null, source: null }).toString()).toBe("view=comments&sort=reach&minReach=1000&period=30");
     expect(applyFeedFilters(new URLSearchParams("sort=reach&minReach=1000&period=30"), DEFAULT_FEED_FILTERS).toString()).toBe("");
     expect(isFiltered(DEFAULT_FEED_FILTERS)).toBe(false);
     expect(isFiltered({ ...DEFAULT_FEED_FILTERS, days: 1 })).toBe(true);
@@ -90,5 +94,48 @@ describe("overall sentiment filter (2026-10-06)", () => {
     expect(page).toContain("data-testid={`sentiment-legend-${s.key}`}");
     expect(page).toMatch(/onClick=\{\(\) => setFeed\(\{ sentiment: active \? null : s\.value \}\)\}/);
     expect(page).toMatch(/onClick=\{\(\) => setFeed\(DEFAULT_FEED_FILTERS\)\}/);
+  });
+});
+
+describe("source filter (2026-10-06)", () => {
+  const schema = readFileSync(join(__dirname, "../../../packages/db/prisma/schema.prisma"), "utf8");
+
+  it("MENTION_SOURCES is exactly the MentionSource enum", () => {
+    const body = schema.slice(schema.indexOf("enum MentionSource {"), schema.indexOf("}", schema.indexOf("enum MentionSource {")));
+    const values = body.split("\n").slice(1).map((l) => l.trim()).filter((l) => /^[A-Z]+$/.test(l));
+    expect([...MENTION_SOURCES].sort()).toEqual(values.sort());
+    for (const v of MENTION_SOURCES) expect(SOURCE_LABEL[v]).toBeTruthy();
+  });
+
+  it("?source= reads any enum value case-insensitively; anything else is all sources", () => {
+    expect(parseFeedFilters(new URLSearchParams("source=youtube")).source).toBe("YOUTUBE");
+    expect(parseSource("HackerNews")).toBe("HACKERNEWS");
+    expect(parseSource("blog")).toBe("BLOG");
+    expect(parseSource("myspace")).toBeNull();
+    expect(parseSource("")).toBeNull();
+  });
+
+  it("is written lower-case, dropped when cleared, counts as filtered, and keeps other params", () => {
+    const on = applyFeedFilters(new URLSearchParams("sentiment=negative"), { ...DEFAULT_FEED_FILTERS, sentiment: "NEGATIVE", source: "REDDIT" });
+    expect(on.toString()).toBe("sentiment=negative&source=reddit");
+    expect(applyFeedFilters(on, { ...DEFAULT_FEED_FILTERS, sentiment: "NEGATIVE" }).toString()).toBe("sentiment=negative");
+    expect(isFiltered({ ...DEFAULT_FEED_FILTERS, source: "NEWS" })).toBe(true);
+  });
+
+  it("offers the sources listening collects (not the never-written BLOG / FORUM / OTHER); News covers Bing and GDELT too", () => {
+    const values = SOURCE_FILTER_OPTIONS.map((o) => o.value);
+    expect(values[0]).toBeNull();
+    expect(values).toHaveLength(13);
+    expect(values).not.toContain("BLOG");
+    expect(values).not.toContain("OTHER");
+    expect(SOURCE_LABEL.NEWS).toBe("News");
+  });
+
+  it("the page sends it, offers a select, and the Sources rows toggle it", () => {
+    expect(page).toMatch(/\.\.\.\(feed\.source \? \{ source: feed\.source \} : \{\}\)/);
+    expect(page).toContain('data-testid="mention-source"');
+    expect(page).toContain("data-testid={`source-row-${s.source.toLowerCase()}`}");
+    expect(page).toMatch(/setFeed\(\{ source: active \? null : parseSource\(s\.source\) \}\)/);
+    expect(page).not.toMatch(/const SOURCE_LABEL/);
   });
 });
