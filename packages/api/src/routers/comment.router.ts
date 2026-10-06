@@ -75,6 +75,15 @@ import { afterMessagingFailure, resolveMessagingAccess } from "../lib/meta-messa
  */
 
 const COMMENT_PLATFORMS: readonly string[] = ["FACEBOOK", "INSTAGRAM"];
+/** Accounts comment automation can cover; YouTube for comment sentiment only. */
+const AUTOMATION_PLATFORMS: Array<"FACEBOOK" | "INSTAGRAM" | "YOUTUBE"> = ["FACEBOOK", "INSTAGRAM", "YOUTUBE"];
+
+/** A comment's own page on YouTube (top-level or reply id; `lc=` highlights it). */
+export function youtubeCommentUrl(videoId: string | null | undefined, commentId?: string | null): string | null {
+  if (!videoId || !/^[A-Za-z0-9_-]{11}$/.test(videoId)) return null;
+  const base = `https://www.youtube.com/watch?v=${videoId}`;
+  return commentId ? `${base}&lc=${encodeURIComponent(commentId)}` : base;
+}
 
 function isCommentPlatform(platform: unknown): platform is CommentPlatform {
   return typeof platform === "string" && COMMENT_PLATFORMS.includes(platform);
@@ -1330,7 +1339,8 @@ export const commentRouter = createRouter({
     const [row, channels] = await Promise.all([
       (ctx.prisma as any).commentAutomation.findUnique({ where: { organizationId: ctx.organizationId } }),
       ctx.prisma.channel.findMany({
-        where: { organizationId: ctx.organizationId, disconnectedAt: null, platform: { in: ["FACEBOOK", "INSTAGRAM"] } },
+        // YouTube channels take part in comment sentiment only (2026-10-06).
+        where: { organizationId: ctx.organizationId, disconnectedAt: null, platform: { in: AUTOMATION_PLATFORMS } },
         select: { id: true, platform: true, name: true, username: true, avatar: true, isActive: true, metadata: true },
         orderBy: { name: "asc" },
       }),
@@ -1350,11 +1360,14 @@ export const commentRouter = createRouter({
       canEdit: role === "OWNER" || role === "ADMIN",
       accounts: channels.map(({ metadata, ...c }) => ({
         ...c,
-        // Whether the recorded grant lets the automation HIDE on this account.
-        canModerate: commentCapabilities(
-          c.platform as CommentPlatform,
-          cachedGrantedScopes(metadata as Record<string, unknown> | null)
-        ).canModerate,
+        // Whether the recorded grant lets the automation HIDE on this account
+        // (null on YouTube: the automation never hides there).
+        canModerate:
+          c.platform === "YOUTUBE"
+            ? null
+            : commentCapabilities(c.platform as CommentPlatform, cachedGrantedScopes(metadata as Record<string, unknown> | null))
+                .canModerate,
+        sentimentOnly: c.platform === "YOUTUBE",
       })),
       limits: { maxWords: MAX_BLOCKED_WORDS, maxWordLength: MAX_BLOCKED_WORD_LENGTH },
     };
@@ -1382,7 +1395,7 @@ export const commentRouter = createRouter({
         throw new TRPCError({ code: "FORBIDDEN", message: "Only workspace owners and admins can change comment automation." });
       }
       const blockedWords = normalizeBlockedWords(input.blockedWords);
-      // Only this workspace's live FB/IG channels — a foreign or stale id is dropped, never stored.
+      // Only this workspace's live FB/IG/YouTube channels — a foreign or stale id is dropped, never stored.
       const requested = [...new Set(input.channelIds)];
       const owned =
         requested.length === 0
@@ -1392,7 +1405,7 @@ export const commentRouter = createRouter({
                 id: { in: requested },
                 organizationId: ctx.organizationId,
                 disconnectedAt: null,
-                platform: { in: ["FACEBOOK", "INSTAGRAM"] },
+                platform: { in: AUTOMATION_PLATFORMS },
               },
               select: { id: true },
             });
@@ -1506,11 +1519,19 @@ export const commentRouter = createRouter({
       const postRows = postIds.length
         ? await ctx.prisma.postTarget.findMany({
             where: { id: { in: postIds }, post: { organizationId: ctx.organizationId } },
-            select: { id: true, channelId: true, publishedUrl: true, publishedAt: true, post: { select: { content: true } } },
+            select: {
+              id: true,
+              channelId: true,
+              publishedId: true,
+              publishedUrl: true,
+              publishedAt: true,
+              post: { select: { content: true } },
+            },
           })
         : [];
       const postById = new Map(postRows.map((p: any) => [p.id, p]));
       const channelName = new Map(channels.map((c: any) => [c.id, c.name]));
+      const channelPlatform = new Map(channels.map((c: any) => [c.id, c.platform as string]));
       const worstPosts = (negativePosts as Array<{ postTargetId: string; _count: { _all: number } }>)
         .map((p) => {
           const row: any = postById.get(p.postTargetId);
@@ -1522,6 +1543,9 @@ export const commentRouter = createRouter({
             caption: String(row.post?.content ?? "").slice(0, 140),
             publishedUrl: (row.publishedUrl as string | null) ?? null,
             publishedAt: row.publishedAt as Date | null,
+            platform: (channelPlatform.get(row.channelId) as string | undefined) ?? null,
+            // YouTube has no Comments inbox here — link the video itself.
+            externalUrl: channelPlatform.get(row.channelId) === "YOUTUBE" ? youtubeCommentUrl(row.publishedId) : null,
             negative: p._count._all,
           };
         })
@@ -1595,10 +1619,24 @@ export const commentRouter = createRouter({
           })
         : [];
       const byId = new Map(channels.map((c: any) => [c.id, c]));
+      // YouTube comments open on YouTube (there is no YouTube Comments inbox here).
+      const ytTargetIds = [...new Set(items.filter((r) => r.platform === "YOUTUBE").map((r) => r.postTargetId as string))];
+      const ytTargets = ytTargetIds.length
+        ? await ctx.prisma.postTarget.findMany({
+            where: { id: { in: ytTargetIds }, post: { organizationId: ctx.organizationId } },
+            select: { id: true, publishedId: true },
+          })
+        : [];
+      const videoIdOf = new Map(ytTargets.map((t: any) => [t.id, t.publishedId as string | null]));
       return {
         items: items.map((r) => {
           const ch: any = byId.get(r.channelId);
-          return { ...r, channelName: ch?.name ?? null, channelAvatar: ch?.avatar ?? null };
+          return {
+            ...r,
+            channelName: ch?.name ?? null,
+            channelAvatar: ch?.avatar ?? null,
+            externalUrl: r.platform === "YOUTUBE" ? youtubeCommentUrl(videoIdOf.get(r.postTargetId), r.commentId) : null,
+          };
         }),
         nextCursor: hasMore ? (items[items.length - 1]?.id ?? null) : null,
       };

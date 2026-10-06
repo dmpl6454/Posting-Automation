@@ -14,6 +14,7 @@ import {
   commentThreadHref,
   fillDailySeries,
   formatAvgScore,
+  platformLabel,
   sentimentKey,
   sentimentPercents,
   type SentimentKey,
@@ -24,7 +25,8 @@ import { cn } from "~/lib/utils";
  * Social Listening → "Comments on your posts" (2026-10-05).
  *
  * Sentiment of the comments people leave on posts published through
- * PostAutomation to the workspace's Facebook Pages and Instagram accounts.
+ * PostAutomation to the workspace's Facebook Pages, Instagram accounts and
+ * YouTube channels (YouTube since 2026-10-06; its comments link to YouTube).
  * The comment sweep stores and scores them every 15 minutes once a workspace
  * switches "Comment sentiment" on (Comments → Automation). Unscored comments
  * are shown as "waiting", never folded into neutral.
@@ -85,10 +87,10 @@ export function CommentSentimentPanel() {
           aria-label="Account"
           data-testid="sentiment-account"
         >
-          <option value="">All Pages and accounts</option>
+          <option value="">All accounts</option>
           {(data?.byChannel ?? []).map((c) => (
             <option key={c.channelId} value={c.channelId}>
-              {c.platform === "FACEBOOK" ? "Facebook" : "Instagram"} · {c.name}
+              {platformLabel(c.platform)} · {c.name}
             </option>
           ))}
         </select>
@@ -104,7 +106,7 @@ export function CommentSentimentPanel() {
           <b className="text-foreground">Comment sentiment is off for this workspace.</b>{" "}
           {totals.total > 0
             ? "Showing comments scored while it was on; no new comments are being collected."
-            : "Turn it on to score the comments people leave on your Facebook and Instagram posts."}{" "}
+            : "Turn it on to score the comments people leave on your Facebook, Instagram and YouTube posts."}{" "}
           An owner or admin can switch it on in{" "}
           <Link href="/dashboard/comments?view=automation" className="font-medium text-foreground underline">
             Comments → Automation
@@ -214,20 +216,35 @@ export function CommentSentimentPanel() {
                           {c.authorLabel && <span className="font-medium text-muted-foreground">{c.authorLabel}</span>}
                           {c.channelName && (
                             <span>
-                              on {c.platform === "FACEBOOK" ? "Facebook" : "Instagram"} · {c.channelName}
+                              on {platformLabel(c.platform)} · {c.channelName}
                             </span>
                           )}
                           {c.isReply && <span>reply</span>}
                           <span>{formatDistanceToNow(new Date(c.commentedAt ?? c.createdAt), { addSuffix: true })}</span>
                         </div>
                       </div>
-                      <Link
-                        href={commentThreadHref(c.channelId, c.postTargetId)}
-                        className="shrink-0 text-faint hover:text-foreground"
-                        title="Open this post's comments to reply, hide or message privately"
-                      >
-                        <ExternalLink className="h-3.5 w-3.5" />
-                      </Link>
+                      {c.platform === "YOUTUBE" ? (
+                        c.externalUrl && (
+                          <a
+                            href={c.externalUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="shrink-0 text-faint hover:text-foreground"
+                            title="Open this comment on YouTube"
+                            data-testid="sentiment-youtube-link"
+                          >
+                            <ExternalLink className="h-3.5 w-3.5" />
+                          </a>
+                        )
+                      ) : (
+                        <Link
+                          href={commentThreadHref(c.channelId, c.postTargetId)}
+                          className="shrink-0 text-faint hover:text-foreground"
+                          title="Open this post's comments to reply, hide or message privately"
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </Link>
+                      )}
                     </div>
                   );
                 })
@@ -256,7 +273,7 @@ export function CommentSentimentPanel() {
                     <div key={c.channelId} className="space-y-1.5">
                       <div className="flex items-center justify-between gap-2 text-[12px]">
                         <span className="min-w-0 truncate">
-                          {c.platform === "FACEBOOK" ? "Facebook" : "Instagram"} · {c.name}
+                          {platformLabel(c.platform)} · {c.name}
                         </span>
                         <span className="shrink-0 text-faint">
                           {scored} scored{c.pending ? ` · ${c.pending} waiting` : ""}
@@ -288,19 +305,34 @@ export function CommentSentimentPanel() {
               {(data?.worstPosts ?? []).length === 0 ? (
                 <p className="py-3 text-center text-[12px] text-muted-foreground">No negative comments in this range</p>
               ) : (
-                data!.worstPosts.map((p) => (
-                  <Link
-                    key={p.targetId}
-                    href={commentThreadHref(p.channelId, p.targetId)}
-                    className="rounded-[9px] border border-border px-3 py-2.5 hover:border-border2"
-                  >
-                    <p className="line-clamp-2 text-[12px] leading-[1.4]">{p.caption || "(no caption)"}</p>
-                    <p className="mt-1 text-[10.5px] text-faint">
-                      {p.negative} negative {p.negative === 1 ? "comment" : "comments"}
-                      {p.channelName ? ` · ${p.channelName}` : ""}
-                    </p>
-                  </Link>
-                ))
+                data!.worstPosts.map((p) => {
+                  const body = (
+                    <>
+                      <p className="line-clamp-2 text-[12px] leading-[1.4]">{p.caption || "(no caption)"}</p>
+                      <p className="mt-1 text-[10.5px] text-faint">
+                        {p.negative} negative {p.negative === 1 ? "comment" : "comments"}
+                        {p.channelName ? ` · ${p.platform === "YOUTUBE" ? "YouTube · " : ""}${p.channelName}` : ""}
+                      </p>
+                    </>
+                  );
+                  const cls = "rounded-[9px] border border-border px-3 py-2.5 hover:border-border2";
+                  if (p.platform === "YOUTUBE") {
+                    return p.externalUrl ? (
+                      <a key={p.targetId} href={p.externalUrl} target="_blank" rel="noopener noreferrer" className={cls}>
+                        {body}
+                      </a>
+                    ) : (
+                      <div key={p.targetId} className={cls}>
+                        {body}
+                      </div>
+                    );
+                  }
+                  return (
+                    <Link key={p.targetId} href={commentThreadHref(p.channelId, p.targetId)} className={cls}>
+                      {body}
+                    </Link>
+                  );
+                })
               )}
             </div>
           </div>
@@ -309,8 +341,9 @@ export function CommentSentimentPanel() {
 
       <p className="text-[11px] leading-[1.6] text-faint">
         Covers comments on posts published through PostAutomation to your Facebook Pages and Instagram accounts, collected
-        every 15 minutes from posts of the last 3 days (the first page of comments on each). Sentiment is scored by AI and can
-        be wrong on sarcasm or slang.
+        every 15 minutes from posts of the last 3 days (the first page of comments on each), and on videos published to your
+        YouTube channels, read about once an hour for 7 days (the newest 100 comment threads on each, within a daily
+        YouTube API budget). Sentiment is scored by AI and can be wrong on sarcasm or slang.
       </p>
     </div>
   );

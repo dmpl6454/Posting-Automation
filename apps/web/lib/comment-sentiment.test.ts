@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { commentThreadHref, fillDailySeries, formatAvgScore, sentimentKey, sentimentPercents } from "./comment-sentiment";
+import { commentThreadHref, fillDailySeries, formatAvgScore, platformLabel, sentimentKey, sentimentPercents } from "./comment-sentiment";
 import { describeLastRun } from "./comment-automation";
 
 describe("sentimentPercents", () => {
@@ -74,5 +74,36 @@ describe("source contracts", () => {
   it("the Automation tab saves the switch", () => {
     expect(automation).toMatch(/sentimentEnabled: sentiment,/);
     expect(automation).toMatch(/data-testid="sentiment-switch"/);
+  });
+});
+
+describe("YouTube comment sentiment (2026-10-06)", () => {
+  const panel = readFileSync(join(__dirname, "../components/listening/comment-sentiment-panel.tsx"), "utf8");
+  const automation = readFileSync(join(__dirname, "../components/comments/comment-automation.tsx"), "utf8");
+
+  it("names each platform, YouTube included", () => {
+    expect(platformLabel("FACEBOOK")).toBe("Facebook");
+    expect(platformLabel("INSTAGRAM")).toBe("Instagram");
+    expect(platformLabel("YOUTUBE")).toBe("YouTube");
+    expect(platformLabel(null)).toBe("Account");
+    expect(panel).not.toMatch(/=== "FACEBOOK" \? "Facebook" : "Instagram"/);
+  });
+
+  it("the last run mentions the YouTube videos it read", () => {
+    expect(describeLastRun({ postsChecked: 0, youtubeVideosChecked: 3 })).toBe("read comments on 3 YouTube videos.");
+    expect(describeLastRun({ postsChecked: 2, youtubeVideosChecked: 1 })).toBe("Checked 2 posts · read comments on 1 YouTube video.");
+  });
+
+  it("YouTube comments and posts open on YouTube in a new tab, not the FB/IG Comments inbox", () => {
+    expect(panel).toMatch(/c\.platform === "YOUTUBE" \?/);
+    expect(panel).toMatch(/href=\{c\.externalUrl\}\s+target="_blank"\s+rel="noopener noreferrer"/);
+    expect(panel).toMatch(/p\.platform === "YOUTUBE"/);
+    expect(panel).toMatch(/data-testid="sentiment-youtube-link"/);
+  });
+
+  it("the Automation tab offers YouTube channels as sentiment-only", () => {
+    expect(automation).toMatch(/a\.sentimentOnly && \(/);
+    expect(automation).toMatch(/Sentiment only/);
+    expect(automation).toMatch(/sentiment only — the rules above and\s+new-comment alerts don't apply there/);
   });
 });

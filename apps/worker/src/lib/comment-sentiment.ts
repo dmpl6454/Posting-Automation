@@ -21,6 +21,7 @@
  */
 
 import type { CommentPlatform, SocialComment } from "@postautomation/social";
+import { decodeEntities } from "./listening-comments";
 
 export type Sentiment = "POSITIVE" | "NEGATIVE" | "NEUTRAL" | "MIXED";
 
@@ -97,6 +98,41 @@ export function sentimentCandidates(comments: readonly SocialComment[], platform
   for (const c of comments) {
     add(c, false);
     for (const r of c.replies) add(r, true);
+  }
+  return out;
+}
+
+/**
+ * YouTube (2026-10-06): the same rows from one `commentThreads.list` page
+ * (part=snippet,replies) on one of our own videos — every top-level comment
+ * and the replies YouTube embeds, minus those our channel wrote. No keyword
+ * filter: everything on our own video is feedback. Reply ids look like
+ * "{parentId}.{replyId}", which YouTube's `lc=` deep link accepts too.
+ */
+export function youtubeSentimentCandidates(body: unknown, ownChannelId: string | null): StoredCommentInput[] {
+  const items: any[] = Array.isArray((body as any)?.items) ? (body as any).items : [];
+  const str = (v: unknown) => (typeof v === "string" ? v : "");
+  const out: StoredCommentInput[] = [];
+  const add = (c: any, isReply: boolean) => {
+    const s = c?.snippet ?? {};
+    const id = str(c?.id);
+    if (!id) return;
+    if (ownChannelId && str(s.authorChannelId?.value) === ownChannelId) return;
+    const text = decodeEntities(str(s.textOriginal) || str(s.textDisplay)).trim();
+    if (!text) return;
+    const at = Date.parse(str(s.publishedAt));
+    out.push({
+      commentId: id,
+      commentText: text.slice(0, COMMENT_TEXT_MAX),
+      authorLabel: str(s.authorDisplayName).trim().slice(0, 200) || "YouTube user",
+      isReply,
+      commentedAt: Number.isFinite(at) ? new Date(at) : null,
+    });
+  };
+  for (const it of items) {
+    add(it?.snippet?.topLevelComment, false);
+    const replies: any[] = Array.isArray(it?.replies?.comments) ? it.replies.comments : [];
+    for (const r of replies) add(r, true);
   }
   return out;
 }

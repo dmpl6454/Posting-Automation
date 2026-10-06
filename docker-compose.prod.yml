@@ -359,6 +359,10 @@ services:
       COMMENT_AUTOHIDE_MAX_PER_RUN: ${COMMENT_AUTOHIDE_MAX_PER_RUN:-}
       COMMENT_SENTIMENT_MAX_PER_RUN: ${COMMENT_SENTIMENT_MAX_PER_RUN:-}
       COMMENT_NEGATIVE_ALERT_MIN: ${COMMENT_NEGATIVE_ALERT_MIN:-}
+      COMMENT_SENTIMENT_YT_DAILY_UNITS: ${COMMENT_SENTIMENT_YT_DAILY_UNITS:-}
+      COMMENT_SENTIMENT_YT_MAX_VIDEOS: ${COMMENT_SENTIMENT_YT_MAX_VIDEOS:-}
+      COMMENT_SENTIMENT_YT_INTERVAL_MIN: ${COMMENT_SENTIMENT_YT_INTERVAL_MIN:-}
+      COMMENT_SENTIMENT_YT_LOOKBACK_DAYS: ${COMMENT_SENTIMENT_YT_LOOKBACK_DAYS:-}
       # Social listening on YouTube (2026-10-05): optional API key (else the
       # workspace's connected YouTube channel is used) and a daily unit budget
       # shared with nothing else in listening. Publishing uses the same Google

@@ -29,6 +29,16 @@
  * Every step is idempotent (hide is idempotent; the action row is unique per
  * workspace + comment; the watermark only moves forward), so a run killed by a
  * deploy is simply finished by the next one.
+ *
+ * YouTube (2026-10-06) — comment SENTIMENT only (no auto-hide, no alerts): for
+ * workspaces with sentiment on, the sweep also reads the newest page of comment
+ * threads on videos published through the app to their YouTube channels, with
+ * the channel's own token. That spends YouTube Data API units from the same
+ * project quota as uploads (1600 units each), so it is budgeted separately:
+ *   - one `commentThreads.list` (1 unit) per video, each video at most once per
+ *     `minIntervalMs`, at most `maxVideosPerRun` videos per run;
+ *   - a daily unit cap in Redis by Google's Pacific quota day, failing CLOSED
+ *     when Redis can't answer; Google's own quotaExceeded stops it for the day.
  */
 
 import {
@@ -43,9 +53,12 @@ import {
   readCommentSentimentConfig,
   scorePendingCommentSentiment,
   sentimentCandidates,
+  youtubeSentimentCandidates,
   type CommentSentimentConfig,
   type Sentiment,
+  type StoredCommentInput,
 } from "./comment-sentiment";
+import { isPerVideoCommentError, isQuotaError, quotaDay, YT_UNITS } from "./listening-comments";
 
 export const SWEEP_INTERVAL_MS = 15 * 60 * 1000;
 
@@ -71,6 +84,29 @@ export function readSweepConfig(env: Record<string, string | undefined> = proces
     maxHidesPerOrg: intEnv(env, "COMMENT_AUTOHIDE_MAX_PER_RUN", 50, 1, 500),
   };
 }
+
+export interface YouTubeSentimentConfig {
+  /** YouTube Data API units this pass may spend per Pacific day; 0 turns it off. */
+  dailyUnits: number;
+  /** Videos read per run, across all workspaces. */
+  maxVideosPerRun: number;
+  /** A video is re-read at most this often. */
+  minIntervalMs: number;
+  /** Videos published within this many days are read. */
+  lookbackDays: number;
+}
+
+export function readYouTubeSentimentConfig(env: Record<string, string | undefined> = process.env): YouTubeSentimentConfig {
+  return {
+    dailyUnits: intEnv(env, "COMMENT_SENTIMENT_YT_DAILY_UNITS", 300, 0, 5000),
+    maxVideosPerRun: intEnv(env, "COMMENT_SENTIMENT_YT_MAX_VIDEOS", 20, 1, 200),
+    minIntervalMs: intEnv(env, "COMMENT_SENTIMENT_YT_INTERVAL_MIN", 60, 15, 24 * 60) * 60 * 1000,
+    lookbackDays: intEnv(env, "COMMENT_SENTIMENT_YT_LOOKBACK_DAYS", 7, 1, 30),
+  };
+}
+
+/** A YouTube video id (a community post's id is not one, and has no comment threads to list). */
+export const YOUTUBE_VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
 
 /** Kill switch: `COMMENT_AUTOMATION_ENABLED=false` stops the sweep. Workspaces opt in individually. */
 export function isCommentAutomationEnabled(env: Record<string, string | undefined> = process.env): boolean {
@@ -100,7 +136,10 @@ export interface SweepCandidate {
  * capped per workspace, then interleaved round-robin across workspaces up to the
  * run cap.
  */
-export function planSweepTargets<T extends SweepCandidate>(candidates: readonly T[], cfg: SweepConfig): T[] {
+export function planSweepTargets<T extends SweepCandidate>(
+  candidates: readonly T[],
+  cfg: Pick<SweepConfig, "maxPostsPerRun" | "maxPostsPerOrg">
+): T[] {
   const byOrg = new Map<string, T[]>();
   for (const c of candidates) {
     const list = byOrg.get(c.organizationId) ?? [];
@@ -210,6 +249,15 @@ export interface SweepDeps {
    */
   scoreSentimentBatch?: (texts: string[]) => Promise<Map<number, { sentiment: Sentiment; score: number }>>;
   sentimentConfig?: CommentSentimentConfig;
+  /**
+   * YouTube comment sentiment: one `commentThreads.list` page for a video with
+   * the channel's token. When absent (or without `reserveYouTubeUnits`), the
+   * YouTube pass is skipped.
+   */
+  readYouTubeComments?: (accessToken: string, videoId: string) => Promise<{ status: number; body: unknown }>;
+  /** Reserve units against the daily cap; false = cap reached or the counter is unavailable. */
+  reserveYouTubeUnits?: (units: number) => Promise<boolean>;
+  youtubeConfig?: YouTubeSentimentConfig;
   now?: () => Date;
   log?: Pick<Console, "log" | "warn">;
 }
@@ -228,6 +276,8 @@ export interface OrgRunSummary {
   sentimentScored?: number;
   sentimentNegative?: number;
   sentimentPending?: number;
+  /** YouTube videos whose comments were read for sentiment this run. */
+  youtubeVideosChecked?: number;
 }
 
 const NOT_A_STORY = [{ format: null }, { format: { not: "STORY" as const } }];
@@ -303,6 +353,7 @@ export async function runCommentSweep(deps: SweepDeps, cfg: SweepConfig = readSw
     };
   }
   if (planned.length === 0) {
+    await sweepYouTubeSentiment(deps, automations, summaries, now, log);
     // Comments stored on an earlier run may still be waiting for a verdict.
     await scoreSentimentForRun(deps, automations, summaries, log);
     await finishOrgs(prisma, automations, summaries, now, log);
@@ -413,32 +464,7 @@ export async function runCommentSweep(deps: SweepDeps, cfg: SweepConfig = readSw
     // Comment sentiment: remember every comment on this page we haven't stored
     // yet (comments the rules just hid included — they are still feedback).
     if (page && automation.sentimentEnabled) {
-      const found = sentimentCandidates(page.comments, platform);
-      if (found.length > 0) {
-        try {
-          const existing: any[] = await prisma.commentSentiment.findMany({
-            where: { organizationId: target.organizationId, commentId: { in: found.map((f) => f.commentId) } },
-            select: { commentId: true },
-          });
-          const known = new Set(existing.map((e) => e.commentId));
-          const fresh = found.filter((f) => !known.has(f.commentId));
-          if (fresh.length > 0) {
-            await prisma.commentSentiment.createMany({
-              data: fresh.map((f) => ({
-                organizationId: target.organizationId,
-                postTargetId: target.id,
-                channelId: channel.id,
-                platform,
-                ...f,
-              })),
-              skipDuplicates: true,
-            });
-            summary.sentimentStored = (summary.sentimentStored ?? 0) + fresh.length;
-          }
-        } catch (err: any) {
-          log.warn(`[CommentSweep] sentiment store failed for target ${target.id}: ${String(err?.message ?? err).slice(0, 160)}`);
-        }
-      }
+      await storeSentimentRows(prisma, target, channel.id, platform, sentimentCandidates(page.comments, platform), summary, log);
     }
 
     const { lastSeenAt } = readCheckedAt(target.metadata);
@@ -493,6 +519,7 @@ export async function runCommentSweep(deps: SweepDeps, cfg: SweepConfig = readSw
     }
   }
 
+  const ytChecked = await sweepYouTubeSentiment(deps, automations, summaries, now, log);
   await scoreSentimentForRun(deps, automations, summaries, log);
   await finishOrgs(prisma, automations, summaries, now, log);
   const totals = Object.values(summaries).reduce(
@@ -500,9 +527,195 @@ export async function runCommentSweep(deps: SweepDeps, cfg: SweepConfig = readSw
     { posts: 0, hidden: 0, fresh: 0, errors: 0 }
   );
   log.log(
-    `[CommentSweep] orgs=${automations.length} posts=${totals.posts}/${candidates.length} hidden=${totals.hidden} new=${totals.fresh} errors=${totals.errors}${fbPaused ? " fb=paused" : ""}`
+    `[CommentSweep] orgs=${automations.length} posts=${totals.posts}/${candidates.length} hidden=${totals.hidden} new=${totals.fresh} errors=${totals.errors}${ytChecked ? ` yt=${ytChecked}` : ""}${fbPaused ? " fb=paused" : ""}`
   );
   return summaries;
+}
+
+/** Store the comments not seen before for sentiment scoring; never throws. */
+async function storeSentimentRows(
+  prisma: any,
+  target: { id: string; organizationId: string },
+  channelId: string,
+  platform: string,
+  found: StoredCommentInput[],
+  summary: OrgRunSummary,
+  log: Pick<Console, "warn">
+): Promise<void> {
+  if (found.length === 0) return;
+  try {
+    const existing: any[] = await prisma.commentSentiment.findMany({
+      where: { organizationId: target.organizationId, commentId: { in: found.map((f) => f.commentId) } },
+      select: { commentId: true },
+    });
+    const known = new Set(existing.map((e) => e.commentId));
+    const fresh = found.filter((f) => !known.has(f.commentId));
+    if (fresh.length === 0) return;
+    await prisma.commentSentiment.createMany({
+      data: fresh.map((f) => ({ organizationId: target.organizationId, postTargetId: target.id, channelId, platform, ...f })),
+      skipDuplicates: true,
+    });
+    summary.sentimentStored = (summary.sentimentStored ?? 0) + fresh.length;
+  } catch (err: any) {
+    log.warn(`[CommentSweep] sentiment store failed for target ${target.id}: ${String(err?.message ?? err).slice(0, 160)}`);
+  }
+}
+
+/** Set when Google answers quotaExceeded — no more YouTube reads that Pacific day. */
+let ytQuotaExhaustedDay: string | null = null;
+
+/**
+ * Channels whose token lacks a YouTube read scope (connected before
+ * youtube.readonly was requested) → epoch ms to try again. Reconnecting the
+ * channel fixes it; until then they would spend a unit on every run.
+ */
+const ytScopeMissingUntil = new Map<string, number>();
+const SCOPE_MISSING_PAUSE_MS = 24 * 60 * 60 * 1000;
+
+/** Test seam. */
+export function __resetYouTubeSweepState(): void {
+  ytQuotaExhaustedDay = null;
+  ytScopeMissingUntil.clear();
+}
+
+/**
+ * YouTube comment sentiment: read the newest comment threads on the
+ * sentiment workspaces' recent app-published YouTube videos and store them.
+ * Returns how many videos were read; never throws.
+ */
+async function sweepYouTubeSentiment(
+  deps: SweepDeps,
+  automations: any[],
+  summaries: Record<string, OrgRunSummary>,
+  now: Date,
+  log: Pick<Console, "log" | "warn">
+): Promise<number> {
+  const orgs = automations.filter((a) => a.sentimentEnabled);
+  if (orgs.length === 0 || !deps.readYouTubeComments || !deps.reserveYouTubeUnits) return 0;
+  const cfg = deps.youtubeConfig ?? readYouTubeSentimentConfig();
+  if (cfg.dailyUnits <= 0) return 0;
+  if (ytQuotaExhaustedDay === quotaDay(now)) return 0;
+  const prisma = deps.prisma;
+  let checked = 0;
+  try {
+    const since = new Date(now.getTime() - cfg.lookbackDays * 24 * 60 * 60 * 1000);
+    const dueBefore = now.getTime() - cfg.minIntervalMs;
+    const candidates: Array<SweepCandidate & { publishedId: string }> = [];
+    for (const a of orgs) {
+      const rows: any[] = await prisma.postTarget.findMany({
+        where: {
+          post: { organizationId: a.organizationId },
+          status: "PUBLISHED",
+          publishedId: { not: null },
+          publishedAt: { gte: since },
+          channel: {
+            organizationId: a.organizationId,
+            disconnectedAt: null,
+            isActive: true,
+            platform: "YOUTUBE",
+            ...(a.channelIds?.length ? { id: { in: a.channelIds } } : {}),
+          },
+        },
+        orderBy: [{ publishedAt: "desc" }],
+        take: 200,
+        select: { id: true, channelId: true, publishedId: true, publishedAt: true, metadata: true },
+      });
+      for (const r of rows) {
+        if (!YOUTUBE_VIDEO_ID.test(r.publishedId ?? "")) continue;
+        const { checkedAt } = readCheckedAt(r.metadata);
+        if (checkedAt !== null && checkedAt > dueBefore) continue;
+        candidates.push({
+          id: r.id,
+          organizationId: a.organizationId,
+          channelId: r.channelId,
+          publishedAt: r.publishedAt,
+          publishedId: r.publishedId,
+          checkedAt,
+        });
+      }
+    }
+    const planned = planSweepTargets(candidates, { maxPostsPerRun: cfg.maxVideosPerRun, maxPostsPerOrg: cfg.maxVideosPerRun });
+    if (planned.length === 0) return 0;
+
+    // ⚠️ DIRECT channel.findMany — the only read shape that decrypts accessToken.
+    const channels: any[] = await prisma.channel.findMany({
+      where: { id: { in: [...new Set(planned.map((p) => p.channelId))] }, disconnectedAt: null },
+    });
+    const channelById = new Map<string, any>(channels.map((c) => [c.id, c]));
+    const unusable = new Set<string>();
+
+    for (const target of planned) {
+      const summary = summaries[target.organizationId]!;
+      const channel = channelById.get(target.channelId);
+      if (!channel || channel.organizationId !== target.organizationId || channel.platform !== "YOUTUBE") continue;
+      if (unusable.has(channel.id)) continue;
+      if ((ytScopeMissingUntil.get(channel.id) ?? 0) > now.getTime()) continue;
+      const expiresAt = channel.tokenExpiresAt ? new Date(channel.tokenExpiresAt).getTime() : null;
+      if (!channel.accessToken || (expiresAt !== null && expiresAt <= now.getTime())) {
+        // The token-refresh cron renews it; spend no units on a certain 401.
+        unusable.add(channel.id);
+        log.warn(`[CommentSweep:YouTube] token for channel ${channel.id} is missing or expired — skipping its videos this run`);
+        continue;
+      }
+      if (!(await deps.reserveYouTubeUnits(YT_UNITS.commentThreads))) {
+        log.warn(`[CommentSweep:YouTube] daily unit cap (${cfg.dailyUnits}) reached or the counter is unavailable — stopping`);
+        break;
+      }
+
+      let res: { status: number; body: unknown };
+      try {
+        res = await deps.readYouTubeComments(channel.accessToken, target.publishedId);
+      } catch (err: any) {
+        summary.errors++;
+        log.warn(`[CommentSweep:YouTube] read failed for target ${target.id}: ${String(err?.message ?? err).slice(0, 160)}`);
+        continue;
+      }
+      const reason = (res.body as any)?.error?.errors?.[0]?.reason;
+      if (reason === "quotaExceeded" || reason === "dailyLimitExceeded") {
+        ytQuotaExhaustedDay = quotaDay(now);
+        log.warn(`[CommentSweep:YouTube] Google reports the project's YouTube quota is used up for today — stopping`);
+        break;
+      }
+      if (isQuotaError(res.body)) {
+        log.warn(`[CommentSweep:YouTube] rate limited by Google — stopping for this run`);
+        break;
+      }
+      if (res.status === 401) {
+        summary.errors++;
+        unusable.add(channel.id);
+        log.warn(`[CommentSweep:YouTube] token for channel ${channel.id} was refused — skipping its videos this run`);
+        continue;
+      }
+      if (res.status === 403 && (reason === "insufficientPermissions" || /insufficient/i.test(JSON.stringify((res.body as any)?.error?.message ?? "")))) {
+        summary.errors++;
+        unusable.add(channel.id);
+        ytScopeMissingUntil.set(channel.id, now.getTime() + SCOPE_MISSING_PAUSE_MS);
+        log.warn(`[CommentSweep:YouTube] channel ${channel.id} hasn't granted YouTube read access — reconnect it; paused for 24h`);
+        continue;
+      }
+
+      checked++;
+      summary.youtubeVideosChecked = (summary.youtubeVideosChecked ?? 0) + 1;
+      if (res.status >= 200 && res.status < 300) {
+        const found = youtubeSentimentCandidates(res.body, typeof channel.platformId === "string" ? channel.platformId : null);
+        await storeSentimentRows(prisma, target, channel.id, "YOUTUBE", found, summary, log);
+      } else if (!isPerVideoCommentError(res.body)) {
+        // commentsDisabled / videoNotFound are the video's state, not a failure.
+        summary.errors++;
+        log.warn(`[CommentSweep:YouTube] comments failed for target ${target.id}: HTTP ${res.status} ${JSON.stringify(reason ?? null)}`);
+      }
+
+      const patch = JSON.stringify({ commentSweep: { checkedAt: now.getTime() } });
+      try {
+        await prisma.$executeRaw`UPDATE "PostTarget" SET "metadata" = COALESCE("metadata", '{}'::jsonb) || ${patch}::jsonb WHERE "id" = ${target.id}`;
+      } catch (err: any) {
+        log.warn(`[CommentSweep:YouTube] checkedAt write failed for ${target.id}: ${String(err?.message ?? err).slice(0, 160)}`);
+      }
+    }
+  } catch (err: any) {
+    log.warn(`[CommentSweep:YouTube] pass failed: ${String(err?.message ?? err).slice(0, 160)}`);
+  }
+  return checked;
 }
 
 /** Score what the sentiment workspaces have pending; never throws. */

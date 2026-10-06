@@ -13,12 +13,22 @@ vi.mock("../lib/audit", async (importOriginal) => {
 });
 
 import { createCallerFactory } from "../trpc";
-import { commentRouter } from "../routers/comment.router";
+import { commentRouter, youtubeCommentUrl } from "../routers/comment.router";
 
 const ORG = "org-1";
 const USER = "user-1";
 
-function build(over: { role?: string; automation?: any; groupBy?: (a: any) => any[]; findMany?: (a: any) => any[]; queryRaw?: any[] } = {}) {
+function build(
+  over: {
+    role?: string;
+    automation?: any;
+    groupBy?: (a: any) => any[];
+    findMany?: (a: any) => any[];
+    queryRaw?: any[];
+    channels?: (a: any) => any[];
+    postTargets?: (a: any) => any[];
+  } = {}
+) {
   const groupBy = vi.fn(async (a: any) => (over.groupBy ? over.groupBy(a) : []));
   const sentimentFindMany = vi.fn(async (a: any) => (over.findMany ? over.findMany(a) : []));
   const queryRaw = vi.fn(async (..._a: any[]) => over.queryRaw ?? []);
@@ -37,12 +47,16 @@ function build(over: { role?: string; automation?: any; groupBy?: (a: any) => an
     },
     channel: {
       findMany: vi.fn(async (a: any) =>
-        (a.where.id?.in ?? []).map((id: string) => ({ id, name: `Name ${id}`, platform: "INSTAGRAM", avatar: null }))
+        over.channels
+          ? over.channels(a)
+          : (a.where.id?.in ?? []).map((id: string) => ({ id, name: `Name ${id}`, platform: "INSTAGRAM", avatar: null }))
       ),
     },
     postTarget: {
       findMany: vi.fn(async (a: any) =>
-        (a.where.id?.in ?? []).map((id: string) => ({ id, channelId: "ch-1", publishedUrl: null, publishedAt: null, post: { content: "Trailer drop!" } }))
+        over.postTargets
+          ? over.postTargets(a)
+          : (a.where.id?.in ?? []).map((id: string) => ({ id, channelId: "ch-1", publishedUrl: null, publishedAt: null, post: { content: "Trailer drop!" } }))
       ),
     },
   } as any;
@@ -162,5 +176,63 @@ describe("comment.updateAutomation sentiment switch", () => {
     const { caller } = build({ automation: { sentimentEnabled: true, blockedWords: [], channelIds: [] } });
     const out = await caller.automationSettings();
     expect(out.settings.sentimentEnabled).toBe(true);
+  });
+});
+
+describe("YouTube comment sentiment (2026-10-06)", () => {
+  it("youtubeCommentUrl only builds a URL from a real video id", () => {
+    expect(youtubeCommentUrl("dQw4w9WgXcQ", "Ugx1.Ugy2")).toBe("https://www.youtube.com/watch?v=dQw4w9WgXcQ&lc=Ugx1.Ugy2");
+    expect(youtubeCommentUrl("dQw4w9WgXcQ")).toBe("https://www.youtube.com/watch?v=dQw4w9WgXcQ");
+    expect(youtubeCommentUrl("Ugkx_community_post", "c")).toBeNull();
+    expect(youtubeCommentUrl(null, "c")).toBeNull();
+  });
+
+  it("YouTube comments carry a link to the comment on YouTube, looked up org-scoped; others don't", async () => {
+    const rows = [
+      { id: "s1", channelId: "ch-yt", postTargetId: "t-yt", platform: "YOUTUBE", commentId: "Ugx1", commentText: "great" },
+      { id: "s2", channelId: "ch-ig", postTargetId: "t-ig", platform: "INSTAGRAM", commentId: "179", commentText: "nice" },
+    ];
+    const { caller, prisma } = build({
+      findMany: () => rows,
+      postTargets: (a) => (a.where.id.in as string[]).map((id) => ({ id, publishedId: "dQw4w9WgXcQ" })),
+    });
+    const out = await caller.sentimentComments({});
+    const ptWhere = prisma.postTarget.findMany.mock.calls[0]![0].where;
+    expect(ptWhere).toEqual({ id: { in: ["t-yt"] }, post: { organizationId: ORG } });
+    expect(out.items.map((i: any) => i.externalUrl)).toEqual(["https://www.youtube.com/watch?v=dQw4w9WgXcQ&lc=Ugx1", null]);
+  });
+
+  it("a YouTube post drawing negative comments links to the video", async () => {
+    const { caller } = build({
+      automation: { sentimentEnabled: true, lastRunAt: null, channelIds: [] },
+      groupBy: (a) =>
+        a.by.includes("postTargetId")
+          ? [{ postTargetId: "t-yt", _count: { _all: 2 } }]
+          : a.by.includes("channelId")
+            ? [{ channelId: "ch-yt", sentiment: "NEGATIVE", _count: { _all: 2 } }]
+            : [],
+      channels: () => [{ id: "ch-yt", name: "Our Channel", platform: "YOUTUBE", avatar: null }],
+      postTargets: () => [
+        { id: "t-yt", channelId: "ch-yt", publishedId: "dQw4w9WgXcQ", publishedUrl: null, publishedAt: null, post: { content: "Trailer" } },
+      ],
+    });
+    const out = await caller.sentimentOverview({ days: 30 });
+    expect(out.worstPosts[0]).toMatchObject({ platform: "YOUTUBE", externalUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ" });
+    expect(out.byChannel[0]).toMatchObject({ platform: "YOUTUBE", negative: 2 });
+  });
+
+  it("settings list YouTube channels as sentiment-only, never asking the Meta grant about them", async () => {
+    const { caller, prisma } = build({
+      channels: () => [
+        { id: "ch-yt", platform: "YOUTUBE", name: "Our Channel", username: null, avatar: null, isActive: true, metadata: null },
+        { id: "ch-fb", platform: "FACEBOOK", name: "Page", username: null, avatar: null, isActive: true, metadata: { grantedScopes: [] } },
+      ],
+    });
+    const out = await caller.automationSettings();
+    expect(prisma.channel.findMany.mock.calls[0]![0].where.platform).toEqual({ in: ["FACEBOOK", "INSTAGRAM", "YOUTUBE"] });
+    expect(out.accounts).toEqual([
+      expect.objectContaining({ id: "ch-yt", canModerate: null, sentimentOnly: true }),
+      expect.objectContaining({ id: "ch-fb", canModerate: false, sentimentOnly: false }),
+    ]);
   });
 });

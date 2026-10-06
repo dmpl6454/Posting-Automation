@@ -612,3 +612,67 @@ it is unverified there.
 Queries with no platforms selected use every source, so existing "all platforms" queries pick these
 up after the deploy. That means more mentions and more sentiment scoring, at 20 mentions per AI call.
 Mastodon followers are stored in metadata, not as reach, so the Reach total stays comparable.
+
+## 16. Comment sentiment on your YouTube videos (2026-10-06)
+
+Comment sentiment (§13) now also covers videos published through PostAutomation to a workspace's
+YouTube channels. It is **sentiment only**: auto-hide rules and new-comment alerts stay
+Facebook/Instagram-only.
+
+**What runs.** A workspace with Comment sentiment on is handled by the same 15-minute comment sweep
+(`apps/worker/src/lib/comment-sweep.ts`). After the Facebook/Instagram pass, the sweep reads
+`commentThreads.list?part=snippet,replies&order=time&maxResults=100` (the newest 100 threads plus
+the replies YouTube embeds) on each recent video, using the channel's own OAuth token
+(`youtube.readonly`). Comments written by our own channel are skipped. Each new comment is stored
+in `CommentSentiment` with `platform = YOUTUBE` and scored with the same batch prompt.
+
+**Which videos.**
+- PostTargets that are `PUBLISHED` on a live, active YouTube channel in the automation's account
+  scope.
+- Published in the last 7 days.
+- `publishedId` is a real 11-character video id. Community posts are skipped.
+- Each video is read at most once an hour (`PostTarget.metadata.commentSweep.checkedAt`, written
+  with an atomic jsonb merge), never-read videos first.
+- At most 20 videos per run.
+
+**Quota.** These reads spend YouTube Data API units from the same Google Cloud project quota as
+uploads (1,600 units per upload, 10,000 per day by default):
+- Each read costs 1 unit.
+- A separate daily cap is counted in Redis (`comment-sentiment:yt-units:{Pacific day}`). It is
+  separate from social listening's cap and fails closed when Redis doesn't answer.
+- Google's `quotaExceeded` stops the pass for the rest of the Pacific day.
+- `rateLimitExceeded` stops it for the current run only.
+
+At the defaults that is at most 300 units a day, or 3% of the default project quota.
+
+**Failures.**
+
+| Response | Outcome |
+|---|---|
+| Expired or missing token | The video is not called. The token-refresh cron renews the token. |
+| 401 | The channel is skipped for this run. The video is not stamped, so it is retried soon. |
+| 403 `insufficientPermissions` | The token predates `youtube.readonly`. The channel is parked for 24 hours (in memory) and needs a reconnect. |
+| `commentsDisabled` or `videoNotFound` | The video's own state, not an error. The video still rotates. |
+
+**Settings and UI.**
+- **Comments → Automation:** the account picker now lists YouTube channels with a "Sentiment only"
+  badge.
+- **Scope:** a workspace on "All" accounts includes its YouTube channels automatically. A workspace
+  on "Only the ones I pick" must tick them.
+- **Social Listening → Comments on your posts:** YouTube comments link to the comment on YouTube
+  (`watch?v={id}&lc={commentId}`, new tab). There is no YouTube Comments inbox here, so they don't
+  link into one. A YouTube post among "Most negative comments" links to the video.
+- **Last run** reads "read comments on N YouTube videos".
+
+**Env (worker; empty means default):**
+
+| Key | Default | Range | Meaning |
+|---|---|---|---|
+| `COMMENT_SENTIMENT_YT_DAILY_UNITS` | 300 | 0–5000 | Units per Pacific day; 0 turns the YouTube pass off |
+| `COMMENT_SENTIMENT_YT_MAX_VIDEOS` | 20 | 1–200 | Videos per run |
+| `COMMENT_SENTIMENT_YT_INTERVAL_MIN` | 60 | 15–1440 | Minimum minutes between reads of one video |
+| `COMMENT_SENTIMENT_YT_LOOKBACK_DAYS` | 7 | 1–30 | Videos published within this many days |
+
+Not verified against the live API from the build sandbox: there is no YouTube token there. The
+parser follows the documented `commentThread` / `comment` resources. These are the same fields
+social listening's YouTube comment parser reads.
