@@ -15,8 +15,10 @@ import {
   SWEEP_INTERVAL_MS as COMMENT_SWEEP_INTERVAL_MS,
   isCommentAutomationEnabled,
   readSweepConfig as readCommentSweepConfig,
+  readYouTubeSentimentConfig,
   runCommentSweep,
 } from "../lib/comment-sweep";
+import { reserveYouTubeUnits, type UnitCounter } from "../lib/listening-comments";
 import {
   getSocialProvider as getCommentProvider,
   facebookAppUsagePeak,
@@ -24,7 +26,7 @@ import {
   type InstagramProvider as CommentInstagramProvider,
 } from "@postautomation/social";
 import { runCelebrityDetectors } from "../workers/celebrity-detect.worker";
-import { enqueueScheduledPublishJobs, excludeExpiredStoriesWhere, shouldReconcileCheckpoints } from "@postautomation/queue";
+import { createRedisConnection, enqueueScheduledPublishJobs, excludeExpiredStoriesWhere, shouldReconcileCheckpoints } from "@postautomation/queue";
 import { HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE } from "../lib/publish-recovery";
 
 /**
@@ -1529,6 +1531,42 @@ export async function flushFbDeprecationWarnings() {
  * lib/comment-sweep.ts. `COMMENT_AUTOMATION_ENABLED=false` stops it.
  */
 let commentSweepRunning = false;
+
+// YouTube comment sentiment's own daily unit counter (by Google's Pacific
+// quota day), separate from listening's — each feature has its own cap.
+let commentYtRedis: ReturnType<typeof createRedisConnection> | null = null;
+function withRedisTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([p, new Promise<T>((_, reject) => setTimeout(() => reject(new Error("timeout")), ms))]);
+}
+const commentYtUnitCounter: UnitCounter = {
+  async incrBy(day, units) {
+    commentYtRedis ??= createRedisConnection();
+    const key = `comment-sentiment:yt-units:${day}`;
+    const total = await withRedisTimeout(commentYtRedis.incrby(key, units), 2_000);
+    void commentYtRedis.expire(key, 2 * 24 * 60 * 60).catch(() => {});
+    return total;
+  },
+  async decrBy(day, units) {
+    commentYtRedis ??= createRedisConnection();
+    await withRedisTimeout(commentYtRedis.decrby(`comment-sentiment:yt-units:${day}`, units), 2_000);
+  },
+};
+
+/** One page of comment threads (with embedded replies) on a video, as its channel. 1 unit. */
+async function readYouTubeCommentThreads(accessToken: string, videoId: string): Promise<{ status: number; body: unknown }> {
+  const qs = new URLSearchParams({
+    part: "snippet,replies",
+    videoId,
+    maxResults: "100",
+    order: "time",
+    textFormat: "plainText",
+  });
+  const res = await fetch(`https://www.googleapis.com/youtube/v3/commentThreads?${qs.toString()}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(15_000),
+  });
+  return { status: res.status, body: await res.json().catch(() => null) };
+}
 export async function runCommentAutomationSweep(): Promise<void> {
   if (!isCommentAutomationEnabled()) return;
   if (commentSweepRunning) {
@@ -1576,6 +1614,10 @@ export async function runCommentAutomationSweep(): Promise<void> {
           );
           return parseBatchSentimentResponse(raw, texts.length);
         },
+        // YouTube comment sentiment (2026-10-06): sentiment only, own unit cap.
+        readYouTubeComments: readYouTubeCommentThreads,
+        reserveYouTubeUnits: (units) =>
+          reserveYouTubeUnits(commentYtUnitCounter, units, readYouTubeSentimentConfig().dailyUnits, new Date()),
       },
       readCommentSweepConfig()
     );

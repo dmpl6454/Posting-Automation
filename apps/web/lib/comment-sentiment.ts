@@ -58,6 +58,14 @@ export function formatAvgScore(avg: number | null | undefined): string {
   return `${v > 0 ? "+" : ""}${v.toFixed(2)}`;
 }
 
+/** "FACEBOOK" → "Facebook", "YOUTUBE" → "YouTube". */
+export function platformLabel(platform: string | null | undefined): string {
+  if (platform === "FACEBOOK") return "Facebook";
+  if (platform === "INSTAGRAM") return "Instagram";
+  if (platform === "YOUTUBE") return "YouTube";
+  return "Account";
+}
+
 /** Deep link to a post's comment thread in the Comments inbox. */
 export function commentThreadHref(channelId: string, postTargetId: string): string {
   return `/dashboard/comments?channel=${encodeURIComponent(channelId)}&post=${encodeURIComponent(postTargetId)}`;

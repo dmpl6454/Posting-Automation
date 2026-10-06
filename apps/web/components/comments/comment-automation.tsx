@@ -19,6 +19,7 @@ import { Switch } from "~/components/ui/switch";
 import { Textarea } from "~/components/ui/textarea";
 import { Skeleton } from "~/components/ui/skeleton";
 import { PlatformGlyph, type CommentPlatform } from "~/components/comments/comment-thread";
+import { YouTubeIcon } from "~/components/icons/platform-icons";
 import { cn } from "~/lib/utils";
 
 /**
@@ -174,8 +175,9 @@ export function CommentAutomation() {
           <p className="text-xs text-muted-foreground">
             Scores each new comment on your recent posts as positive, neutral, mixed or negative, using the same AI
             scoring as Social Listening. See the results in Social Listening → Comments on your posts, and as a tag on
-            each comment here. Owners and admins get one alert when a check finds a burst of negative comments (at
-            most one every 6 hours).
+            each comment here. Also covers videos you publish to YouTube (sentiment only — the rules above and
+            new-comment alerts don't apply there). Owners and admins get one alert when a check finds a burst of
+            negative comments (at most one every 6 hours).
           </p>
         </div>
         <Switch
@@ -193,7 +195,7 @@ export function CommentAutomation() {
         <div className="flex flex-wrap gap-4 text-xs">
           <label className="flex items-center gap-1.5">
             <input type="radio" name="automation-scope" checked={allAccounts} disabled={!canEdit} onChange={() => setAllAccounts(true)} />
-            All Facebook Pages and Instagram accounts ({data.accounts.length})
+            All Facebook Pages, Instagram accounts and YouTube channels ({data.accounts.length})
           </label>
           <label className="flex items-center gap-1.5">
             <input type="radio" name="automation-scope" checked={!allAccounts} disabled={!canEdit} onChange={() => setAllAccounts(false)} />
@@ -217,8 +219,17 @@ export function CommentAutomation() {
                     })
                   }
                 />
-                <PlatformGlyph platform={a.platform as CommentPlatform} className="shrink-0" />
+                {a.platform === "YOUTUBE" ? (
+                  <YouTubeIcon className="shrink-0" size={14} />
+                ) : (
+                  <PlatformGlyph platform={a.platform as CommentPlatform} className="shrink-0" />
+                )}
                 <span className="truncate">{a.name}</span>
+                {a.sentimentOnly && (
+                  <Badge variant="outline" className="h-4 shrink-0 px-1 text-[9px]" title="Comment sentiment only — no auto-hide or alerts on YouTube">
+                    Sentiment only
+                  </Badge>
+                )}
                 {!a.isActive && <Badge variant="outline" className="h-4 px-1 text-[9px]">Paused</Badge>}
               </label>
             ))}
