@@ -15,6 +15,7 @@ import {
   SWEEP_INTERVAL_MS as COMMENT_SWEEP_INTERVAL_MS,
   isCommentAutomationEnabled,
   readSweepConfig as readCommentSweepConfig,
+  readLinkedInSentimentConfig,
   readYouTubeSentimentConfig,
   runCommentSweep,
 } from "../lib/comment-sweep";
@@ -22,6 +23,7 @@ import { reserveYouTubeUnits, type UnitCounter } from "../lib/listening-comments
 import {
   getSocialProvider as getCommentProvider,
   facebookAppUsagePeak,
+  LINKEDIN_API_VERSION,
   type FacebookProvider as CommentFacebookProvider,
   type InstagramProvider as CommentInstagramProvider,
 } from "@postautomation/social";
@@ -1532,25 +1534,51 @@ export async function flushFbDeprecationWarnings() {
  */
 let commentSweepRunning = false;
 
-// YouTube comment sentiment's own daily unit counter (by Google's Pacific
-// quota day), separate from listening's — each feature has its own cap.
-let commentYtRedis: ReturnType<typeof createRedisConnection> | null = null;
+// Comment sentiment's own daily API counters (YouTube units, LinkedIn calls),
+// separate from listening's — each feature has its own cap. Fail closed: a
+// Redis that doesn't answer within 2 s reserves nothing.
+let commentSentimentRedis: ReturnType<typeof createRedisConnection> | null = null;
 function withRedisTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return Promise.race([p, new Promise<T>((_, reject) => setTimeout(() => reject(new Error("timeout")), ms))]);
 }
-const commentYtUnitCounter: UnitCounter = {
-  async incrBy(day, units) {
-    commentYtRedis ??= createRedisConnection();
-    const key = `comment-sentiment:yt-units:${day}`;
-    const total = await withRedisTimeout(commentYtRedis.incrby(key, units), 2_000);
-    void commentYtRedis.expire(key, 2 * 24 * 60 * 60).catch(() => {});
-    return total;
-  },
-  async decrBy(day, units) {
-    commentYtRedis ??= createRedisConnection();
-    await withRedisTimeout(commentYtRedis.decrby(`comment-sentiment:yt-units:${day}`, units), 2_000);
-  },
-};
+function dailyRedisCounter(prefix: string): UnitCounter {
+  return {
+    async incrBy(day, units) {
+      commentSentimentRedis ??= createRedisConnection();
+      const key = `${prefix}:${day}`;
+      const total = await withRedisTimeout(commentSentimentRedis.incrby(key, units), 2_000);
+      void commentSentimentRedis.expire(key, 2 * 24 * 60 * 60).catch(() => {});
+      return total;
+    },
+    async decrBy(day, units) {
+      commentSentimentRedis ??= createRedisConnection();
+      await withRedisTimeout(commentSentimentRedis.decrby(`${prefix}:${day}`, units), 2_000);
+    },
+  };
+}
+const commentYtUnitCounter = dailyRedisCounter("comment-sentiment:yt-units");
+const commentLiCallCounter = dailyRedisCounter("comment-sentiment:li-calls");
+
+/** One page of comments on a LinkedIn Page post, as the Page's admin. 1 call. */
+async function readLinkedInCommentPage(
+  accessToken: string,
+  postUrn: string,
+  start: number,
+  count: number
+): Promise<{ status: number; body: unknown }> {
+  const res = await fetch(
+    `https://api.linkedin.com/rest/socialActions/${encodeURIComponent(postUrn)}/comments?start=${start}&count=${count}`,
+    {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "LinkedIn-Version": LINKEDIN_API_VERSION,
+        "X-Restli-Protocol-Version": "2.0.0",
+      },
+      signal: AbortSignal.timeout(15_000),
+    }
+  );
+  return { status: res.status, body: await res.json().catch(() => null) };
+}
 
 /** One page of comment threads (with embedded replies) on a video, as its channel. 1 unit. */
 async function readYouTubeCommentThreads(accessToken: string, videoId: string): Promise<{ status: number; body: unknown }> {
@@ -1618,6 +1646,10 @@ export async function runCommentAutomationSweep(): Promise<void> {
         readYouTubeComments: readYouTubeCommentThreads,
         reserveYouTubeUnits: (units) =>
           reserveYouTubeUnits(commentYtUnitCounter, units, readYouTubeSentimentConfig().dailyUnits, new Date()),
+        // LinkedIn Page comment sentiment (2026-10-06): same pattern, own call cap.
+        readLinkedInComments: readLinkedInCommentPage,
+        reserveLinkedInCalls: (calls) =>
+          reserveYouTubeUnits(commentLiCallCounter, calls, readLinkedInSentimentConfig().dailyUnits, new Date()),
       },
       readCommentSweepConfig()
     );

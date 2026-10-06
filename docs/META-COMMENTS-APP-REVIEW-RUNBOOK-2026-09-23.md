@@ -676,3 +676,67 @@ At the defaults that is at most 300 units a day, or 3% of the default project qu
 Not verified against the live API from the build sandbox: there is no YouTube token there. The
 parser follows the documented `commentThread` / `comment` resources. These are the same fields
 social listening's YouTube comment parser reads.
+
+## 17. Comment sentiment on your LinkedIn Page posts (2026-10-06)
+
+Comment sentiment now also covers posts published through PostAutomation to a workspace's
+**LinkedIn Pages**. As with YouTube (§16), it is **sentiment only**: no auto-hide, no new-comment
+alerts, and no Comments inbox.
+
+**LinkedIn personal profiles are not covered.** Reading the comments on a member's own post needs
+`r_member_social`, which LinkedIn grants only to approved partners. Page posts need
+`r_organization_social`, which the app already requests for analytics.
+
+**What runs.** The YouTube and LinkedIn passes now share one implementation
+(`sweepExternalSentiment` in `comment-sweep.ts`). Each platform plugs in its own channel filter,
+post-id check, read and response classifier. For LinkedIn:
+- **Channels:** `platform = LINKEDIN` with `platformId` starting `org-`, i.e. Page channels. The
+  query filters on this, and the loaded channel is checked again before any call.
+- **Posts:** `publishedId` is a `urn:li:share:…` or `urn:li:ugcPost:…` from the last 7 days. Each post
+  is read at most hourly, at most 20 per run.
+- **Read:** `GET /rest/socialActions/{post}/comments?start=0&count=50`, with the Page channel's token
+  and the provider's `LinkedIn-Version`.
+- **Busy posts:** when `paging.total` is over 50, it also reads the last page (`start = total − 50`).
+  The newest comments are then covered whichever order LinkedIn returns them in. That second read
+  costs one more call and is skipped if the cap is reached.
+- **Stored rows:** `CommentSentiment` with `platform = LINKEDIN`. The id is the comment URN. Replies
+  are flagged by `parentComment`. Comments the Page itself wrote are skipped.
+- **Author labels:** the versioned API returns commenters as URNs only, so comments are labelled
+  "LinkedIn member" or "LinkedIn Page" rather than by name.
+
+**Budget.**
+- A daily call cap is counted in Redis (`comment-sentiment:li-calls:{day}`, default 300), separate
+  from YouTube's. It fails closed when Redis doesn't answer.
+- A 429 whose message names the APPLICATION **DAY** limit stops LinkedIn until midnight UTC, when
+  LinkedIn's limits reset. Any other 429 stops it for the current run only.
+
+**Failures.**
+
+| Response | Outcome |
+|---|---|
+| Recorded `Channel.scopes` lacks `r_organization_social` | Skipped with no call. Reconnect the LinkedIn account. |
+| 401 | Skipped for the run. |
+| 403 (`ACCESS_DENIED`: missing scope, or the member no longer administers the Page) | Parked for 24 hours. |
+| 404 or 410 (post deleted) | The post's own state, not an error. |
+
+**UI.**
+- **Comments → Automation:** LinkedIn Pages appear with the LinkedIn icon and a "Sentiment only"
+  badge. Personal profiles are not listed.
+- **Social Listening → Comments on your posts:** LinkedIn comments open the **post** on LinkedIn
+  (stored `publishedUrl`, else `linkedin.com/feed/update/{urn}`). LinkedIn has no stable public
+  deep link to a single comment.
+- **Last run** reads "read comments on N LinkedIn posts".
+
+**Env (worker; empty means default):**
+
+| Key | Default | Range | Meaning |
+|---|---|---|---|
+| `COMMENT_SENTIMENT_LI_DAILY_CALLS` | 300 | 0–5000 | Calls per day; 0 turns LinkedIn off |
+| `COMMENT_SENTIMENT_LI_MAX_POSTS` | 20 | 1–200 | Posts per run |
+| `COMMENT_SENTIMENT_LI_INTERVAL_MIN` | 60 | 15–1440 | Minimum minutes between reads of one post |
+| `COMMENT_SENTIMENT_LI_LOOKBACK_DAYS` | 7 | 1–30 | Posts published within this many days |
+
+Not verified against the live API from the build sandbox, which has no LinkedIn token. The parser
+follows LinkedIn's documented Comments API (`elements[].commentUrn`, `actor`, `message.text`,
+`created.time`, `parentComment`, `paging.total`). Check the first runs in the worker log
+(`[CommentSweep:LinkedIn]`, and `li=N` on the summary line).

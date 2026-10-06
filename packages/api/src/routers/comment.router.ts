@@ -75,8 +75,40 @@ import { afterMessagingFailure, resolveMessagingAccess } from "../lib/meta-messa
  */
 
 const COMMENT_PLATFORMS: readonly string[] = ["FACEBOOK", "INSTAGRAM"];
-/** Accounts comment automation can cover; YouTube for comment sentiment only. */
-const AUTOMATION_PLATFORMS: Array<"FACEBOOK" | "INSTAGRAM" | "YOUTUBE"> = ["FACEBOOK", "INSTAGRAM", "YOUTUBE"];
+/**
+ * Channels comment automation can cover. YouTube channels and LinkedIn PAGES
+ * take part in comment sentiment only; LinkedIn personal profiles can't (reading
+ * comments on a member's post needs r_member_social, a partner-only permission).
+ */
+const AUTOMATION_CHANNEL_WHERE = {
+  OR: [
+    { platform: { in: ["FACEBOOK", "INSTAGRAM", "YOUTUBE"] as Array<"FACEBOOK" | "INSTAGRAM" | "YOUTUBE"> } },
+    { platform: "LINKEDIN" as const, platformId: { startsWith: "org-" } },
+  ],
+};
+/** Platforms whose comments are only scored — no auto-hide, alerts, or Comments inbox here. */
+const SENTIMENT_ONLY_PLATFORMS: readonly string[] = ["YOUTUBE", "LINKEDIN"];
+
+/** Where a sentiment-only platform's post (or comment) opens: on the platform itself. */
+export function externalCommentUrl(
+  platform: string | null | undefined,
+  post: { publishedId?: string | null; publishedUrl?: string | null } | null | undefined,
+  commentId?: string | null
+): string | null {
+  if (platform === "YOUTUBE") return youtubeCommentUrl(post?.publishedId, commentId);
+  if (platform === "LINKEDIN") return linkedinPostUrl(post?.publishedId, post?.publishedUrl);
+  return null;
+}
+
+/**
+ * A LinkedIn post's page. LinkedIn has no stable public deep link to a single
+ * comment, so its comments open the post.
+ */
+export function linkedinPostUrl(publishedId: string | null | undefined, publishedUrl?: string | null): string | null {
+  if (publishedUrl && /^https:\/\/(www\.)?linkedin\.com\//i.test(publishedUrl)) return publishedUrl;
+  if (publishedId && /^urn:li:(share|ugcPost|activity):\d+$/.test(publishedId)) return `https://www.linkedin.com/feed/update/${publishedId}`;
+  return null;
+}
 
 /** A comment's own page on YouTube (top-level or reply id; `lc=` highlights it). */
 export function youtubeCommentUrl(videoId: string | null | undefined, commentId?: string | null): string | null {
@@ -1340,7 +1372,7 @@ export const commentRouter = createRouter({
       (ctx.prisma as any).commentAutomation.findUnique({ where: { organizationId: ctx.organizationId } }),
       ctx.prisma.channel.findMany({
         // YouTube channels take part in comment sentiment only (2026-10-06).
-        where: { organizationId: ctx.organizationId, disconnectedAt: null, platform: { in: AUTOMATION_PLATFORMS } },
+        where: { organizationId: ctx.organizationId, disconnectedAt: null, ...AUTOMATION_CHANNEL_WHERE },
         select: { id: true, platform: true, name: true, username: true, avatar: true, isActive: true, metadata: true },
         orderBy: { name: "asc" },
       }),
@@ -1362,12 +1394,11 @@ export const commentRouter = createRouter({
         ...c,
         // Whether the recorded grant lets the automation HIDE on this account
         // (null on YouTube: the automation never hides there).
-        canModerate:
-          c.platform === "YOUTUBE"
-            ? null
-            : commentCapabilities(c.platform as CommentPlatform, cachedGrantedScopes(metadata as Record<string, unknown> | null))
-                .canModerate,
-        sentimentOnly: c.platform === "YOUTUBE",
+        canModerate: SENTIMENT_ONLY_PLATFORMS.includes(c.platform)
+          ? null
+          : commentCapabilities(c.platform as CommentPlatform, cachedGrantedScopes(metadata as Record<string, unknown> | null))
+              .canModerate,
+        sentimentOnly: SENTIMENT_ONLY_PLATFORMS.includes(c.platform),
       })),
       limits: { maxWords: MAX_BLOCKED_WORDS, maxWordLength: MAX_BLOCKED_WORD_LENGTH },
     };
@@ -1405,7 +1436,7 @@ export const commentRouter = createRouter({
                 id: { in: requested },
                 organizationId: ctx.organizationId,
                 disconnectedAt: null,
-                platform: { in: AUTOMATION_PLATFORMS },
+                ...AUTOMATION_CHANNEL_WHERE,
               },
               select: { id: true },
             });
@@ -1544,8 +1575,8 @@ export const commentRouter = createRouter({
             publishedUrl: (row.publishedUrl as string | null) ?? null,
             publishedAt: row.publishedAt as Date | null,
             platform: (channelPlatform.get(row.channelId) as string | undefined) ?? null,
-            // YouTube has no Comments inbox here — link the video itself.
-            externalUrl: channelPlatform.get(row.channelId) === "YOUTUBE" ? youtubeCommentUrl(row.publishedId) : null,
+            // YouTube / LinkedIn have no Comments inbox here — link the post on the platform.
+            externalUrl: externalCommentUrl(channelPlatform.get(row.channelId), row),
             negative: p._count._all,
           };
         })
@@ -1619,15 +1650,17 @@ export const commentRouter = createRouter({
           })
         : [];
       const byId = new Map(channels.map((c: any) => [c.id, c]));
-      // YouTube comments open on YouTube (there is no YouTube Comments inbox here).
-      const ytTargetIds = [...new Set(items.filter((r) => r.platform === "YOUTUBE").map((r) => r.postTargetId as string))];
-      const ytTargets = ytTargetIds.length
+      // YouTube / LinkedIn comments open on the platform (no Comments inbox for them here).
+      const externalTargetIds = [
+        ...new Set(items.filter((r) => SENTIMENT_ONLY_PLATFORMS.includes(r.platform)).map((r) => r.postTargetId as string)),
+      ];
+      const externalTargets = externalTargetIds.length
         ? await ctx.prisma.postTarget.findMany({
-            where: { id: { in: ytTargetIds }, post: { organizationId: ctx.organizationId } },
-            select: { id: true, publishedId: true },
+            where: { id: { in: externalTargetIds }, post: { organizationId: ctx.organizationId } },
+            select: { id: true, publishedId: true, publishedUrl: true },
           })
         : [];
-      const videoIdOf = new Map(ytTargets.map((t: any) => [t.id, t.publishedId as string | null]));
+      const targetById = new Map(externalTargets.map((t: any) => [t.id, t]));
       return {
         items: items.map((r) => {
           const ch: any = byId.get(r.channelId);
@@ -1635,7 +1668,7 @@ export const commentRouter = createRouter({
             ...r,
             channelName: ch?.name ?? null,
             channelAvatar: ch?.avatar ?? null,
-            externalUrl: r.platform === "YOUTUBE" ? youtubeCommentUrl(videoIdOf.get(r.postTargetId), r.commentId) : null,
+            externalUrl: externalCommentUrl(r.platform, targetById.get(r.postTargetId) as any, r.commentId),
           };
         }),
         nextCursor: hasMore ? (items[items.length - 1]?.id ?? null) : null,

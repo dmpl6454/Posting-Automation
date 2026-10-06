@@ -13,7 +13,7 @@ vi.mock("../lib/audit", async (importOriginal) => {
 });
 
 import { createCallerFactory } from "../trpc";
-import { commentRouter, youtubeCommentUrl } from "../routers/comment.router";
+import { commentRouter, externalCommentUrl, linkedinPostUrl, youtubeCommentUrl } from "../routers/comment.router";
 
 const ORG = "org-1";
 const USER = "user-1";
@@ -229,10 +229,46 @@ describe("YouTube comment sentiment (2026-10-06)", () => {
       ],
     });
     const out = await caller.automationSettings();
-    expect(prisma.channel.findMany.mock.calls[0]![0].where.platform).toEqual({ in: ["FACEBOOK", "INSTAGRAM", "YOUTUBE"] });
+    expect(prisma.channel.findMany.mock.calls[0]![0].where.OR).toEqual({ OR: [{ platform: { in: ["FACEBOOK", "INSTAGRAM", "YOUTUBE"] } }, { platform: "LINKEDIN", platformId: { startsWith: "org-" } }] }.OR);
     expect(out.accounts).toEqual([
       expect.objectContaining({ id: "ch-yt", canModerate: null, sentimentOnly: true }),
       expect.objectContaining({ id: "ch-fb", canModerate: false, sentimentOnly: false }),
     ]);
+  });
+});
+
+describe("LinkedIn Page comment sentiment (2026-10-06)", () => {
+  it("LinkedIn posts open on LinkedIn: the stored URL, else the feed URL from the post URN", () => {
+    expect(linkedinPostUrl("urn:li:share:123", "https://www.linkedin.com/feed/update/urn:li:share:123")).toBe(
+      "https://www.linkedin.com/feed/update/urn:li:share:123"
+    );
+    expect(linkedinPostUrl("urn:li:ugcPost:456", null)).toBe("https://www.linkedin.com/feed/update/urn:li:ugcPost:456");
+    expect(linkedinPostUrl("urn:li:ugcPost:456", "javascript:alert(1)")).toBe("https://www.linkedin.com/feed/update/urn:li:ugcPost:456");
+    expect(linkedinPostUrl("", null)).toBeNull();
+    expect(externalCommentUrl("FACEBOOK", { publishedId: "1_2" })).toBeNull();
+  });
+
+  it("LinkedIn comments carry the post's LinkedIn URL, looked up org-scoped", async () => {
+    const rows = [
+      { id: "s1", channelId: "ch-li", postTargetId: "t-li", platform: "LINKEDIN", commentId: "urn:li:comment:(urn:li:activity:9,1)", commentText: "Congrats" },
+    ];
+    const { caller, prisma } = build({
+      findMany: () => rows,
+      postTargets: (a) => (a.where.id.in as string[]).map((id) => ({ id, publishedId: "urn:li:share:123", publishedUrl: null })),
+    });
+    const out = await caller.sentimentComments({});
+    expect(prisma.postTarget.findMany.mock.calls[0]![0]).toMatchObject({
+      where: { id: { in: ["t-li"] }, post: { organizationId: ORG } },
+      select: { id: true, publishedId: true, publishedUrl: true },
+    });
+    expect(out.items[0]).toMatchObject({ externalUrl: "https://www.linkedin.com/feed/update/urn:li:share:123" });
+  });
+
+  it("settings list LinkedIn Pages as sentiment-only (personal profiles are excluded by the query)", async () => {
+    const { caller } = build({
+      channels: () => [{ id: "ch-li", platform: "LINKEDIN", name: "Acme (Page)", username: null, avatar: null, isActive: true, metadata: { orgId: "777" } }],
+    });
+    const out = await caller.automationSettings();
+    expect(out.accounts).toEqual([expect.objectContaining({ id: "ch-li", canModerate: null, sentimentOnly: true })]);
   });
 });
