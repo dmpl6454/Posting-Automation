@@ -70,6 +70,20 @@ describe("listening.mentions", () => {
     await expect(caller.mentions({ sentiment: "ANGRY" as any })).rejects.toThrow();
   });
 
+  it("a source filter is validated against MentionSource and combines with the others (2026-10-06)", async () => {
+    const { caller, findMany } = build();
+    await caller.mentions({ source: "YOUTUBE", sentiment: "NEGATIVE", minReach: 1000 });
+    expect(findMany.mock.calls[0]![0].where).toMatchObject({
+      listeningQuery: { organizationId: ORG },
+      source: "YOUTUBE",
+      sentiment: "NEGATIVE",
+      reach: { gte: 1000 },
+    });
+    // Used to reach Prisma as-is (a 500); now a 400 before any query.
+    await expect(caller.mentions({ source: "MYSPACE" as any })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(findMany).toHaveBeenCalledTimes(1);
+  });
+
   it("returns a next cursor only when there is another page", async () => {
     const rows = Array.from({ length: 3 }, (_, i) => ({ id: `m${i}` }));
     const { caller } = build(rows);

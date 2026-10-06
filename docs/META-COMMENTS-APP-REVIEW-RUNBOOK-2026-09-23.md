@@ -866,3 +866,25 @@ reach/period filters (§19), so links can be shared. Reset clears everything.
 - **Neutral also includes failed scoring.** The light scorer writes NEUTRAL with score 0 when every
   AI provider fails.
 - Both of those are the same set the distribution bar counts as Neutral.
+
+## 21. Social Listening feed: filter by source (2026-10-06)
+
+The mention feed can also be narrowed to one source. There are two ways in:
+- **A "Source" select** in the filter row: All sources, X / Twitter, Instagram, Facebook, LinkedIn,
+  Reddit, YouTube, TikTok, News, Hacker News, Bluesky, Mastodon, Lemmy.
+- **The Sources card:** each row is now a toggle. Click "YouTube" to show only YouTube mentions;
+  click it again to clear.
+
+It is kept in the URL (`?source=youtube`, lower-case) with the other filters. It combines with
+sentiment, reach and period, and Reset clears everything.
+
+- **API:** `listening.mentions` `source` is now validated against the `MentionSource` enum
+  (`z.nativeEnum`). It used to be any string cast to `any`, so a bad value reached Prisma and came
+  back as a 500; now it is a 400 before any query runs.
+- **Options:** `BLOG`, `FORUM` and `OTHER` exist in the enum, but nothing writes them, so the select
+  doesn't offer them. A URL naming one still works and shows it as selected.
+- **Labels:** source labels moved to `apps/web/lib/listening-feed.ts` (`SOURCE_LABEL`), shared by
+  the Sources card and the filter. "Google News" became "News", because the source has also covered
+  Bing News and GDELT since §15.
+- **Drift guard:** a test checks the web's `MENTION_SOURCES` list against the Prisma enum, so a new
+  source can't be left out of the filter.

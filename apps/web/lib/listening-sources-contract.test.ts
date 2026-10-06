@@ -7,6 +7,8 @@ import { join } from "node:path";
  * YouTube as a source and shows which post/video a comment was left on.
  */
 const page = readFileSync(join(__dirname, "../app/dashboard/listening/page.tsx"), "utf8");
+// Source labels moved to the shared feed helper (2026-10-06, source filter).
+const feedLib = readFileSync(join(__dirname, "./listening-feed.ts"), "utf8");
 
 describe("listening sources", () => {
   it("offers YouTube and says Reddit includes comments", () => {
@@ -33,7 +35,7 @@ describe("public listening sources (2026-10-05)", () => {
     }
     for (const e of ["HACKERNEWS", "BLUESKY", "MASTODON", "LEMMY"]) {
       expect(page).toMatch(new RegExp(`\\n  ${e}: "#[0-9a-f]{6}",`));
-      expect(page).toMatch(new RegExp(`\\n  ${e}: "[A-Z][^"]+",`));
+      expect(feedLib).toMatch(new RegExp(`\\n  ${e}: "[A-Z][^"]+",`));
     }
     expect(page).toMatch(/\{ id: "news", label: "News \(Google News, Bing News, GDELT\)" \}/);
   });
