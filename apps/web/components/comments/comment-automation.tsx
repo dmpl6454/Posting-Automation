@@ -19,7 +19,7 @@ import { Switch } from "~/components/ui/switch";
 import { Textarea } from "~/components/ui/textarea";
 import { Skeleton } from "~/components/ui/skeleton";
 import { PlatformGlyph, type CommentPlatform } from "~/components/comments/comment-thread";
-import { LinkedInIcon, YouTubeIcon } from "~/components/icons/platform-icons";
+import { LinkedInIcon, TwitterIcon, YouTubeIcon } from "~/components/icons/platform-icons";
 import { cn } from "~/lib/utils";
 
 /**
@@ -175,10 +175,11 @@ export function CommentAutomation() {
           <p className="text-xs text-muted-foreground">
             Scores each new comment on your recent posts as positive, neutral, mixed or negative, using the same AI
             scoring as Social Listening. See the results in Social Listening → Comments on your posts, and as a tag on
-            each comment here. Also covers videos you publish to YouTube and posts on your LinkedIn Pages (sentiment
-            only — the rules above and new-comment alerts don't apply there; LinkedIn personal profiles can't be
-            covered). Owners and admins get one alert when a check finds a burst of negative comments (at most one
-            every 6 hours).
+            each comment here. Also covers videos you publish to YouTube, posts on your LinkedIn Pages and replies to
+            your X posts (sentiment only — the rules above and new-comment alerts don't apply there; LinkedIn personal
+            profiles can't be covered; X replies are read within a small daily budget because X charges per read).
+            Owners and admins get one alert when a check finds a burst of negative comments (at most one every 6
+            hours).
           </p>
         </div>
         <Switch
@@ -196,7 +197,7 @@ export function CommentAutomation() {
         <div className="flex flex-wrap gap-4 text-xs">
           <label className="flex items-center gap-1.5">
             <input type="radio" name="automation-scope" checked={allAccounts} disabled={!canEdit} onChange={() => setAllAccounts(true)} />
-            All Facebook Pages, Instagram accounts, YouTube channels and LinkedIn Pages ({data.accounts.length})
+            All Facebook Pages, Instagram accounts, YouTube channels, LinkedIn Pages and X accounts ({data.accounts.length})
           </label>
           <label className="flex items-center gap-1.5">
             <input type="radio" name="automation-scope" checked={!allAccounts} disabled={!canEdit} onChange={() => setAllAccounts(false)} />
@@ -224,12 +225,14 @@ export function CommentAutomation() {
                   <YouTubeIcon className="shrink-0" size={14} />
                 ) : a.platform === "LINKEDIN" ? (
                   <LinkedInIcon className="shrink-0" size={14} />
+                ) : a.platform === "TWITTER" ? (
+                  <TwitterIcon className="shrink-0" size={14} />
                 ) : (
                   <PlatformGlyph platform={a.platform as CommentPlatform} className="shrink-0" />
                 )}
                 <span className="truncate">{a.name}</span>
                 {a.sentimentOnly && (
-                  <Badge variant="outline" className="h-4 shrink-0 px-1 text-[9px]" title="Comment sentiment only — no auto-hide or alerts on YouTube or LinkedIn">
+                  <Badge variant="outline" className="h-4 shrink-0 px-1 text-[9px]" title="Comment sentiment only — no auto-hide or alerts on YouTube, LinkedIn or X">
                     Sentiment only
                   </Badge>
                 )}

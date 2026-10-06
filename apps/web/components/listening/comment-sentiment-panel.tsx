@@ -28,8 +28,8 @@ import { cn } from "~/lib/utils";
  *
  * Sentiment of the comments people leave on posts published through
  * PostAutomation to the workspace's Facebook Pages, Instagram accounts and
- * YouTube channels and LinkedIn Pages (both since 2026-10-06; their comments
- * open on the platform, since there is no Comments inbox for them here).
+ * YouTube channels, LinkedIn Pages and X accounts (all since 2026-10-06; their
+ * comments open on the platform, since there is no Comments inbox for them here).
  * The comment sweep stores and scores them every 15 minutes once a workspace
  * switches "Comment sentiment" on (Comments → Automation). Unscored comments
  * are shown as "waiting", never folded into neutral.
@@ -109,7 +109,7 @@ export function CommentSentimentPanel() {
           <b className="text-foreground">Comment sentiment is off for this workspace.</b>{" "}
           {totals.total > 0
             ? "Showing comments scored while it was on; no new comments are being collected."
-            : "Turn it on to score the comments people leave on your Facebook, Instagram, YouTube and LinkedIn Page posts."}{" "}
+            : "Turn it on to score the comments people leave on your Facebook, Instagram, YouTube, LinkedIn Page and X posts."}{" "}
           An owner or admin can switch it on in{" "}
           <Link href="/dashboard/comments?view=automation" className="font-medium text-foreground underline">
             Comments → Automation
@@ -346,8 +346,9 @@ export function CommentSentimentPanel() {
         Covers comments on posts published through PostAutomation to your Facebook Pages and Instagram accounts, collected
         every 15 minutes from posts of the last 3 days (the first page of comments on each). Videos published to your
         YouTube channels and posts published to your LinkedIn Pages are read about once an hour for 7 days, within a daily
-        API budget (LinkedIn personal profiles aren't covered: LinkedIn doesn't let apps read their comments). Sentiment is
-        scored by AI and can be wrong on sarcasm or slang.
+        API budget (LinkedIn personal profiles aren't covered: LinkedIn doesn't let apps read their comments). Replies to
+        your X posts are read every few hours for 6 days, only the new ones each time, within a small daily budget — X
+        charges for every reply read. Sentiment is scored by AI and can be wrong on sarcasm or slang.
       </p>
     </div>
   );

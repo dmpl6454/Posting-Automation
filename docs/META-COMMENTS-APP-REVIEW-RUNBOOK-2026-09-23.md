@@ -740,3 +740,66 @@ Not verified against the live API from the build sandbox, which has no LinkedIn 
 follows LinkedIn's documented Comments API (`elements[].commentUrn`, `actor`, `message.text`,
 `created.time`, `parentComment`, `paging.total`). Check the first runs in the worker log
 (`[CommentSweep:LinkedIn]`, and `li=N` on the summary line).
+
+## 18. Comment sentiment on replies to your X posts (2026-10-06)
+
+Comment sentiment now also covers replies to tweets published through PostAutomation. As with
+YouTube and LinkedIn (§16, §17), it is **sentiment only**: no auto-hide, no alerts, no Comments inbox.
+
+**Cost first.** X's API has been pay-per-use since 2026-02, and there is no free tier: roughly
+**$0.005 for every post read**. User objects are billed separately. Every reply this feature reads
+is a charge to the X developer account behind `TWITTER_CLIENT_ID`. So the X source is the stingiest
+of the three:
+- **New replies only.** Each read asks only for replies newer than the newest one already seen
+  (`since_id`). That reply id is kept on the post as `PostTarget.metadata.commentSweep.cursor`, so
+  each reply is paid for about once. The cursor survives failed reads, so a failure never makes the
+  next read start over.
+- **Daily cap in posts read.** The cap is counted in replies returned (Redis
+  `comment-sentiment:x-reads:{day}`, default **100/day**, about $0.50/day or $15/month at most).
+  Each request reserves 25, then refunds whatever wasn't returned. An empty poll still counts as 1.
+  The counter fails closed.
+- **Slow cadence.** Each tweet is re-read every **3 hours**, at most 10 tweets per run, for **6 days**.
+  Recent search only reaches back 7 days.
+- **No author objects** (no `expansions=author_id`), so replies are labelled "X user".
+
+**What runs.**
+- `GET /2/tweets/search/recent?query=conversation_id:{tweet}&max_results=25&since_id=…&tweet.fields=author_id,created_at,conversation_id,referenced_tweets`.
+- Signed with OAuth 1.0a as the channel (`TwitterProvider.searchConversationReplies`), like
+  publishing and analytics. A test recomputes the signature independently from RFC 5849.
+- Replies by the account itself are skipped. Leading `@handles` are stripped before scoring, and
+  handle-only replies are skipped.
+- A reply to a reply is flagged `isReply`.
+- Rows are stored as `CommentSentiment` with `platform = TWITTER`. The id is the reply's tweet id.
+
+**Stops and failures.**
+
+| Response | Outcome |
+|---|---|
+| 402, `CreditsDepleted` or `UsageCapExceeded` (credits or monthly cap spent) | Stops X until midnight UTC |
+| 403 `client-not-enrolled` (the app isn't allowed recent search) | Stops X until midnight UTC |
+| Other 429 | Stops X for the current run |
+| 401 | The channel is skipped for the run |
+| Other 403 | The channel is parked for 24 hours |
+
+**UI.**
+- **Comments → Automation:** X accounts appear with the X icon and a "Sentiment only" badge. The
+  copy says X replies are read within a small budget because X charges per read.
+- **Social Listening → Comments on your posts:** X replies open the **reply itself**
+  (`x.com/i/status/{id}`). A post among "Most negative comments" opens the tweet.
+- **Last run** reads "read replies on N X posts".
+
+**Env (worker; empty means default):**
+
+| Key | Default | Range | Meaning |
+|---|---|---|---|
+| `COMMENT_SENTIMENT_X_DAILY_READS` | 100 | 0–5000 | Posts read per day; 0 turns X off |
+| `COMMENT_SENTIMENT_X_MAX_POSTS` | 10 | 1–200 | Tweets per run |
+| `COMMENT_SENTIMENT_X_INTERVAL_MIN` | 180 | 15–1440 | Minimum minutes between reads of one tweet |
+| `COMMENT_SENTIMENT_X_LOOKBACK_DAYS` | 6 | 1–7 | Tweets published within this many days |
+
+**Turning it off for X only:** set `COMMENT_SENTIMENT_X_DAILY_READS=0` in `.env.production` and
+redeploy (or restart the worker).
+
+Not verified against the live API from the build sandbox, which has no X user token. Check the first
+runs in the worker log (`[CommentSweep:X]`, and `x=N` on the summary line). Watch the X developer
+portal's usage page the first day.

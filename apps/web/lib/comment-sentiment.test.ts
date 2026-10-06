@@ -139,7 +139,28 @@ describe("LinkedIn Page comment sentiment (2026-10-06)", () => {
 
   it("says LinkedIn Pages are covered and personal profiles are not", () => {
     expect(automation).toMatch(/LinkedInIcon/);
-    expect(automation).toMatch(/LinkedIn personal profiles can't be\s+covered/);
+    expect(automation).toMatch(/LinkedIn personal\s+profiles can't be\s+covered/);
     expect(panel).toMatch(/LinkedIn personal profiles aren't covered/);
+  });
+});
+
+describe("X reply sentiment (2026-10-06)", () => {
+  const panel = readFileSync(join(__dirname, "../components/listening/comment-sentiment-panel.tsx"), "utf8");
+  const automation = readFileSync(join(__dirname, "../components/comments/comment-automation.tsx"), "utf8");
+
+  it("labels X, opens the reply itself on X", () => {
+    expect(platformLabel("TWITTER")).toBe("X");
+    expect(opensOnPlatform("TWITTER")).toBe(true);
+    expect(externalLinkTitle("TWITTER")).toBe("Open this reply on X");
+  });
+
+  it("the last run counts X posts read", () => {
+    expect(describeLastRun({ postsChecked: 0, twitterPostsChecked: 3 })).toBe("read replies on 3 X posts.");
+  });
+
+  it("says X reads are paid and budgeted", () => {
+    expect(automation).toMatch(/TwitterIcon/);
+    expect(automation).toMatch(/X replies are read within a small daily budget because X charges per read/);
+    expect(panel).toMatch(/X\s+charges for every reply read/);
   });
 });

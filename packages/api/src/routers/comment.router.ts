@@ -76,18 +76,23 @@ import { afterMessagingFailure, resolveMessagingAccess } from "../lib/meta-messa
 
 const COMMENT_PLATFORMS: readonly string[] = ["FACEBOOK", "INSTAGRAM"];
 /**
- * Channels comment automation can cover. YouTube channels and LinkedIn PAGES
- * take part in comment sentiment only; LinkedIn personal profiles can't (reading
- * comments on a member's post needs r_member_social, a partner-only permission).
+ * Channels comment automation can cover. YouTube channels, LinkedIn PAGES and
+ * X accounts take part in comment sentiment only; LinkedIn personal profiles
+ * can't (reading comments on a member's post needs r_member_social, a
+ * partner-only permission).
  */
 const AUTOMATION_CHANNEL_WHERE = {
   OR: [
-    { platform: { in: ["FACEBOOK", "INSTAGRAM", "YOUTUBE"] as Array<"FACEBOOK" | "INSTAGRAM" | "YOUTUBE"> } },
+    {
+      platform: {
+        in: ["FACEBOOK", "INSTAGRAM", "YOUTUBE", "TWITTER"] as Array<"FACEBOOK" | "INSTAGRAM" | "YOUTUBE" | "TWITTER">,
+      },
+    },
     { platform: "LINKEDIN" as const, platformId: { startsWith: "org-" } },
   ],
 };
 /** Platforms whose comments are only scored — no auto-hide, alerts, or Comments inbox here. */
-const SENTIMENT_ONLY_PLATFORMS: readonly string[] = ["YOUTUBE", "LINKEDIN"];
+const SENTIMENT_ONLY_PLATFORMS: readonly string[] = ["YOUTUBE", "LINKEDIN", "TWITTER"];
 
 /** Where a sentiment-only platform's post (or comment) opens: on the platform itself. */
 export function externalCommentUrl(
@@ -97,7 +102,13 @@ export function externalCommentUrl(
 ): string | null {
   if (platform === "YOUTUBE") return youtubeCommentUrl(post?.publishedId, commentId);
   if (platform === "LINKEDIN") return linkedinPostUrl(post?.publishedId, post?.publishedUrl);
+  if (platform === "TWITTER") return tweetUrl(commentId ?? post?.publishedId);
   return null;
+}
+
+/** A tweet's page — a reply (stored by its own tweet id) or the post itself. */
+export function tweetUrl(tweetId: string | null | undefined): string | null {
+  return tweetId && /^\d{5,25}$/.test(tweetId) ? `https://x.com/i/status/${tweetId}` : null;
 }
 
 /**

@@ -256,6 +256,38 @@ export class TwitterProvider extends SocialProvider {
     };
   }
 
+  /**
+   * Replies in a tweet's conversation (2026-10-06, comment sentiment):
+   * `GET /2/tweets/search/recent?query=conversation_id:{id}`, newest first,
+   * only those newer than `sinceId` when given. Recent search reaches back 7
+   * days. Signed as the channel (OAuth 1.0a user context). No author
+   * expansion: X bills user objects separately from posts.
+   *
+   * Returns the raw status and body — the caller classifies it (billing,
+   * throttling and access errors mean different things to it).
+   */
+  async searchConversationReplies(
+    tokens: OAuthTokens,
+    tweetId: string,
+    opts: { sinceId?: string | null; maxResults: number }
+  ): Promise<{ status: number; body: unknown }> {
+    const token = { key: tokens.accessToken, secret: tokens.refreshToken ?? "" };
+    const params: Array<[string, string]> = [
+      ["query", `conversation_id:${tweetId}`],
+      ["max_results", String(Math.min(100, Math.max(10, opts.maxResults)))],
+      ["tweet.fields", "author_id,created_at,conversation_id,referenced_tweets"],
+    ];
+    if (opts.sinceId) params.push(["since_id", opts.sinceId]);
+    // encodeURIComponent (not URLSearchParams, which writes spaces as "+") so
+    // the OAuth 1.0a signature base string matches what X computes.
+    const qs = params.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&");
+    const url = `https://api.twitter.com/2/tweets/search/recent?${qs}`;
+    const oauth = this.makeOAuth();
+    const header = oauth.toHeader(oauth.authorize({ url, method: "GET" }, token));
+    const res = await fetchT(url, { headers: { Authorization: header.Authorization } });
+    return { status: res.status, body: await res.json().catch(() => null) };
+  }
+
   async getPostAnalytics(tokens: OAuthTokens, platformPostId: string): Promise<SocialAnalytics | null> {
     const token = { key: tokens.accessToken, secret: tokens.refreshToken ?? "" };
     const analyticsUrl = `https://api.twitter.com/2/tweets/${platformPostId}?tweet.fields=public_metrics`;
