@@ -5,8 +5,10 @@ import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { CommentSentimentPanel } from "~/components/listening/comment-sentiment-panel";
 import {
+  DEFAULT_FEED_FILTERS,
   MIN_REACH_OPTIONS,
   PERIOD_OPTIONS,
+  SENTIMENT_FILTER_OPTIONS,
   applyFeedFilters,
   compactCount,
   isFiltered,
@@ -66,11 +68,12 @@ const SENTIMENT_STYLE: Record<
 
 /** The four segments of the Sentiment Distribution bar, in the design's order. */
 const SENTIMENT_BAR = [
-  { key: "positive", label: "Positive", color: "#5cb85c" },
-  { key: "neutral", label: "Neutral", color: "#8a8578" },
-  { key: "mixed", label: "Mixed", color: "#e0b84a" },
-  { key: "negative", label: "Negative", color: "#d9695f" },
+  { key: "positive", value: "POSITIVE", label: "Positive", color: "#5cb85c" },
+  { key: "neutral", value: "NEUTRAL", label: "Neutral", color: "#8a8578" },
+  { key: "mixed", value: "MIXED", label: "Mixed", color: "#e0b84a" },
+  { key: "negative", value: "NEGATIVE", label: "Negative", color: "#d9695f" },
 ] as const;
+const SENTIMENT_DOT: Record<string, string> = Object.fromEntries(SENTIMENT_BAR.map((s) => [s.value, s.color]));
 
 const PLATFORMS = [
   { id: "twitter", label: "X / Twitter" },
@@ -229,6 +232,7 @@ function ListeningPageInner() {
       sort: feed.sort,
       minReach: feed.minReach,
       ...(feed.days !== null ? { days: feed.days } : {}),
+      ...(feed.sentiment ? { sentiment: feed.sentiment } : {}),
       limit: 20,
     },
     { getNextPageParam: (last) => last.nextCursor ?? undefined }
@@ -594,16 +598,30 @@ function ListeningPageInner() {
               />
             ))}
           </div>
-          <div className="mt-3.5 flex flex-wrap items-center gap-5 text-[12px] leading-none text-muted-foreground">
-            {SENTIMENT_BAR.map((s) => (
-              <span key={s.key} className="flex items-center gap-[7px]">
-                <span
-                  className="h-[9px] w-[9px] rounded-full"
-                  style={{ background: s.color }}
-                />
-                {s.label} {sentimentPercent(overview?.[s.key] ?? 0)}%
-              </span>
-            ))}
+          {/* Each legend item filters the mentions below to that sentiment
+              (click again to clear) — the same filter as the chips there. */}
+          <div className="mt-3.5 flex flex-wrap items-center gap-2 text-[12px] leading-none text-muted-foreground">
+            {SENTIMENT_BAR.map((s) => {
+              const active = feed.sentiment === s.value;
+              return (
+                <button
+                  key={s.key}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => setFeed({ sentiment: active ? null : s.value })}
+                  title={active ? "Show all mentions" : `Show only ${s.label.toLowerCase()} mentions`}
+                  className={
+                    active
+                      ? "flex items-center gap-[7px] rounded-full border border-border2 bg-surface1 px-2.5 py-1.5 font-semibold text-foreground"
+                      : "flex items-center gap-[7px] rounded-full border border-transparent px-2.5 py-1.5 hover:bg-hover hover:text-foreground"
+                  }
+                  data-testid={`sentiment-legend-${s.key}`}
+                >
+                  <span className="h-[9px] w-[9px] rounded-full" style={{ background: s.color }} />
+                  {s.label} {sentimentPercent(overview?.[s.key] ?? 0)}%
+                </button>
+              );
+            })}
           </div>
         </div>
       )}
@@ -698,10 +716,29 @@ function ListeningPageInner() {
                 </option>
               ))}
             </select>
+            <div className="flex w-full flex-wrap rounded-[9px] border border-border bg-surface1 p-0.5 sm:w-auto" role="group" aria-label="Sentiment">
+              {SENTIMENT_FILTER_OPTIONS.map((o) => (
+                <button
+                  key={o.label}
+                  type="button"
+                  aria-pressed={feed.sentiment === o.value}
+                  onClick={() => setFeed({ sentiment: o.value })}
+                  className={
+                    feed.sentiment === o.value
+                      ? "flex h-7 items-center gap-1.5 rounded-[7px] bg-card px-2 text-[12px] font-semibold text-foreground shadow-sm sm:px-2.5"
+                      : "flex h-7 items-center gap-1.5 rounded-[7px] px-2 text-[12px] text-muted-foreground hover:text-foreground sm:px-2.5"
+                  }
+                  data-testid={`mention-sentiment-${(o.value ?? "all").toLowerCase()}`}
+                >
+                  {o.value && <span className="h-2 w-2 rounded-full" style={{ background: SENTIMENT_DOT[o.value] }} />}
+                  {o.label}
+                </button>
+              ))}
+            </div>
             {isFiltered(feed) && (
               <button
                 type="button"
-                onClick={() => setFeed({ sort: "recent", minReach: 0, days: null })}
+                onClick={() => setFeed(DEFAULT_FEED_FILTERS)}
                 className="text-[11.5px] text-muted-foreground underline hover:text-foreground"
               >
                 Reset

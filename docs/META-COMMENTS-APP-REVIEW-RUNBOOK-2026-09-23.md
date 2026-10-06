@@ -845,3 +845,24 @@ non-unique, so `db push` adds it to the populated table without data loss.
   row comes back exactly once, in order, and the workspace scope holds.
 - `listening-mentions-sort.test.ts` pins the query shape.
 - `apps/web/lib/listening-feed.test.ts` covers URL parsing, labels and the page contract.
+
+## 20. Social Listening feed: filter by overall sentiment (2026-10-06)
+
+The mention feed can also be narrowed to one overall sentiment. There are two ways in:
+- **Chips** in the feed's filter row: All, Positive, Neutral, Negative, Mixed.
+- **The Sentiment Distribution legend:** click "Negative 24%" to show only negative mentions; click
+  it again to clear.
+
+Both set the same filter. It is kept in the URL (`?sentiment=negative`, lower-case) alongside the
+reach/period filters (§19), so links can be shared. Reset clears everything.
+
+- **No API or schema change.** `listening.mentions` already took `sentiment`, and the page now sends
+  it. A router test checks that it combines with the reach filters and that unknown values are
+  refused.
+- **Mixed is offered** because the classifier produces it and the distribution bar shows it.
+  Without a chip, those mentions couldn't be singled out.
+- **Neutral includes mentions not yet scored.** New mentions are stored as NEUTRAL until the
+  sentiment worker scores them, minutes later in a 20-per-call batch.
+- **Neutral also includes failed scoring.** The light scorer writes NEUTRAL with score 0 when every
+  AI provider fails.
+- Both of those are the same set the distribution bar counts as Neutral.
