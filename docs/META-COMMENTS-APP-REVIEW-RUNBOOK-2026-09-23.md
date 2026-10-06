@@ -803,3 +803,45 @@ redeploy (or restart the worker).
 Not verified against the live API from the build sandbox, which has no X user token. Check the first
 runs in the worker log (`[CommentSweep:X]`, and `x=N` on the summary line). Watch the X developer
 portal's usage page the first day.
+
+## 19. Social Listening feed: sort and filter by reach/views (2026-10-06)
+
+The Social Listening mention feed can now be **sorted by reach** ("Most reach") and **filtered by a
+minimum reach** (1K+, 10K+, 100K+ or 1M+) and a **period** (24 hours, 7 days, 30 days or all time).
+The choices live in the URL (`?sort=reach&minReach=10000&period=7`), so a filtered feed can be shared
+and survives a reload. The feed also pages now ("Load more", 20 at a time; it used to show only the
+latest 20).
+
+**What "reach" is.** It is whatever the source reports for a mention, labelled on each card:
+
+| Source | Reach shown as |
+|---|---|
+| YouTube, TikTok | Views |
+| X | Impressions |
+| Reddit posts | Upvotes |
+| Every other source (news, Hacker News, Bluesky, Mastodon, Lemmy, Facebook, Instagram, LinkedIn, comments) | Nothing; they store 0 ("not reported") |
+
+Sources that report nothing sort last under "Most reach" and are hidden by any minimum. The page
+says so whenever either control is in use.
+
+**API.** `listening.mentions` takes:
+- `sort` (`recent` | `reach`, default `recent`);
+- `minReach` (default 0);
+- `days` (1–365, omitted = all).
+
+Pagination is now Prisma cursor paging (`cursor: { id }, skip: 1`) over a total order:
+- `recent` orders by `mentionedAt desc, id desc`;
+- `reach` orders by `reach desc, mentionedAt desc, id desc`.
+
+The old `id < cursor` paging only worked by accident: ids aren't ordered by `mentionedAt`.
+`listening.mentions` has no other caller.
+
+**Schema.** New plain index `Mention(listeningQueryId, reach)` for the per-query reach sort. It is
+non-unique, so `db push` adds it to the populated table without data loss.
+
+**Tests.**
+- `listening-mentions-sort.e2e.test.ts` (real Postgres; `LIVE_E2E=1`) pages through seeded rows
+  with reach ties, zero reach, an out-of-period row and another workspace's high-reach rows. Every
+  row comes back exactly once, in order, and the workspace scope holds.
+- `listening-mentions-sort.test.ts` pins the query shape.
+- `apps/web/lib/listening-feed.test.ts` covers URL parsing, labels and the page contract.

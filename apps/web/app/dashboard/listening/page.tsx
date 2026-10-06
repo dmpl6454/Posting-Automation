@@ -4,6 +4,16 @@ import { RequireAppAdmin } from "~/components/auth/require-app-admin";
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { CommentSentimentPanel } from "~/components/listening/comment-sentiment-panel";
+import {
+  MIN_REACH_OPTIONS,
+  PERIOD_OPTIONS,
+  applyFeedFilters,
+  compactCount,
+  isFiltered,
+  parseFeedFilters,
+  reachLabel,
+  type FeedFilters,
+} from "~/lib/listening-feed";
 import { trpc } from "~/lib/trpc/client";
 import { Button } from "~/components/ui/button";
 import { Skeleton } from "~/components/ui/skeleton";
@@ -33,6 +43,7 @@ import {
   Frown,
   Meh,
   Info,
+  Eye,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
@@ -163,9 +174,7 @@ function formatSentimentScore(n: number): string {
  * there, because a mention count is small enough to read exactly.
  */
 function formatCompact(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
+  return compactCount(n);
 }
 
 /**
@@ -190,6 +199,12 @@ function ListeningPageInner() {
     const qs = params.toString();
     router.replace(`/dashboard/listening${qs ? `?${qs}` : ""}`, { scroll: false });
   };
+  // Mention feed sort / minimum reach / period (2026-10-06), kept in the URL.
+  const feed = parseFeedFilters(searchParams);
+  const setFeed = (patch: Partial<FeedFilters>) => {
+    const qs = applyFeedFilters(new URLSearchParams(searchParams.toString()), { ...feed, ...patch }).toString();
+    router.replace(`/dashboard/listening${qs ? `?${qs}` : ""}`, { scroll: false });
+  };
   const [dialogOpen, setDialogOpen] = useState(false);
   const [name, setName] = useState("");
   const [keywords, setKeywords] = useState("");
@@ -208,10 +223,18 @@ function ListeningPageInner() {
     },
     { refetchInterval: LISTENING_POLL_MS }
   );
-  const { data: mentions, isLoading: mentionsLoading } = trpc.listening.mentions.useQuery({
-    queryId: selectedQuery,
-    limit: 20,
-  });
+  const mentionsQuery = trpc.listening.mentions.useInfiniteQuery(
+    {
+      queryId: selectedQuery,
+      sort: feed.sort,
+      minReach: feed.minReach,
+      ...(feed.days !== null ? { days: feed.days } : {}),
+      limit: 20,
+    },
+    { getNextPageParam: (last) => last.nextCursor ?? undefined }
+  );
+  const mentionItems = mentionsQuery.data?.pages.flatMap((p) => p.items) ?? [];
+  const mentionsLoading = mentionsQuery.isLoading;
   const { data: alerts } = trpc.listening.alerts.useQuery(
     {
       queryId: selectedQuery,
@@ -593,7 +616,7 @@ function ListeningPageInner() {
               sidebar's, in both the with- and without-"Sync Now" states. */}
           <div className="mb-2.5 flex h-8 items-center justify-between">
             <h2 className="text-[12.5px] font-semibold uppercase leading-none tracking-[0.06em] text-muted-foreground">
-              Recent Mentions
+              {feed.sort === "reach" ? "Top Mentions by Reach" : "Recent Mentions"}
             </h2>
             {/* The design keeps Sync Now in this header at all times, so the row
                 never changes shape between the All-Queries and per-query views.
@@ -624,11 +647,79 @@ function ListeningPageInner() {
               Sync Now
             </Button>
           </div>
+          {/* Sort / minimum reach / period (2026-10-06). */}
+          <div className="mb-2.5 flex flex-wrap items-center gap-2" data-testid="mention-filters">
+            <div className="flex rounded-[9px] border border-border bg-surface1 p-0.5" role="group" aria-label="Sort mentions">
+              {(
+                [
+                  { id: "recent", label: "Newest" },
+                  { id: "reach", label: "Most reach" },
+                ] as const
+              ).map((o) => (
+                <button
+                  key={o.id}
+                  type="button"
+                  aria-pressed={feed.sort === o.id}
+                  onClick={() => setFeed({ sort: o.id })}
+                  className={
+                    feed.sort === o.id
+                      ? "h-7 rounded-[7px] bg-card px-3 text-[12px] font-semibold text-foreground shadow-sm"
+                      : "h-7 rounded-[7px] px-3 text-[12px] text-muted-foreground hover:text-foreground"
+                  }
+                  data-testid={`mention-sort-${o.id}`}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+            <select
+              value={feed.minReach}
+              onChange={(e) => setFeed({ minReach: Number(e.target.value) })}
+              className="h-8 rounded-[9px] border border-border bg-card px-2 text-[12px]"
+              aria-label="Minimum reach"
+              data-testid="mention-min-reach"
+            >
+              {MIN_REACH_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+            <select
+              value={feed.days ?? ""}
+              onChange={(e) => setFeed({ days: e.target.value ? Number(e.target.value) : null })}
+              className="h-8 rounded-[9px] border border-border bg-card px-2 text-[12px]"
+              aria-label="Period"
+              data-testid="mention-period"
+            >
+              {PERIOD_OPTIONS.map((o) => (
+                <option key={o.label} value={o.value ?? ""}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+            {isFiltered(feed) && (
+              <button
+                type="button"
+                onClick={() => setFeed({ sort: "recent", minReach: 0, days: null })}
+                className="text-[11.5px] text-muted-foreground underline hover:text-foreground"
+              >
+                Reset
+              </button>
+            )}
+          </div>
+          {(feed.sort === "reach" || feed.minReach > 0) && (
+            <p className="mb-2.5 text-[11px] leading-[1.5] text-faint" data-testid="mention-reach-note">
+              Reach is what each source reports: views on YouTube and TikTok, impressions on X, upvotes on Reddit posts.
+              Other sources (news, Hacker News, Bluesky, Mastodon, Lemmy, Facebook, Instagram, LinkedIn, comments) report
+              none, so {feed.minReach > 0 ? "a minimum reach hides them" : "they sort last"}.
+            </p>
+          )}
           <div className="flex flex-col gap-2">
             {mentionsLoading ? (
               [1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-[78px] rounded-[12px]" />)
-            ) : mentions?.items && mentions.items.length > 0 ? (
-              mentions.items.map((mention) => {
+            ) : mentionItems.length > 0 ? (
+              mentionItems.map((mention) => {
                 const sent = SENTIMENT_STYLE[mention.sentiment] ?? SENTIMENT_STYLE.NEUTRAL!;
                 const SentimentIcon = sent.icon;
                 const tag = SOURCE_TAG[mention.source] ?? SOURCE_TAG_FALLBACK;
@@ -677,6 +768,12 @@ function ListeningPageInner() {
                         <span>
                           {formatDistanceToNow(new Date(mention.mentionedAt), { addSuffix: true })}
                         </span>
+                        {reachLabel(mention.source, mention.reach) && (
+                          <span className="inline-flex items-center gap-1 font-medium text-muted-foreground" data-testid="mention-reach">
+                            <Eye className="h-3 w-3" />
+                            {reachLabel(mention.source, mention.reach)}
+                          </span>
+                        )}
                       </div>
                     </div>
                     {mention.sourceUrl && (
@@ -691,11 +788,25 @@ function ListeningPageInner() {
               <div className="flex flex-col items-center rounded-[12px] border border-border bg-card px-4 py-8 text-center">
                 <Ear className="mb-3 h-10 w-10 text-muted-foreground/30" />
                 <p className="text-[12.5px] leading-[1.5] text-muted-foreground">
-                  {queries && queries.length > 0
-                    ? "No mentions found yet. Try syncing or adjusting your keywords."
-                    : "Create a listening query to start monitoring mentions."}
+                  {isFiltered(feed)
+                    ? "No mentions match these filters. Try a lower minimum reach or a longer period."
+                    : queries && queries.length > 0
+                      ? "No mentions found yet. Try syncing or adjusting your keywords."
+                      : "Create a listening query to start monitoring mentions."}
                 </p>
               </div>
+            )}
+            {mentionsQuery.hasNextPage && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 text-[12px]"
+                onClick={() => void mentionsQuery.fetchNextPage()}
+                disabled={mentionsQuery.isFetchingNextPage}
+                data-testid="mention-load-more"
+              >
+                {mentionsQuery.isFetchingNextPage ? "Loading…" : "Load more"}
+              </Button>
             )}
           </div>
         </div>
