@@ -6,18 +6,39 @@
  * stores 0 — so a minimum reach hides them, and a reach sort puts them last.
  * The choices live in the URL (?sort=reach&minReach=10000&period=7) so a
  * filtered feed can be shared and survives a reload.
+ *
+ * Sentiment (2026-10-06): ?sentiment=positive|neutral|negative|mixed narrows
+ * the feed to one overall sentiment.
  */
 
 export type FeedSort = "recent" | "reach";
+export type FeedSentiment = "POSITIVE" | "NEUTRAL" | "NEGATIVE" | "MIXED";
 
 export interface FeedFilters {
   sort: FeedSort;
   minReach: number;
   /** Last N days; null = all stored mentions. */
   days: number | null;
+  /** One overall sentiment; null = all. */
+  sentiment: FeedSentiment | null;
 }
 
-export const DEFAULT_FEED_FILTERS: FeedFilters = { sort: "recent", minReach: 0, days: null };
+export const DEFAULT_FEED_FILTERS: FeedFilters = { sort: "recent", minReach: 0, days: null, sentiment: null };
+
+/** The sentiment chips, in the order the Sentiment Distribution bar shows them (Mixed last: it is the rarest). */
+export const SENTIMENT_FILTER_OPTIONS: ReadonlyArray<{ value: FeedSentiment | null; label: string }> = [
+  { value: null, label: "All" },
+  { value: "POSITIVE", label: "Positive" },
+  { value: "NEUTRAL", label: "Neutral" },
+  { value: "NEGATIVE", label: "Negative" },
+  { value: "MIXED", label: "Mixed" },
+];
+
+/** "positive" → "POSITIVE"; anything else → null. */
+export function parseSentiment(value: string | null | undefined): FeedSentiment | null {
+  const v = String(value ?? "").toUpperCase();
+  return v === "POSITIVE" || v === "NEUTRAL" || v === "NEGATIVE" || v === "MIXED" ? v : null;
+}
 
 export const MIN_REACH_OPTIONS: ReadonlyArray<{ value: number; label: string }> = [
   { value: 0, label: "Any reach" },
@@ -41,7 +62,7 @@ export function parseFeedFilters(params: { get(name: string): string | null }): 
   const minReach = MIN_REACH_OPTIONS.some((o) => o.value === min) ? min : 0;
   const period = Number(params.get("period"));
   const days = PERIOD_OPTIONS.some((o) => o.value !== null && o.value === period) ? period : null;
-  return { sort, minReach, days };
+  return { sort, minReach, days, sentiment: parseSentiment(params.get("sentiment")) };
 }
 
 /** Write the filters into URL params, dropping the defaults so a plain feed keeps a clean URL. */
@@ -53,11 +74,13 @@ export function applyFeedFilters(params: URLSearchParams, f: FeedFilters): URLSe
   else out.delete("minReach");
   if (f.days !== null) out.set("period", String(f.days));
   else out.delete("period");
+  if (f.sentiment) out.set("sentiment", f.sentiment.toLowerCase());
+  else out.delete("sentiment");
   return out;
 }
 
 export function isFiltered(f: FeedFilters): boolean {
-  return f.sort !== "recent" || f.minReach > 0 || f.days !== null;
+  return f.sort !== "recent" || f.minReach > 0 || f.days !== null || f.sentiment !== null;
 }
 
 /** "482K", "1.2M" — the page's compact count. */

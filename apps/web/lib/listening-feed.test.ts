@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   DEFAULT_FEED_FILTERS,
+  SENTIMENT_FILTER_OPTIONS,
+  parseSentiment,
   applyFeedFilters,
   compactCount,
   isFiltered,
@@ -16,14 +18,14 @@ const page = readFileSync(join(__dirname, "../app/dashboard/listening/page.tsx")
 describe("feed filters in the URL", () => {
   it("reads only the values on offer; anything else is the default", () => {
     expect(parseFeedFilters(new URLSearchParams(""))).toEqual(DEFAULT_FEED_FILTERS);
-    expect(parseFeedFilters(new URLSearchParams("sort=reach&minReach=10000&period=7"))).toEqual({ sort: "reach", minReach: 10000, days: 7 });
+    expect(parseFeedFilters(new URLSearchParams("sort=reach&minReach=10000&period=7"))).toEqual({ sort: "reach", minReach: 10000, days: 7, sentiment: null });
     expect(parseFeedFilters(new URLSearchParams("sort=views&minReach=123&period=999"))).toEqual(DEFAULT_FEED_FILTERS);
     expect(parseFeedFilters(new URLSearchParams("minReach=-5&period=abc"))).toEqual(DEFAULT_FEED_FILTERS);
   });
 
   it("writes non-defaults and keeps other params (like ?view)", () => {
     const base = new URLSearchParams("view=comments&sort=reach");
-    expect(applyFeedFilters(base, { sort: "reach", minReach: 1000, days: 30 }).toString()).toBe("view=comments&sort=reach&minReach=1000&period=30");
+    expect(applyFeedFilters(base, { sort: "reach", minReach: 1000, days: 30, sentiment: null }).toString()).toBe("view=comments&sort=reach&minReach=1000&period=30");
     expect(applyFeedFilters(new URLSearchParams("sort=reach&minReach=1000&period=30"), DEFAULT_FEED_FILTERS).toString()).toBe("");
     expect(isFiltered(DEFAULT_FEED_FILTERS)).toBe(false);
     expect(isFiltered({ ...DEFAULT_FEED_FILTERS, days: 1 })).toBe(true);
@@ -58,5 +60,35 @@ describe("listening page contract", () => {
 
   it("explains which sources report reach", () => {
     expect(page).toMatch(/views on YouTube and TikTok, impressions on X, upvotes on Reddit posts/);
+  });
+});
+
+describe("overall sentiment filter (2026-10-06)", () => {
+  it("?sentiment= reads positive / neutral / negative / mixed, case-insensitively; anything else is all", () => {
+    expect(parseFeedFilters(new URLSearchParams("sentiment=negative")).sentiment).toBe("NEGATIVE");
+    expect(parseFeedFilters(new URLSearchParams("sentiment=Positive")).sentiment).toBe("POSITIVE");
+    expect(parseSentiment("neutral")).toBe("NEUTRAL");
+    expect(parseSentiment("mixed")).toBe("MIXED");
+    expect(parseSentiment("angry")).toBeNull();
+    expect(parseSentiment(null)).toBeNull();
+  });
+
+  it("is written lower-case, dropped when cleared, and counts as filtered", () => {
+    const on = applyFeedFilters(new URLSearchParams("period=7"), { ...DEFAULT_FEED_FILTERS, days: 7, sentiment: "NEUTRAL" });
+    expect(on.toString()).toBe("period=7&sentiment=neutral");
+    expect(applyFeedFilters(on, { ...DEFAULT_FEED_FILTERS, days: 7 }).toString()).toBe("period=7");
+    expect(isFiltered({ ...DEFAULT_FEED_FILTERS, sentiment: "POSITIVE" })).toBe(true);
+  });
+
+  it("offers All, Positive, Neutral, Negative and Mixed", () => {
+    expect(SENTIMENT_FILTER_OPTIONS.map((o) => o.label)).toEqual(["All", "Positive", "Neutral", "Negative", "Mixed"]);
+  });
+
+  it("the page sends it to the feed query; chips and the distribution legend both set it", () => {
+    expect(page).toMatch(/\.\.\.\(feed\.sentiment \? \{ sentiment: feed\.sentiment \} : \{\}\)/);
+    expect(page).toContain("data-testid={`mention-sentiment-${(o.value ?? \"all\").toLowerCase()}`}");
+    expect(page).toContain("data-testid={`sentiment-legend-${s.key}`}");
+    expect(page).toMatch(/onClick=\{\(\) => setFeed\(\{ sentiment: active \? null : s\.value \}\)\}/);
+    expect(page).toMatch(/onClick=\{\(\) => setFeed\(DEFAULT_FEED_FILTERS\)\}/);
   });
 });

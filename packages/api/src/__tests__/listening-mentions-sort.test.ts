@@ -59,6 +59,17 @@ describe("listening.mentions", () => {
     expect(args.take).toBe(21);
   });
 
+  it("an overall-sentiment filter combines with the others (2026-10-06)", async () => {
+    const { caller, findMany } = build();
+    await caller.mentions({ sentiment: "NEGATIVE", sort: "reach", minReach: 1000 });
+    expect(findMany.mock.calls[0]![0].where).toMatchObject({
+      listeningQuery: { organizationId: ORG },
+      sentiment: "NEGATIVE",
+      reach: { gte: 1000 },
+    });
+    await expect(caller.mentions({ sentiment: "ANGRY" as any })).rejects.toThrow();
+  });
+
   it("returns a next cursor only when there is another page", async () => {
     const rows = Array.from({ length: 3 }, (_, i) => ({ id: `m${i}` }));
     const { caller } = build(rows);
