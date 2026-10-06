@@ -64,21 +64,24 @@ export function platformLabel(platform: string | null | undefined): string {
   if (platform === "INSTAGRAM") return "Instagram";
   if (platform === "YOUTUBE") return "YouTube";
   if (platform === "LINKEDIN") return "LinkedIn";
+  if (platform === "TWITTER") return "X";
   return "Account";
 }
 
 /**
- * Platforms whose comments are only scored (YouTube, LinkedIn Pages): there is
- * no Comments inbox for them here, so their comments and posts open on the
+ * Platforms whose comments are only scored (YouTube, LinkedIn Pages, X): there
+ * is no Comments inbox for them here, so their comments and posts open on the
  * platform itself.
  */
 export function opensOnPlatform(platform: string | null | undefined): boolean {
-  return platform === "YOUTUBE" || platform === "LINKEDIN";
+  return platform === "YOUTUBE" || platform === "LINKEDIN" || platform === "TWITTER";
 }
 
 /** Tooltip for a sentiment-only comment's link. LinkedIn has no per-comment link, so it opens the post. */
 export function externalLinkTitle(platform: string | null | undefined): string {
-  return platform === "YOUTUBE" ? "Open this comment on YouTube" : `Open this post on ${platformLabel(platform)}`;
+  if (platform === "YOUTUBE") return "Open this comment on YouTube";
+  if (platform === "TWITTER") return "Open this reply on X";
+  return `Open this post on ${platformLabel(platform)}`;
 }
 
 /** Deep link to a post's comment thread in the Comments inbox. */

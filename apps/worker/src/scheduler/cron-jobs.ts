@@ -16,16 +16,18 @@ import {
   isCommentAutomationEnabled,
   readSweepConfig as readCommentSweepConfig,
   readLinkedInSentimentConfig,
+  readTwitterSentimentConfig,
   readYouTubeSentimentConfig,
   runCommentSweep,
 } from "../lib/comment-sweep";
-import { reserveYouTubeUnits, type UnitCounter } from "../lib/listening-comments";
+import { quotaDay, reserveYouTubeUnits, type UnitCounter } from "../lib/listening-comments";
 import {
   getSocialProvider as getCommentProvider,
   facebookAppUsagePeak,
   LINKEDIN_API_VERSION,
   type FacebookProvider as CommentFacebookProvider,
   type InstagramProvider as CommentInstagramProvider,
+  type TwitterProvider as CommentTwitterProvider,
 } from "@postautomation/social";
 import { runCelebrityDetectors } from "../workers/celebrity-detect.worker";
 import { createRedisConnection, enqueueScheduledPublishJobs, excludeExpiredStoriesWhere, shouldReconcileCheckpoints } from "@postautomation/queue";
@@ -1558,6 +1560,7 @@ function dailyRedisCounter(prefix: string): UnitCounter {
 }
 const commentYtUnitCounter = dailyRedisCounter("comment-sentiment:yt-units");
 const commentLiCallCounter = dailyRedisCounter("comment-sentiment:li-calls");
+const commentXReadCounter = dailyRedisCounter("comment-sentiment:x-reads");
 
 /** One page of comments on a LinkedIn Page post, as the Page's admin. 1 call. */
 async function readLinkedInCommentPage(
@@ -1650,6 +1653,18 @@ export async function runCommentAutomationSweep(): Promise<void> {
         readLinkedInComments: readLinkedInCommentPage,
         reserveLinkedInCalls: (calls) =>
           reserveYouTubeUnits(commentLiCallCounter, calls, readLinkedInSentimentConfig().dailyUnits, new Date()),
+        // X reply sentiment (2026-10-06): pay-per-use reads, counted in posts read.
+        readTwitterReplies: (tokens, tweetId, opts) =>
+          (getCommentProvider("TWITTER") as CommentTwitterProvider).searchConversationReplies(
+            { accessToken: tokens.accessToken, refreshToken: tokens.tokenSecret },
+            tweetId,
+            opts
+          ),
+        reserveTwitterReads: (reads) =>
+          reserveYouTubeUnits(commentXReadCounter, reads, readTwitterSentimentConfig().dailyUnits, new Date()),
+        refundTwitterReads: async (reads) => {
+          if (reads > 0) await commentXReadCounter.decrBy(quotaDay(new Date()), reads);
+        },
       },
       readCommentSweepConfig()
     );

@@ -48,7 +48,15 @@
  * second for the newest page when a post has more than one page of comments),
  * under its own daily call cap.
  *
- * Both run through one source-agnostic pass (sweepExternalSentiment).
+ * X / Twitter (2026-10-06) — replies to tweets the app published: `GET
+ * /2/tweets/search/recent?query=conversation_id:{tweet}` as the channel. X's
+ * API is pay-per-use (about $0.005 per post read since 2026-02), so this
+ * source is the stingiest: it asks only for replies newer than the newest one
+ * already seen (`since_id`, kept as the post's cursor), counts its daily cap
+ * in replies returned (at least 1 per request), re-reads a post every 3 hours
+ * and asks for no author objects (billed separately).
+ *
+ * All three run through one source-agnostic pass (sweepExternalSentiment).
  */
 
 import {
@@ -64,6 +72,7 @@ import {
   scorePendingCommentSentiment,
   sentimentCandidates,
   linkedinSentimentCandidates,
+  twitterSentimentCandidates,
   youtubeSentimentCandidates,
   type CommentSentimentConfig,
   type Sentiment,
@@ -98,7 +107,7 @@ export function readSweepConfig(env: Record<string, string | undefined> = proces
 
 /** Budget of a sentiment-only source (YouTube, LinkedIn Pages). */
 export interface ExternalSentimentConfig {
-  /** API units (YouTube) / calls (LinkedIn) this source may spend per day; 0 turns it off. */
+  /** API units (YouTube) / calls (LinkedIn) / posts read (X) this source may spend per day; 0 turns it off. */
   dailyUnits: number;
   /** Posts read per run, across all workspaces. */
   maxPostsPerRun: number;
@@ -109,17 +118,25 @@ export interface ExternalSentimentConfig {
 }
 export type YouTubeSentimentConfig = ExternalSentimentConfig;
 export type LinkedInSentimentConfig = ExternalSentimentConfig;
+export type TwitterSentimentConfig = ExternalSentimentConfig;
 
 function readExternalConfig(
   env: Record<string, string | undefined>,
   prefix: string,
-  keys: { daily: string; max: string }
+  keys: { daily: string; max: string },
+  defaults: { daily: number; max: number; intervalMin: number; lookbackDays: number; lookbackMax: number } = {
+    daily: 300,
+    max: 20,
+    intervalMin: 60,
+    lookbackDays: 7,
+    lookbackMax: 30,
+  }
 ): ExternalSentimentConfig {
   return {
-    dailyUnits: intEnv(env, `${prefix}_${keys.daily}`, 300, 0, 5000),
-    maxPostsPerRun: intEnv(env, `${prefix}_${keys.max}`, 20, 1, 200),
-    minIntervalMs: intEnv(env, `${prefix}_INTERVAL_MIN`, 60, 15, 24 * 60) * 60 * 1000,
-    lookbackDays: intEnv(env, `${prefix}_LOOKBACK_DAYS`, 7, 1, 30),
+    dailyUnits: intEnv(env, `${prefix}_${keys.daily}`, defaults.daily, 0, 5000),
+    maxPostsPerRun: intEnv(env, `${prefix}_${keys.max}`, defaults.max, 1, 200),
+    minIntervalMs: intEnv(env, `${prefix}_INTERVAL_MIN`, defaults.intervalMin, 15, 24 * 60) * 60 * 1000,
+    lookbackDays: intEnv(env, `${prefix}_LOOKBACK_DAYS`, defaults.lookbackDays, 1, defaults.lookbackMax),
   };
 }
 
@@ -131,12 +148,30 @@ export function readLinkedInSentimentConfig(env: Record<string, string | undefin
   return readExternalConfig(env, "COMMENT_SENTIMENT_LI", { daily: "DAILY_CALLS", max: "MAX_POSTS" });
 }
 
+/**
+ * X: deliberately cheap defaults — 100 posts read a day (about $0.50 at
+ * pay-per-use rates), 10 posts a run, each re-read every 3 hours, and a 6-day
+ * window because recent search only reaches back 7 days.
+ */
+export function readTwitterSentimentConfig(env: Record<string, string | undefined> = process.env): TwitterSentimentConfig {
+  return readExternalConfig(
+    env,
+    "COMMENT_SENTIMENT_X",
+    { daily: "DAILY_READS", max: "MAX_POSTS" },
+    { daily: 100, max: 10, intervalMin: 180, lookbackDays: 6, lookbackMax: 7 }
+  );
+}
+
 /** A YouTube video id (a community post's id is not one, and has no comment threads to list). */
 export const YOUTUBE_VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
 /** A LinkedIn post URN as /rest/posts returns it (x-restli-id). */
 export const LINKEDIN_POST_URN = /^urn:li:(share|ugcPost):\d+$/;
 /** Comments per LinkedIn page read. */
 export const LINKEDIN_COMMENTS_PAGE = 50;
+/** A tweet id. */
+export const TWEET_ID = /^\d{5,25}$/;
+/** Replies asked for per X read (each one returned is billed). */
+export const TWITTER_REPLIES_PAGE = 25;
 
 /** Kill switch: `COMMENT_AUTOMATION_ENABLED=false` stops the sweep. Workspaces opt in individually. */
 export function isCommentAutomationEnabled(env: Record<string, string | undefined> = process.env): boolean {
@@ -297,6 +332,20 @@ export interface SweepDeps {
   /** Reserve calls against LinkedIn's daily cap; false = cap reached or the counter is unavailable. */
   reserveLinkedInCalls?: (calls: number) => Promise<boolean>;
   linkedinConfig?: LinkedInSentimentConfig;
+  /**
+   * X reply sentiment: one recent-search page of a tweet's conversation, as the
+   * channel (OAuth 1.0a). Skipped when absent (or without the reserve/refund pair).
+   */
+  readTwitterReplies?: (
+    tokens: { accessToken: string; tokenSecret: string },
+    tweetId: string,
+    opts: { sinceId: string | null; maxResults: number }
+  ) => Promise<{ status: number; body: unknown }>;
+  /** Reserve posts read against X's daily cap; false = cap reached or the counter is unavailable. */
+  reserveTwitterReads?: (reads: number) => Promise<boolean>;
+  /** Give back what a reservation didn't use (fewer replies returned than asked for). */
+  refundTwitterReads?: (reads: number) => Promise<void>;
+  twitterConfig?: TwitterSentimentConfig;
   now?: () => Date;
   log?: Pick<Console, "log" | "warn">;
 }
@@ -319,14 +368,20 @@ export interface OrgRunSummary {
   youtubeVideosChecked?: number;
   /** LinkedIn Page posts whose comments were read for sentiment this run. */
   linkedinPostsChecked?: number;
+  /** X posts whose replies were read for sentiment this run. */
+  twitterPostsChecked?: number;
 }
 
 const NOT_A_STORY = [{ format: null }, { format: { not: "STORY" as const } }];
 
-function readCheckedAt(metadata: unknown): { checkedAt: number | null; lastSeenAt: number | null } {
+function readCheckedAt(metadata: unknown): { checkedAt: number | null; lastSeenAt: number | null; cursor: string | null } {
   const sweep = (metadata as any)?.commentSweep;
   const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
-  return { checkedAt: num(sweep?.checkedAt), lastSeenAt: num(sweep?.lastSeenAt) };
+  return {
+    checkedAt: num(sweep?.checkedAt),
+    lastSeenAt: num(sweep?.lastSeenAt),
+    cursor: typeof sweep?.cursor === "string" && sweep.cursor ? sweep.cursor : null,
+  };
 }
 
 function rulesOf(a: { blockedWords: string[]; hideLinks: boolean }): CommentRules {
@@ -568,7 +623,7 @@ export async function runCommentSweep(deps: SweepDeps, cfg: SweepConfig = readSw
     { posts: 0, hidden: 0, fresh: 0, errors: 0 }
   );
   log.log(
-    `[CommentSweep] orgs=${automations.length} posts=${totals.posts}/${candidates.length} hidden=${totals.hidden} new=${totals.fresh} errors=${totals.errors}${external.YOUTUBE ? ` yt=${external.YOUTUBE}` : ""}${external.LINKEDIN ? ` li=${external.LINKEDIN}` : ""}${fbPaused ? " fb=paused" : ""}`
+    `[CommentSweep] orgs=${automations.length} posts=${totals.posts}/${candidates.length} hidden=${totals.hidden} new=${totals.fresh} errors=${totals.errors}${external.YOUTUBE ? ` yt=${external.YOUTUBE}` : ""}${external.LINKEDIN ? ` li=${external.LINKEDIN}` : ""}${external.TWITTER ? ` x=${external.TWITTER}` : ""}${fbPaused ? " fb=paused" : ""}`
   );
   return summaries;
 }
@@ -606,8 +661,8 @@ async function storeSentimentRows(
 
 /** What reading one post's comments came to. */
 export type ExternalRead =
-  /** Comments read (possibly none). */
-  | { kind: "ok"; found: StoredCommentInput[] }
+  /** Comments read (possibly none); `cursor` = where the next read should start (kept on the post). */
+  | { kind: "ok"; found: StoredCommentInput[]; cursor?: string | null }
   /** Comments off / post gone — the post's state, not an error. The post rotates. */
   | { kind: "postState" }
   /** Any other failure: counted; the post rotates. */
@@ -618,12 +673,12 @@ export type ExternalRead =
   | { kind: "scopeMissing" }
   /** The platform throttled us: stop this source for the run. */
   | { kind: "rateLimited" }
-  /** The platform's daily quota is spent: stop this source until its quota day turns. */
-  | { kind: "quotaExhausted" }
+  /** The platform's daily quota is spent (or the app has no access): stop this source until its quota day turns. */
+  | { kind: "quotaExhausted"; detail?: string }
   /** Our own daily cap said no (or its counter is unavailable): stop this source. */
   | { kind: "budget" };
 
-type ExternalPlatform = "YOUTUBE" | "LINKEDIN";
+type ExternalPlatform = "YOUTUBE" | "LINKEDIN" | "TWITTER";
 
 interface ExternalSource {
   platform: ExternalPlatform;
@@ -638,8 +693,9 @@ interface ExternalSource {
   accepts?: (channel: any) => boolean;
   /** A pre-check from what the channel recorded at connect time; "scopeMissing" spends nothing. */
   precheck?: (channel: any) => "ok" | "scopeMissing";
-  read: (channel: any, postId: string) => Promise<ExternalRead>;
-  summaryKey: "youtubeVideosChecked" | "linkedinPostsChecked";
+  /** `cursor`: what the last read of this post left (see ExternalRead "ok"). */
+  read: (channel: any, postId: string, cursor: string | null) => Promise<ExternalRead>;
+  summaryKey: "youtubeVideosChecked" | "linkedinPostsChecked" | "twitterPostsChecked";
 }
 
 /** Platform → quota day on which its quota ran out. */
@@ -757,6 +813,67 @@ function linkedinSource(deps: SweepDeps): ExternalSource | null {
   };
 }
 
+/** A recent-search response → what it means (`found` left empty). Pure. */
+export function classifyTwitterRead(res: { status: number; body: unknown }): ExternalRead {
+  const body = res.body as any;
+  const what = `${body?.title ?? ""} ${body?.reason ?? ""} ${body?.type ?? ""} ${body?.detail ?? ""}`;
+  // 402 = no credits left on a pay-per-use account; UsageCapExceeded = a
+  // plan's monthly cap. Either way nothing will work until someone tops up.
+  if (res.status === 402 || /UsageCapExceeded|CreditsDepleted/i.test(what)) {
+    return { kind: "quotaExhausted", detail: "X API credits or usage cap exhausted" };
+  }
+  if (res.status === 429) return { kind: "rateLimited" };
+  if (res.status === 401) return { kind: "tokenRefused" };
+  // The app (not one account) isn't allowed this endpoint — stop X for the day.
+  if (res.status === 403 && /client-not-enrolled|client-forbidden/i.test(what)) {
+    return { kind: "quotaExhausted", detail: "the X app has no access to recent search" };
+  }
+  if (res.status === 403) return { kind: "scopeMissing" };
+  if (res.status >= 200 && res.status < 300) return { kind: "ok", found: [] };
+  return { kind: "failed", detail: `HTTP ${res.status} ${JSON.stringify(body?.title ?? null)}` };
+}
+
+function twitterSource(deps: SweepDeps): ExternalSource | null {
+  const readReplies = deps.readTwitterReplies;
+  const reserve = deps.reserveTwitterReads;
+  const refund = deps.refundTwitterReads;
+  if (!readReplies || !reserve || !refund) return null;
+  return {
+    platform: "TWITTER",
+    tag: "X",
+    cfg: deps.twitterConfig ?? readTwitterSentimentConfig(),
+    channelWhere: { platform: "TWITTER" },
+    isPostId: (id) => TWEET_ID.test(id),
+    quotaDay: (now) => now.toISOString().slice(0, 10),
+    summaryKey: "twitterPostsChecked",
+    read: async (channel, tweetId, cursor) => {
+      // Reserve the most this read can be billed for; give back the unused part.
+      // A request counts as at least 1 so empty polls are budgeted too.
+      if (!(await reserve(TWITTER_REPLIES_PAGE))) return { kind: "budget" };
+      let used = 1;
+      try {
+        const res = await readReplies(
+          { accessToken: channel.accessToken, tokenSecret: channel.refreshToken ?? "" },
+          tweetId,
+          { sinceId: cursor && TWEET_ID.test(cursor) ? cursor : null, maxResults: TWITTER_REPLIES_PAGE }
+        );
+        const read = classifyTwitterRead(res);
+        if (read.kind !== "ok") return read;
+        const count = Number((res.body as any)?.meta?.result_count);
+        used = Math.max(1, Number.isFinite(count) ? Math.min(count, TWITTER_REPLIES_PAGE) : TWITTER_REPLIES_PAGE);
+        const newest = (res.body as any)?.meta?.newest_id;
+        return {
+          kind: "ok",
+          found: twitterSentimentCandidates(res.body, typeof channel.platformId === "string" ? channel.platformId : null, tweetId),
+          cursor: typeof newest === "string" && TWEET_ID.test(newest) ? newest : cursor,
+        };
+      } finally {
+        await refund(TWITTER_REPLIES_PAGE - used).catch(() => {});
+      }
+    },
+  };
+}
+
 /** Run every configured sentiment-only source; returns posts read per platform. Never throws. */
 async function sweepExternalSources(
   deps: SweepDeps,
@@ -766,7 +883,7 @@ async function sweepExternalSources(
   log: Pick<Console, "log" | "warn">
 ): Promise<Partial<Record<ExternalPlatform, number>>> {
   const out: Partial<Record<ExternalPlatform, number>> = {};
-  for (const source of [youtubeSource(deps), linkedinSource(deps)]) {
+  for (const source of [youtubeSource(deps), linkedinSource(deps), twitterSource(deps)]) {
     if (source) out[source.platform] = await sweepExternalSentiment(source, deps.prisma, automations, summaries, now, log);
   }
   return out;
@@ -793,7 +910,7 @@ async function sweepExternalSentiment(
   try {
     const since = new Date(now.getTime() - cfg.lookbackDays * 24 * 60 * 60 * 1000);
     const dueBefore = now.getTime() - cfg.minIntervalMs;
-    const candidates: Array<SweepCandidate & { publishedId: string }> = [];
+    const candidates: Array<SweepCandidate & { publishedId: string; cursor: string | null }> = [];
     for (const a of orgs) {
       const rows: any[] = await prisma.postTarget.findMany({
         where: {
@@ -815,7 +932,7 @@ async function sweepExternalSentiment(
       });
       for (const r of rows) {
         if (!source.isPostId(r.publishedId ?? "")) continue;
-        const { checkedAt } = readCheckedAt(r.metadata);
+        const { checkedAt, cursor } = readCheckedAt(r.metadata);
         if (checkedAt !== null && checkedAt > dueBefore) continue;
         candidates.push({
           id: r.id,
@@ -824,6 +941,7 @@ async function sweepExternalSentiment(
           publishedAt: r.publishedAt,
           publishedId: r.publishedId,
           checkedAt,
+          cursor,
         });
       }
     }
@@ -859,7 +977,7 @@ async function sweepExternalSentiment(
 
       let read: ExternalRead;
       try {
-        read = await source.read(channel, target.publishedId);
+        read = await source.read(channel, target.publishedId, target.cursor);
       } catch (err: any) {
         summary.errors++;
         log.warn(`[CommentSweep:${tag}] read failed for target ${target.id}: ${String(err?.message ?? err).slice(0, 160)}`);
@@ -871,7 +989,7 @@ async function sweepExternalSentiment(
       }
       if (read.kind === "quotaExhausted") {
         quotaExhaustedOn.set(source.platform, source.quotaDay(now));
-        log.warn(`[CommentSweep:${tag}] the platform reports today's API quota is used up — stopping for the day`);
+        log.warn(`[CommentSweep:${tag}] ${read.detail ?? "the platform reports today's API quota is used up"} — stopping for the day`);
         break;
       }
       if (read.kind === "rateLimited") {
@@ -901,7 +1019,9 @@ async function sweepExternalSentiment(
         log.warn(`[CommentSweep:${tag}] comments failed for target ${target.id}: ${read.detail}`);
       }
 
-      const patch = JSON.stringify({ commentSweep: { checkedAt: now.getTime() } });
+      // The cursor survives every outcome: a failed read must not make the next one start over (and pay again).
+      const cursor = read.kind === "ok" && read.cursor !== undefined ? read.cursor : target.cursor;
+      const patch = JSON.stringify({ commentSweep: { checkedAt: now.getTime(), ...(cursor ? { cursor } : {}) } });
       try {
         await prisma.$executeRaw`UPDATE "PostTarget" SET "metadata" = COALESCE("metadata", '{}'::jsonb) || ${patch}::jsonb WHERE "id" = ${target.id}`;
       } catch (err: any) {

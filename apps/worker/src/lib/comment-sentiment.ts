@@ -170,6 +170,40 @@ export function linkedinSentimentCandidates(body: unknown, ownOrgUrn: string | n
 }
 
 /**
+ * X (2026-10-06): the same rows from one recent-search page of a tweet's
+ * conversation — replies by anyone but the account itself. X prefixes a reply
+ * with the handles it answers ("@acme @sam …"); those are stripped so the
+ * score is about what the person wrote, and a reply that is only handles is
+ * skipped. `isReply` marks a reply to a reply (not directly to our tweet).
+ * No author objects are requested (billed separately), so the label is
+ * generic. The id is the reply's tweet id.
+ */
+export function twitterSentimentCandidates(body: unknown, ownUserId: string | null, rootTweetId: string): StoredCommentInput[] {
+  const tweets: any[] = Array.isArray((body as any)?.data) ? (body as any).data : [];
+  const str = (v: unknown) => (typeof v === "string" ? v : "");
+  const out: StoredCommentInput[] = [];
+  for (const t of tweets) {
+    const id = str(t?.id);
+    if (!/^\d+$/.test(id) || id === rootTweetId) continue;
+    if (ownUserId && str(t?.author_id) === ownUserId) continue;
+    const text = decodeEntities(str(t?.text)).replace(/^(?:@\w{1,15}\s+)+/, "").trim();
+    if (!text || /^(?:@\w{1,15}\s*)+$/.test(text)) continue;
+    const repliedTo = Array.isArray(t?.referenced_tweets)
+      ? str(t.referenced_tweets.find((r: any) => r?.type === "replied_to")?.id)
+      : "";
+    const at = Date.parse(str(t?.created_at));
+    out.push({
+      commentId: id,
+      commentText: text.slice(0, COMMENT_TEXT_MAX),
+      authorLabel: "X user",
+      isReply: !!repliedTo && repliedTo !== rootTweetId,
+      commentedAt: Number.isFinite(at) ? new Date(at) : null,
+    });
+  }
+  return out;
+}
+
+/**
  * Interleave each workspace's pending comments (oldest first within a
  * workspace) round-robin, up to the cap — so one busy workspace cannot use
  * the whole run's AI budget.

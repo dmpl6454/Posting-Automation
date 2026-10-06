@@ -13,7 +13,7 @@ vi.mock("../lib/audit", async (importOriginal) => {
 });
 
 import { createCallerFactory } from "../trpc";
-import { commentRouter, externalCommentUrl, linkedinPostUrl, youtubeCommentUrl } from "../routers/comment.router";
+import { commentRouter, externalCommentUrl, linkedinPostUrl, tweetUrl, youtubeCommentUrl } from "../routers/comment.router";
 
 const ORG = "org-1";
 const USER = "user-1";
@@ -229,7 +229,7 @@ describe("YouTube comment sentiment (2026-10-06)", () => {
       ],
     });
     const out = await caller.automationSettings();
-    expect(prisma.channel.findMany.mock.calls[0]![0].where.OR).toEqual({ OR: [{ platform: { in: ["FACEBOOK", "INSTAGRAM", "YOUTUBE"] } }, { platform: "LINKEDIN", platformId: { startsWith: "org-" } }] }.OR);
+    expect(prisma.channel.findMany.mock.calls[0]![0].where.OR).toEqual({ OR: [{ platform: { in: ["FACEBOOK", "INSTAGRAM", "YOUTUBE", "TWITTER"] } }, { platform: "LINKEDIN", platformId: { startsWith: "org-" } }] }.OR);
     expect(out.accounts).toEqual([
       expect.objectContaining({ id: "ch-yt", canModerate: null, sentimentOnly: true }),
       expect.objectContaining({ id: "ch-fb", canModerate: false, sentimentOnly: false }),
@@ -270,5 +270,32 @@ describe("LinkedIn Page comment sentiment (2026-10-06)", () => {
     });
     const out = await caller.automationSettings();
     expect(out.accounts).toEqual([expect.objectContaining({ id: "ch-li", canModerate: null, sentimentOnly: true })]);
+  });
+});
+
+describe("X reply sentiment (2026-10-06)", () => {
+  it("replies open the reply itself on X; a post opens the tweet", () => {
+    expect(tweetUrl("1840000000000000020")).toBe("https://x.com/i/status/1840000000000000020");
+    expect(tweetUrl("javascript:1")).toBeNull();
+    expect(externalCommentUrl("TWITTER", { publishedId: "1840000000000000001" }, "1840000000000000020")).toBe(
+      "https://x.com/i/status/1840000000000000020"
+    );
+    expect(externalCommentUrl("TWITTER", { publishedId: "1840000000000000001" })).toBe("https://x.com/i/status/1840000000000000001");
+  });
+
+  it("X replies carry their own X link; settings list X accounts as sentiment-only", async () => {
+    const rows = [{ id: "s1", channelId: "ch-x", postTargetId: "t-x", platform: "TWITTER", commentId: "1840000000000000020", commentText: "love it" }];
+    const { caller } = build({
+      findMany: () => rows,
+      postTargets: (a) => (a.where.id.in as string[]).map((id) => ({ id, publishedId: "1840000000000000001", publishedUrl: null })),
+    });
+    const out = await caller.sentimentComments({});
+    expect(out.items[0]).toMatchObject({ externalUrl: "https://x.com/i/status/1840000000000000020" });
+
+    const s = build({
+      channels: () => [{ id: "ch-x", platform: "TWITTER", name: "Acme on X", username: "acme", avatar: null, isActive: true, metadata: null }],
+    });
+    const settings = await s.caller.automationSettings();
+    expect(settings.accounts).toEqual([expect.objectContaining({ id: "ch-x", canModerate: null, sentimentOnly: true })]);
   });
 });
