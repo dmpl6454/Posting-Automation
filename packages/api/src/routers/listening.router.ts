@@ -98,7 +98,18 @@ export const listeningRouter = createRouter({
         queryId: z.string().optional(),
         sentiment: z.enum(["POSITIVE", "NEGATIVE", "NEUTRAL", "MIXED"]).optional(),
         source: z.string().optional(),
+        /**
+         * "recent" (newest first) or "reach" (most reach/views first, 2026-10-06).
+         * Reach is what the source reports — views (YouTube, TikTok),
+         * impressions (X), upvotes (Reddit posts) — and 0 where it reports none.
+         */
+        sort: z.enum(["recent", "reach"]).default("recent"),
+        /** Only mentions with at least this much reach (0 = no minimum). */
+        minReach: z.number().int().min(0).max(1_000_000_000).default(0),
+        /** Only mentions from the last N days (omitted = all stored). */
+        days: z.number().int().min(1).max(365).optional(),
         limit: z.number().min(1).max(100).default(50),
+        /** The last item's id from the previous page. */
         cursor: z.string().optional(),
       })
     )
@@ -113,10 +124,13 @@ export const listeningRouter = createRouter({
           ...queryFilter,
           ...(input.sentiment ? { sentiment: input.sentiment } : {}),
           ...(input.source ? { source: input.source as any } : {}),
-          ...(input.cursor ? { id: { lt: input.cursor } } : {}),
+          ...(input.minReach > 0 ? { reach: { gte: input.minReach } } : {}),
+          ...(input.days ? { mentionedAt: { gte: new Date(Date.now() - input.days * 24 * 60 * 60 * 1000) } } : {}),
         },
-        orderBy: { mentionedAt: "desc" },
+        // A total order (id breaks ties), so cursor pages never skip or repeat a row.
+        orderBy: mentionsOrderBy(input.sort),
         take: input.limit + 1,
+        ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
       });
 
       const hasMore = mentions.length > input.limit;
@@ -307,3 +321,10 @@ export const listeningRouter = createRouter({
       return { queued: true };
     }),
 });
+
+/** Mention feed order: newest first, or most reach first (newest first among equals). Always ends on id. */
+export function mentionsOrderBy(sort: "recent" | "reach") {
+  return sort === "reach"
+    ? [{ reach: "desc" as const }, { mentionedAt: "desc" as const }, { id: "desc" as const }]
+    : [{ mentionedAt: "desc" as const }, { id: "desc" as const }];
+}

@@ -1281,6 +1281,7 @@ model Mention {
   @@index([listeningQueryId, dedupKey])
   @@index([listeningQueryId, mentionedAt])
   @@index([listeningQueryId, sentiment])
+  @@index([listeningQueryId, reach])
   @@index([source])
 }
 
