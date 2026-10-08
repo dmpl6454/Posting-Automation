@@ -1,5 +1,6 @@
 "use client";
 import { RequireAppAdmin } from "~/components/auth/require-app-admin";
+import { OwnCampaignReports } from "~/components/campaigns/own-campaign-reports";
 
 import { useState } from "react";
 import { trpc } from "~/lib/trpc/client";
@@ -226,6 +227,9 @@ function CampaignsPageInner() {
           external brands — separate from your own posting, Approvals, and Brand Outreach.
         </p>
       </div>
+      {/* The campaign-wise report of your OWN posts lives in Insights → Reports;
+          people look for it here, so link it (2026-10-08). */}
+      <OwnCampaignReports />
 
       {/* Overview Stats — design: 3px accent rail + tinted 28px icon tile, a
           26px value and a 10.5px sub-line. Literal hex, because this project's

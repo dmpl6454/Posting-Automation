@@ -888,3 +888,30 @@ sentiment, reach and period, and Reset clears everything.
   Bing News and GDELT since §15.
 - **Drift guard:** a test checks the web's `MENTION_SOURCES` list against the Prisma enum, so a new
   source can't be left out of the filter.
+
+## 22. Campaign-wise report download: findable from Campaigns (2026-10-08)
+
+The campaign-wise report of the workspace's **own posts** already exists (shipped 2026-10-03). It is
+in **Insights → Reports**:
+- **Export CSV** downloads the current view.
+- **Download per campaign** downloads a ZIP with one CSV per campaign name, `campaigns/<slug>.csv`.
+  Unlabelled posts get one CSV each under `posts/`, and `index.csv` holds the totals.
+
+Posts are grouped by `Post.campaignLabel`, the campaign name typed in Compose. That is deliberately
+**not** the monitoring `Campaign` model that the Campaigns page manages.
+
+People looked for it on the Campaigns page, so that page now links to it:
+- **New card on the Campaigns page:** "Reports on your own posts, by campaign"
+  (`components/campaigns/own-campaign-reports.tsx`). It sits right after the "How Campaigns work"
+  note. It shows:
+  - each campaign name as a link (first 8, then "+N more");
+  - an **All campaigns** link;
+  - when no post has a campaign name yet, a hint to add one in Compose.
+- **Deep link `/dashboard/analytics?tab=reports&campaign=<name>`:** the Reports tab now reads
+  `?campaign=` (`ReportCampaignDeepLink`). It selects that campaign and opens the widest window,
+  30 days, so older posts aren't shown empty.
+  - The reader is keyed on the campaign value, so a window picked afterwards is not reset.
+  - An unknown name falls back to All, the existing guard.
+  - Link building lives in `apps/web/lib/campaign-report-link.ts`.
+
+Not changed: what the report contains, and the 30-day maximum window of Reports.

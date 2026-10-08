@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { trpc } from "~/lib/trpc/client";
@@ -88,6 +88,20 @@ function ReportPostDeepLink({ onPost }: { onPost: (id: string) => void }) {
   return null;
 }
 
+/**
+ * ?campaign= deep-link reader (2026-10-08: the Campaigns page links each
+ * campaign label here). Same Suspense-isolation reason as ReportPostDeepLink.
+ */
+function ReportCampaignDeepLink({ onCampaign }: { onCampaign: (label: string) => void }) {
+  // Keyed on the VALUE, not the searchParams object: it fires once per link,
+  // never on a re-render — so a window picked afterwards is not reset to 30 days.
+  const label = useSearchParams().get("campaign");
+  useEffect(() => {
+    if (label) onCampaign(label);
+  }, [label, onCampaign]);
+  return null;
+}
+
 /** Option label for the post picker: enough text to recognise the post, plus its size. */
 function postOptionLabel(p: { contentPreview: string; publishedTargets: number; campaignLabel: string | null }): string {
   const text = p.contentPreview.replace(/\s+/g, " ").trim() || "(no text)";
@@ -125,6 +139,15 @@ export function ReportsTab() {
 
   const { toast } = useToast();
   const utils = trpc.useUtils();
+
+  // A ?campaign= link opens that campaign over the widest window (30 days), so
+  // a campaign whose posts are older than the default 7 days isn't shown empty.
+  // Stable (useCallback) so the reader's effect runs once per URL, not on every
+  // render — which would undo the window the person picks afterwards.
+  const openCampaignFromLink = useCallback((label: string) => {
+    setCampaignView(label.slice(0, 120));
+    setWin("30d");
+  }, []);
 
   const { data: orgPlatforms } = trpc.analytics.platformsInWindow.useQuery();
   // Fall back to All for a platform this org doesn't have, rather than rendering
@@ -339,6 +362,9 @@ export function ReportsTab() {
     <>
     <Suspense fallback={null}>
       <ReportPostDeepLink onPost={setPostView} />
+    </Suspense>
+    <Suspense fallback={null}>
+      <ReportCampaignDeepLink onCampaign={openCampaignFromLink} />
     </Suspense>
     <Dialog open={emailOpen} onOpenChange={(open) => { if (!emailReport.isPending) setEmailOpen(open); }}>
       <DialogContent className="sm:max-w-md">
