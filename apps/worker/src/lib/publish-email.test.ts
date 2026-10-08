@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   buildPublishEmail,
   buildPublishReportCsv,
+  buildPublishReportFilename,
   escapeHtml,
   safeHref,
   fmtWhen,
@@ -247,26 +248,39 @@ describe("buildPublishReportCsv", () => {
     ],
   };
 
-  it("emits the exact header and one row per target, in order", () => {
+  it("numbers the delivered channels first, then the rest, then a delivered count", () => {
     const lines = buildPublishReportCsv(input).split("\n");
-    expect(lines[0]).toBe('"platform","channel","handle","url","status","published_at_utc","published_at_ist"');
-    expect(lines).toHaveLength(3);
+    expect(lines[0]).toBe('"#","platform","channel","handle","url","status","published_at_utc","published_at_ist"');
+    expect(lines).toHaveLength(5);
     expect(lines[1]).toContain('"FACEBOOK"');
     expect(lines[1]).toContain('"https://facebook.com/123/posts/456"');
     expect(lines[1]).toContain('"2026-07-17 09:30"');
     expect(lines[1]).toContain('"15:00"');
     expect(lines[2]).toContain('"TWITTER"');
     expect(lines[2]).toContain('"FAILED"');
+    expect(lines[3]).toBe("");
+    expect(lines[4]).toBe('"","Successfully delivered","1 of 2"');
   });
 
-  it("is byte-identical to the pre-2026-09-15 report — the email change must not touch the spreadsheet", () => {
+  it("is locked byte-for-byte (owner layout 2026-10-08)", () => {
     expect(buildPublishReportCsv(input)).toBe(
       [
-        '"platform","channel","handle","url","status","published_at_utc","published_at_ist"',
-        '"FACEBOOK","My Page","mypage","https://facebook.com/123/posts/456","PUBLISHED","2026-07-17 09:30","15:00"',
-        '"TWITTER","X Acct","","https://postautomation.co.in/dashboard/posts/post_1","FAILED","",""',
+        '"#","platform","channel","handle","url","status","published_at_utc","published_at_ist"',
+        '"1","FACEBOOK","My Page","mypage","https://facebook.com/123/posts/456","PUBLISHED","2026-07-17 09:30","15:00"',
+        '"","TWITTER","X Acct","","https://postautomation.co.in/dashboard/posts/post_1","FAILED","",""',
+        "",
+        '"","Successfully delivered","1 of 2"',
       ].join("\n")
     );
+  });
+
+  it("puts every delivered channel before the failed ones, keeping each group's order", () => {
+    const failed = { ...okTarget, platform: "TWITTER", channelName: "X Acct", status: "FAILED", publishedUrl: null, publishedAt: null };
+    const csv = buildPublishReportCsv({ ...input, targets: [failed, okTarget, igTarget] });
+    const rows = csv.split("\n").slice(1, 4);
+    expect(rows.map((r) => r.split(",")[0])).toEqual(['"1"', '"2"', '""']);
+    expect(rows.map((r) => r.split(",")[1])).toEqual(['"FACEBOOK"', '"INSTAGRAM"', '"TWITTER"']);
+    expect(csv.endsWith('"","Successfully delivered","2 of 3"')).toBe(true);
   });
 
   it("neutralizes formula injection in user-controlled fields (leading ' before = + - @)", () => {
@@ -295,7 +309,52 @@ describe("buildPublishReportCsv", () => {
     // The embedded newline lives INSIDE quotes; parsing rows by naive split is
     // expected to see it — assert the quoted-escaped form is present instead.
     expect(csv).toContain('"My, ""Fancy""\nPage"');
-    expect(csv.startsWith('"platform"')).toBe(true);
+    expect(csv.startsWith('"#","platform"')).toBe(true);
+  });
+});
+
+describe("buildPublishReportFilename", () => {
+  const two = [okTarget, { ...igTarget, status: "FAILED", publishedUrl: null }];
+
+  it("is the caption plus the delivered count", () => {
+    expect(buildPublishReportFilename({ ...base, postContent: "Diwali sale is live\nMore text", targets: two })).toBe(
+      "Diwali sale is live - 1 of 2 delivered.csv"
+    );
+  });
+
+  it("uses the first non-empty line and drops Markdown heading marks", () => {
+    expect(buildPublishReportFilename({ ...base, postContent: "\n\n## Big launch\nbody", targets: [okTarget] })).toBe(
+      "Big launch - 1 of 1 delivered.csv"
+    );
+  });
+
+  it("strips characters a file name cannot hold", () => {
+    const name = buildPublishReportFilename({ ...base, postContent: 'Q&A: "who/what?" <live> | now*\u2028x', targets: [okTarget] });
+    expect(name).toBe("Q&A who what live now x - 1 of 1 delivered.csv");
+    expect(name).not.toMatch(/[\\/:*?"<>|]/);
+  });
+
+  it("cuts a long caption on a word boundary and never inside an emoji", () => {
+    const caption = "🎉 ".repeat(5) + "word ".repeat(30);
+    const name = buildPublishReportFilename({ ...base, postContent: caption, targets: [okTarget] });
+    const stem = name.replace(/ - 1 of 1 delivered\.csv$/, "");
+    expect(Array.from(stem).length).toBeLessThanOrEqual(60);
+    expect(stem.endsWith("word")).toBe(true);
+    expect(stem.startsWith("🎉 🎉")).toBe(true);
+    expect(stem).not.toMatch(/[\uD800-\uDBFF]$/);
+  });
+
+  it("keeps non-Latin captions", () => {
+    expect(buildPublishReportFilename({ ...base, postContent: "दिवाली की शुभकामनाएं", targets: [okTarget] })).toBe(
+      "दिवाली की शुभकामनाएं - 1 of 1 delivered.csv"
+    );
+  });
+
+  it("falls back to the post id when there is no caption", () => {
+    expect(buildPublishReportFilename({ ...base, postId: "cmabcdef12345678", postContent: "   \n", targets: two })).toBe(
+      "Post 12345678 - 1 of 2 delivered.csv"
+    );
+    expect(buildPublishReportFilename({ ...base, postContent: "...", targets: two })).toBe("Post post_1 - 1 of 2 delivered.csv");
   });
 });
 

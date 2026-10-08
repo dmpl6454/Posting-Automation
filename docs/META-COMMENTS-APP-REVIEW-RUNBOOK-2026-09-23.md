@@ -915,3 +915,22 @@ People looked for it on the Campaigns page, so that page now links to it:
   - Link building lives in `apps/web/lib/campaign-report-link.ts`.
 
 Not changed: what the report contains, and the 30-day maximum window of Reports.
+
+## 23. Publish email spreadsheet: named after the caption, delivered count inside (2026-10-08)
+
+Owner ask: the spreadsheet attached to the publish email should be named after the caption and show
+how many links were successfully delivered.
+
+- **File name** (`buildPublishReportFilename`, [publish-email.ts](../apps/worker/src/lib/publish-email.ts)):
+  `<caption> - <N> of <M> delivered.csv`. Caption = first non-empty line, Markdown `#` marks dropped,
+  characters a file name cannot hold (`\ / : * ? " < > |`, control and line-separator characters)
+  replaced by spaces, cut on a word boundary at 60 characters, never inside an emoji. No caption
+  (story / media-only) ⇒ `Post <id tail>`. Was `publish-report-<postId>.csv`.
+  Nodemailer sends a non-ASCII name RFC 2231-encoded; checked to round-trip an emoji + Devanagari
+  name through a standard MIME parser.
+- **Sheet** (`buildPublishReportCsv`): a new first column `#` numbers the channels that PUBLISHED
+  (1..N, listed first, original order kept); the others follow un-numbered; then a blank line and
+  `"","Successfully delivered","N of M"`. Other columns and the formula-injection guard are
+  unchanged; the BOM is still added by the worker so Excel reads UTF-8.
+- The email body (links only) is unchanged.
+- Tests: [publish-email.test.ts](../apps/worker/src/lib/publish-email.test.ts) (layout locked byte for byte, plus 6 file-name cases).
