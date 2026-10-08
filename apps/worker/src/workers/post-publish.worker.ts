@@ -7,7 +7,7 @@ import {
 } from "@postautomation/social";
 import { QUEUE_NAMES, postPublishQueue, analyticsSyncQueue, type PostPublishJobData, createRedisConnection } from "@postautomation/queue";
 import IORedis from "ioredis";
-import { buildPublishEmail, buildPublishReportCsv } from "../lib/publish-email";
+import { buildPublishEmail, buildPublishReportCsv, buildPublishReportFilename } from "../lib/publish-email";
 import { publishReportFingerprint, claimPublishReport, releasePublishReport } from "../lib/publish-report-dedupe";
 import { planFacebookAnalyticsId, earlyVideoSyncDelayMs } from "../lib/fb-video-post-id";
 import { addLocalClaim, releaseLocalClaim, localClaimCount } from "../lib/local-claims";
@@ -178,7 +178,8 @@ async function sendPublishReportEmail(
     const { subject, html, text } = buildPublishEmail(emailInput);
 
     // Spreadsheet-ready CSV attachment (platform, channel, url, …) so the
-    // recipient gets the links into Sheets/Excel in one click. Built in its
+    // recipient gets the links into Sheets/Excel in one click, named after the
+    // caption + delivered count ("<caption> - 18 of 20 delivered.csv"). Built in its
     // own try/catch: a CSV failure must never block the email itself, just
     // as an email failure never blocks the publish.
     let attachments:
@@ -188,7 +189,7 @@ async function sendPublishReportEmail(
       const csv = buildPublishReportCsv(emailInput);
       attachments = [
         {
-          filename: `publish-report-${postId}.csv`,
+          filename: buildPublishReportFilename(emailInput),
           // BOM prefix so Excel detects UTF-8 (same as apps/web/lib/csv.ts).
           content: "﻿" + csv,
           contentType: "text/csv; charset=utf-8",

@@ -209,13 +209,19 @@ function csvIst(d: Date | string | null): string {
  * where platform, channel, handle, status and time live — Gmail opens it
  * straight into Google Sheets, Outlook into Excel. PURE like buildPublishEmail.
  * URL column: the live post URL when http(s), else the dashboard fallback
- * (never a javascript:/data: value — safeHref-gated). Output is locked
- * byte-for-byte by publish-email.test.ts.
+ * (never a javascript:/data: value — safeHref-gated).
+ *
+ * Layout (owner ask 2026-10-08): the channels that published come first, each
+ * numbered in the "#" column (1..N, so the last number IS the delivered count);
+ * the rest follow un-numbered in their original order; then one blank line and
+ * a "Successfully delivered" row reading "N of M". Locked byte-for-byte by
+ * publish-email.test.ts.
  */
 export function buildPublishReportCsv(input: PublishEmailInput): string {
   const { postId, appUrl, targets } = input;
   const dashboardUrl = `${appUrl}/dashboard/posts/${postId}`;
   const header = [
+    "#",
     "platform",
     "channel",
     "handle",
@@ -224,7 +230,10 @@ export function buildPublishReportCsv(input: PublishEmailInput): string {
     "published_at_utc",
     "published_at_ist",
   ];
-  const rows = targets.map((t) => [
+  const delivered = targets.filter((t) => t.status === "PUBLISHED");
+  const rest = targets.filter((t) => t.status !== "PUBLISHED");
+  const row = (t: PublishEmailTarget, n: number | "") => [
+    n,
     t.platform,
     t.channelName,
     t.channelUsername ?? "",
@@ -232,9 +241,49 @@ export function buildPublishReportCsv(input: PublishEmailInput): string {
     t.status,
     csvUtc(t.publishedAt),
     csvIst(t.publishedAt),
-  ]);
+  ];
+  const rows = [...delivered.map((t, i) => row(t, i + 1)), ...rest.map((t) => row(t, ""))];
   return [
     header.map(csvField).join(","),
     ...rows.map((r) => r.map(csvField).join(",")),
+    "",
+    ["", "Successfully delivered", `${delivered.length} of ${targets.length}`].map(csvField).join(","),
   ].join("\n");
+}
+
+/** Characters no file name may carry on Windows/macOS, plus control and line-separator characters. */
+const FILENAME_UNSAFE = /[\\/:*?"<>|\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
+const FILENAME_CAPTION_MAX = 60;
+
+/**
+ * The attachment's file name (owner ask 2026-10-08): the post's caption, then
+ * how many channels it reached — "Diwali sale is live - 18 of 20 delivered.csv".
+ * Caption = the first non-empty line, Markdown heading marks dropped, cut on a
+ * word boundary at 60 characters (never inside an emoji). No caption (a story,
+ * a media-only post) ⇒ "Post <id tail>". PURE; nodemailer encodes non-ASCII
+ * names (RFC 2231), so emoji and Devanagari captions arrive intact.
+ */
+export function buildPublishReportFilename(input: PublishEmailInput): string {
+  const { postId, postContent, targets } = input;
+  const firstLine =
+    (postContent ?? "")
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .find((l) => l.length > 0) ?? "";
+  const cleaned = firstLine
+    .replace(/^#+\s*/, "")
+    .replace(FILENAME_UNSAFE, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  let chars = Array.from(cleaned);
+  if (chars.length > FILENAME_CAPTION_MAX) {
+    chars = chars.slice(0, FILENAME_CAPTION_MAX);
+    const cut = chars.lastIndexOf(" ");
+    if (cut >= FILENAME_CAPTION_MAX / 2) chars = chars.slice(0, cut);
+  }
+  // No leading/trailing dots or spaces (Windows strips them; a leading dot hides the file).
+  const caption = chars.join("").replace(/^[\s.]+|[\s.,;\-–—]+$/g, "");
+  const name = caption || `Post ${postId.slice(-8)}`;
+  const delivered = targets.filter((t) => t.status === "PUBLISHED").length;
+  return `${name} - ${delivered} of ${targets.length} delivered.csv`;
 }
