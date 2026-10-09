@@ -47,6 +47,9 @@ const repurposeContent = vi.fn(async (..._a: any[]) => ({
 const generateContent = vi.fn(async (..._a: any[]) => "Synthesized headline");
 
 vi.mock("@postautomation/ai", () => ({
+  // The shared text chain (repurpose.router uses it since 2026-10-09). With no
+  // provider keys in the test env the real one returns just [chosen].
+  buildTextProviderChain: (chosen?: string) => [chosen || "deepseek"],
   generateStyledCreativeImage: (...a: any[]) => generateStyledCreativeImage(...a),
   generateImageSafe: (...a: any[]) => generateImageSafe(...a),
   extractDominantColor: (...a: any[]) => extractDominantColor(...a),

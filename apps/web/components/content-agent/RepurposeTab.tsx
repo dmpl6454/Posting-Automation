@@ -163,7 +163,8 @@ export function RepurposeTab() {
   // No platforms pre-selected — the user explicitly picks targets (the
   // Generate button stays disabled until at least one is chosen).
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
-  const [provider, setProvider] = useState<typeof providers[number]>("openai");
+  // DeepSeek is the default text provider (owner decision 2026-10-09).
+  const [provider, setProvider] = useState<typeof providers[number]>("deepseek");
   const { data: aiConfig } = trpc.ai.getConfig.useQuery();
   useEffect(() => {
     if (!aiConfig) return;
@@ -173,7 +174,7 @@ export function RepurposeTab() {
       deepseek: aiConfig.deepseek, gemma4: aiConfig.gemma4,
     };
     if (!configured[provider]) {
-      const first = (["openai", "anthropic", "gemini", "gemma4", "grok", "deepseek"] as const)
+      const first = (["deepseek", "openai", "anthropic", "gemini", "gemma4", "grok"] as const)
         .find((p) => configured[p]);
       if (first) setProvider(first);
     }

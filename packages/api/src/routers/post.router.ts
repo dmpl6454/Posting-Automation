@@ -1415,8 +1415,9 @@ Return ONLY the JSON array, no other text.`;
       try {
         // Resilient chain: 'gemini' was hardcoded — during the Google billing
         // hold carousels silently degraded to the dumb text-split fallback.
+        // Default chain since 2026-10-09: deepseek first.
         const { withTextProviderFallback } = await import("@postautomation/ai");
-        const slideResponse = await withTextProviderFallback("gemini", (p) =>
+        const slideResponse = await withTextProviderFallback(undefined, (p) =>
           generateContent({
             provider: p as any,
             platform: "INSTAGRAM",

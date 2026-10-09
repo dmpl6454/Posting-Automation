@@ -16,6 +16,9 @@ const isPublicPageUrl = vi.fn((..._a: any[]) => false);
 const resolveImageFromPageUrl = vi.fn(async (..._a: any[]) => null as string | null);
 
 vi.mock("@postautomation/ai", () => ({
+  // The shared text chain (repurpose.router uses it since 2026-10-09). With no
+  // provider keys in the test env the real one returns just [chosen].
+  buildTextProviderChain: (chosen?: string) => [chosen || "deepseek"],
   safeFetchPublicImage: (...a: any[]) => safeFetchPublicImage(...a),
   classifyCard: (...a: any[]) => classifyCard(...a),
   isPublicImageUrl: (...a: any[]) => isPublicImageUrl(...a),

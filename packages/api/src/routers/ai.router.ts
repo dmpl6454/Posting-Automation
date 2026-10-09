@@ -13,14 +13,14 @@ export const aiRouter = createRouter({
         prompt: z.string().min(1),
         platform: z.string().optional(),
         tone: z.enum(["professional", "casual", "humorous", "formal", "inspiring"]).default("professional"),
-        provider: z.enum(["openai", "anthropic", "gemini", "grok", "deepseek", "gemma4"]).default("openai"),
+        provider: z.enum(["openai", "anthropic", "gemini", "grok", "deepseek", "gemma4"]).default("deepseek"),
       })
     )
     .mutation(async ({ input }) => {
       try {
         // Dynamically import to avoid issues if AI package isn't fully set up
         const { generateContent, withTextProviderFallback } = await import("@postautomation/ai");
-        // Resilient chain [chosen → openai → anthropic]: a billing-held or
+        // Resilient chain [chosen → deepseek → openai → anthropic]: a billing-held or
         // quota-exhausted chosen provider degrades to the next configured one
         // instead of hard-failing the generation (same policy as repurpose).
         const content = await withTextProviderFallback(
@@ -49,7 +49,7 @@ export const aiRouter = createRouter({
       try {
         const { suggestHashtags, withTextProviderFallback } = await import("@postautomation/ai");
         const hashtags = await withTextProviderFallback(
-          undefined, // default chain [openai → anthropic]
+          undefined, // default chain [deepseek → openai → anthropic]
           (p) =>
             suggestHashtags({
               content: input.content,
@@ -77,7 +77,7 @@ export const aiRouter = createRouter({
       try {
         const { optimizeContent, withTextProviderFallback } = await import("@postautomation/ai");
         const optimized = await withTextProviderFallback(
-          undefined, // default chain [openai → anthropic]
+          undefined, // default chain [deepseek → openai → anthropic]
           (p) =>
             optimizeContent({
               content: input.content,

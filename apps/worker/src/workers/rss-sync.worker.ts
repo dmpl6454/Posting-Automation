@@ -8,25 +8,31 @@ import { userHostFetch } from "@postautomation/social";
 async function generatePostFromEntry(
   entry: { title: string; summary: string },
   promptTemplate: string | null,
-): Promise<string> {
+): Promise<{ content: string; provider: string | null }> {
   try {
     // Dynamic import — @postautomation/ai is optional for the worker
-    const { generateContent } = await import("@postautomation/ai");
+    const { generateContent, withTextProviderFallback } = await import("@postautomation/ai");
     const prompt = promptTemplate
       ? promptTemplate
           .replace("{{title}}", entry.title)
           .replace("{{summary}}", entry.summary || "")
       : `Create an engaging social media post about this article:\nTitle: ${entry.title}\nSummary: ${entry.summary || "No summary available"}`;
 
-    const content = await generateContent({
-      provider: "openai",
-      platform: "TWITTER",
-      userPrompt: prompt,
+    // Shared text chain — deepseek first (2026-10-09; was OpenAI only, no fallback).
+    let used: string | null = null;
+    const content = await withTextProviderFallback(undefined, async (provider) => {
+      const out = await generateContent({
+        provider: provider as Parameters<typeof generateContent>[0]["provider"],
+        platform: "TWITTER",
+        userPrompt: prompt,
+      });
+      used = provider;
+      return out;
     });
-    return content;
+    return { content, provider: used };
   } catch (error) {
     console.error("[RssSync] AI generation failed, using fallback:", error);
-    return `${entry.title}\n\n${entry.summary || ""}`.trim();
+    return { content: `${entry.title}\n\n${entry.summary || ""}`.trim(), provider: null };
   }
 }
 
@@ -123,7 +129,7 @@ export function createRssSyncWorker() {
           for (const entry of unprocessedEntries) {
             if (!authorId) break;
             try {
-              const content = await generatePostFromEntry(
+              const { content, provider } = await generatePostFromEntry(
                 { title: entry.title, summary: entry.summary || "" },
                 feed.promptTemplate
               );
@@ -134,8 +140,10 @@ export function createRssSyncWorker() {
                   createdById: authorId,
                   content,
                   status: "DRAFT",
-                  aiGenerated: true,
-                  aiProvider: "openai",
+                  // The provider that actually wrote it; null when every AI
+                  // provider failed and the title + summary were used instead.
+                  aiGenerated: provider !== null,
+                  aiProvider: provider,
                   aiPrompt: `RSS auto-post from: ${entry.title}`,
                   targets: {
                     create: feed.targetChannels.map((channelId) => ({

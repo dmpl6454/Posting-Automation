@@ -1,12 +1,15 @@
 /**
- * Shared text-provider fallback chain: [chosen → openai → anthropic → deepseek],
+ * Shared text-provider fallback chain: [chosen → deepseek → openai → anthropic],
  * deduped, skipping providers whose API keys are absent from the environment.
+ * With no provider chosen it is [deepseek → openai → anthropic].
  *
- * DeepSeek is the LAST hop (owner decision 2026-09-28): OpenAI and Anthropic were
- * both out of credit for 4+ days while the DeepSeek account held a balance, so AI
- * text was down for everyone despite a working provider being configured. Being
- * last, it changes nothing while OpenAI answers; with no DEEPSEEK_API_KEY (an
- * unplumbed compose key arrives as "") it is skipped and the chain is unchanged.
+ * DeepSeek FIRST (owner decision 2026-10-09; it was the last hop from
+ * 2026-09-28): every AI text feature defaults to DeepSeek, and DeepSeek is the
+ * first fallback when a provider the user explicitly picked fails. With no
+ * DEEPSEEK_API_KEY (an unplumbed compose key arrives as "") it is skipped and
+ * the chain is [chosen → openai → anthropic].
+ * The Super Agent chat does NOT use this chain — it has its own order
+ * (Anthropic → DeepSeek → …) in apps/web/app/api/chat/stream/route.ts.
  * Always returns at least one entry (the chosen provider) so callers get a
  * meaningful provider error rather than a silent empty loop.
  *
@@ -15,7 +18,7 @@
  * key), fall through to the next configured provider instead of hard-failing.
  */
 export function buildTextProviderChain(chosen: string | undefined): string[] {
-  const safe = chosen || "openai";
+  const safe = chosen || "deepseek";
   const configured: Record<string, boolean> = {
     openai: !!process.env.OPENAI_API_KEY,
     anthropic: !!process.env.ANTHROPIC_API_KEY,
@@ -25,7 +28,7 @@ export function buildTextProviderChain(chosen: string | undefined): string[] {
     deepseek: !!process.env.DEEPSEEK_API_KEY,
   };
   const seen = new Set<string>();
-  const chain = [safe, "openai", "anthropic", "deepseek"].filter((p) => {
+  const chain = [safe, "deepseek", "openai", "anthropic"].filter((p) => {
     if (seen.has(p)) return false;
     seen.add(p);
     return configured[p] ?? true; // unknown providers (e.g. in tests) pass through

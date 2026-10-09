@@ -1,7 +1,7 @@
 import { auth } from "~/lib/auth";
 import { prisma } from "@postautomation/db";
 import { resolveActiveOrganizationId } from "~/lib/upload-org";
-import { streamChatAgent, parseActions, cleanResponseText, withIdempotencyKey, fetchTrendingNews, detectTrendingIntent, routeProvider } from "@postautomation/ai";
+import { streamChatAgent, parseActions, cleanResponseText, withIdempotencyKey, fetchTrendingNews, detectTrendingIntent } from "@postautomation/ai";
 import type { AIChatMessage, AIProvider } from "@postautomation/ai";
 
 export const dynamic = "force-dynamic";
@@ -155,41 +155,24 @@ export async function POST(req: Request) {
     }
   }
 
-  // Provider priority: explicit client request > agent preference > smart router
-  let provider: AIProvider;
-  if (body.provider) {
-    provider = body.provider;
-  } else if (thread.agent?.aiProvider) {
-    provider = thread.agent.aiProvider as AIProvider;
-  } else {
-    const lastAssistantMsg = dbMessages
-      .filter((m) => m.role === "assistant")
-      .pop();
-    const lastMeta = lastAssistantMsg?.metadata as Record<string, unknown> | null;
-    provider = await routeProvider(
-      lastText,
-      {
-        threadHistory: messages.slice(-6).map((m) => ({
-          role: m.role,
-          content: typeof m.content === "string" ? m.content : m.content.map((p) => (p.type === "text" ? p.text : "")).join(" "),
-        })),
-        hasAttachments: hasImageAttachments,
-        agentNiche: thread.agent?.niche || undefined,
-        lastProvider: (lastMeta?.provider as AIProvider) ?? undefined,
-      }
-    );
-    console.log(`[Chat] Smart router selected provider: ${provider}`);
-  }
+  // Provider (owner decision 2026-10-09): the Super Agent answers with
+  // Anthropic first, then DeepSeek if Anthropic fails (FALLBACK_PRIORITY
+  // below). An explicit `provider` in the request body still wins (no UI sends
+  // one today). The smart router and the thread agent's aiProvider are no
+  // longer consulted here — they could put any provider first.
+  const provider: AIProvider = body.provider ?? "anthropic";
 
   // Stream response
   const { readable, writable } = new TransformStream();
   const writer = writable.getWriter();
   const encoder = new TextEncoder();
 
-  // Vision-capable only when images are attached (grok/deepseek/gemma4 have no vision API).
+  // Text: Anthropic → DeepSeek, then the rest as a last resort.
+  // Vision-capable only when images are attached (grok/deepseek/gemma4 have no
+  // vision API), so an image turn goes Anthropic → Gemini → OpenAI.
   const FALLBACK_PRIORITY: AIProvider[] = hasImageAttachments
-    ? ["gemini", "openai", "anthropic"]
-    : ["openai", "anthropic", "grok", "deepseek", "gemini", "gemma4"];
+    ? ["anthropic", "gemini", "openai"]
+    : ["anthropic", "deepseek", "openai", "grok", "gemini", "gemma4"];
 
   const streamResponse = async () => {
     let fullResponse = "";
