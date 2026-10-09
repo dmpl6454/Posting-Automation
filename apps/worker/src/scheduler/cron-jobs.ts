@@ -1630,7 +1630,7 @@ export async function runCommentAutomationSweep(): Promise<void> {
           const { generateContent, withTextProviderFallback } = await import("@postautomation/ai");
           const prompt = buildBatchSentimentPrompt(texts.map((content, i) => ({ mentionId: String(i), content })));
           const raw = await withTextProviderFallback(
-            "anthropic",
+            undefined, // default chain: deepseek first (2026-10-09)
             (provider) =>
               generateContent({
                 provider: provider as Parameters<typeof generateContent>[0]["provider"],

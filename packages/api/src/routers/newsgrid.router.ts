@@ -195,7 +195,7 @@ export const newsgridRouter = createRouter({
                 input.language === "HI" ? "Write in Hindi." : input.language === "MIX" ? "Use Hinglish." : "",
               ].filter(Boolean).join("\n");
 
-              // Resilient chain [chosen → openai → anthropic]: a billing-held
+              // Resilient chain [chosen → deepseek → openai → anthropic]: a billing-held
               // provider degrades instead of dropping to the raw-headline caption.
               const { withTextProviderFallback } = await import("@postautomation/ai");
               const res = await withTextProviderFallback(input.provider, (p) =>
@@ -592,8 +592,9 @@ Requirements:
         // Resilient chain: 'gemini' was hardcoded — during the Google billing
         // hold every prefill silently returned an empty form. Fall through to
         // openai/anthropic; the silent catch below stays as the final guard.
+        // Default chain since 2026-10-09: deepseek first.
         const { withTextProviderFallback } = await import("@postautomation/ai");
-        const res = await withTextProviderFallback("gemini", (p) =>
+        const res = await withTextProviderFallback(undefined, (p) =>
           generateContent({
             provider: p as any,
             platform: "INSTAGRAM" as any,

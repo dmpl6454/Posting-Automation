@@ -873,7 +873,7 @@ export const repurposeRouter = createRouter({
       z.object({
         originalContent: z.string().min(1).max(50000),
         targetPlatforms: z.array(z.string()).min(1).max(16),
-        provider: z.enum(["openai", "anthropic", "gemini", "grok", "deepseek", "gemma4"]).default("openai"),
+        provider: z.enum(["openai", "anthropic", "gemini", "grok", "deepseek", "gemma4"]).default("deepseek"),
       })
     )
     .mutation(async ({ input }) => {
@@ -992,7 +992,7 @@ export const repurposeRouter = createRouter({
         // (gemini/gemma4) share the project that is currently on a billing
         // hold (403 "Lightning dunning"), which would kill caption generation
         // before any media work. OpenAI is the verified-working default.
-        provider: z.enum(["openai", "anthropic", "gemini", "grok", "deepseek", "gemma4"]).default("openai"),
+        provider: z.enum(["openai", "anthropic", "gemini", "grok", "deepseek", "gemma4"]).default("deepseek"),
         channelName: z.string().optional().default(""),
         channelHandle: z.string().optional().default(""),
         logoUrl: z.string().optional().default(""),
@@ -1138,32 +1138,13 @@ export const repurposeRouter = createRouter({
         if (pid) pushProgress(pid, step, status, detail).catch(() => {});
       };
 
-      // Build [chosen → openai → anthropic], deduped, skipping keys that are
-      // absent in the environment so we never route to an unconfigured provider.
-      // Always includes at least one entry: falls back to "openai" if the chain
-      // would otherwise be empty (e.g. all keys absent in a test environment).
-      function buildProviderChain(chosen: string | undefined): string[] {
-        const safe = chosen || "openai";
-        const configured: Record<string, boolean> = {
-          openai:    !!process.env.OPENAI_API_KEY,
-          anthropic: !!process.env.ANTHROPIC_API_KEY,
-          gemini:    !!(process.env.GOOGLE_GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY),
-          gemma4:    !!(process.env.GOOGLE_GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY),
-          grok:      !!process.env.XAI_API_KEY,
-          deepseek:  !!process.env.DEEPSEEK_API_KEY,
-        };
-        const seen = new Set<string>();
-        const chain = [safe, "openai", "anthropic"].filter((p) => {
-          if (seen.has(p)) return false;
-          seen.add(p);
-          return configured[p] ?? true; // unknown providers (e.g. in tests) pass through
-        });
-        // Guarantee at least the chosen provider is tried — even if unconfigured —
-        // so the caller always gets a meaningful error rather than silent no-op.
-        return chain.length > 0 ? chain : [safe];
-      }
+      // The SHARED chain [chosen → deepseek → openai → anthropic]
+      // (packages/ai provider-chain.ts). This router used to keep its own copy,
+      // [chosen → openai → anthropic], which never reached DeepSeek at all; it
+      // now follows the same order as every other text feature (2026-10-09).
+      const { buildTextProviderChain: buildProviderChain } = await import("@postautomation/ai");
 
-      // Text-provider resilience: tries [chosen → openai → anthropic] in order,
+      // Text-provider resilience: tries [chosen → deepseek → openai → anthropic] in order,
       // skipping unconfigured providers, throwing only after the full chain fails.
       // Previously fell back only to OpenAI — when OpenAI itself was quota-degraded,
       // Anthropic (healthy) was never tried and every dead provider produced a hard

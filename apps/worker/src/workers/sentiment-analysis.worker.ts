@@ -28,11 +28,9 @@ export type ScoreSentimentDeps = {
 /**
  * SL-04 (light scope): score a single mention's sentiment using the shared
  * provider-chain helper (withTextProviderFallback from @postautomation/ai)
- * instead of a single hardcoded provider. The worker passes the literal
- * string "anthropic" as the chosen provider, so buildTextProviderChain("anthropic")
- * resolves to ["anthropic", "openai"] (deduped) — it tries anthropic first
- * and falls back to openai if anthropic fails, rather than the [chosen→openai→
- * anthropic] ordering seen at other call sites where `chosen` is a variable.
+ * instead of a single hardcoded provider. No provider is chosen, so the chain
+ * is the shared default [deepseek → openai → anthropic] (DeepSeek first —
+ * owner decision 2026-10-09; it started with anthropic before).
  * Previously a lone `provider: "anthropic"` call meant ANY failure (missing
  * key, 401, rate limit, malformed JSON) fell straight to the generic catch
  * block, which silently wrote NEUTRAL/0 indistinguishably from a real
@@ -208,13 +206,13 @@ export function createSentimentAnalysisWorker() {
     QUEUE_NAMES.SENTIMENT_ANALYSIS,
     async (job: Job<SentimentAnalysisJobData>) => {
       const { buildTextProviderChain } = await import("@postautomation/ai");
-      const providersAttempted = buildTextProviderChain("anthropic");
+      const providersAttempted = buildTextProviderChain(undefined);
 
       const deps: ScoreSentimentDeps = {
         generateContentWithFallback: async (prompt) => {
           const { generateContent, withTextProviderFallback } = await import("@postautomation/ai");
           return withTextProviderFallback(
-            "anthropic",
+            undefined,
             (provider) =>
               generateContent({
                 provider: provider as Parameters<typeof generateContent>[0]["provider"],

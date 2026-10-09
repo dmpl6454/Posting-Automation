@@ -934,3 +934,30 @@ how many links were successfully delivered.
   unchanged; the BOM is still added by the worker so Excel reads UTF-8.
 - The email body (links only) is unchanged.
 - Tests: [publish-email.test.ts](../apps/worker/src/lib/publish-email.test.ts) (layout locked byte for byte, plus 6 file-name cases).
+
+## 24. AI provider order: DeepSeek first for text, Anthropic first for the Super Agent (2026-10-09)
+
+Owner ask: text features use DeepSeek first; the Super Agent uses Anthropic first, then DeepSeek if
+Anthropic fails.
+
+- **Text features** — one shared chain, `buildTextProviderChain` ([provider-chain.ts](../packages/ai/src/utils/provider-chain.ts)):
+  `[chosen → deepseek → openai → anthropic]`; with nothing chosen `[deepseek → openai → anthropic]`.
+  Providers without a key are skipped (no `DEEPSEEK_API_KEY` ⇒ `[chosen → openai → anthropic]`).
+  - Callers that hard-coded a first provider now take the default: comment + mention sentiment
+    (were `anthropic`), carousel slide text and NewsGrid prefill (were `gemini`), RSS auto-posts
+    (were OpenAI only, with no fallback; the stored `aiProvider` is now the provider that actually
+    wrote the post, or null when the title + summary fallback was used).
+  - Repurpose had its own copy of the chain, `[chosen → openai → anthropic]`, which never reached
+    DeepSeek; it now uses the shared one.
+  - API defaults (`ai.generate`, `repurpose.*`) and the UI defaults (Repurpose and Generate pickers,
+    Compose "Create with AI" / Enhance) are DeepSeek. A provider the user explicitly picks still goes
+    first, with DeepSeek as its first fallback. An autopilot agent's own `aiProvider` setting is
+    still honoured the same way.
+- **Super Agent** ([chat/stream/route.ts](../apps/web/app/api/chat/stream/route.ts)): provider =
+  request `provider` (no UI sends one) else **Anthropic**; the smart router and the thread agent's
+  `aiProvider` are no longer consulted. Fallback: Anthropic → DeepSeek → OpenAI → Grok → Gemini →
+  Gemma. With an image attached: Anthropic → Gemini → OpenAI (DeepSeek cannot read images).
+- Out-of-credit errors (incl. DeepSeek's HTTP 402) are final per provider, so a dry account moves to
+  the next provider immediately instead of retrying.
+- Tests: [provider-chain.test.ts](../packages/ai/src/__tests__/provider-chain.test.ts),
+  [super-agent-provider-order.test.ts](../apps/web/lib/super-agent-provider-order.test.ts).

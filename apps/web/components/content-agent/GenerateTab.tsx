@@ -34,7 +34,8 @@ export function GenerateTab() {
   const [prompt, setPrompt] = useState("");
   const [platform, setPlatform] = useState<string>("TWITTER");
   const [tone, setTone] = useState<typeof tones[number]>("professional");
-  const [provider, setProvider] = useState<typeof providers[number]>("gemma4");
+  // DeepSeek is the default text provider (owner decision 2026-10-09).
+  const [provider, setProvider] = useState<typeof providers[number]>("deepseek");
   const [result, setResult] = useState("");
   const [copied, setCopied] = useState(false);
 
@@ -50,7 +51,7 @@ export function GenerateTab() {
 
   const { data: aiConfig } = trpc.ai.getConfig.useQuery();
 
-  // Auto-correct default provider to first configured one (avoids landing on unconfigured gemma4)
+  // Auto-correct default provider to first configured one (avoids landing on an unconfigured provider)
   useEffect(() => {
     if (!aiConfig) return;
     const providerConfigured: Record<string, boolean> = {
@@ -58,7 +59,7 @@ export function GenerateTab() {
       gemini: aiConfig.gemini, grok: aiConfig.grok, deepseek: aiConfig.deepseek,
     };
     if (!providerConfigured[provider]) {
-      const first = (["gemma4","gemini","anthropic","openai","grok","deepseek"] as const)
+      const first = (["deepseek","openai","anthropic","gemini","gemma4","grok"] as const)
         .find((p) => providerConfigured[p]);
       if (first) setProvider(first);
     }

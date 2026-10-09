@@ -765,7 +765,7 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
     }
     setIsGenerating(true);
     // Pick the first available provider
-    const provider = aiConfig.anthropic ? "anthropic" : aiConfig.openai ? "openai" : "gemini";
+    const provider = aiConfig.deepseek ? "deepseek" : aiConfig.openai ? "openai" : aiConfig.anthropic ? "anthropic" : "gemini";
     try {
       const enhancePrompt = `ENHANCE the following social media post for better engagement. IMPORTANT RULES:
 1. Do NOT change the core meaning or topic
@@ -799,7 +799,7 @@ ${content}`;
       return;
     }
     setIsCreatingWithAI(true);
-    const provider = aiConfig.anthropic ? "anthropic" : aiConfig.openai ? "openai" : "gemini";
+    const provider = aiConfig.deepseek ? "deepseek" : aiConfig.openai ? "openai" : aiConfig.anthropic ? "anthropic" : "gemini";
     try {
       const selectedPlatform = channels?.find((ch: any) => selectedChannels.includes(ch.id))?.platform as string | undefined;
       const result = await generateAI.mutateAsync({
