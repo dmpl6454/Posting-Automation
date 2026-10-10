@@ -20,6 +20,7 @@ import { Textarea } from "~/components/ui/textarea";
 import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
 import { DateTimePicker } from "~/components/ui/datetime-picker";
+import { nowLocalDateTimeInput } from "~/lib/local-datetime";
 import { Badge } from "~/components/ui/badge";
 import { Separator } from "~/components/ui/separator";
 import { Switch } from "~/components/ui/switch";
@@ -2676,7 +2677,7 @@ ${content}`;
                     id="schedule-date"
                     value={scheduledAt}
                     onChange={setScheduledAt}
-                    min={new Date().toISOString().slice(0, 16)}
+                    min={nowLocalDateTimeInput()}
                   />
                 </div>
                 {scheduledAt && (

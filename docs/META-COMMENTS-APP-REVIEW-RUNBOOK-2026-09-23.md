@@ -997,3 +997,24 @@ limit). To inspect a specific failing file on the box:
 Tests: [media-optimize.test.ts](../apps/worker/src/lib/__tests__/media-optimize.test.ts),
 [video-overlay.test.ts](../apps/worker/src/lib/video-overlay.test.ts),
 [story-fit-wiring.test.ts](../apps/worker/src/__tests__/story-fit-wiring.test.ts).
+
+## 26. Scheduling: the post page shifted every schedule by the timezone offset (2026-10-10)
+
+Owner: "schedule doesn't work properly … fix asap". Found by reading the schedule path end to end.
+
+- **Bug.** The post detail page seeded its Schedule picker with
+  `new Date(post.scheduledAt).toISOString().slice(0, 16)` — the UTC clock face — while
+  `DateTimePicker` treats its value as LOCAL time. For an IST user a post scheduled for 18:30
+  showed as 13:00; and because `handleSave` always resends `scheduledAt`, ANY Save on that page
+  (a caption edit, adding a tag) moved the real schedule 5½ hours earlier. When that landed in
+  the past, `post.update` — which had no past check — made the post due immediately and it
+  published at once. The same UTC slice as the pickers' `min` disables "today" for anyone west
+  of UTC once their evening starts.
+- **Fix.** [local-datetime.ts](../apps/web/lib/local-datetime.ts) — `toLocalDateTimeInput` /
+  `nowLocalDateTimeInput` build the picker string from LOCAL components. Used for the post-page
+  seed and every picker `min` (Compose, post page, API-key expiry, NewsGrid). `post.update` now
+  refuses a CHANGED schedule time in the past (same 60s skew allowance as `create`); an unchanged,
+  already-due value still saves so a caption edit on a due post is not refused.
+- Compose, Bulk and the chat path were already correct (they only convert local → ISO at submit).
+- Tests: [local-datetime.test.ts](../apps/web/lib/local-datetime.test.ts) (round trip + a source
+  lock that no picker is fed a UTC slice), [post-update-past-schedule.test.ts](../packages/api/src/__tests__/post-update-past-schedule.test.ts).

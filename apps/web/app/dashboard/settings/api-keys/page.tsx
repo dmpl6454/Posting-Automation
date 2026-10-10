@@ -8,6 +8,7 @@ import { trpc } from "~/lib/trpc/client";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { DateTimePicker } from "~/components/ui/datetime-picker";
+import { nowLocalDateTimeInput } from "~/lib/local-datetime";
 import { Skeleton } from "~/components/ui/skeleton";
 import { useToast } from "~/hooks/use-toast";
 import { Key, Plus, Trash2, Copy, AlertTriangle } from "lucide-react";
@@ -124,7 +125,7 @@ function ApiKeysPageInner() {
             <DateTimePicker
               value={expiresAt}
               onChange={setExpiresAt}
-              min={new Date().toISOString().slice(0, 16)}
+              min={nowLocalDateTimeInput()}
               placeholder="No expiration"
               className={FIELD_38}
             />
