@@ -13,6 +13,7 @@ import { Textarea } from "~/components/ui/textarea";
 import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
 import { DateTimePicker } from "~/components/ui/datetime-picker";
+import { toLocalDateTimeInput, nowLocalDateTimeInput } from "~/lib/local-datetime";
 import { Separator } from "~/components/ui/separator";
 import { Skeleton } from "~/components/ui/skeleton";
 import { useToast } from "~/hooks/use-toast";
@@ -141,11 +142,9 @@ export default function PostDetailPage() {
     if (post) {
       setContent(post.content);
       setTags(post.tags.map((t: any) => t.tag).join(", "));
-      setScheduledAt(
-        post.scheduledAt
-          ? new Date(post.scheduledAt).toISOString().slice(0, 16)
-          : ""
-      );
+      // LOCAL clock face for the picker — a UTC slice showed IST users a time
+      // 5½ hours early and every Save then moved the schedule to match it.
+      setScheduledAt(toLocalDateTimeInput(post.scheduledAt));
       setHasChanges(false);
     }
   }, [post]);
@@ -1064,7 +1063,7 @@ export default function PostDetailPage() {
                   id="schedule-date"
                   value={scheduledAt}
                   onChange={handleScheduleChange}
-                  min={new Date().toISOString().slice(0, 16)}
+                  min={nowLocalDateTimeInput()}
                 />
               </div>
               {scheduledAt && (

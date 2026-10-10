@@ -817,6 +817,22 @@ export const postRouter = createRouter({
       const effectiveScheduledAt =
         input.scheduledAt !== undefined ? input.scheduledAt : existing.scheduledAt;
 
+      // A NEW schedule time must not be in the past (same 60s skew allowance
+      // as post.create; update used to have no check at all). Only a CHANGED
+      // time is judged: a caption edit resends the existing value, and a post
+      // that is already due must stay editable. 2026-10-10: the post page
+      // seeded its picker from a UTC slice, so every Save moved the schedule
+      // 5½ hours earlier for IST users — and without this guard a time that
+      // landed in the past made the post publish immediately.
+      if (input.scheduledAt) {
+        const next = new Date(input.scheduledAt).getTime();
+        const current = existing.scheduledAt ? existing.scheduledAt.getTime() : null;
+        const changed = current === null || Math.abs(next - current) > 60_000;
+        if (changed && next < Date.now() - 60_000) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Scheduled time cannot be in the past." });
+        }
+      }
+
       // A story stays a story. Runs on EITHER route that could break it — a
       // channel replacement (the post detail page's one-click "Add channel") or
       // an update that leaves the post scheduled.

@@ -10,6 +10,7 @@ import { Input } from "~/components/ui/input";
 import { Textarea } from "~/components/ui/textarea";
 import { Label } from "~/components/ui/label";
 import { DateTimePicker } from "~/components/ui/datetime-picker";
+import { nowLocalDateTimeInput } from "~/lib/local-datetime";
 import { Badge } from "~/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~/components/ui/select";
@@ -1067,7 +1068,7 @@ function NewsGridPageInner() {
                             <DateTimePicker
                               value={scheduleMap[r.channelId] ?? ""}
                               onChange={(val) => setScheduleMap((p) => ({ ...p, [r.channelId]: val }))}
-                              min={new Date().toISOString().slice(0, 16)}
+                              min={nowLocalDateTimeInput()}
                               className="text-xs"
                             />
                           </div>
