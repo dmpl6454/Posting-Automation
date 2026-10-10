@@ -12,6 +12,8 @@ import {
   buildTranscodeArgs,
   type ProbeSummary,
   type OptimizeState,
+  OPTIMIZE_ARGS_VERSION,
+  parseFrameRate,
 } from "../lib/media-optimize";
 
 /**
@@ -63,7 +65,18 @@ async function probeMedia(url: string): Promise<ProbeSummary> {
     { timeout: PROBE_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024 }
   );
   const data = JSON.parse(stdout) as {
-    streams?: Array<{ codec_type?: string; codec_name?: string; width?: number; height?: number }>;
+    streams?: Array<{
+      codec_type?: string;
+      codec_name?: string;
+      width?: number;
+      height?: number;
+      avg_frame_rate?: string;
+      r_frame_rate?: string;
+      pix_fmt?: string;
+      color_transfer?: string;
+      sample_rate?: string;
+      channels?: number;
+    }>;
     format?: { duration?: string; bit_rate?: string };
   };
   const v = data.streams?.find((s) => s.codec_type === "video");
@@ -75,6 +88,11 @@ async function probeMedia(url: string): Promise<ProbeSummary> {
     height: v?.height,
     durationSec: data.format?.duration ? parseFloat(data.format.duration) || undefined : undefined,
     bitrate: data.format?.bit_rate ? parseInt(data.format.bit_rate, 10) || undefined : undefined,
+    fps: parseFrameRate(v?.avg_frame_rate) ?? parseFrameRate(v?.r_frame_rate),
+    pixFmt: v?.pix_fmt,
+    colorTransfer: v?.color_transfer,
+    audioSampleRate: a?.sample_rate ? parseInt(a.sample_rate, 10) || undefined : undefined,
+    audioChannels: a?.channels,
   };
 }
 
@@ -158,6 +176,7 @@ async function handleJob(job: Job<MediaOptimizeJobData>) {
           reasons: verdict.reasons,
           probe,
           enqueuedAt,
+          argsVersion: OPTIMIZE_ARGS_VERSION,
         },
         columns
       );

@@ -72,7 +72,8 @@ export function planMetaVideoPrep(o: {
  * the output. The version is part of the object key, so a bump makes every old
  * cached artifact unreachable instead of silently serving the old encode.
  */
-export const META_READY_ARGS_VERSION = "v1";
+// v2 (2026-10-10): AAC 48kHz stereo audio, -fpsmax 60, bt709 colour tags.
+export const META_READY_ARGS_VERSION = "v2";
 
 /**
  * Deterministic S3 key for the shared normalize artifact.

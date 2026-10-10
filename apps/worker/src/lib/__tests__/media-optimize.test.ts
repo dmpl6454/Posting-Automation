@@ -5,6 +5,9 @@ import {
   choosePublishUrl,
   planOptimizeGate,
   OPTIMIZE_SIZE_BYTES,
+  OPTIMIZE_ARGS_VERSION,
+  isCurrentRendition,
+  parseFrameRate,
 } from "../media-optimize";
 
 const GB = 1024 * 1024 * 1024;
@@ -35,7 +38,67 @@ describe("evaluateOptimization", () => {
   });
 });
 
+// 2026-10-10 (IG "error code 2207082"): Meta's Reels/Stories spec is AAC at
+// 48kHz max in 1–2 channels, 23–60 FPS, 8-bit 4:2:0 SDR. Files outside it now
+// get a rendition.
+describe("evaluateOptimization — Meta video spec", () => {
+  const ok = { videoCodec: "h264", audioCodec: "aac", width: 1080, height: 1920, bitrate: 6_000_000 };
+
+  it("still passes a normal phone export (30fps, 8-bit, bt709, 44.1/48kHz stereo)", () => {
+    expect(
+      evaluateOptimization({ ...ok, fps: 29.97, pixFmt: "yuv420p", colorTransfer: "bt709", audioSampleRate: 44100, audioChannels: 2 }, 1000).needed
+    ).toBe(false);
+    expect(evaluateOptimization({ ...ok, fps: 60, audioSampleRate: 48000, audioChannels: 1 }, 1000).needed).toBe(false);
+  });
+
+  it("flags slow-motion above 60fps", () => {
+    const v = evaluateOptimization({ ...ok, fps: 120 }, 1000);
+    expect(v.needed).toBe(true);
+    expect(v.reasons.join()).toMatch(/120fps/);
+  });
+
+  it("flags HDR (HLG or PQ) and 10-bit / non-4:2:0 video", () => {
+    expect(evaluateOptimization({ ...ok, colorTransfer: "arib-std-b67", pixFmt: "yuv420p10le" }, 1000).reasons.join()).toMatch(/HDR/);
+    expect(evaluateOptimization({ ...ok, colorTransfer: "smpte2084" }, 1000).needed).toBe(true);
+    expect(evaluateOptimization({ ...ok, pixFmt: "yuv420p10le" }, 1000).reasons.join()).toMatch(/8-bit 4:2:0/);
+    expect(evaluateOptimization({ ...ok, pixFmt: "yuv444p" }, 1000).needed).toBe(true);
+  });
+
+  it("flags audio above 48kHz or with more than two channels", () => {
+    expect(evaluateOptimization({ ...ok, audioSampleRate: 96000 }, 1000).reasons.join()).toMatch(/96kHz/);
+    expect(evaluateOptimization({ ...ok, audioChannels: 6 }, 1000).reasons.join()).toMatch(/6-channel/);
+  });
+});
+
+describe("parseFrameRate", () => {
+  it("reads ffprobe rationals and rejects unknowns", () => {
+    expect(parseFrameRate("60/1")).toBe(60);
+    expect(parseFrameRate("30000/1001")).toBeCloseTo(29.97, 2);
+    expect(parseFrameRate("0/0")).toBeUndefined();
+    expect(parseFrameRate(undefined)).toBeUndefined();
+  });
+});
+
+describe("isCurrentRendition", () => {
+  it("only trusts a finished rendition made by the current transcode args", () => {
+    expect(isCurrentRendition({ optimize: { status: "done", url: "u", argsVersion: OPTIMIZE_ARGS_VERSION } })).toBe(true);
+    expect(isCurrentRendition({ optimize: { status: "done", url: "u" } })).toBe(false); // made before 2026-10-10
+    expect(isCurrentRendition({ optimize: { status: "processing", argsVersion: OPTIMIZE_ARGS_VERSION } })).toBe(false);
+    expect(isCurrentRendition(null)).toBe(false);
+  });
+});
+
 describe("buildTranscodeArgs", () => {
+  it("encodes to Meta's spec: AAC 48kHz stereo, at most 60fps, SDR bt709 tags", () => {
+    const args = buildTranscodeArgs("https://s3/x.mp4", "/tmp/out.mp4");
+    const at = (flag: string) => args[args.indexOf(flag) + 1];
+    expect(at("-ar")).toBe("48000");
+    expect(at("-ac")).toBe("2");
+    expect(at("-fpsmax")).toBe("60");
+    expect(at("-color_trc")).toBe("bt709");
+    expect(at("-pix_fmt")).toBe("yuv420p");
+  });
+
   it("is an argv array with faststart, AAC, H.264 and the 1920 cap", () => {
     const args = buildTranscodeArgs("https://s3/x.mp4", "/tmp/out.mp4");
     expect(args[0]).toBe("-y");

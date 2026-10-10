@@ -18,6 +18,14 @@ export interface ProbeSummary {
   height?: number;
   durationSec?: number;
   bitrate?: number; // bits/sec, container-level
+  /** Video frames per second (ffprobe avg_frame_rate, else r_frame_rate). */
+  fps?: number;
+  /** e.g. "yuv420p", "yuv420p10le" (10-bit), "yuv444p". */
+  pixFmt?: string;
+  /** e.g. "bt709", "arib-std-b67" (HLG), "smpte2084" (PQ / HDR10). */
+  colorTransfer?: string;
+  audioSampleRate?: number;
+  audioChannels?: number;
 }
 
 export interface OptimizeState {
@@ -29,6 +37,29 @@ export interface OptimizeState {
   probe?: ProbeSummary;
   enqueuedAt?: string;
   error?: string;
+  /**
+   * Which buildTranscodeArgs produced `url` (absent = before 2026-10-10). A
+   * rendition from older args is still served, but no longer counts as
+   * already Meta-ready — see isCurrentRendition.
+   */
+  argsVersion?: number;
+}
+
+/**
+ * Bump when buildTranscodeArgs changes what it outputs.
+ * 2 (2026-10-10): AAC 48kHz stereo, -fpsmax 60, bt709 SDR tags.
+ */
+export const OPTIMIZE_ARGS_VERSION = 2;
+
+/**
+ * True when the media's optimize rendition was made by the CURRENT transcode
+ * args, so the publish path may send it without another encode. A rendition
+ * from older args (which kept HDR tags, >60fps and >48kHz audio) is still the
+ * file that gets sent, but it goes through the Meta-ready encode first.
+ */
+export function isCurrentRendition(metadata: unknown): boolean {
+  const opt = (metadata as { optimize?: OptimizeState } | null)?.optimize;
+  return opt?.status === "done" && (opt.argsVersion ?? 1) >= OPTIMIZE_ARGS_VERSION;
 }
 
 /** Instagram's hard cap for URL-pull video (reels/feed) is 1GB. */
@@ -46,6 +77,25 @@ export const OPTIMIZE_WAIT_CEILING_MS = 45 * 60 * 1000;
 const SAFE_AUDIO = new Set(["aac", "mp3"]);
 /** Video codecs IG/FB/browsers take without re-encode. */
 const SAFE_VIDEO = new Set(["h264"]);
+/** Meta Reels/Stories spec: 23–60 FPS, AAC at 48kHz max, 1–2 channels, 4:2:0 SDR. */
+const META_MAX_FPS = 60;
+const META_MAX_SAMPLE_RATE = 48_000;
+const META_MAX_CHANNELS = 2;
+const HDR_TRANSFERS = new Set(["smpte2084", "arib-std-b67"]);
+
+/** 8-bit 4:2:0 is the only pixel format the spec allows ("4:2:0 chroma subsampling"). */
+function isSpecPixFmt(pixFmt: string): boolean {
+  return pixFmt === "yuv420p" || pixFmt === "yuvj420p" || pixFmt === "nv12";
+}
+
+/** ffprobe rate "30000/1001" | "60/1" | "0/0" → fps, or undefined when unknown. */
+export function parseFrameRate(rate: string | undefined): number | undefined {
+  if (!rate) return undefined;
+  const [num, den] = rate.split("/").map(Number);
+  if (!Number.isFinite(num) || !num) return undefined;
+  const fps = den ? num / den : num;
+  return Number.isFinite(fps) && fps > 0 ? fps : undefined;
+}
 
 export function evaluateOptimization(
   probe: ProbeSummary,
@@ -68,6 +118,20 @@ export function evaluateOptimization(
   if (longEdge > OPTIMIZE_MAX_EDGE) {
     reasons.push(`${probe.width}x${probe.height} exceeds platform maximums`);
   }
+  if ((probe.fps ?? 0) > META_MAX_FPS + 0.5) {
+    reasons.push(`${Math.round(probe.fps ?? 0)}fps (Instagram allows 23–60)`);
+  }
+  if (probe.colorTransfer && HDR_TRANSFERS.has(probe.colorTransfer)) {
+    reasons.push(`HDR video (${probe.colorTransfer}) — platforms expect SDR`);
+  } else if (probe.pixFmt && !isSpecPixFmt(probe.pixFmt)) {
+    reasons.push(`pixel format ${probe.pixFmt} (platforms need 8-bit 4:2:0)`);
+  }
+  if ((probe.audioSampleRate ?? 0) > META_MAX_SAMPLE_RATE) {
+    reasons.push(`audio at ${Math.round((probe.audioSampleRate ?? 0) / 1000)}kHz (Instagram allows 48kHz max)`);
+  }
+  if ((probe.audioChannels ?? 0) > META_MAX_CHANNELS) {
+    reasons.push(`${probe.audioChannels}-channel audio (Instagram allows mono or stereo)`);
+  }
   return { needed: reasons.length > 0, reasons };
 }
 
@@ -89,8 +153,15 @@ export function buildTranscodeArgs(inputUrl: string, outPath: string): string[] 
     "-maxrate", "8M",
     "-bufsize", "16M",
     "-pix_fmt", "yuv420p",
+    // Meta spec (2026-10-10): SDR tags, ≤60fps, AAC 48kHz stereo. Same
+    // settings as the publish-time encode (video-overlay-args.ts).
+    "-color_primaries", "bt709",
+    "-color_trc", "bt709",
+    "-colorspace", "bt709",
+    "-fpsmax", "60",
     "-c:a", "aac",
     "-b:a", "128k",
+    "-ar", "48000",
     "-ac", "2",
     "-movflags", "+faststart",
     "-threads", "3",
