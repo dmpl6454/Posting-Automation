@@ -90,8 +90,21 @@ describe("buildOverlayFfmpegArgs", () => {
       expect(threads).toBeLessThanOrEqual(2);
     });
 
-    it("still stream-copies audio (re-encoding it would be pure waste)", () => {
-      expect(valueOf("-codec:a")).toBe("copy");
+    // 2026-10-10: copying the audio let PCM / 96kHz / 5.1 tracks through to
+    // Instagram, whose spec is AAC, 48kHz max, 1–2 channels.
+    it("re-encodes audio to Meta's spec instead of copying it", () => {
+      expect(args).not.toContain("-codec:a");
+      expect(args).not.toContain("copy");
+      expect(valueOf("-c:a")).toBe("aac");
+      expect(valueOf("-ar")).toBe("48000");
+      expect(valueOf("-ac")).toBe("2");
+    });
+
+    it("caps the frame rate at 60 and labels the output as SDR bt709", () => {
+      expect(valueOf("-fpsmax")).toBe("60");
+      expect(valueOf("-color_primaries")).toBe("bt709");
+      expect(valueOf("-color_trc")).toBe("bt709");
+      expect(valueOf("-colorspace")).toBe("bt709");
     });
   });
 

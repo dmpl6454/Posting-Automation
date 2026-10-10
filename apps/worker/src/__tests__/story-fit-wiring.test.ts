@@ -120,7 +120,12 @@ describe("watermark removal (owner decision 2026-09-16)", () => {
     // Captured before any step rewrites mediaUrls.
     expect(worker.indexOf("const mediaIsRendition")).toBeLessThan(worker.indexOf("mediaUrls = processed;"));
     expect(worker).toMatch(
-      /planMetaVideoPrep\(\{\s*watermarkOn,\s*hasOverlayText: !!overlayText,\s*publishesAsStory,\s*isRendition: mediaIsRendition\[i\] === true,\s*tooBig: tooBigForOverlay,\s*\}\)/
+      /planMetaVideoPrep\(\{\s*watermarkOn,\s*hasOverlayText: !!overlayText,\s*publishesAsStory,\s*isRendition: mediaIsMetaReadyRendition\[i\] === true,\s*tooBig: tooBigForOverlay,\s*\}\)/
+    );
+    // 2026-10-10: a rendition only skips the encode when the CURRENT transcode
+    // args made it (older ones kept HDR tags, >60fps and >48kHz audio).
+    expect(worker).toMatch(
+      /const mediaIsMetaReadyRendition = postTarget\.post\.mediaAttachments\.map\(\s*\(m, i\) => mediaIsRendition\[i\] === true && isCurrentRendition\(/
     );
   });
 

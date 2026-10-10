@@ -961,3 +961,39 @@ Anthropic fails.
   the next provider immediately instead of retrying.
 - Tests: [provider-chain.test.ts](../packages/ai/src/__tests__/provider-chain.test.ts),
   [super-agent-provider-order.test.ts](../apps/web/lib/super-agent-provider-order.test.ts).
+
+## 25. Instagram "Media upload has failed with error code 2207082": Meta-ready encode now meets Meta's video spec (2026-10-10)
+
+Report: an Instagram post failed three times with `Instagram media processing failed: Error: Media
+upload has failed with error code 2207082` (container `status_code: ERROR`). 2207082 is not in
+Meta's error-code reference. Public reports tie it to Instagram receiving a file it cannot process.
+The failing file could not be inspected from this session (no server access).
+
+**A gap was found and proven with ffmpeg.** The publish-time "Meta-ready" encode
+([video-overlay-args.ts](../apps/worker/src/lib/video-overlay-args.ts)) re-encoded the picture but:
+- **copied the audio** (`-codec:a copy`), so PCM / 96 kHz / 5.1 tracks went to Instagram as-is;
+- kept the source **frame rate** (a 120 fps slow-mo stayed 120 fps);
+- kept **HDR colour tags** (HLG/PQ) on 8-bit output.
+
+A test clip (120 fps, HLG, 10-bit, PCM 96 kHz 6-channel) came out of the old encode at 120 fps, still
+tagged HLG, with PCM 96 kHz 6-channel audio. Meta's Reels/Stories spec is AAC at 48 kHz max in 1–2
+channels, 23–60 FPS, 4:2:0, and Instagram does not take HDR.
+
+**Fix:**
+- The encode now outputs `-c:a aac -b:a 128k -ar 48000 -ac 2`, `-fpsmax 60` and bt709 colour tags.
+  The same clip comes out at 60 fps, bt709, AAC 48 kHz stereo; a silent 30 fps clip stays 30 fps
+  with no audio added.
+- `META_READY_ARGS_VERSION` was bumped to v2, so artifacts cached with the old settings are not reused.
+- The media-optimize rendition uses the same settings and now also flags >60 fps, HDR / 10-bit /
+  non-4:2:0, >48 kHz and >2-channel audio. Renditions record `argsVersion`, and `isCurrentRendition`
+  stops an older rendition from skipping the publish-time encode.
+- HDR is relabelled as SDR, not tone-mapped, so HLG/PQ footage may look somewhat flat. A proper
+  tone-map needs zscale.
+
+**Not addressed:** clips shorter than 3 s, below 23 fps or over 300 MB (Meta's current Reels file
+limit). To inspect a specific failing file on the box:
+`docker exec postautomation-worker-1 ffprobe -v error -show_entries stream=codec_name,pix_fmt,r_frame_rate,sample_rate,channels,color_transfer:format=duration,size <media url>`.
+
+Tests: [media-optimize.test.ts](../apps/worker/src/lib/__tests__/media-optimize.test.ts),
+[video-overlay.test.ts](../apps/worker/src/lib/video-overlay.test.ts),
+[story-fit-wiring.test.ts](../apps/worker/src/__tests__/story-fit-wiring.test.ts).

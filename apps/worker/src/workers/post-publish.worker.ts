@@ -16,7 +16,7 @@ import { buildPublishTokens, publishIdempotencyKey } from "../lib/publish-tokens
 import { markTargetFailed, markTargetAmbiguous, buildPublishClaimWhere, routePublishError, shouldPreflightReconcile, buildPublishNotifications, mediaRequiredReason, isSeedNoise, decidePreClaimSkip, isHeavyPublish, planHeavyDefer, HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE, classifyError, isDefiniteAuthFailure, releaseClaimAfterPrePublishError, decideClaimMiss, countOtherActiveJobsForTarget, ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE, formatPublishTiming, type PublishJobState } from "../lib/publish-recovery";
 import { collectPerTargetMediaIds, substitutePerTargetMedia } from "../lib/per-target-media";
 import { PRIORITY_RETRY, mediaOptimizeQueue, atAgeWindowsForFormat } from "@postautomation/queue";
-import { planOptimizeGate, choosePublishUrl } from "../lib/media-optimize";
+import { planOptimizeGate, choosePublishUrl, isCurrentRendition } from "../lib/media-optimize";
 import { buildSnapshotMetadata } from "../lib/snapshot-metadata";
 
 /**
@@ -626,6 +626,13 @@ export function createPostPublishWorker() {
       // (2026-09-16). Computed HERE, while mediaUrls is still index-aligned
       // with the attachments and untouched by any later step.
       const mediaIsRendition = postTarget.post.mediaAttachments.map((m, i) => mediaUrls[i] !== m.media.url);
+      // Only a rendition made by the CURRENT transcode args is already Meta-ready
+      // and may skip the publish-time encode; an older one (made before
+      // 2026-10-10, which kept HDR tags, >60fps and >48kHz audio) is still the
+      // file sent, but it goes through the normalize encode first.
+      const mediaIsMetaReadyRendition = postTarget.post.mediaAttachments.map(
+        (m, i) => mediaIsRendition[i] === true && isCurrentRendition((m.media as { metadata?: unknown }).metadata)
+      );
       // Size of the file that video prep would actually download and encode:
       // the rendition when one is being sent (its size is recorded by
       // media-optimize), else the original. Checking the ORIGINAL's size here
@@ -804,7 +811,7 @@ export function createPostPublishWorker() {
               watermarkOn,
               hasOverlayText: !!overlayText,
               publishesAsStory,
-              isRendition: mediaIsRendition[i] === true,
+              isRendition: mediaIsMetaReadyRendition[i] === true,
               tooBig: tooBigForOverlay,
             });
             videoPrepPlans.push(plan);

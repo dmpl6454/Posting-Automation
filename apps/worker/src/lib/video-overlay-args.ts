@@ -76,10 +76,32 @@ export function buildOverlayFfmpegArgs(opts: {
     "12M",
     "-pix_fmt",
     "yuv420p",
+    // ⚠️ META SPEC (2026-10-10, after an IG "error code 2207082"): Reels and
+    // stories need AAC audio at 48kHz max in 1 or 2 channels, 23–60 FPS and
+    // SDR 4:2:0 video. This pass used to COPY the audio and keep the source's
+    // frame rate and HDR colour tags, so a phone clip with PCM / 96kHz / 5.1
+    // audio, a 120fps slow-mo or an HLG/PQ HDR recording came out of the
+    // "Meta-ready" encode still out of spec. -fpsmax only lowers a rate above
+    // 60 (a 30fps clip stays 30); the colour tags mark the output as plain
+    // bt709 SDR, which is what the 8-bit yuv420p pixels now are.
+    "-color_primaries",
+    "bt709",
+    "-color_trc",
+    "bt709",
+    "-colorspace",
+    "bt709",
+    "-fpsmax",
+    "60",
     "-threads",
     String(overlayThreads()),
-    "-codec:a",
-    "copy",
+    "-c:a",
+    "aac",
+    "-b:a",
+    "128k",
+    "-ar",
+    "48000",
+    "-ac",
+    "2",
     "-movflags",
     "+faststart",
     opts.outputPath,
