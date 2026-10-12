@@ -24,3 +24,32 @@ export function toLocalDateTimeInput(value: Date | string | number | null | unde
 export function nowLocalDateTimeInput(now: Date = new Date()): string {
   return toLocalDateTimeInput(now);
 }
+
+/**
+ * Why a Compose "Schedule" click cannot go through yet, or null (2026-10-12).
+ * The Schedule button used to be DISABLED until a time was picked in the
+ * separate Schedule box — greyed out with no reason a phone could show, which
+ * read as "the schedule option is gone". It now stays clickable and this names
+ * the fix instead. Same 60s skew allowance as the server.
+ */
+export function scheduleTimeProblem(value: string, now: number = Date.now()): string | null {
+  if (!value) return "Pick a date and time in the Schedule box first.";
+  const at = new Date(value).getTime();
+  if (Number.isNaN(at)) return "Pick a date and time in the Schedule box first.";
+  if (at < now - 60_000) return "That time has already passed — pick a later time.";
+  return null;
+}
+
+/**
+ * The time a freshly picked DATE should get when no time is chosen yet: the
+ * next full hour (as before). For TODAY after 23:00 that hour is tomorrow's
+ * 00:00 — the picker used `(now.getHours() + 1) % 24` on today's date, which
+ * set TODAY 00:00, a time already in the past.
+ */
+export function defaultTimeForDate(date: Date, now: Date = new Date()): { date: Date; hour: number; minute: number } {
+  const sameDay =
+    date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
+  if (!sameDay) return { date, hour: (now.getHours() + 1) % 24, minute: 0 };
+  const next = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours() + 1, 0);
+  return { date: new Date(next.getFullYear(), next.getMonth(), next.getDate()), hour: next.getHours(), minute: 0 };
+}

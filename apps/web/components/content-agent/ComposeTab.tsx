@@ -20,7 +20,7 @@ import { Textarea } from "~/components/ui/textarea";
 import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
 import { DateTimePicker } from "~/components/ui/datetime-picker";
-import { nowLocalDateTimeInput } from "~/lib/local-datetime";
+import { nowLocalDateTimeInput, scheduleTimeProblem } from "~/lib/local-datetime";
 import { Badge } from "~/components/ui/badge";
 import { Separator } from "~/components/ui/separator";
 import { Switch } from "~/components/ui/switch";
@@ -182,6 +182,9 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   const [content, setContent] = useState(initialContent || "");
   const [selectedChannels, setSelectedChannels] = useState<string[]>([]);
   const [scheduledAt, setScheduledAt] = useState("");
+  // The Schedule button opens the picker when no usable time is set yet.
+  const [schedulePickerOpen, setSchedulePickerOpen] = useState(false);
+  const scheduleCardRef = useRef<HTMLDivElement>(null);
   // PR-5: unique caption per channel (AI) — only meaningful with >1 channel.
   const [uniqueCaptions, setUniqueCaptions] = useState(false);
   // Per-channel SUPER TEXT (2026-10-02): AI writes a different strip line per
@@ -1336,6 +1339,19 @@ ${content}`;
     if (youtubeBlockReason) {
       toast({ title: "Cannot publish to YouTube", description: youtubeBlockReason, variant: "destructive" });
       return;
+    }
+
+    // Schedule with no time, or a time that has passed: say so and open the
+    // picker. The button used to be silently DISABLED until a time was set,
+    // which read as "the schedule option is gone" (2026-10-12).
+    if (!publishNow) {
+      const problem = scheduleTimeProblem(scheduledAt);
+      if (problem) {
+        toast({ title: "Choose when to publish", description: problem, variant: "destructive" });
+        scheduleCardRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+        setSchedulePickerOpen(true);
+        return;
+      }
     }
 
     try {
@@ -2662,7 +2678,7 @@ ${content}`;
           ) : null}
 
           {/* Schedule */}
-          <Card>
+          <Card ref={scheduleCardRef} data-testid="compose-schedule-card">
             <CardHeader className="pb-3">
               <CardTitle>Schedule</CardTitle>
               <CardDescription>Set a date and time for publishing</CardDescription>
@@ -2678,6 +2694,8 @@ ${content}`;
                     value={scheduledAt}
                     onChange={setScheduledAt}
                     min={nowLocalDateTimeInput()}
+                    open={schedulePickerOpen}
+                    onOpenChange={setSchedulePickerOpen}
                   />
                 </div>
                 {scheduledAt && (
@@ -2691,6 +2709,11 @@ ${content}`;
                   </Button>
                 )}
               </div>
+              {scheduledAt && scheduleTimeProblem(scheduledAt) && (
+                <p className="mt-2 text-xs text-amber-700 dark:text-amber-400" data-testid="compose-schedule-past">
+                  {scheduleTimeProblem(scheduledAt)}
+                </p>
+              )}
             </CardContent>
           </Card>
 
@@ -2968,7 +2991,7 @@ ${content}`;
               className="w-full sm:w-auto"
               onClick={() => handleSubmit(false)}
               disabled={
-                needsSharedCaption || selectedChannels.length === 0 || !scheduledAt || createPost.isPending || isUploading || !!youtubeBlockReason || !!storyBlock || !!articleBlock
+                needsSharedCaption || selectedChannels.length === 0 || createPost.isPending || isUploading || !!youtubeBlockReason || !!storyBlock || !!articleBlock
               }
               title={youtubeBlockReason ?? storyBlock ?? articleBlock ?? captionBlock ?? undefined}
             >
