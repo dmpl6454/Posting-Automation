@@ -1018,3 +1018,21 @@ Owner: "schedule doesn't work properly … fix asap". Found by reading the sched
 - Compose, Bulk and the chat path were already correct (they only convert local → ISO at submit).
 - Tests: [local-datetime.test.ts](../apps/web/lib/local-datetime.test.ts) (round trip + a source
   lock that no picker is fed a UTC slice), [post-update-past-schedule.test.ts](../packages/api/src/__tests__/post-update-past-schedule.test.ts).
+
+## 27. Compose: the Schedule button no longer sits greyed out without a reason (2026-10-12)
+
+Owner: "now scheduled option is not available" → "Compose: Schedule button greyed".
+
+- The Schedule button was `disabled` until a time had been picked in the separate Schedule box,
+  with no visible reason (a `title` tooltip never shows on a phone). It now stays clickable like
+  Publish Now. A click with no time — or a time that has passed — shows "Choose when to publish",
+  scrolls to the Schedule box and OPENS the picker (`DateTimePicker` gained optional controlled
+  `open` / `onOpenChange`). The Schedule box also shows an amber line when the picked time is past.
+  Pure check: `scheduleTimeProblem` in [local-datetime.ts](../apps/web/lib/local-datetime.ts), same
+  60s skew allowance as the server.
+- Picking a date with no time yet defaulted to `(now.getHours() + 1) % 24` on that date, so
+  choosing TODAY after 23:00 set today 00:00 — already in the past. `defaultTimeForDate` rolls it
+  into tomorrow 00:00; other days keep the old next-hour default.
+- Browser-verified (Chromium, Asia/Kolkata, clock fixed at 23:20): button enabled with no time;
+  click → message + picker open; picking today → `2026-10-13T00:00`; second click submits.
+- Tests: [compose-schedule.test.ts](../apps/web/lib/compose-schedule.test.ts).

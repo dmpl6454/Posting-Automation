@@ -8,6 +8,7 @@ import { Button } from "~/components/ui/button";
 import { Calendar } from "~/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "~/components/ui/popover";
 import { ScrollArea } from "~/components/ui/scroll-area";
+import { defaultTimeForDate } from "~/lib/local-datetime";
 
 /**
  * Drop-in replacement for <input type="datetime-local">.
@@ -31,6 +32,9 @@ interface DateTimePickerProps {
   className?: string;
   placeholder?: string;
   disabled?: boolean;
+  /** Optional controlled open state (Compose opens the picker from its Schedule button). */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -72,8 +76,15 @@ export function DateTimePicker({
   className,
   placeholder = "Pick date & time",
   disabled,
+  open: openProp,
+  onOpenChange,
 }: DateTimePickerProps) {
-  const [open, setOpen] = React.useState(false);
+  const [openState, setOpenState] = React.useState(false);
+  const open = openProp ?? openState;
+  const setOpen = (next: boolean) => {
+    setOpenState(next);
+    onOpenChange?.(next);
+  };
   const { date, hour, minute } = parseLocal(value);
 
   const minParsed = min ? parseLocal(min) : null;
@@ -86,13 +97,15 @@ export function DateTimePicker({
 
   const handleDateSelect = (selected: Date | undefined) => {
     if (!selected) return;
-    // Keep the existing time when only the date changes; default to the next
-    // round hour if no time chosen yet, so a freshly-picked date lands in the
-    // future (avoids same-hour expiry for api-key expiry, etc.).
-    const now = new Date();
-    const h = date ? hour : (now.getHours() + 1) % 24;
-    const mi = date ? minute : 0;
-    emit(selected, h, mi);
+    // Keep the existing time when only the date changes. With no time chosen
+    // yet, use the next full hour — rolling into tomorrow when today is picked
+    // after 23:00 (the old `(hour + 1) % 24` set TODAY 00:00, already past).
+    if (date) {
+      emit(selected, hour, minute);
+      return;
+    }
+    const d = defaultTimeForDate(selected);
+    emit(d.date, d.hour, d.minute);
   };
 
   const hours = Array.from({ length: 24 }, (_, i) => i);
