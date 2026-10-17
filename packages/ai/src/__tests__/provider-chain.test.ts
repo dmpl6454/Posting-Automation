@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { buildTextProviderChain } from "../utils/provider-chain";
-import { getAnthropicModel } from "../providers/anthropic.provider";
+import { getAnthropicModel, anthropicWorkspaceHeaders } from "../providers/anthropic.provider";
 
 describe("buildTextProviderChain", () => {
   beforeEach(() => {
@@ -82,5 +82,68 @@ describe("getAnthropicModel default model id", () => {
     const model = getAnthropicModel();
     expect((model as unknown as { topP?: number }).topP).toBe(1);
     expect((model as unknown as { topP?: number }).topP).not.toBe(-1);
+  });
+});
+
+// An account-level key (sk-ant-usr-…) is refused by Anthropic unless every
+// request names a workspace (prod key swap, 2026-10-17).
+describe("ANTHROPIC_WORKSPACE_ID", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it("sends no header when unset, empty or malformed", () => {
+    expect(anthropicWorkspaceHeaders(undefined)).toBeUndefined();
+    expect(anthropicWorkspaceHeaders("")).toBeUndefined();
+    expect(anthropicWorkspaceHeaders("   ")).toBeUndefined();
+    expect(anthropicWorkspaceHeaders("wrkspc_1\r\nx-evil: 1")).toBeUndefined();
+    expect(anthropicWorkspaceHeaders("a b")).toBeUndefined();
+  });
+
+  it("trims and accepts a Console workspace id", () => {
+    expect(anthropicWorkspaceHeaders(" wrkspc_01AbC-9 ")).toEqual({ "anthropic-workspace-id": "wrkspc_01AbC-9" });
+  });
+
+  async function wireHeaders(): Promise<Headers> {
+    let seen: Headers | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: unknown, init?: RequestInit) => {
+        seen = new Headers(init?.headers);
+        return new Response(
+          JSON.stringify({
+            id: "msg_1",
+            type: "message",
+            role: "assistant",
+            model: "claude-sonnet-4-6",
+            content: [{ type: "text", text: "ok" }],
+            stop_reason: "end_turn",
+            stop_sequence: null,
+            usage: { input_tokens: 1, output_tokens: 1 },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        );
+      })
+    );
+    vi.stubEnv("ANTHROPIC_API_KEY", "test-key");
+    vi.stubEnv("ANTHROPIC_MODEL", "");
+    await getAnthropicModel().invoke("hi");
+    if (!seen) throw new Error("no request was made");
+    return seen;
+  }
+
+  it("puts the header on the actual request when set", async () => {
+    vi.stubEnv("ANTHROPIC_WORKSPACE_ID", "wrkspc_01AbC");
+    const h = await wireHeaders();
+    expect(h.get("anthropic-workspace-id")).toBe("wrkspc_01AbC");
+    expect(h.get("x-api-key")).toBe("test-key");
+  });
+
+  it("leaves the request without it when unset (workspace keys)", async () => {
+    vi.stubEnv("ANTHROPIC_WORKSPACE_ID", "");
+    const h = await wireHeaders();
+    expect(h.get("anthropic-workspace-id")).toBeNull();
+    expect(h.get("x-api-key")).toBe("test-key");
   });
 });
