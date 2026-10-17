@@ -84,3 +84,52 @@ export async function ensurePageSubscribed(input: {
     return { pageId, status: "failed", reason: err?.name === "TimeoutError" ? "timeout" : "request did not complete" };
   }
 }
+
+/** One Page from a consent's `me/accounts`, with the IG account linked to it (if any). */
+export interface LinkedPage {
+  pageId: string;
+  pageAccessToken: string;
+  igUserId: string | null;
+}
+
+const LIST_MAX_PAGES = 10;
+
+/**
+ * List the Pages a Facebook USER token can manage, with each Page's token and
+ * linked Instagram account (2026-10-17, for the Page-subscription backfill: an
+ * IG channel stores the user token, not its Page's). One call per 100 Pages.
+ *
+ * NEVER throws. `ok: false` means the listing could not be read (usually a dead
+ * token); a partial listing after a later page fails is still `ok: false`, so a
+ * caller never reads "not in the list" from an incomplete answer.
+ */
+export async function listLinkedPages(
+  userAccessToken: string
+): Promise<{ ok: boolean; pages: LinkedPage[]; reason?: string }> {
+  const pages: LinkedPage[] = [];
+  try {
+    if (!userAccessToken) return { ok: false, pages, reason: "no token" };
+    const params = new URLSearchParams({
+      fields: "id,access_token,instagram_business_account{id}",
+      limit: "100",
+      access_token: userAccessToken,
+    });
+    let url: string | null = `${GRAPH}/me/accounts?${params.toString()}`;
+    for (let n = 0; url; n++) {
+      if (n >= LIST_MAX_PAGES) return { ok: false, pages, reason: "too many Pages" };
+      const res = await fetchT(url, {}, TIMEOUT_MS);
+      const body: any = await res.json().catch(() => null);
+      if (!res.ok) return { ok: false, pages, reason: reasonOf(body?.error, res.status) };
+      for (const p of Array.isArray(body?.data) ? body.data : []) {
+        if (typeof p?.id !== "string" || !GRAPH_OBJECT_ID_RE.test(p.id) || typeof p?.access_token !== "string") continue;
+        const ig = p.instagram_business_account?.id;
+        pages.push({ pageId: p.id, pageAccessToken: p.access_token, igUserId: typeof ig === "string" ? ig : null });
+      }
+      const next = body?.paging?.next;
+      url = typeof next === "string" && next.startsWith(`${GRAPH}/`) ? next : null;
+    }
+    return { ok: true, pages };
+  } catch (err: any) {
+    return { ok: false, pages, reason: err?.name === "TimeoutError" ? "timeout" : "request did not complete" };
+  }
+}

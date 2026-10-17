@@ -9,6 +9,8 @@ import {
   isMetaPlatform,
   resolveMetaCredentials,
   listAllMetaApps,
+  ensurePageSubscribed,
+  listLinkedPages,
 } from "@postautomation/social";
 import { runAutoHealerWithLogging } from "../workers/auto-healer.worker";
 import {
@@ -32,6 +34,7 @@ import {
 import { runCelebrityDetectors } from "../workers/celebrity-detect.worker";
 import { createRedisConnection, enqueueScheduledPublishJobs, excludeExpiredStoriesWhere, shouldReconcileCheckpoints } from "@postautomation/queue";
 import { HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE } from "../lib/publish-recovery";
+import { runPageSubscriptionBackfill } from "../lib/page-subscription-backfill";
 
 /**
  * Purge AnalyticsSnapshot rows whose PostTarget no longer exists.
@@ -262,6 +265,48 @@ export async function scheduleMetaDataAccessBackfill() {
         `${unavailable} had no readable window (dead token — cooling down ${DATA_ACCESS_RECHECK_COOLDOWN_MS / 86400000}d); ` +
         `${Math.max(0, byToken.size - calls)} token group(s) deferred to the next run`
     );
+  }
+}
+
+/**
+ * Subscribe the Pages behind already-connected FB/IG channels to the Meta app, so
+ * Instagram `mentions` webhooks can arrive without a reconnect (2026-10-17). New
+ * connects do this in the OAuth callback; see lib/page-subscription-backfill.ts
+ * for the budget rules. Daily, capped, never throws.
+ */
+let pageSubscriptionBackfillRunning = false;
+export async function scheduleMetaPageSubscriptionBackfill() {
+  if (pageSubscriptionBackfillRunning) return;
+  pageSubscriptionBackfillRunning = true;
+  try {
+    // DIRECT channel.findMany — the shape that auto-decrypts accessToken.
+    const channels = await prisma.channel.findMany({
+      where: { isActive: true, disconnectedAt: null, platform: { in: ["FACEBOOK", "INSTAGRAM"] as any } },
+      orderBy: { updatedAt: "desc" },
+      select: { id: true, platform: true, platformId: true, accessToken: true, metaAppId: true, metadata: true },
+    });
+    const summary = await runPageSubscriptionBackfill({
+      channels: channels.map((c) => ({ ...c, platform: String(c.platform) })),
+      resolveAppId: (platform, metaAppId) =>
+        isMetaPlatform(platform) ? resolveMetaCredentials(platform, metaAppId)?.appId ?? null : null,
+      subscribe: ensurePageSubscribed,
+      listLinkedPages,
+      record: async (channelId, outcome) => {
+        const patch = JSON.stringify({ pageSubscription: outcome });
+        await prisma.$executeRaw`UPDATE "Channel" SET "metadata" = COALESCE("metadata", '{}'::jsonb) || ${patch}::jsonb WHERE "id" = ${channelId}`;
+      },
+    });
+    if (summary.eligible > 0) {
+      console.log(
+        `[Cron:PageSubscription] ${summary.eligible} of ${summary.considered} channel(s) eligible; ` +
+          `${summary.listings} Page listing(s); subscribed ${summary.subscribed}, already ${summary.already}, ` +
+          `missing permission ${summary.missingPermission}, failed ${summary.failed}; ${summary.deferred} channel(s) deferred`
+      );
+    }
+  } catch (err: any) {
+    console.error("[Cron:PageSubscription] run failed:", err?.message ?? err);
+  } finally {
+    pageSubscriptionBackfillRunning = false;
   }
 }
 
@@ -1685,6 +1730,11 @@ export function startCronJobs() {
   // burning the app's hourly Graph quota in one pass.
   setInterval(scheduleMetaDataAccessBackfill, 24 * 60 * 60 * 1000);
   setTimeout(scheduleMetaDataAccessBackfill, 11 * 60 * 1000); // after 11 min warmup
+
+  // Page-subscription backfill (Instagram mentions webhooks), once daily.
+  // Capped per run; runs after the data-access backfill has refreshed grants.
+  setInterval(scheduleMetaPageSubscriptionBackfill, 24 * 60 * 60 * 1000);
+  setTimeout(scheduleMetaPageSubscriptionBackfill, 17 * 60 * 1000); // after 17 min warmup
 
   // Orphaned-snapshot janitor, once daily. REPORT-ONLY until
   // ORPHAN_PURGE_ENABLED=true; batched + capped when armed.
