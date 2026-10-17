@@ -1036,3 +1036,19 @@ Owner: "now scheduled option is not available" → "Compose: Schedule button gre
 - Browser-verified (Chromium, Asia/Kolkata, clock fixed at 23:20): button enabled with no time;
   click → message + picker open; picking today → `2026-10-13T00:00`; second click submits.
 - Tests: [compose-schedule.test.ts](../apps/web/lib/compose-schedule.test.ts).
+
+## 28. Anthropic account-level keys need a workspace id (2026-10-17)
+
+A key created under account settings starts `sk-ant-usr-` and Anthropic refuses it with HTTP 400
+"This API key is not scoped to a workspace, so this request must include the anthropic-workspace-id
+header". Keys created inside a workspace (`sk-ant-api03-`) need nothing.
+
+- New optional env `ANTHROPIC_WORKSPACE_ID` (plumbed to web AND worker in `docker-compose.prod.yml`).
+  When it holds a Console workspace id (`wrkspc_…`), `getAnthropicModel` — the only `ChatAnthropic`
+  construction site — sends `anthropic-workspace-id` on every request via `clientOptions.defaultHeaders`.
+- Empty, unset or anything outside `[A-Za-z0-9_-]` ⇒ no header and the constructor arguments are
+  exactly the old ones, so a workspace key is unaffected.
+- Server: add `ANTHROPIC_WORKSPACE_ID=wrkspc_…` to `.env.prod`, then
+  `docker compose -f docker-compose.prod.yml --env-file .env.production up -d --no-deps --timeout 300 web worker`.
+- Tests: the `ANTHROPIC_WORKSPACE_ID` block in `packages/ai/src/__tests__/provider-chain.test.ts`
+  checks the header on the real outgoing request (stubbed fetch); verified failing without the fix.

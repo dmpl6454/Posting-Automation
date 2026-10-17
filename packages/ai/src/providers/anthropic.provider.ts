@@ -6,7 +6,28 @@ import { aiFailedAttemptHandler } from "../utils/credit-exhaustion";
 // rotates model IDs again. (Mirrors the OPENAI_MODEL override in openai.provider.ts.)
 const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6";
 
+// A workspace id as the Console shows it (e.g. "wrkspc_01AbC…"). Anything else
+// — including "" from an unplumbed compose key — sends NO header, which is the
+// pre-2026-10-17 request byte-for-byte.
+const WORKSPACE_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
+
+/**
+ * Headers for an Anthropic key that is NOT scoped to a workspace (account-level
+ * keys, prefix `sk-ant-usr-`). Anthropic refuses those with HTTP 400 "This API
+ * key is not scoped to a workspace, so this request must include the
+ * anthropic-workspace-id header" (2026-10-17, prod key swap). Workspace keys
+ * (`sk-ant-api03-`) need nothing, so leave ANTHROPIC_WORKSPACE_ID unset for them.
+ */
+export function anthropicWorkspaceHeaders(
+  raw: string | undefined = process.env.ANTHROPIC_WORKSPACE_ID
+): Record<string, string> | undefined {
+  const id = raw?.trim();
+  if (!id || !WORKSPACE_ID_RE.test(id)) return undefined;
+  return { "anthropic-workspace-id": id };
+}
+
 export function getAnthropicModel(temperature = 0.7) {
+  const workspaceHeaders = anthropicWorkspaceHeaders();
   return new ChatAnthropic({
     modelName: process.env.ANTHROPIC_MODEL || DEFAULT_ANTHROPIC_MODEL,
     temperature,
@@ -22,5 +43,7 @@ export function getAnthropicModel(temperature = 0.7) {
     // topP: undefined / null do NOT work — both collapse back to -1 via `?? -1`.
     topP: 1,
     onFailedAttempt: aiFailedAttemptHandler,
+    // Spread only when set, so a workspace-scoped key keeps the exact old ctor args.
+    ...(workspaceHeaders ? { clientOptions: { defaultHeaders: workspaceHeaders } } : {}),
   });
 }
