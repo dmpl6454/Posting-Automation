@@ -153,7 +153,8 @@ export function MentionsInbox({ accounts }: { accounts: Account[] }) {
           {show === "open" && (
             <p className="text-xs">
               Mentions arrive the moment Instagram reports them. If none ever appear, the mentions feed may not be switched on
-              for your workspace yet — it needs Meta to approve the comment permissions for PostAutomation.
+              yet: it needs Meta to approve PostAutomation&apos;s comment and Page-management permissions, then a reconnect
+              of the Instagram account (Channels → Connect Instagram → Edit settings) so its Page can be subscribed.
             </p>
           )}
         </div>

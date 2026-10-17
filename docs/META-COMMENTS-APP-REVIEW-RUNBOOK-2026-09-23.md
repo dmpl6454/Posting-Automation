@@ -1092,8 +1092,9 @@ and a second reply needs an explicit "Reply again" / "Send again anyway".
    `story_insights` is ticked).
 3. **`pages_manage_metadata` + Page subscription.** Meta requires
    `POST /{page-id}/subscribed_apps` on the Page linked to each IG account, which needs
-   `pages_manage_metadata` — a NEW permission we do not request yet (needs App Review). Until
-   then no mention webhooks are delivered.
+   `pages_manage_metadata`. That permission is already REQUESTED for Facebook and Instagram (it
+   came with the Messages inbox) and is waiting on App Review. The subscription itself is now
+   automatic — see §30.
 4. Meta's limits: no mentions from stories or private accounts; no commenting on photos you
    were only TAGGED in.
 
@@ -1103,3 +1104,35 @@ Tests: `packages/social/src/__tests__/instagram-mentions.test.ts` (22),
 `packages/api/src/__tests__/comment-create-and-mentions.test.ts` (12),
 `apps/worker/src/lib/first-comment.test.ts` (9), `apps/web/lib/first-comment.test.ts`,
 `apps/web/lib/instagram-comment-ui-contract.test.ts`.
+
+## 30. Pages are subscribed to the app automatically on connect (2026-10-17)
+
+Every Facebook or Instagram connect now subscribes our Meta app to each granted Page
+(`packages/api/src/lib/page-subscriptions.ts` → `ensurePageSubscribed` in
+`packages/social/src/utils/meta-page-subscription.ts`). That is what lets Instagram `mentions`
+webhooks reach `/api/webhooks/instagram`.
+
+- **Read before write:** `GET /{page}/subscribed_apps` first; if our app is already there it is
+  left exactly as configured (a POST with `subscribed_fields` replaces the field list).
+- Otherwise `POST /{page}/subscribed_apps subscribed_fields=name` with the Page token — `name` is
+  a valid Page field that almost never changes, so Pages do not start streaming feed events at the
+  web container. Any field enables Instagram webhooks.
+- Facebook connect uses each Page's token from `me/accounts`; Instagram connect now also asks
+  `me/accounts` for `access_token` so the linked Page can be subscribed. Page tokens stay in
+  memory — never written to the IG channel.
+- **Skipped** when `debug_token` says the consent did NOT grant `pages_manage_metadata` (every call
+  would be refused). Unknown grant ⇒ tried. Until App Review approves the permission only
+  app-role accounts hold it.
+- Fire-and-forget, 3 Pages at a time, 15s per call, never throws. Each channel records the outcome
+  in `metadata.pageSubscription = { status: subscribed | already | missing_permission | failed,
+  reason?, at }` (atomic jsonb merge), and the web log prints one summary line:
+  `[page-subscription] app <id>: N subscribed, N already, N missing permission, N failed`.
+- **Existing channels are not back-filled**: they were connected without the permission anyway, so
+  each account needs one reconnect after approval, which subscribes it.
+
+Still required on Meta's side for mentions: Advanced Access for `instagram_manage_comments` and
+`pages_manage_metadata`, and the `mentions` field ticked under App Dashboard → Webhooks → Instagram.
+
+Tests: `packages/social/src/__tests__/meta-page-subscription.test.ts`,
+`packages/api/src/__tests__/page-subscriptions.test.ts` (includes a source lock on the callback).
+

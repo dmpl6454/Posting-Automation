@@ -6,6 +6,7 @@ import { getSocialProvider, FacebookProvider, InstagramProvider, LinkedInProvide
 // bridges the avatar-cache enqueue.
 import { enqueueAvatarCacheJobs } from "@postautomation/api/src/lib/avatar-cache";
 import { markChannelsMissingFromGrant } from "@postautomation/api/src/lib/orphaned-grant";
+import { subscribeConnectedPages, type PageToSubscribe } from "@postautomation/api/src/lib/page-subscriptions";
 import { metaAppChannelScope } from "@postautomation/api/src/lib/meta-app-scope";
 import { auth } from "~/lib/auth";
 
@@ -58,6 +59,22 @@ async function correctOrphanedGrantVerdicts(
  * (IG/FB signed URLs expire in days). Fire-and-forget — must NEVER break or
  * delay the connect flow.
  */
+/**
+ * Best-effort, fire-and-forget: subscribe our Meta app to the Pages this consent
+ * granted, so Instagram `mentions` webhooks can arrive (2026-10-17). Skipped when
+ * the recorded grant lacks pages_manage_metadata. Must NEVER break or delay the
+ * connect flow — see page-subscriptions.ts.
+ */
+function queuePageSubscriptions(items: PageToSubscribe[], appId: string, grantedScopes: string[] | undefined): void {
+  try {
+    void subscribeConnectedPages(items, appId, grantedScopes).catch((err: any) => {
+      console.warn(`[oauth] page subscription failed (non-fatal): ${err?.message ?? err}`);
+    });
+  } catch (err: any) {
+    console.warn(`[oauth] page subscription failed (non-fatal): ${err?.message ?? err}`);
+  }
+}
+
 function queueAvatarCache(channelIds: string[]): void {
   try {
     void enqueueAvatarCacheJobs(channelIds, "connect").catch((err: any) => {
@@ -359,6 +376,7 @@ export async function GET(
       } else {
         // Save each Facebook Page as a separate channel
         const fbChannelIds: string[] = [];
+        const fbSubscriptions: PageToSubscribe[] = [];
         for (const page of pages) {
           const fbChannel = await prisma.channel.upsert({
             where: {
@@ -415,8 +433,14 @@ export async function GET(
           // Fresh token → clear this channel's open token/auth monitoring errors.
           await resolveChannelErrorsOnReconnect(prisma, fbChannel.id);
           fbChannelIds.push(fbChannel.id);
+          fbSubscriptions.push({ pageId: page.id, pageAccessToken: page.accessToken, channelIds: [fbChannel.id] });
         }
         queueAvatarCache(fbChannelIds);
+        queuePageSubscriptions(
+          fbSubscriptions,
+          metaCreds!.appId,
+          metaTokenWindow?.valid ? metaTokenWindow.scopes : undefined
+        );
         // Pages the user did NOT tick are never visited by the loop above, so
         // their stale "reconnect this channel" verdict would otherwise outlive
         // every future reconnect.
@@ -452,6 +476,7 @@ export async function GET(
       }
 
       const igChannelIds: string[] = [];
+      const igSubscriptions: PageToSubscribe[] = [];
       for (const ig of igAccounts) {
         const igChannel = await prisma.channel.upsert({
           where: {
@@ -499,8 +524,15 @@ export async function GET(
         // Fresh token → clear this channel's open token/auth monitoring errors.
         await resolveChannelErrorsOnReconnect(prisma, igChannel.id);
         igChannelIds.push(igChannel.id);
+        // The IG account's linked Page — its token stays in memory only.
+        if (ig.pageId) igSubscriptions.push({ pageId: ig.pageId, pageAccessToken: ig.pageAccessToken, channelIds: [igChannel.id] });
       }
       queueAvatarCache(igChannelIds);
+      queuePageSubscriptions(
+        igSubscriptions,
+        metaCreds!.appId,
+        metaTokenWindow?.valid ? metaTokenWindow.scopes : undefined
+      );
       // Same orphan class as Facebook: an IG account resolves through a Page, so
       // an unticked Page silently drops its IG account from this consent too.
       await correctOrphanedGrantVerdicts(

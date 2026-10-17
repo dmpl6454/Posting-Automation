@@ -822,9 +822,13 @@ export class InstagramProvider extends SocialProvider {
     name: string;
     username?: string;
     avatar?: string;
+    /** The Facebook Page the IG account is linked to (2026-10-17, for Page subscriptions). */
+    pageId?: string;
+    /** That Page's token — in memory only; never stored on the IG channel. */
+    pageAccessToken?: string;
   }>> {
-    const accounts: Array<{ id: string; name: string; username?: string; avatar?: string }> = [];
-    let url: string | null = `${this.graphBaseUrl}/${this.apiVersion}/me/accounts?fields=id,instagram_business_account&limit=25&access_token=${tokens.accessToken}`;
+    const accounts: Array<{ id: string; name: string; username?: string; avatar?: string; pageId?: string; pageAccessToken?: string }> = [];
+    let url: string | null = `${this.graphBaseUrl}/${this.apiVersion}/me/accounts?fields=id,access_token,instagram_business_account&limit=25&access_token=${tokens.accessToken}`;
     let pageCount = 0;
 
     while (url) {
@@ -857,6 +861,8 @@ export class InstagramProvider extends SocialProvider {
                 name: igData.username || igData.id,
                 username: igData.username,
                 avatar: igData.profile_picture_url,
+                pageId: typeof page.id === "string" ? page.id : undefined,
+                pageAccessToken: typeof page.access_token === "string" ? page.access_token : undefined,
               });
             }
           } catch {

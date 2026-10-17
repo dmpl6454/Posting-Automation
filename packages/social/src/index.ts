@@ -175,6 +175,12 @@ export {
   type FirstCommentRecord,
   type FirstCommentStatus,
 } from "./utils/instagram-mentions";
+export {
+  ensurePageSubscribed,
+  PAGE_SUBSCRIPTION_FIELD,
+  type PageSubscriptionResult,
+  type PageSubscriptionStatus,
+} from "./utils/meta-page-subscription";
 export type {
   CommentCapabilities,
   CommentModerationAction,
