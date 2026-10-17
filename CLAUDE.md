@@ -3465,9 +3465,15 @@ Instagram's API only lets an account comment on media it OWNS, plus reply where 
   signing Meta app; details via `mentioned_comment`/`mentioned_media` with a minimal-field fallback. Ids reach a
   field EXPANSION, so the provider re-checks them with `GRAPH_OBJECT_ID_RE`. Reply = `POST /{ig-user-id}/mentions`;
   a second reply requires `again: true`.
-- ⚠️ **Mentions do not arrive yet**: needs `instagram_manage_comments` Advanced Access, the `mentions` field ticked
-  in the App Dashboard, and `pages_manage_metadata` + `POST /{page-id}/subscribed_apps` per Page (not requested —
-  App Review). The UI's empty state says so.
+- **Page subscription is automatic on connect** (runbook §30): [page-subscriptions.ts](packages/api/src/lib/page-subscriptions.ts)
+  → `ensurePageSubscribed` ([meta-page-subscription.ts](packages/social/src/utils/meta-page-subscription.ts)), fired
+  and forgotten from the OAuth callback for FB Pages and IG accounts' linked Pages. GET first — an existing
+  subscription is never touched (a POST REPLACES its fields); otherwise POST `subscribed_fields=name` (quiet field).
+  Skipped when the recorded grant lacks `pages_manage_metadata`; outcome on `Channel.metadata.pageSubscription`.
+  `getAllInstagramAccounts` now also returns `pageId`/`pageAccessToken` (memory only — never stored).
+- ⚠️ **Mentions do not arrive yet**: `pages_manage_metadata` IS requested (FB + IG, since the Messages inbox) but
+  needs App Review, as does `instagram_manage_comments`; the `mentions` field must be ticked in the App Dashboard;
+  and existing accounts need one reconnect after approval. The UI's empty state says so.
 
 ## 👂 Social listening sync — efficiency pass (2026-10-04) — read before touching listening-sync, sentiment-analysis or `Mention`
 
