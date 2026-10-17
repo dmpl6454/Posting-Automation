@@ -14,7 +14,10 @@ const store = readFileSync(join(__dirname, "./comment-queue.ts"), "utf8");
 describe("unanswered queue", () => {
   it("loads only when the Unanswered view is chosen (it is a set of live Graph reads)", () => {
     expect(page).toMatch(/view === "unanswered" \?/);
-    expect(page).toMatch(/viewParam === "unanswered" \|\| viewParam === "automation" \? viewParam : "posts"/);
+    // ?view=mentions joined the list 2026-10-17; anything else still lands on "posts".
+    expect(page).toMatch(
+      /viewParam === "unanswered" \|\| viewParam === "automation" \|\| viewParam === "mentions" \? viewParam : "posts"/
+    );
     expect(queue).toMatch(/retry: false/);
     expect(queue).toMatch(/refetchOnWindowFocus: false/);
   });

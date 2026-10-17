@@ -204,6 +204,10 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   // compose field.
   const [campaignLabel, setCampaignLabel] = useState("");
   const [customCaptions, setCustomCaptions] = useState(false);
+  // Automatic first comment on every Instagram target, posted right after the
+  // post goes live (2026-10-17). Sent only when an Instagram channel is
+  // selected and never for a story or an article — see firstCommentPayload.
+  const [firstComment, setFirstComment] = useState("");
   const [captionOverrides, setCaptionOverrides] = useState<Record<string, string>>({});
   const [isGenerating, setIsGenerating] = useState(false);
   const [postMedia, setPostMedia] = useState<{ url: string; mediaId?: string; file?: File; uploading?: boolean; progress?: number; superText?: SuperTextConfig; thumbnail?: { mediaId: string; url: string }; thumbnailUploading?: boolean }[]>([]);
@@ -713,6 +717,7 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
       setUniqueCaptions(false);
       setCustomCaptions(false);
       setCaptionOverrides({});
+      setFirstComment("");
       setPostMedia([]);
       // Mentions are per-story. Carrying them over would silently re-tag the
       // previous story's people on the next one.
@@ -1376,6 +1381,7 @@ ${content}`;
         content,
         channelIds: selectedChannels,
         ...(Object.keys(manualCaptions).length > 0 && { captionOverrides: manualCaptions }),
+        ...firstCommentPayload(),
         // Internal grouping label for Reports. Omitted when blank ⇒ the post is
         // written exactly as before.
         ...(campaignLabel.trim() && { campaignLabel: campaignLabel.trim() }),
@@ -1437,6 +1443,16 @@ ${content}`;
   };
 
   const charCount = content.length;
+
+  /** `{ firstComment }` for post.create, or nothing (no IG channel, story, article, blank). */
+  function firstCommentPayload(): { firstComment?: string } {
+    const text = firstComment.trim();
+    if (!text || isStoryMode || isArticleMode) return {};
+    const hasInstagram = (channels ?? []).some(
+      (ch: any) => selectedChannels.includes(ch.id) && ch.platform === "INSTAGRAM"
+    );
+    return hasInstagram ? { firstComment: text } : {};
+  }
 
   const selectedPlatforms: string[] = channels
     ? channels
@@ -2867,6 +2883,33 @@ ${content}`;
             </Card>
           )}
 
+          {/* Automatic first comment (2026-10-17) — Instagram only, never for a
+              story or an article. */}
+          {!isStoryMode && !isArticleMode && selectedPlatforms.includes("instagram") && (
+            <Card data-testid="first-comment-card">
+              <CardHeader className="pb-3">
+                <CardTitle>First comment</CardTitle>
+                <CardDescription>
+                  Posted on each Instagram post as your account right after it goes live — handy for hashtags or a link note.
+                  Leave blank for none.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-1.5">
+                <Textarea
+                  id="first-comment"
+                  value={firstComment}
+                  maxLength={2200}
+                  rows={2}
+                  placeholder="#hashtags #go #here"
+                  onChange={(e) => setFirstComment(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  {firstComment.length.toLocaleString()}/2,200 · Instagram only. Facebook and other channels don&apos;t get it.
+                </p>
+              </CardContent>
+            </Card>
+          )}
+
           {/* Per-channel super text (2026-10-02) — shown only when a video tile
               carries super text and >1 channel is selected. The user's line stays
               on one channel; AI writes a different line for each of the others and
@@ -2930,6 +2973,7 @@ ${content}`;
                     content,
                     channelIds: selectedChannels.length > 0 ? selectedChannels : [],
                     ...(Object.keys(manualCaptions).length > 0 && { captionOverrides: manualCaptions }),
+                    ...firstCommentPayload(),
                     ...(campaignLabel.trim() && { campaignLabel: campaignLabel.trim() }),
                     // A saved draft burns its per-channel variants now too, so scheduling it
                     // later needs no further wait.

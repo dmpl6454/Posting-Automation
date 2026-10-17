@@ -17,6 +17,7 @@ import { toLocalDateTimeInput, nowLocalDateTimeInput } from "~/lib/local-datetim
 import { Separator } from "~/components/ui/separator";
 import { Skeleton } from "~/components/ui/skeleton";
 import { useToast } from "~/hooks/use-toast";
+import { firstCommentLine } from "~/lib/first-comment";
 import { CommentThread } from "~/components/comments/comment-thread";
 import {
   ArrowLeft,
@@ -803,6 +804,24 @@ export default function PostDetailPage() {
                     // the affordance there can only produce a confusing error.
                     target.format !== "STORY" && (
                     <div className="space-y-2">
+                      {(() => {
+                        const line = firstCommentLine(target.metadata);
+                        if (!line) return null;
+                        return (
+                          <p
+                            data-testid="first-comment-status"
+                            className={
+                              line.tone === "ok"
+                                ? "text-xs text-muted-foreground"
+                                : line.tone === "warn"
+                                  ? "text-xs text-amber-700 dark:text-amber-400"
+                                  : "text-xs text-red-600"
+                            }
+                          >
+                            {line.text}
+                          </p>
+                        );
+                      })()}
                       <div className="flex flex-wrap items-center gap-3">
                         <button
                           type="button"

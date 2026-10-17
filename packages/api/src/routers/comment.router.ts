@@ -28,7 +28,9 @@ import {
   messagingFailureOf,
   messagingFailureMessage,
   MESSENGER_TEXT_MAX_CHARS,
+  IG_COMMENT_MAX_LENGTH,
 } from "@postautomation/social";
+import { fillMentionDetails } from "../lib/instagram-mention-store";
 import { createRateLimitMiddleware } from "../middleware/rate-limit.middleware";
 import {
   commentIgLikeBurstLimiter,
@@ -441,6 +443,25 @@ async function assertCommentOnTarget(prisma: any, t: ResolvedCommentTarget, comm
 }
 
 /** A write whose outcome the platform didn't confirm — it may have happened. */
+const MENTIONS_PAGE = 30;
+
+/**
+ * An org-scoped mention row and its channel, loaded DIRECTLY so the token is
+ * decrypted. Refuses a disconnected or non-Instagram channel.
+ */
+async function loadMentionForWrite(prisma: any, organizationId: string, mentionId: string) {
+  const mention = await prisma.instagramMention.findFirst({ where: { id: mentionId, organizationId } });
+  if (!mention) throw new TRPCError({ code: "NOT_FOUND", message: "Mention not found." });
+  const channel = await prisma.channel.findUnique({ where: { id: mention.channelId } });
+  if (!channel || channel.organizationId !== organizationId || channel.platform !== "INSTAGRAM") {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Mention not found." });
+  }
+  if (channel.disconnectedAt) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "This Instagram account has been disconnected." });
+  }
+  return { mention, channel };
+}
+
 function isUnconfirmedMessage(message: unknown): boolean {
   return /may already be posted|didn't confirm that change/i.test(String(message ?? ""));
 }
@@ -830,6 +851,219 @@ export const commentRouter = createRouter({
       });
 
       return { id: result.id, platform: t.platform };
+    }),
+
+  /**
+   * A NEW top-level comment on our own Instagram post, as the account
+   * (2026-10-17). The media id comes from OUR PostTarget row — the client only
+   * names the target. Same permission and the same "may already be posted"
+   * semantics as a reply: creating a comment is not idempotent.
+   */
+  create: replyRateLimited
+    .input(
+      z.object({
+        targetId: z.string(),
+        message: z.string().trim().min(1, "Comment cannot be empty.").max(IG_COMMENT_MAX_LENGTH),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const t = await resolvePublishedCommentTarget(ctx.prisma as any, ctx.organizationId, input.targetId);
+      if (t.platform !== "INSTAGRAM") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Adding a new comment is available for Instagram posts only." });
+      }
+      enforcePageBudget(commentPageReplyLimiter, t.platform, t.account.platformId);
+
+      const audit = (metadata: Record<string, unknown>) =>
+        createAuditLog({
+          organizationId: ctx.organizationId,
+          userId: (ctx.session?.user as any)?.id,
+          action: AUDIT_ACTIONS.COMMENT_CREATED,
+          entityType: "PostTarget",
+          entityId: input.targetId,
+          metadata: { platform: t.platform, channelId: t.account.channelId, length: input.message.length, ...metadata },
+        });
+
+      let result: { id: string };
+      try {
+        result = await (getSocialProvider("INSTAGRAM") as InstagramProvider).commentOnMedia(t.tokens, t.objectId, input.message);
+      } catch (err: any) {
+        if (isPermissionMessage(err?.message)) void refreshGrantedScopes(ctx.prisma, t);
+        if (isUnconfirmedMessage(err?.message)) await audit({ outcome: "unconfirmed" });
+        throw new TRPCError({ code: "BAD_REQUEST", message: err?.message ?? "Failed to post the comment." });
+      }
+      await audit({ commentId: result.id });
+      return { id: result.id, platform: t.platform };
+    }),
+
+  /**
+   * Places where other Instagram accounts @mentioned ours (caption or comment
+   * on THEIR media), newest first. Rows come only from the `mentions` webhook.
+   */
+  mentions: orgProcedure
+    .input(
+      z
+        .object({
+          channelId: z.string().optional(),
+          show: z.enum(["open", "replied", "dismissed", "all"]).default("open"),
+          cursor: z.string().optional(),
+        })
+        .optional()
+    )
+    .query(async ({ ctx, input }) => {
+      const show = input?.show ?? "open";
+      const where: Record<string, unknown> = { organizationId: ctx.organizationId };
+      if (input?.channelId) where.channelId = input.channelId;
+      if (show === "open") Object.assign(where, { dismissedAt: null, replyStatus: null });
+      if (show === "replied") Object.assign(where, { replyStatus: { not: null } });
+      if (show === "dismissed") Object.assign(where, { dismissedAt: { not: null } });
+
+      const rows = await ctx.prisma.instagramMention.findMany({
+        where,
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: MENTIONS_PAGE + 1,
+        ...(input?.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
+      });
+      const page = rows.slice(0, MENTIONS_PAGE);
+      const channelIds = [...new Set(page.map((r) => r.channelId))];
+      // Never the token: non-secret columns only.
+      const channels = channelIds.length
+        ? await ctx.prisma.channel.findMany({
+            where: { id: { in: channelIds }, organizationId: ctx.organizationId },
+            select: { id: true, name: true, username: true, avatar: true, disconnectedAt: true, metadata: true },
+          })
+        : [];
+      const byId = new Map(channels.map((c) => [c.id, c]));
+      const openCount = await ctx.prisma.instagramMention.count({
+        where: { organizationId: ctx.organizationId, dismissedAt: null, replyStatus: null },
+      });
+      return {
+        openCount,
+        nextCursor: rows.length > MENTIONS_PAGE ? page[page.length - 1]!.id : null,
+        mentions: page.map((r) => {
+          const c = byId.get(r.channelId);
+          return {
+            id: r.id,
+            kind: r.commentId ? ("comment" as const) : ("caption" as const),
+            text: r.text,
+            username: r.username,
+            permalink: r.permalink,
+            mediaType: r.mediaType,
+            mentionedAt: r.mentionedAt,
+            receivedAt: r.createdAt,
+            detailsError: r.detailsError,
+            replyStatus: r.replyStatus,
+            replyText: r.replyText,
+            repliedAt: r.repliedAt,
+            dismissedAt: r.dismissedAt,
+            account: c
+              ? {
+                  channelId: c.id,
+                  name: c.name,
+                  username: c.username,
+                  avatar: c.avatar,
+                  disconnected: !!c.disconnectedAt,
+                  canReply: commentCapabilities(
+                    "INSTAGRAM",
+                    cachedGrantedScopes(c.metadata as Record<string, unknown> | null)
+                  ).canReply,
+                }
+              : null,
+          };
+        }),
+      };
+    }),
+
+  /**
+   * Reply publicly where we were @mentioned — a comment on their media for a
+   * caption mention, a reply under their comment for a comment mention.
+   * POST /{ig-user-id}/mentions with ids from OUR stored row.
+   */
+  replyMention: replyRateLimited
+    .input(
+      z.object({
+        mentionId: z.string(),
+        message: z.string().trim().min(1, "Reply cannot be empty.").max(IG_COMMENT_MAX_LENGTH),
+        /** Required to reply again after a SENT or unconfirmed reply. */
+        again: z.boolean().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { mention, channel } = await loadMentionForWrite(ctx.prisma, ctx.organizationId, input.mentionId);
+      if (mention.replyStatus && !input.again) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            mention.replyStatus === "UNCONFIRMED"
+              ? "An earlier reply here may already be live. Check the post on Instagram, then use “Send again anyway”."
+              : "You already replied to this mention.",
+        });
+      }
+      enforcePageBudget(commentPageReplyLimiter, "INSTAGRAM", channel.platformId);
+
+      const tokens = { accessToken: channel.accessToken, metadata: (channel.metadata ?? undefined) as any };
+      const audit = (metadata: Record<string, unknown>) =>
+        createAuditLog({
+          organizationId: ctx.organizationId,
+          userId: (ctx.session?.user as any)?.id,
+          action: AUDIT_ACTIONS.MENTION_REPLIED,
+          entityType: "InstagramMention",
+          entityId: mention.id,
+          metadata: { channelId: channel.id, mediaId: mention.mediaId, commentId: mention.commentId, length: input.message.length, ...metadata },
+        });
+      const record = (data: Record<string, unknown>) =>
+        ctx.prisma.instagramMention.update({
+          where: { id: mention.id },
+          data: { replyText: input.message, repliedAt: new Date(), repliedById: (ctx.session?.user as any)?.id ?? null, ...data },
+        });
+
+      let result: { id: string };
+      try {
+        result = await (getSocialProvider("INSTAGRAM") as InstagramProvider).replyToMention(
+          tokens,
+          mention.igUserId,
+          mention.mediaId,
+          mention.commentId,
+          input.message
+        );
+      } catch (err: any) {
+        if (isUnconfirmedMessage(err?.message)) {
+          await record({ replyStatus: "UNCONFIRMED", replyId: null });
+          await audit({ outcome: "unconfirmed" });
+        }
+        throw new TRPCError({ code: "BAD_REQUEST", message: err?.message ?? "Failed to send the reply." });
+      }
+      await record({ replyStatus: "SENT", replyId: result.id });
+      await audit({ replyId: result.id });
+      return { id: result.id };
+    }),
+
+  /** Hide a mention from the open list (or bring it back). Nothing changes on Instagram. */
+  dismissMention: orgProcedure
+    .input(z.object({ mentionId: z.string(), dismissed: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      const res = await ctx.prisma.instagramMention.updateMany({
+        where: { id: input.mentionId, organizationId: ctx.organizationId },
+        data: { dismissedAt: input.dismissed ? new Date() : null },
+      });
+      if (res.count === 0) throw new TRPCError({ code: "NOT_FOUND", message: "Mention not found." });
+      return { ok: true };
+    }),
+
+  /** Re-read a mention's text/author/link from Instagram (after a failed lookup). */
+  refreshMention: readRateLimited
+    .input(z.object({ mentionId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const { mention, channel } = await loadMentionForWrite(ctx.prisma, ctx.organizationId, input.mentionId);
+      enforcePageBudget(commentPageReadLimiter, "INSTAGRAM", channel.platformId);
+      await fillMentionDetails(
+        ctx.prisma,
+        getSocialProvider("INSTAGRAM") as InstagramProvider,
+        channel,
+        mention.igUserId,
+        mention.mediaId,
+        mention.commentId
+      );
+      return { ok: true };
     }),
 
   /**

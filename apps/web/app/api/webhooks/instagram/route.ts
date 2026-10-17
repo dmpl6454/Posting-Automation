@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { verifyMetaWebhookSignature } from "@postautomation/social";
+import { verifyMetaWebhookSignature, parseMentionWebhook } from "@postautomation/social";
+import { storeInstagramMentions } from "@postautomation/api/src/lib/instagram-mention-store";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -25,7 +26,11 @@ export const runtime = "nodejs";
  *   comments        — needs instagram_manage_comments (REQUESTED again 2026-09-19 now that a real
  *                     reply feature backs it — comment.router.ts; not yet Advanced-Access approved.
  *                     Real-time comment webhooks are a follow-up; v1 lists on demand.)
- *   mentions        — needs instagram_manage_comments (same)
+ *   mentions        — HANDLED since 2026-10-17 (stored in InstagramMention, replied
+ *                     to from the Comments inbox). Needs instagram_manage_comments,
+ *                     pages_manage_metadata, the `mentions` field ticked in the App
+ *                     Dashboard and the Page subscribed to the app — see
+ *                     docs/META-COMMENTS-APP-REVIEW-RUNBOOK-2026-09-23.md §29.
  *   messages        — Messenger API territory, out of scope
  *   story_insights  — needs instagram_manage_insights (APPROVED)
  *
@@ -94,6 +99,14 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
+  // @mentions are persisted (Meta keeps no copy). Scoped to the app that signed.
+  const mentions = parseMentionWebhook(payload);
+  if (mentions.length > 0) {
+    storeInstagramMentions(mentions, verified.appId)
+      .then((r) => console.log(`[ig-webhook] mentions: ${mentions.length} event(s), ${r.stored} new row(s), ${r.lookedUp} looked up`))
+      .catch((err) => console.error(`[ig-webhook] mention store error:`, err));
+  }
+
   processEventsInBackground(payload).catch((err) => {
     console.error(`[ig-webhook] Background processing error:`, err);
   });
@@ -113,7 +126,9 @@ async function processEventsInBackground(payload: any): Promise<void> {
 
     for (const change of changes) {
       try {
-        if (change.field === "story_insights") {
+        if (change.field === "mentions") {
+          // Handled above (storeInstagramMentions).
+        } else if (change.field === "story_insights") {
           // Meta sends the metrics directly in the value. Shape (per docs):
           //   {media_id, impressions, reach, taps_forward, taps_back,
           //    exits, replies}

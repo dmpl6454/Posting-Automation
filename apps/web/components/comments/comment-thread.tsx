@@ -180,6 +180,11 @@ export function CommentThread({
   // Private reply composer (one message per comment, see private-reply.ts).
   const [privateTo, setPrivateTo] = useState<string | null>(null);
   const [privateDrafts, setPrivateDrafts] = useState<Record<string, string>>({});
+  // "Comment on this post" (Instagram, 2026-10-17): a NEW top-level comment as
+  // the account. Same unknown-outcome rule as a reply — never one click from a
+  // silent re-send.
+  const [newComment, setNewComment] = useState("");
+  const [newCommentUnconfirmed, setNewCommentUnconfirmed] = useState(false);
   const utils = trpc.useUtils();
 
   const query = trpc.comment.list.useInfiniteQuery(
@@ -235,6 +240,28 @@ export function CommentThread({
     for (const page of query.data?.pages ?? []) Object.assign(out, (page as any).sentiments ?? {});
     return out;
   }, [query.data]);
+
+  const createComment = trpc.comment.create.useMutation({
+    onSuccess: () => {
+      toast({ title: `Comment posted as ${accountName}` });
+      setNewComment("");
+      setNewCommentUnconfirmed(false);
+      void query.refetch();
+    },
+    onError: (err) => {
+      if (classifyReplyFailure(err as any) === "unconfirmed") {
+        toast({
+          title: "Comment not confirmed",
+          description: "It may already be posted — check the thread before posting it again.",
+        });
+        setNewCommentUnconfirmed(true);
+        void query.refetch();
+        return;
+      }
+      toast({ title: "Couldn't post the comment", description: humanizeError(err), variant: "destructive" });
+      if (/hasn't (been )?granted comment/i.test(err.message)) setTimeout(() => void query.refetch(), 1500);
+    },
+  });
 
   const sendPrivate = trpc.comment.privateReply.useMutation({
     onSuccess: (_res, variables) => {
@@ -939,6 +966,44 @@ export function CommentThread({
             <Link href="/dashboard/channels" className="inline-block font-medium underline">
               Go to Channels
             </Link>
+          </div>
+        </div>
+      )}
+
+      {knownPlatform === "INSTAGRAM" && first && (
+        <div className="space-y-1.5 rounded-md border p-2.5" data-testid="new-comment">
+          <label htmlFor={`new-comment-${targetId}`} className="text-xs font-medium">
+            Comment on this post as {accountName}
+          </label>
+          <Textarea
+            id={`new-comment-${targetId}`}
+            value={newComment}
+            maxLength={REPLY_MAX_LENGTH.INSTAGRAM}
+            rows={2}
+            className="text-sm"
+            placeholder="Add a comment… (e.g. hashtags, a link note, a question for followers)"
+            disabled={writeBlocked}
+            onChange={(e) => setNewComment(e.target.value)}
+          />
+          {newCommentUnconfirmed && (
+            <p className="text-xs text-amber-700 dark:text-amber-400">
+              The last attempt wasn't confirmed and may already be posted. Check the comments below before posting again.
+            </p>
+          )}
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              className="h-7 px-3 text-xs"
+              disabled={writeBlocked || createComment.isPending || !newComment.trim()}
+              title={writeBlocked ? blockedTitle : undefined}
+              onClick={() => createComment.mutate({ targetId, message: newComment.trim() })}
+            >
+              {createComment.isPending && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
+              {newCommentUnconfirmed ? "Post again anyway" : "Post comment"}
+            </Button>
+            <span className="text-[11px] text-muted-foreground">
+              {newComment.length.toLocaleString()}/{REPLY_MAX_LENGTH.INSTAGRAM.toLocaleString()}
+            </span>
           </div>
         </div>
       )}
