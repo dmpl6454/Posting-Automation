@@ -177,7 +177,9 @@ export {
 } from "./utils/instagram-mentions";
 export {
   ensurePageSubscribed,
+  listLinkedPages,
   PAGE_SUBSCRIPTION_FIELD,
+  type LinkedPage,
   type PageSubscriptionResult,
   type PageSubscriptionStatus,
 } from "./utils/meta-page-subscription";

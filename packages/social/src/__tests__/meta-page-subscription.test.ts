@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { ensurePageSubscribed, PAGE_SUBSCRIPTION_FIELD } from "../utils/meta-page-subscription";
+import { ensurePageSubscribed, listLinkedPages, PAGE_SUBSCRIPTION_FIELD } from "../utils/meta-page-subscription";
 
 type Reply = { ok: boolean; status?: number; body: any } | "throw";
 
@@ -67,5 +67,45 @@ describe("ensurePageSubscribed", () => {
       { ok: true, body: {} },
     ]);
     await expect(ensurePageSubscribed(input)).resolves.toMatchObject({ status: "failed" });
+  });
+});
+
+describe("listLinkedPages", () => {
+  it("returns every Page with its token and linked IG account, following paging", async () => {
+    const calls = mockGraph([
+      {
+        ok: true,
+        body: {
+          data: [
+            { id: "111", access_token: "T1", instagram_business_account: { id: "17841" } },
+            { id: "bad id", access_token: "T" },
+          ],
+          paging: { next: "https://graph.facebook.com/v18.0/me/accounts?after=X" },
+        },
+      },
+      { ok: true, body: { data: [{ id: "222", access_token: "T2" }] } },
+    ]);
+    await expect(listLinkedPages("USER")).resolves.toEqual({
+      ok: true,
+      pages: [
+        { pageId: "111", pageAccessToken: "T1", igUserId: "17841" },
+        { pageId: "222", pageAccessToken: "T2", igUserId: null },
+      ],
+    });
+    expect(calls[0]!.url).toContain("/me/accounts?");
+    expect(calls[0]!.url).toContain("instagram_business_account");
+  });
+
+  it("reports an unreadable listing (dead token, or a page that fails midway) as not ok", async () => {
+    mockGraph([{ ok: false, status: 400, body: { error: { code: 190, error_subcode: 460 } } }]);
+    await expect(listLinkedPages("USER")).resolves.toMatchObject({ ok: false, reason: "#190/460" });
+    mockGraph(["throw"]);
+    await expect(listLinkedPages("USER")).resolves.toMatchObject({ ok: false, reason: "request did not complete" });
+  });
+
+  it("never follows a paging link off graph.facebook.com", async () => {
+    const calls = mockGraph([{ ok: true, body: { data: [], paging: { next: "https://evil.example/steal" } } }]);
+    await expect(listLinkedPages("USER")).resolves.toEqual({ ok: true, pages: [] });
+    expect(calls).toHaveLength(1);
   });
 });

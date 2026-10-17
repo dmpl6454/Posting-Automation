@@ -1127,8 +1127,8 @@ webhooks reach `/api/webhooks/instagram`.
   in `metadata.pageSubscription = { status: subscribed | already | missing_permission | failed,
   reason?, at }` (atomic jsonb merge), and the web log prints one summary line:
   `[page-subscription] app <id>: N subscribed, N already, N missing permission, N failed`.
-- **Existing channels are not back-filled**: they were connected without the permission anyway, so
-  each account needs one reconnect after approval, which subscribes it.
+- **Existing channels are back-filled daily** by the worker (§31), so a channel whose consent
+  already holds the permission does not need a reconnect.
 
 Still required on Meta's side for mentions: Advanced Access for `instagram_manage_comments` and
 `pages_manage_metadata`, and the `mentions` field ticked under App Dashboard → Webhooks → Instagram.
@@ -1136,3 +1136,31 @@ Still required on Meta's side for mentions: Advanced Access for `instagram_manag
 Tests: `packages/social/src/__tests__/meta-page-subscription.test.ts`,
 `packages/api/src/__tests__/page-subscriptions.test.ts` (includes a source lock on the callback).
 
+
+## 31. Daily Page-subscription backfill for existing channels (2026-10-17)
+
+`scheduleMetaPageSubscriptionBackfill` (worker cron, daily, first run 17 min after boot) subscribes
+the Pages behind FB/IG channels connected before §30 shipped. Logic is pure and tested in
+`apps/worker/src/lib/page-subscription-backfill.ts`; the Graph calls are `ensurePageSubscribed`
+and `listLinkedPages` (`packages/social/src/utils/meta-page-subscription.ts`).
+
+- **Facebook channel:** its stored token IS the Page token, so one subscription call per Page.
+- **Instagram channel:** its stored token is the user token, so the job lists that consent's Pages
+  ONCE (`me/accounts?fields=id,access_token,instagram_business_account{id}`, 100 per call, ≤10
+  calls) and subscribes the Page linked to the IG account. Page tokens stay in memory.
+- **Dedup:** one subscription per (Meta app, Page) however many workspaces hold the Page; one
+  listing per (app, IG user token). The app comes from `Channel.metaAppId` via
+  `resolveMetaCredentials` — an unconfigured app is skipped.
+- **Skipped without a call (and without a stamp):** dead tokens (`insightsHealth` =
+  needs_reconnect), a recorded grant lacking `pages_manage_metadata`, disconnected/paused channels.
+  Once Meta approves the permission and the data-access cron refreshes `grantedScopes`, those
+  channels become eligible on their own.
+- **Retry rules:** a failure or missing permission waits 7 days; a `subscribed`/`already` result is
+  re-checked every 30 days with a GET only (an existing subscription is never rewritten).
+- **Caps per run:** 60 Pages, 20 listings, freshest channels first; the rest wait for the next day.
+- Outcome on `Channel.metadata.pageSubscription` (same key as §30) with reasons such as
+  `could not list Pages (#190/460)` or `linked Page not granted to this login`. Log line:
+  `[Cron:PageSubscription] N of M channel(s) eligible; … subscribed N, already N, missing permission N, failed N; N deferred`.
+
+Tests: `apps/worker/src/lib/page-subscription-backfill.test.ts` (10),
+`packages/social/src/__tests__/meta-page-subscription.test.ts` (listLinkedPages cases).

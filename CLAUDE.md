@@ -3471,6 +3471,11 @@ Instagram's API only lets an account comment on media it OWNS, plus reply where 
   subscription is never touched (a POST REPLACES its fields); otherwise POST `subscribed_fields=name` (quiet field).
   Skipped when the recorded grant lacks `pages_manage_metadata`; outcome on `Channel.metadata.pageSubscription`.
   `getAllInstagramAccounts` now also returns `pageId`/`pageAccessToken` (memory only — never stored).
+- **Existing channels: daily backfill** (runbook §31) — `scheduleMetaPageSubscriptionBackfill` →
+  [page-subscription-backfill.ts](apps/worker/src/lib/page-subscription-backfill.ts). FB = stored Page token; IG =
+  one `listLinkedPages` (`me/accounts`) per user token to find the linked Page. One call per (app, Page), freshest
+  first, 60 Pages + 20 listings per run; skips dead tokens and grants without `pages_manage_metadata` with NO call;
+  failures cool down 7d, successes re-checked (GET only) every 30d.
 - ⚠️ **Mentions do not arrive yet**: `pages_manage_metadata` IS requested (FB + IG, since the Messages inbox) but
   needs App Review, as does `instagram_manage_comments`; the `mentions` field must be ticked in the App Dashboard;
   and existing accounts need one reconnect after approval. The UI's empty state says so.
