@@ -96,6 +96,9 @@ export const AUDIT_ACTIONS = {
   COMMENT_LIKED: "comment.liked",
   COMMENT_UNLIKED: "comment.unliked",
   COMMENT_EDITED: "comment.edited",
+  // A new top-level comment on our own IG post, and replies to @mentions (2026-10-17).
+  COMMENT_CREATED: "comment.created",
+  MENTION_REPLIED: "comment.mention_replied",
   // Instagram: switch comments off / on for a post (2026-10-05).
   COMMENTS_DISABLED: "comment.comments_disabled",
   COMMENTS_ENABLED: "comment.comments_enabled",

@@ -4,7 +4,7 @@ import { Suspense, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { format } from "date-fns";
-import { ImageIcon, Inbox, ListTree, Loader2, MessageSquare, Search, Settings2, Video } from "lucide-react";
+import { AtSign, ImageIcon, Inbox, ListTree, Loader2, MessageSquare, Search, Settings2, Video } from "lucide-react";
 import { trpc } from "~/lib/trpc/client";
 import { humanizeError } from "~/lib/errors";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card";
@@ -21,6 +21,7 @@ import {
 } from "~/components/comments/comment-thread";
 import { UnansweredQueue } from "~/components/comments/unanswered-queue";
 import { CommentAutomation } from "~/components/comments/comment-automation";
+import { MentionsInbox } from "~/components/comments/mentions-inbox";
 import { cn } from "~/lib/utils";
 
 /**
@@ -33,7 +34,8 @@ import { cn } from "~/lib/utils";
  * Deep link: /dashboard/comments?channel=<channelId>&post=<postTargetId>
  * (the post detail page links here). `?view=unanswered` opens the queue of
  * comments nobody has replied to yet across recent posts (2026-10-05), and
- * `?view=automation` the auto-hide rules and new-comment alerts.
+ * `?view=automation` the auto-hide rules and new-comment alerts, `?view=mentions`
+ * the places other Instagram accounts @mentioned ours (2026-10-17).
  */
 export default function CommentsPage() {
   return (
@@ -49,7 +51,8 @@ function CommentsInbox() {
   const channelParam = searchParams.get("channel");
   const postParam = searchParams.get("post");
   const viewParam = searchParams.get("view");
-  const view = viewParam === "unanswered" || viewParam === "automation" ? viewParam : "posts";
+  const view =
+    viewParam === "unanswered" || viewParam === "automation" || viewParam === "mentions" ? viewParam : "posts";
   const [search, setSearch] = useState("");
   const threadRef = useRef<HTMLDivElement>(null);
 
@@ -81,7 +84,7 @@ function CommentsInbox() {
     );
   }, [accounts, search]);
 
-  const showView = (next: "posts" | "unanswered" | "automation") => {
+  const showView = (next: "posts" | "unanswered" | "mentions" | "automation") => {
     const params = new URLSearchParams(searchParams.toString());
     if (next === "posts") params.delete("view");
     else params.set("view", next);
@@ -142,6 +145,17 @@ function CommentsInbox() {
           </Button>
           <Button
             size="sm"
+            variant={view === "mentions" ? "secondary" : "ghost"}
+            className="h-7 px-3 text-xs"
+            role="tab"
+            aria-selected={view === "mentions"}
+            onClick={() => showView("mentions")}
+            data-testid="view-mentions"
+          >
+            <AtSign className="mr-1 h-3.5 w-3.5" /> Mentions
+          </Button>
+          <Button
+            size="sm"
             variant={view === "automation" ? "secondary" : "ghost"}
             className="h-7 px-3 text-xs"
             role="tab"
@@ -175,6 +189,12 @@ function CommentsInbox() {
         <Card>
           <CardContent className="p-4">
             <CommentAutomation />
+          </CardContent>
+        </Card>
+      ) : view === "mentions" ? (
+        <Card>
+          <CardContent className="p-4">
+            <MentionsInbox accounts={accounts} />
           </CardContent>
         </Card>
       ) : view === "unanswered" ? (

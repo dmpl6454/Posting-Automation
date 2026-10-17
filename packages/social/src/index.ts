@@ -160,6 +160,21 @@ export {
   type MessageAttachment,
 } from "./utils/meta-messaging";
 export { COMMENT_NOT_ON_POST_MESSAGE, COMMENT_LIKE_PERMISSION_MESSAGE, COMMENT_LIKE_REFUSED_MESSAGE } from "./utils/instagram-comments";
+// New comments on our own IG media, the automatic first comment, and replies
+// to @mentions (2026-10-17) — see instagram-mentions.ts.
+export {
+  IG_COMMENT_MAX_LENGTH,
+  parseMentionWebhook,
+  mentionDedupKey,
+  readInstagramFirstComment,
+  readFirstCommentRecord,
+  safeInstagramPermalink,
+  type InstagramMentionEvent,
+  type InstagramMentionDetails,
+  type InstagramFirstComment,
+  type FirstCommentRecord,
+  type FirstCommentStatus,
+} from "./utils/instagram-mentions";
 export type {
   CommentCapabilities,
   CommentModerationAction,

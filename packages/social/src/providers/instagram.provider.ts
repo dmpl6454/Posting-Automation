@@ -19,9 +19,24 @@ import {
   isInstagramLikeRefusedError,
   IG_COMMENT_FIELDS,
   IG_COMMENT_FIELDS_MINIMAL,
+  GRAPH_OBJECT_ID_RE,
   type InstagramCommentPage,
   type InstagramOwnAccount,
 } from "../utils/instagram-comments";
+import {
+  COMMENT_CREATE_UNCONFIRMED_MESSAGE,
+  COMMENT_CREATE_FAILED_MESSAGE,
+  MENTION_REPLY_UNCONFIRMED_MESSAGE,
+  MENTION_REPLY_FAILED_MESSAGE,
+  MENTION_GONE_MESSAGE,
+  IG_MENTIONED_COMMENT_FIELDS,
+  IG_MENTIONED_COMMENT_FIELDS_MINIMAL,
+  IG_MENTIONED_MEDIA_FIELDS,
+  IG_MENTIONED_MEDIA_FIELDS_MINIMAL,
+  parseMentionedComment,
+  parseMentionedMedia,
+  type InstagramMentionDetails,
+} from "../utils/instagram-mentions";
 import {
   COMMENT_ACTION_UNCONFIRMED_MESSAGE,
   isGraphFieldError,
@@ -1974,68 +1989,170 @@ export class InstagramProvider extends SocialProvider {
    * router already does on the CHANNEL whose token gets used.
    */
   async replyToComment(tokens: OAuthTokens, commentId: string, message: string): Promise<{ id: string }> {
-    // fetchT, not bare fetch: this runs in the WEB process on a user-triggered
-    // request, so an unbounded hang would hold the request until nginx 504s.
     // 🔴 encodeURIComponent is LOAD-BEARING here: commentId is client-supplied,
     // and raw interpolation made this an arbitrary authenticated Graph POST.
     // The router's GRAPH_OBJECT_ID_RE check is the first layer; this is the
     // second, so the provider is safe even if called from somewhere else.
+    return this.createIgComment(
+      `${encodeURIComponent(commentId)}/replies`,
+      { message },
+      tokens,
+      { unconfirmed: COMMENT_REPLY_UNCONFIRMED_MESSAGE, failed: COMMENT_REPLY_FAILED_MESSAGE, gone: COMMENT_OBJECT_GONE_MESSAGE },
+      "comment reply"
+    );
+  }
+
+  /**
+   * A new top-level comment on media this account OWNS (2026-10-17) — the
+   * "Comment on this post" box and the automatic first comment. The media id
+   * always comes from our own PostTarget row, never from the client.
+   */
+  async commentOnMedia(tokens: OAuthTokens, mediaId: string, message: string): Promise<{ id: string }> {
+    assertGraphIds(mediaId);
+    return this.createIgComment(
+      `${encodeURIComponent(mediaId)}/comments`,
+      { message },
+      tokens,
+      { unconfirmed: COMMENT_CREATE_UNCONFIRMED_MESSAGE, failed: COMMENT_CREATE_FAILED_MESSAGE, gone: COMMENT_MEDIA_GONE_MESSAGE },
+      "new comment"
+    );
+  }
+
+  /**
+   * Reply where another account @mentioned ours: a comment on their media for
+   * a caption mention, or a reply under their comment for a comment mention.
+   * POST /{ig-user-id}/mentions — the ids come from OUR stored mention row,
+   * which the webhook parser already shape-checked.
+   */
+  async replyToMention(
+    tokens: OAuthTokens,
+    igUserId: string,
+    mediaId: string,
+    commentId: string | null,
+    message: string
+  ): Promise<{ id: string }> {
+    assertGraphIds(igUserId, mediaId, commentId);
+    const body: Record<string, string> = { media_id: mediaId, message };
+    if (commentId) body.comment_id = commentId;
+    return this.createIgComment(
+      `${encodeURIComponent(igUserId)}/mentions`,
+      body,
+      tokens,
+      { unconfirmed: MENTION_REPLY_UNCONFIRMED_MESSAGE, failed: MENTION_REPLY_FAILED_MESSAGE, gone: MENTION_GONE_MESSAGE },
+      "mention reply"
+    );
+  }
+
+  /**
+   * What someone said when they @mentioned us. One Graph read; a renamed field
+   * descends once to a minimal set (Graph only validates field names on a
+   * non-empty answer). Throws the same classified messages as the writes.
+   */
+  async getMentionDetails(
+    tokens: OAuthTokens,
+    igUserId: string,
+    mediaId: string,
+    commentId: string | null
+  ): Promise<InstagramMentionDetails> {
+    // The ids sit inside a field EXPANSION here, not just a path — refuse
+    // anything that isn't a Graph id rather than trust the caller's checks.
+    assertGraphIds(igUserId, mediaId, commentId);
+    const read = async (fields: string) => {
+      const expansion = commentId
+        ? `mentioned_comment.comment_id(${commentId}){${fields}}`
+        : `mentioned_media.media_id(${mediaId}){${fields}}`;
+      const params = new URLSearchParams({ fields: expansion, access_token: tokens.accessToken });
+      let res: Response;
+      try {
+        res = await fetchT(`${this.graphBaseUrl}/${this.apiVersion}/${encodeURIComponent(igUserId)}?${params.toString()}`);
+      } catch (err: any) {
+        console.error(`[Instagram] mention lookup did not complete:`, err?.message ?? err);
+        throw new Error(COMMENT_LIST_FAILED_MESSAGE);
+      }
+      const data: any = await res.json().catch(() => null);
+      return { res, data };
+    };
+    let { res, data } = await read(commentId ? IG_MENTIONED_COMMENT_FIELDS : IG_MENTIONED_MEDIA_FIELDS);
+    if (!res.ok && isGraphFieldError(data?.error)) {
+      console.error(`[Instagram] mention field set rejected — retrying minimal:`, JSON.stringify(data));
+      ({ res, data } = await read(commentId ? IG_MENTIONED_COMMENT_FIELDS_MINIMAL : IG_MENTIONED_MEDIA_FIELDS_MINIMAL));
+    }
+    if (!res.ok) {
+      if (Number(data?.error?.code) === 190) throw new Error(COMMENT_TOKEN_INVALID_MESSAGE);
+      if (isCommentPermissionDeniedError(data?.error)) throw new Error(COMMENT_PERMISSION_DENIED_MESSAGE);
+      if (isCommentObjectGoneError(data?.error)) throw new Error(MENTION_GONE_MESSAGE);
+      console.error(`[Instagram] mention lookup failed (HTTP ${res.status}):`, data === null ? "unreadable response body" : JSON.stringify(data));
+      throw new Error(COMMENT_LIST_FAILED_MESSAGE);
+    }
+    return commentId ? parseMentionedComment(data) : parseMentionedMedia(data);
+  }
+
+  /**
+   * POST a comment-shaped object and classify the outcome. Creating a comment
+   * is NOT idempotent, so every outcome we cannot prove was a refusal throws
+   * the "may already be posted" message (the 2026-08-18 duplicate-post lesson).
+   */
+  private async createIgComment(
+    path: string,
+    fields: Record<string, string>,
+    tokens: OAuthTokens,
+    messages: { unconfirmed: string; failed: string; gone: string },
+    label: string
+  ): Promise<{ id: string }> {
+    // fetchT, not bare fetch: this runs in the WEB process on a user-triggered
+    // request, so an unbounded hang would hold the request until nginx 504s.
     let res: Response;
     try {
-      res = await fetchT(`${this.graphBaseUrl}/${this.apiVersion}/${encodeURIComponent(commentId)}/replies`, {
+      res = await fetchT(`${this.graphBaseUrl}/${this.apiVersion}/${path}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message, access_token: tokens.accessToken }),
+        body: JSON.stringify({ ...fields, access_token: tokens.accessToken }),
       });
     } catch (err: any) {
       // Timeout / connection reset AFTER dispatch: Instagram may have processed
-      // the reply. "Failed" would invite a retry that double-posts it.
-      console.error(`[Instagram] comment reply request did not complete:`, err?.message ?? err);
-      throw new Error(COMMENT_REPLY_UNCONFIRMED_MESSAGE);
+      // it. "Failed" would invite a retry that double-posts it.
+      console.error(`[Instagram] ${label} request did not complete:`, err?.message ?? err);
+      throw new Error(messages.unconfirmed);
     }
     const data: any = await res.json().catch(() => null);
 
     if (!res.ok) {
-      // A 5xx is indeterminate whatever the body says (the 2026-08-18 lesson) —
-      // the reply may exist. Only a 4xx is a definite refusal.
+      // A 5xx is indeterminate whatever the body says (the 2026-08-18 lesson).
       if (res.status >= 500) {
         console.error(
-          `[Instagram] comment reply outcome unknown (HTTP ${res.status}):`,
+          `[Instagram] ${label} outcome unknown (HTTP ${res.status}):`,
           data === null ? "unreadable response body" : JSON.stringify(data)
         );
-        throw new Error(COMMENT_REPLY_UNCONFIRMED_MESSAGE);
+        throw new Error(messages.unconfirmed);
       }
       // A 4xx with Meta's `is_transient` flag or code 2 is ALSO unknown — the
       // exact 2026-08-18 duplicate-post shape (throttles excluded in the helper).
       if (isIndeterminateReplyError(data)) {
-        console.error(`[Instagram] comment reply outcome unknown (HTTP ${res.status}, transient):`, JSON.stringify(data));
-        throw new Error(COMMENT_REPLY_UNCONFIRMED_MESSAGE);
+        console.error(`[Instagram] ${label} outcome unknown (HTTP ${res.status}, transient):`, JSON.stringify(data));
+        throw new Error(messages.unconfirmed);
       }
-      if (Number(data?.error?.code) === 190) {
-        throw new Error(COMMENT_TOKEN_INVALID_MESSAGE);
-      }
-      if (isCommentPermissionDeniedError(data?.error)) {
-        throw new Error(COMMENT_PERMISSION_DENIED_MESSAGE);
-      }
-      if (isCommentObjectGoneError(data?.error)) {
-        throw new Error(COMMENT_OBJECT_GONE_MESSAGE);
-      }
+      if (Number(data?.error?.code) === 190) throw new Error(COMMENT_TOKEN_INVALID_MESSAGE);
+      if (isCommentPermissionDeniedError(data?.error)) throw new Error(COMMENT_PERMISSION_DENIED_MESSAGE);
+      if (isCommentObjectGoneError(data?.error)) throw new Error(messages.gone);
       console.error(
-        `[Instagram] comment reply failed (HTTP ${res.status}):`,
+        `[Instagram] ${label} failed (HTTP ${res.status}):`,
         data === null ? "unreadable response body" : JSON.stringify(data)
       );
-      throw new Error(COMMENT_REPLY_FAILED_MESSAGE);
+      throw new Error(messages.failed);
     }
 
-    // ⚠️ An OK response we cannot read leaves the outcome UNKNOWN, and creating
-    // a reply is NOT idempotent. Reporting a plain failure here would invite the
-    // user to retry and post the reply twice — the same reasoning as
-    // AmbiguousPublishError on the publish path, one severity tier down. Say
-    // plainly that it may already be live instead.
+    // ⚠️ An OK response we cannot read leaves the outcome UNKNOWN.
     if (data === null || !data.id) {
-      throw new Error(COMMENT_REPLY_UNCONFIRMED_MESSAGE);
+      throw new Error(messages.unconfirmed);
     }
 
     return { id: data.id };
+  }
+}
+
+/** Throws unless every given id (null/undefined skipped) is a Graph object id. */
+function assertGraphIds(...ids: Array<string | null | undefined>): void {
+  for (const id of ids) {
+    if (id != null && !GRAPH_OBJECT_ID_RE.test(id)) throw new Error(COMMENT_ACTION_FAILED_MESSAGE);
   }
 }

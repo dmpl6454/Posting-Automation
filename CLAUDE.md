@@ -3445,6 +3445,30 @@ Reply). Fixes, each load-bearing:
   [comment-reply-outcome.test.ts](apps/web/lib/comment-reply-outcome.test.ts),
   [graph-time.test.ts](apps/web/lib/graph-time.test.ts).
 
+## 💬 Instagram: new comments on our posts, first comment, @mention replies (2026-10-17) — read before touching instagram-mentions.ts or InstagramMention
+
+Instagram's API only lets an account comment on media it OWNS, plus reply where another account
+@mentioned ours. Full detail: runbook §29 ([docs/META-COMMENTS-APP-REVIEW-RUNBOOK-2026-09-23.md](docs/META-COMMENTS-APP-REVIEW-RUNBOOK-2026-09-23.md)).
+
+- **`comment.create`** → `commentOnMedia` (`POST /{ig-media-id}/comments`) on the TARGET's own media id
+  from our DB. All three IG writes go through ONE provider helper, `createIgComment`
+  ([instagram.provider.ts](packages/social/src/providers/instagram.provider.ts)) — unknown outcome ⇒ a
+  "may already be posted" message (the web classifier keys on that phrase). `replyToComment` now uses it too.
+- **First comment**: `post.create` `firstComment` → `Post.metadata.instagramFirstComment` (stripped from the
+  client passthrough). [first-comment.ts](apps/worker/src/lib/first-comment.ts) runs right after the target is
+  marked PUBLISHED: Instagram only, never a story, once per target, **never throws** (a throw would re-publish
+  the post), outcome on `PostTarget.metadata.firstComment` via atomic jsonb merge. Do not move it before the
+  PUBLISHED write.
+- **Mentions**: discovered ONLY via the IG `mentions` webhook (no list endpoint; Meta stores nothing).
+  [instagram-mention-store.ts](packages/api/src/lib/instagram-mention-store.ts) writes `InstagramMention` rows
+  (one per channel, `@@unique([channelId, dedupKey])` on a NEW table) BEFORE any Graph call, scoped to the
+  signing Meta app; details via `mentioned_comment`/`mentioned_media` with a minimal-field fallback. Ids reach a
+  field EXPANSION, so the provider re-checks them with `GRAPH_OBJECT_ID_RE`. Reply = `POST /{ig-user-id}/mentions`;
+  a second reply requires `again: true`.
+- ⚠️ **Mentions do not arrive yet**: needs `instagram_manage_comments` Advanced Access, the `mentions` field ticked
+  in the App Dashboard, and `pages_manage_metadata` + `POST /{page-id}/subscribed_apps` per Page (not requested —
+  App Review). The UI's empty state says so.
+
 ## 👂 Social listening sync — efficiency pass (2026-10-04) — read before touching listening-sync, sentiment-analysis or `Mention`
 
 Owner: "finetune social listening tools … make it more efficient". Every change below was found by

@@ -46,6 +46,9 @@ import {
 } from "../lib/caption-overrides";
 import { campaignLabelSchema, normalizeCampaignLabel } from "../lib/campaign-label";
 import { stripChannelRoutingKeys } from "../lib/client-post-metadata";
+
+/** Instagram's comment ceiling (IG_COMMENT_MAX_LENGTH in @postautomation/social). */
+const FIRST_COMMENT_MAX = 2200;
 import { gatesBlockingManualPublish } from "../lib/publish-gate-scope";
 
 /**
@@ -224,6 +227,10 @@ export const postRouter = createRouter({
         // Markdown, plus excerpt / status / taxonomy — stored under
         // `metadata.wordpressArticle` and rendered by the provider.
         article: articleInputSchema.optional(),
+        // Automatic first comment on every Instagram target, posted by the
+        // publish worker right after the post goes live (2026-10-17). Stored as
+        // `metadata.instagramFirstComment`; ignored for stories and articles.
+        firstComment: z.string().trim().max(FIRST_COMMENT_MAX, "The first comment can be at most 2,200 characters.").optional(),
         metadata: z.object({
           title: z.string().optional(),
           tags: z.array(z.string()).optional(),
@@ -529,6 +536,8 @@ export const postRouter = createRouter({
               instagramStory: _rawStory,
               // Same rule for the article marker: only the `article` input writes it.
               wordpressArticle: _rawArticle,
+              // Only the `firstComment` input writes this marker.
+              instagramFirstComment: _rawFirstComment,
               ...rest
             } = (input.metadata ?? {}) as Record<string, unknown>;
             // Destination keys (siteUrl, instance, blog_id, …) only ever come
@@ -537,6 +546,7 @@ export const postRouter = createRouter({
             if (videoThumbnail) out.videoThumbnail = videoThumbnail;
             if (isStory) out.instagramStory = { mentions: storyMentions };
             if (storedArticle) out.wordpressArticle = storedArticle;
+            if (input.firstComment && !isStory && !isArticle) out.instagramFirstComment = { text: input.firstComment };
             if (captionFanout.enabled) {
               out.captionFanout = {
                 requested: true,

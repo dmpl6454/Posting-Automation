@@ -10,24 +10,24 @@ datasource db {
 // ==================== AUTH & USERS ====================
 
 model User {
-  id            String    @id @default(cuid())
-  name          String?
-  email         String    @unique
-  emailVerified DateTime?
-  image         String?
-  password           String?
-  passwordChangedAt  DateTime?
-  isSuperAdmin  Boolean   @default(false)
+  id                     String    @id @default(cuid())
+  name                   String?
+  email                  String    @unique
+  emailVerified          DateTime?
+  image                  String?
+  password               String?
+  passwordChangedAt      DateTime?
+  isSuperAdmin           Boolean   @default(false)
   /// App-level access tier — ORTHOGONAL to org MemberRole (workspace membership)
   /// and to isSuperAdmin (which implies ADMIN at every appRole gate). USER =
   /// Dashboard, Content Studio, Super Agent, Media, Insights, Channels.
   /// ADMIN = everything. Managed from /admin by super admins. Existing users
   /// were grandfathered to ADMIN via scripts/backfill-app-roles.ts (2026-07-17).
-  appRole       AppRole   @default(USER)
-  isBanned      Boolean   @default(false)
-  phone         String?   @unique
-  phoneVerified DateTime?
-  deletedAt     DateTime?
+  appRole                AppRole   @default(USER)
+  isBanned               Boolean   @default(false)
+  phone                  String?   @unique
+  phoneVerified          DateTime?
+  deletedAt              DateTime?
   /// Single-slot revocation marker for this admin's IN-FLIGHT impersonation
   /// token (security audit 2026-09-28, "impersonation token not bound to the
   /// issuing admin / not revocable"). Written on mint (impersonate), matched
@@ -37,13 +37,13 @@ model User {
   /// admin — there is only ever one live token per admin by construction.
   activeImpersonationJti String?
 
-  accounts    Account[]
-  sessions    Session[]
-  memberships OrganizationMember[]
-  auditLogs        AuditLog[]
-  designTemplates  DesignTemplate[]
+  accounts          Account[]
+  sessions          Session[]
+  memberships       OrganizationMember[]
+  auditLogs         AuditLog[]
+  designTemplates   DesignTemplate[]
   creativeTemplates CreativeTemplate[]
-  sentInvites      OrganizationInvite[] @relation("SentInvites")
+  sentInvites       OrganizationInvite[] @relation("SentInvites")
 
   passwordResetTokens     PasswordResetToken[]
   emailVerificationTokens EmailVerificationToken[]
@@ -154,35 +154,36 @@ model Organization {
   /// ⚠️ Changing this does NOT migrate existing channels — their tokens stay
   /// bound to the app that minted them (Channel.metaAppId). It only affects
   /// the next connect.
-  metaAppId            String?
+  metaAppId String?
 
-  members        OrganizationMember[]
-  invites        OrganizationInvite[]
-  channels       Channel[]
-  channelGroups  ChannelGroup[]
-  posts          Post[]
-  media          Media[]
-  webhooks       Webhook[]
-  apiKeys        ApiKey[]
-  auditLogs      AuditLog[]
-  agents         Agent[]
-  chatThreads    ChatThread[]
-  trendingItems  TrendingItem[]
-  autopilotPosts AutopilotPost[]
-  accountGroups   AccountGroup[]
-  pipelineRuns    PipelineRun[]
-  designTemplates    DesignTemplate[]
-  creativeTemplates  CreativeTemplate[]
-  listeningQueries   ListeningQuery[]
-  campaigns               Campaign[]
-  brandTrackers           BrandTracker[]
-  influencers             Influencer[]
-  celebrityBrandSignals   CelebrityBrandSignal[]
-  dailyDigests            DailyDigest[]
-  commentAutomation       CommentAutomation?
-  commentAutoActions      CommentAutoAction[]
-  commentPrivateReplies   CommentPrivateReply[]
-  commentSentiments       CommentSentiment[]
+  members               OrganizationMember[]
+  invites               OrganizationInvite[]
+  channels              Channel[]
+  channelGroups         ChannelGroup[]
+  posts                 Post[]
+  media                 Media[]
+  webhooks              Webhook[]
+  apiKeys               ApiKey[]
+  auditLogs             AuditLog[]
+  agents                Agent[]
+  chatThreads           ChatThread[]
+  trendingItems         TrendingItem[]
+  autopilotPosts        AutopilotPost[]
+  accountGroups         AccountGroup[]
+  pipelineRuns          PipelineRun[]
+  designTemplates       DesignTemplate[]
+  creativeTemplates     CreativeTemplate[]
+  listeningQueries      ListeningQuery[]
+  campaigns             Campaign[]
+  brandTrackers         BrandTracker[]
+  influencers           Influencer[]
+  celebrityBrandSignals CelebrityBrandSignal[]
+  dailyDigests          DailyDigest[]
+  commentAutomation     CommentAutomation?
+  commentAutoActions    CommentAutoAction[]
+  commentPrivateReplies CommentPrivateReply[]
+  instagramMentions     InstagramMention[]
+  commentSentiments     CommentSentiment[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -205,17 +206,17 @@ model OrganizationMember {
 
 // Fix #69-71: email invitation flow
 model OrganizationInvite {
-  id             String     @id @default(cuid())
+  id             String       @id @default(cuid())
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   email          String
-  role           MemberRole @default(MEMBER)
-  token          String     @unique
+  role           MemberRole   @default(MEMBER)
+  token          String       @unique
   expiresAt      DateTime
   invitedById    String
-  invitedBy      User       @relation("SentInvites", fields: [invitedById], references: [id], onDelete: Cascade)
+  invitedBy      User         @relation("SentInvites", fields: [invitedById], references: [id], onDelete: Cascade)
   acceptedAt     DateTime?
-  createdAt      DateTime   @default(now())
+  createdAt      DateTime     @default(now())
 
   @@index([organizationId])
   @@index([email])
@@ -299,12 +300,12 @@ model Channel {
   /// Deliberately NOT part of the unique key: the same Page connected under a
   /// different app is the SAME channel, and adding this to the key would
   /// duplicate rows and orphan their post history.
-  metaAppId      String?
+  metaAppId String?
 
-  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  postTargets    PostTarget[]
-  channelGroups  ChannelGroup[] @relation("ChannelGroupMembers")
-  externalPosts  ExternalPost[]
+  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  postTargets   PostTarget[]
+  channelGroups ChannelGroup[] @relation("ChannelGroupMembers")
+  externalPosts ExternalPost[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -339,9 +340,9 @@ model Channel {
 /// efficiency while keeping the ordinary `-> Channel -> organizationId` join every
 /// Insights query already uses, so org scoping / IDOR safety needs no new machinery.
 model ExternalPost {
-  id       String         @id @default(cuid())
+  id        String         @id @default(cuid())
   channelId String
-  platform SocialPlatform
+  platform  SocialPlatform
 
   /// Platform-native id. FB: the composite "{pageId}_{postId}" returned by
   /// /published_posts. IG: the bare media id (which is also what publishing returns,
@@ -377,7 +378,7 @@ model ExternalPost {
   videoResolvedAt DateTime?
   /// FB: the attachment target is a /reel/ permalink. Reels return NO rows from
   /// video_insights (measured 0/36), so they skip straight to the scraper.
-  isReel         Boolean?
+  isReel          Boolean?
 
   /// Set when this platform post is one WE published — the dedup link. NULL means it
   /// was made directly on the platform. Read paths union only the NULL ones on top of
@@ -386,12 +387,12 @@ model ExternalPost {
 
   /// Latest metrics, denormalized so Insights reads never touch a snapshot table.
   /// A value here is meaningless without `metricsAvailable` — see below.
-  impressions Int @default(0)
-  clicks      Int @default(0)
-  likes       Int @default(0)
-  comments    Int @default(0)
-  shares      Int @default(0)
-  reach       Int @default(0)
+  impressions Int  @default(0)
+  clicks      Int  @default(0)
+  likes       Int  @default(0)
+  comments    Int  @default(0)
+  shares      Int  @default(0)
+  reach       Int  @default(0)
   /// Views — a DIFFERENT number from impressions, and NULLABLE on purpose.
   ///
   /// On Facebook the two genuinely diverge: `post_media_view` (impressions) is a
@@ -434,10 +435,10 @@ model ExternalPost {
 }
 
 model ChannelGroup {
-  id             String   @id @default(cuid())
+  id             String @id @default(cuid())
   organizationId String
   name           String
-  color          String   @default("#6366f1")
+  color          String @default("#6366f1")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   channels     Channel[]    @relation("ChannelGroupMembers")
@@ -485,7 +486,7 @@ model Post {
   /// Soft archive for old posts (Phase 3 activity management). NULL = active.
   /// Deliberately NOT a PostStatus value — the publish pipeline's status
   /// machine (cron scan, atomic claim, watchdog) must never see a new state.
-  archivedAt DateTime?
+  archivedAt  DateTime?
 
   aiGenerated Boolean @default(false)
   aiProvider  String?
@@ -523,20 +524,20 @@ model Post {
 }
 
 model PostTarget {
-  id             String      @id @default(cuid())
-  postId         String
-  channelId      String
-  status         PostStatus  @default(DRAFT)
-  format         PostFormat?
-  publishedId    String?
-  publishedUrl   String?
-  errorMessage   String?     @db.Text
-  retryCount     Int         @default(0)
-  uploadProgress Int?        // 0-100, set during media upload phases
-  metadata       Json?
+  id              String      @id @default(cuid())
+  postId          String
+  channelId       String
+  status          PostStatus  @default(DRAFT)
+  format          PostFormat?
+  publishedId     String?
+  publishedUrl    String?
+  errorMessage    String?     @db.Text
+  retryCount      Int         @default(0)
+  uploadProgress  Int? // 0-100, set during media upload phases
+  metadata        Json?
   /// Per-channel caption override (PR-5 unique captions). NULL → the shared
   /// Post.content / contentVariants path — byte-identical to pre-PR-5 behavior.
-  contentOverride String? @db.Text
+  contentOverride String?     @db.Text
 
   /// Set when a publish attempt's outcome could NOT be determined — the platform
   /// failed the request in a way that does not prove the WRITE failed, so the post
@@ -554,7 +555,7 @@ model PostTarget {
   /// did NOT go live, which re-arms the ordinary retry path.
   ambiguousAt     DateTime?
   /// Operator-facing explanation shown beside the ambiguous badge.
-  ambiguousReason String?  @db.Text
+  ambiguousReason String?   @db.Text
 
   post    Post    @relation(fields: [postId], references: [id], onDelete: Cascade)
   channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
@@ -613,11 +614,11 @@ model Media {
   /// enqueuedAt?, error? } }. Additive Json — no reader assumes presence.
   metadata     Json?
 
-  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  postMedia       PostMedia[]
-  chatAttachments ChatAttachment[]
-  creativeTemplates          CreativeTemplate[] @relation("CreativeTemplateLogo")
-  referenceTemplates         CreativeTemplate[] @relation("CreativeTemplateReference")
+  organization       Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  postMedia          PostMedia[]
+  chatAttachments    ChatAttachment[]
+  creativeTemplates  CreativeTemplate[] @relation("CreativeTemplateLogo")
+  referenceTemplates CreativeTemplate[] @relation("CreativeTemplateReference")
 
   createdAt DateTime @default(now())
 
@@ -855,7 +856,7 @@ model RssFeed {
   isActive       Boolean   @default(true)
   checkInterval  Int       @default(60) // minutes between checks
   lastCheckedAt  DateTime?
-  lastSyncStatus String?   // "SUCCESS" | "FAILED"
+  lastSyncStatus String? // "SUCCESS" | "FAILED"
   lastSyncError  String?   @db.Text
 
   autoPost       Boolean  @default(false)
@@ -1170,26 +1171,26 @@ model DesignTemplate {
 }
 
 model CreativeTemplate {
-  id             String       @id @default(cuid())
-  organizationId String
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  name           String
-  kind           String       @default("style") // "logo" | "style" — which library this belongs to
-  style          String // "premium_editorial" | "hook_bars" | "tweet_card" | "bold_typographic"
-  logoMediaId    String?
-  logoMedia      Media?       @relation("CreativeTemplateLogo", fields: [logoMediaId], references: [id], onDelete: SetNull)
-  logoPosition   String       @default("top-right")
-  brandColor     String?
-  channelId      String?
+  id               String       @id @default(cuid())
+  organizationId   String
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name             String
+  kind             String       @default("style") // "logo" | "style" — which library this belongs to
+  style            String // "premium_editorial" | "hook_bars" | "tweet_card" | "bold_typographic"
+  logoMediaId      String?
+  logoMedia        Media?       @relation("CreativeTemplateLogo", fields: [logoMediaId], references: [id], onDelete: SetNull)
+  logoPosition     String       @default("top-right")
+  brandColor       String?
+  channelId        String?
   // Saved style-reference library (Component 9 / D8)
   referenceMediaId String?
-  referenceMedia   Media?     @relation("CreativeTemplateReference", fields: [referenceMediaId], references: [id], onDelete: SetNull)
-  cardSpec         Json?      // resolved CardSpec (preset + blocks + StyleControls)
-  sourceUrl        String?    // original ref URL, if pasted (sanitized; provenance only)
-  createdById    String
-  createdBy      User         @relation(fields: [createdById], references: [id])
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
+  referenceMedia   Media?       @relation("CreativeTemplateReference", fields: [referenceMediaId], references: [id], onDelete: SetNull)
+  cardSpec         Json? // resolved CardSpec (preset + blocks + StyleControls)
+  sourceUrl        String? // original ref URL, if pasted (sanitized; provenance only)
+  createdById      String
+  createdBy        User         @relation(fields: [createdById], references: [id])
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
 
   @@index([organizationId])
 }
@@ -1232,7 +1233,7 @@ model ListeningQuery {
   language       String   @default("en")
   isActive       Boolean  @default(true)
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   mentions     Mention[]
   alerts       SentimentAlert[]
 
@@ -1254,7 +1255,7 @@ model Mention {
   authorAvatar     String?
   content          String        @db.Text
   sentiment        Sentiment     @default(NEUTRAL)
-  sentimentScore   Float?        // -1.0 to 1.0
+  sentimentScore   Float? // -1.0 to 1.0
   reach            Int           @default(0)
   engagements      Int           @default(0)
   metadata         Json?
@@ -1288,7 +1289,7 @@ model Mention {
 model SentimentAlert {
   id               String  @id @default(cuid())
   listeningQueryId String
-  type             String  // "spike_negative", "volume_surge", "trending_mention"
+  type             String // "spike_negative", "volume_surge", "trending_mention"
   title            String
   description      String  @db.Text
   severity         String  @default("medium") // "low", "medium", "high", "critical"
@@ -1325,7 +1326,7 @@ model Campaign {
   targetChannels String[]       @default([]) // Channel IDs
   budget         Float?
   currency       String         @default("USD")
-  goalType       String?        // "awareness", "engagement", "traffic", "conversions"
+  goalType       String? // "awareness", "engagement", "traffic", "conversions"
   goalTarget     Float?
 
   // Metrics (aggregated)
@@ -1338,15 +1339,15 @@ model Campaign {
   totalReach       Int   @default(0)
   totalSpend       Float @default(0)
 
-  organization    Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  campaignPosts   CampaignPost[]
-  brandTrackers   BrandTracker[]
+  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaignPosts CampaignPost[]
+  brandTrackers BrandTracker[]
 
-  startDate   DateTime?
-  endDate     DateTime?
-  lastSyncAt  DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  startDate  DateTime?
+  endDate    DateTime?
+  lastSyncAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
   @@index([organizationId, status])
   @@index([startDate, endDate])
@@ -1378,24 +1379,24 @@ model CampaignPost {
 
 // Track brands/competitors releasing new content
 model BrandTracker {
-  id             String  @id @default(cuid())
-  organizationId String
-  campaignId     String?
-  brandName      String
-  description    String? @db.Text
+  id              String  @id @default(cuid())
+  organizationId  String
+  campaignId      String?
+  brandName       String
+  description     String? @db.Text
   // Social handles to monitor
-  twitterHandle  String?
+  twitterHandle   String?
   instagramHandle String?
-  facebookPageId String?
-  linkedinHandle String?
-  tiktokHandle   String?
-  youtubeHandle  String?
-  websiteUrl     String?
-  isActive       Boolean @default(true)
+  facebookPageId  String?
+  linkedinHandle  String?
+  tiktokHandle    String?
+  youtubeHandle   String?
+  websiteUrl      String?
+  isActive        Boolean @default(true)
 
-  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  campaign      Campaign?      @relation(fields: [campaignId], references: [id], onDelete: SetNull)
-  contentItems  BrandContent[]
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaign     Campaign?      @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  contentItems BrandContent[]
 
   lastSyncAt DateTime?
   createdAt  DateTime  @default(now())
@@ -1411,7 +1412,7 @@ model BrandContent {
   id             String        @id @default(cuid())
   brandTrackerId String
   platform       MentionSource
-  contentType    String        // "post", "reel", "story", "article", "video", "ad"
+  contentType    String // "post", "reel", "story", "article", "video", "ad"
   content        String        @db.Text
   contentUrl     String?
   mediaUrl       String?
@@ -1435,28 +1436,28 @@ model BrandContent {
 
 // Discovered influencers / key persons to reach out
 model Influencer {
-  id             String  @id @default(cuid())
-  organizationId String
-  name           String
-  bio            String? @db.Text
-  avatarUrl      String?
-  platform       String  // primary platform
-  handle         String
-  profileUrl     String?
+  id              String    @id @default(cuid())
+  organizationId  String
+  name            String
+  bio             String?   @db.Text
+  avatarUrl       String?
+  platform        String // primary platform
+  handle          String
+  profileUrl      String?
   // Metrics
-  followers      Int     @default(0)
-  avgEngagement  Float   @default(0) // engagement rate %
-  avgLikes       Int     @default(0)
-  avgComments    Int     @default(0)
+  followers       Int       @default(0)
+  avgEngagement   Float     @default(0) // engagement rate %
+  avgLikes        Int       @default(0)
+  avgComments     Int       @default(0)
   // Discovery context
-  niche          String?
-  relevanceScore Float   @default(0) // 0-100 how relevant to the org
-  discoveredFrom String? // "listening_query", "brand_tracker", "manual"
-  discoveredId   String? // ID of the listening query or brand tracker
+  niche           String?
+  relevanceScore  Float     @default(0) // 0-100 how relevant to the org
+  discoveredFrom  String? // "listening_query", "brand_tracker", "manual"
+  discoveredId    String? // ID of the listening query or brand tracker
   // Outreach tracking
-  status         String  @default("discovered") // "discovered", "shortlisted", "contacted", "responded", "engaged", "rejected"
-  notes          String? @db.Text
-  contactEmail   String?
+  status          String    @default("discovered") // "discovered", "shortlisted", "contacted", "responded", "engaged", "rejected"
+  notes           String?   @db.Text
+  contactEmail    String?
   lastContactedAt DateTime?
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -1473,10 +1474,10 @@ model Influencer {
 // ==================== CELEBRITY BRAND OUTREACH ====================
 
 enum SignalType {
-  AD_LIBRARY    // Meta/Google paid ad featuring celebrity — Score 3
-  SOCIAL_MEDIA  // Brand post with celebrity tag/hashtag — Score 2
-  PR_NEWS       // Press release or news about endorsement deal — Score 2
-  JOB_POSTING   // Brand hiring celebrity relations role — Score 1
+  AD_LIBRARY // Meta/Google paid ad featuring celebrity — Score 3
+  SOCIAL_MEDIA // Brand post with celebrity tag/hashtag — Score 2
+  PR_NEWS // Press release or news about endorsement deal — Score 2
+  JOB_POSTING // Brand hiring celebrity relations role — Score 1
 }
 
 enum OutreachStatus {
@@ -1490,10 +1491,10 @@ enum OutreachStatus {
   // (deliberate: see the Brand Outreach gap #3 decision). They track what
   // happened AFTER a message was sent and are orthogonal to the auto pipeline
   // states above.
-  REPLIED        // brand responded (neutral)
-  INTERESTED     // positive response — worth pursuing
+  REPLIED // brand responded (neutral)
+  INTERESTED // positive response — worth pursuing
   NOT_INTERESTED // declined
-  CLOSED         // concluded / archived (won or lost)
+  CLOSED // concluded / archived (won or lost)
 }
 
 enum OutreachChannel {
@@ -1517,20 +1518,20 @@ enum MessageStatus {
 
 // A detected signal that a brand has onboarded a celebrity
 model CelebrityBrandSignal {
-  id              String     @id @default(cuid())
-  organizationId  String
-  brandName       String
-  brandWebsite    String?
-  brandEmail      String?
-  brandTwitter    String?
-  brandInstagram  String?
-  brandLinkedin   String?
-  celebrityNames  String[]   // e.g. ["Virat Kohli", "Alia Bhatt"]
-  signalType      SignalType
-  signalUrl       String?    @db.Text
-  signalData      Json?      // raw scraped payload
-  score           Int        // 1=weak, 2=confirmed, 3=active_spend
-  detectedAt      DateTime   @default(now())
+  id             String     @id @default(cuid())
+  organizationId String
+  brandName      String
+  brandWebsite   String?
+  brandEmail     String?
+  brandTwitter   String?
+  brandInstagram String?
+  brandLinkedin  String?
+  celebrityNames String[] // e.g. ["Virat Kohli", "Alia Bhatt"]
+  signalType     SignalType
+  signalUrl      String?    @db.Text
+  signalData     Json? // raw scraped payload
+  score          Int // 1=weak, 2=confirmed, 3=active_spend
+  detectedAt     DateTime   @default(now())
 
   organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   outreachLeads OutreachLead[]
@@ -1541,15 +1542,15 @@ model CelebrityBrandSignal {
 
 // One outreach lead per brand per daily digest cycle
 model OutreachLead {
-  id          String        @id @default(cuid())
-  signalId    String
-  digestDate  DateTime      @db.Date
-  status      OutreachStatus @default(PENDING)
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  id         String         @id @default(cuid())
+  signalId   String
+  digestDate DateTime       @db.Date
+  status     OutreachStatus @default(PENDING)
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
 
-  signal    CelebrityBrandSignal @relation(fields: [signalId], references: [id], onDelete: Cascade)
-  messages  OutreachMessage[]
+  signal   CelebrityBrandSignal @relation(fields: [signalId], references: [id], onDelete: Cascade)
+  messages OutreachMessage[]
 
   @@index([digestDate, status])
   @@index([signalId])
@@ -1560,14 +1561,14 @@ model OutreachMessage {
   id        String          @id @default(cuid())
   leadId    String
   channel   OutreachChannel
-  subject   String?         // email subject only
+  subject   String? // email subject only
   body      String          @db.Text
   status    MessageStatus   @default(DRAFT)
   sentAt    DateTime?
   createdAt DateTime        @default(now())
   updatedAt DateTime        @updatedAt
 
-  lead         OutreachLead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  lead         OutreachLead          @relation(fields: [leadId], references: [id], onDelete: Cascade)
   deliveryLogs OutreachDeliveryLog[]
 
   @@index([leadId, channel])
@@ -1576,14 +1577,14 @@ model OutreachMessage {
 
 // Daily digest log
 model DailyDigest {
-  id               String    @id @default(cuid())
-  organizationId   String
-  digestDate       DateTime  @unique @db.Date
+  id                String    @id @default(cuid())
+  organizationId    String
+  digestDate        DateTime  @unique @db.Date
   telegramMessageId String?
-  leadCount        Int       @default(0)
-  approvedCount    Int       @default(0)
-  sentAt           DateTime?
-  createdAt        DateTime  @default(now())
+  leadCount         Int       @default(0)
+  approvedCount     Int       @default(0)
+  sentAt            DateTime?
+  createdAt         DateTime  @default(now())
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
@@ -1592,12 +1593,12 @@ model DailyDigest {
 
 // Outreach delivery audit trail
 model OutreachDeliveryLog {
-  id           String    @id @default(cuid())
+  id           String   @id @default(cuid())
   messageId    String
-  attemptedAt  DateTime  @default(now())
+  attemptedAt  DateTime @default(now())
   responseCode Int?
-  responseBody String?   @db.Text
-  error        String?   @db.Text
+  responseBody String?  @db.Text
+  error        String?  @db.Text
 
   message OutreachMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
 
@@ -1607,25 +1608,25 @@ model OutreachDeliveryLog {
 // ==================== ERROR MONITORING ====================
 
 model ErrorLog {
-  id             String   @id @default(cuid())
+  id             String    @id @default(cuid())
   organizationId String?
   userId         String?
-  source         String   // "frontend" | "api" | "worker" | "publish"
-  severity       String   @default("error") // "error" | "warning" | "critical"
-  message        String   @db.Text
-  stack          String?  @db.Text
-  endpoint       String?  // API route or page path
+  source         String // "frontend" | "api" | "worker" | "publish"
+  severity       String    @default("error") // "error" | "warning" | "critical"
+  message        String    @db.Text
+  stack          String?   @db.Text
+  endpoint       String? // API route or page path
   userAgent      String?
-  metadata       Json?    // extra context (browser, platform, postId, channelId, etc.)
-  resolved       Boolean  @default(false)
+  metadata       Json? // extra context (browser, platform, postId, channelId, etc.)
+  resolved       Boolean   @default(false)
   resolvedAt     DateTime?
   resolvedBy     String?
-  resolvedNote   String?  @db.Text
-  fingerprint    String?  // hash of message+stack for dedup
-  occurrences    Int      @default(1)
-  firstSeenAt    DateTime @default(now())
-  lastSeenAt     DateTime @default(now())
-  createdAt      DateTime @default(now())
+  resolvedNote   String?   @db.Text
+  fingerprint    String? // hash of message+stack for dedup
+  occurrences    Int       @default(1)
+  firstSeenAt    DateTime  @default(now())
+  lastSeenAt     DateTime  @default(now())
+  createdAt      DateTime  @default(now())
 
   @@index([organizationId, createdAt])
   @@index([source, severity])
@@ -1636,19 +1637,19 @@ model ErrorLog {
 // ==================== DEPLOYMENTS ====================
 
 model Deployment {
-  id          String   @id @default(cuid())
-  version     String   // e.g. "1.0.42"
-  commitHash  String   // short git SHA
-  commitMsg   String   @db.Text
-  branch      String   @default("main")
-  deployedBy  String?  // user or "ci"
-  status      String   @default("active") // active, rolled_back, superseded
-  environment String   @default("production") // production, staging
-  changelog   String?  @db.Text // auto-generated from commits since last deploy
-  metadata    Json?    // extra info (docker image tags, build duration, etc.)
-  rolledBackAt   DateTime?
-  rolledBackTo   String?  // ID of the deployment that was rolled back to
-  createdAt   DateTime @default(now())
+  id           String    @id @default(cuid())
+  version      String // e.g. "1.0.42"
+  commitHash   String // short git SHA
+  commitMsg    String    @db.Text
+  branch       String    @default("main")
+  deployedBy   String? // user or "ci"
+  status       String    @default("active") // active, rolled_back, superseded
+  environment  String    @default("production") // production, staging
+  changelog    String?   @db.Text // auto-generated from commits since last deploy
+  metadata     Json? // extra info (docker image tags, build duration, etc.)
+  rolledBackAt DateTime?
+  rolledBackTo String? // ID of the deployment that was rolled back to
+  createdAt    DateTime  @default(now())
 
   @@index([status])
   @@index([createdAt])
@@ -1662,24 +1663,24 @@ model Deployment {
 /// which checks recent published Facebook/Instagram posts on a budget. A
 /// workspace with no row, or with both switches off, is never swept.
 model CommentAutomation {
-  id              String   @id @default(cuid())
-  organizationId  String   @unique
+  id               String    @id @default(cuid())
+  organizationId   String    @unique
   /// Hide matching comments as the Page / account (needs the write permission).
-  autoHideEnabled Boolean  @default(false)
+  autoHideEnabled  Boolean   @default(false)
   /// Words or phrases, matched case-insensitively (whole words for plain words).
-  blockedWords    String[] @default([])
+  blockedWords     String[]  @default([])
   /// Also hide comments that contain a link.
-  hideLinks       Boolean  @default(false)
+  hideLinks        Boolean   @default(false)
   /// In-app notification to owners/admins when new comments arrive.
-  alertsEnabled   Boolean  @default(false)
+  alertsEnabled    Boolean   @default(false)
   /// Store new comments on our own posts and score their sentiment (2026-10-05).
-  sentimentEnabled Boolean @default(false)
+  sentimentEnabled Boolean   @default(false)
   /// Empty = every Facebook Page and Instagram account in the workspace.
-  channelIds      String[] @default([])
+  channelIds       String[]  @default([])
   /// When the sweep last looked at this workspace, and what it found.
-  lastRunAt       DateTime?
-  lastRunSummary  Json?
-  updatedById     String?
+  lastRunAt        DateTime?
+  lastRunSummary   Json?
+  updatedById      String?
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
@@ -1772,4 +1773,46 @@ model CommentPrivateReply {
 
   @@unique([organizationId, commentId])
   @@index([postTargetId])
+}
+
+/// Somebody else @mentioned one of our Instagram professional accounts, in a
+/// caption or a comment on THEIR media (2026-10-17). Discovered only through
+/// the IG `mentions` webhook — Meta has no "list my mentions" endpoint, and it
+/// does not store webhook data, so this table is the only record. One row per
+/// CHANNEL (the same IG account can be connected in several workspaces).
+model InstagramMention {
+  id               String    @id @default(cuid())
+  organizationId   String
+  channelId        String
+  /// Our IG professional account id (the webhook entry.id).
+  igUserId         String
+  /// Their media the mention is on.
+  mediaId          String
+  /// Set for a comment mention; NULL for a caption mention.
+  commentId        String?
+  /// "{mediaId}:{commentId}" or "{mediaId}:caption" — see mentionDedupKey.
+  dedupKey         String
+  /// Filled in from Graph after the webhook; any of these may stay NULL.
+  text             String?   @db.Text
+  username         String?
+  permalink        String?
+  mediaType        String?
+  mentionedAt      DateTime?
+  detailsError     String?
+  detailsFetchedAt DateTime?
+  /// Our public reply: SENT or UNCONFIRMED (may already be live).
+  replyStatus      String?
+  replyId          String?
+  replyText        String?   @db.Text
+  repliedAt        DateTime?
+  repliedById      String?
+  dismissedAt      DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([channelId, dedupKey])
+  @@index([organizationId, createdAt])
 }

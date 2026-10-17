@@ -1,3 +1,4 @@
+import { postFirstComment, type FirstCommentDeps } from "../lib/first-comment";
 import { Worker, type Job, UnrecoverableError } from "bullmq";
 import { prisma } from "@postautomation/db";
 import {
@@ -1340,6 +1341,25 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
         // Do not rethrow — BullMQ must not retry (would re-publish)
         return result;
       }
+
+      // 4-ig. The automatic first comment (Instagram, not stories). Never throws —
+      // the post is already live; see lib/first-comment.ts.
+      await postFirstComment(
+        {
+          prisma,
+          commentOnMedia: (t, mediaId, message) =>
+            (provider as unknown as { commentOnMedia: FirstCommentDeps["commentOnMedia"] }).commentOnMedia(t, mediaId, message),
+        },
+        {
+          platform,
+          isStoryTarget,
+          postMetadata: postTarget.post.metadata,
+          targetId: postTargetId,
+          targetMetadata: updatedTarget.metadata,
+          mediaId: result.platformPostId,
+          tokens,
+        }
+      );
 
       // 4a. In-app notification for org owners/admins (best-effort, never fails publish)
       await notifyPublishOutcome(postTarget.post.organizationId, postTarget.postId, postTargetId, platform, "PUBLISHED");

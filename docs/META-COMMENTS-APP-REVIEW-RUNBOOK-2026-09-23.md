@@ -1052,3 +1052,54 @@ header". Keys created inside a workspace (`sk-ant-api03-`) need nothing.
   `docker compose -f docker-compose.prod.yml --env-file .env.production up -d --no-deps --timeout 300 web worker`.
 - Tests: the `ANTHROPIC_WORKSPACE_ID` block in `packages/ai/src/__tests__/provider-chain.test.ts`
   checks the header on the real outgoing request (stubbed fetch); verified failing without the fix.
+
+## 29. Instagram: comment on our own posts, automatic first comment, reply to @mentions (2026-10-17)
+
+Instagram's API only lets an account comment on media it OWNS. The two exceptions are
+replying where another account @mentioned ours (`POST /{ig-user-id}/mentions`) — and
+nothing else: commenting on other people's posts, or one connected account commenting on
+another's post, is not possible.
+
+**1. Comment on this post** — a box at the top of every Instagram thread (Comments inbox and
+"Show comments" on the post page). `comment.create` → `POST /{ig-media-id}/comments` on the
+TARGET's own media id from our DB; the client only names the target. Same rate limits, audit
+(`comment.created`) and "may already be posted" handling as a reply.
+
+**2. First comment** — Compose shows a "First comment" card when an Instagram channel is
+selected (not in Story or Article mode). `post.create` input `firstComment` (≤2,200) →
+`Post.metadata.instagramFirstComment = { text }` (the client passthrough cannot write it).
+The publish worker posts it right after the target is marked PUBLISHED
+(`apps/worker/src/lib/first-comment.ts`): Instagram targets only, never stories, at most
+once per target, **never throws** (the post is already live — a throw would re-publish), and
+records `PostTarget.metadata.firstComment = { status: posted | failed | unconfirmed, … }` with
+an atomic jsonb merge. The post page shows the outcome; a failed one can be added by hand from
+"Show comments".
+
+**3. Mentions** — Comments → **Mentions** tab. Rows come only from the Instagram `mentions`
+webhook (`apps/web/app/api/webhooks/instagram/route.ts` → `storeInstagramMentions`): one
+`InstagramMention` row per channel of that IG account (deduped on `channelId + dedupKey`,
+written BEFORE any Graph call because Meta keeps no copy), scoped to the Meta app that signed
+the delivery, then the text/author/link are read with `mentioned_comment` /
+`mentioned_media` (max 25 lookups per delivery). Reply = `POST /{ig-user-id}/mentions`
+(`media_id`, plus `comment_id` for a comment mention); SENT / UNCONFIRMED recorded on the row,
+and a second reply needs an explicit "Reply again" / "Send again anyway".
+
+### ⚠️ What the Mentions tab needs before anything arrives (Meta side, not code)
+
+1. **`instagram_manage_comments` Advanced Access** (already requested). Business apps get NO
+   webhook notifications for a permission below Advanced Access.
+2. **App Dashboard → Webhooks → Instagram → subscribe the `mentions` field** (today only
+   `story_insights` is ticked).
+3. **`pages_manage_metadata` + Page subscription.** Meta requires
+   `POST /{page-id}/subscribed_apps` on the Page linked to each IG account, which needs
+   `pages_manage_metadata` — a NEW permission we do not request yet (needs App Review). Until
+   then no mention webhooks are delivered.
+4. Meta's limits: no mentions from stories or private accounts; no commenting on photos you
+   were only TAGGED in.
+
+Comment-on-post and first comment need only `instagram_manage_comments` (same as replies).
+
+Tests: `packages/social/src/__tests__/instagram-mentions.test.ts` (22),
+`packages/api/src/__tests__/comment-create-and-mentions.test.ts` (12),
+`apps/worker/src/lib/first-comment.test.ts` (9), `apps/web/lib/first-comment.test.ts`,
+`apps/web/lib/instagram-comment-ui-contract.test.ts`.
