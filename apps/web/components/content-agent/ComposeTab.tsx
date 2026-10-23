@@ -9,6 +9,7 @@ import { isVideoMediaItem, VIDEO_EXT_RE } from "~/components/previews/preview-me
 import { superTextConfigSchema, type SuperTextConfig } from "@postautomation/super-text";
 import { buildSuperTextPayload } from "~/lib/super-text-payload";
 import { SuperTextEditor } from "./SuperTextEditor";
+import { VideoCoverPicker } from "./VideoCoverPicker";
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
@@ -213,6 +214,9 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   const [postMedia, setPostMedia] = useState<{ url: string; mediaId?: string; file?: File; uploading?: boolean; progress?: number; superText?: SuperTextConfig; thumbnail?: { mediaId: string; url: string }; thumbnailUploading?: boolean }[]>([]);
   // Index into postMedia whose super text is being edited (null = dialog closed).
   const [superTextEditIndex, setSuperTextEditIndex] = useState<number | null>(null);
+  // Cover picker for one video tile, keyed on the tile URL (never the index —
+  // the tile X-button re-indexes postMedia while the dialog is open).
+  const [coverPickerTileUrl, setCoverPickerTileUrl] = useState<string | null>(null);
   // Live mirror of postMedia for post-await reads in async handlers. A `landed`
   // flag mutated INSIDE a setPostMedia updater is unreliable: React runs the
   // updater eagerly only when that hook's queue is empty, so with any other
@@ -2170,43 +2174,29 @@ ${content}`;
                             feature and Meta rejects it on a STORIES container,
                             so offering the control would be a dead end. */}
                         {isVideo && !isStoryMode && (
-                          <label
+                          <button
+                            type="button"
                             className={`${TILE_STRIP} bottom-5 ${
                               item.uploading || item.thumbnailUploading
                                 ? "cursor-wait bg-black/70 font-medium text-white"
                                 : `cursor-pointer ${item.thumbnail ? TILE_STRIP_SET : TILE_STRIP_IDLE}`
                             }`}
-                            title="Upload a custom cover image (Instagram Reels, Facebook and YouTube). Any image works — large ones are resized and fitted to the video automatically. Note: YouTube's Shorts FEED ignores custom covers — yours still shows in the channel grid and search."
+                            title="Choose the cover (Instagram Reels, Facebook and YouTube): pick a frame from this video, or upload an image. Note: YouTube's Shorts FEED ignores custom covers — yours still shows in the channel grid and search."
+                            // Disabled while THIS tile's video is still uploading:
+                            // startAutoUpload swaps the tile's blob: url to the
+                            // durable S3 url on completion, and the cover write-back
+                            // is keyed on that url — picking mid-upload would race it.
+                            // Also disabled during a cover upload so a second pick
+                            // cannot interleave.
+                            disabled={!!item.uploading || !!item.thumbnailUploading}
+                            onClick={() => setCoverPickerTileUrl(item.url)}
                           >
                             {item.thumbnailUploading
                               ? "Thumbnail…"
                               : item.thumbnail
                                 ? "Thumbnail ✓"
                                 : "Thumbnail"}
-                            <input
-                              type="file"
-                              // Broad on purpose: prepareThumbnail normalizes any
-                              // decodable format (HEIC on Safari, webp, …) to JPEG.
-                              // The old jpeg/png-only accept let phones hand over
-                              // HEIC anyway (accept is advisory on mobile), which
-                              // then died server-side with an opaque error.
-                              accept="image/*"
-                              className="hidden"
-                              // Disabled while THIS tile's video is still uploading:
-                              // startAutoUpload swaps the tile's blob: url to the
-                              // durable S3 url on completion, and the cover write-back
-                              // is keyed on that url — picking mid-upload would race it.
-                              // Also disabled during a cover upload so a second pick
-                              // cannot interleave.
-                              disabled={!!item.uploading || !!item.thumbnailUploading}
-                              onChange={(e) => {
-                                const f = e.target.files?.[0];
-                                // Reset so re-picking the SAME file fires change again.
-                                e.target.value = "";
-                                if (f) void handleThumbnailUpload(idx, f);
-                              }}
-                            />
-                          </label>
+                          </button>
                         )}
                       </div>
                     );
@@ -3148,6 +3138,37 @@ ${content}`;
         onSelect={handleMediaLibrarySelect}
         title="Attach Image from Library"
       />
+      {/* Cover picker — mounted only while open, so no <video> exists for it
+          otherwise. A large LOCAL file never gets a media element (OOM rule);
+          after upload the tile url is the remote file and previews normally. */}
+      {(() => {
+        const tile = coverPickerTileUrl ? postMedia.find((m) => m.url === coverPickerTileUrl) : undefined;
+        if (!tile) return null;
+        const isLargeLocal = !!tile.file && tile.file.size > TILE_VIDEO_PREVIEW_MAX_BYTES && tile.url.startsWith("blob:");
+        return (
+          <VideoCoverPicker
+            open
+            videoUrl={tile.url}
+            canPreview={!isLargeLocal}
+            onOpenChange={(o) => {
+              if (!o) setCoverPickerTileUrl(null);
+            }}
+            onPickImage={(file) => {
+              const pickedUrl = tile.url;
+              const idx = postMediaRef.current.findIndex((m) => m.url === pickedUrl);
+              if (idx < 0) {
+                toast({
+                  title: "Thumbnail not attached",
+                  description: "That video was removed. Pick it again.",
+                  variant: "destructive",
+                });
+                return;
+              }
+              void handleThumbnailUpload(idx, file);
+            }}
+          />
+        );
+      })()}
       {/* Super text editor — mounted only while open so its aspect probe and
           ResizeObserver don't exist for the (common) no-super-text case. */}
       {superTextEditIndex !== null && postMedia[superTextEditIndex] && (
