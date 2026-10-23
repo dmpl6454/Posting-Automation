@@ -504,6 +504,20 @@ Two PROFESSIONAL-gated features backed by [packages/api/src/routers/campaign.rou
 - **nginx healthcheck fixed**: `location = /nginx-health` on port 80 + compose probe hits it. The old probe (`/api/health`) followed the 301 to https://localhost and died on TLS → `(unhealthy)` for 3 weeks while serving fine. Verify after nginx changes: `curl http://127.0.0.1/nginx-health` on the box → 200, container → `(healthy)`.
 - **Friendly maintenance page**: `error_page 502 503 504 @maintenance` (auto-retry HTML, Retry-After 6). Only nginx-GENERATED errors (upstream unreachable/timeout) — app JSON 5xx passes through (`proxy_intercept_errors` stays off).
 - Remember the standing gotcha: nginx.conf changes need `docker compose … up -d --force-recreate nginx` after the pull. `deploy.sh` (deploy/update/rollback) now does this automatically, after an `nginx -t` gate, whenever the running nginx's config differs from the file on disk.
+- **Scanner probes are dropped at nginx (2026-10-23).** This stack runs NO PHP/WordPress/CGI, so a
+  request for `*.php`, `/wp-login.php`, `/xmlrpc.php`, `/phpmyadmin`, `/vendor/phpunit`, `/.env`,
+  `/.git` or `composer.json` is always an exploit scanner. The `$is_scanner_path` map (over the
+  DECODED `$uri`, so `%2e%2f` tricks match) + `if ($is_scanner_path) { return 444; }` in all three
+  named servers close the connection before any proxying: no 404 page to fingerprint, no web-container
+  render, no spend of the shared api rate-limit bucket. Two `default_server` blocks catch bare-IP /
+  unknown-Host traffic: port 80 keeps `location = /nginx-health` (the docker healthcheck probes it with
+  `Host: 127.0.0.1` and would otherwise be dropped) and 444s the rest; port 443 uses
+  `ssl_reject_handshake on` (TLS alert 112 — the bot never learns the hostname on the cert). ⚠️ A
+  client sending no SNI lands there too (every modern browser/curl/monitor sends it). Keep `.well-known`
+  OUT of the dot-file rule or certificate renewal breaks. Source-locked by
+  [nginx-scanner-block.test.ts](apps/web/lib/nginx-scanner-block.test.ts); behaviour verified by running
+  the config under nginx 1.24 on spare ports with a stub backend (legit paths 200, probes closed,
+  ACME path 404 not 444). `nginx -t` locally needs the cert paths swapped for a self-signed pair.
 
 ## Phase-B batch — 2026-07-18 (branch `feat/snapchat-connect-2026-07-18`) — read before touching these areas
 
