@@ -178,7 +178,13 @@ export function PlatformPerformanceRadar({
      edge — `justify-between` puts the slack between the two columns rather than
      after them, so the list sits where the mockup puts it. */
   return (
-    <div className="mt-4 grid items-center gap-y-3.5 lg:grid-cols-[minmax(0,520px)_200px] lg:justify-between lg:gap-x-8">
+    /* `items-start`, NOT `items-center`. The legend column grows with the
+       channel count, and centring aligned the plot to the MIDDLE of that
+       column — measured: a 40-channel workspace pushed the chart 770px down
+       and a 110-channel one 2,527px, so the card opened on a wall of buttons
+       with the chart far below the fold. The plot must stay pinned to the top
+       however tall the list gets. */
+    <div className="mt-4 grid items-start gap-y-3.5 lg:grid-cols-[minmax(0,520px)_200px] lg:justify-between lg:gap-x-8">
       {/* The plot is capped and LEFT-aligned rather than filling the whole 1fr
           column. At full width it renders ~660px across — matching the mockup's
           measured 676px, but on a workspace with little data that is a lot of
@@ -259,7 +265,11 @@ export function PlatformPerformanceRadar({
           )}
         </div>
       </div>
-      <div className="flex flex-col gap-2">
+      {/* Capped and scrollable. Unbounded, this column set the whole card's
+          height — 5,514px on a 110-channel workspace. The cap is the plot's
+          own rendered height, so the two columns end together and the card
+          stays one screenful whatever the channel count. */}
+      <div className="flex max-h-[460px] flex-col gap-2 overflow-y-auto pr-1">
         {rows.map((r) => {
           const on = activeIds.has(r.ch.id);
           return (
