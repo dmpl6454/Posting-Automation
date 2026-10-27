@@ -38,6 +38,7 @@ import { brandLeadsRouter } from "./routers/brand-leads.router";
 import { uploadRouter } from "./routers/upload.router";
 import { commentRouter } from "./routers/comment.router";
 import { messageRouter } from "./routers/message.router";
+import { tiktokRouter } from "./routers/tiktok.router";
 
 export const appRouter = createRouter({
   user: userRouter,
@@ -79,6 +80,7 @@ export const appRouter = createRouter({
   upload: uploadRouter,
   comment: commentRouter,
   message: messageRouter,
+  tiktok: tiktokRouter,
 });
 
 export type AppRouter = typeof appRouter;

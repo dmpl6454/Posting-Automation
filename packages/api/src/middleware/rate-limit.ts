@@ -185,3 +185,13 @@ export const commentDraftRateLimiter = createRateLimiter({ windowMs: 60_000, max
  */
 export const messageReadRateLimiter = createRateLimiter({ windowMs: 60_000, max: 90 });
 export const messageSendRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
+
+/**
+ * TikTok creator_info (2026-10-28). TikTok allows 20 creator_info calls a minute
+ * PER TOKEN, and the publish worker spends the same budget (TikTok requires a
+ * fresh creator_info before every post). So: 20/min per user, and a tighter
+ * 15/min per TikTok account across every user and org, which leaves headroom
+ * for publishing. Compose caches the answer (staleTime) so real use is far lower.
+ */
+export const tiktokCreatorInfoRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
+export const tiktokCreatorInfoAccountLimiter = createRateLimiter({ windowMs: 60_000, max: 15 });
