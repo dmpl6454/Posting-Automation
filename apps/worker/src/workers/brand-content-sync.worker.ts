@@ -6,6 +6,7 @@ import {
   type BrandContentSyncJobData,
   createRedisConnection,
 } from "@postautomation/queue";
+import { isTikTokResearchEnabled } from "../lib/tiktok-research";
 
 interface RawBrandContent {
   platform: MentionSource;
@@ -220,6 +221,11 @@ async function fetchLinkedInContent(handle: string, orgId: string): Promise<RawB
 
 /** Fetch TikTok user videos */
 async function fetchTikTokContent(handle: string): Promise<RawBrandContent[]> {
+  // Research API only: needs an approved research client, and production holds
+  // the posting app's keys. Off unless TIKTOK_RESEARCH_ENABLED=true — see
+  // lib/tiktok-research.ts. (The request below is also not yet in the Research
+  // API's shape; fix it before turning this on.)
+  if (!isTikTokResearchEnabled()) return [];
   // Standardized on TIKTOK_CLIENT_ID (matches the OAuth connect/publish paths,
   // which read `${PLATFORM}_CLIENT_ID`). Falls back to the legacy TIKTOK_CLIENT_KEY
   // name so existing deployments keep working. The value is TikTok's Client Key.
@@ -275,6 +281,11 @@ async function fetchTikTokContent(handle: string): Promise<RawBrandContent[]> {
   }
   return items;
 }
+
+/** Test seam: the per-platform fetchers, callable directly. */
+export const __brandContentFetchers = {
+  tiktok: fetchTikTokContent,
+};
 
 // ---------------------------------------------------------------------------
 // Worker — dedicated BRAND_CONTENT_SYNC queue (was incorrectly sharing CAMPAIGN_ANALYTICS_SYNC)

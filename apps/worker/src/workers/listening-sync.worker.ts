@@ -11,6 +11,7 @@ import {
   LISTENING_SYNC_INTERVAL_MS,
 } from "@postautomation/queue";
 import { hasSurgeBaseline } from "./lib/surge-guard";
+import { isTikTokResearchEnabled } from "../lib/tiktok-research";
 import {
   alertOnCooldown,
   ALERT_COOLDOWN_MS,
@@ -735,6 +736,11 @@ const fetchFacebookTagged: Fetcher = async ({ keywords, channels }) => {
 
 /** TikTok Research API — client token (cached) + ONE query carrying every keyword (`IN` takes a list). */
 const fetchTikTokMentions: Fetcher = async ({ keywords }) => {
+  // Research API only: needs an approved research client, and production holds
+  // the posting app's keys. Off unless TIKTOK_RESEARCH_ENABLED=true — see
+  // lib/tiktok-research.ts. (The request below is also not yet in the Research
+  // API's shape; fix it before turning this on.)
+  if (!isTikTokResearchEnabled()) return [];
   const clientKey = process.env.TIKTOK_CLIENT_ID || process.env.TIKTOK_CLIENT_KEY;
   const clientSecret = process.env.TIKTOK_CLIENT_SECRET;
   if (!clientKey || !clientSecret) return [];
@@ -955,6 +961,7 @@ const DEFAULT_PLATFORMS = [
 /** Test seam: the per-platform fetchers, callable with a hand-built context. */
 export const __listeningFetchers = {
   news: fetchGoogleNews,
+  tiktok: fetchTikTokMentions,
   facebook: fetchFacebookTagged,
   reddit: fetchRedditMentions,
   youtube: fetchYouTubeMentions,

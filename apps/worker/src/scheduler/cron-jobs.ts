@@ -332,10 +332,15 @@ export async function scheduleTokenRefreshes() {
   });
 
   for (const channel of expiringChannels) {
+    // ⚠️ removeOnFail: true is load-bearing (2026-10-28). The fixed jobId dedupes
+    // overlapping cron runs, but the queue default KEEPS a failed job, and BullMQ
+    // silently ignores an add whose jobId still exists — so one refresh that
+    // exhausted its attempts (a short provider outage) used to stop background
+    // refresh for that channel forever. TikTok access tokens live 24 hours.
     await tokenRefreshQueue.add(
       `refresh-${channel.id}`,
       { channelId: channel.id, platform: channel.platform },
-      { jobId: `refresh-${channel.id}`, removeOnComplete: true }
+      { jobId: `refresh-${channel.id}`, removeOnComplete: true, removeOnFail: true }
     );
   }
 

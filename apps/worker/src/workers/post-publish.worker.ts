@@ -19,6 +19,7 @@ import { collectPerTargetMediaIds, substitutePerTargetMedia } from "../lib/per-t
 import { PRIORITY_RETRY, mediaOptimizeQueue, atAgeWindowsForFormat } from "@postautomation/queue";
 import { planOptimizeGate, choosePublishUrl, isCurrentRendition } from "../lib/media-optimize";
 import { buildSnapshotMetadata } from "../lib/snapshot-metadata";
+import { tiktokProviderMetadata, withoutInheritedTikTokKeys } from "../lib/tiktok-publish-metadata";
 
 /**
  * How far back a PRE-FLIGHT reconciliation looks when a retry is about to
@@ -702,14 +703,34 @@ export function createPostPublishWorker() {
       // what the user published. Facebook stories only come from story MODE,
       // which caps media at one, so this is a no-op there.
       const publishesAsStory = isStoryTarget && postTarget.post.mediaAttachments.length === 1;
-      const providerMetadata: Record<string, unknown> = {
+      // TikTok (2026-10-28): the provider gets ONLY this channel's settings block
+      // (from Post.metadata.tiktokByChannel) as `tiktok`, the creator's @handle and
+      // the probed video length — see lib/tiktok-publish-metadata.ts. Gated on the
+      // platform so every other provider payload is byte-identical.
+      const isTikTokTarget = platform === "TIKTOK";
+      const inheritedMetadata: Record<string, unknown> = {
         ...((postTarget.post.metadata as object) || {}),
         ...((postTarget.metadata as object) || {}),
+      };
+      const providerMetadata: Record<string, unknown> = {
+        ...(isTikTokTarget ? withoutInheritedTikTokKeys(inheritedMetadata) : inheritedMetadata),
         ...(postTarget.format ? { format: postTarget.format } : {}),
         // Stories only: the provider builds the /stories/{username}/{id}/ URL when
         // Meta returns no permalink (`/p/{id}` is a 404 for a story). Gated on the
         // format so every non-story provider payload is byte-identical.
         ...(isStoryTarget && channel.username ? { channelUsername: channel.username } : {}),
+        ...(isTikTokTarget
+          ? tiktokProviderMetadata({
+              postMetadata: postTarget.post.metadata,
+              channelId: channel.id,
+              channelUsername: channel.username,
+              media: postTarget.post.mediaAttachments.map((m) => ({
+                fileType: m.media.fileType,
+                duration: (m.media as { duration?: number | null }).duration,
+                metadata: (m.media as { metadata?: unknown }).metadata,
+              })),
+            })
+          : {}),
         ...channelMetadata, // pageId/igUserId/logo_path MUST win — kept last
       };
 

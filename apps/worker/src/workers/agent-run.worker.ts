@@ -5,6 +5,7 @@ import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import crypto from "crypto";
 import { resolveOrgAuthor } from "../lib/system-user";
 import { resolveAgentRunReview } from "./agent-run-review";
+import { autopilotSkipReason } from "./autopilot-platforms";
 import { PRIORITY_BULK, computePublishDelays } from "@postautomation/queue";
 
 const SCHEDULE_HOURS = [9, 12, 15, 18]; // 9am, 12pm, 3pm, 6pm
@@ -260,12 +261,13 @@ export function createAgentRunWorker() {
           );
           for (let chIdx = 0; chIdx < uniqueChannels.length; chIdx++) {
             const channel = uniqueChannels[chIdx]!;
-            // Autopilot only generates still images, never video. YouTube requires
-            // a video file, so an image-only YouTube target would always fail at
-            // publish time (the PNG gets POSTed to YouTube's video endpoint and
-            // rejected). Skip it until autopilot can produce video.
-            if (channel.platform === "YOUTUBE") {
-              console.warn(`[AgentRun] Skipping YOUTUBE — autopilot produces images, not video`);
+            // Autopilot only generates still images, never video, with nobody at
+            // the keyboard. YouTube and TikTok targets would always fail at
+            // publish time (the PNG gets POSTed to a video endpoint; TikTok also
+            // needs the creator's own visibility choice). See autopilot-platforms.ts.
+            const skipReason = autopilotSkipReason(channel.platform);
+            if (skipReason) {
+              console.warn(`[AgentRun] Skipping ${channel.platform} — ${skipReason}`);
               continue;
             }
             if (!mediaId && mediaRequiredPlatforms.includes(channel.platform)) {
