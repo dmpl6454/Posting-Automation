@@ -1073,6 +1073,38 @@ describe("TikTok provider metadata (2026-10-28)", () => {
     });
   });
 
+  it("end to end: a 'still processing' attempt leaves its checkpoint for the BullMQ retry, which resumes instead of re-initing", async () => {
+    const cp = { publishId: "v_pub_url~v2.789", createdAt: "2026-10-28T10:00:00.000Z", source: "PULL_FROM_URL" };
+    const STILL_PROCESSING = "TikTok is still processing this video. It will be checked again shortly.";
+    const publishPost = seedTikTok();
+    publishPost
+      .mockImplementationOnce(async (_t: any, payload: any) => {
+        expect(payload.metadata.tiktokPublish).toBeUndefined(); // first attempt: nothing to resume
+        await payload.onCheckpoint({ tiktokPublish: cp });
+        throw new Error(STILL_PROCESSING);
+      })
+      .mockImplementationOnce(async (_t: any, payload: any) => {
+        expect(payload.metadata.tiktokPublish).toEqual(cp); // the retry resumes THIS publish
+        expect(payload.metadata.tiktok).toEqual(MINE);
+        return { platformPostId: "7300000000000000002", url: "https://www.tiktok.com/@channel/video/7300000000000000002", metadata: { publishId: cp.publishId } };
+      });
+    seedTarget("t1");
+
+    const err = await runExpectingError(tiktokJob());
+    expect(err).not.toBeInstanceOf(UnrecoverableError); // retryable — BullMQ tries again
+    expect(rows.get("t1")).toMatchObject({ status: "FAILED", errorMessage: STILL_PROCESSING, ambiguousAt: null });
+    // The FAILED write does not touch metadata: the checkpoint survives for the retry.
+    expect(rows.get("t1")!.metadata).toEqual({ tiktokPublish: cp });
+    await s.handlers.failed!({ ...tiktokJob(), attemptsMade: 1 }, err);
+    await awaitBackgroundTasks(1_000);
+    expect(rows.get("t1")!.metadata).toEqual({ tiktokPublish: cp });
+
+    await s.processor!(makeJob({ attemptsMade: 1, data: { ...makeJob().data, platform: "TIKTOK" } }));
+
+    expect(publishPost).toHaveBeenCalledTimes(2);
+    expect(rows.get("t1")).toMatchObject({ status: "PUBLISHED", publishedId: "7300000000000000002", errorMessage: null });
+  });
+
   it("a failed checkpoint write aborts the publish — it is never swallowed", async () => {
     const publishPost = seedTikTok();
     publishPost.mockImplementationOnce(async (_t: any, payload: any) => {
