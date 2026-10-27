@@ -673,6 +673,21 @@ describe("TikTok publish — FILE_UPLOAD fallback (url_ownership_unverified)", (
     for (let i = 1; i < t.progress.length; i++) expect(t.progress[i]!).toBeGreaterThanOrEqual(t.progress[i - 1]!);
   });
 
+  it("progress follows TikTok's uploaded_bytes while it processes the upload", async () => {
+    let initN = 0;
+    let statusN = 0;
+    mockServer({
+      mediaSize: SIZE,
+      init: () => (++initN === 1 ? fail(403, "url_ownership_unverified") : ok({ publish_id: "v_pub_file~v2-1.42", upload_url: UPLOAD_URL })),
+      status: () => (++statusN === 1 ? statusRaw(`{"status":"PROCESSING_UPLOAD","uploaded_bytes":${SIZE}}`) : complete()),
+    });
+    const t = payload();
+    await provider().publishPost(TOKENS, t.payload);
+    expect(t.progress).toContain(80); // all chunks sent
+    expect(t.progress).toContain(90); // TikTok has every byte
+    expect(t.progress.at(-1)).toBe(100);
+  });
+
   it("a transient chunk failure is retried (same range) and the upload completes", async () => {
     let initN = 0;
     let putN = 0;

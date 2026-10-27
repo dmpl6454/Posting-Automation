@@ -800,7 +800,7 @@ export class TikTokProvider extends SocialProvider {
 
     await this.uploadChunks(payload, videoUrl, uploadUrl, plan, contentType, progress);
 
-    const outcome = await this.poll(tokens, publishId, { immediate: false, progress, size: null, base: 80 });
+    const outcome = await this.poll(tokens, publishId, { immediate: false, progress, size: plan.videoSize, base: 80 });
     return this.finish(outcome, publishId, settings, username, progress);
   }
 
