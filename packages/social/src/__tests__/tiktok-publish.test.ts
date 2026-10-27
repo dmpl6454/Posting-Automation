@@ -789,7 +789,7 @@ describe("TikTok publish — FILE_UPLOAD fallback (url_ownership_unverified)", (
   it("a video over 4 GB is refused before the FILE_UPLOAD init", async () => {
     let initN = 0;
     const { counts } = mockServer({
-      mediaSize: 4 * 1024 * 1024 * 1024 + 1,
+      mediaSize: 4_000_000_001, // TikTok's "4 GB" read as decimal (2026-10-28)
       init: () => (++initN === 1 ? fail(403, "url_ownership_unverified") : ok({ publish_id: "x", upload_url: UPLOAD_URL })),
     });
     const err = await failWith(provider().publishPost(TOKENS, payload().payload));
@@ -814,7 +814,7 @@ describe("TikTok — the rest of the provider contract", () => {
       maxContentLength: 2200,
       supportedMediaTypes: ["video/mp4", "video/quicktime", "video/webm"],
       maxMediaCount: 1,
-      maxMediaSize: 4 * 1024 * 1024 * 1024,
+      maxMediaSize: 4_000_000_000,
     });
   });
 });

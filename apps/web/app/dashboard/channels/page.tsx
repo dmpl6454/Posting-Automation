@@ -119,6 +119,8 @@ const OAUTH_ERROR_MESSAGES: Record<string, string> = {
     "Twitter rejected the initial request. Check that your TWITTER_CLIENT_ID / TWITTER_CLIENT_SECRET are valid.",
   fb_no_pages:
     "No Facebook Page was selected. PostAutomation posts to Pages, not personal profiles. When reconnecting, click “Edit settings” (or “Edit access”) in the Facebook dialog and tick a Page you manage. If you don’t have one yet, create a Facebook Page first, then reconnect.",
+  tiktok_publish_scope_missing:
+    "TikTok connected without permission to post videos. Connect again and leave “Post content to TikTok” ticked on TikTok's permission screen.",
   ig_no_business_account:
     "No Instagram Business account found. Convert your Instagram account to Professional/Business and link it to a Facebook Page you manage, then reconnect (click “Edit settings” in the Facebook dialog and tick the Page).",
 };

@@ -76,7 +76,19 @@ const MEDIA_RANGE_TIMEOUT_MS = 60_000;
 /** status/fetch allows 30 req/min per token; every 5 s leaves room for two posts at once. */
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
 /** How long one attempt waits on TikTok; a retry resumes from the checkpoint. */
-export const TIKTOK_POLL_BUDGET_MS = 8 * 60_000;
+/**
+ * How long ONE attempt waits for TikTok to finish processing. Kept under the
+ * worker's 270 s graceful-shutdown budget so a deploy never kills a poll midway
+ * (an interrupted job is parked as "Needs check" by the reaper — and checking a
+ * TikTok account from India needs a VPN). Longer processing is fine: the attempt
+ * ends with a retryable "still processing", and the retry resumes the SAME
+ * publish_id from the checkpoint instead of posting again.
+ */
+/** Thrown by exchangeCodeForTokens; the OAuth callback maps it to `tiktok_publish_scope_missing`. */
+export const TIKTOK_PUBLISH_SCOPE_MISSING =
+  "TikTok sign-in: the permission to post videos (video.publish) was not granted.";
+
+export const TIKTOK_POLL_BUDGET_MS = 3 * 60_000;
 const CHUNK_ATTEMPTS = 3;
 /** onProgress at least this often while waiting, so the watchdog sees a live target. */
 const PROGRESS_HEARTBEAT_MS = 30_000;
@@ -298,6 +310,9 @@ export class TikTokProvider extends SocialProvider {
       scope: config.scopes.join(","),
       redirect_uri: config.callbackUrl,
       state,
+      // Always show TikTok's consent page. Without it a browser still signed in
+      // to account A silently re-authorizes A when the user meant to add B.
+      disable_auto_auth: "1",
     });
     return `https://www.tiktok.com/v2/auth/authorize/?${params.toString()}`;
   }
@@ -305,7 +320,7 @@ export class TikTokProvider extends SocialProvider {
   /* ─────────────────────────────── OAuth ──────────────────────────────────── */
 
   async exchangeCodeForTokens(code: string, config: OAuthConfig): Promise<OAuthTokens> {
-    return this.tokenRequest(
+    const tokens = await this.tokenRequest(
       new URLSearchParams({
         client_key: config.clientId,
         client_secret: config.clientSecret,
@@ -315,6 +330,13 @@ export class TikTokProvider extends SocialProvider {
       }),
       "TikTok sign-in"
     );
+    // TikTok's consent screen lets the user untick permissions. Without
+    // video.publish every post would fail later with scope_not_authorized, so
+    // refuse the connect now with a message the callback maps to a clear toast.
+    if (tokens.scopes && !tokens.scopes.includes("video.publish")) {
+      throw new Error(TIKTOK_PUBLISH_SCOPE_MISSING);
+    }
+    return tokens;
   }
 
   /**
@@ -360,6 +382,9 @@ export class TikTokProvider extends SocialProvider {
       throw new Error(code ? `${what} failed (${code}).` : `${what} failed: TikTok returned no access token.`);
     }
     const expiresIn = Number(d.expires_in);
+    // The refresh token lives 365 days from FIRST issue and refreshing does not
+    // extend it; kept so a later warning can say when the account must reconnect.
+    const refreshExpiresIn = Number(d.refresh_expires_in);
     return {
       accessToken,
       refreshToken: typeof d.refresh_token === "string" && d.refresh_token ? d.refresh_token : undefined,
@@ -371,6 +396,9 @@ export class TikTokProvider extends SocialProvider {
               .map((s) => s.trim())
               .filter(Boolean)
           : undefined,
+      ...(Number.isFinite(refreshExpiresIn) && refreshExpiresIn > 0
+        ? { metadata: { refreshExpiresAt: new Date(Date.now() + refreshExpiresIn * 1000).toISOString() } }
+        : {}),
     };
   }
 

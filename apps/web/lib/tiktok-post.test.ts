@@ -288,8 +288,9 @@ describe("labels", () => {
   });
   it("consent line: null without TikTok, branded wording when any selected channel is branded content", () => {
     expect(tiktokConsentLine({}, [])).toBeNull();
-    expect(tiktokConsentLine({ tt1: draft() }, ["tt1"])).toBe("By posting, you agree to TikTok's Music Usage Confirmation.");
-    expect(tiktokConsentLine({}, ["tt1"])).toBe("By posting, you agree to TikTok's Music Usage Confirmation.");
+    // Verbatim from TikTok's guidelines: the default line has no full stop (2026-10-28).
+    expect(tiktokConsentLine({ tt1: draft() }, ["tt1"])).toBe("By posting, you agree to TikTok's Music Usage Confirmation");
+    expect(tiktokConsentLine({}, ["tt1"])).toBe("By posting, you agree to TikTok's Music Usage Confirmation");
     expect(
       tiktokConsentLine({ tt1: draft(), tt2: draft({ discloseCommercial: true, brandContent: true }) }, ["tt1", "tt2"])
     ).toBe("By posting, you agree to TikTok's Branded Content Policy and Music Usage Confirmation.");

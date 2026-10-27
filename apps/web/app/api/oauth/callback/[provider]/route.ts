@@ -701,6 +701,10 @@ export async function GET(
         // the front-loaded getProfile for INSTAGRAM above.
         /No Instagram Business Account|Instagram Professional account/i.test(msg)
       ? "ig_no_business_account"
+      : // TikTok's consent screen lets the user untick the posting permission;
+        // the provider refuses that connect (TIKTOK_PUBLISH_SCOPE_MISSING).
+        /\(video\.publish\) was not granted/.test(msg)
+      ? "tiktok_publish_scope_missing"
       : "oauth_failed";
     return genericErrorRedirect(code);
   }

@@ -112,7 +112,12 @@ export const TIKTOK_MAX_CHUNK = 64 * 1024 * 1024;
 /** The final chunk may run over chunk_size, up to this. */
 export const TIKTOK_MAX_FINAL_CHUNK = 128 * 1024 * 1024;
 export const TIKTOK_MAX_CHUNKS = 1000;
-export const TIKTOK_MAX_VIDEO_BYTES = 4 * 1024 * 1024 * 1024;
+/**
+ * TikTok writes "4 GB". Read it as DECIMAL (4,000,000,000 bytes): a file between
+ * 4.0e9 and 4 GiB would otherwise pass our checks and be refused by TikTok after
+ * init, costing one of the creator's ~15 daily posts.
+ */
+export const TIKTOK_MAX_VIDEO_BYTES = 4_000_000_000;
 /**
  * Our chunk size: one chunk is held in worker memory at a time, so smaller is
  * kinder to the box; 10 MiB keeps a 4 GiB file at ~410 PUTs (well under 1,000).
@@ -288,9 +293,11 @@ export function tiktokInteractionFlags(settings: TikTokPostSettings): {
  * changes when the post is marked as branded content.
  */
 export function tiktokConsentText(settings: Pick<TikTokPostSettings, "brandContent">): string {
+  // Exact strings from TikTok's Content Sharing Guidelines (the default one has
+  // no full stop there; kept verbatim).
   return settings.brandContent
     ? "By posting, you agree to TikTok's Branded Content Policy and Music Usage Confirmation."
-    : "By posting, you agree to TikTok's Music Usage Confirmation.";
+    : "By posting, you agree to TikTok's Music Usage Confirmation";
 }
 
 /* ─────────────────────────────── status/fetch ─────────────────────────────── */

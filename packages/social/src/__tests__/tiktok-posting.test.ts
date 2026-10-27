@@ -54,7 +54,7 @@ describe("planTikTokChunks", () => {
   });
 
   it("covers every byte exactly once, for sizes around the boundaries", () => {
-    for (const size of [5 * MB, 5 * MB + 1, 10 * MB, 10 * MB - 1, 19 * MB + 7, 1024 * MB, 4 * 1024 * MB]) {
+    for (const size of [5 * MB, 5 * MB + 1, 10 * MB, 10 * MB - 1, 19 * MB + 7, 1024 * MB, 4_000_000_000]) {
       const p = planTikTokChunks(size);
       expect(p.ranges.length).toBe(p.totalChunkCount);
       expect(p.totalChunkCount).toBe(Math.floor(size / p.chunkSize) || 1);
@@ -75,7 +75,7 @@ describe("planTikTokChunks", () => {
   it("refuses an empty, fractional or over-4GB size", () => {
     expect(() => planTikTokChunks(0)).toThrow();
     expect(() => planTikTokChunks(1.5)).toThrow();
-    expect(() => planTikTokChunks(4 * 1024 * MB + 1)).toThrow(/4 GB/);
+    expect(() => planTikTokChunks(4_000_000_001)).toThrow(/4 GB/);
   });
 
   it("builds the Content-Range header", () => {
@@ -174,7 +174,8 @@ describe("flags and consent", () => {
     expect(tiktokInteractionFlags(settings())).toEqual({ disable_comment: false, disable_duet: true, disable_stitch: false });
   });
   it("names the Branded Content Policy only for branded posts", () => {
-    expect(tiktokConsentText({ brandContent: false })).toBe("By posting, you agree to TikTok's Music Usage Confirmation.");
+    // Verbatim from TikTok's guidelines — the default line has no full stop there.
+    expect(tiktokConsentText({ brandContent: false })).toBe("By posting, you agree to TikTok's Music Usage Confirmation");
     expect(tiktokConsentText({ brandContent: true })).toMatch(/Branded Content Policy/);
   });
 });

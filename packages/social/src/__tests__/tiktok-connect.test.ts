@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { TikTokProvider } from "../providers/tiktok.provider";
+import { TikTokProvider, TIKTOK_PUBLISH_SCOPE_MISSING } from "../providers/tiktok.provider";
 
 /**
  * TikTok CONNECT path (2026-10-28): token exchange, refresh, profile.
@@ -85,6 +85,13 @@ describe("exchangeCodeForTokens", () => {
     expect(t.expiresAt!.getTime()).toBeGreaterThan(Date.now() + 86000 * 1000);
     expect(calls[0]!.hasSignal).toBe(true);
     expect(calls[0]!.body).toContain("grant_type=authorization_code");
+    // The refresh token's 365-day deadline is kept for a later "reconnect soon" warning.
+    expect(Date.parse(t.metadata!.refreshExpiresAt as string)).toBeGreaterThan(Date.now() + 364 * 86400 * 1000);
+  });
+
+  it("refuses a connect where the user unticked the posting permission (2026-10-28)", async () => {
+    mockFetch(() => json(200, { access_token: "act.aaa", refresh_token: "rft.bbb", expires_in: 86400, scope: "user.info.basic" }));
+    await expect(new TikTokProvider().exchangeCodeForTokens("c", config)).rejects.toThrow(TIKTOK_PUBLISH_SCOPE_MISSING);
   });
 
   it("an error body throws a fixed message without the body", async () => {
@@ -209,5 +216,13 @@ describe("getProfile", () => {
     const err = await new TikTokProvider().getProfile({ accessToken: "act.x" }).catch((e) => e);
     expect(err).not.toBeInstanceOf(SyntaxError);
     expect(err.message).not.toContain("<html>");
+  });
+});
+
+describe("getOAuthUrl", () => {
+  it("always shows TikTok's consent page, so adding a second account is possible (2026-10-28)", () => {
+    const url = new URL(new TikTokProvider().getOAuthUrl(config as any, "st"));
+    expect(url.searchParams.get("disable_auto_auth")).toBe("1");
+    expect(url.searchParams.get("scope")).toBe("user.info.basic,video.publish");
   });
 });
