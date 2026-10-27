@@ -10,6 +10,7 @@ import {
   creatorStateFromQuery,
   tiktokCommercialLabel,
   tiktokConsentLine,
+  tiktokPublishingLabel,
   TIKTOK_COMMERCIAL_HINT,
   type TikTokDraft,
   type TikTokCreatorState,
@@ -294,5 +295,17 @@ describe("labels", () => {
     ).toBe("By posting, you agree to TikTok's Branded Content Policy and Music Usage Confirmation.");
     // A deselected channel's branded flag does not change the line.
     expect(tiktokConsentLine({ tt2: draft({ discloseCommercial: true, brandContent: true }) }, ["tt1"])).toMatch(/^By posting, you agree to TikTok's Music/);
+  });
+});
+
+describe("tiktokPublishingLabel (post page, PUBLISHING target)", () => {
+  it("no known percent ⇒ TikTok is processing", () => {
+    expect(tiktokPublishingLabel(null)).toBe("Processing on TikTok…");
+    expect(tiktokPublishingLabel(undefined)).toBe("Processing on TikTok…");
+  });
+  it("transfer under way ⇒ uploading; finished transfer ⇒ processing", () => {
+    expect(tiktokPublishingLabel(0)).toBe("Uploading…");
+    expect(tiktokPublishingLabel(42)).toBe("Uploading…");
+    expect(tiktokPublishingLabel(100)).toBe("Processing on TikTok…");
   });
 });

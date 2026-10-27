@@ -257,3 +257,12 @@ export function sanitizeRestoredTikTok(raw: unknown): Record<string, TikTokDraft
   }
   return out;
 }
+
+/**
+ * The progress label for a TikTok target that is PUBLISHING (post page). The
+ * worker reports TikTok's downloaded/uploaded bytes as a percent; with no
+ * percent — or once the transfer is done — TikTok is processing the video.
+ */
+export function tiktokPublishingLabel(pct: number | null | undefined): string {
+  return pct == null || pct >= 100 ? "Processing on TikTok…" : "Uploading…";
+}

@@ -14,6 +14,7 @@ const read = (p: string) => stripSourceComments(readFileSync(join(ROOT, p), "utf
 const compose = read("apps/web/components/content-agent/ComposeTab.tsx");
 const card = read("apps/web/components/content-agent/TikTokPostSettings.tsx");
 const lib = read("apps/web/lib/tiktok-post.ts");
+const postPage = read("apps/web/app/dashboard/posts/[id]/page.tsx");
 
 describe("what a post to TikTok sends", () => {
   it("BOTH create paths (publish/schedule and save-as-draft) carry the TikTok settings", () => {
@@ -129,5 +130,22 @@ describe("drafts", () => {
   it("a restored draft is re-validated field by field, and the choices reset after a create", () => {
     expect(compose).toMatch(/const restoredTikTok = sanitizeRestoredTikTok\(saved\.draft\.tiktok\);/);
     expect(compose).toMatch(/setTiktokDrafts\(\{\}\);\s*removeTask\(TASK_ID\);/);
+  });
+});
+
+describe("post page", () => {
+  it("a PUBLISHING TikTok target says it is processing on TikTok, with the notice", () => {
+    expect(postPage).toMatch(/const isTikTok = target\.channel\.platform === "TIKTOK";/);
+    expect(postPage).toMatch(/\{isTikTok \? tiktokPublishingLabel\(pct\) : "Uploading…"\}/);
+    expect(postPage).toMatch(/\{isTikTok \? tiktokPublishingLabel\(null\) : "Publishing…"\}/);
+    expect(postPage).toMatch(/\{TIKTOK_PROCESSING_NOTICE\}/);
+  });
+  it("the View links render only when the target has a publishedUrl", () => {
+    expect(postPage).toMatch(/\{target\.publishedUrl && \(\s*<a\s+href=\{target\.publishedUrl\}/);
+    expect(postPage).toMatch(/\.filter\(\(t: any\) => t\.publishedUrl\)/);
+  });
+  it("the View-on button names TikTok correctly", () => {
+    expect(postPage).toMatch(/View on \{platformLinkName\(target\.channel\.platform\)\}/);
+    expect(postPage).toMatch(/TIKTOK: "TikTok"/);
   });
 });
