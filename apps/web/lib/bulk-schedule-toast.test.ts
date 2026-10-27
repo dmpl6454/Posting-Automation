@@ -60,4 +60,10 @@ describe("BulkTab uses it (source lock)", () => {
     expect(handler).toMatch(/toast\(\s*bulkScheduleToast\(\s*result\s*\)\s*\)/);
     expect(handler).not.toMatch(/scheduled successfully/);
   });
+
+  it("names TikTok posts it skipped (2026-10-28)", () => {
+    const t = bulkScheduleToast({ scheduled: 1, skippedTikTok: 2 });
+    expect(t.description).toMatch(/2 TikTok post\(s\) were skipped/);
+    expect(bulkScheduleToast({ scheduled: 0, skippedTikTok: 1 }).title).toBe("Nothing scheduled");
+  });
 });
