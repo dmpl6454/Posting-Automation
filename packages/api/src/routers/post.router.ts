@@ -46,6 +46,40 @@ import {
 } from "../lib/caption-overrides";
 import { campaignLabelSchema, normalizeCampaignLabel } from "../lib/campaign-label";
 import { stripChannelRoutingKeys } from "../lib/client-post-metadata";
+import {
+  tiktokInputSchema,
+  buildTikTokByChannel,
+  mergeTikTokByChannel,
+  storedTikTokByChannel,
+  validateTikTokPost,
+  hasTikTokChannel,
+} from "../lib/tiktok-post";
+
+/**
+ * The state a KEPT target carries when post.update replaces a post's channels
+ * (targets are deleted and recreated). Without it a TikTok publish checkpoint
+ * (`metadata.tiktokPublish`) or a "Needs check" park (`ambiguousAt`) was lost on
+ * the recreated row, and the next publish could post a duplicate. Keys are only
+ * spread when set, so a target without them is written exactly as before; a NEW
+ * channel carries nothing.
+ */
+export function carriedTargetState(
+  channelId: string,
+  existingTargets: Array<{
+    channelId: string;
+    metadata?: unknown;
+    ambiguousAt?: Date | null;
+    ambiguousReason?: string | null;
+  }>
+): { metadata?: any; ambiguousAt?: Date; ambiguousReason?: string } {
+  const kept = existingTargets.find((t) => t.channelId === channelId);
+  if (!kept) return {};
+  return {
+    ...(kept.metadata != null ? { metadata: kept.metadata as any } : {}),
+    ...(kept.ambiguousAt ? { ambiguousAt: kept.ambiguousAt } : {}),
+    ...(kept.ambiguousReason ? { ambiguousReason: kept.ambiguousReason } : {}),
+  };
+}
 
 /** Instagram's comment ceiling (IG_COMMENT_MAX_LENGTH in @postautomation/social). */
 const FIRST_COMMENT_MAX = 2200;
@@ -231,6 +265,12 @@ export const postRouter = createRouter({
         // publish worker right after the post goes live (2026-10-17). Stored as
         // `metadata.instagramFirstComment`; ignored for stories and articles.
         firstComment: z.string().trim().max(FIRST_COMMENT_MAX, "The first comment can be at most 2,200 characters.").optional(),
+        // TikTok (2026-10-28): the user's choices per TikTok channel — who can
+        // see it, comments/Duet/Stitch, commercial-content disclosure, AI label.
+        // Stored as `metadata.tiktokByChannel` for TikTok channels this post
+        // targets only. Required for every TikTok channel to SCHEDULE (TikTok's
+        // guidelines forbid a default); a draft may be saved without it.
+        tiktok: tiktokInputSchema.optional(),
         metadata: z.object({
           title: z.string().optional(),
           tags: z.array(z.string()).optional(),
@@ -374,6 +414,9 @@ export const postRouter = createRouter({
       // Whether this post carries a video. Only meaningful alongside channels —
       // it gates the per-channel format map (see sanitizeFormatByChannelId).
       let hasVideoMedia = false;
+      // The attached media's types — read once here, also used by the TikTok
+      // rules below (exactly one video).
+      let attachedMedia: Array<{ fileType: string }> = [];
       if (input.mediaIds?.length) {
         await assertMediaOwned(ctx.prisma as any, ctx.organizationId, input.mediaIds);
         // Early platform-constraint validation (owner-approved 2026-07-21):
@@ -386,6 +429,7 @@ export const postRouter = createRouter({
             where: { id: { in: input.mediaIds } },
             select: { fileName: true, fileType: true, fileSize: true, metadata: true },
           });
+          attachedMedia = mediaRows;
           hasVideoMedia = mediaRows.some((r) => r.fileType.startsWith("video/"));
           const constraintError = validateVideoAgainstPlatforms(
             mediaRows.map((r) => ({ ...r, fileSize: Number(r.fileSize) })),
@@ -395,6 +439,21 @@ export const postRouter = createRouter({
             throw new TRPCError({ code: "BAD_REQUEST", message: constraintError });
           }
         }
+      }
+
+      // TikTok: the user's own choices per TikTok channel, kept only for TikTok
+      // channels this post targets. Runs AFTER the ownership check (a foreign id
+      // is never named back). Scheduling requires them for every TikTok channel
+      // plus exactly one video; a draft may be saved without either.
+      const tiktokByChannel = buildTikTokByChannel(input.tiktok, ownedChannels);
+      if (hasTikTokChannel(ownedChannels)) {
+        const tiktokError = validateTikTokPost({
+          channels: ownedChannels,
+          byChannel: tiktokByChannel,
+          media: attachedMedia,
+          scheduling: !!input.scheduledAt,
+        });
+        if (tiktokError) throw new TRPCError({ code: "BAD_REQUEST", message: tiktokError });
       }
 
       // Block a media-less IG/FB SCHEDULE when AI is off (it can never publish).
@@ -538,11 +597,19 @@ export const postRouter = createRouter({
               wordpressArticle: _rawArticle,
               // Only the `firstComment` input writes this marker.
               instagramFirstComment: _rawFirstComment,
+              // TikTok choices come ONLY from the `tiktok` input, validated and
+              // restricted to this post's TikTok channels. A raw client copy —
+              // or the old top-level `privacyLevel` the provider used to read
+              // for EVERY TikTok target — must never reach the provider.
+              tiktokByChannel: _rawTikTokByChannel,
+              tiktok: _rawTikTok,
+              privacyLevel: _rawPrivacyLevel,
               ...rest
             } = (input.metadata ?? {}) as Record<string, unknown>;
             // Destination keys (siteUrl, instance, blog_id, …) only ever come
             // from the channel row — see client-post-metadata.ts.
             const out: Record<string, unknown> = stripChannelRoutingKeys(rest);
+            if (tiktokByChannel) out.tiktokByChannel = tiktokByChannel;
             if (videoThumbnail) out.videoThumbnail = videoThumbnail;
             if (isStory) out.instagramStory = { mentions: storyMentions };
             if (storedArticle) out.wordpressArticle = storedArticle;
@@ -747,6 +814,9 @@ export const postRouter = createRouter({
         // media-less IG/FB SCHEDULE (the post-update path of the media-required
         // guard — closes the create-only gap so it can't be reached via edit).
         aiImages: z.boolean().default(true),
+        // TikTok choices per channel (see create). Merged into the stored
+        // `metadata.tiktokByChannel`; every other metadata key is left alone.
+        tiktok: tiktokInputSchema.optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -759,7 +829,22 @@ export const postRouter = createRouter({
           // `contentOverride` for the same reason: recreating targets without it
           // wiped every per-channel caption (AI-generated or hand-written) the
           // moment one channel was added on the post page.
-          targets: { select: { channelId: true, format: true, contentOverride: true } },
+          // `metadata` / `ambiguousAt` / `ambiguousReason` too (2026-10-28): a
+          // kept target's TikTok publish checkpoint or "Needs check" park must
+          // survive the recreation, or the next publish can post a duplicate.
+          // `channel` (platform + name only — never tokens) tells the TikTok
+          // rules which targets are TikTok without another query.
+          targets: {
+            select: {
+              channelId: true,
+              format: true,
+              contentOverride: true,
+              metadata: true,
+              ambiguousAt: true,
+              ambiguousReason: true,
+              channel: { select: { platform: true, name: true } },
+            },
+          },
           _count: { select: { mediaAttachments: true } },
         },
       });
@@ -800,11 +885,13 @@ export const postRouter = createRouter({
       }
 
       // `aiImages` is a guard input, not a Post column — keep it out of `data`.
-      const { id, tags, channelIds, aiImages, ...data } = input;
+      // `tiktok` likewise: it is merged into metadata below, never a column.
+      const { id, tags, channelIds, aiImages, tiktok: tiktokInput, ...data } = input;
 
       // Channel replacement: only for DRAFT/SCHEDULED posts (a FAILED post may
       // hold already-PUBLISHED targets that must not be deleted). Every id is
       // org-ownership-validated — same IDOR guard as create.
+      let replacementChannels: Array<{ id: string; platform: string; name: string | null }> | undefined;
       if (channelIds) {
         if (existing.status !== "DRAFT" && existing.status !== "SCHEDULED") {
           throw new TRPCError({ code: "BAD_REQUEST", message: "Channels can only be changed on draft or scheduled posts." });
@@ -816,6 +903,7 @@ export const postRouter = createRouter({
         if (ownedChannels.length !== new Set(channelIds).size) {
           throw new TRPCError({ code: "FORBIDDEN", message: "Some selected channels are no longer available. Please re-select your channels and try again." });
         }
+        replacementChannels = ownedChannels as typeof replacementChannels;
       }
 
       // Full-coverage media-required guard (closes the create-only gap): if this
@@ -892,6 +980,50 @@ export const postRouter = createRouter({
         });
       }
 
+      // TikTok: the choices AFTER this update (stored ones for channels still
+      // targeted, overlaid with the input). Validated whenever the update leaves
+      // the post armed — same rule as stories — including a channel replacement
+      // that adds a TikTok channel. Effective channels come from the replacement
+      // (ownership-checked above) or the existing targets' channel platform.
+      const effectiveChannels =
+        replacementChannels ??
+        existing.targets.map((t) => ({
+          id: t.channelId,
+          platform: (t.channel?.platform as string | undefined) ?? "",
+          name: t.channel?.name ?? null,
+        }));
+      const storedTikTok = storedTikTokByChannel(existing.metadata);
+      const nextTikTok = mergeTikTokByChannel(storedTikTok, tiktokInput, effectiveChannels);
+      if (hasTikTokChannel(effectiveChannels) && effectiveScheduledAt) {
+        const attached = await ctx.prisma.postMedia.findMany({
+          where: { postId: id },
+          select: { media: { select: { fileType: true } } },
+        });
+        const tiktokError = validateTikTokPost({
+          channels: effectiveChannels,
+          byChannel: nextTikTok,
+          media: attached.map((a) => ({ fileType: a.media?.fileType })),
+          scheduling: true,
+        });
+        if (tiktokError) throw new TRPCError({ code: "BAD_REQUEST", message: tiktokError });
+      }
+
+      // Persist the TikTok choices with an ATOMIC jsonb merge, never a
+      // read-modify-write of the whole column: the super-text and caption-fanout
+      // workers write their gate flags into this same `metadata` while a post is
+      // parked, and a whole-column write could resurrect a flag they cleared
+      // (leaving the post parked forever). Only the `tiktokByChannel` key is
+      // touched, and only when it actually changes.
+      if (tiktokInput !== undefined || (channelIds && storedTikTok !== undefined)) {
+        const changed = JSON.stringify(nextTikTok) !== JSON.stringify(storedTikTok ?? {});
+        if (changed && Object.keys(nextTikTok).length > 0) {
+          const patch = JSON.stringify({ tiktokByChannel: nextTikTok });
+          await ctx.prisma.$executeRaw`UPDATE "Post" SET "metadata" = COALESCE("metadata", '{}'::jsonb) || ${patch}::jsonb WHERE "id" = ${id} AND "organizationId" = ${ctx.organizationId}`;
+        } else if (changed && storedTikTok !== undefined) {
+          await ctx.prisma.$executeRaw`UPDATE "Post" SET "metadata" = "metadata" - 'tiktokByChannel' WHERE "id" = ${id} AND "organizationId" = ${ctx.organizationId}`;
+        }
+      }
+
       const updatedPost = await ctx.prisma.post.update({
         where: { id },
         data: {
@@ -920,6 +1052,10 @@ export const postRouter = createRouter({
                 // A kept channel keeps its per-channel caption; a new one starts
                 // with the shared caption (null).
                 contentOverride: contentOverrideForReplacedTarget(channelId, existing.targets),
+                // A kept channel keeps its metadata (a TikTok publish checkpoint)
+                // and its ambiguity park — dropping either lets the next publish
+                // post a duplicate. See carriedTargetState.
+                ...carriedTargetState(channelId, existing.targets),
               })),
             },
           }),
@@ -1161,6 +1297,28 @@ export const postRouter = createRouter({
       }
       if (blockedAsAmbiguous.length > 0) {
         console.warn(`[publishNow] skipped ${blockedAsAmbiguous.length} ambiguous target(s) on post ${post.id}`);
+      }
+
+      // TikTok: a target is only published with the user's own choices and
+      // exactly one video. Checked over the targets about to publish, BEFORE any
+      // status flips. The media lookup only runs when a TikTok target is in the set.
+      const publishChannels = targetsToPublish.map((t) => ({
+        id: t.channelId,
+        platform: t.channel.platform as string,
+        name: t.channel.name,
+      }));
+      if (hasTikTokChannel(publishChannels)) {
+        const attached = await ctx.prisma.postMedia.findMany({
+          where: { postId: post.id },
+          select: { media: { select: { fileType: true } } },
+        });
+        const tiktokError = validateTikTokPost({
+          channels: publishChannels,
+          byChannel: storedTikTokByChannel(post.metadata),
+          media: attached.map((a) => ({ fileType: a.media?.fileType })),
+          scheduling: true,
+        });
+        if (tiktokError) throw new TRPCError({ code: "BAD_REQUEST", message: tiktokError });
       }
 
       await ctx.prisma.post.update({

@@ -76,7 +76,9 @@ describe("post.update — a story stays a story", () => {
     // silently republished a Story as a Reel.
     // 2026-09-18: the select also carries contentOverride (per-channel captions
     // were being wiped the same way) — see caption-overrides.test.ts.
-    expect(postRouter).toMatch(/targets: \{ select: \{ channelId: true, format: true, contentOverride: true \} \}/);
+    // 2026-10-28: multi-line now (also metadata + ambiguity park, for TikTok
+    // checkpoints) — the format key is what this test locks.
+    expect(postRouter).toMatch(/targets: \{\s*select: \{\s*channelId: true,\s*format: true,\s*contentOverride: true,/);
   });
 
   it("CARRIES the format onto every recreated target", () => {
@@ -159,6 +161,8 @@ describe("bulk.bulkSchedule — a story without exactly one media is skipped, no
     // fan-out is still generating, or HELD, must be skipped-and-counted the same
     // way a story without media already was) — the assertion widens to match,
     // the invariant it locks (skips are counted, never silent) is unchanged.
-    expect(bulkRouter).toMatch(/return \{ scheduled, skippedStories, skippedPending \}/);
+    // 2026-10-28: + skippedTikTok (a TikTok post without its settings or video
+    // is skipped-and-counted the same way).
+    expect(bulkRouter).toMatch(/return \{ scheduled, skippedStories, skippedPending, skippedTikTok \}/);
   });
 });
