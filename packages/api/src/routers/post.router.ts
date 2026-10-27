@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TIKTOK_CHECKPOINT_KEY } from "@postautomation/social/src/utils/tiktok-posting";
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
 import { PUBLIC_CHANNEL_SELECT } from "../lib/public-channel";
@@ -1466,6 +1467,21 @@ export const postRouter = createRouter({
         // "It didn't publish" button that has just disappeared.
         data: { ambiguousAt: null, ambiguousReason: null, errorMessage: null },
       });
+
+      // A TikTok target may carry its publish_id checkpoint. Retry resumes from
+      // it, so after this human "it did NOT publish" override the checkpoint has
+      // to go too — otherwise a publish TikTok no longer recognises
+      // (invalid_publish_id) is re-checked and re-parked on every Retry, forever.
+      for (const t of resolved) {
+        const md = (t!.metadata ?? null) as Record<string, unknown> | null;
+        if (md && typeof md === "object" && !Array.isArray(md) && TIKTOK_CHECKPOINT_KEY in md) {
+          const { [TIKTOK_CHECKPOINT_KEY]: _dropped, ...rest } = md;
+          await ctx.prisma.postTarget.update({
+            where: { id: t!.id },
+            data: { metadata: rest as any },
+          });
+        }
+      }
 
       // This is the ONLY action that authorises re-posting content which may
       // already be live, so it is recorded like every other mutation here.

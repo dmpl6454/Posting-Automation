@@ -49,6 +49,7 @@ const orgFindUnique = vi.fn();
 const postFindFirst = vi.fn();
 const postUpdate = vi.fn();
 const targetUpdateMany = vi.fn();
+const targetUpdate = vi.fn(async (..._a: any[]) => ({}));
 const targetFindMany = vi.fn();
 
 vi.mock("@postautomation/db", () => ({
@@ -61,6 +62,7 @@ vi.mock("@postautomation/db", () => ({
     post: { findFirst: (...a: any[]) => postFindFirst(...a), update: (...a: any[]) => postUpdate(...a) },
     postTarget: {
       updateMany: (...a: any[]) => targetUpdateMany(...a),
+      update: (...a: any[]) => targetUpdate(...a),
       findMany: (...a: any[]) => targetFindMany(...a),
     },
     auditLog: { create: vi.fn() },
@@ -245,6 +247,20 @@ describe("post.clearPublishAmbiguity", () => {
       where: { id: { in: ["t1"] }, postId: "p1" },
       data: { ambiguousAt: null, ambiguousReason: null, errorMessage: null },
     });
+  });
+
+  it("drops a TikTok publish checkpoint so Retry starts fresh, keeping other target metadata (2026-10-28)", async () => {
+    postFindFirst.mockResolvedValue({
+      id: "p1",
+      targets: [
+        target({ id: "t1", ambiguousAt: new Date(), metadata: { tiktokPublish: { publishId: "v_pub_1" }, keep: 1 } }),
+        target({ id: "t2", ambiguousAt: new Date(), metadata: { keep: 2 } }),
+      ],
+    });
+    targetUpdateMany.mockResolvedValue({ count: 2 });
+    await makeCaller().clearPublishAmbiguity({ id: "p1", targetIds: ["t1", "t2"] });
+    expect(targetUpdate).toHaveBeenCalledTimes(1);
+    expect(targetUpdate).toHaveBeenCalledWith({ where: { id: "t1" }, data: { metadata: { keep: 1 } } });
   });
 
   it("is org-scoped — a cross-org post id is NOT_FOUND and writes nothing", async () => {
