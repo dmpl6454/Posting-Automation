@@ -10,6 +10,7 @@
  * rendition (H.264+AAC, ≤1080p long-edge 1920, ~8Mbps, +faststart) stored
  * NEXT TO the original: previews/publish use it, YouTube keeps the master.
  */
+import { TIKTOK_MAX_VIDEO_BYTES } from "@postautomation/social/src/utils/tiktok-posting";
 
 export interface ProbeSummary {
   videoCodec?: string;
@@ -194,12 +195,14 @@ const PLATFORM_LABELS: Record<string, string> = {
  * Pick the URL the publish worker should hand a platform for one media row.
  * IG/FB video → optimized rendition when available; everything else — and
  * every other platform (YouTube deliberately gets the full-quality master) —
- * keeps the original URL.
+ * keeps the original URL. TikTok keeps the original unless the probe shows it
+ * is out of TikTok's spec (chooseTikTokPublishUrl).
  */
 export function choosePublishUrl(
   platform: string,
   media: { url: string; fileType: string; fileSize?: number; metadata?: unknown }
 ): string {
+  if (platform === "TIKTOK") return chooseTikTokPublishUrl(media);
   if (!OPTIMIZED_PLATFORMS.has(platform)) return media.url;
   if (!media.fileType.startsWith("video/")) return media.url;
   const opt = (media.metadata as { optimize?: OptimizeState } | null)?.optimize;
@@ -222,6 +225,37 @@ export function choosePublishUrl(
     (probe?.videoCodec && !SAFE_VIDEO.has(probe.videoCodec));
   const tooBig = (media.fileSize ?? 0) > (PLATFORM_ORIGINAL_CAPS[platform] ?? Infinity);
   return badCodec || tooBig ? rendition : media.url;
+}
+
+/**
+ * TikTok's video spec (Content Posting API, 2026-10-28): H.264 / H.265 / VP8 /
+ * VP9, 23–60 fps, 360–4096 px per side, up to 4 GB. Wider than Meta's, so a
+ * phone or camera export usually goes as-is — 4K60 HEVC included.
+ */
+const TIKTOK_VIDEO_CODECS = new Set(["h264", "hevc", "vp8", "vp9"]);
+const TIKTOK_MAX_FPS = 60;
+const TIKTOK_MAX_EDGE = 4096;
+
+/**
+ * TikTok keeps the FULL-QUALITY original, like Facebook (owner constraint: never
+ * downgrade when the destination can take it). The rendition (1920 long edge,
+ * H.264, ≤60fps) is sent only when the STORED probe proves the original is out
+ * of TikTok's spec AND the rendition already exists. TikTok is never gated on a
+ * rendition (planOptimizeGate has no TikTok cap): with no rendition — or no
+ * probe — the original goes and TikTok judges it.
+ */
+function chooseTikTokPublishUrl(media: { url: string; fileType: string; fileSize?: number; metadata?: unknown }): string {
+  if (!media.fileType.startsWith("video/")) return media.url;
+  const opt = (media.metadata as { optimize?: OptimizeState } | null)?.optimize;
+  const rendition = opt?.status === "done" && opt.url ? opt.url : null;
+  if (!rendition) return media.url;
+  const probe = opt?.probe;
+  const badCodec = !!probe?.videoCodec && !TIKTOK_VIDEO_CODECS.has(probe.videoCodec);
+  // Same half-frame tolerance as the Meta check: ffprobe reports 59.94 and 60.
+  const tooFast = (probe?.fps ?? 0) > TIKTOK_MAX_FPS + 0.5;
+  const tooLarge = Math.max(probe?.width ?? 0, probe?.height ?? 0) > TIKTOK_MAX_EDGE;
+  const tooBig = (media.fileSize ?? 0) > TIKTOK_MAX_VIDEO_BYTES;
+  return badCodec || tooFast || tooLarge || tooBig ? rendition : media.url;
 }
 
 export type OptimizeGateAction =
