@@ -149,3 +149,10 @@ describe("post page", () => {
     expect(postPage).toMatch(/TIKTOK: "TikTok"/);
   });
 });
+
+describe("preview", () => {
+  it("the preview tab is labelled 'TikTok', not 'Tiktok'", () => {
+    const switcher = read("apps/web/components/previews/post-preview-switcher.tsx");
+    expect(switcher).toMatch(/tiktok: "TikTok",/);
+  });
+});
