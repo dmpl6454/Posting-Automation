@@ -123,6 +123,14 @@ const h = vi.hoisted(() => {
         return s.channel;
       }),
       update: vi.fn(async () => ({})),
+      // The race-safe token refresh (lib/channel-token-refresh.ts, 2026-10-28)
+      // re-reads the row and writes under an optimistic lock.
+      findUnique: vi.fn(async () => {
+        if (s.channelError) throw s.channelError;
+        const c = s.channel as any;
+        return c ? { accessToken: c.accessToken, refreshToken: c.refreshToken, tokenExpiresAt: c.tokenExpiresAt } : null;
+      }),
+      updateMany: vi.fn(async () => ({ count: 1 })),
     },
     post: {
       findUnique: vi.fn(async () => ({ scheduledAt: null, createdById: null })),
@@ -662,7 +670,10 @@ describe("dead token fails fast instead of retrying into a false ambiguity", () 
 
     expect(err).not.toBeInstanceOf(UnrecoverableError);
     expect(publishPost).toHaveBeenCalledTimes(2);
-    expect(prisma.channel.update).toHaveBeenCalledTimes(1);
+    // Persisted once — through the optimistic-lock write since 2026-10-28
+    // (lib/channel-token-refresh.ts), not a plain channel.update.
+    expect(prisma.channel.updateMany).toHaveBeenCalledTimes(1);
+    expect(prisma.channel.update).not.toHaveBeenCalled();
   });
 
   it("no refresh possible → judged on the ORIGINAL publish error", async () => {

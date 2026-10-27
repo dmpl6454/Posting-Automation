@@ -1,4 +1,5 @@
 import { postFirstComment, type FirstCommentDeps } from "../lib/first-comment";
+import { refreshChannelToken, type ChannelTokenRefreshDeps } from "../lib/channel-token-refresh";
 import { Worker, type Job, UnrecoverableError } from "bullmq";
 import { prisma } from "@postautomation/db";
 import {
@@ -509,25 +510,23 @@ export function createPostPublishWorker() {
             const clientId = creds?.clientId || "";
             const clientSecret = creds?.clientSecret || "";
             if (clientId && clientSecret) {
-              const refreshed = await provider.refreshAccessToken(
-                channel.refreshToken!,
-              {
-                clientId,
-                clientSecret,
-                callbackUrl: `${process.env.APP_URL || ""}/api/oauth/callback/${platform.toLowerCase()}`,
-                scopes: [],
-              });
-              // Update DB with refreshed token
-              await prisma.channel.update({
-                where: { id: channelId },
-                data: {
-                  accessToken: refreshed.accessToken,
-                  refreshToken: refreshed.refreshToken ?? channel.refreshToken,
-                  tokenExpiresAt: refreshed.expiresAt ? new Date(refreshed.expiresAt) : undefined,
-                },
-              });
+              // Re-reads the row and refreshes with the FRESH refresh token — the
+              // copy read at job start may already be spent by the cron (rotating
+              // refresh tokens, e.g. TikTok). See lib/channel-token-refresh.ts.
+              const refreshed = await refreshChannelToken(
+                accessToken,
+                channelTokenRefreshDeps(prisma, channelId, (rt) =>
+                  provider.refreshAccessToken(rt, {
+                    clientId,
+                    clientSecret,
+                    callbackUrl: `${process.env.APP_URL || ""}/api/oauth/callback/${platform.toLowerCase()}`,
+                    scopes: [],
+                  })
+                )
+              );
               accessToken = refreshed.accessToken;
-              console.log(`[PostPublish] Token refreshed for channel ${channelId}`);
+              channel.refreshToken = refreshed.refreshToken;
+              console.log(`[PostPublish] Token ${refreshed.kind} for channel ${channelId}`);
             } else {
               console.warn(`[PostPublish] Missing ${platform}_CLIENT_ID or ${platform}_CLIENT_SECRET, cannot refresh token`);
             }
@@ -1216,22 +1215,24 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
             const clientSecret = creds?.clientSecret || "";
             if (clientId && clientSecret && channel.refreshToken) {
               refreshAttempted = true;
-              const refreshed = await provider.refreshAccessToken(
-                channel.refreshToken,
-                { clientId, clientSecret, callbackUrl: `${process.env.APP_URL || ""}/api/oauth/callback/${platform.toLowerCase()}`, scopes: [] }
+              // Same race-safe refresh as before the publish: a token another
+              // refresher already rotated is reused, never refreshed again with a
+              // spent refresh token (which would read as "reconnect").
+              const refreshed = await refreshChannelToken(
+                accessToken,
+                channelTokenRefreshDeps(prisma, channelId, (rt) =>
+                  provider.refreshAccessToken(rt, {
+                    clientId,
+                    clientSecret,
+                    callbackUrl: `${process.env.APP_URL || ""}/api/oauth/callback/${platform.toLowerCase()}`,
+                    scopes: [],
+                  })
+                )
               );
               refreshSucceeded = true;
-              await prisma.channel.update({
-                where: { id: channelId },
-                data: {
-                  accessToken: refreshed.accessToken,
-                  refreshToken: refreshed.refreshToken ?? channel.refreshToken,
-                  tokenExpiresAt: refreshed.expiresAt ? new Date(refreshed.expiresAt) : undefined,
-                },
-              });
               // Retry immediately with fresh token
               result = await provider.publishPost(
-                buildPublishTokens(platform, refreshed.accessToken, refreshed.refreshToken ?? channel.refreshToken ?? undefined, channel.metadata),
+                buildPublishTokens(platform, refreshed.accessToken, refreshed.refreshToken ?? undefined, channel.metadata),
                 // ⚠️ onCheckpoint here too: this is a SECOND publishPost call, and
                 // for a story the first one may already have created a container.
                 // providerMetadata was mutated in place by the first checkpoint, so
@@ -1737,4 +1738,27 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
   });
 
   return worker;
+}
+
+/** Prisma-backed deps for refreshChannelToken (direct channel reads decrypt tokens). */
+function channelTokenRefreshDeps(
+  db: typeof prisma,
+  channelId: string,
+  refresh: ChannelTokenRefreshDeps["refresh"]
+): ChannelTokenRefreshDeps {
+  return {
+    readRow: () =>
+      db.channel.findUnique({
+        where: { id: channelId },
+        select: { accessToken: true, refreshToken: true, tokenExpiresAt: true },
+      }),
+    writeIfUnchanged: async (expected, data) =>
+      (
+        await db.channel.updateMany({
+          where: { id: channelId, tokenExpiresAt: expected },
+          data,
+        })
+      ).count,
+    refresh,
+  };
 }
