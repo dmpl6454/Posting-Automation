@@ -29,6 +29,7 @@ const PLATFORM_LABELS: Record<string, string> = {
   facebook: "Facebook",
   instagram: "Instagram",
   youtube: "YouTube",
+  tiktok: "TikTok",
 };
 
 function getPlatformLabel(platform: string): string {

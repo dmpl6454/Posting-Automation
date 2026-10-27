@@ -50,7 +50,8 @@ describe("ComposeTab wiring (source-level contract)", () => {
   it("persists the draft on a string signature, never the map's identity (OOM dep rule)", () => {
     expect(src).toMatch(/const captionOverridesSignature = customCaptions \? JSON\.stringify\(captionOverrides\) : ""/);
     // 2026-09-21: campaignLabel appended (a plain string — no identity churn).
-    expect(src).toMatch(/storyMentionsSignature, captionOverridesSignature, campaignLabel, articleSignature\]\);/);
+    // 2026-10-28: tiktokDraftsSignature appended (a JSON string — still no identity churn).
+    expect(src).toMatch(/storyMentionsSignature, captionOverridesSignature, campaignLabel, articleSignature, tiktokDraftsSignature\]\);/);
   });
 
   it("re-validates a restored draft's map and turns the editor on so it is visible", () => {

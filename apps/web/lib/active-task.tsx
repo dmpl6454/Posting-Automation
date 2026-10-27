@@ -50,6 +50,13 @@ export interface ActiveTask {
      * restore. ABSENT ⇒ an earlier build's draft, which restores unchanged.
      */
     article?: unknown;
+    /**
+     * TikTok posting choices per channel (2026-10-28): channelId → privacy,
+     * interactions, disclosure, AI label. Kept as `unknown` — ComposeTab
+     * re-validates it field by field (sanitizeRestoredTikTok). ABSENT ⇒ an
+     * earlier build's draft, which restores unchanged.
+     */
+    tiktok?: unknown;
   };
   createdAt: number;
 }

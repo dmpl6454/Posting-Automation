@@ -18,6 +18,13 @@ import { Separator } from "~/components/ui/separator";
 import { Skeleton } from "~/components/ui/skeleton";
 import { useToast } from "~/hooks/use-toast";
 import { firstCommentLine } from "~/lib/first-comment";
+import { tiktokPublishingLabel, TIKTOK_PROCESSING_NOTICE } from "~/lib/tiktok-post";
+
+// Platform names whose casing first-letter capitalisation gets wrong.
+const PLATFORM_LINK_NAMES: Record<string, string> = { TIKTOK: "TikTok", YOUTUBE: "YouTube", LINKEDIN: "LinkedIn" };
+function platformLinkName(platform: string): string {
+  return PLATFORM_LINK_NAMES[platform] ?? platform.charAt(0) + platform.slice(1).toLowerCase();
+}
 import { CommentThread } from "~/components/comments/comment-thread";
 import {
   ArrowLeft,
@@ -854,11 +861,15 @@ export default function PostDetailPage() {
                   {/* Upload progress bar — live via SSE; falls back to DB-polled value */}
                   {target.status === "PUBLISHING" && (() => {
                     const pct = liveProgress[target.id] ?? target.uploadProgress;
+                    // TikTok pulls/receives the video, then processes it — which
+                    // can take minutes after the transfer (TikTok's guideline asks
+                    // us to say so).
+                    const isTikTok = target.channel.platform === "TIKTOK";
                     if (pct != null) {
                       return (
                         <div className="space-y-1">
                           <div className="flex items-center justify-between text-xs text-muted-foreground">
-                            <span>Uploading…</span>
+                            <span>{isTikTok ? tiktokPublishingLabel(pct) : "Uploading…"}</span>
                             <span>{pct}%</span>
                           </div>
                           <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
@@ -867,15 +878,19 @@ export default function PostDetailPage() {
                               style={{ width: `${pct}%` }}
                             />
                           </div>
+                          {isTikTok && pct >= 100 ? (
+                            <p className="text-[11px] text-muted-foreground">{TIKTOK_PROCESSING_NOTICE}</p>
+                          ) : null}
                         </div>
                       );
                     }
                     return (
                       <div className="space-y-1">
-                        <div className="text-xs text-muted-foreground">Publishing…</div>
+                        <div className="text-xs text-muted-foreground">{isTikTok ? tiktokPublishingLabel(null) : "Publishing…"}</div>
                         <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
                           <div className="h-full w-full rounded-full bg-primary/40 animate-pulse" />
                         </div>
+                        {isTikTok ? <p className="text-[11px] text-muted-foreground">{TIKTOK_PROCESSING_NOTICE}</p> : null}
                       </div>
                     );
                   })()}
@@ -1218,7 +1233,7 @@ export default function PostDetailPage() {
                 <Button key={target.id} variant="outline" asChild>
                   <a href={target.publishedUrl!} target="_blank" rel="noopener noreferrer">
                     <ExternalLink className="mr-2 h-4 w-4" />
-                    View on {target.channel.platform.charAt(0) + target.channel.platform.slice(1).toLowerCase()}
+                    View on {platformLinkName(target.channel.platform)}
                   </a>
                 </Button>
               ))}
