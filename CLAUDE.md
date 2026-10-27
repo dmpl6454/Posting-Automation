@@ -2354,6 +2354,22 @@ containers restores direct posts with no code change (and re-incurs ~250k Graph 
 it off is honest but sparse. Do not "fix" the sparseness by widening the population silently; that
 reverses an explicit owner decision.
 
+## 🎥 `total_video_impressions` is RETIRED — video_insights asks for `total_video_views` only (2026-10-27)
+
+Prod worker logged `[Facebook] video_insights failed for <id>: (#100) The value must be a valid
+insights metric` for every Facebook video. Meta retired `total_video_impressions` (and the other
+video impression metrics) in June 2026 for ALL Graph versions. Both `video_insights` calls asked
+for `total_video_impressions,total_video_views`, and one retired name 400s the WHOLE call, so the
+valid `total_video_views` was lost too and FB video views fell back to the scraper or "—".
+
+- The metric list now lives in ONE constant, `FB_VIDEO_INSIGHT_METRICS` in
+  [facebook.provider.ts](packages/social/src/providers/facebook.provider.ts), used by
+  `getVideoAnalytics` and `getExternalPostAnalytics`. Views map onto impressions as before.
+- ⚠️ `#100` maps to NO degradation, so a retired name produces no banner and no health verdict.
+  The worker log line is the only signal. Probe any new name on its own against a live token.
+- [facebook-video.test.ts](packages/social/src/__tests__/facebook-video.test.ts) asserts the
+  retired name is never requested (verified failing against the old request).
+
 ## 🎬 FACEBOOK REELS need their VIDEO id resolved to a POST id, or they report nothing (2026-08-25)
 
 **Reported as "I watched and shared the reel but only likes and comments are fetched".

@@ -25,8 +25,7 @@ describe("FacebookProvider.getPostAnalytics — VIDEO ids (bare node id, no unde
       if (u.includes("/video_insights")) {
         return jsonResponse({
           data: [
-            { name: "total_video_impressions", values: [{ value: 500 }] },
-            { name: "total_video_views", values: [{ value: 450 }] },
+            { name: "total_video_views", values: [{ value: 500 }] },
           ],
         });
       }
@@ -43,7 +42,10 @@ describe("FacebookProvider.getPostAnalytics — VIDEO ids (bare node id, no unde
     const result = await provider.getPostAnalytics(tokens, "123456789012345");
 
     // Video-node-valid endpoints only
-    expect(urls[0]).toContain("/123456789012345/video_insights?metric=total_video_impressions,total_video_views");
+    expect(urls[0]).toContain("/123456789012345/video_insights?metric=total_video_views&");
+    // Meta retired total_video_impressions (June 2026, all versions). One retired
+    // name 400s the whole call, so it must never be requested again.
+    expect(urls[0]).not.toContain("total_video_impressions");
     expect(urls[1]).toContain("/123456789012345?fields=likes.summary(true),comments.summary(true)");
     // No Post-node endpoints — `shares`/`reactions` are not Video-node fields
     // and would fail the whole Graph call (the original null-forever defect).
@@ -63,7 +65,7 @@ describe("FacebookProvider.getPostAnalytics — VIDEO ids (bare node id, no unde
     expect(result?.metricsAvailable).toMatchObject({ reach: false, shares: false, clicks: false });
   });
 
-  it("falls back to total_video_views for impressions when total_video_impressions is absent", async () => {
+  it("maps total_video_views onto impressions", async () => {
     global.fetch = vi.fn(async (url: any) => {
       const u = String(url);
       if (u.includes("/video_insights")) {

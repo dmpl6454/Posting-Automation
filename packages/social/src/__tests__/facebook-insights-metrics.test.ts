@@ -154,7 +154,7 @@ describe("Facebook video-post insights (P5)", () => {
     // successfully-fetched video_insights — throwing away real view counts.
     mockGraph((url) => {
       if (url.includes("/video_insights")) {
-        return { ok: true, body: insightsBody({ total_video_views: 4211, total_video_impressions: 5000 }) };
+        return { ok: true, body: insightsBody({ total_video_views: 4211 }) };
       }
       return {
         ok: false,
@@ -165,7 +165,7 @@ describe("Facebook video-post insights (P5)", () => {
     const a = await new FacebookProvider().getPostAnalytics(tokens, VIDEO_ID);
 
     expect(a).toBeTruthy();
-    expect(a!.impressions).toBe(5000);
+    expect(a!.impressions).toBe(4211);
     // The per-capture override that stops the platform-wide static map (which
     // marks FACEBOOK impressions unavailable for FEED posts) from hiding this.
     expect(a!.metricsAvailable?.impressions).toBe(true);
@@ -199,7 +199,7 @@ describe("Facebook video-post insights (P5)", () => {
     const { scrapeFacebookReelEngagement } = await import("@postautomation/social-scrapers");
     mockGraph((url) => {
       if (url.includes("/video_insights")) {
-        return { ok: true, body: insightsBody({ total_video_views: 0, total_video_impressions: 0 }) };
+        return { ok: true, body: insightsBody({ total_video_views: 0 }) };
       }
       return { ok: true, body: { likes: { summary: { total_count: 0 } }, comments: { summary: { total_count: 0 } } } };
     });
