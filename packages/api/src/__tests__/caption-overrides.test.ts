@@ -150,7 +150,9 @@ describe("post.router wiring (source-level contract)", () => {
   it("post.update selects contentOverride and carries it through channel replacement", () => {
     // Without this, adding one channel on the post page wiped every per-channel
     // caption (AI-generated and hand-written alike).
-    expect(src).toMatch(/targets: \{ select: \{ channelId: true, format: true, contentOverride: true \} \}/);
+    // 2026-10-28: the select became multi-line (it also carries metadata + the
+    // ambiguity park for TikTok checkpoints); assert the key, not the one-liner.
+    expect(src).toMatch(/targets: \{\s*select: \{\s*channelId: true,\s*format: true,\s*contentOverride: true,/);
     expect(src).toMatch(/contentOverride: contentOverrideForReplacedTarget\(channelId, existing\.targets\)/);
   });
 

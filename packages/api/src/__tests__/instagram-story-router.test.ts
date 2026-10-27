@@ -76,7 +76,9 @@ describe("post.update — a story stays a story", () => {
     // silently republished a Story as a Reel.
     // 2026-09-18: the select also carries contentOverride (per-channel captions
     // were being wiped the same way) — see caption-overrides.test.ts.
-    expect(postRouter).toMatch(/targets: \{ select: \{ channelId: true, format: true, contentOverride: true \} \}/);
+    // 2026-10-28: multi-line now (also metadata + ambiguity park, for TikTok
+    // checkpoints) — the format key is what this test locks.
+    expect(postRouter).toMatch(/targets: \{\s*select: \{\s*channelId: true,\s*format: true,\s*contentOverride: true,/);
   });
 
   it("CARRIES the format onto every recreated target", () => {
