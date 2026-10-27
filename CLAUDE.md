@@ -167,7 +167,7 @@ Filter to one workspace: `pnpm --filter @postautomation/web <cmd>`
 - **Local**: `.env` (gitignored). Template: [.env.example](.env.example).
 - **Production**: `.env.production` on the server (gitignored). Template: [.env.production.example](.env.production.example).
 - Many OAuth/API credentials are intentionally left blank (Twitter, LinkedIn, FB, IG, Reddit, YouTube, TikTok, Pinterest, OpenAI, Anthropic, Gemini, Stripe, Resend, Hunter, Sentry). The app boots without them; affected features just don't work until filled in.
-- **Configured in production**: `AUTH_GOOGLE_ID/SECRET`, `AUTH_SECRET`/`NEXTAUTH_SECRET`, `SMTP_*` (Google Workspace), `TWITTER_CLIENT_ID/SECRET` (live — Consumer Key/Secret, public posting active), plus the Meta + YouTube OAuth creds. GitHub OAuth was removed — not needed. (TikTok creds intentionally unset — blocked by the India ban; see Channel Connections → TikTok specifics.)
+- **Configured in production**: `AUTH_GOOGLE_ID/SECRET`, `AUTH_SECRET`/`NEXTAUTH_SECRET`, `SMTP_*` (Google Workspace), `TWITTER_CLIENT_ID/SECRET` (live — Consumer Key/Secret, public posting active), plus the Meta + YouTube OAuth creds. GitHub OAuth was removed — not needed. (TikTok creds ARE set — Direct Post audited; accounts are connected via VPN from India; see Channel Connections → TikTok specifics.)
 
 ## Deployment
 
@@ -308,11 +308,70 @@ The `platformAuthInfo` tRPC query tells the UI which type each platform is and w
 - **Analytics needs a paid tier:** `getPostAnalytics` hits `/2/tweets/{id}?tweet.fields=public_metrics` which 403s on Free; posting works regardless.
 - Full operator guide: [docs/TWITTER_TIKTOK_SETUP.md](docs/TWITTER_TIKTOK_SETUP.md).
 
-**TikTok specifics — code-ready, but BLOCKED by the India ban (2026-06-06):**
+**TikTok specifics — VIDEO POSTING BUILT (2026-10-28, branch `feat/tiktok-video-posting-2026-10-28`) — read before touching the TikTok provider, Compose's TikTok card or `Post.metadata.tiktokByChannel`:**
 
-- **Code is complete and fixed** (commit on `fix/audit-2026-06-06`): env var standardized to `TIKTOK_CLIENT_ID` (the OAuth connect/publish paths + the "Setup required" gate read `${PLATFORM}_CLIENT_ID`; the value pasted is still TikTok's "Client Key"; analytics workers keep a `TIKTOK_CLIENT_ID || TIKTOK_CLIENT_KEY` fallback) and `getDefaultScopes` now has `TIKTOK: ["user.info.basic", "video.publish", "video.upload"]` (was empty `[]` → authorize URL had `scope=""` → TikTok rejected it). Provider is video-only (`PULL_FROM_URL` Direct Post, 287 MB, no programmatic delete).
-- **🚫 Cannot be set up or used from India.** TikTok has been banned in India since 2020-06-29. `developers.tiktok.com` is unreachable from an Indian IP, so the operator cannot register the app / get the Client Key / pass the Content Posting API audit; and Indian end users are blocked regardless. **TikTok is shelved for this (India-based) operation** unless run via a non-India developer egress AND targeting a non-India user base. No code change fixes this — it's a geo/legal block.
-- **Sandbox/audit gate (if ever pursued abroad):** until the Content Posting API review is approved, the app is an *unaudited client* — test users only + all posts forced `SELF_ONLY` (private). Provider defaults `privacy_level: SELF_ONLY`; public posting needs `payload.metadata.privacyLevel` plumbed from the compose UI post-approval. This is TikTok's analogue of Meta Advanced Access.
+Design + the audit that drove it: [docs/superpowers/specs/2026-10-28-tiktok-video-posting-design.md](docs/superpowers/specs/2026-10-28-tiktok-video-posting-design.md).
+The pre-2026-10-28 provider could neither connect nor publish: TikTok's v2 SUCCESS body carries
+`"error":{"code":"ok"}`, and `if (data.error?.code) throw` fired on every success — so every connect
+ended "Sign-in failed" and every successful publish threw, after which the worker's retry branches
+posted the video again (a `log_id` containing "401" even took the token_expired re-publish branch).
+
+- **Owner decisions (2026-10-28):** the app's Content Posting API **Direct Post is AUDITED** (public
+  posts allowed) and `TIKTOK_CLIENT_ID/SECRET` ARE set in prod. Accounts are connected by **our team on
+  a VPN**: from India `www.tiktok.com/v2/auth/authorize/` 302s to `tiktok.com/in/about`, but the Mumbai
+  server reaches `open.tiktokapis.com`, so token refresh and publishing run server-side; only the consent
+  step needs the VPN. The channels page shows an India notice before every TikTok connect.
+- **Success = HTTP 2xx AND `error.code === "ok"`** — everywhere. creator_info returns its can't-post codes
+  (`spam_risk_*`, `reached_active_user_cap`) with **HTTP 200**. Bodies are read as TEXT first.
+- **Contract:** [tiktok-posting.ts](packages/social/src/utils/tiktok-posting.ts) (dependency-free; the
+  browser deep-imports it). Settings live in **`Post.metadata.tiktokByChannel = { [channelId]:
+  TikTokPostSettings }`**, written ONLY by the server from post.create/update's `tiktok.byChannel` input (a
+  raw client copy, and the old top-level `privacyLevel`, are stripped). The worker hands the provider ONLY
+  its own channel's block as `metadata.tiktok` (+ `channelUsername`, `videoDurationSec`). Per channel
+  because each creator allows different options.
+- **🔴 No defaults, ever.** A TikTok target without settings is refused before anything is sent; the
+  privacy dropdown has no default; Comment/Duet/Stitch start unchecked and are disabled when the creator
+  disabled them; commercial disclosure needs "Your brand" and/or "Branded content"; branded content
+  cannot be "Only me"; the consent line is verbatim from TikTok's Content Sharing Guidelines (the default
+  line has no full stop). Chat actions refuse TikTok channels; autopilot/agents skip them; caption
+  fan-out never writes an AI caption for a TikTok target (the user must have seen the exact text).
+- **creator_info before every post** (provider) and live in Compose (`tiktok.creatorInfo`, 20/min per user
+  + 15/min per channel; refreshes a nearly-expired token first under an optimistic lock).
+- **🔴 Duplicate safety — init is the irreversible step and TikTok has NO delete API.** A lost init
+  reply / 5xx / unreadable body ⇒ `AmbiguousPublishError`. The moment init returns a `publish_id` it is
+  checkpointed in `PostTarget.metadata.tiktokPublish` (a failed checkpoint write on PULL is ambiguous).
+  EVERY later attempt resumes that publish_id with status/fetch — COMPLETE ⇒ adopt, PROCESSING ⇒ keep
+  waiting, FAILED (`internal`/`video_pull_failed` retryable) ⇒ a new init is allowed. `post.update`
+  channel replacement carries a KEPT target's metadata + ambiguity (it used to drop them — for every
+  platform); `clearPublishAmbiguity` drops the TikTok checkpoint (human override).
+- **Poll budget 3 min per attempt** — under the worker's 270 s graceful shutdown, so a deploy never kills a
+  poll (the reaper would park it "Needs check", and checking TikTok from India needs a VPN). Longer
+  processing ends in a retryable "still processing"; the retry resumes the SAME publish_id.
+- **PULL_FROM_URL first** (TikTok: never FILE_UPLOAD for files already on your server); the domain
+  signature file is `apps/web/public/tiktok4XVx…txt`. `url_ownership_unverified` (pre-write) falls back to a
+  streamed FILE_UPLOAD (`planTikTokChunks`: 10 MiB chunks, ranged reads, never the whole file in memory).
+- **Ids:** post ids are 19-digit integers sent as JSON numbers — `JSON.parse` rounds them; read them from
+  the raw body (`extractPublicPostIds`). URL `tiktok.com/@<creator_username>/video/<id>`, else the profile.
+  The @handle comes from creator_info (user/info `display_name` is not a handle).
+- **Tokens:** access 24 h, refresh 365 days from first issue (stored as `metadata.refreshExpiresAt`;
+  refreshing does not extend it). The publish worker now refreshes through
+  [channel-token-refresh.ts](apps/worker/src/lib/channel-token-refresh.ts) — re-read the row, reuse a token
+  another refresher produced, else refresh with the FRESH refresh token under an optimistic lock on
+  `tokenExpiresAt` — because the job-start copy of a ROTATED refresh token may already be spent
+  (`invalid_grant` ⇒ a false "reconnect"). The refresh cron adds with `removeOnFail: true`: a failed job
+  with the fixed `refresh-<id>` jobId used to block every later refresh. Connect sends
+  `disable_auto_auth=1` and refuses a consent where "post content" (`video.publish`) was unticked.
+- **Create-time limits:** a TikTok target needs exactly one video; media-constraints refuses what no
+  rendition can fix (>10 min, <23 fps, <360 px a side). TikTok's "4 GB" is read as 4,000,000,000 bytes.
+- **Scopes stay `user.info.basic, video.publish, video.upload`** — changing them forces every account to
+  reconnect (VPN). No analytics yet (`video.list` not requested); no webhooks; no photo posts.
+- **Social listening / brand sync called TikTok's RESEARCH API with the posting keys** (unapproved and
+  malformed) every 30 min — now gated by `TIKTOK_RESEARCH_ENABLED === "true"` (default off).
+- **Audit-risk notes (TikTok's "intended use"):** they reject "a utility tool to help upload contents to the
+  account(s) you or your team manages" and "copies arbitrary contents from other platforms" (Repurpose).
+  No watermark may ever be added on the TikTok path.
+- Tests: `packages/social/src/__tests__/tiktok-*.test.ts`, `apps/worker/src/__tests__/tiktok-*.test.ts`,
+  `channel-token-refresh.test.ts`, `packages/api/src/__tests__/tiktok-*.test.ts`, `apps/web/lib/tiktok-*.test.ts`.
 
 ### Facebook / Instagram (Meta) specifics — read before debugging FB/IG
 
