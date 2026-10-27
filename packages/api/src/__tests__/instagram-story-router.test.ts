@@ -161,6 +161,8 @@ describe("bulk.bulkSchedule — a story without exactly one media is skipped, no
     // fan-out is still generating, or HELD, must be skipped-and-counted the same
     // way a story without media already was) — the assertion widens to match,
     // the invariant it locks (skips are counted, never silent) is unchanged.
-    expect(bulkRouter).toMatch(/return \{ scheduled, skippedStories, skippedPending \}/);
+    // 2026-10-28: + skippedTikTok (a TikTok post without its settings or video
+    // is skipped-and-counted the same way).
+    expect(bulkRouter).toMatch(/return \{ scheduled, skippedStories, skippedPending, skippedTikTok \}/);
   });
 });
