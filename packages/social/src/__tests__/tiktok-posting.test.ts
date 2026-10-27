@@ -15,6 +15,8 @@ import {
   extractPublicPostIds,
   classifyTikTokStatus,
   tiktokPostUrl,
+  readTikTokCheckpoint,
+  readTikTokSettingsForChannel,
   type TikTokPostSettings,
   type TikTokCreatorInfo,
 } from "../utils/tiktok-posting";
@@ -206,5 +208,22 @@ describe("tiktokPostUrl", () => {
     expect(tiktokPostUrl("agency.demo", null)).toBe("https://www.tiktok.com/@agency.demo");
     expect(tiktokPostUrl(null, "123")).toBeNull();
     expect(tiktokPostUrl("bad name/../x", "123")).toBeNull();
+  });
+});
+
+describe("checkpoint + per-channel settings", () => {
+  it("reads a valid checkpoint and rejects junk", () => {
+    const ok = { tiktokPublish: { publishId: "v_pub_url~v2-1.7340912345", createdAt: "2026-10-28T10:00:00.000Z", source: "PULL_FROM_URL" } };
+    expect(readTikTokCheckpoint(ok)).toEqual(ok.tiktokPublish);
+    expect(readTikTokCheckpoint({ tiktokPublish: { ...ok.tiktokPublish, publishId: "bad id with spaces" } })).toBeNull();
+    expect(readTikTokCheckpoint({ tiktokPublish: { ...ok.tiktokPublish, source: "OTHER" } })).toBeNull();
+    expect(readTikTokCheckpoint({})).toBeNull();
+  });
+  it("reads one channel's settings and never a prototype key", () => {
+    const md = { tiktokByChannel: { ch1: { privacyLevel: "FOLLOWER_OF_CREATOR", allowComment: true } } };
+    expect(readTikTokSettingsForChannel(md, "ch1")?.privacyLevel).toBe("FOLLOWER_OF_CREATOR");
+    expect(readTikTokSettingsForChannel(md, "ch2")).toBeNull();
+    expect(readTikTokSettingsForChannel(md, "__proto__")).toBeNull();
+    expect(readTikTokSettingsForChannel(null, "ch1")).toBeNull();
   });
 });

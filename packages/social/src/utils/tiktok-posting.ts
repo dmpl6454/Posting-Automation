@@ -18,7 +18,60 @@
  * different id. Read ids from the RAW body with `extractPublicPostIds`.
  */
 
+/**
+ * Where things live (cross-slice contract, 2026-10-28):
+ *  - `Post.metadata.tiktokByChannel` — { [channelId]: TikTokPostSettings }, written ONLY
+ *    by the server from post.create / post.update's `tiktok` input (a raw client copy
+ *    is stripped). Per channel because each creator allows different options.
+ *  - The publish worker hands the provider THIS target's settings as
+ *    `payload.metadata.tiktok` (TIKTOK_SETTINGS_KEY), plus `channelUsername`
+ *    and, when the media probe knows it, `videoDurationSec`.
+ *  - `PostTarget.metadata.tiktokPublish` — the publish_id checkpoint (see
+ *    TikTokPublishCheckpoint), written through onCheckpoint the moment init
+ *    succeeds, so a retry checks THAT publish instead of posting again.
+ */
+export const TIKTOK_BY_CHANNEL_KEY = "tiktokByChannel" as const;
 export const TIKTOK_SETTINGS_KEY = "tiktok" as const;
+export const TIKTOK_CHECKPOINT_KEY = "tiktokPublish" as const;
+
+export interface TikTokPublishCheckpoint {
+  publishId: string;
+  /** ISO time the init succeeded. */
+  createdAt: string;
+  source: "PULL_FROM_URL" | "FILE_UPLOAD";
+}
+
+export function readTikTokCheckpoint(metadata: unknown): TikTokPublishCheckpoint | null {
+  if (!metadata || typeof metadata !== "object") return null;
+  const raw = (metadata as Record<string, unknown>)[TIKTOK_CHECKPOINT_KEY];
+  if (!raw || typeof raw !== "object") return null;
+  const c = raw as Record<string, unknown>;
+  if (typeof c.publishId !== "string" || !/^[\w~.-]{1,200}$/.test(c.publishId)) return null;
+  if (typeof c.createdAt !== "string" || Number.isNaN(Date.parse(c.createdAt))) return null;
+  if (c.source !== "PULL_FROM_URL" && c.source !== "FILE_UPLOAD") return null;
+  return { publishId: c.publishId, createdAt: c.createdAt, source: c.source };
+}
+
+/** Read one channel's settings out of `Post.metadata.tiktokByChannel`. */
+export function readTikTokSettingsForChannel(postMetadata: unknown, channelId: string): TikTokPostSettings | null {
+  if (!postMetadata || typeof postMetadata !== "object") return null;
+  const byChannel = (postMetadata as Record<string, unknown>)[TIKTOK_BY_CHANNEL_KEY];
+  if (!byChannel || typeof byChannel !== "object" || Array.isArray(byChannel)) return null;
+  if (!Object.prototype.hasOwnProperty.call(byChannel, channelId)) return null;
+  return readTikTokSettings({ [TIKTOK_SETTINGS_KEY]: (byChannel as Record<string, unknown>)[channelId] });
+}
+
+/**
+ * Errors TikTok returns when the CREATOR cannot post right now (creator_info or
+ * init). Pre-write and not retryable by us: the user has to wait or act in TikTok.
+ */
+export const TIKTOK_CANNOT_POST_CODES = [
+  "spam_risk_too_many_posts",
+  "spam_risk_user_banned_from_posting",
+  "reached_active_user_cap",
+  "spam_risk_too_many_pending_share",
+  "spam_risk",
+] as const;
 
 /** Every privacy level TikTok defines; a creator's allowed subset comes from creator_info. */
 export const TIKTOK_PRIVACY_LEVELS = [
