@@ -41,7 +41,7 @@ describe("Facebook video analytics — scraper fallback", () => {
     global.fetch = vi.fn(async (url: any) => {
       const u = String(url);
       const body = u.includes("/video_insights")
-        ? { data: [{ name: "total_video_impressions", values: [{ value: 400 }] }] }
+        ? { data: [{ name: "total_video_views", values: [{ value: 400 }] }] }
         : { likes: { summary: { total_count: 10 } }, comments: { summary: { total_count: 2 } } };
       return { ok: true, json: async () => body } as any;
     }) as any;

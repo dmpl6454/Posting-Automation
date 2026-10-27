@@ -106,6 +106,19 @@ import {
  */
 export const FB_URL_PULL_MIN_BYTES = 64 * 1024 * 1024;
 
+/**
+ * Metrics requested from a Video node's `video_insights` edge.
+ *
+ * ⚠️ `total_video_impressions` (and the other video impression metrics) were
+ * retired by Meta in June 2026 for ALL Graph API versions (v25 deprecation
+ * notice). Graph validates every name in `metric=`, so ONE retired name 400s
+ * the whole call with `#100 "The value must be a valid insights metric"` and
+ * the still-valid `total_video_views` is lost with it — prod logged exactly
+ * that for every FB video (2026-10-27). Do NOT re-add a retired name here;
+ * probe any new name on its own against a live token first.
+ */
+export const FB_VIDEO_INSIGHT_METRICS = "total_video_views";
+
 // ── Facebook API Usage Tracking ────────────────────────────────────────
 // Facebook returns x-app-usage and x-page-usage headers as JSON:
 //   { "call_count": 28, "total_cputime": 25, "total_time": 30 }
@@ -1215,7 +1228,7 @@ export class FacebookProvider extends SocialProvider {
     if (!opts.isReel) {
       const res = await this.graphFetch(
         `${this.graphBaseUrl}/${this.apiVersion}/${videoId}/video_insights` +
-          `?metric=total_video_impressions,total_video_views&access_token=${tokens.accessToken}`,
+          `?metric=${FB_VIDEO_INSIGHT_METRICS}&access_token=${tokens.accessToken}`,
         {},
         opts.pageId
       );
@@ -1225,7 +1238,7 @@ export class FacebookProvider extends SocialProvider {
       if (res.ok && rows.length > 0) {
         const m: Record<string, number> = {};
         for (const r of rows) m[r.name] = Number(r.values?.[0]?.value ?? 0);
-        views = m.total_video_impressions || m.total_video_views || 0;
+        views = m.total_video_views || 0;
       }
     }
 
@@ -1300,7 +1313,7 @@ export class FacebookProvider extends SocialProvider {
    */
   private async getVideoAnalytics(tokens: OAuthTokens, videoId: string): Promise<SocialAnalytics | null> {
     const insightsRes = await this.graphFetch(
-      `${this.graphBaseUrl}/${this.apiVersion}/${videoId}/video_insights?metric=total_video_impressions,total_video_views&access_token=${tokens.accessToken}`
+      `${this.graphBaseUrl}/${this.apiVersion}/${videoId}/video_insights?metric=${FB_VIDEO_INSIGHT_METRICS}&access_token=${tokens.accessToken}`
     );
 
     const insightsData: any = await insightsRes.json();
@@ -1343,7 +1356,7 @@ export class FacebookProvider extends SocialProvider {
     }
 
     const impressions = viewsUsable
-      ? metrics.total_video_impressions || metrics.total_video_views || 0
+      ? metrics.total_video_views || 0
       : 0;
 
     // Scraper fallback: only when the API could NOT report views (permission

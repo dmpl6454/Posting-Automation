@@ -74,7 +74,7 @@ describe("the publish-shared path is untouched", () => {
     const seen: string[] = [];
     strictFetch(
       [
-        [/\/video_insights\?metric=total_video_impressions/, { data: [{ name: "total_video_views", values: [{ value: 185 }] }] }],
+        [/\/video_insights\?metric=total_video_views&/, { data: [{ name: "total_video_views", values: [{ value: 185 }] }] }],
         [/\?fields=likes\.summary/, { likes: { summary: { total_count: 4 } }, comments: { summary: { total_count: 1 } } }],
       ],
       seen
