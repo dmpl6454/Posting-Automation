@@ -38,8 +38,9 @@ describe("Story mode is one derived flag, not scattered conditions", () => {
     expect(compose.match(/!!storyBlock/g) ?? []).toHaveLength(2);
     // 2026-09-21: the chain gained `?? captionBlock` (the missing-caption reason)
     // on both buttons. storyBlock still precedes it, so a story's reason wins.
+    // 2026-10-28: `?? tiktokBlock` appended after captionBlock; storyBlock still wins.
     expect(
-      compose.match(/youtubeBlockReason \?\? storyBlock \?\? articleBlock \?\? captionBlock \?\? undefined/g) ?? []
+      compose.match(/youtubeBlockReason \?\? storyBlock \?\? articleBlock \?\? captionBlock \?\? tiktokBlock \?\? undefined/g) ?? []
     ).toHaveLength(2);
   });
 });
@@ -148,8 +149,9 @@ describe("mentions", () => {
     // string signature (caption-overrides-payload.test.ts locks that one).
     // 2026-09-21: campaignLabel joined it — already a plain string, so the rule
     // ("never key on an array/object identity") holds without a signature.
+    // 2026-10-28: tiktokDraftsSignature joined it — a JSON string, same rule.
     expect(compose).toMatch(
-      /\[content, selectedChannels, draftMediaSignature, postType, storyMentionsSignature, captionOverridesSignature, campaignLabel, articleSignature\]/
+      /\[content, selectedChannels, draftMediaSignature, postType, storyMentionsSignature, captionOverridesSignature, campaignLabel, articleSignature, tiktokDraftsSignature\]/
     );
   });
 });
@@ -220,10 +222,11 @@ describe("diff-review fixes", () => {
     // 2026-09-21: the missing-caption reason joins the same banner, for the same
     // reason (a touch device never shows a tooltip). It is gated on having picked
     // a channel so an untouched composer does not nag.
+    // 2026-10-28: the TikTok reason joins the same banner (appended last).
     expect(compose).toMatch(
-      /\{\(youtubeBlockReason \|\| storyBlock \|\| \(articleBlock && [\s\S]*?\)\) \|\| \(captionBlock && selectedChannels\.length > 0\)\) && \(/
+      /\{\(youtubeBlockReason \|\| storyBlock \|\| \(articleBlock && [\s\S]*?\)\) \|\| \(captionBlock && selectedChannels\.length > 0\) \|\| tiktokBlock\) && \(/
     );
-    expect(compose).toMatch(/\{youtubeBlockReason \?\? storyBlock \?\? articleBlock \?\? captionBlock\}/);
+    expect(compose).toMatch(/\{youtubeBlockReason \?\? storyBlock \?\? articleBlock \?\? captionBlock \?\? tiktokBlock\}/);
   });
 });
 
