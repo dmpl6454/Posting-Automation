@@ -239,3 +239,38 @@ describe("AI unique captions never write for TikTok (2026-10-28 review)", () => 
     expect(compose).toMatch(/captionFanout\?\.requested \? aiCaptionTargetCount\(post\?\.targets\) : 0/);
   });
 });
+
+describe("post page — existing TikTok targets (2026-10-28 review)", () => {
+  it("never offers TikTok in 'Add channel' (its settings can only be chosen in Compose), with a hint instead", () => {
+    expect(postPage).toMatch(/const addableChannels = excludeTikTokChannels\(addableCandidates\);/);
+    expect(postPage).toMatch(/const tiktokNotAddableHere = addableCandidates\.length > addableChannels\.length;/);
+    expect(postPage).toMatch(/\{isEditable && tiktokNotAddableHere && \(\s*<p[^>]*data-testid="post-tiktok-add-hint">\s*\{TIKTOK_ADD_IN_COMPOSE_TEXT\}/);
+    // The Add buttons are built from the filtered list only.
+    expect(postPage).toMatch(/\{addableChannels\.map\(\(channel: any\) => \(/);
+    expect(postPage).not.toMatch(/addableCandidates\.map\(/);
+  });
+  it("shows 'Posting to TikTok as {nickname}' + the consent line from the STORED settings where it would post", () => {
+    expect(postPage).toMatch(/const armableTikTok = armableTikTokTargets\(\(post\?\.targets \?\? \[\]\) as any\[\]\);/);
+    expect(postPage).toMatch(/t\.tiktok\.creatorInfo\(\{ channelId \}, \{ staleTime: 60_000, retry: false \}\)/);
+    expect(postPage).toMatch(/tiktokCreatorQueries\[i\]\?\.data\?\.creator\?\.nickname \?\? null/);
+    expect(postPage).toMatch(
+      /const tiktokPostConsent = storedTikTokConsentLine\(\s*armableTikTok\.map\(\(t: any\) => \(\{ postMetadata: post\?\.metadata, channelId: t\.channelId as string \}\)\)\s*\);/
+    );
+    // Bottom actions: above Publish now / Retry All Failed / Save.
+    const block = postPage.indexOf('data-testid="post-tiktok-consent"');
+    const actions = postPage.indexOf("onClick={handlePublishAll}");
+    expect(block).toBeGreaterThan(-1);
+    expect(actions).toBeGreaterThan(block);
+    expect(postPage).toMatch(/\{tiktokPostingLines\.map\(\(line\) => \(\s*<p key=\{line\}>\{line\}<\/p>\s*\)\)\}\s*<p>\{tiktokPostConsent\}<\/p>/);
+    // Per target row: next to that row's Publish/Retry.
+    expect(postPage).toMatch(
+      /\{armableTikTokTargetIds\.has\(target\.id\) && \(\s*<p[^>]*data-testid="post-tiktok-target-consent">\s*\{tiktokPostingAsLine\(tiktokNicknameByChannel\[target\.channelId\]\)\}/
+    );
+  });
+  it("the TikTok hooks run before the page's early returns (rules of hooks)", () => {
+    const hooks = postPage.indexOf("const tiktokCreatorQueries = trpc.useQueries(");
+    const firstReturn = postPage.indexOf("if (isLoading) {");
+    expect(hooks).toBeGreaterThan(-1);
+    expect(firstReturn).toBeGreaterThan(hooks);
+  });
+});
