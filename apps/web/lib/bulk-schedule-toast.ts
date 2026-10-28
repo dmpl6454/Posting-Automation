@@ -27,10 +27,11 @@ export function bulkScheduleToast(result: BulkScheduleResult): { title: string; 
     description += ` ${skippedPending} post(s) were skipped — unique captions or super text are still being prepared, or need your attention on the post page.`;
   }
 
-  // A TikTok post needs its per-channel privacy chosen and exactly one video
-  // (2026-10-28); the server will not arm it otherwise.
+  // A TikTok post needs its per-channel settings and exactly one video
+  // (2026-10-28); the server will not arm it otherwise. No screen can add
+  // TikTok settings to an existing post, so point to where they are chosen.
   if (skippedTikTok > 0) {
-    description += ` ${skippedTikTok} TikTok post(s) were skipped — open them to choose who can see the video (and attach exactly one video).`;
+    description += ` ${skippedTikTok} TikTok post(s) were skipped — they're missing TikTok settings or a single video. Create them in Content Studio to post them to TikTok.`;
   }
 
   return { title: result.scheduled > 0 ? "Scheduled" : "Nothing scheduled", description };
