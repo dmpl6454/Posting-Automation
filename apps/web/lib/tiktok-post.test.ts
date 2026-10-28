@@ -11,7 +11,21 @@ import {
   tiktokCommercialLabel,
   tiktokConsentLine,
   tiktokPublishingLabel,
+  tiktokDraftBlockReason,
+  tiktokDraftNotice,
+  tiktokLengthNote,
+  isTooManyRequestsError,
+  creatorInfoErrorMessage,
+  tiktokPostingAsLine,
+  armableTikTokTargets,
+  storedTikTokConsentLine,
+  excludeTikTokChannels,
+  aiCaptionTargetCount,
+  selectedNonTikTokCount,
+  tiktokProcessingNoticeApplies,
   TIKTOK_COMMERCIAL_HINT,
+  TIKTOK_CHECKING_LENGTH_TEXT,
+  TIKTOK_CREATOR_RATE_LIMIT_TEXT,
   type TikTokDraft,
   type TikTokCreatorState,
 } from "./tiktok-post";
@@ -308,5 +322,253 @@ describe("tiktokPublishingLabel (post page, PUBLISHING target)", () => {
     expect(tiktokPublishingLabel(0)).toBe("Uploading…");
     expect(tiktokPublishingLabel(42)).toBe("Uploading…");
     expect(tiktokPublishingLabel(100)).toBe("Processing on TikTok…");
+  });
+});
+
+/* ───────────── 2026-10-28 review fixes ───────────── */
+
+describe("tiktokBlockReason — video length still being measured", () => {
+  it("blocks while the length of THIS video is unknown and the probe is still running", () => {
+    expect(gate({ media: { ...oneVideo, durationSec: null, durationPending: true } })).toBe(TIKTOK_CHECKING_LENGTH_TEXT);
+    expect(TIKTOK_CHECKING_LENGTH_TEXT).toBe("Checking the video's length…");
+  });
+  it("media problems still come first", () => {
+    expect(gate({ media: { count: 2, videoCount: 2, imageCount: 0, durationSec: null, durationPending: true } })).toMatch(
+      /one video/i
+    );
+  });
+  it("a FAILED probe does not block (the server and the publish worker check again)", () => {
+    expect(gate({ media: { ...oneVideo, durationSec: null, durationPending: false } })).toBeNull();
+  });
+  it("no TikTok channel ⇒ never blocked by the probe", () => {
+    expect(
+      tiktokBlockReason({
+        selectedTikTok: [],
+        drafts: {},
+        creators: {},
+        media: { ...oneVideo, durationSec: null, durationPending: true },
+      })
+    ).toBeNull();
+  });
+});
+
+describe("tiktokLengthNote (the card's length line)", () => {
+  it("nothing when the creator has no limit", () => {
+    expect(tiktokLengthNote({ maxSec: null, durationSec: 30, lengthStatus: "done" })).toBeNull();
+  });
+  it("the plain limit while the length is known and fits, pending, or there is no video", () => {
+    for (const lengthStatus of ["done", "pending", "none"] as const) {
+      expect(tiktokLengthNote({ maxSec: 600, durationSec: lengthStatus === "done" ? 30 : null, lengthStatus })).toEqual({
+        text: "This account can post videos up to 600s.",
+        tooLong: false,
+      });
+    }
+  });
+  it("too long ⇒ destructive line with both numbers", () => {
+    expect(tiktokLengthNote({ maxSec: 60, durationSec: 61.4, lengthStatus: "done" })).toEqual({
+      text: "This video is 61s long; this account can post videos up to 60s.",
+      tooLong: true,
+    });
+  });
+  it("a failed probe says so quietly, with the limit (never blocks)", () => {
+    const n = tiktokLengthNote({ maxSec: 600, durationSec: null, lengthStatus: "failed" });
+    expect(n?.tooLong).toBe(false);
+    expect(n?.text).toMatch(/couldn't read this video's length here/i);
+    expect(n?.text).toMatch(/up to 600s/);
+  });
+});
+
+describe("tiktokDraftBlockReason (Save as Draft)", () => {
+  const two = [
+    { id: "tt1", name: "First" },
+    { id: "tt2", name: "Second" },
+  ];
+  it("null without TikTok, or when every selected TikTok channel has a privacy choice", () => {
+    expect(tiktokDraftBlockReason([], {})).toBeNull();
+    expect(tiktokDraftBlockReason(two, { tt1: draft(), tt2: draft({ privacyLevel: "SELF_ONLY" }) })).toBeNull();
+  });
+  it("names the first selected TikTok channel with no privacy choice", () => {
+    expect(tiktokDraftBlockReason(two, { tt1: draft(), tt2: emptyTikTokDraft() })).toBe(
+      "Choose who can see this post on Second (TikTok) before saving — TikTok settings can only be chosen here."
+    );
+    expect(tiktokDraftBlockReason(two, {})).toMatch(/^Choose who can see this post on First \(TikTok\)/);
+  });
+  it("ONLY the missing privacy blocks a draft — not media, length, caption or can-post state", () => {
+    // Settings the creator would refuse today, or invalid combinations, still save.
+    expect(
+      tiktokDraftBlockReason(two, {
+        tt1: draft({ privacyLevel: "FOLLOWER_OF_CREATOR", allowComment: true }),
+        tt2: draft({ discloseCommercial: true }),
+      })
+    ).toBeNull();
+  });
+  it("an unknown privacy value counts as not chosen", () => {
+    expect(tiktokDraftBlockReason([{ id: "tt1", name: "A" }], { tt1: { ...draft(), privacyLevel: "EVERYONE" as any } })).toMatch(
+      /^Choose who can see/
+    );
+  });
+  it("whenever it blocks a draft, the publish gate is blocked too (so the notice is already showing)", () => {
+    const combos: Array<Parameters<typeof tiktokBlockReason>[0]> = [
+      { selectedTikTok: tt, drafts: {}, creators: { tt1: ready() }, media: oneVideo },
+      { selectedTikTok: tt, drafts: {}, creators: {}, media: oneVideo },
+      { selectedTikTok: tt, drafts: {}, creators: { tt1: { status: "error" } }, media: oneVideo },
+      { selectedTikTok: tt, drafts: {}, creators: { tt1: { status: "cannot-post" } }, media: oneVideo },
+      { selectedTikTok: tt, drafts: {}, creators: { tt1: ready() }, media: { count: 0, videoCount: 0, imageCount: 0, durationSec: null } },
+    ];
+    for (const c of combos) {
+      expect(tiktokDraftBlockReason(c.selectedTikTok, c.drafts)).not.toBeNull();
+      expect(tiktokBlockReason(c)).not.toBeNull();
+    }
+  });
+});
+
+describe("tiktokDraftNotice (the second line of the amber notice)", () => {
+  const draftReason = "Choose who can see this post on Dash TikTok (TikTok) before saving — TikTok settings can only be chosen here.";
+  it("nothing when the draft is not blocked", () => {
+    expect(tiktokDraftNotice("Add a caption.", null)).toBeNull();
+    expect(tiktokDraftNotice(null, null)).toBeNull();
+  });
+  it("shown under an unrelated reason (it is why Save as Draft is disabled)", () => {
+    expect(tiktokDraftNotice("TikTok needs a video. Attach one MP4, MOV or WebM.", draftReason)).toBe(draftReason);
+    expect(tiktokDraftNotice(null, draftReason)).toBe(draftReason);
+  });
+  it("not repeated when the visible reason is already 'choose who can see this video'", () => {
+    const primary = gate({ drafts: {} });
+    expect(primary).toBe("Dash TikTok: choose who can see this video.");
+    expect(tiktokDraftNotice(primary, draftReason)).toBeNull();
+  });
+});
+
+describe("creator_info rate limit", () => {
+  const tooMany = { message: "Rate limit exceeded. Try again after 2026-10-28T10:00:00.000Z", data: { code: "TOO_MANY_REQUESTS", httpStatus: 429 } };
+  it("recognises the app's TOO_MANY_REQUESTS and nginx's HTML 429", () => {
+    expect(isTooManyRequestsError(tooMany)).toBe(true);
+    expect(isTooManyRequestsError({ message: "x", data: { httpStatus: 429 } })).toBe(true);
+    expect(isTooManyRequestsError({ message: "x", shape: { data: { code: "TOO_MANY_REQUESTS" } } })).toBe(true);
+    expect(isTooManyRequestsError(new Error("Too many requests - please wait a moment and try again."))).toBe(true);
+  });
+  it("other errors are not rate limits", () => {
+    for (const e of [null, undefined, "x", new Error("boom"), { data: { code: "BAD_GATEWAY", httpStatus: 502 } }]) {
+      expect(isTooManyRequestsError(e)).toBe(false);
+    }
+  });
+  it("a rate limit shows fixed text, never the raw 'Try again after <ISO>'", () => {
+    const msg = creatorInfoErrorMessage({ error: tooMany, hasData: false }, () => "RAW");
+    expect(msg).toBe(TIKTOK_CREATOR_RATE_LIMIT_TEXT);
+    expect(msg).toBe("TikTok's limit for checking this account was reached — checking again shortly.");
+    expect(msg).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
+  });
+  it("shows it while the automatic retry is still waiting (failureReason, no error yet)", () => {
+    expect(creatorInfoErrorMessage({ error: null, failureReason: tooMany, hasData: false }, () => "RAW")).toBe(
+      TIKTOK_CREATOR_RATE_LIMIT_TEXT
+    );
+  });
+  it("a refresh that hit the limit keeps the settings already loaded", () => {
+    expect(creatorInfoErrorMessage({ error: tooMany, hasData: true }, () => "RAW")).toBeNull();
+    expect(creatorInfoErrorMessage({ failureReason: tooMany, hasData: true }, () => "RAW")).toBeNull();
+  });
+  it("other errors keep the humanized message (unchanged behaviour)", () => {
+    const err = { message: "Reconnect", data: { code: "PRECONDITION_FAILED" } };
+    expect(creatorInfoErrorMessage({ error: err, hasData: false }, () => "Reconnect this TikTok account.")).toBe(
+      "Reconnect this TikTok account."
+    );
+    expect(creatorInfoErrorMessage({ error: err, hasData: true }, () => "Reconnect this TikTok account.")).toBe(
+      "Reconnect this TikTok account."
+    );
+    expect(creatorInfoErrorMessage({ error: null, failureReason: null, hasData: true }, () => "x")).toBeNull();
+  });
+});
+
+describe("post page / Bulk Schedule — existing TikTok targets", () => {
+  const tgt = (over: Record<string, unknown> = {}) => ({
+    id: "t1",
+    channelId: "c1",
+    status: "DRAFT",
+    ambiguousAt: null,
+    channel: { platform: "TIKTOK", name: "Dash" },
+    ...over,
+  });
+  it("armable = TikTok targets Publish now / Retry / Schedule would arm (never ambiguous, never done)", () => {
+    const targets = [
+      tgt(),
+      tgt({ id: "t2", status: "FAILED" }),
+      tgt({ id: "t3", status: "SCHEDULED" }),
+      tgt({ id: "t4", status: "PUBLISHED" }),
+      tgt({ id: "t5", status: "PUBLISHING" }),
+      tgt({ id: "t6", status: "FAILED", ambiguousAt: "2026-10-28T00:00:00Z" }),
+      tgt({ id: "t7", channel: { platform: "INSTAGRAM" } }),
+    ];
+    expect(armableTikTokTargets(targets).map((t) => t.id)).toEqual(["t1", "t2", "t3"]);
+    expect(armableTikTokTargets(null)).toEqual([]);
+  });
+  it("the consent line uses the STORED settings — branded wording when any of them is branded content", () => {
+    const settings = (brandContent: boolean) => ({
+      privacyLevel: "PUBLIC_TO_EVERYONE",
+      allowComment: false,
+      allowDuet: false,
+      allowStitch: false,
+      brandOrganic: false,
+      brandContent,
+      isAigc: false,
+    });
+    expect(storedTikTokConsentLine([])).toBeNull();
+    expect(storedTikTokConsentLine([{ postMetadata: { tiktokByChannel: { c1: settings(false) } }, channelId: "c1" }])).toBe(
+      "By posting, you agree to TikTok's Music Usage Confirmation"
+    );
+    expect(
+      storedTikTokConsentLine([
+        { postMetadata: { tiktokByChannel: { c1: settings(false) } }, channelId: "c1" },
+        { postMetadata: { tiktokByChannel: { c2: settings(true) } }, channelId: "c2" },
+      ])
+    ).toBe("By posting, you agree to TikTok's Branded Content Policy and Music Usage Confirmation.");
+    // Missing / malformed settings ⇒ the default line (the server refuses to arm those anyway).
+    expect(storedTikTokConsentLine([{ postMetadata: null, channelId: "c1" }])).toMatch(/^By posting, you agree to TikTok's Music/);
+  });
+  it("'Posting to TikTok as {nickname}', without the nickname when it is unknown", () => {
+    expect(tiktokPostingAsLine("Dash Mani")).toBe("Posting to TikTok as Dash Mani");
+    expect(tiktokPostingAsLine("  ")).toBe("Posting to TikTok");
+    expect(tiktokPostingAsLine(null)).toBe("Posting to TikTok");
+  });
+});
+
+describe("channel pickers that cannot carry TikTok settings", () => {
+  it("excludeTikTokChannels drops TikTok and keeps order otherwise", () => {
+    const list = [
+      { id: "a", platform: "INSTAGRAM" },
+      { id: "b", platform: "TIKTOK" },
+      { id: "c", platform: "FACEBOOK" },
+    ];
+    expect(excludeTikTokChannels(list).map((c) => c.id)).toEqual(["a", "c"]);
+    expect(excludeTikTokChannels(null)).toEqual([]);
+  });
+});
+
+describe("AI unique captions never apply to TikTok", () => {
+  it("counts only non-TikTok selected channels", () => {
+    expect(selectedNonTikTokCount(["a", "tt1", "b"], ["tt1"])).toBe(2);
+    expect(selectedNonTikTokCount(["tt1", "tt2"], ["tt1", "tt2"])).toBe(0);
+    expect(selectedNonTikTokCount([], [])).toBe(0);
+  });
+  it("the 'Generating N unique captions' count excludes TikTok targets", () => {
+    expect(
+      aiCaptionTargetCount([
+        { channel: { platform: "INSTAGRAM" } },
+        { channel: { platform: "TIKTOK" } },
+        { channel: { platform: "FACEBOOK" } },
+      ])
+    ).toBe(2);
+    expect(aiCaptionTargetCount(undefined)).toBe(0);
+  });
+});
+
+describe("tiktokProcessingNoticeApplies (Compose success toast)", () => {
+  const targets = [{ channel: { platform: "INSTAGRAM" } }, { channel: { platform: "TIKTOK" } }];
+  it("shown whenever a TikTok channel was published or scheduled — even when the post is parked as DRAFT", () => {
+    expect(tiktokProcessingNoticeApplies({ sentForPublishing: true, targets })).toBe(true);
+  });
+  it("not for Save as Draft, and not without a TikTok target", () => {
+    expect(tiktokProcessingNoticeApplies({ sentForPublishing: false, targets })).toBe(false);
+    expect(tiktokProcessingNoticeApplies({ sentForPublishing: true, targets: [{ channel: { platform: "INSTAGRAM" } }] })).toBe(false);
+    expect(tiktokProcessingNoticeApplies({ sentForPublishing: true, targets: undefined })).toBe(false);
   });
 });
