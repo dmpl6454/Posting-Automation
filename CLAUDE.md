@@ -333,20 +333,52 @@ posted the video again (a `log_id` containing "401" even took the token_expired 
   privacy dropdown has no default; Comment/Duet/Stitch start unchecked and are disabled when the creator
   disabled them; commercial disclosure needs "Your brand" and/or "Branded content"; branded content
   cannot be "Only me"; the consent line is verbatim from TikTok's Content Sharing Guidelines (the default
-  line has no full stop). Chat actions refuse TikTok channels; autopilot/agents skip them; caption
-  fan-out never writes an AI caption for a TikTok target (the user must have seen the exact text).
-- **creator_info before every post** (provider) and live in Compose (`tiktok.creatorInfo`, 20/min per user
-  + 15/min per channel; refreshes a nearly-expired token first under an optimistic lock).
+  line has no full stop). Chat actions, CSV import and NewsGrid refuse TikTok channels; autopilot,
+  agents and RSS auto-post skip them; caption fan-out never writes an AI caption for a TikTok target,
+  and per-channel AI super text never burns an AI line into a TikTok video (the user must have seen
+  the exact content posted).
+- **🔴 TikTok settings exist ONLY in Compose.** No screen edits an existing post's TikTok settings, so
+  nothing may create a TikTok target without them: Compose's Save as Draft is blocked until every
+  selected TikTok channel has a privacy choice; the post page's "Add channel" never offers TikTok;
+  Repurpose "Create Drafts" and CSV import exclude TikTok. Arming an existing post without them says
+  "create this TikTok post again in Content Studio". The post page and Bulk Schedule show TikTok's
+  consent line (and the creator's nickname, from creator_info) where they publish.
+- **creator_info before every post** (provider) and live in Compose (`tiktok.creatorInfo`, re-fetched every
+  minute while the card is mounted; **15/min per TikTok account** is the real budget (TikTok allows 20 per
+  token and publishing spends the same budget); the per-USER limit is 200/min — it was 20, which blocked
+  an agency selecting 20+ accounts. It refreshes a nearly-expired token first under an optimistic lock
+  that also requires `disconnectedAt: null`.)
+- **🔴 Captions over 2,200 UTF-16 units are REFUSED, never cut** — at create, post.update and
+  updateTargetContent (`findOverlongTikTokCaption`, computed as the worker does: own caption ⇒ TikTok
+  variant ⇒ shared caption), by the worker's own validation, and by the provider. TIKTOK is deliberately
+  absent from `PLATFORM_CHAR_LIMITS`: a cut used to drop the trailing #ad disclosure.
 - **🔴 Duplicate safety — init is the irreversible step and TikTok has NO delete API.** A lost init
   reply / 5xx / unreadable body ⇒ `AmbiguousPublishError`. The moment init returns a `publish_id` it is
   checkpointed in `PostTarget.metadata.tiktokPublish` (a failed checkpoint write on PULL is ambiguous).
   EVERY later attempt resumes that publish_id with status/fetch — COMPLETE ⇒ adopt, PROCESSING ⇒ keep
-  waiting, FAILED (`internal`/`video_pull_failed` retryable) ⇒ a new init is allowed. `post.update`
-  channel replacement carries a KEPT target's metadata + ambiguity (it used to drop them — for every
-  platform); `clearPublishAmbiguity` drops the TikTok checkpoint (human override).
+  waiting, FAILED ⇒ a new init ONLY for `internal`/`video_pull_failed`/`auth_removed`, or once the
+  caption changed (the checkpoint stores `captionHash`); every other reason (spam_risk*, *_check_failed,
+  publish_cancelled) TikTok says not to retry, so it is refused again. The checkpoint also stores the
+  @handle, and stays in the PUBLISHED result's metadata so a target that is ever re-armed adopts instead
+  of re-posting.
+  - **🔴 The checkpoint comes from the TARGET only** (`tiktokInheritedMetadata`): post metadata is
+    client-writable at create, and a forged `tiktokPublish` there made the provider adopt an unrelated
+    publish. post.create also strips `tiktokPublish`/`channelUsername`/`videoDurationSec`.
+  - **"It didn't publish" KEEPS the checkpoint, marked `clearedAt`** (an atomic `jsonb_set`, only while the
+    row is still parked). Retry still resumes it — PROCESSING waits, COMPLETE adopts — and only a definite
+    "TikTok can't report on this publish_id" answer then posts afresh. Deleting it (the first version)
+    made Retry post a second copy of a video still processing or private.
+  - `post.update` channel replacement carries a KEPT target's metadata + ambiguity (it used to drop them —
+    for every platform) and is **refused while any target is PUBLISHING or PUBLISHED**: it recreates every
+    target as SCHEDULED, which re-posted a published one in the seconds after Retry.
 - **Poll budget 3 min per attempt** — under the worker's 270 s graceful shutdown, so a deploy never kills a
   poll (the reaper would park it "Needs check", and checking TikTok from India needs a VPN). Longer
-  processing ends in a retryable "still processing"; the retry resumes the SAME publish_id.
+  processing ends in a **`TikTokStillProcessingError`** (duck-typed): the worker sets the target
+  SCHEDULED with `TIKTOK_PROCESSING_WAIT_MESSAGE` (a watchdog keep-alive marker) and queues a delayed
+  re-check of the SAME publish_id — no BullMQ attempt is spent. Past `TIKTOK_PROCESSING_CEILING_MS` (3 h)
+  it is parked for a human as "may still go live" — never FAILED (three attempts used to run out and mark
+  a video FAILED that then went live). A PUBLIC post waits up to 90 s after PUBLISH_COMPLETE for its post
+  id; a FILE_UPLOAD still PROCESSING_UPLOAD past the upload_url's hour is dropped and posted afresh.
 - **PULL_FROM_URL first** (TikTok: never FILE_UPLOAD for files already on your server); the domain
   signature file is `apps/web/public/tiktok4XVx…txt`. `url_ownership_unverified` (pre-write) falls back to a
   streamed FILE_UPLOAD (`planTikTokChunks`: 10 MiB chunks, ranged reads, never the whole file in memory).
@@ -358,11 +390,18 @@ posted the video again (a `log_id` containing "401" even took the token_expired 
   [channel-token-refresh.ts](apps/worker/src/lib/channel-token-refresh.ts) — re-read the row, reuse a token
   another refresher produced, else refresh with the FRESH refresh token under an optimistic lock on
   `tokenExpiresAt` — because the job-start copy of a ROTATED refresh token may already be spent
-  (`invalid_grant` ⇒ a false "reconnect"). The refresh cron adds with `removeOnFail: true`: a failed job
+  (`invalid_grant` ⇒ a false "reconnect"); a FAILED refresh re-reads the row and reuses a newer token
+  another refresher wrote; writes require `disconnectedAt: null`. The 30-min cron uses the same helper
+  (it used to write unconditionally). After a SUCCESSFUL refresh the re-publish's own error is kept (a
+  terminal refusal stays terminal). The refresh cron adds with `removeOnFail: true`: a failed job
   with the fixed `refresh-<id>` jobId used to block every later refresh. Connect sends
   `disable_auto_auth=1` and refuses a consent where "post content" (`video.publish`) was unticked.
 - **Create-time limits:** a TikTok target needs exactly one video; media-constraints refuses what no
-  rendition can fix (>10 min, <23 fps, <360 px a side). TikTok's "4 GB" is read as 4,000,000,000 bytes.
+  rendition can fix (>10 min, <23 fps, <360 px a side), falling back to the Media duration/width/height
+  columns when a failed optimization dropped the probe. TikTok's "4 GB" is read as 4,000,000,000 bytes;
+  an original above it waits for the rendition (`planOptimizeGate`). Durations allow 0.5 s and print m:ss
+  rounded up. A connect whose creator_info is refused stores NO @handle (never the display name);
+  avatar-cache refreshes TikTok avatars through getProfile (the URL lives 2 h).
 - **Scopes stay `user.info.basic, video.publish, video.upload`** — changing them forces every account to
   reconnect (VPN). No analytics yet (`video.list` not requested); no webhooks; no photo posts.
 - **Social listening / brand sync called TikTok's RESEARCH API with the posting keys** (unapproved and
