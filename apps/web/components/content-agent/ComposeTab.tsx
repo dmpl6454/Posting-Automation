@@ -91,8 +91,21 @@ import {
   sanitizeRestoredTikTok,
   pickTikTokDrafts,
   tiktokConsentLine,
+  tiktokDraftBlockReason,
+  tiktokDraftNotice,
+  selectedNonTikTokCount,
+  aiCaptionTargetCount,
+  tiktokProcessingNoticeApplies,
   TIKTOK_PROCESSING_NOTICE,
+  TIKTOK_AI_CAPTIONS_ALL_TIKTOK_TEXT,
+  TIKTOK_AI_CAPTIONS_MIXED_TEXT,
 } from "~/lib/tiktok-post";
+import {
+  type VideoProbeOutcome,
+  VIDEO_PROBE_TIMEOUT_MS,
+  videoLengthStatus,
+  probedDurationFor,
+} from "~/lib/video-length-probe";
 
 const MediaEditor = dynamic(
   () => import("~/components/media-editor/MediaEditor").then((m) => ({ default: m.MediaEditor })),
@@ -280,6 +293,11 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   // Length of the first attached video, from the SAME metadata probe as
   // videoAspect (no second media element). Null until measured.
   const [videoDurationSec, setVideoDurationSec] = useState<number | null>(null);
+  // Which URL the probe last finished, and how. A reading counts only for the
+  // URL it was taken from (videoLengthStatus) — so TikTok's length check never
+  // judges video B by video A's duration, even for the one render before the
+  // effect below resets the numbers.
+  const [videoProbe, setVideoProbe] = useState<VideoProbeOutcome | null>(null);
   const [storyMentionInput, setStoryMentionInput] = useState("");
   const [storyMentionError, setStoryMentionError] = useState<string | null>(null);
   const channelSectionRef = useRef<HTMLDivElement>(null);
@@ -615,19 +633,32 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
     return videoItem?.url ?? null;
   }, [postMedia]);
   useEffect(() => {
+    // A different video (or none): forget the previous one's measurements
+    // first. They used to survive a swap, so the Shorts check and TikTok's
+    // length check could judge the new video by the old one's numbers.
+    setVideoAspect(null);
+    setVideoDurationSec(null);
     if (!firstVideoUrl) {
-      setVideoAspect(null);
-      setVideoDurationSec(null);
+      setVideoProbe(null);
       return;
     }
+    const probedUrl = firstVideoUrl;
     const el = document.createElement("video");
     el.preload = "metadata";
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+    const finish = (status: VideoProbeOutcome["status"]) => {
+      if (settled) return;
+      settled = true;
+      setVideoProbe({ url: probedUrl, status });
+    };
     // Full WebKit teardown: clearing the handler alone leaves the media
     // player alive until GC — removeAttribute + load() releases it now.
     // Released the moment metadata arrives (not just on unmount): an idle
     // media element bound to a high-bitrate blob triggers GB-scale
     // opportunistic read bursts in WebKit (measured 2026-07-21).
     const release = () => {
+      if (timer !== undefined) clearTimeout(timer);
       el.onloadedmetadata = null;
       el.onerror = null;
       el.removeAttribute("src");
@@ -640,11 +671,28 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
       // TikTok's max_video_post_duration_sec check reads this — same element.
       if (Number.isFinite(el.duration) && el.duration > 0) {
         setVideoDurationSec(el.duration);
+        finish("done");
+      } else {
+        finish("failed");
       }
       release();
     };
-    el.onerror = release;
-    el.src = firstVideoUrl;
+    // Unreadable here (codec, network): the length is UNKNOWN, not zero and not
+    // the previous video's. TikTok's gate does not block on it — the server
+    // and the publish worker check the length again.
+    el.onerror = () => {
+      setVideoAspect(null);
+      setVideoDurationSec(null);
+      finish("failed");
+      release();
+    };
+    // A probe that never answers (stalled remote URL) must not hold the
+    // TikTok gate on "Checking the video's length…" forever.
+    timer = setTimeout(() => {
+      finish("failed");
+      release();
+    }, VIDEO_PROBE_TIMEOUT_MS);
+    el.src = probedUrl;
     return release;
   }, [firstVideoUrl]);
 
@@ -737,18 +785,24 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   }, [anyUploading]);
 
   const createPost = trpc.post.create.useMutation({
-    onSuccess: (post: any) => {
+    onSuccess: (post: any, variables) => {
       // PR-5: a unique-captions post is parked while the fanout worker writes
-      // one caption per channel — say so instead of the generic toast.
-      const fanoutCount = post?.metadata?.captionFanout?.requested ? (post?.targets?.length ?? 0) : 0;
+      // one caption per channel — say so instead of the generic toast. TikTok
+      // targets are not counted: the fan-out never writes a TikTok caption.
+      const fanoutCount = post?.metadata?.captionFanout?.requested ? aiCaptionTargetCount(post?.targets) : 0;
       const created =
         fanoutCount > 0
           ? { title: "Post created!", description: `Generating ${fanoutCount} unique captions — publishing when ready.` }
           : { title: "Post created!", description: "Your post has been saved successfully." };
       // TikTok processes a video after it is sent (guideline notice). Read from
-      // the SERVER's targets, and not for a draft, which publishes nothing yet.
-      const toTikTok =
-        post?.status !== "DRAFT" && ((post?.targets ?? []) as any[]).some((t) => t?.channel?.platform === "TIKTOK");
+      // the SERVER's targets. Keyed on what the user did (publish/schedule send
+      // scheduledAt; Save as Draft never does), not on the post's status: a
+      // post parked as DRAFT for caption fan-out or a super-text burn still
+      // publishes on its own.
+      const toTikTok = tiktokProcessingNoticeApplies({
+        sentForPublishing: !!variables?.scheduledAt,
+        targets: post?.targets,
+      });
       toast(toTikTok ? { ...created, description: `${created.description} ${TIKTOK_PROCESSING_NOTICE}` } : created);
       // Invalidate recently used cache so it refreshes
       utils.channel.recentlyUsed.invalidate();
@@ -1448,7 +1502,9 @@ ${content}`;
             : undefined,
         // PR-5: only sent on the schedule/publish path (draft-save keeps it off).
         // Never for a story — it displays no caption to vary.
-        ...(!isStoryMode && !isArticleMode && uniqueCaptions && selectedChannels.length > 1 && { uniqueCaptions: true }),
+        // Not when every selected channel is TikTok: the fan-out never writes a
+        // TikTok caption, so there would be nothing for it to do.
+        ...(!isStoryMode && !isArticleMode && uniqueCaptions && selectedChannels.length > 1 && aiCaptionChannelCount > 0 && { uniqueCaptions: true }),
         // Per-channel super text: only meaningful when a strip is actually
         // configured on a video AND the post fans out to >1 channel.
         ...(uniqueSuperText && selectedChannels.length > 1 && Object.keys(superTextByMediaId).length > 0 && { uniqueSuperText: true }),
@@ -1599,6 +1655,13 @@ ${content}`;
         )
       : [];
   const selectedTikTokIds = selectedTikTokChannels.map((ch) => ch.id);
+  // Selected channels the AI "unique caption per channel" fan-out can write
+  // for — never TikTok (the user must have seen the exact text TikTok gets).
+  const aiCaptionChannelCount = selectedNonTikTokCount(selectedChannels, selectedTikTokIds);
+  const aiCaptionsActive = uniqueCaptions && aiCaptionChannelCount > 0;
+  // This video's length, only once it was measured from THIS video.
+  const videoLengthState = videoLengthStatus(firstVideoUrl, videoProbe);
+  const tiktokDurationSec = probedDurationFor(firstVideoUrl, videoProbe, videoDurationSec);
   // One creator_info query per selected TikTok channel; the card and the gate
   // read the same state.
   const { creators: tiktokCreators, retry: retryTikTokCreator } = useTikTokCreators(selectedTikTokIds);
@@ -1615,7 +1678,8 @@ ${content}`;
             count: postMedia.length,
             videoCount: tiktokVideoCount,
             imageCount: postMedia.length - tiktokVideoCount,
-            durationSec: videoDurationSec,
+            durationSec: tiktokDurationSec,
+            durationPending: videoLengthState === "pending",
           },
           // The caption each TikTok channel will carry: its own (when the
           // per-channel editor holds one) or the shared caption.
@@ -1630,6 +1694,23 @@ ${content}`;
   // TikTok's consent line, shown above the action buttons whenever a TikTok
   // channel is selected.
   const tiktokConsent = tiktokConsentLine(tiktokDrafts, selectedTikTokIds);
+  // Save as Draft needs only the privacy choice for every selected TikTok
+  // channel: TikTok settings can be chosen nowhere else, so a TikTok draft
+  // saved without them could never be scheduled or published.
+  const tiktokDraftBlock =
+    selectedTikTokIds.length > 0
+      ? tiktokDraftBlockReason(
+          selectedTikTokChannels.map((ch) => ({ id: ch.id, name: ch.name })),
+          tiktokDrafts
+        )
+      : null;
+  // Shown under the amber notice's reason unless that reason already asks for
+  // the privacy choice. (A blocked draft always comes with a blocked publish
+  // gate, so the notice is already visible.)
+  const tiktokDraftLine = tiktokDraftNotice(
+    youtubeBlockReason ?? storyBlock ?? articleBlock ?? captionBlock ?? tiktokBlock,
+    tiktokDraftBlock
+  );
 
   return (
     <div className="w-full space-y-6">
@@ -2788,7 +2869,8 @@ ${content}`;
               drafts={tiktokDrafts}
               onChange={(channelId, next) => setTiktokDrafts((prev) => ({ ...prev, [channelId]: next }))}
               onRetry={retryTikTokCreator}
-              videoDurationSec={videoDurationSec}
+              videoDurationSec={tiktokDurationSec}
+              videoLengthStatus={videoLengthState}
             />
           )}
 
@@ -2884,7 +2966,7 @@ ${content}`;
                       Different caption per channel
                     </Label>
                     <p className="mt-0.5 text-xs text-muted-foreground">
-                      Write your own caption for any selected channel. Channels you leave blank use the shared caption{uniqueCaptions ? " (or the AI caption)" : ""}.
+                      Write your own caption for any selected channel. Channels you leave blank use the shared caption{aiCaptionsActive ? " (or the AI caption)" : ""}.
                     </p>
                   </div>
                   <Switch
@@ -2963,21 +3045,36 @@ ${content}`;
                     </div>
                   );
                 })()}
-                <div className="flex items-center justify-between gap-3 border-t pt-3">
-                  <div className="min-w-0">
-                    <Label htmlFor="unique-captions" className="text-sm">
-                      Unique caption per channel (AI)
-                    </Label>
-                    <p className="mt-0.5 text-xs text-muted-foreground">
-                      Captions are generated in the background — the post publishes when they&apos;re ready. You can review and edit each one on the post page.
-                    </p>
+                {/* The fan-out never writes a TikTok caption (the user must have
+                    seen the exact text TikTok gets). With only TikTok selected
+                    the toggle has nothing to do, so it is not offered. */}
+                {aiCaptionChannelCount === 0 ? (
+                  <div className="border-t pt-3" data-testid="unique-captions-tiktok-only">
+                    <p className="text-sm">Unique caption per channel (AI)</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">{TIKTOK_AI_CAPTIONS_ALL_TIKTOK_TEXT}</p>
                   </div>
-                  <Switch
-                    id="unique-captions"
-                    checked={uniqueCaptions}
-                    onCheckedChange={setUniqueCaptions}
-                  />
-                </div>
+                ) : (
+                  <div className="flex items-center justify-between gap-3 border-t pt-3">
+                    <div className="min-w-0">
+                      <Label htmlFor="unique-captions" className="text-sm">
+                        Unique caption per channel (AI)
+                      </Label>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        Captions are generated in the background — the post publishes when they&apos;re ready. You can review and edit each one on the post page.
+                      </p>
+                      {selectedTikTokIds.length > 0 && (
+                        <p className="mt-0.5 text-xs text-muted-foreground" data-testid="unique-captions-tiktok-note">
+                          {TIKTOK_AI_CAPTIONS_MIXED_TEXT}
+                        </p>
+                      )}
+                    </div>
+                    <Switch
+                      id="unique-captions"
+                      checked={uniqueCaptions}
+                      onCheckedChange={setUniqueCaptions}
+                    />
+                  </div>
+                )}
               </CardContent>
             </Card>
           )}
@@ -3057,6 +3154,10 @@ ${content}`;
                   toast({ title: "Please wait", description: "Media is still uploading...", variant: "destructive" });
                   return;
                 }
+                if (tiktokDraftBlock) {
+                  toast({ title: "TikTok settings needed", description: tiktokDraftBlock, variant: "destructive" });
+                  return;
+                }
                 try {
                   setIsUploading(true);
                   // Resolve EVERY attached item (incl. url-only deep-link images) to a
@@ -3132,8 +3233,10 @@ ${content}`;
                     ? !article.title.trim()
                     : needsSharedCaption) ||
                 createPost.isPending ||
-                isUploading
+                isUploading ||
+                !!tiktokDraftBlock
               }
+              title={tiktokDraftBlock ?? undefined}
             >
               <Save className="mr-2 h-4 w-4" />
               Save as Draft
@@ -3173,6 +3276,11 @@ ${content}`;
           {(youtubeBlockReason || storyBlock || (articleBlock && (article.title.trim() || selectedChannels.length > 0)) || (captionBlock && selectedChannels.length > 0) || tiktokBlock) && (
             <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-300">
               {youtubeBlockReason ?? storyBlock ?? articleBlock ?? captionBlock ?? tiktokBlock}
+              {tiktokDraftLine && (
+                <p className="mt-1" data-testid="tiktok-draft-block">
+                  {tiktokDraftLine}
+                </p>
+              )}
             </div>
           )}
           </>

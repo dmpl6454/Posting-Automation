@@ -20,15 +20,22 @@ import {
   type TikTokCreatorInfoResult,
   emptyTikTokDraft,
   creatorStateFromQuery,
+  creatorInfoErrorMessage,
+  isTooManyRequestsError,
   tiktokCommercialLabel,
+  tiktokLengthNote,
   TIKTOK_PRIVACY_PLACEHOLDER,
   TIKTOK_COMMERCIAL_HINT,
   TIKTOK_BRANDED_PRIVATE_TEXT,
   TIKTOK_INTERACTION_OFF_TEXT,
+  TIKTOK_CREATOR_RATE_LIMIT_TEXT,
 } from "~/lib/tiktok-post";
+import type { VideoLengthStatus } from "~/lib/video-length-probe";
 
 /** creator_info is limited to 20 requests/min per token — a minute of cache is plenty. */
 const CREATOR_INFO_STALE_MS = 60_000;
+/** One automatic retry after the app's rate limit, about when its window resets. */
+const CREATOR_INFO_RATE_LIMIT_RETRY_MS = 60_000;
 
 /**
  * Live creator_info for every selected TikTok channel — one query per channel
@@ -36,6 +43,12 @@ const CREATOR_INFO_STALE_MS = 60_000;
  * state. TikTok requires fresh creator info before every post; the provider
  * fetches it again right before init, so a setting changed after scheduling is
  * still caught.
+ *
+ * Compose is force-mounted and window-focus refetch is off, so without an
+ * interval the settings could be hours old when the user finally schedules —
+ * they are re-read every minute while mounted (never from a background tab).
+ * A rate-limited read (TOO_MANY_REQUESTS) is retried once, a minute later, and
+ * shows fixed text meanwhile instead of the raw "Try again after <ISO>".
  */
 export function useTikTokCreators(channelIds: string[]): {
   creators: Record<string, TikTokCreatorState>;
@@ -43,7 +56,16 @@ export function useTikTokCreators(channelIds: string[]): {
 } {
   const results = trpc.useQueries((t) =>
     channelIds.map((channelId) =>
-      t.tiktok.creatorInfo({ channelId }, { staleTime: CREATOR_INFO_STALE_MS, retry: false })
+      t.tiktok.creatorInfo(
+        { channelId },
+        {
+          staleTime: CREATOR_INFO_STALE_MS,
+          refetchInterval: CREATOR_INFO_STALE_MS,
+          refetchIntervalInBackground: false,
+          retry: (failureCount, error) => failureCount < 1 && isTooManyRequestsError(error),
+          retryDelay: CREATOR_INFO_RATE_LIMIT_RETRY_MS,
+        }
+      )
     )
   );
   const creators: Record<string, TikTokCreatorState> = {};
@@ -53,7 +75,10 @@ export function useTikTokCreators(channelIds: string[]): {
     if (!q) return;
     creators[id] = creatorStateFromQuery({
       isPending: q.isPending,
-      errorMessage: q.error ? humanizeError(q.error, "Couldn't load this account's TikTok settings. Try again.") : null,
+      errorMessage: creatorInfoErrorMessage(
+        { error: q.error, failureReason: q.failureReason, hasData: q.data != null },
+        (err) => humanizeError(err, "Couldn't load this account's TikTok settings. Try again.")
+      ),
       data: (q.data ?? null) as TikTokCreatorInfoResult | null,
     });
     refetchers[id] = () => void q.refetch();
@@ -83,13 +108,16 @@ export function TikTokPostSettings({
   onChange,
   onRetry,
   videoDurationSec,
+  videoLengthStatus,
 }: {
   channels: TikTokChannelSummary[];
   creators: Record<string, TikTokCreatorState>;
   drafts: Record<string, TikTokDraft>;
   onChange: (channelId: string, next: TikTokDraft) => void;
   onRetry?: (channelId: string) => void;
+  /** The first video's length, only once it was measured from THAT video. */
   videoDurationSec: number | null;
+  videoLengthStatus: VideoLengthStatus;
 }) {
   if (channels.length === 0) return null;
   return (
@@ -110,6 +138,7 @@ export function TikTokPostSettings({
             onChange={(next) => onChange(ch.id, next)}
             onRetry={onRetry ? () => onRetry(ch.id) : undefined}
             videoDurationSec={videoDurationSec}
+            videoLengthStatus={videoLengthStatus}
           />
         ))}
       </CardContent>
@@ -124,6 +153,7 @@ function TikTokChannelSection({
   onChange,
   onRetry,
   videoDurationSec,
+  videoLengthStatus,
 }: {
   channel: TikTokChannelSummary;
   creator: TikTokCreatorState;
@@ -131,6 +161,7 @@ function TikTokChannelSection({
   onChange: (next: TikTokDraft) => void;
   onRetry?: () => void;
   videoDurationSec: number | null;
+  videoLengthStatus: VideoLengthStatus;
 }) {
   const info = creator.status === "ready" ? creator.info : null;
   const displayName = info?.nickname || channel.name;
@@ -168,7 +199,9 @@ function TikTokChannelSection({
                 ? creator.message || "Couldn't load this account's TikTok settings."
                 : creator.reason || "This TikTok account can't post right now. Try again later."}
             </p>
-            {onRetry ? (
+            {/* No button while rate-limited: it re-checks on its own, and a
+                click would only spend more of the same limit. */}
+            {onRetry && !(creator.status === "error" && creator.message === TIKTOK_CREATOR_RATE_LIMIT_TEXT) ? (
               <Button type="button" variant="ghost" size="sm" className="mt-1 h-7 px-2 text-xs" onClick={onRetry}>
                 <RefreshCw className="mr-1 h-3 w-3" /> Check again
               </Button>
@@ -182,6 +215,7 @@ function TikTokChannelSection({
           draft={draft}
           set={set}
           videoDurationSec={videoDurationSec}
+          videoLengthStatus={videoLengthStatus}
         />
       )}
     </div>
@@ -194,12 +228,14 @@ function ReadySection({
   draft,
   set,
   videoDurationSec,
+  videoLengthStatus,
 }: {
   idBase: string;
   info: Extract<TikTokCreatorState, { status: "ready" }>["info"];
   draft: TikTokDraft;
   set: (patch: Partial<TikTokDraft>) => void;
   videoDurationSec: number | null;
+  videoLengthStatus: VideoLengthStatus;
 }) {
   const brandedOn = draft.discloseCommercial && draft.brandContent;
   // A restored privacy level the creator no longer allows shows the
@@ -207,8 +243,13 @@ function ReadySection({
   const privacyValue =
     draft.privacyLevel && info.privacyLevelOptions.includes(draft.privacyLevel) ? draft.privacyLevel : "";
   const commercialLabel = tiktokCommercialLabel(draft);
-  const tooLong =
-    videoDurationSec != null && info.maxVideoPostDurationSec != null && videoDurationSec > info.maxVideoPostDurationSec;
+  // A length that couldn't be read here is said quietly and never blocks — the
+  // server and the publish worker check it again.
+  const lengthNote = tiktokLengthNote({
+    maxSec: info.maxVideoPostDurationSec,
+    durationSec: videoDurationSec,
+    lengthStatus: videoLengthStatus,
+  });
 
   const interactions: Array<{ key: "allowComment" | "allowDuet" | "allowStitch"; label: string; off: boolean }> = [
     { key: "allowComment", label: "Comment", off: info.commentDisabled },
@@ -355,11 +396,12 @@ function ReadySection({
         <Switch id={`${idBase}-aigc`} checked={draft.isAigc} onCheckedChange={(v) => set({ isAigc: v })} />
       </div>
 
-      {info.maxVideoPostDurationSec != null ? (
-        <p className={`text-xs ${tooLong ? "text-destructive" : "text-muted-foreground"}`}>
-          {tooLong
-            ? `This video is ${Math.round(videoDurationSec!)}s long; this account can post videos up to ${info.maxVideoPostDurationSec}s.`
-            : `This account can post videos up to ${info.maxVideoPostDurationSec}s.`}
+      {lengthNote ? (
+        <p
+          className={`text-xs ${lengthNote.tooLong ? "text-destructive" : "text-muted-foreground"}`}
+          data-testid="tiktok-length-note"
+        >
+          {lengthNote.text}
         </p>
       ) : null}
     </div>

@@ -16,11 +16,13 @@ import {
   isTikTokPrivacyLevel,
   validateTikTokSettings,
   tiktokConsentText,
+  readTikTokSettingsForChannel,
   TIKTOK_TITLE_MAX,
   type TikTokCreatorInfo,
   type TikTokPostSettings,
   type TikTokPrivacyLevel,
 } from "@postautomation/social/src/utils/tiktok-posting";
+import type { VideoLengthStatus } from "./video-length-probe";
 
 /** What one TikTok channel's section of the card holds while composing. */
 export interface TikTokDraft {
@@ -72,6 +74,12 @@ export interface TikTokMediaSummary {
   imageCount: number;
   /** From the existing first-video probe; null when unknown. */
   durationSec: number | null;
+  /**
+   * True while the probe is still measuring THIS video. The gate waits for it
+   * instead of judging the video by an unknown length; a probe that FAILED is
+   * not pending (the server and the publish worker check the length again).
+   */
+  durationPending?: boolean;
 }
 
 /* Fixed copy. TikTok's guideline wording is quoted verbatim where it gives one. */
@@ -80,6 +88,21 @@ export const TIKTOK_COMMERCIAL_HINT = "You need to indicate if your content prom
 export const TIKTOK_BRANDED_PRIVATE_TEXT = "Branded content visibility cannot be set to private.";
 export const TIKTOK_PROCESSING_NOTICE = "TikTok may take a few minutes to process your video.";
 export const TIKTOK_INTERACTION_OFF_TEXT = "Turned off in this account's TikTok settings.";
+/** The missing-privacy reason's tail, so the draft notice can tell it is already on screen. */
+export const TIKTOK_CHOOSE_PRIVACY_TEXT = "choose who can see this video.";
+export const TIKTOK_CHECKING_LENGTH_TEXT = "Checking the video's length…";
+export const TIKTOK_CREATOR_RATE_LIMIT_TEXT =
+  "TikTok's limit for checking this account was reached — checking again shortly.";
+/** AI "unique caption per channel" never writes a TikTok caption (the user must have seen the exact text). */
+export const TIKTOK_AI_CAPTIONS_ALL_TIKTOK_TEXT = "TikTok keeps the caption you wrote.";
+export const TIKTOK_AI_CAPTIONS_MIXED_TEXT =
+  "TikTok channels keep the caption you wrote — AI captions are only written for the other channels.";
+/** Screens that cannot choose TikTok settings point to the one that can. */
+export const TIKTOK_ADD_IN_COMPOSE_TEXT =
+  "TikTok channels are added in Content Studio, where their TikTok settings are chosen.";
+export const TIKTOK_POSTS_IN_COMPOSE_TEXT =
+  "TikTok posts are made in Content Studio's Compose, where their TikTok settings are chosen.";
+export const TIKTOK_CSV_IMPORT_TEXT = "TikTok posts can't be imported from CSV — create them in Content Studio.";
 export const TIKTOK_CONNECT_NOTICE =
   "TikTok's sign-in page isn't available in India. Connect from a location where TikTok is available; posting then works from here.";
 
@@ -116,10 +139,10 @@ function channelBlockReason(
   if (creator.status === "error") return `${name}: ${creator.message?.trim() || LOAD_ERROR_FALLBACK}`;
   if (creator.status === "cannot-post") return `${name}: ${creator.reason?.trim() || CANNOT_POST_FALLBACK}`;
   const d = draft ?? emptyTikTokDraft();
-  if (!d.privacyLevel) return `${name}: choose who can see this video.`;
+  if (!d.privacyLevel) return `${name}: ${TIKTOK_CHOOSE_PRIVACY_TEXT}`;
   if (d.discloseCommercial && !d.brandOrganic && !d.brandContent) return `${name}: ${TIKTOK_COMMERCIAL_HINT}`;
   const settings = tiktokSettingsFromDraft(d);
-  if (!settings) return `${name}: choose who can see this video.`;
+  if (!settings) return `${name}: ${TIKTOK_CHOOSE_PRIVACY_TEXT}`;
   const invalid = validateTikTokSettings(settings, creator.info, { videoDurationSec: media.durationSec });
   if (invalid) return `${name}: ${invalid}`;
   if (captionLength != null && captionLength > TIKTOK_TITLE_MAX) {
@@ -146,6 +169,9 @@ export function tiktokBlockReason(input: {
   if (media.imageCount > 0) return "TikTok posts a video only — remove the images, or deselect the TikTok channels.";
   if (media.videoCount === 0) return "TikTok needs a video. Attach one MP4, MOV or WebM.";
   if (media.count > 1 || media.videoCount > 1) return "TikTok posts one video at a time — keep a single video attached.";
+  // Wait for THIS video's length rather than judge it by an unknown (or the
+  // previous video's) duration.
+  if (media.durationPending) return TIKTOK_CHECKING_LENGTH_TEXT;
   for (const ch of input.selectedTikTok) {
     const reason = channelBlockReason(
       ch,
@@ -265,4 +291,152 @@ export function sanitizeRestoredTikTok(raw: unknown): Record<string, TikTokDraft
  */
 export function tiktokPublishingLabel(pct: number | null | undefined): string {
   return pct == null || pct >= 100 ? "Processing on TikTok…" : "Uploading…";
+}
+
+/* ─────────────────────────── 2026-10-28 review fixes ─────────────────────────── */
+
+const hasOwn = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k);
+
+/**
+ * Why "Save as Draft" must wait, or null. ONLY a missing privacy choice blocks
+ * a draft (media, length, caption and can-post state do not): no screen other
+ * than Compose can add TikTok settings to an existing post, so a TikTok draft
+ * saved without them could never be scheduled or published.
+ */
+export function tiktokDraftBlockReason(
+  selectedTikTok: Array<{ id: string; name: string }>,
+  drafts: Record<string, TikTokDraft>
+): string | null {
+  for (const ch of selectedTikTok) {
+    const d = hasOwn(drafts, ch.id) ? drafts[ch.id] : undefined;
+    if (!d || !isTikTokPrivacyLevel(d.privacyLevel)) {
+      return `Choose who can see this post on ${ch.name} (TikTok) before saving — TikTok settings can only be chosen here.`;
+    }
+  }
+  return null;
+}
+
+/**
+ * The draft reason as a second line of Compose's amber notice, or null when
+ * there is none or the visible reason already asks for the privacy choice.
+ * (Whenever the draft is blocked the publish gate is blocked too, so the
+ * notice is already showing — this only decides whether to add the line.)
+ */
+export function tiktokDraftNotice(visibleReason: string | null, draftBlock: string | null): string | null {
+  if (!draftBlock) return null;
+  if (visibleReason && visibleReason.endsWith(`: ${TIKTOK_CHOOSE_PRIVACY_TEXT}`)) return null;
+  return draftBlock;
+}
+
+/** The TikTok card's length line for one account, or null when the account has no limit. */
+export function tiktokLengthNote(input: {
+  maxSec: number | null | undefined;
+  durationSec: number | null;
+  lengthStatus: VideoLengthStatus;
+}): { text: string; tooLong: boolean } | null {
+  const { maxSec, durationSec, lengthStatus } = input;
+  if (maxSec == null) return null;
+  if (lengthStatus === "failed") {
+    return {
+      text: `Couldn't read this video's length here. This account can post videos up to ${maxSec}s — the length is checked again before posting.`,
+      tooLong: false,
+    };
+  }
+  if (lengthStatus === "done" && durationSec != null && durationSec > maxSec) {
+    return {
+      text: `This video is ${Math.round(durationSec)}s long; this account can post videos up to ${maxSec}s.`,
+      tooLong: true,
+    };
+  }
+  return { text: `This account can post videos up to ${maxSec}s.`, tooLong: false };
+}
+
+/** The app's own TOO_MANY_REQUESTS, or nginx's HTML 429 (rewritten by the tRPC fetch guard). */
+export function isTooManyRequestsError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { message?: unknown; data?: { code?: unknown; httpStatus?: unknown }; shape?: { data?: { code?: unknown } } };
+  if (e.data?.code === "TOO_MANY_REQUESTS" || e.data?.httpStatus === 429) return true;
+  if (e.shape?.data?.code === "TOO_MANY_REQUESTS") return true;
+  return typeof e.message === "string" && /^too many requests/i.test(e.message.trim());
+}
+
+/**
+ * The message for one creator_info query, or null when it has none. A rate
+ * limit gets fixed text (never the raw "Try again after <ISO>"), including
+ * while the one automatic retry is waiting (`failureReason`, no `error` yet).
+ * A REFRESH that hit the limit keeps the settings already loaded — they are a
+ * minute or two old, and the provider checks creator_info again before posting.
+ */
+export function creatorInfoErrorMessage(
+  q: { error?: unknown; failureReason?: unknown; hasData: boolean },
+  humanize: (err: unknown) => string
+): string | null {
+  const err = q.error ?? q.failureReason ?? null;
+  if (!err) return null;
+  if (isTooManyRequestsError(err)) return q.hasData ? null : TIKTOK_CREATOR_RATE_LIMIT_TEXT;
+  return humanize(err);
+}
+
+/** TikTok's guidelines: the creator's nickname is shown where the user posts. */
+export function tiktokPostingAsLine(nickname: string | null | undefined): string {
+  const n = typeof nickname === "string" ? nickname.trim() : "";
+  return n ? `Posting to TikTok as ${n}` : "Posting to TikTok";
+}
+
+interface TargetLike {
+  status?: string | null;
+  ambiguousAt?: unknown;
+  channel?: { platform?: string | null } | null;
+}
+
+const ARMABLE_STATUSES = new Set(["DRAFT", "SCHEDULED", "FAILED"]);
+
+/**
+ * TikTok targets that Publish now / Retry / Schedule would arm. An ambiguous
+ * target is never armed (the server refuses it until a human clears it).
+ */
+export function armableTikTokTargets<T extends TargetLike>(targets: readonly T[] | null | undefined): T[] {
+  return (targets ?? []).filter(
+    (t) => t?.channel?.platform === "TIKTOK" && !t.ambiguousAt && ARMABLE_STATUSES.has(String(t.status))
+  );
+}
+
+/**
+ * The consent line for EXISTING TikTok targets (post page, Bulk Schedule),
+ * from the settings stored on each post — the branded wording once any of
+ * them is marked Branded content. Null when there is none.
+ */
+export function storedTikTokConsentLine(items: Array<{ postMetadata: unknown; channelId: string }>): string | null {
+  if (items.length === 0) return null;
+  const branded = items.some((i) => readTikTokSettingsForChannel(i.postMetadata, i.channelId)?.brandContent === true);
+  return tiktokConsentText({ brandContent: branded });
+}
+
+/** Channel pickers that cannot carry TikTok settings (Repurpose drafts, CSV import, post-page "Add"). */
+export function excludeTikTokChannels<T extends { platform?: unknown }>(channels: readonly T[] | null | undefined): T[] {
+  return (channels ?? []).filter((c) => c?.platform !== "TIKTOK");
+}
+
+/** Selected channels the AI caption fan-out can write for (never TikTok). */
+export function selectedNonTikTokCount(selectedIds: readonly string[], tiktokIds: readonly string[]): number {
+  const tiktok = new Set(tiktokIds);
+  return selectedIds.filter((id) => !tiktok.has(id)).length;
+}
+
+/** "Generating N unique captions" — the targets the fan-out writes for. */
+export function aiCaptionTargetCount(targets: readonly TargetLike[] | null | undefined): number {
+  return (targets ?? []).filter((t) => t?.channel?.platform !== "TIKTOK").length;
+}
+
+/**
+ * Whether Compose's success toast carries TikTok's processing notice: the user
+ * published or scheduled (not Save as Draft) and the server created a TikTok
+ * target. A post parked as DRAFT for caption fan-out or a super-text burn
+ * still counts — it publishes on its own.
+ */
+export function tiktokProcessingNoticeApplies(input: {
+  sentForPublishing: boolean;
+  targets: readonly TargetLike[] | null | undefined;
+}): boolean {
+  return input.sentForPublishing && (input.targets ?? []).some((t) => t?.channel?.platform === "TIKTOK");
 }
