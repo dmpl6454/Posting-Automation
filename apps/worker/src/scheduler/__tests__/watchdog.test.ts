@@ -21,7 +21,7 @@ vi.mock("../../workers/auto-healer.worker", () => ({ runAutoHealerWithLogging: v
 vi.mock("../../workers/celebrity-detect.worker", () => ({ runCelebrityDetectors: vi.fn() }));
 
 import { watchdogPublishingPosts } from "../cron-jobs";
-import { HEAVY_SLOT_WAIT_MESSAGE } from "../../lib/publish-recovery";
+import { HEAVY_SLOT_WAIT_MESSAGE, TIKTOK_PROCESSING_WAIT_MESSAGE } from "../../lib/publish-recovery";
 
 const NOW = Date.now();
 const recent = new Date(NOW - 2 * 60 * 1000);   // 2 min ago — "live"
@@ -56,6 +56,18 @@ describe("watchdogPublishingPosts", () => {
         id: "p-heavy-defer",
         updatedAt: postAge,
         targets: [{ status: "SCHEDULED", updatedAt: old, errorMessage: HEAVY_SLOT_WAIT_MESSAGE }],
+      },
+    ]);
+    await watchdogPublishingPosts();
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("SKIPS a post whose TikTok target is waiting on TikTok's processing (a re-check is queued)", async () => {
+    findManyMock.mockResolvedValue([
+      {
+        id: "p-tiktok-wait",
+        updatedAt: postAge,
+        targets: [{ status: "SCHEDULED", updatedAt: old, errorMessage: TIKTOK_PROCESSING_WAIT_MESSAGE }],
       },
     ]);
     await watchdogPublishingPosts();

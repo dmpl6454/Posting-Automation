@@ -250,7 +250,7 @@ describe("choosePublishUrl — TikTok (2026-10-28)", () => {
   });
 });
 
-describe("planOptimizeGate — TikTok never waits on a rendition", () => {
+describe("planOptimizeGate — TikTok waits on a rendition only above TikTok's own 4 GB limit", () => {
   const base = { id: "m1", url: "o", fileType: "video/mp4" };
   const now = Date.parse("2026-10-28T12:00:00Z");
   it.each([
@@ -262,5 +262,32 @@ describe("planOptimizeGate — TikTok never waits on a rendition", () => {
     expect(
       planOptimizeGate({ platform: "TIKTOK", media: [{ ...base, fileSize: 3.5 * GB, metadata }], now })
     ).toEqual({ action: "proceed" });
+  });
+});
+
+describe("planOptimizeGate — a TikTok original over 4,000,000,000 bytes", () => {
+  // Uploads are capped at 4 GiB (4,294,967,296) but TikTok's "4 GB" is decimal:
+  // an original in between was sent and refused AFTER init, costing one of the
+  // creator's ~15 daily posts.
+  const base = { id: "m1", url: "o", fileType: "video/mp4", fileSize: 4_100_000_000 };
+  const now = Date.parse("2026-10-28T12:00:00Z");
+  it("waits for the rendition", () => {
+    expect(planOptimizeGate({ platform: "TIKTOK", media: [{ ...base, metadata: { optimize: { status: "processing", enqueuedAt: new Date(now - 60_000).toISOString() } } }], now })).toEqual({
+      action: "wait",
+      mediaId: "m1",
+    });
+  });
+  it("proceeds once the rendition exists (choosePublishUrl then sends it)", () => {
+    const metadata = { optimize: { status: "done", url: "r" } };
+    expect(planOptimizeGate({ platform: "TIKTOK", media: [{ ...base, metadata }], now })).toEqual({ action: "proceed" });
+    expect(choosePublishUrl("TIKTOK", { ...base, metadata })).toBe("r");
+  });
+  it("fails with a TikTok-worded message when the rendition failed", () => {
+    const out = planOptimizeGate({ platform: "TIKTOK", media: [{ ...base, metadata: { optimize: { status: "failed", error: "x" } } }], now });
+    expect(out.action).toBe("fail");
+    expect((out as { message: string }).message).toMatch(/TikTok/);
+  });
+  it("exactly 4,000,000,000 bytes still goes as-is", () => {
+    expect(planOptimizeGate({ platform: "TIKTOK", media: [{ ...base, fileSize: 4_000_000_000 }], now })).toEqual({ action: "proceed" });
   });
 });

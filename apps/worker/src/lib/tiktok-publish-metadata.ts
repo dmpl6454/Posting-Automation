@@ -16,12 +16,21 @@
  */
 import {
   TIKTOK_BY_CHANNEL_KEY,
+  TIKTOK_CHECKPOINT_KEY,
   TIKTOK_SETTINGS_KEY,
   readTikTokSettingsForChannel,
 } from "@postautomation/social/src/utils/tiktok-posting";
 
-/** Keys a TIKTOK target must never inherit from the post/target metadata spread. */
-export const TIKTOK_INHERITED_KEYS_TO_DROP = [TIKTOK_SETTINGS_KEY, TIKTOK_BY_CHANNEL_KEY] as const;
+/**
+ * Keys a TIKTOK target never inherits from the post/target metadata spread —
+ * only the worker supplies them (tiktokProviderMetadata, spread after this).
+ */
+export const TIKTOK_INHERITED_KEYS_TO_DROP = [
+  TIKTOK_SETTINGS_KEY,
+  TIKTOK_BY_CHANNEL_KEY,
+  "channelUsername",
+  "videoDurationSec",
+] as const;
 
 export interface TikTokMediaInput {
   fileType: string;
@@ -72,9 +81,23 @@ export function tiktokProviderMetadata(params: {
  * worker may set: a raw `tiktok` copy (from a client, or a legacy post) must
  * never stand in for this channel's own choice, and the other channels' blocks
  * are not this provider's business.
+ *
+ * ⚠️ The publish checkpoint (`tiktokPublish`) comes from the TARGET only. Post
+ * metadata is client-writable at create (`.passthrough()`), and a checkpoint
+ * there was inherited by every TikTok target without one of its own: the
+ * provider RESUMES a checkpoint before any other check, so a forged publish_id
+ * marked the post PUBLISHED with an earlier video, and the new one was never
+ * sent. The real checkpoint is written only through onCheckpoint, onto the
+ * target row.
  */
-export function withoutInheritedTikTokKeys(spread: Record<string, unknown>): Record<string, unknown> {
-  const out = { ...spread };
+export function tiktokInheritedMetadata(postMetadata: unknown, targetMetadata: unknown): Record<string, unknown> {
+  const post = isPlainObject(postMetadata) ? { ...postMetadata } : {};
+  delete post[TIKTOK_CHECKPOINT_KEY];
+  const out: Record<string, unknown> = { ...post, ...(isPlainObject(targetMetadata) ? targetMetadata : {}) };
   for (const k of TIKTOK_INHERITED_KEYS_TO_DROP) delete out[k];
   return out;
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === "object" && !Array.isArray(v);
 }

@@ -12,6 +12,9 @@ import {
   ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE,
   countOtherActiveJobsForTarget,
   formatPublishTiming,
+  planTikTokProcessingWait,
+  TIKTOK_PROCESSING_CEILING_MS,
+  TIKTOK_PROCESSING_WAIT_MESSAGE,
 } from "./publish-recovery";
 
 describe("shouldReapPublishing", () => {
@@ -433,5 +436,42 @@ describe("classifyError routes Meta THROTTLES to the rate-limit re-queue", () =>
 
   it("keeps our own pre-publish verdict out of the rate-limit branch", () => {
     expect(classifyError("Validation failed: Too many media attachments. Instagram allows max 10.")).toBe("unknown");
+  });
+});
+
+describe("planTikTokProcessingWait — a TikTok publish still processing is re-checked, never failed", () => {
+  const T0 = Date.parse("2026-10-28T10:00:00Z");
+  const started = new Date(T0).toISOString();
+
+  it("defers a re-check of the SAME publish while TikTok is within its processing window", () => {
+    const plan = planTikTokProcessingWait({ publishId: "v_pub_url~v2-1.1", checkpointCreatedAt: started, now: T0 + 20 * 60_000 });
+    expect(plan.action).toBe("defer");
+    if (plan.action === "defer") {
+      expect(plan.delayMs).toBeGreaterThanOrEqual(90_000);
+      expect(plan.delayMs).toBeLessThanOrEqual(180_000);
+    }
+  });
+
+  it("after the ceiling it is handed to a human as 'may still go live' — never FAILED, never re-posted", () => {
+    const plan = planTikTokProcessingWait({
+      publishId: "v_pub_url~v2-1.1",
+      checkpointCreatedAt: started,
+      now: T0 + TIKTOK_PROCESSING_CEILING_MS + 1,
+    });
+    expect(plan.action).toBe("park");
+    if (plan.action === "park") {
+      expect(plan.message).toMatch(/may still go live/);
+      expect(plan.message).toContain("v_pub_url~v2-1.1");
+      // Never routed back into a re-publishing branch if it is ever classified.
+      expect(classifyError(plan.message)).toBe("unknown");
+    }
+  });
+
+  it("an unreadable checkpoint time is treated as past the ceiling (a human looks)", () => {
+    expect(planTikTokProcessingWait({ publishId: "p", checkpointCreatedAt: "nonsense", now: T0 }).action).toBe("park");
+  });
+
+  it("the wait message is a classifier-neutral keep-alive (the watchdog matches it exactly)", () => {
+    expect(classifyError(TIKTOK_PROCESSING_WAIT_MESSAGE)).toBe("unknown");
   });
 });

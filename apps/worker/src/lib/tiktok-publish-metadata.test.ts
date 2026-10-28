@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   tiktokProviderMetadata,
   videoDurationFromMedia,
-  withoutInheritedTikTokKeys,
+  tiktokInheritedMetadata,
 } from "./tiktok-publish-metadata";
 
 const SETTINGS = {
@@ -48,11 +48,34 @@ describe("tiktokProviderMetadata", () => {
   });
 });
 
-describe("withoutInheritedTikTokKeys", () => {
-  it("drops the raw settings copy and the per-channel map, keeps the checkpoint and everything else", () => {
-    const spread = { tiktok: { privacyLevel: "PUBLIC_TO_EVERYONE" }, tiktokByChannel: {}, tiktokPublish: { publishId: "p" }, title: "t" };
-    expect(withoutInheritedTikTokKeys(spread)).toEqual({ tiktokPublish: { publishId: "p" }, title: "t" });
-    // Pure: the input is not mutated.
-    expect(spread.tiktok).toBeDefined();
+describe("tiktokInheritedMetadata", () => {
+  it("drops the raw settings copy and the per-channel map, keeps the TARGET's checkpoint and everything else", () => {
+    const post = { tiktok: { privacyLevel: "PUBLIC_TO_EVERYONE" }, tiktokByChannel: {}, title: "t" };
+    const target = { tiktokPublish: { publishId: "p" } };
+    expect(tiktokInheritedMetadata(post, target)).toEqual({ tiktokPublish: { publishId: "p" }, title: "t" });
+    // Pure: the inputs are not mutated.
+    expect(post.tiktok).toBeDefined();
+  });
+
+  it("never takes a checkpoint, handle or video length from POST metadata (a client can write it there)", () => {
+    // post.create's metadata is .passthrough(): a forged checkpoint there used to
+    // be inherited by every TikTok target without one of its own — the provider
+    // then RESUMED someone's earlier publish and marked this post PUBLISHED.
+    const forged = {
+      tiktokPublish: { publishId: "v_pub_url~v2-1.old", createdAt: "2026-10-01T00:00:00Z", source: "PULL_FROM_URL" },
+      channelUsername: "someone.else",
+      videoDurationSec: 1,
+      title: "t",
+    };
+    expect(tiktokInheritedMetadata(forged, null)).toEqual({ title: "t" });
+    // The target's own checkpoint (written only through onCheckpoint) still wins.
+    expect(tiktokInheritedMetadata(forged, { tiktokPublish: { publishId: "real" } })).toEqual({
+      title: "t",
+      tiktokPublish: { publishId: "real" },
+    });
+  });
+
+  it("drops a handle or video length on the TARGET too — only the worker supplies those", () => {
+    expect(tiktokInheritedMetadata({}, { channelUsername: "x", videoDurationSec: 2, keep: 1 })).toEqual({ keep: 1 });
   });
 });

@@ -1,6 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
 import type { SuperTextConfig } from "@postautomation/super-text";
-import { runPerChannelSuperText, type PerChannelDeps, type PerChannelState } from "./super-text-per-channel";
+import {
+  runPerChannelSuperText,
+  PER_CHANNEL_SUPER_TEXT_EXCLUDED_PLATFORMS,
+  type PerChannelDeps,
+  type PerChannelState,
+} from "./super-text-per-channel";
 
 const base: SuperTextConfig = {
   version: 1,
@@ -48,6 +53,38 @@ const input = (state?: PerChannelState) => ({
 });
 
 describe("runPerChannelSuperText", () => {
+  it("never gives a TikTok target an AI-written line: TikTok keeps the user's own burn", async () => {
+    // TikTok's guidelines: the user must have seen the exact content that is
+    // posted. An AI line burned into the video was never in the Compose preview.
+    expect(PER_CHANNEL_SUPER_TEXT_EXCLUDED_PLATFORMS.has("TIKTOK")).toBe(true);
+    const mixed = [
+      { id: "tk1", channel: { name: "TT one", username: null, platform: "TIKTOK" } },
+      { id: "ig1", channel: { name: "IG one", username: null, platform: "INSTAGRAM" } },
+      { id: "tk2", channel: { name: "TT two", username: null, platform: "TIKTOK" } },
+      { id: "fb1", channel: { name: "FB one", username: null, platform: "FACEBOOK" } },
+    ];
+    const { deps, written } = makeDeps({ loadTargets: async () => mixed });
+    const out = await runPerChannelSuperText(deps, input());
+    expect(written.map((w) => w.targetId)).toEqual(["fb1"]); // ig1 is on the base; TikTok untouched
+    expect(written.some((w) => w.targetId.startsWith("tk"))).toBe(false);
+    expect(out.targets).toBe(2);
+    // The prompt never names a TikTok channel.
+    const prompt = String((deps.generateText as any).mock.calls[0][0]);
+    expect(prompt).not.toMatch(/TT one|TT two|TIKTOK/);
+  });
+
+  it("with only TikTok (plus one other) nothing is generated at all", async () => {
+    const { deps, written } = makeDeps({
+      loadTargets: async () => [
+        { id: "tk1", channel: { name: "TT", username: null, platform: "TIKTOK" } },
+        { id: "ig1", channel: { name: "IG", username: null, platform: "INSTAGRAM" } },
+      ],
+    });
+    await runPerChannelSuperText(deps, input());
+    expect(deps.generateText).not.toHaveBeenCalled();
+    expect(written).toEqual([]);
+  });
+
   it("generates N-1 lines, burns each once, assigns round-robin with the base at 0", async () => {
     const { deps, written, persisted } = makeDeps();
     const out = await runPerChannelSuperText(deps, input());

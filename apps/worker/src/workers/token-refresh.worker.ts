@@ -2,6 +2,7 @@ import { Worker, type Job } from "bullmq";
 import { prisma } from "@postautomation/db";
 import { getSocialProvider, isMetaPlatform, resolveMetaCredentials } from "@postautomation/social";
 import { QUEUE_NAMES, type TokenRefreshJobData, createRedisConnection } from "@postautomation/queue";
+import { refreshChannelToken, prismaChannelTokenRefreshDeps } from "../lib/channel-token-refresh";
 
 export function createTokenRefreshWorker() {
   const worker = new Worker<TokenRefreshJobData>(
@@ -49,18 +50,17 @@ export function createTokenRefreshWorker() {
         scopes: [],
       };
 
-      const newTokens = await provider.refreshAccessToken(channel.refreshToken, config);
+      // The same race-safe refresh the publish worker uses (2026-10-28): re-read
+      // the row, reuse a token another refresher already produced, refresh with
+      // the FRESH refresh token, and write only if nothing changed underneath —
+      // never onto a channel disconnected meanwhile. TikTok rotates refresh
+      // tokens, and this cron used to write unconditionally.
+      const outcome = await refreshChannelToken(
+        channel.accessToken,
+        prismaChannelTokenRefreshDeps(prisma, channelId, (rt) => provider.refreshAccessToken(rt, config))
+      );
 
-      await prisma.channel.update({
-        where: { id: channelId },
-        data: {
-          accessToken: newTokens.accessToken,
-          refreshToken: newTokens.refreshToken ?? channel.refreshToken,
-          tokenExpiresAt: newTokens.expiresAt,
-        },
-      });
-
-      console.log(`[TokenRefresh] Successfully refreshed token for ${channelId}`);
+      console.log(`[TokenRefresh] Token for ${channelId}: ${outcome.kind}`);
     },
     {
       connection: createRedisConnection(),

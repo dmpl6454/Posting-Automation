@@ -189,6 +189,7 @@ const PLATFORM_LABELS: Record<string, string> = {
   INSTAGRAM: "Instagram",
   FACEBOOK: "Facebook",
   TWITTER: "X (Twitter)",
+  TIKTOK: "TikTok",
 };
 
 /**
@@ -240,9 +241,9 @@ const TIKTOK_MAX_EDGE = 4096;
  * TikTok keeps the FULL-QUALITY original, like Facebook (owner constraint: never
  * downgrade when the destination can take it). The rendition (1920 long edge,
  * H.264, ≤60fps) is sent only when the STORED probe proves the original is out
- * of TikTok's spec AND the rendition already exists. TikTok is never gated on a
- * rendition (planOptimizeGate has no TikTok cap): with no rendition — or no
- * probe — the original goes and TikTok judges it.
+ * of TikTok's spec AND the rendition already exists. TikTok waits on a rendition
+ * only above TIKTOK_MAX_VIDEO_BYTES (planOptimizeGate); below it, with no
+ * rendition — or no probe — the original goes and TikTok judges it.
  */
 function chooseTikTokPublishUrl(media: { url: string; fileType: string; fileSize?: number; metadata?: unknown }): string {
   if (!media.fileType.startsWith("video/")) return media.url;
@@ -276,8 +277,11 @@ export function planOptimizeGate(params: {
   now: number;
 }): OptimizeGateAction {
   const { platform, media, now } = params;
-  const cap = PLATFORM_ORIGINAL_CAPS[platform];
-  if (!OPTIMIZED_PLATFORMS.has(platform) || !cap) return { action: "proceed" };
+  // TikTok is gated ONLY above its own decimal "4 GB" (2026-10-28): uploads go
+  // up to 4 GiB, and an original in between was sent and refused after init.
+  // Below it TikTok keeps the full-quality original (chooseTikTokPublishUrl).
+  const cap = platform === "TIKTOK" ? TIKTOK_MAX_VIDEO_BYTES : PLATFORM_ORIGINAL_CAPS[platform];
+  if ((platform !== "TIKTOK" && !OPTIMIZED_PLATFORMS.has(platform)) || !cap) return { action: "proceed" };
   for (const m of media) {
     if (!m.fileType.startsWith("video/")) continue;
     if (m.fileSize <= cap) continue; // small enough — original is publishable

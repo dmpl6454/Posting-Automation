@@ -59,7 +59,21 @@ export async function refreshChannelToken(usedAccessToken: string, deps: Channel
   }
   if (!row.refreshToken) throw new Error("This channel has no refresh token — reconnect it.");
 
-  const refreshed = await deps.refresh(row.refreshToken);
+  let refreshed: OAuthTokens;
+  try {
+    refreshed = await deps.refresh(row.refreshToken);
+  } catch (err) {
+    // The race can also land BETWEEN our read and our refresh: another refresher
+    // spent the same rotating refresh token first, so ours fails invalid_grant —
+    // which the worker reads as a dead credential ("reconnect"). If the row now
+    // holds a newer, still-valid token, that refresher won: use its token.
+    const after = await deps.readRow().catch(() => null);
+    const winnerFresh = !!after?.tokenExpiresAt && after.tokenExpiresAt.getTime() > now() + STILL_VALID_MS;
+    if (after && after.accessToken && after.accessToken !== row.accessToken && after.accessToken !== usedAccessToken && winnerFresh) {
+      return { kind: "reused", accessToken: after.accessToken, refreshToken: after.refreshToken };
+    }
+    throw err;
+  }
   const data = {
     accessToken: refreshed.accessToken,
     refreshToken: refreshed.refreshToken ?? row.refreshToken,
@@ -76,5 +90,43 @@ export async function refreshChannelToken(usedAccessToken: string, deps: Channel
     kind: "lost_race",
     accessToken: refreshed.accessToken,
     refreshToken: winner?.refreshToken ?? data.refreshToken,
+  };
+}
+
+/**
+ * Prisma-backed deps. Reads the token columns with a DIRECT channel read (that
+ * is what decrypts them — a relation read returns ciphertext) and writes only
+ * while the row is unchanged AND still connected: a disconnect replaces the
+ * token with a placeholder and clears the refresh token but leaves
+ * tokenExpiresAt alone, so without `disconnectedAt: null` an in-flight refresh
+ * wrote live credentials back onto a channel the user had just disconnected.
+ */
+export function prismaChannelTokenRefreshDeps(
+  db: {
+    channel: {
+      findUnique(args: {
+        where: { id: string };
+        select: { accessToken: true; refreshToken: true; tokenExpiresAt: true };
+      }): Promise<TokenRow | null>;
+      updateMany(args: { where: Record<string, unknown>; data: Record<string, unknown> }): Promise<{ count: number }>;
+    };
+  },
+  channelId: string,
+  refresh: ChannelTokenRefreshDeps["refresh"]
+): ChannelTokenRefreshDeps {
+  return {
+    readRow: () =>
+      db.channel.findUnique({
+        where: { id: channelId },
+        select: { accessToken: true, refreshToken: true, tokenExpiresAt: true },
+      }),
+    writeIfUnchanged: async (expected, data) =>
+      (
+        await db.channel.updateMany({
+          where: { id: channelId, tokenExpiresAt: expected, disconnectedAt: null },
+          data,
+        })
+      ).count,
+    refresh,
   };
 }

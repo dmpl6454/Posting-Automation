@@ -645,6 +645,52 @@ export function decidePreClaimSkip(
 export const HEAVY_SLOT_WAIT_MESSAGE = "Waiting for a large-upload slot";
 // Parked while media-optimize produces the platform rendition (IG/FB >1GB).
 export const OPTIMIZE_WAIT_MESSAGE = "Optimizing video for this platform";
+/**
+ * Parked while TikTok processes a video it has already accepted (2026-10-28).
+ * Another watchdog keep-alive marker: the target is SCHEDULED with a delayed
+ * re-check job queued that RESUMES the checkpointed publish_id — it never posts
+ * the video again. Must stay classifier-neutral (classifyError → "unknown").
+ */
+export const TIKTOK_PROCESSING_WAIT_MESSAGE = "TikTok is still processing this video — checking on it again shortly";
+/**
+ * How long after TikTok accepted a video we keep re-checking it before handing
+ * it to a human. TikTok allows up to an hour to pull a file and says moderation
+ * can take longer; the watchdog's 12 h hard ceiling stays the backstop.
+ */
+export const TIKTOK_PROCESSING_CEILING_MS = 3 * 60 * 60_000;
+
+export type TikTokProcessingWaitPlan = { action: "defer"; delayMs: number } | { action: "park"; message: string };
+
+/**
+ * A TikTok publish was still processing when an attempt's poll budget ran out
+ * (TikTokStillProcessingError). Re-check the SAME publish later instead of
+ * spending a BullMQ attempt — three attempts used to run out on a big video and
+ * mark the target FAILED with "it will be checked again", which nothing did,
+ * while the video then went live. Past the ceiling, park it for a human as
+ * "may still go live": never FAILED (a user re-creating a "failed" post makes a
+ * permanent duplicate — TikTok has no delete API), never re-posted. Pure.
+ */
+export function planTikTokProcessingWait(input: {
+  publishId: string;
+  checkpointCreatedAt: string;
+  now: number;
+  /** Injected for tests; 0..1. */
+  random?: () => number;
+}): TikTokProcessingWaitPlan {
+  const started = Date.parse(input.checkpointCreatedAt);
+  if (!Number.isFinite(started) || input.now - started > TIKTOK_PROCESSING_CEILING_MS) {
+    const hours = Number.isFinite(started) ? Math.max(1, Math.round((input.now - started) / 3_600_000)) : null;
+    return {
+      action: "park",
+      message:
+        `TikTok was still processing this video${hours ? ` ${hours} hours after it was sent` : ""}, so whether it posted ` +
+        `can't be confirmed yet — it may still go live. Check the TikTok account before publishing it again. ` +
+        `(publish id ${input.publishId})`,
+    };
+  }
+  const r = (input.random ?? Math.random)();
+  return { action: "defer", delayMs: 90_000 + Math.floor(Math.max(0, Math.min(1, r)) * 90_000) };
+}
 
 /** Is this publish "heavy" — a streamed platform with media above the threshold? */
 export function isHeavyPublish(

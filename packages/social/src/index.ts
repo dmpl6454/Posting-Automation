@@ -199,6 +199,8 @@ export {
   TikTokProvider,
   TIKTOK_MESSAGES,
   TIKTOK_POLL_BUDGET_MS,
+  TikTokStillProcessingError,
+  isTikTokStillProcessingError,
   tiktokCannotPostMessage,
   tiktokInitRefusalMessage,
   tiktokFailedMessage,

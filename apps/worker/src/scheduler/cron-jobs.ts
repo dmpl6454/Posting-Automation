@@ -33,7 +33,7 @@ import {
 } from "@postautomation/social";
 import { runCelebrityDetectors } from "../workers/celebrity-detect.worker";
 import { createRedisConnection, enqueueScheduledPublishJobs, excludeExpiredStoriesWhere, shouldReconcileCheckpoints } from "@postautomation/queue";
-import { HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE } from "../lib/publish-recovery";
+import { HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE, TIKTOK_PROCESSING_WAIT_MESSAGE } from "../lib/publish-recovery";
 import { runPageSubscriptionBackfill } from "../lib/page-subscription-backfill";
 
 /**
@@ -1299,7 +1299,9 @@ export async function watchdogPublishingPosts() {
         t.status !== "PUBLISHED" && t.status !== "FAILED" && t.status !== "CANCELLED" &&
         (new Date(t.updatedAt) >= activeThreshold ||
           (t.status === "SCHEDULED" &&
-            (t.errorMessage === HEAVY_SLOT_WAIT_MESSAGE || t.errorMessage === OPTIMIZE_WAIT_MESSAGE)))
+            (t.errorMessage === HEAVY_SLOT_WAIT_MESSAGE ||
+              t.errorMessage === OPTIMIZE_WAIT_MESSAGE ||
+              t.errorMessage === TIKTOK_PROCESSING_WAIT_MESSAGE)))
     );
     const pastHardCeiling = new Date(post.updatedAt) < hardReapThreshold;
     if (hasActiveUpload && !pastHardCeiling) {

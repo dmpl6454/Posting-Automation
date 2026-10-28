@@ -1,10 +1,11 @@
 import { postFirstComment, type FirstCommentDeps } from "../lib/first-comment";
-import { refreshChannelToken, type ChannelTokenRefreshDeps } from "../lib/channel-token-refresh";
+import { refreshChannelToken, prismaChannelTokenRefreshDeps } from "../lib/channel-token-refresh";
 import { Worker, type Job, UnrecoverableError } from "bullmq";
 import { prisma } from "@postautomation/db";
 import {
   getSocialProvider,
   isAmbiguousPublishError,
+  isTikTokStillProcessingError,
   resolvePlatformCredentials,
 } from "@postautomation/social";
 import { QUEUE_NAMES, postPublishQueue, analyticsSyncQueue, type PostPublishJobData, createRedisConnection } from "@postautomation/queue";
@@ -15,12 +16,12 @@ import { planFacebookAnalyticsId, earlyVideoSyncDelayMs } from "../lib/fb-video-
 import { addLocalClaim, releaseLocalClaim, localClaimCount } from "../lib/local-claims";
 import { trackBackgroundTask } from "../lib/background-tasks";
 import { buildPublishTokens, publishIdempotencyKey } from "../lib/publish-tokens";
-import { markTargetFailed, markTargetAmbiguous, buildPublishClaimWhere, routePublishError, shouldPreflightReconcile, buildPublishNotifications, mediaRequiredReason, isSeedNoise, decidePreClaimSkip, isHeavyPublish, planHeavyDefer, HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE, classifyError, isDefiniteAuthFailure, releaseClaimAfterPrePublishError, decideClaimMiss, countOtherActiveJobsForTarget, ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE, formatPublishTiming, type PublishJobState } from "../lib/publish-recovery";
+import { markTargetFailed, markTargetAmbiguous, buildPublishClaimWhere, routePublishError, shouldPreflightReconcile, buildPublishNotifications, mediaRequiredReason, isSeedNoise, decidePreClaimSkip, isHeavyPublish, planHeavyDefer, HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE, TIKTOK_PROCESSING_WAIT_MESSAGE, planTikTokProcessingWait, classifyError, isDefiniteAuthFailure, releaseClaimAfterPrePublishError, decideClaimMiss, countOtherActiveJobsForTarget, ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE, formatPublishTiming, type PublishJobState } from "../lib/publish-recovery";
 import { collectPerTargetMediaIds, substitutePerTargetMedia } from "../lib/per-target-media";
 import { PRIORITY_RETRY, mediaOptimizeQueue, atAgeWindowsForFormat } from "@postautomation/queue";
 import { planOptimizeGate, choosePublishUrl, isCurrentRendition } from "../lib/media-optimize";
 import { buildSnapshotMetadata } from "../lib/snapshot-metadata";
-import { tiktokProviderMetadata, withoutInheritedTikTokKeys } from "../lib/tiktok-publish-metadata";
+import { tiktokProviderMetadata, tiktokInheritedMetadata } from "../lib/tiktok-publish-metadata";
 
 /**
  * How far back a PRE-FLIGHT reconciliation looks when a retry is about to
@@ -274,7 +275,9 @@ const PLATFORM_CHAR_LIMITS: Record<string, number> = {
   FACEBOOK: 63206,
   LINKEDIN: 3000,
   THREADS: 500,
-  TIKTOK: 2200,
+  // TIKTOK deliberately absent (2026-10-28): a TikTok caption over 2,200 is
+  // REFUSED by the provider, never cut here. A cut caption is text the user
+  // never saw, and it usually drops the trailing #ad disclosure.
   PINTEREST: 500,
   MASTODON: 500,
   BLUESKY: 300,
@@ -515,7 +518,7 @@ export function createPostPublishWorker() {
               // refresh tokens, e.g. TikTok). See lib/channel-token-refresh.ts.
               const refreshed = await refreshChannelToken(
                 accessToken,
-                channelTokenRefreshDeps(prisma, channelId, (rt) =>
+                prismaChannelTokenRefreshDeps(prisma, channelId, (rt) =>
                   provider.refreshAccessToken(rt, {
                     clientId,
                     clientSecret,
@@ -707,12 +710,17 @@ export function createPostPublishWorker() {
       // the probed video length — see lib/tiktok-publish-metadata.ts. Gated on the
       // platform so every other provider payload is byte-identical.
       const isTikTokTarget = platform === "TIKTOK";
-      const inheritedMetadata: Record<string, unknown> = {
-        ...((postTarget.post.metadata as object) || {}),
-        ...((postTarget.metadata as object) || {}),
-      };
+      // TikTok's spread comes from tiktokInheritedMetadata: its publish
+      // checkpoint is read from the TARGET only, never from client-writable post
+      // metadata. Every other platform keeps the original spread byte-for-byte.
+      const inheritedMetadata: Record<string, unknown> = isTikTokTarget
+        ? tiktokInheritedMetadata(postTarget.post.metadata, postTarget.metadata)
+        : {
+            ...((postTarget.post.metadata as object) || {}),
+            ...((postTarget.metadata as object) || {}),
+          };
       const providerMetadata: Record<string, unknown> = {
-        ...(isTikTokTarget ? withoutInheritedTikTokKeys(inheritedMetadata) : inheritedMetadata),
+        ...inheritedMetadata,
         ...(postTarget.format ? { format: postTarget.format } : {}),
         // Stories only: the provider builds the /stories/{username}/{id}/ URL when
         // Meta returns no permalink (`/p/{id}` is a 404 for a story). Gated on the
@@ -771,6 +779,43 @@ export function createPostPublishWorker() {
           console.warn(`[PostPublish] checkpoint write failed for target ${postTargetId}: ${err?.message}`);
           throw err;
         }
+      };
+
+      /**
+       * TikTok accepted the video and was still processing it when the provider's
+       * poll budget ran out (TikTokStillProcessingError). Re-check the SAME
+       * publish_id later: release the claim (SCHEDULED + a watchdog keep-alive
+       * message), then queue a delayed job — the same order as the optimize and
+       * heavy-slot defers. The job RESUMES from the checkpoint, so it can never
+       * post the video twice, and it never spends a BullMQ attempt (three
+       * attempts used to run out on a big video and leave a FAILED target whose
+       * video then went live). Past the ceiling it is handed to a human as "may
+       * still go live" — never FAILED.
+       */
+      const deferTikTokProcessingRecheck = async (err: { publishId: string; checkpointCreatedAt: string }) => {
+        const plan = planTikTokProcessingWait({
+          publishId: err.publishId,
+          checkpointCreatedAt: err.checkpointCreatedAt,
+          now: Date.now(),
+        });
+        if (plan.action === "park") {
+          await markTargetAmbiguous(prisma, postTargetId, plan.message);
+          console.warn(`[PostPublish] TikTok target ${postTargetId} still processing past the ceiling — parked for a human check`);
+          throw new UnrecoverableError(plan.message);
+        }
+        await prisma.postTarget.update({
+          where: { id: postTargetId },
+          data: { status: "SCHEDULED", errorMessage: TIKTOK_PROCESSING_WAIT_MESSAGE },
+        });
+        await postPublishQueue.add(`retry-tiktokwait-${postTargetId}-${Date.now()}`, job.data, {
+          delay: plan.delayMs,
+          priority: PRIORITY_RETRY,
+          attempts: 3,
+          backoff: { type: "exponential", delay: 60_000 },
+        });
+        console.log(
+          `[PostPublish] TikTok still processing ${err.publishId} — re-checking ${postTargetId} in ${Math.round(plan.delayMs / 1000)}s`
+        );
       };
 
       // Meta-ready video prep for IG/FB (2026-09-16). Measured on prod: a
@@ -1158,6 +1203,12 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
           // untouched so BullMQ stops and nothing re-classifies it.
           throw publishErr;
         }
+        if (isTikTokStillProcessingError(publishErr)) {
+          // TikTok accepted the video and is still processing it. Not a failure,
+          // and the checkpoint guarantees the re-check RESUMES this publish.
+          await deferTikTokProcessingRecheck(publishErr);
+          return;
+        }
 
         const errMsg = publishErr.message || String(publishErr);
         const errType = classifyError(errMsg);
@@ -1220,7 +1271,7 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
               // spent refresh token (which would read as "reconnect").
               const refreshed = await refreshChannelToken(
                 accessToken,
-                channelTokenRefreshDeps(prisma, channelId, (rt) =>
+                prismaChannelTokenRefreshDeps(prisma, channelId, (rt) =>
                   provider.refreshAccessToken(rt, {
                     clientId,
                     clientSecret,
@@ -1252,6 +1303,21 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
               await markTargetAmbiguous(prisma, postTargetId, reason);
               console.warn(`[PostPublish] target ${postTargetId} parked as AMBIGUOUS after token-refresh re-publish (job ${job.id})`);
               throw new UnrecoverableError(reason);
+            }
+            if (refreshSucceeded && isTikTokStillProcessingError(refreshRetryErr)) {
+              await deferTikTokProcessingRecheck(refreshRetryErr);
+              return;
+            }
+            // The refresh WORKED and the re-publish failed on its own terms (2026-10-28).
+            // Keep that error as it is: a terminal refusal (PublishRefusedError
+            // carries the UnrecoverableError name) must stay terminal, and its
+            // actionable text must not become "refresh failed … reconnect". This
+            // used to wrap EVERY such error in a plain retryable Error — so a
+            // TikTok file_format_check_failed was retried, and on the final attempt
+            // reported as an expired token.
+            if (refreshSucceeded) {
+              await markTargetFailed(prisma, postTargetId, refreshRetryErr?.message ?? errMsg);
+              throw refreshRetryErr;
             }
             // Mark FAILED before throwing — otherwise the target stays at PUBLISHING,
             // the BullMQ retry's claim guard skips it as a "duplicate" (claim.count === 0),
@@ -1740,25 +1806,3 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
   return worker;
 }
 
-/** Prisma-backed deps for refreshChannelToken (direct channel reads decrypt tokens). */
-function channelTokenRefreshDeps(
-  db: typeof prisma,
-  channelId: string,
-  refresh: ChannelTokenRefreshDeps["refresh"]
-): ChannelTokenRefreshDeps {
-  return {
-    readRow: () =>
-      db.channel.findUnique({
-        where: { id: channelId },
-        select: { accessToken: true, refreshToken: true, tokenExpiresAt: true },
-      }),
-    writeIfUnchanged: async (expected, data) =>
-      (
-        await db.channel.updateMany({
-          where: { id: channelId, tokenExpiresAt: expected },
-          data,
-        })
-      ).count,
-    refresh,
-  };
-}
