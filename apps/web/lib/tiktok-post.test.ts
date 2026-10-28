@@ -178,7 +178,7 @@ describe("tiktokBlockReason — settings", () => {
   });
   it("the video must not exceed the creator's max duration", () => {
     expect(gate({ media: { ...oneVideo, durationSec: 601 }, creators: { tt1: ready({ maxVideoPostDurationSec: 600 }) } })).toMatch(
-      /up to 600s/
+      /up to 10:00\./
     );
     expect(gate({ media: { ...oneVideo, durationSec: 600 }, creators: { tt1: ready({ maxVideoPostDurationSec: 600 }) } })).toBeNull();
     // Unknown duration or unknown max: not blocked here (the server re-checks).

@@ -95,6 +95,9 @@ export const TIKTOK_CREATOR_RATE_LIMIT_TEXT =
   "TikTok's limit for checking this account was reached — checking again shortly.";
 /** AI "unique caption per channel" never writes a TikTok caption (the user must have seen the exact text). */
 export const TIKTOK_AI_CAPTIONS_ALL_TIKTOK_TEXT = "TikTok keeps the caption you wrote.";
+/** TikTok plus ONE other channel: the server fans out only across two or more non-TikTok channels. */
+export const TIKTOK_AI_CAPTIONS_ONE_OTHER_TEXT =
+  "TikTok keeps the caption you wrote, which leaves one channel — AI captions need two or more non-TikTok channels.";
 export const TIKTOK_AI_CAPTIONS_MIXED_TEXT =
   "TikTok channels keep the caption you wrote — AI captions are only written for the other channels.";
 /** Screens that cannot choose TikTok settings point to the one that can. */

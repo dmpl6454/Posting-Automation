@@ -224,12 +224,13 @@ describe("AI unique captions never write for TikTok (2026-10-28 review)", () => 
   it("counts only non-TikTok channels and does not request a fan-out without one", () => {
     expect(compose).toMatch(/const aiCaptionChannelCount = selectedNonTikTokCount\(selectedChannels, selectedTikTokIds\);/);
     expect(compose).toMatch(
-      /uniqueCaptions && selectedChannels\.length > 1 && aiCaptionChannelCount > 0 && \{ uniqueCaptions: true \}/
+      // > 1: the server fans out only across two or more non-TikTok channels.
+      /uniqueCaptions && selectedChannels\.length > 1 && aiCaptionChannelCount > 1 && \{ uniqueCaptions: true \}/
     );
   });
   it("only TikTok selected ⇒ no toggle, a note instead; a mix ⇒ the toggle plus a note", () => {
-    expect(compose).toMatch(/\{aiCaptionChannelCount === 0 \? \(\s*<div className="border-t pt-3" data-testid="unique-captions-tiktok-only">/);
-    expect(compose).toMatch(/\{TIKTOK_AI_CAPTIONS_ALL_TIKTOK_TEXT\}/);
+    expect(compose).toMatch(/\{aiCaptionChannelCount < 2 \? \(\s*<div className="border-t pt-3" data-testid="unique-captions-tiktok-only">/);
+    expect(compose).toMatch(/aiCaptionChannelCount === 0 \? TIKTOK_AI_CAPTIONS_ALL_TIKTOK_TEXT : TIKTOK_AI_CAPTIONS_ONE_OTHER_TEXT/);
     expect(compose).toMatch(/\{selectedTikTokIds\.length > 0 && \(\s*<p[^>]*data-testid="unique-captions-tiktok-note">\s*\{TIKTOK_AI_CAPTIONS_MIXED_TEXT\}/);
     expect(lib).toMatch(/TIKTOK_AI_CAPTIONS_ALL_TIKTOK_TEXT = "TikTok keeps the caption you wrote\."/);
     // The manual-captions hint mentions AI captions only when they apply.

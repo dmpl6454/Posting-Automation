@@ -98,6 +98,7 @@ import {
   tiktokProcessingNoticeApplies,
   TIKTOK_PROCESSING_NOTICE,
   TIKTOK_AI_CAPTIONS_ALL_TIKTOK_TEXT,
+  TIKTOK_AI_CAPTIONS_ONE_OTHER_TEXT,
   TIKTOK_AI_CAPTIONS_MIXED_TEXT,
 } from "~/lib/tiktok-post";
 import {
@@ -1504,7 +1505,7 @@ ${content}`;
         // Never for a story — it displays no caption to vary.
         // Not when every selected channel is TikTok: the fan-out never writes a
         // TikTok caption, so there would be nothing for it to do.
-        ...(!isStoryMode && !isArticleMode && uniqueCaptions && selectedChannels.length > 1 && aiCaptionChannelCount > 0 && { uniqueCaptions: true }),
+        ...(!isStoryMode && !isArticleMode && uniqueCaptions && selectedChannels.length > 1 && aiCaptionChannelCount > 1 && { uniqueCaptions: true }),
         // Per-channel super text: only meaningful when a strip is actually
         // configured on a video AND the post fans out to >1 channel.
         ...(uniqueSuperText && selectedChannels.length > 1 && Object.keys(superTextByMediaId).length > 0 && { uniqueSuperText: true }),
@@ -1658,7 +1659,9 @@ ${content}`;
   // Selected channels the AI "unique caption per channel" fan-out can write
   // for — never TikTok (the user must have seen the exact text TikTok gets).
   const aiCaptionChannelCount = selectedNonTikTokCount(selectedChannels, selectedTikTokIds);
-  const aiCaptionsActive = uniqueCaptions && aiCaptionChannelCount > 0;
+  // The server fans out only across 2+ non-TikTok channels (TikTok keeps the
+  // caption the user wrote), so one other channel beside TikTok has nothing to vary.
+  const aiCaptionsActive = uniqueCaptions && aiCaptionChannelCount > 1;
   // This video's length, only once it was measured from THIS video.
   const videoLengthState = videoLengthStatus(firstVideoUrl, videoProbe);
   const tiktokDurationSec = probedDurationFor(firstVideoUrl, videoProbe, videoDurationSec);
@@ -3048,10 +3051,12 @@ ${content}`;
                 {/* The fan-out never writes a TikTok caption (the user must have
                     seen the exact text TikTok gets). With only TikTok selected
                     the toggle has nothing to do, so it is not offered. */}
-                {aiCaptionChannelCount === 0 ? (
+                {aiCaptionChannelCount < 2 ? (
                   <div className="border-t pt-3" data-testid="unique-captions-tiktok-only">
                     <p className="text-sm">Unique caption per channel (AI)</p>
-                    <p className="mt-0.5 text-xs text-muted-foreground">{TIKTOK_AI_CAPTIONS_ALL_TIKTOK_TEXT}</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {aiCaptionChannelCount === 0 ? TIKTOK_AI_CAPTIONS_ALL_TIKTOK_TEXT : TIKTOK_AI_CAPTIONS_ONE_OTHER_TEXT}
+                    </p>
                   </div>
                 ) : (
                   <div className="flex items-center justify-between gap-3 border-t pt-3">
