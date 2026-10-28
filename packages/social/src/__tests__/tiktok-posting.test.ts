@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
-  fitTikTokTitle,
   TIKTOK_TITLE_MAX,
+  tiktokCaptionTooLong,
+  tiktokCaptionFingerprint,
+  formatTikTokDuration,
   planTikTokChunks,
   tiktokContentRange,
   TIKTOK_MIN_CHUNK,
@@ -23,17 +25,24 @@ import {
 
 const MB = 1024 * 1024;
 
-describe("fitTikTokTitle", () => {
-  it("leaves a caption within the limit untouched", () => {
-    expect(fitTikTokTitle("hello")).toBe("hello");
-    const exact = "x".repeat(TIKTOK_TITLE_MAX);
-    expect(fitTikTokTitle(exact)).toBe(exact);
+describe("caption length", () => {
+  // TikTok counts the title in UTF-16 units, which is what String#length counts.
+  it("allows up to 2,200 UTF-16 units and refuses one more — never cuts", () => {
+    expect(tiktokCaptionTooLong("x".repeat(TIKTOK_TITLE_MAX))).toBe(false);
+    expect(tiktokCaptionTooLong("x".repeat(TIKTOK_TITLE_MAX + 1))).toBe(true);
+    expect(tiktokCaptionTooLong("x".repeat(TIKTOK_TITLE_MAX - 1) + "😀")).toBe(true); // 2,201 units
+    expect(tiktokCaptionTooLong("")).toBe(false);
+    expect(tiktokCaptionTooLong(null)).toBe(false);
   });
-  it("cuts to 2,200 UTF-16 units and never splits an emoji", () => {
-    const long = "x".repeat(TIKTOK_TITLE_MAX - 1) + "😀" + "tail";
-    const out = fitTikTokTitle(long);
-    expect(out.length).toBeLessThanOrEqual(TIKTOK_TITLE_MAX);
-    expect(out).toBe("x".repeat(TIKTOK_TITLE_MAX - 1)); // the emoji would straddle the limit
+});
+
+describe("tiktokCaptionFingerprint", () => {
+  it("is stable for the same caption and differs when it changes", () => {
+    const a = tiktokCaptionFingerprint("Launch day #ad");
+    expect(a).toMatch(/^[0-9a-f]{16}$/);
+    expect(tiktokCaptionFingerprint("Launch day #ad")).toBe(a);
+    expect(tiktokCaptionFingerprint("Launch day")).not.toBe(a);
+    expect(tiktokCaptionFingerprint("")).toBe(tiktokCaptionFingerprint(undefined));
   });
 });
 
@@ -165,7 +174,29 @@ describe("validateTikTokSettings", () => {
     expect(validateTikTokSettings(settings({ allowDuet: true }), creator)).toMatch(/Duet/);
   });
   it("refuses a video longer than the creator may post", () => {
-    expect(validateTikTokSettings(settings(), creator, { videoDurationSec: 601 })).toMatch(/up to 600s/);
+    expect(validateTikTokSettings(settings(), creator, { videoDurationSec: 601 })).toBe(
+      "This video is 10:01 long; this TikTok account can post videos up to 10:00."
+    );
+  });
+  it("allows the few milliseconds a video exported at exactly the limit runs over", () => {
+    // A 3:00 export commonly probes at 180.02–180.06 s (audio runs long).
+    const c = { ...creator, maxVideoPostDurationSec: 180 };
+    expect(validateTikTokSettings(settings(), c, { videoDurationSec: 180.04 })).toBeNull();
+    expect(validateTikTokSettings(settings(), c, { videoDurationSec: 180.5 })).toBeNull();
+    // Over the tolerance, the message never prints the limit as the video's own length.
+    expect(validateTikTokSettings(settings(), c, { videoDurationSec: 180.6 })).toBe(
+      "This video is 3:01 long; this TikTok account can post videos up to 3:00."
+    );
+  });
+});
+
+describe("formatTikTokDuration", () => {
+  it("prints seconds under a minute and m:ss above, rounding the video UP", () => {
+    expect(formatTikTokDuration(45)).toBe("45s");
+    expect(formatTikTokDuration(59.2)).toBe("1:00");
+    expect(formatTikTokDuration(60)).toBe("1:00");
+    expect(formatTikTokDuration(610)).toBe("10:10");
+    expect(formatTikTokDuration(180.04)).toBe("3:01");
   });
 });
 
@@ -219,6 +250,14 @@ describe("checkpoint + per-channel settings", () => {
     expect(readTikTokCheckpoint({ tiktokPublish: { ...ok.tiktokPublish, publishId: "bad id with spaces" } })).toBeNull();
     expect(readTikTokCheckpoint({ tiktokPublish: { ...ok.tiktokPublish, source: "OTHER" } })).toBeNull();
     expect(readTikTokCheckpoint({})).toBeNull();
+  });
+  it("keeps the operator-clear mark and caption fingerprint, dropping malformed ones", () => {
+    const base = { publishId: "v_pub_url~v2-1.7340912345", createdAt: "2026-10-28T10:00:00.000Z", source: "PULL_FROM_URL" };
+    const full = { ...base, clearedAt: "2026-10-28T11:00:00.000Z", captionHash: "0123456789abcdef", username: "creator.one" };
+    expect(readTikTokCheckpoint({ tiktokPublish: full })).toEqual(full);
+    expect(
+      readTikTokCheckpoint({ tiktokPublish: { ...base, clearedAt: "yesterday", captionHash: "<script>", username: "bad name/.." } })
+    ).toEqual(base);
   });
   it("reads one channel's settings and never a prototype key", () => {
     const md = { tiktokByChannel: { ch1: { privacyLevel: "FOLLOWER_OF_CREATOR", allowComment: true } } };

@@ -17,11 +17,13 @@ import {
   TIKTOK_CHECKPOINT_KEY,
   TIKTOK_MAX_VIDEO_BYTES,
   classifyTikTokStatus,
-  fitTikTokTitle,
   parseCreatorInfo,
   planTikTokChunks,
   readTikTokCheckpoint,
   readTikTokSettings,
+  tiktokCaptionFingerprint,
+  tiktokCaptionTooLong,
+  TIKTOK_CAPTION_TOO_LONG_MESSAGE,
   tiktokContentRange,
   tiktokInteractionFlags,
   tiktokPostUrl,
@@ -75,20 +77,32 @@ const MEDIA_RANGE_TIMEOUT_MS = 60_000;
 
 /** status/fetch allows 30 req/min per token; every 5 s leaves room for two posts at once. */
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
-/** How long one attempt waits on TikTok; a retry resumes from the checkpoint. */
+
+/** Thrown by exchangeCodeForTokens; the OAuth callback maps it to `tiktok_publish_scope_missing`. */
+export const TIKTOK_PUBLISH_SCOPE_MISSING =
+  "TikTok sign-in: the permission to post videos (video.publish) was not granted.";
+
 /**
  * How long ONE attempt waits for TikTok to finish processing. Kept under the
  * worker's 270 s graceful-shutdown budget so a deploy never kills a poll midway
  * (an interrupted job is parked as "Needs check" by the reaper — and checking a
  * TikTok account from India needs a VPN). Longer processing is fine: the attempt
- * ends with a retryable "still processing", and the retry resumes the SAME
- * publish_id from the checkpoint instead of posting again.
+ * ends with a TikTokStillProcessingError, and the worker re-checks the SAME
+ * publish_id from the checkpoint later instead of posting again.
  */
-/** Thrown by exchangeCodeForTokens; the OAuth callback maps it to `tiktok_publish_scope_missing`. */
-export const TIKTOK_PUBLISH_SCOPE_MISSING =
-  "TikTok sign-in: the permission to post videos (video.publish) was not granted.";
-
 export const TIKTOK_POLL_BUDGET_MS = 3 * 60_000;
+/**
+ * A PUBLIC post's id only appears once TikTok's moderation passes ("usually
+ * within one minute"). After PUBLISH_COMPLETE we keep reading this much longer
+ * (inside the attempt's budget) so the post page links the video itself.
+ */
+export const TIKTOK_PUBLIC_ID_WAIT_MS = 90_000;
+/**
+ * A FILE_UPLOAD's upload_url lives one hour. A checkpoint older than that whose
+ * status is still PROCESSING_UPLOAD can never complete (our chunks can no longer
+ * arrive), so it is dropped and the video posted afresh. The margin covers clock skew.
+ */
+export const TIKTOK_DEAD_UPLOAD_AFTER_MS = 75 * 60_000;
 const CHUNK_ATTEMPTS = 3;
 /** onProgress at least this often while waiting, so the watchdog sees a live target. */
 const PROGRESS_HEARTBEAT_MS = 30_000;
@@ -98,6 +112,14 @@ const VIDEO_EXT_RE = /\.(mp4|m4v|mov|webm)(?:[?#]|$)/i;
 
 /** fail_reason values TikTok itself documents as retryable. */
 const RETRYABLE_FAIL_REASONS = new Set(["internal", "video_pull_failed"]);
+/**
+ * A FAILED publish may be posted again on resume for these reasons, whatever the
+ * caption: TikTok says nothing went live, and the cause (a transient fault, or
+ * access the creator has since restored by reconnecting) is not the content.
+ * Every OTHER reason — spam_risk*, *_check_failed, publish_cancelled… — is one
+ * TikTok says not to retry: it is refused again unless the caption changed.
+ */
+const REINIT_ON_RESUME_REASONS = new Set([...RETRYABLE_FAIL_REASONS, "auth_removed"]);
 
 /**
  * Every fixed message this provider throws. Exported so the worker's
@@ -133,6 +155,32 @@ export const TIKTOK_MESSAGES = {
   initUnconfirmed:
     "TikTok may have accepted this video, but its reply was lost. Check the TikTok account before publishing again — the video may already be posted.",
 } as const;
+
+/**
+ * TikTok accepted the video and is still processing it when this attempt's poll
+ * budget ran out. NOT a failure and NOT ambiguous: the publish_id is
+ * checkpointed, so the worker re-queues a later check of THAT publish (it never
+ * spends a BullMQ attempt on it). Duck-typed via `tiktokStillProcessing` — under
+ * pnpm's isolated layout the worker may load another copy of this module, so
+ * never test it with instanceof.
+ */
+export class TikTokStillProcessingError extends Error {
+  readonly tiktokStillProcessing = true as const;
+  constructor(
+    readonly publishId: string,
+    /** When the publish was started (the checkpoint's createdAt). */
+    readonly checkpointCreatedAt: string
+  ) {
+    super(TIKTOK_MESSAGES.stillProcessing);
+    this.name = "TikTokStillProcessingError";
+  }
+}
+
+export function isTikTokStillProcessingError(
+  err: unknown
+): err is { message: string; publishId: string; checkpointCreatedAt: string; tiktokStillProcessing: true } {
+  return !!err && typeof err === "object" && (err as { tiktokStillProcessing?: unknown }).tiktokStillProcessing === true;
+}
 
 /** A TikTok error/fail code, or "unknown" — never arbitrary text. */
 function safeCode(v: unknown): string {
@@ -271,7 +319,13 @@ type PollOutcome =
   | { kind: "complete"; postIds: string[] }
   | { kind: "inbox" }
   | { kind: "failed"; reason: string }
-  | { kind: "budget" };
+  /** The budget ran out; `lastStatus` is the last processing status TikTok reported. */
+  | { kind: "budget"; lastStatus: string | null }
+  /** A definite answer that TikTok can no longer report on this publish (invalid_publish_id…). */
+  | { kind: "unknown"; code: string };
+
+/** What a resume does with the checkpointed publish's state. */
+type ResumeDecision = "finish" | "refuse" | "reinit" | "dead-upload";
 
 /** How a non-ok init reply is to be read. Definite refusals are thrown instead. */
 type InitFailure = "unconfirmed" | "fallback";
@@ -427,7 +481,11 @@ export class TikTokProvider extends SocialProvider {
     const userAvatar = typeof user.avatar_url === "string" && /^https:\/\//.test(user.avatar_url) ? user.avatar_url : undefined;
 
     if (creatorRes.status !== "fulfilled" || !creatorRes.value.ok) {
-      return { id: openId, name: displayName, username: displayName || undefined, avatar: userAvatar };
+      // NO handle rather than a wrong one: a display name ("Acme Bakery") stored
+      // as the @handle builds a broken link — or another account's ("Nike").
+      // creator_info answers can't-post codes with HTTP 200, and a rate limit is
+      // common right after posting, so this is reachable on a normal reconnect.
+      return { id: openId, name: displayName, username: undefined, avatar: userAvatar };
     }
     const c = dataOf(creatorRes.value);
     const nickname = typeof c.creator_nickname === "string" ? c.creator_nickname : "";
@@ -475,15 +533,20 @@ export class TikTokProvider extends SocialProvider {
     const settings = readTikTokSettings(metadata);
     const progress = this.progressReporter(payload.onProgress);
     const channelUsername = typeof metadata.channelUsername === "string" ? metadata.channelUsername : null;
+    const caption = payload.content ?? "";
+    const awaitPublicId = settings?.privacyLevel === "PUBLIC_TO_EVERYONE";
 
     // (c) RESUME FIRST. A checkpoint means an earlier attempt's init succeeded,
     // so the video may be posting or posted — its fate is settled before any
     // refusal below ("Nothing was sent to TikTok" would be false here).
     const checkpoint = readTikTokCheckpoint(metadata);
     if (checkpoint) {
-      const outcome = await this.poll(tokens, checkpoint.publishId, { immediate: true, progress, size: null, base: 10 });
-      // FAILED: TikTok says nothing went live, so a NEW init is allowed (below).
-      if (outcome.kind !== "failed") return this.finish(outcome, checkpoint.publishId, settings, channelUsername, progress);
+      const outcome = await this.poll(tokens, checkpoint.publishId, { immediate: true, progress, size: null, base: 10, awaitPublicId });
+      const decision = this.resumeDecision(outcome, checkpoint, caption);
+      if (decision === "finish") return this.finish(outcome, checkpoint, settings, checkpoint.username ?? channelUsername, progress);
+      if (decision === "refuse") throw this.failedError((outcome as { reason: string }).reason);
+      if (decision === "dead-upload") await this.clearCheckpoint(payload);
+      // "reinit" / "dead-upload": nothing of this publish can go live — post afresh below.
     }
 
     // (a) No defaults: TikTok's guidelines forbid guessing a privacy level.
@@ -494,6 +557,11 @@ export class TikTokProvider extends SocialProvider {
     const videoUrl = this.singleVideoUrl(payload);
     if (!videoUrl) {
       throw new PublishRefusedError(TIKTOK_MESSAGES.videoRequired, { reason: "rejected", platform: "TIKTOK" });
+    }
+    // (b2) Over TikTok's title limit: REFUSED, never cut — a cut caption is text
+    // the user never saw, and it usually drops the trailing #ad disclosure.
+    if (tiktokCaptionTooLong(caption)) {
+      throw new PublishRefusedError(TIKTOK_CAPTION_TOO_LONG_MESSAGE, { reason: "rejected", platform: "TIKTOK" });
     }
 
     // (d) Fresh creator_info before every post (TikTok requires it).
@@ -517,7 +585,7 @@ export class TikTokProvider extends SocialProvider {
     await progress.report(5);
 
     const postInfo: Record<string, unknown> = {
-      ...(payload.content ? { title: fitTikTokTitle(payload.content) } : {}),
+      ...(caption ? { title: caption } : {}),
       privacy_level: settings.privacyLevel,
       ...tiktokInteractionFlags(settings),
       brand_content_toggle: settings.brandContent,
@@ -525,19 +593,62 @@ export class TikTokProvider extends SocialProvider {
       is_aigc: settings.isAigc,
     };
     const username = info.creator.username || channelUsername;
+    const checkpointBase = {
+      captionHash: tiktokCaptionFingerprint(caption),
+      ...(username ? { username } : {}),
+    };
 
     // (e) PULL_FROM_URL first — TikTok: don't FILE_UPLOAD what is already on your servers.
     const pull = await this.initPull(tokens, postInfo, videoUrl);
     if (pull.kind === "fallback") {
       // (f) url_ownership_unverified is refused before any write — a streamed FILE_UPLOAD is safe.
-      return this.publishByUpload(tokens, payload, postInfo, videoUrl, settings, username, progress);
+      return this.publishByUpload(tokens, payload, postInfo, videoUrl, settings, username, checkpointBase, progress, awaitPublicId);
     }
 
     // (g) TikTok is already pulling: the checkpoint is the only way a retry finds this publish.
-    await this.savePullCheckpoint(payload, pull.publishId);
+    const cp: TikTokPublishCheckpoint = {
+      publishId: pull.publishId,
+      createdAt: new Date().toISOString(),
+      source: "PULL_FROM_URL",
+      ...checkpointBase,
+    };
+    await this.savePullCheckpoint(payload, cp);
     await progress.report(10);
-    const outcome = await this.poll(tokens, pull.publishId, { immediate: false, progress, size: null, base: 10 });
-    return this.finish(outcome, pull.publishId, settings, username, progress);
+    const outcome = await this.poll(tokens, pull.publishId, { immediate: false, progress, size: null, base: 10, awaitPublicId });
+    return this.finish(outcome, cp, settings, username, progress);
+  }
+
+  /**
+   * What to do with a checkpointed publish, from its state now:
+   *  - COMPLETE / inbox ⇒ adopt it ("finish");
+   *  - still processing ⇒ "finish" (which raises TikTokStillProcessingError) —
+   *    EXCEPT a FILE_UPLOAD stuck in PROCESSING_UPLOAD past the upload_url's
+   *    lifetime, which can never complete ("dead-upload");
+   *  - FAILED ⇒ "reinit" only for reasons that are not about the content, or
+   *    when the caption changed since; otherwise "refuse" (TikTok says those must
+   *    not be retried, and every init spends one of the creator's daily posts);
+   *  - TikTok can't report on it ⇒ ambiguous ("finish" raises it), unless the
+   *    operator already looked and cleared it ("It didn't publish") ⇒ "reinit".
+   */
+  private resumeDecision(outcome: PollOutcome, cp: TikTokPublishCheckpoint, caption: string): ResumeDecision {
+    switch (outcome.kind) {
+      case "complete":
+      case "inbox":
+        return "finish";
+      case "budget": {
+        const age = Date.now() - Date.parse(cp.createdAt);
+        const deadUpload =
+          cp.source === "FILE_UPLOAD" && outcome.lastStatus === "PROCESSING_UPLOAD" && age > TIKTOK_DEAD_UPLOAD_AFTER_MS;
+        return deadUpload ? "dead-upload" : "finish";
+      }
+      case "unknown":
+        return cp.clearedAt ? "reinit" : "finish";
+      case "failed": {
+        if (REINIT_ON_RESUME_REASONS.has(outcome.reason)) return "reinit";
+        const captionChanged = !!cp.captionHash && cp.captionHash !== tiktokCaptionFingerprint(caption);
+        return captionChanged ? "reinit" : "refuse";
+      }
+    }
   }
 
   /** TikTok has no API to look a post up; the resume lives in publishPost, from the checkpoint. */
@@ -644,8 +755,8 @@ export class TikTokProvider extends SocialProvider {
   }
 
   /** (g) for PULL_FROM_URL: TikTok is already pulling, so a lost checkpoint is ambiguous. */
-  private async savePullCheckpoint(payload: SocialPostPayload, publishId: string): Promise<void> {
-    const cp: TikTokPublishCheckpoint = { publishId, createdAt: new Date().toISOString(), source: "PULL_FROM_URL" };
+  private async savePullCheckpoint(payload: SocialPostPayload, cp: TikTokPublishCheckpoint): Promise<void> {
+    const publishId = cp.publishId;
     try {
       await payload.onCheckpoint?.({ [TIKTOK_CHECKPOINT_KEY]: cp });
     } catch (err) {
@@ -676,16 +787,23 @@ export class TikTokProvider extends SocialProvider {
 
   private async finish(
     outcome: PollOutcome,
-    publishId: string,
+    cp: TikTokPublishCheckpoint,
     settings: TikTokPostSettings | null,
     username: string | null,
     progress: ProgressReporter
   ): Promise<SocialPostResult> {
-    // Safe as a plain retryable error: the checkpoint makes the retry RESUME this publish.
-    if (outcome.kind === "budget") throw new Error(TIKTOK_MESSAGES.stillProcessing);
+    const publishId = cp.publishId;
+    // Not a failure: the worker re-checks THIS publish_id later, from the checkpoint.
+    if (outcome.kind === "budget") throw new TikTokStillProcessingError(publishId, cp.createdAt);
+    if (outcome.kind === "unknown") {
+      throw new AmbiguousPublishError(statusUnknownMessage(outcome.code, publishId), { platform: "TIKTOK" });
+    }
     if (outcome.kind === "failed") throw this.failedError(outcome.reason);
     const postId = outcome.kind === "complete" ? outcome.postIds[0] ?? null : null;
     await progress.report(100);
+    // The checkpoint as it should stay on the PUBLISHED target (the operator's
+    // clear mark, if any, is spent).
+    const { clearedAt: _spent, ...keep } = cp;
     return {
       platformPostId: postId ?? publishId,
       // A private post (or one still in moderation) has no public id: link the profile.
@@ -698,6 +816,11 @@ export class TikTokProvider extends SocialProvider {
         ...(outcome.kind === "inbox"
           ? { note: "TikTok sent this video to the creator's TikTok inbox; it goes live once they finish posting it in the TikTok app." }
           : {}),
+        // The PUBLISHED write replaces the target's metadata with this object.
+        // Keeping the checkpoint means a target that is ever armed again (a
+        // channel edit, a stray Retry) RESUMES — and adopts — this publish
+        // instead of posting the video a second time.
+        [TIKTOK_CHECKPOINT_KEY]: keep,
       },
     };
   }
@@ -714,10 +837,13 @@ export class TikTokProvider extends SocialProvider {
   private async poll(
     tokens: OAuthTokens,
     publishId: string,
-    opts: { immediate: boolean; progress: ProgressReporter; size: number | null; base: number }
+    opts: { immediate: boolean; progress: ProgressReporter; size: number | null; base: number; awaitPublicId?: boolean }
   ): Promise<PollOutcome> {
     const maxReads = Math.max(1, Math.floor(this.pollBudgetMs / this.pollIntervalMs));
     const deadline = Date.now() + this.pollBudgetMs;
+    let lastStatus: string | null = null;
+    // Reads left to wait for a public post's id after PUBLISH_COMPLETE (null = not waiting yet).
+    let idReadsLeft: number | null = null;
     for (let i = 0; i < maxReads; i++) {
       if (i > 0 || !opts.immediate) await this.sleep(this.pollIntervalMs);
       if (i > 0 && Date.now() > deadline) break;
@@ -734,15 +860,24 @@ export class TikTokProvider extends SocialProvider {
         const code = reply.json === null || reply.code === null ? null : safeCode(reply.code);
         if (code === "access_token_invalid") throw new Error(TIKTOK_MESSAGES.tokenExpired); // the refreshed retry resumes
         const definite = code !== null && reply.status < 500 && code !== "rate_limit_exceeded" && code !== "internal_error";
-        if (definite) throw new AmbiguousPublishError(statusUnknownMessage(code, publishId), { platform: "TIKTOK" });
+        if (definite) return { kind: "unknown", code: code! };
         await opts.progress.heartbeat();
         continue;
       }
 
       const state = classifyTikTokStatus(reply.text);
-      if (state.state === "complete") return { kind: "complete", postIds: state.postIds };
+      if (state.state === "complete") {
+        // A public post's id arrives once moderation passes — usually within a
+        // minute. Wait a little for it so the post links the video, not the profile.
+        if (state.postIds.length > 0 || !opts.awaitPublicId) return { kind: "complete", postIds: state.postIds };
+        if (idReadsLeft === null) idReadsLeft = Math.ceil(TIKTOK_PUBLIC_ID_WAIT_MS / this.pollIntervalMs);
+        if (idReadsLeft-- <= 0) return { kind: "complete", postIds: [] };
+        await opts.progress.heartbeat();
+        continue;
+      }
       if (state.state === "inbox") return { kind: "inbox" };
       if (state.state === "failed") return { kind: "failed", reason: safeCode(state.failReason) };
+      if (state.state === "processing") lastStatus = state.status;
       const d = dataOf(reply);
       const moved = Number(d.downloaded_bytes ?? d.uploaded_bytes);
       if (opts.size && Number.isFinite(moved) && moved > 0) {
@@ -751,7 +886,9 @@ export class TikTokProvider extends SocialProvider {
         await opts.progress.heartbeat();
       }
     }
-    return { kind: "budget" };
+    // The post went live while we were waiting for its public id: a success.
+    if (idReadsLeft !== null) return { kind: "complete", postIds: [] };
+    return { kind: "budget", lastStatus };
   }
 
   /* ─────────────────────────────── FILE_UPLOAD ────────────────────────────── */
@@ -763,7 +900,9 @@ export class TikTokProvider extends SocialProvider {
     videoUrl: string,
     settings: TikTokPostSettings,
     username: string | null,
-    progress: ProgressReporter
+    checkpointBase: Pick<TikTokPublishCheckpoint, "captionHash" | "username">,
+    progress: ProgressReporter,
+    awaitPublicId: boolean
   ): Promise<SocialPostResult> {
     // Size + type WITHOUT downloading the video.
     let size: number;
@@ -781,7 +920,7 @@ export class TikTokProvider extends SocialProvider {
     } catch {
       throw new PublishRefusedError(TIKTOK_MESSAGES.tooBig, { reason: "rejected", platform: "TIKTOK" });
     }
-    const contentType = this.chunkContentType(payload.mediaTypes?.[0], headType, videoUrl);
+    const contentType = this.chunkContentType(headType, videoUrl, payload.mediaTypes?.[0]);
 
     // FILE_UPLOAD init only opens an upload task: TikTok posts nothing until
     // every chunk has arrived, and the upload_url exists only in this reply. A
@@ -818,8 +957,13 @@ export class TikTokProvider extends SocialProvider {
     // (g) Checkpoint before the first chunk: once the last chunk lands TikTok
     // posts, and a crash after that must resume, not upload again. Nothing has
     // been sent yet, so failing to record it is safe to abort.
+    const cp: TikTokPublishCheckpoint = {
+      publishId,
+      createdAt: new Date().toISOString(),
+      source: "FILE_UPLOAD",
+      ...checkpointBase,
+    };
     try {
-      const cp: TikTokPublishCheckpoint = { publishId, createdAt: new Date().toISOString(), source: "FILE_UPLOAD" };
       await payload.onCheckpoint?.({ [TIKTOK_CHECKPOINT_KEY]: cp });
     } catch {
       throw new Error(TIKTOK_MESSAGES.checkpointUnsaved);
@@ -828,17 +972,29 @@ export class TikTokProvider extends SocialProvider {
 
     await this.uploadChunks(payload, videoUrl, uploadUrl, plan, contentType, progress);
 
-    const outcome = await this.poll(tokens, publishId, { immediate: false, progress, size: plan.videoSize, base: 80 });
-    return this.finish(outcome, publishId, settings, username, progress);
+    const outcome = await this.poll(tokens, publishId, { immediate: false, progress, size: plan.videoSize, base: 80, awaitPublicId });
+    return this.finish(outcome, cp, settings, username, progress);
   }
 
-  private chunkContentType(declared: string | undefined, headType: string, url: string): string {
+  /**
+   * The Content-Type of the file ACTUALLY being uploaded: storage's own answer
+   * for that URL first, then its extension, and only then the type the worker
+   * declared — which is the ORIGINAL's, while the URL may be the MP4 rendition
+   * (a WebM original's chunks used to go up labelled video/webm over MP4 bytes).
+   */
+  private chunkContentType(headType: string, url: string, declared: string | undefined): string {
     const pick = (t: string | undefined) => {
       const v = (t ?? "").split(";")[0]!.trim().toLowerCase();
       return (SUPPORTED_VIDEO_TYPES as readonly string[]).includes(v) ? v : null;
     };
-    const fromExt = /\.mov(?:[?#]|$)/i.test(url) ? "video/quicktime" : /\.webm(?:[?#]|$)/i.test(url) ? "video/webm" : null;
-    return pick(declared) ?? pick(headType) ?? fromExt ?? "video/mp4";
+    const fromExt = /\.mov(?:[?#]|$)/i.test(url)
+      ? "video/quicktime"
+      : /\.webm(?:[?#]|$)/i.test(url)
+        ? "video/webm"
+        : /\.(mp4|m4v)(?:[?#]|$)/i.test(url)
+          ? "video/mp4"
+          : null;
+    return pick(headType) ?? fromExt ?? pick(declared) ?? "video/mp4";
   }
 
   /**

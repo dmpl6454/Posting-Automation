@@ -39,6 +39,23 @@ export interface TikTokPublishCheckpoint {
   /** ISO time the init succeeded. */
   createdAt: string;
   source: "PULL_FROM_URL" | "FILE_UPLOAD";
+  /**
+   * Set by post.clearPublishAmbiguity ("It didn't publish") instead of deleting
+   * the checkpoint. A retry still RESUMES this publish — PROCESSING waits,
+   * COMPLETE is adopted — and only a definite "TikTok can't report on this
+   * publish_id" answer is then read as permission to post again. Deleting the
+   * checkpoint made Retry post a second copy of a video that was still
+   * processing (TikTok has no delete API).
+   */
+  clearedAt?: string;
+  /**
+   * tiktokCaptionFingerprint of the caption sent at init. A publish TikTok
+   * FAILED for a reason it says must not be retried (spam_risk_text, a
+   * *_check_failed, …) is only posted again once the caption has changed.
+   */
+  captionHash?: string;
+  /** The creator's @handle at init (fresh creator_info), so a resumed publish can still link the video. */
+  username?: string;
 }
 
 export function readTikTokCheckpoint(metadata: unknown): TikTokPublishCheckpoint | null {
@@ -49,7 +66,12 @@ export function readTikTokCheckpoint(metadata: unknown): TikTokPublishCheckpoint
   if (typeof c.publishId !== "string" || !/^[\w~.-]{1,200}$/.test(c.publishId)) return null;
   if (typeof c.createdAt !== "string" || Number.isNaN(Date.parse(c.createdAt))) return null;
   if (c.source !== "PULL_FROM_URL" && c.source !== "FILE_UPLOAD") return null;
-  return { publishId: c.publishId, createdAt: c.createdAt, source: c.source };
+  const out: TikTokPublishCheckpoint = { publishId: c.publishId, createdAt: c.createdAt, source: c.source };
+  // Optional fields: a malformed one is dropped, never trusted, and never voids the checkpoint.
+  if (typeof c.clearedAt === "string" && !Number.isNaN(Date.parse(c.clearedAt))) out.clearedAt = c.clearedAt;
+  if (typeof c.captionHash === "string" && /^[0-9a-f]{8,64}$/.test(c.captionHash)) out.captionHash = c.captionHash;
+  if (typeof c.username === "string" && TIKTOK_USERNAME_RE.test(c.username)) out.username = c.username;
+  return out;
 }
 
 /** Read one channel's settings out of `Post.metadata.tiktokByChannel`. */
@@ -97,12 +119,32 @@ export function isTikTokPrivacyLevel(v: unknown): v is TikTokPrivacyLevel {
 export const TIKTOK_TITLE_MAX = 2200;
 
 /** Cut a caption to TikTok's limit without splitting a surrogate pair (an emoji). */
-export function fitTikTokTitle(text: string): string {
-  if (text.length <= TIKTOK_TITLE_MAX) return text;
-  let cut = TIKTOK_TITLE_MAX;
-  const code = text.charCodeAt(cut - 1);
-  if (code >= 0xd800 && code <= 0xdbff) cut -= 1; // high surrogate left alone: drop it
-  return text.slice(0, cut);
+/**
+ * True when a caption is over TikTok's title limit. It is REFUSED, never cut: a
+ * cut caption is text the user never saw, and the cut usually lands on the
+ * trailing #ad disclosure. Counted in UTF-16 units, like TikTok (String#length).
+ */
+export function tiktokCaptionTooLong(text: string | null | undefined): boolean {
+  return (text ?? "").length > TIKTOK_TITLE_MAX;
+}
+
+export const TIKTOK_CAPTION_TOO_LONG_MESSAGE =
+  "This TikTok caption is longer than TikTok's 2,200 characters. Shorten it, then publish again. Nothing was sent to TikTok.";
+
+/**
+ * A short, stable fingerprint of a caption (64-bit FNV-1a, hex). Change
+ * detection only — NOT a security hash. Pure JS so the browser can import this
+ * module.
+ */
+export function tiktokCaptionFingerprint(text: string | null | undefined): string {
+  let h = 0xcbf29ce484222325n;
+  const prime = 0x100000001b3n;
+  const mask = 0xffffffffffffffffn;
+  for (const ch of text ?? "") {
+    h ^= BigInt(ch.codePointAt(0)!);
+    h = (h * prime) & mask;
+  }
+  return h.toString(16).padStart(16, "0");
 }
 
 /* ─────────────────────────── FILE_UPLOAD chunking ─────────────────────────── */
@@ -269,10 +311,25 @@ export function validateTikTokSettings(
     return `This TikTok account has ${turnedOff.join(", ")} turned off in its TikTok settings, so they can't be allowed on this post.`;
   }
   const dur = opts.videoDurationSec;
-  if (dur != null && creator.maxVideoPostDurationSec != null && dur > creator.maxVideoPostDurationSec) {
-    return `This video is ${Math.round(dur)}s long; this TikTok account can post videos up to ${creator.maxVideoPostDurationSec}s.`;
+  const max = creator.maxVideoPostDurationSec;
+  if (dur != null && max != null && dur > max + TIKTOK_DURATION_TOLERANCE_SEC) {
+    return `This video is ${formatTikTokDuration(dur)} long; this TikTok account can post videos up to ${formatTikTokDuration(max)}.`;
   }
   return null;
+}
+
+/**
+ * A video exported at exactly the limit commonly probes a few hundredths of a
+ * second over it (the audio track runs long). Same allowance as the server's
+ * 10-minute check in packages/api/src/lib/media-constraints.ts.
+ */
+export const TIKTOK_DURATION_TOLERANCE_SEC = 0.5;
+
+/** "45s" under a minute, "m:ss" above — rounded UP, so an over-limit video never prints as the limit. */
+export function formatTikTokDuration(sec: number): string {
+  const s = Math.ceil(sec - 1e-9);
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
 /** The post_info flags TikTok expects, from the user's choices. */

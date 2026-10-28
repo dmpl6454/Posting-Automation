@@ -1,8 +1,14 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { TikTokProvider, TIKTOK_MESSAGES } from "../providers/tiktok.provider";
+import { TikTokProvider, TIKTOK_MESSAGES, isTikTokStillProcessingError } from "../providers/tiktok.provider";
 import { isAmbiguousPublishError } from "../utils/ambiguous-publish";
 import { isPublishRefusedError } from "../utils/publish-refused";
-import { planTikTokChunks, tiktokContentRange, type TikTokPostSettings } from "../utils/tiktok-posting";
+import {
+  planTikTokChunks,
+  tiktokContentRange,
+  tiktokCaptionFingerprint,
+  TIKTOK_CAPTION_TOO_LONG_MESSAGE,
+  type TikTokPostSettings,
+} from "../utils/tiktok-posting";
 
 /**
  * TikTok Direct Post publishing (2026-10-28).
@@ -232,6 +238,8 @@ describe("TikTok publish — happy path (PULL_FROM_URL)", () => {
     expect(cp.publishId).toBe(PUBLISH_ID);
     expect(cp.source).toBe("PULL_FROM_URL");
     expect(Number.isNaN(Date.parse(cp.createdAt))).toBe(false);
+    expect(cp.captionHash).toBe(tiktokCaptionFingerprint("this will be a funny #cat video"));
+    expect(cp.username).toBe("creator.one");
 
     const status = tiktokCalls(calls, "/post/publish/status/fetch/");
     expect(status).toHaveLength(3);
@@ -240,7 +248,16 @@ describe("TikTok publish — happy path (PULL_FROM_URL)", () => {
     expect(res).toEqual({
       platformPostId: BIG_ID,
       url: `https://www.tiktok.com/@creator.one/video/${BIG_ID}`,
-      metadata: { publishId: PUBLISH_ID, postId: BIG_ID, privacyLevel: "PUBLIC_TO_EVERYONE", status: "PUBLISH_COMPLETE" },
+      metadata: {
+        publishId: PUBLISH_ID,
+        postId: BIG_ID,
+        privacyLevel: "PUBLIC_TO_EVERYONE",
+        status: "PUBLISH_COMPLETE",
+        // The PUBLISHED write replaces the target's metadata with this; keeping the
+        // checkpoint means a target that is ever re-armed RESUMES (and adopts)
+        // this publish instead of posting the video again.
+        tiktokPublish: cp,
+      },
     });
 
     // The video is never fetched by us on the PULL path.
@@ -266,10 +283,19 @@ describe("TikTok publish — happy path (PULL_FROM_URL)", () => {
     expect(tiktokCalls(calls, "/post/publish/video/init/")[0]!.json.post_info).not.toHaveProperty("title");
   });
 
-  it("a long caption is cut to 2,200 UTF-16 units without splitting an emoji", async () => {
+  it("a caption of exactly 2,200 UTF-16 units is sent whole", async () => {
     const { calls } = mockServer({});
-    await provider().publishPost(TOKENS, payload({ content: "x".repeat(2199) + "😀tail" }).payload);
-    expect(tiktokCalls(calls, "/post/publish/video/init/")[0]!.json.post_info.title).toBe("x".repeat(2199));
+    const caption = "x".repeat(2198) + "😀"; // 2,200 units
+    await provider().publishPost(TOKENS, payload({ content: caption }).payload);
+    expect(tiktokCalls(calls, "/post/publish/video/init/")[0]!.json.post_info.title).toBe(caption);
+  });
+
+  it("a longer caption is REFUSED before anything is sent — never cut (a cut drops the #ad disclosure)", async () => {
+    const { calls } = mockServer({});
+    const err = await failWith(provider().publishPost(TOKENS, payload({ content: "x".repeat(2195) + " #brand #ad" }).payload));
+    expect(isPublishRefusedError(err)).toBe(true);
+    expect(err.message).toBe(TIKTOK_CAPTION_TOO_LONG_MESSAGE);
+    expect(calls).toHaveLength(0);
   });
 
   it("SEND_TO_USER_INBOX is a success with a note", async () => {
@@ -394,7 +420,7 @@ describe("TikTok publish — refused before anything is sent", () => {
     mockServer({ creator: () => ok({ ...CREATOR, max_video_post_duration_sec: 60 }) });
     const err = await failWith(provider().publishPost(TOKENS, payload({ metadata: { videoDurationSec: 90.4 } }).payload));
     expect(isPublishRefusedError(err)).toBe(true);
-    expect(err.message).toContain("up to 60s");
+    expect(err.message).toBe("This video is 1:31 long; this TikTok account can post videos up to 1:00.");
   });
 });
 
@@ -553,12 +579,179 @@ describe("TikTok publish — resume from a checkpoint", () => {
   });
 });
 
+describe("TikTok publish — resume decisions (review fixes, 2026-10-28)", () => {
+  const cp = (over: Record<string, unknown> = {}) => ({
+    tiktokPublish: {
+      publishId: PUBLISH_ID,
+      createdAt: new Date(Date.now() - 60_000).toISOString(),
+      source: "PULL_FROM_URL",
+      captionHash: tiktokCaptionFingerprint("this will be a funny #cat video"),
+      ...over,
+    },
+  });
+
+  it.each(["spam_risk_text", "file_format_check_failed", "duration_check_failed", "publish_cancelled"])(
+    "FAILED (%s, which TikTok says not to retry) with the SAME caption ⇒ refused again, no new init",
+    async (reason) => {
+      const { counts } = mockServer({ status: () => failed(reason) });
+      const err = await failWith(provider().publishPost(TOKENS, payload({ metadata: cp() }).payload));
+      expect(isPublishRefusedError(err)).toBe(true);
+      expect(err.message).toContain(reason);
+      expect(counts.init ?? 0).toBe(0);
+      expect(counts.creator ?? 0).toBe(0);
+    }
+  );
+
+  it("a checkpoint with no caption fingerprint is treated as the same caption (refused)", async () => {
+    const { counts } = mockServer({ status: () => failed("spam_risk_text") });
+    const err = await failWith(provider().publishPost(TOKENS, payload({ metadata: cp({ captionHash: undefined }) }).payload));
+    expect(isPublishRefusedError(err)).toBe(true);
+    expect(counts.init ?? 0).toBe(0);
+  });
+
+  it("FAILED (spam_risk_text) after the user CHANGED the caption ⇒ a new init is allowed", async () => {
+    let n = 0;
+    const { counts } = mockServer({
+      status: () => (++n === 1 ? failed("spam_risk_text") : complete()),
+      init: () => ok({ publish_id: "v_pub_url~v2-1.second" }),
+    });
+    const t = payload({ metadata: cp(), content: "a rewritten caption" });
+    const res = await provider().publishPost(TOKENS, t.payload);
+    expect(counts.init).toBe(1);
+    expect(res.metadata).toMatchObject({ publishId: "v_pub_url~v2-1.second" });
+  });
+
+  it("FAILED auth_removed ⇒ a new init is allowed (after a reconnect nothing was ever posted)", async () => {
+    let n = 0;
+    const { counts } = mockServer({ status: () => (++n === 1 ? failed("auth_removed") : complete()) });
+    await provider().publishPost(TOKENS, payload({ metadata: cp() }).payload);
+    expect(counts.init).toBe(1);
+  });
+
+  describe("a checkpoint the operator cleared (\"It didn't publish\")", () => {
+    const cleared = () => cp({ clearedAt: new Date().toISOString() });
+
+    it.each(["invalid_publish_id", "token_not_authorized_for_specified_publish_id"])(
+      "TikTok can't report on it (%s) ⇒ the operator's word stands: a fresh init",
+      async (code) => {
+        let n = 0;
+        const { counts } = mockServer({
+          status: () => (++n === 1 ? fail(400, code) : complete()),
+          init: () => ok({ publish_id: "v_pub_url~v2-1.second" }),
+        });
+        const t = payload({ metadata: cleared() });
+        const res = await provider().publishPost(TOKENS, t.payload);
+        expect(counts.creator).toBe(1);
+        expect(counts.init).toBe(1);
+        const fresh = (t.checkpoints.at(-1) as any).tiktokPublish;
+        expect(fresh.publishId).toBe("v_pub_url~v2-1.second");
+        expect(fresh.clearedAt).toBeUndefined();
+        expect(res.platformPostId).toBe(BIG_ID);
+      }
+    );
+
+    it("still PROCESSING ⇒ waits on it (never posts a second copy)", async () => {
+      const { counts } = mockServer({ status: () => processing() });
+      const err = await failWith(provider({ pollBudgetMs: 30_000 }).publishPost(TOKENS, payload({ metadata: cleared() }).payload));
+      expect(isTikTokStillProcessingError(err)).toBe(true);
+      expect(counts.init ?? 0).toBe(0);
+    });
+
+    it("COMPLETE ⇒ adopted (it was live after all)", async () => {
+      const { counts } = mockServer({});
+      const res = await provider().publishPost(TOKENS, payload({ metadata: cleared() }).payload);
+      expect(counts.init ?? 0).toBe(0);
+      expect(res.platformPostId).toBe(BIG_ID);
+    });
+  });
+
+  it("an UNcleared checkpoint TikTok can't report on is still ambiguous (no init)", async () => {
+    const { counts } = mockServer({ status: () => fail(400, "invalid_publish_id") });
+    const err = await failWith(provider().publishPost(TOKENS, payload({ metadata: cp() }).payload));
+    expect(isAmbiguousPublishError(err)).toBe(true);
+    expect(counts.init ?? 0).toBe(0);
+  });
+
+  it("a resumed publish links the video with the @handle saved at init", async () => {
+    mockServer({});
+    const t = payload({ metadata: cp({ username: "saved.handle" }) });
+    delete t.metadata.channelUsername;
+    const res = await provider().publishPost(TOKENS, t.payload);
+    expect(res.url).toBe(`https://www.tiktok.com/@saved.handle/video/${BIG_ID}`);
+  });
+
+  describe("a FILE_UPLOAD whose upload can never finish", () => {
+    const upload = (ageMs: number) => cp({ source: "FILE_UPLOAD", createdAt: new Date(Date.now() - ageMs).toISOString() });
+    const stuck = () => statusRaw(`{"status":"PROCESSING_UPLOAD"}`);
+
+    it("older than TikTok's 1-hour upload_url and still PROCESSING_UPLOAD ⇒ cleared and posted afresh", async () => {
+      let n = 0;
+      const { counts } = mockServer({
+        status: () => (++n <= 6 ? stuck() : complete()),
+        init: () => ok({ publish_id: "v_pub_url~v2-1.fresh" }),
+      });
+      const t = payload({ metadata: upload(2 * 3600_000) });
+      const res = await provider({ pollBudgetMs: 30_000 }).publishPost(TOKENS, t.payload);
+      expect(counts.init).toBe(1);
+      expect(t.checkpoints[0]).toEqual({ tiktokPublish: null });
+      expect(res.metadata).toMatchObject({ publishId: "v_pub_url~v2-1.fresh" });
+    });
+
+    it("a recent one is waited on, not abandoned", async () => {
+      const { counts } = mockServer({ status: () => stuck() });
+      const err = await failWith(provider({ pollBudgetMs: 30_000 }).publishPost(TOKENS, payload({ metadata: upload(10 * 60_000) }).payload));
+      expect(isTikTokStillProcessingError(err)).toBe(true);
+      expect(counts.init ?? 0).toBe(0);
+    });
+  });
+});
+
+describe("TikTok publish — still processing is a distinct, resumable outcome", () => {
+  it("carries the publish id and checkpoint time, and is neither ambiguous nor refused", async () => {
+    mockServer({ status: () => processing() });
+    const t = payload();
+    const err = await failWith(provider({ pollBudgetMs: 30_000 }).publishPost(TOKENS, t.payload));
+    expect(isTikTokStillProcessingError(err)).toBe(true);
+    expect((err as any).publishId).toBe(PUBLISH_ID);
+    expect((err as any).checkpointCreatedAt).toBe((t.checkpoints[0] as any).tiktokPublish.createdAt);
+    expect(isAmbiguousPublishError(err)).toBe(false);
+    expect(isPublishRefusedError(err)).toBe(false);
+  });
+});
+
+describe("TikTok publish — a public post's id arrives after moderation", () => {
+  it("PUBLISH_COMPLETE without the id yet ⇒ keeps reading briefly and links the real video", async () => {
+    let n = 0;
+    const { counts } = mockServer({ status: () => (++n < 4 ? complete("[]") : complete()) });
+    const res = await provider().publishPost(TOKENS, payload().payload);
+    expect(counts.status).toBe(4);
+    expect(res.platformPostId).toBe(BIG_ID);
+    expect(res.url).toBe(`https://www.tiktok.com/@creator.one/video/${BIG_ID}`);
+  });
+
+  it("the id never comes ⇒ still a SUCCESS with the publish id after the short wait (never 'still processing')", async () => {
+    const { counts } = mockServer({ status: () => complete("[]") });
+    const res = await provider().publishPost(TOKENS, payload().payload);
+    expect(res.platformPostId).toBe(PUBLISH_ID);
+    expect(res.metadata).toMatchObject({ status: "PUBLISH_COMPLETE", postId: null });
+    // 1 read that saw COMPLETE + up to 90 s more at 5 s.
+    expect(counts.status).toBe(19);
+  });
+
+  it("a private post does not wait for an id it will never get", async () => {
+    const { counts } = mockServer({ status: () => complete("[]") });
+    await provider().publishPost(TOKENS, payload({ metadata: { tiktok: { ...SETTINGS, privacyLevel: "SELF_ONLY" } } }).payload);
+    expect(counts.status).toBe(1);
+  });
+});
+
 describe("TikTok publish — polling", () => {
   it("still processing at the end of the budget ⇒ plain retryable (the checkpoint makes the retry resume)", async () => {
     const { counts } = mockServer({ status: () => processing() });
     const t = payload();
     const err = await failWith(provider().publishPost(TOKENS, t.payload));
     expect(err.message).toBe(TIKTOK_MESSAGES.stillProcessing);
+    expect(isTikTokStillProcessingError(err)).toBe(true);
     expect(isAmbiguousPublishError(err)).toBe(false);
     expect(isPublishRefusedError(err)).toBe(false);
     // 8 minutes at 5 s = 96 reads, not one more.
@@ -671,6 +864,21 @@ describe("TikTok publish — FILE_UPLOAD fallback (url_ownership_unverified)", (
     // Progress rose through the upload and finished at 100.
     expect(t.progress.at(-1)).toBe(100);
     for (let i = 1; i < t.progress.length; i++) expect(t.progress[i]!).toBeGreaterThanOrEqual(t.progress[i - 1]!);
+  });
+
+  it("chunks carry the type of the file actually sent (an MP4 rendition of a WebM original goes up as video/mp4)", async () => {
+    let initN = 0;
+    const { calls } = mockServer({
+      mediaSize: SIZE,
+      mediaType: "video/mp4",
+      init: () =>
+        ++initN === 1 ? fail(403, "url_ownership_unverified") : ok({ publish_id: "v_pub_file~v2-1.43", upload_url: UPLOAD_URL }),
+    });
+    // The worker declares the ORIGINAL's type; the URL is the rendition.
+    await provider().publishPost(TOKENS, payload({ mediaTypes: ["video/webm"] }).payload);
+    const puts = calls.filter((c) => c.method === "PUT");
+    expect(puts.length).toBeGreaterThan(0);
+    expect(puts.every((p) => p.headers["content-type"] === "video/mp4")).toBe(true);
   });
 
   it("progress follows TikTok's uploaded_bytes while it processes the upload", async () => {

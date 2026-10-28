@@ -186,10 +186,16 @@ describe("getProfile", () => {
     expect(calls.every((c) => c.hasSignal)).toBe(true);
   });
 
-  it("falls back to display_name only when creator_info fails", async () => {
-    mockFetch((url) => (url.includes("/creator_info/") ? fail(401, "scope_not_authorized") : ok({ user })));
+  it.each([
+    ["a can't-post code (HTTP 200)", () => json(200, { data: {}, error: { code: "spam_risk_too_many_posts", message: "", log_id: "x" } })],
+    ["a rate limit", () => fail(429, "rate_limit_exceeded")],
+    ["scope_not_authorized", () => fail(401, "scope_not_authorized")],
+  ])("when creator_info is refused (%s) the display name is the NAME, never the @handle", async (_n, refused) => {
+    // A display name stored as the handle builds a broken link ("@Acme Bakery")
+    // or another account's ("@Nike").
+    mockFetch((url) => (url.includes("/creator_info/") ? (refused as () => Response)() : ok({ user })));
     const p = await new TikTokProvider().getProfile({ accessToken: "act.x" });
-    expect(p).toEqual({ id: "open-123", name: "Creator Display", username: "Creator Display", avatar: "https://p16.tiktokcdn.com/user.jpg" });
+    expect(p).toEqual({ id: "open-123", name: "Creator Display", username: undefined, avatar: "https://p16.tiktokcdn.com/user.jpg" });
   });
 
   it("does not show a display name as a handle when creator_info answered without one", async () => {
