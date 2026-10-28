@@ -274,3 +274,35 @@ describe("post page — existing TikTok targets (2026-10-28 review)", () => {
     expect(firstReturn).toBeGreaterThan(hooks);
   });
 });
+
+describe("screens that cannot choose TikTok settings never target TikTok (2026-10-28 review)", () => {
+  const repurpose = read("apps/web/components/content-agent/RepurposeTab.tsx");
+  const bulk = read("apps/web/components/content-agent/BulkTab.tsx");
+
+  it("Repurpose 'Create Drafts': TikTok channels are not offered (Select All too), with a note", () => {
+    expect(repurpose).toMatch(/const draftableChannels = excludeTikTokChannels\(activeChannels\);/);
+    expect(repurpose).toMatch(/const filteredChannels = draftableChannels\.filter\(/);
+    expect(repurpose).toMatch(
+      /selectedChannelIds\.length === draftableChannels\.length \? \[\] : draftableChannels\.map\(\(c: any\) => c\.id\)/
+    );
+    expect(repurpose).toMatch(/\{hasTikTokChannels && \(\s*<p[^>]*data-testid="repurpose-tiktok-note">\s*\{TIKTOK_POSTS_IN_COMPOSE_TEXT\}/);
+    // The only setters of the Create Drafts selection are the picker and Select All.
+    expect(repurpose.match(/setSelectedChannelIds\(/g) ?? []).toHaveLength(2);
+    expect(repurpose).not.toMatch(/activeChannels\.map\(\(c: any\) => c\.id\)/);
+  });
+  it("CSV import: TikTok channels are not offered, with a note", () => {
+    expect(bulk).toMatch(/const importChannels = excludeTikTokChannels\(channels as any\[\] \| undefined\);/);
+    expect(bulk).toMatch(/\{importChannels\.map\(\(ch: any\) => \(/);
+    expect(bulk).not.toMatch(/channels\?\.map\(/);
+    expect(bulk).toMatch(/\{hasTikTokChannels && \(\s*<p[^>]*data-testid="csv-import-tiktok-note">\s*\{TIKTOK_CSV_IMPORT_TEXT\}/);
+  });
+  it("Bulk Schedule: TikTok's consent line next to Schedule when a selected post would send a TikTok target", () => {
+    expect(bulk).toMatch(/armableTikTokTargets\(p\.targets \?\? \[\]\)\.map\(\(t: any\) => \(\{ postMetadata: p\.metadata, channelId: t\.channelId as string \}\)\)/);
+    expect(bulk).toMatch(/\.filter\(\(p: any\) => selectedIds\.has\(p\.id\)\)/);
+    const button = bulk.indexOf("Schedule Selected ({selectedIds.size})");
+    const consent = bulk.indexOf('data-testid="bulk-tiktok-consent"');
+    expect(button).toBeGreaterThan(-1);
+    expect(consent).toBeGreaterThan(button);
+    expect(consent - button).toBeLessThan(400);
+  });
+});

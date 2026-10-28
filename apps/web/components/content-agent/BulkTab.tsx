@@ -2,6 +2,12 @@
 
 import { humanizeError } from "~/lib/errors";
 import { bulkScheduleToast } from "~/lib/bulk-schedule-toast";
+import {
+  armableTikTokTargets,
+  excludeTikTokChannels,
+  storedTikTokConsentLine,
+  TIKTOK_CSV_IMPORT_TEXT,
+} from "~/lib/tiktok-post";
 
 import { useState, useRef, useCallback } from "react";
 import { trpc } from "~/lib/trpc/client";
@@ -112,6 +118,17 @@ function BulkScheduleSection() {
     else setSelectedIds(new Set(data.posts.map((p: any) => p.id)));
   };
 
+  // TikTok's consent line next to Schedule whenever a selected post would send
+  // a TikTok target — from the settings stored on each post (branded wording
+  // once any of them is Branded content).
+  const tiktokConsent = storedTikTokConsentLine(
+    (data?.posts ?? [])
+      .filter((p: any) => selectedIds.has(p.id))
+      .flatMap((p: any) =>
+        armableTikTokTargets(p.targets ?? []).map((t: any) => ({ postMetadata: p.metadata, channelId: t.channelId as string }))
+      )
+  );
+
   const handleSchedule = () => {
     if (selectedIds.size === 0 || !scheduledAt) return;
     bulkSchedule.mutate({
@@ -155,6 +172,11 @@ function BulkScheduleSection() {
             Schedule Selected ({selectedIds.size})
           </Button>
         </div>
+        {tiktokConsent && (
+          <p className="text-xs text-muted-foreground sm:text-right" data-testid="bulk-tiktok-consent">
+            {tiktokConsent}
+          </p>
+        )}
 
         {isLoading ? (
           <div className="space-y-2">
@@ -241,6 +263,10 @@ function CSVImportSection() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: channels } = trpc.channel.list.useQuery();
+  // CSV import makes text-only posts with no TikTok settings — TikTok needs a
+  // video and settings chosen in Compose (the server refuses TikTok here).
+  const importChannels = excludeTikTokChannels(channels as any[] | undefined);
+  const hasTikTokChannels = importChannels.length < ((channels as any[] | undefined)?.length ?? 0);
   const utils = trpc.useUtils();
 
   const csvImport = trpc.bulk.csvImport.useMutation({
@@ -405,7 +431,7 @@ function CSVImportSection() {
           <div className="space-y-2">
             <Label>Target Channels</Label>
             <div className="flex flex-wrap gap-2">
-              {channels?.map((ch: any) => (
+              {importChannels.map((ch: any) => (
                 <Button
                   key={ch.id}
                   variant={selectedChannels.includes(ch.id) ? "default" : "outline"}
@@ -418,6 +444,11 @@ function CSVImportSection() {
             </div>
             {(!channels || channels.length === 0) && (
               <p className="text-sm text-muted-foreground">No channels connected</p>
+            )}
+            {hasTikTokChannels && (
+              <p className="text-xs text-muted-foreground" data-testid="csv-import-tiktok-note">
+                {TIKTOK_CSV_IMPORT_TEXT}
+              </p>
             )}
           </div>
         )}
