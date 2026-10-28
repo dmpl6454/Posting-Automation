@@ -82,13 +82,13 @@ export interface CaptionFanoutDeps {
  */
 export function buildCaptionPrompt(
   baseContent: string,
-  targets: Array<{ index: number; platform: string; channelName: string; username: string | null; charLimit: number }>
+  targets: Array<{ index: number; platform: string; charLimit: number }>
 ): string {
+  // Channel names and @handles are deliberately NOT sent: with many channels
+  // the model started addressing each page by name ("Bachelors, ..." for
+  // @bachelorssociety). A caption must never be personalised to the page.
   const channelLines = targets
-    .map(
-      (t) =>
-        `${t.index}. platform=${t.platform}, channel="${t.channelName}"${t.username ? ` (@${t.username})` : ""}, max ${t.charLimit} characters`
-    )
+    .map((t) => `${t.index}. platform=${t.platform}, max ${t.charLimit} characters`)
     .join("\n");
 
   return `Rewrite ONE base social media post into ${targets.length} UNIQUE captions — one per channel listed below.
@@ -96,6 +96,7 @@ export function buildCaptionPrompt(
 Rules:
 - Every caption must convey the SAME message and facts as the base post. Do NOT invent facts, names, dates, or statistics.
 - Each caption must be clearly DISTINCT from the others in wording and angle (hashtags may repeat across captions).
+- NEVER mention, address or refer to the channel, page or account the caption is posted on (no page names, @handles or audience labels derived from them) unless the base post itself already contains that name.
 - Match each channel's platform style and stay UNDER that channel's character limit.
 - Output ONLY a JSON array — no prose, no markdown fences: [{"index": 0, "caption": "..."}, ...] with exactly one item per channel, using each channel's index number.
 
@@ -406,8 +407,6 @@ export async function runCaptionFanout(
     const described = chunk.map((t, j) => ({
       index: j,
       platform: t.channel.platform,
-      channelName: t.channel.name || t.channel.platform,
-      username: t.channel.username,
       charLimit: deps.charLimitFor(t.channel.platform) ?? DEFAULT_CHAR_LIMIT,
     }));
     try {
