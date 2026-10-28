@@ -106,3 +106,23 @@ describe("bulk.csvImport plan quota", () => {
     expect(checkUsageLimit).toHaveBeenCalledWith(ORG_ID, "postsPerMonth", false);
   });
 });
+
+describe("bulk.csvImport — TikTok channels (2026-10-28)", () => {
+  it("refuses a TikTok channel before creating anything: CSV rows have no video and no TikTok settings", async () => {
+    // A SCHEDULED TikTok target created here could only fail at publish ("choose
+    // who can see this post"), after the import had reported it imported.
+    channelFindMany.mockResolvedValueOnce([
+      { id: "ch-1", platform: "INSTAGRAM" },
+      { id: "ch-tt", platform: "TIKTOK" },
+    ] as any);
+    await expect(
+      buildCaller().csvImport({ csvData: csvOf(2), channelIds: ["ch-1", "ch-tt"], scheduledAt: new Date(Date.now() + 3_600_000).toISOString() })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST", message: expect.stringMatching(/TikTok posts can't be imported from CSV/) });
+    expect(postCreate).not.toHaveBeenCalled();
+  });
+
+  it("selects the platform so the check is possible", async () => {
+    await buildCaller().csvImport({ csvData: csvOf(1), channelIds: ["ch-1"] });
+    expect(channelFindMany.mock.calls[0]![0].select).toMatchObject({ id: true, platform: true });
+  });
+});

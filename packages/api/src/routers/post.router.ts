@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { TIKTOK_CHECKPOINT_KEY } from "@postautomation/social/src/utils/tiktok-posting";
+import { TIKTOK_CHECKPOINT_KEY, TIKTOK_TITLE_MAX } from "@postautomation/social/src/utils/tiktok-posting";
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
 import { PUBLIC_CHANNEL_SELECT } from "../lib/public-channel";
@@ -54,6 +54,8 @@ import {
   storedTikTokByChannel,
   validateTikTokPost,
   hasTikTokChannel,
+  findOverlongTikTokCaption,
+  tiktokCaptionTooLongMessage,
 } from "../lib/tiktok-post";
 
 /**
@@ -428,7 +430,7 @@ export const postRouter = createRouter({
           const { validateVideoAgainstPlatforms } = await import("../lib/media-constraints");
           const mediaRows = await ctx.prisma.media.findMany({
             where: { id: { in: input.mediaIds } },
-            select: { fileName: true, fileType: true, fileSize: true, metadata: true },
+            select: { fileName: true, fileType: true, fileSize: true, metadata: true, duration: true, width: true, height: true },
           });
           attachedMedia = mediaRows;
           hasVideoMedia = mediaRows.some((r) => r.fileType.startsWith("video/"));
@@ -455,6 +457,17 @@ export const postRouter = createRouter({
           scheduling: !!input.scheduledAt,
         });
         if (tiktokError) throw new TRPCError({ code: "BAD_REQUEST", message: tiktokError });
+        // Over TikTok's 2,200 is refused here, drafts included: nothing later may
+        // cut it (a cut caption is text the user never saw).
+        const overlong = findOverlongTikTokCaption({
+          targets: ownedChannels.map((c) => {
+            const own = input.captionOverrides?.[c.id];
+            return { channel: c, contentOverride: typeof own === "string" && own.trim() ? own : null };
+          }),
+          content: input.content,
+          contentVariants: input.contentVariants,
+        });
+        if (overlong) throw new TRPCError({ code: "BAD_REQUEST", message: overlong });
       }
 
       // Block a media-less IG/FB SCHEDULE when AI is off (it can never publish).
@@ -476,7 +489,11 @@ export const postRouter = createRouter({
         // AI calls on text nobody ever sees.
         // An article has one body, not a caption to vary per channel.
         uniqueCaptions: isStory || isArticle ? false : input.uniqueCaptions,
-        channelCount: input.channelIds.length,
+        // TikTok channels never get an AI caption (the caption-fanout worker
+        // skips them — the user must see the exact text posted), so only the
+        // OTHER channels count: TikTok plus one other has nothing to vary, and
+        // must not be parked waiting on a fan-out.
+        channelCount: ownedChannels.filter((c) => c.platform !== "TIKTOK").length,
         scheduledAt: input.scheduledAt ?? null,
       });
 
@@ -605,6 +622,13 @@ export const postRouter = createRouter({
               tiktokByChannel: _rawTikTokByChannel,
               tiktok: _rawTikTok,
               privacyLevel: _rawPrivacyLevel,
+              // The TikTok publish checkpoint, the creator's @handle and the
+              // probed video length are written only by the worker. A forged
+              // checkpoint here made the provider RESUME an unrelated publish and
+              // mark this post PUBLISHED without sending the video.
+              [TIKTOK_CHECKPOINT_KEY]: _rawTikTokCheckpoint,
+              channelUsername: _rawChannelUsername,
+              videoDurationSec: _rawVideoDurationSec,
               ...rest
             } = (input.metadata ?? {}) as Record<string, unknown>;
             // Destination keys (siteUrl, instance, blog_id, …) only ever come
@@ -786,6 +810,24 @@ export const postRouter = createRouter({
           });
         }
       }
+      // A TikTok channel's caption over 2,200 would be refused at publish —
+      // refuse it here, where the user can still shorten it. Only looked up when
+      // the text is long enough to matter.
+      if (trimmed.length > 0 && (input.contentOverride ?? "").length > TIKTOK_TITLE_MAX) {
+        const target = await ctx.prisma.postTarget.findUnique({
+          where: { id: input.targetId },
+          select: { channel: { select: { platform: true, name: true } } },
+        });
+        if (target?.channel?.platform === "TIKTOK") {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: tiktokCaptionTooLongMessage(
+              (target.channel.name ?? "").trim() || "your account",
+              (input.contentOverride ?? "").length
+            ),
+          });
+        }
+      }
       const updated = await ctx.prisma.postTarget.update({
         where: { id: input.targetId },
         data: { contentOverride: trimmed.length > 0 ? input.contentOverride : null },
@@ -844,6 +886,9 @@ export const postRouter = createRouter({
               ambiguousAt: true,
               ambiguousReason: true,
               channel: { select: { platform: true, name: true } },
+              // `status`: channel replacement deletes and recreates EVERY target,
+              // so it is refused once any target is publishing or published.
+              status: true,
             },
           },
           _count: { select: { mediaAttachments: true } },
@@ -896,6 +941,19 @@ export const postRouter = createRouter({
       if (channelIds) {
         if (existing.status !== "DRAFT" && existing.status !== "SCHEDULED") {
           throw new TRPCError({ code: "BAD_REQUEST", message: "Channels can only be changed on draft or scheduled posts." });
+        }
+        // Replacement deletes EVERY target and recreates it with the post's
+        // status. A target already published (or mid-publish) would come back
+        // SCHEDULED with no publishedId and be posted AGAIN — reachable in the
+        // moments after Retry, when the post is SCHEDULED but the cron has not
+        // flipped it to PUBLISHING yet. For TikTok the copy is permanent (no
+        // delete API).
+        if (existing.targets.some((t) => t.status === "PUBLISHED" || t.status === "PUBLISHING")) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "Channels can't be changed while this post is publishing or after some of its channels have published. Create a new post for other channels.",
+          });
         }
         const ownedChannels = await ctx.prisma.channel.findMany({
           where: { id: { in: channelIds }, organizationId: ctx.organizationId, disconnectedAt: null },
@@ -1005,8 +1063,23 @@ export const postRouter = createRouter({
           byChannel: nextTikTok,
           media: attached.map((a) => ({ fileType: a.media?.fileType })),
           scheduling: true,
+          existingPost: true,
         });
         if (tiktokError) throw new TRPCError({ code: "BAD_REQUEST", message: tiktokError });
+      }
+      // A TikTok caption over 2,200 — after this edit, worked out as the worker
+      // will — is refused now, while it can still be shortened (the worker used
+      // to cut it silently at publish).
+      if (hasTikTokChannel(effectiveChannels) && (input.content !== undefined || input.contentVariants !== undefined || channelIds)) {
+        const overlong = findOverlongTikTokCaption({
+          targets: effectiveChannels.map((c) => ({
+            channel: c,
+            contentOverride: contentOverrideForReplacedTarget(c.id, existing.targets),
+          })),
+          content: input.content !== undefined ? input.content : existing.content,
+          contentVariants: input.contentVariants !== undefined ? input.contentVariants : existing.contentVariants,
+        });
+        if (overlong) throw new TRPCError({ code: "BAD_REQUEST", message: overlong });
       }
 
       // Persist the TikTok choices with an ATOMIC jsonb merge, never a
@@ -1318,6 +1391,7 @@ export const postRouter = createRouter({
           byChannel: storedTikTokByChannel(post.metadata),
           media: attached.map((a) => ({ fileType: a.media?.fileType })),
           scheduling: true,
+          existingPost: true,
         });
         if (tiktokError) throw new TRPCError({ code: "BAD_REQUEST", message: tiktokError });
       }
@@ -1459,6 +1533,25 @@ export const postRouter = createRouter({
         });
       }
 
+      // A TikTok target keeps its publish_id checkpoint, MARKED as cleared
+      // (2026-10-28) — never deleted. Retry still resumes THAT publish: still
+      // processing ⇒ wait, live after all ⇒ adopt. Only when TikTok itself says
+      // it can no longer report on the publish_id does the mark let the provider
+      // post afresh. Deleting it made Retry post a second copy of a video that
+      // was still processing — or private, so invisible from outside the
+      // creator's login — and TikTok has no delete API.
+      //
+      // Atomic and conditional on the row STILL being parked: a second click
+      // from a stale page must not mark the fresh checkpoint an in-flight retry
+      // has just written. Runs BEFORE the park is lifted, for the same reason.
+      const clearedAt = new Date().toISOString();
+      for (const t of resolved) {
+        const md = (t!.metadata ?? null) as Record<string, unknown> | null;
+        const hasCheckpoint = !!md && typeof md === "object" && !Array.isArray(md) && !!md[TIKTOK_CHECKPOINT_KEY];
+        if (!t!.ambiguousAt || !hasCheckpoint) continue;
+        await ctx.prisma.$executeRaw`UPDATE "PostTarget" SET "metadata" = jsonb_set("metadata", '{tiktokPublish,clearedAt}', to_jsonb(${clearedAt}::text)) WHERE "id" = ${t!.id} AND "ambiguousAt" IS NOT NULL AND jsonb_typeof("metadata"->'tiktokPublish') = 'object'`;
+      }
+
       const res = await ctx.prisma.postTarget.updateMany({
         where: { id: { in: input.targetIds }, postId: post.id },
         // errorMessage is cleared too: markTargetAmbiguous writes the ambiguity
@@ -1467,21 +1560,6 @@ export const postRouter = createRouter({
         // "It didn't publish" button that has just disappeared.
         data: { ambiguousAt: null, ambiguousReason: null, errorMessage: null },
       });
-
-      // A TikTok target may carry its publish_id checkpoint. Retry resumes from
-      // it, so after this human "it did NOT publish" override the checkpoint has
-      // to go too — otherwise a publish TikTok no longer recognises
-      // (invalid_publish_id) is re-checked and re-parked on every Retry, forever.
-      for (const t of resolved) {
-        const md = (t!.metadata ?? null) as Record<string, unknown> | null;
-        if (md && typeof md === "object" && !Array.isArray(md) && TIKTOK_CHECKPOINT_KEY in md) {
-          const { [TIKTOK_CHECKPOINT_KEY]: _dropped, ...rest } = md;
-          await ctx.prisma.postTarget.update({
-            where: { id: t!.id },
-            data: { metadata: rest as any },
-          });
-        }
-      }
 
       // This is the ONLY action that authorises re-posting content which may
       // already be live, so it is recorded like every other mutation here.

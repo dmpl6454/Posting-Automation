@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
   TIKTOK_PRIVACY_LEVELS,
   TIKTOK_BY_CHANNEL_KEY,
+  TIKTOK_TITLE_MAX,
   TIKTOK_CANNOT_POST_CODES,
   readTikTokSettingsForChannel,
   parseCreatorInfo,
@@ -62,6 +63,56 @@ export const TIKTOK_UNREACHABLE_MESSAGE = "Couldn't reach TikTok — try again."
 
 export function tiktokSettingsMissingMessage(channelName: string): string {
   return `Choose who can see this post on ${channelName} (TikTok).`;
+}
+
+/**
+ * The same problem on a post that already exists (arming a draft, Retry, bulk
+ * schedule). No screen edits an existing post's TikTok settings — they are
+ * chosen in Compose when the post is created — so say that, instead of sending
+ * the user looking for a control that does not exist.
+ */
+export function tiktokSettingsMissingOnExistingPostMessage(channelName: string): string {
+  return (
+    `This post has no TikTok settings for ${channelName} (who can see the video). ` +
+    `They're chosen when the post is created — create this TikTok post again in Content Studio.`
+  );
+}
+
+export function tiktokCaptionTooLongMessage(channelName: string, length: number): string {
+  return (
+    `The caption for ${channelName} (TikTok) is ${length.toLocaleString("en-US")} characters — ` +
+    `TikTok allows up to ${TIKTOK_TITLE_MAX.toLocaleString("en-US")}. Shorten it and try again.`
+  );
+}
+
+/**
+ * The first TikTok target whose caption — worked out exactly as the publish
+ * worker does (`contentOverride ?? contentVariants.TIKTOK ?? content`) — is over
+ * TikTok's 2,200-character title limit, as a message; null when none is.
+ * Compose already blocks this; the post page's caption edits did not, and the
+ * worker used to cut the caption silently at publish (usually dropping a
+ * trailing #ad disclosure).
+ */
+export function findOverlongTikTokCaption(input: {
+  targets: Array<{ channel: ChannelRef; contentOverride?: string | null }>;
+  content: string | null | undefined;
+  contentVariants?: unknown;
+}): string | null {
+  const variants = input.contentVariants;
+  const variant =
+    variants && typeof variants === "object" && !Array.isArray(variants) && isOwn(variants, "TIKTOK")
+      ? (variants as Record<string, unknown>).TIKTOK
+      : undefined;
+  for (const t of input.targets) {
+    if (t.channel.platform !== "TIKTOK") continue;
+    const caption =
+      (typeof t.contentOverride === "string" ? t.contentOverride : null) ??
+      (typeof variant === "string" ? variant : null) ??
+      input.content ??
+      "";
+    if (caption.length > TIKTOK_TITLE_MAX) return tiktokCaptionTooLongMessage(channelLabel(t.channel), caption.length);
+  }
+  return null;
 }
 
 function channelLabel(c: ChannelRef): string {
@@ -150,6 +201,8 @@ export function validateTikTokPost(input: {
   byChannel: unknown;
   media: Array<{ fileType: string | null | undefined }>;
   scheduling: boolean;
+  /** Arming a post that already exists: word a missing choice for that case. */
+  existingPost?: boolean;
 }): string | null {
   const tiktok = input.channels.filter((c) => c.platform === "TIKTOK");
   if (tiktok.length === 0 || !input.scheduling) return null;
@@ -157,7 +210,11 @@ export function validateTikTokPost(input: {
   const settingsById = new Map<string, TikTokPostSettings>();
   for (const c of tiktok) {
     const s = readTikTokSettingsForChannel({ [TIKTOK_BY_CHANNEL_KEY]: input.byChannel }, c.id);
-    if (!s) return tiktokSettingsMissingMessage(channelLabel(c));
+    if (!s) {
+      return input.existingPost
+        ? tiktokSettingsMissingOnExistingPostMessage(channelLabel(c))
+        : tiktokSettingsMissingMessage(channelLabel(c));
+    }
     settingsById.set(c.id, s);
   }
 

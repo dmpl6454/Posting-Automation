@@ -128,8 +128,10 @@ const REINIT_ON_RESUME_REASONS = new Set([...RETRYABLE_FAIL_REASONS, "auth_remov
  */
 export const TIKTOK_MESSAGES = {
   // ── PublishRefusedError (terminal: nothing was created) ──
+  // No screen edits an existing post's TikTok settings — they are chosen in
+  // Compose when the post is created — so the message says where, not "choose".
   settingsMissing:
-    "Choose who can see this TikTok post (privacy) in Content Studio, then publish again. Nothing was sent to TikTok.",
+    "This post has no TikTok settings (who can see the video). They're chosen when the post is created — create this TikTok post again in Content Studio. Nothing was sent to TikTok.",
   videoRequired:
     "A TikTok post needs exactly one video (MP4, MOV or WebM). Attach one video and publish again. Nothing was sent to TikTok.",
   reconnect:

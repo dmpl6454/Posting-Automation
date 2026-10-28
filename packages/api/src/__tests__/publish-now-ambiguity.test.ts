@@ -51,6 +51,7 @@ const postUpdate = vi.fn();
 const targetUpdateMany = vi.fn();
 const targetUpdate = vi.fn(async (..._a: any[]) => ({}));
 const targetFindMany = vi.fn();
+const executeRaw = vi.fn(async (..._a: any[]) => 1);
 
 vi.mock("@postautomation/db", () => ({
   prisma: {
@@ -66,6 +67,7 @@ vi.mock("@postautomation/db", () => ({
       findMany: (...a: any[]) => targetFindMany(...a),
     },
     auditLog: { create: vi.fn() },
+    $executeRaw: (...a: any[]) => executeRaw(...a),
   },
   ensurePersonalOrg: vi.fn(),
 }));
@@ -249,18 +251,37 @@ describe("post.clearPublishAmbiguity", () => {
     });
   });
 
-  it("drops a TikTok publish checkpoint so Retry starts fresh, keeping other target metadata (2026-10-28)", async () => {
+  it("KEEPS a TikTok publish checkpoint and marks it cleared — Retry still resumes it (2026-10-28)", async () => {
+    // Deleting it made Retry post a SECOND copy of a video that was still
+    // processing (or private, so invisible from outside) — TikTok has no delete
+    // API. The mark lets the provider post afresh only when TikTok itself says
+    // it can no longer report on that publish.
     postFindFirst.mockResolvedValue({
       id: "p1",
       targets: [
         target({ id: "t1", ambiguousAt: new Date(), metadata: { tiktokPublish: { publishId: "v_pub_1" }, keep: 1 } }),
         target({ id: "t2", ambiguousAt: new Date(), metadata: { keep: 2 } }),
+        target({ id: "t3", ambiguousAt: null, metadata: { tiktokPublish: { publishId: "v_pub_3" } } }),
       ],
     });
-    targetUpdateMany.mockResolvedValue({ count: 2 });
-    await makeCaller().clearPublishAmbiguity({ id: "p1", targetIds: ["t1", "t2"] });
-    expect(targetUpdate).toHaveBeenCalledTimes(1);
-    expect(targetUpdate).toHaveBeenCalledWith({ where: { id: "t1" }, data: { metadata: { keep: 1 } } });
+    targetUpdateMany.mockResolvedValue({ count: 3 });
+    await makeCaller().clearPublishAmbiguity({ id: "p1", targetIds: ["t1", "t2", "t3"] });
+
+    // Never a whole-column metadata rewrite.
+    expect(targetUpdate).not.toHaveBeenCalled();
+    // ONE atomic stamp, for the ambiguous TikTok target only.
+    expect(executeRaw).toHaveBeenCalledTimes(1);
+    const [strings, ...values] = executeRaw.mock.calls[0]!;
+    const sql = (strings as string[]).join("$");
+    expect(sql).toMatch(/jsonb_set/);
+    expect(sql).toMatch(/clearedAt/);
+    // Conditional on the row STILL being parked: a stale second click must not
+    // mark the fresh checkpoint an in-flight retry just wrote.
+    expect(sql).toMatch(/"ambiguousAt" IS NOT NULL/);
+    expect(values).toContain("t1");
+    expect(values).not.toContain("t3");
+    // The mark goes on BEFORE the park is lifted.
+    expect(executeRaw.mock.invocationCallOrder[0]!).toBeLessThan(targetUpdateMany.mock.invocationCallOrder.at(-1)!);
   });
 
   it("is org-scoped — a cross-org post id is NOT_FOUND and writes nothing", async () => {

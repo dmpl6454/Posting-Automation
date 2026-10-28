@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { validateVideoAgainstPlatforms } from "../lib/media-constraints";
 
-const video = (over: Partial<{ fileName: string; fileType: string; fileSize: number; metadata: unknown }> = {}) => ({
+const video = (
+  over: Partial<{ fileName: string; fileType: string; fileSize: number; metadata: unknown; duration: number | null; width: number | null; height: number | null }> = {}
+) => ({
   fileName: "clip.mp4",
   fileType: "video/mp4",
   fileSize: 100_000_000,
@@ -43,7 +45,7 @@ describe("validateVideoAgainstPlatforms", () => {
   describe("TikTok (2026-10-28) — only what no rendition can fix", () => {
     const probed = (probe: Record<string, number>) => video({ metadata: { optimize: { status: "skipped", probe } } });
     it("refuses over 10 minutes, under 23 fps, or under 360 px on a side", () => {
-      expect(validateVideoAgainstPlatforms([probed({ durationSec: 11 * 60 })], ["TIKTOK"])).toMatch(/up to 10 minutes/);
+      expect(validateVideoAgainstPlatforms([probed({ durationSec: 11 * 60 })], ["TIKTOK"])).toMatch(/up to 10:00/);
       expect(validateVideoAgainstPlatforms([probed({ fps: 15 })], ["TIKTOK"])).toMatch(/at least 23 fps/);
       expect(validateVideoAgainstPlatforms([probed({ width: 320, height: 568 })], ["TIKTOK"])).toMatch(/360 px/);
     });
@@ -51,6 +53,19 @@ describe("validateVideoAgainstPlatforms", () => {
       expect(validateVideoAgainstPlatforms([probed({ fps: 120, width: 3840, height: 2160 })], ["TIKTOK"])).toBeNull();
       expect(validateVideoAgainstPlatforms([probed({ durationSec: 59, fps: 30, width: 1080, height: 1920 })], ["TIKTOK"])).toBeNull();
       expect(validateVideoAgainstPlatforms([video()], ["TIKTOK"])).toBeNull();
+    });
+    it("states the length so it never contradicts the limit (610 s is not '10 minutes')", () => {
+      expect(validateVideoAgainstPlatforms([probed({ durationSec: 610 })], ["TIKTOK"])).toBe(
+        '"clip.mp4" is 10:10 long — TikTok accepts videos up to 10:00 (many accounts only 3:00). Trim it and re-upload.'
+      );
+    });
+    it("falls back to the Media columns when the probe is gone (a failed optimization drops it)", () => {
+      // optimize = {status:"failed", error} has no probe, but the duration /
+      // width / height columns written from the same probe are still there.
+      const failed = { optimize: { status: "failed", error: "x" } };
+      expect(validateVideoAgainstPlatforms([video({ metadata: failed, duration: 900 })], ["TIKTOK"])).toMatch(/15:00 long/);
+      expect(validateVideoAgainstPlatforms([video({ metadata: failed, width: 320, height: 568 })], ["TIKTOK"])).toMatch(/360 px/);
+      expect(validateVideoAgainstPlatforms([video({ metadata: null, duration: 30, width: 1080, height: 1920 })], ["TIKTOK"])).toBeNull();
     });
     it("leaves non-TikTok posts exactly as before", () => {
       expect(validateVideoAgainstPlatforms([probed({ fps: 15 })], ["INSTAGRAM"])).toBeNull();

@@ -170,7 +170,9 @@ describe("tiktok.creatorInfo — token refresh", () => {
 
     expect(refreshAccessToken).toHaveBeenCalledWith("rft.old", expect.objectContaining({ clientId: "ck", clientSecret: "cs" }));
     expect(channelUpdateMany).toHaveBeenCalledWith({
-      where: { id: "chan-tt", organizationId: "org-1", tokenExpiresAt: expiring },
+      // disconnectedAt: a disconnect while this refresh was in flight must win —
+      // live credentials are never written back onto a disconnected channel.
+      where: { id: "chan-tt", organizationId: "org-1", tokenExpiresAt: expiring, disconnectedAt: null },
       data: { accessToken: "act.new", refreshToken: "rft.new", tokenExpiresAt: newExpiry },
     });
     expect((fetchMock.mock.calls[0]![1] as RequestInit).headers).toMatchObject({ Authorization: "Bearer act.new" });
@@ -215,9 +217,12 @@ describe("tiktok.creatorInfo — token refresh", () => {
 });
 
 describe("tiktok.creatorInfo — limits", () => {
-  it("per user: 20 a minute", async () => {
+  it("per user: 200 a minute — an agency selecting 25+ TikTok accounts in Compose is not blocked", async () => {
+    // It was 20, so selecting more than 20 TikTok channels at once failed the
+    // rest and blocked the whole post. TikTok's budget is per TOKEN, which the
+    // per-account limit below protects.
     const c = caller("limit-user");
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 200; i++) {
       channelFindFirst.mockResolvedValueOnce(channel());
       await c.creatorInfo({ channelId: "chan-tt" });
     }

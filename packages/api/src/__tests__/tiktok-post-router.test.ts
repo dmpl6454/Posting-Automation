@@ -46,6 +46,8 @@ const postCreate = vi.fn();
 const postFindFirst = vi.fn();
 const postUpdate = vi.fn();
 const postTargetUpdateMany = vi.fn();
+const postTargetFindUnique = vi.fn();
+const postTargetUpdate = vi.fn(async (...a: any[]) => ({ id: a[0].where.id, contentOverride: a[0].data.contentOverride }));
 const executeRaw = vi.fn(async (..._a: any[]) => 1);
 
 vi.mock("@postautomation/db", () => ({
@@ -63,7 +65,11 @@ vi.mock("@postautomation/db", () => ({
       findFirst: (...a: any[]) => postFindFirst(...a),
       update: (...a: any[]) => postUpdate(...a),
     },
-    postTarget: { updateMany: (...a: any[]) => postTargetUpdateMany(...a) },
+    postTarget: {
+      updateMany: (...a: any[]) => postTargetUpdateMany(...a),
+      findUnique: (...a: any[]) => postTargetFindUnique(...a),
+      update: (...a: any[]) => postTargetUpdate(...a),
+    },
     auditLog: { create: vi.fn() },
     $executeRaw: (...a: any[]) => executeRaw(...a),
   },
@@ -215,6 +221,59 @@ describe("post.create — TikTok", () => {
     expect(postCreate).not.toHaveBeenCalled();
   });
 
+  it("STRIPS a client-written publish checkpoint, @handle and video length (only the server/worker write those)", async () => {
+    // A forged tiktokPublish made the provider RESUME an unrelated publish and
+    // mark this post PUBLISHED without sending the new video.
+    await makeCaller().create({
+      content: "hello",
+      channelIds: [TT],
+      metadata: {
+        title: "T",
+        tiktokPublish: { publishId: "v_pub_url~v2-1.forged", createdAt: "2026-10-01T00:00:00Z", source: "PULL_FROM_URL" },
+        channelUsername: "someone.else",
+        videoDurationSec: 1,
+      } as any,
+    });
+    expect(createdData().metadata).toEqual({ title: "T" });
+  });
+
+  it("refuses a TikTok caption over 2,200 characters, naming the channel — never cut at publish", async () => {
+    const long = "x".repeat(2195) + " #brand #ad"; // 2,206
+    await expect(
+      makeCaller().create({ content: long, channelIds: [TT, IG], mediaIds: ["vid"], tiktok: { byChannel: { [TT]: settings() } as any } })
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: "The caption for Studio One (TikTok) is 2,206 characters — TikTok allows up to 2,200. Shorten it and try again.",
+    });
+    expect(postCreate).not.toHaveBeenCalled();
+  });
+
+  it("a TikTok channel with its OWN short caption is fine even when the shared one is long", async () => {
+    await makeCaller().create({
+      content: "x".repeat(3000),
+      channelIds: [TT, IG],
+      mediaIds: ["vid"],
+      captionOverrides: { [TT]: "short TikTok caption" },
+    } as any);
+    expect(postCreate).toHaveBeenCalled();
+  });
+
+  it("AI unique captions never fan out for TikTok: only the OTHER channels count", async () => {
+    // The caption fan-out worker never writes a TikTok caption (the user must see
+    // the exact text posted), so TikTok + one other channel has nothing to vary —
+    // the post must not be parked waiting on a fan-out.
+    await makeCaller().create({
+      content: "hello",
+      channelIds: [TT, TT2, IG],
+      mediaIds: ["vid"],
+      uniqueCaptions: true,
+      scheduledAt: FUTURE,
+      tiktok: { byChannel: { [TT]: settings(), [TT2]: settings() } as any },
+    } as any);
+    expect(createdData().metadata?.captionFanout).toBeUndefined();
+    expect(createdData().status).toBe("SCHEDULED");
+  });
+
   it("lets a TikTok DRAFT be saved without settings", async () => {
     await makeCaller().create({ content: "hello", channelIds: [TT] });
     expect(createdData().metadata).toBeUndefined();
@@ -267,8 +326,10 @@ describe("post.update — TikTok settings", () => {
   it("refuses to ARM a TikTok post whose settings are missing", async () => {
     postFindFirst.mockResolvedValue(existingPost({ metadata: null }));
     postMediaFindMany.mockResolvedValue([{ media: { fileType: "video/mp4" } }]);
+    // An existing post: no screen edits its TikTok settings, so the message says
+    // where they are chosen instead of pointing at a missing control.
     await expect(makeCaller().update({ id: "post-1", scheduledAt: FUTURE })).rejects.toMatchObject({
-      message: "Choose who can see this post on Studio One (TikTok).",
+      message: "This post has no TikTok settings for Studio One (who can see the video). They're chosen when the post is created — create this TikTok post again in Content Studio.",
     });
     expect(postUpdate).not.toHaveBeenCalled();
   });
@@ -291,11 +352,101 @@ describe("post.update — TikTok settings", () => {
     postFindFirst.mockResolvedValue(existingPost({ status: "SCHEDULED", scheduledAt: new Date(FUTURE) }));
     postMediaFindMany.mockResolvedValue([{ media: { fileType: "video/mp4" } }]);
     await expect(makeCaller().update({ id: "post-1", channelIds: [TT, TT2] })).rejects.toMatchObject({
-      message: "Choose who can see this post on Studio Two (TikTok).",
+      message: "This post has no TikTok settings for Studio Two (who can see the video). They're chosen when the post is created — create this TikTok post again in Content Studio.",
     });
     await expect(
       makeCaller().update({ id: "post-1", channelIds: [TT, TT2], tiktok: { byChannel: { [TT2]: settings() } as any } })
     ).resolves.toBeTruthy();
+  });
+});
+
+describe("post.update — TikTok captions (2026-10-28)", () => {
+  const ttPost = (over: Record<string, unknown> = {}) => ({
+    id: "post-1",
+    status: "DRAFT",
+    scheduledAt: null,
+    content: "short",
+    contentVariants: null,
+    metadata: { tiktokByChannel: { [TT]: settings() } },
+    targets: [{ channelId: TT, status: "DRAFT", format: null, contentOverride: null, metadata: null, ambiguousAt: null, ambiguousReason: null, channel: { platform: "TIKTOK", name: "Studio One" } }],
+    _count: { mediaAttachments: 1 },
+    ...over,
+  });
+
+  it("refuses an edit that makes a TikTok channel's caption longer than 2,200", async () => {
+    postFindFirst.mockResolvedValue(ttPost());
+    await expect(makeCaller().update({ id: "post-1", content: "y".repeat(2300) })).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: "The caption for Studio One (TikTok) is 2,300 characters — TikTok allows up to 2,200. Shorten it and try again.",
+    });
+    expect(postUpdate).not.toHaveBeenCalled();
+  });
+
+  it("a TikTok-specific variant is checked too (the worker publishes it over the shared caption)", async () => {
+    postFindFirst.mockResolvedValue(ttPost());
+    await expect(makeCaller().update({ id: "post-1", contentVariants: { TIKTOK: "z".repeat(2201) } })).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+    });
+  });
+
+  it("a TikTok target with its own caption is not affected by a long shared caption", async () => {
+    postFindFirst.mockResolvedValue(
+      ttPost({ targets: [{ ...ttPost().targets[0], contentOverride: "own words" }] })
+    );
+    await expect(makeCaller().update({ id: "post-1", content: "y".repeat(2300) })).resolves.toBeTruthy();
+  });
+});
+
+describe("post.update — channels can't change once a target is publishing or published", () => {
+  it.each(["PUBLISHED", "PUBLISHING"])("refuses channel replacement while a target is %s (it would be recreated and posted again)", async (status) => {
+    // publishNow sets the post SCHEDULED before the 30 s cron flips it to
+    // PUBLISHING, so a partly published post is editable for a moment; channel
+    // replacement deletes and recreates EVERY target as SCHEDULED.
+    postFindFirst.mockResolvedValue({
+      id: "post-1",
+      status: "SCHEDULED",
+      scheduledAt: new Date(FUTURE),
+      content: "hi",
+      contentVariants: null,
+      metadata: null,
+      targets: [
+        { channelId: IG, status, format: null, contentOverride: null, metadata: null, ambiguousAt: null, ambiguousReason: null, channel: { platform: "INSTAGRAM", name: "Insta" } },
+      ],
+      _count: { mediaAttachments: 1 },
+    });
+    // Even re-sending the SAME channel list recreates the target as SCHEDULED.
+    await expect(makeCaller().update({ id: "post-1", channelIds: [IG] })).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringMatching(/Channels can't be changed/),
+    });
+    expect(postUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe("post.updateTargetContent — TikTok", () => {
+  it("refuses a TikTok channel caption over 2,200 characters", async () => {
+    postTargetFindUnique.mockResolvedValue({
+      id: "t-tt",
+      status: "SCHEDULED",
+      post: { organizationId: ORG_ID, content: "shared" },
+      channel: { platform: "TIKTOK", name: "Studio One" },
+    });
+    await expect(makeCaller().updateTargetContent({ targetId: "t-tt", contentOverride: "x".repeat(2201) })).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: "The caption for Studio One (TikTok) is 2,201 characters — TikTok allows up to 2,200. Shorten it and try again.",
+    });
+    expect(postTargetUpdate).not.toHaveBeenCalled();
+  });
+
+  it("another platform's long caption is untouched by the TikTok rule", async () => {
+    postTargetFindUnique.mockResolvedValue({
+      id: "t-ig",
+      status: "SCHEDULED",
+      post: { organizationId: ORG_ID, content: "shared" },
+      channel: { platform: "FACEBOOK", name: "Page" },
+    });
+    await makeCaller().updateTargetContent({ targetId: "t-ig", contentOverride: "x".repeat(5000) });
+    expect(postTargetUpdate).toHaveBeenCalled();
   });
 });
 
@@ -355,7 +506,7 @@ describe("post.publishNow — TikTok", () => {
     postFindFirst.mockResolvedValue(post(null));
     postMediaFindMany.mockResolvedValue([{ media: { fileType: "video/mp4" } }]);
     await expect(makeCaller().publishNow({ id: "post-1" })).rejects.toMatchObject({
-      message: "Choose who can see this post on Studio One (TikTok).",
+      message: "This post has no TikTok settings for Studio One (who can see the video). They're chosen when the post is created — create this TikTok post again in Content Studio.",
     });
     expect(postPublishAdd).not.toHaveBeenCalled();
     expect(postTargetUpdateMany).not.toHaveBeenCalled();

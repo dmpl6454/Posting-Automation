@@ -315,7 +315,7 @@ describe("TikTok publish — refused before anything is sent", () => {
     expect(isPublishRefusedError(err)).toBe(true);
     expect((err as any).reason).toBe("rejected");
     expect(err.message).toBe(
-      "Choose who can see this TikTok post (privacy) in Content Studio, then publish again. Nothing was sent to TikTok."
+      "This post has no TikTok settings (who can see the video). They're chosen when the post is created — create this TikTok post again in Content Studio. Nothing was sent to TikTok."
     );
     expect(calls).toHaveLength(0);
   });

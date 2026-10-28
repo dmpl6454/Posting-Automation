@@ -342,8 +342,19 @@ export const bulkRouter = createRouter({
           id: { in: input.channelIds },
           organizationId,
         },
-        select: { id: true },
+        select: { id: true, platform: true },
       });
+      // A CSV row is text only, and a TikTok post needs one video plus the
+      // creator's own choices (who can see it) — which only Compose collects.
+      // A TikTok target created here could only fail at publish, after the
+      // import had reported it imported.
+      if (channels.some((c) => c.platform === "TIKTOK")) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "TikTok posts can't be imported from CSV — create them in Content Studio, where you add the video and choose who can see it.",
+        });
+      }
       const validChannelIds = channels.map((c) => c.id);
       if (validChannelIds.length === 0) {
         throw new TRPCError({

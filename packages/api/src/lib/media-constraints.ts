@@ -12,6 +12,8 @@
  * authoritative gate.
  */
 
+import { formatTikTokDuration } from "@postautomation/social/src/utils/tiktok-posting";
+
 const META_PLATFORMS = new Set(["INSTAGRAM", "FACEBOOK"]);
 const IG_MAX_DURATION_SEC = 15 * 60; // Instagram reels/video ceiling
 
@@ -33,23 +35,44 @@ const TIKTOK_MAX_DURATION_SEC = 600;
 const TIKTOK_MIN_FPS = 23;
 const TIKTOK_MIN_SIDE_PX = 360;
 
-function tiktokVideoProblem(m: { fileName: string }, probe: OptimizeMeta["probe"]): string | null {
-  if (!probe) return null;
-  if (probe.durationSec && probe.durationSec > TIKTOK_MAX_DURATION_SEC + 0.5) {
-    return `"${m.fileName}" is ${Math.round(probe.durationSec / 60)} minutes long — TikTok accepts videos up to 10 minutes (many accounts only 3). Trim it and re-upload.`;
+type MediaDims = { fileName: string; duration?: number | null; width?: number | null; height?: number | null };
+
+const positive = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : undefined);
+
+/**
+ * The probe's numbers, falling back to the Media columns written from the same
+ * probe: a FAILED optimization overwrites `metadata.optimize` with
+ * `{status, error}` and drops the probe, which used to wave a 15-minute or 320 px
+ * video straight through. (fps has no column, so it is only checked when probed.)
+ */
+function tiktokVideoProblem(m: MediaDims, probe: OptimizeMeta["probe"]): string | null {
+  const durationSec = positive(probe?.durationSec) ?? positive(m.duration);
+  const fps = positive(probe?.fps);
+  const width = positive(probe?.width) ?? positive(m.width);
+  const height = positive(probe?.height) ?? positive(m.height);
+  if (durationSec && durationSec > TIKTOK_MAX_DURATION_SEC + 0.5) {
+    return `"${m.fileName}" is ${formatTikTokDuration(durationSec)} long — TikTok accepts videos up to ${formatTikTokDuration(TIKTOK_MAX_DURATION_SEC)} (many accounts only 3:00). Trim it and re-upload.`;
   }
-  if (probe.fps && probe.fps < TIKTOK_MIN_FPS - 0.5) {
-    return `"${m.fileName}" is ${Math.round(probe.fps)} fps — TikTok needs at least 23 fps. Re-export it at 30 fps and re-upload.`;
+  if (fps && fps < TIKTOK_MIN_FPS - 0.5) {
+    return `"${m.fileName}" is ${Math.round(fps)} fps — TikTok needs at least 23 fps. Re-export it at 30 fps and re-upload.`;
   }
-  const minSide = Math.min(probe.width ?? Infinity, probe.height ?? Infinity);
+  const minSide = Math.min(width ?? Infinity, height ?? Infinity);
   if (Number.isFinite(minSide) && minSide < TIKTOK_MIN_SIDE_PX) {
-    return `"${m.fileName}" is ${probe.width}x${probe.height} — TikTok needs at least 360 px on each side. Use a larger export.`;
+    return `"${m.fileName}" is ${width ?? "?"}x${height ?? "?"} — TikTok needs at least 360 px on each side. Use a larger export.`;
   }
   return null;
 }
 
 export function validateVideoAgainstPlatforms(
-  media: Array<{ fileName: string; fileType: string; fileSize: number; metadata: unknown }>,
+  media: Array<{
+    fileName: string;
+    fileType: string;
+    fileSize: number;
+    metadata: unknown;
+    duration?: number | null;
+    width?: number | null;
+    height?: number | null;
+  }>,
   platforms: string[]
 ): string | null {
   const hasMeta = platforms.some((p) => META_PLATFORMS.has(p));

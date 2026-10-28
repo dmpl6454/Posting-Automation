@@ -78,7 +78,10 @@ async function usableAccessToken(prisma: any, channel: TikTokChannelRow): Promis
       });
       if (!tokens?.accessToken) return channel.accessToken;
       const written = await prisma.channel.updateMany({
-        where: { id: channel.id, organizationId: channel.organizationId, tokenExpiresAt: expiresAt },
+        // disconnectedAt: a disconnect keeps tokenExpiresAt, so without it an
+        // in-flight refresh wrote live credentials back onto a channel the user
+        // had just disconnected.
+        where: { id: channel.id, organizationId: channel.organizationId, tokenExpiresAt: expiresAt, disconnectedAt: null },
         data: {
           accessToken: tokens.accessToken,
           refreshToken: tokens.refreshToken ?? channel.refreshToken,
