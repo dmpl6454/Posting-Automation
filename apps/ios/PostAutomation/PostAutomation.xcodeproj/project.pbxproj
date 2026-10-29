@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		0549C19EA201F26B16BB9CEF /* TRPCClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C575C3B99D0CCBE40B4AFB8C /* TRPCClientTests.swift */; };
 		24AED4969CD76D9057762215 /* TRPCClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8E4E8D01FD26A63F8F941BE /* TRPCClient.swift */; };
+		30A052592FBE81E7451F0838 /* Notification.swift in Sources */ = {isa = PBXBuildFile; fileRef = 780CF38CD9D1E098F9FA5274 /* Notification.swift */; };
 		3D14B8D9BD52E93F49FEAAD6 /* ComposeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F299A69FF530BC344C35326 /* ComposeView.swift */; };
 		3FA46FDB589C6611BFBFDF4D /* LoginUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 508F07865518EC5587FA9E2E /* LoginUITests.swift */; };
 		4469FC953A0761801F7F2686 /* User.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B09A76AE65CB9144FF2C7CC /* User.swift */; };
@@ -51,6 +52,7 @@
 		508F07865518EC5587FA9E2E /* LoginUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginUITests.swift; sourceTree = "<group>"; };
 		5B35098634D11F1A762EE4D1 /* ChannelsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChannelsView.swift; sourceTree = "<group>"; };
 		70C202BC29787754F7D50EE8 /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
+		780CF38CD9D1E098F9FA5274 /* Notification.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notification.swift; sourceTree = "<group>"; };
 		7B09A76AE65CB9144FF2C7CC /* User.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = User.swift; sourceTree = "<group>"; };
 		8F299A69FF530BC344C35326 /* ComposeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposeView.swift; sourceTree = "<group>"; };
 		91432D70C7F52CAE8786C9D3 /* PostAutomationUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = PostAutomationUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -188,6 +190,7 @@
 			isa = PBXGroup;
 			children = (
 				F086111A5C52B8C7D9E6B76F /* Models.swift */,
+				780CF38CD9D1E098F9FA5274 /* Notification.swift */,
 				7B09A76AE65CB9144FF2C7CC /* User.swift */,
 			);
 			path = Models;
@@ -305,6 +308,7 @@
 				9BA09188897B9488276BC575 /* HomeView.swift in Sources */,
 				82A4A708E5378757585DE20E /* LoginView.swift in Sources */,
 				4E3F23AC854D99B5F72D4835 /* Models.swift in Sources */,
+				30A052592FBE81E7451F0838 /* Notification.swift in Sources */,
 				BFD4477B70B65D041F8FBAA2 /* PostAutomationApp.swift in Sources */,
 				8E4F13F31F4023066BA443EC /* PostsView.swift in Sources */,
 				DF8DD1AEFE9AE5EEAD6989DD /* SessionStore.swift in Sources */,

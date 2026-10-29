@@ -133,9 +133,15 @@ struct PostTarget: Decodable, Identifiable, Hashable {
     let publishedUrl: String?
     let errorMessage: String?
     let publishedAt: Date?
+    /// Set when the platform could not confirm whether the publish landed
+    /// (2026-08-18 duplicate-post guard). Such a target is FAILED in `status`
+    /// but must be shown as "Needs check" — never as a plain failure that
+    /// invites a Retry, because retrying is what created the duplicates.
+    let ambiguousAt: Date?
     let channel: Channel
 
     var publishedURL: URL? { publishedUrl.flatMap(URL.init(string:)) }
+    var needsCheck: Bool { ambiguousAt != nil }
 }
 
 struct Post: Decodable, Identifiable, Hashable {
@@ -149,9 +155,20 @@ struct Post: Decodable, Identifiable, Hashable {
     let createdAt: Date
     let updatedAt: Date
     let targets: [PostTarget]
+    /// `post.list` / `post.getById` include `mediaAttachments: { include: { media } }`.
+    /// Optional so a list shape that omits it can never make a page undecodable.
+    let mediaAttachments: [PostMediaAttachment]?
 
     /// Best "when" for display: published > scheduled > created.
     var displayDate: Date { publishedAt ?? scheduledAt ?? createdAt }
+
+    /// Attached media in display order (`PostMedia.order`, then stable).
+    var media: [MediaItem] {
+        (mediaAttachments ?? [])
+            .enumerated()
+            .sorted { ($0.element.order ?? $0.offset) < ($1.element.order ?? $1.offset) }
+            .map(\.element.media)
+    }
 }
 
 struct PostListPage: Decodable {
@@ -167,6 +184,42 @@ struct PostListInput: Encodable {
     var sort: String = "newest"
 }
 
+// MARK: - Media (Post.mediaAttachments[].media, upload.complete)
+
+/// The Prisma `Media` row. `fileSize` is a BigInt (superjson encodes it as a
+/// string + meta) and `metadata` is Json — both deliberately NOT modelled.
+struct MediaItem: Decodable, Identifiable, Hashable {
+    let id: String
+    let url: String
+    let fileName: String?
+    let fileType: String?
+    let thumbnailUrl: String?
+
+    var isVideo: Bool { fileType?.hasPrefix("video/") == true }
+    var mediaURL: URL? { URL(string: url) }
+    /// Something an `<img>`-equivalent may load: a video's thumbnail when the
+    /// worker produced one, an image's own URL, never a video file itself.
+    var previewURL: URL? {
+        if let thumbnailUrl, let u = URL(string: thumbnailUrl) { return u }
+        return isVideo ? nil : mediaURL
+    }
+}
+
+/// `PostMedia` join row (`post.list` includes it with the media relation).
+struct PostMediaAttachment: Decodable, Identifiable, Hashable {
+    let id: String
+    let order: Int?
+    let media: MediaItem
+}
+
+/// `upload.complete` (and the proxied `/api/upload`) answer `{ id, url, fileName, fileType }`.
+struct UploadedMedia: Decodable, Identifiable, Hashable {
+    let id: String
+    let url: String
+    let fileName: String
+    let fileType: String
+}
+
 // MARK: - Compose (post.create)
 
 struct CreatePostInput: Encodable {
@@ -174,6 +227,10 @@ struct CreatePostInput: Encodable {
     let channelIds: [String]
     /// ISO 8601 string; omit for a draft.
     let scheduledAt: String?
+    /// `Media.id`s from `upload.complete`, in display order. nil (omitted) for a
+    /// text-only post — synthesized `Encodable` skips nil optionals, which is what
+    /// the zod `.optional()` on the server expects (it rejects an explicit null).
+    var mediaIds: [String]? = nil
 }
 
 /// `post.create` returns the created Post; we only rely on `id`/`status` so a
@@ -181,6 +238,27 @@ struct CreatePostInput: Encodable {
 struct CreatedPost: Decodable {
     let id: String
     let status: PostStatus?
+}
+
+// MARK: - Small shared inputs / acknowledgements
+
+/// `{ id }` — post.getById / post.delete / notification.markRead / ...
+struct IdInput: Encodable {
+    let id: String
+}
+
+/// `post.publishNow { id, targetIds? }` — omit `targetIds` to publish every
+/// claimable target; pass the FAILED ones to retry only those.
+struct PublishNowInput: Encodable {
+    let id: String
+    var targetIds: [String]? = nil
+}
+
+/// Lenient ack for mutations that answer `{ success: true }` (post.delete,
+/// post.publishNow, notification.markRead/markAllRead). Every field optional so a
+/// richer future payload can never fail the decode.
+struct Ack: Decodable {
+    let success: Bool?
 }
 
 // MARK: - Dashboard (analytics.dashboardStats)
