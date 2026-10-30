@@ -167,7 +167,7 @@ Filter to one workspace: `pnpm --filter @postautomation/web <cmd>`
 - **Local**: `.env` (gitignored). Template: [.env.example](.env.example).
 - **Production**: `.env.production` on the server (gitignored). Template: [.env.production.example](.env.production.example).
 - Many OAuth/API credentials are intentionally left blank (Twitter, LinkedIn, FB, IG, Reddit, YouTube, TikTok, Pinterest, OpenAI, Anthropic, Gemini, Stripe, Resend, Hunter, Sentry). The app boots without them; affected features just don't work until filled in.
-- **Configured in production**: `AUTH_GOOGLE_ID/SECRET`, `AUTH_SECRET`/`NEXTAUTH_SECRET`, `SMTP_*` (Google Workspace), `TWITTER_CLIENT_ID/SECRET` (live — Consumer Key/Secret, public posting active), plus the Meta + YouTube OAuth creds. GitHub OAuth was removed — not needed. (TikTok creds ARE set — Direct Post audited; accounts are connected via VPN from India; see Channel Connections → TikTok specifics.)
+- **Configured in production**: `AUTH_GOOGLE_ID/SECRET`, `AUTH_SECRET`/`NEXTAUTH_SECRET`, `SMTP_*` (Google Workspace), `TWITTER_CLIENT_ID/SECRET` (live — Consumer Key/Secret, public posting active), plus the Meta + YouTube OAuth creds. GitHub OAuth was removed — not needed. (TikTok creds ARE set — Direct Post audited, video posting LIVE since 2026-10-30; accounts are connected via VPN from India; see Channel Connections → TikTok specifics.)
 
 ## Deployment
 
@@ -308,7 +308,13 @@ The `platformAuthInfo` tRPC query tells the UI which type each platform is and w
 - **Analytics needs a paid tier:** `getPostAnalytics` hits `/2/tweets/{id}?tweet.fields=public_metrics` which 403s on Free; posting works regardless.
 - Full operator guide: [docs/TWITTER_TIKTOK_SETUP.md](docs/TWITTER_TIKTOK_SETUP.md).
 
-**TikTok specifics — VIDEO POSTING BUILT (2026-10-28, branch `feat/tiktok-video-posting-2026-10-28`) — read before touching the TikTok provider, Compose's TikTok card or `Post.metadata.tiktokByChannel`:**
+**TikTok specifics — VIDEO POSTING LIVE in production (2026-10-30, PR #249, merge `e3f2553`) — read before touching the TikTok provider, Compose's TikTok card or `Post.metadata.tiktokByChannel`:**
+
+- **✅ LIVE 2026-10-30:** merged and deployed 09:13 UTC (deploy run green; worker verified running the TikTok
+  code, `TIKTOK_CLIENT_ID` present, `TIKTOK_RESEARCH_ENABLED` unset = off). Pre-deploy dump:
+  `/root/backups/predeploy-pr249-20261030T090148Z.dump`; rollback commit `56f7bab`. **⏳ Not yet verified
+  end to end:** no TikTok channel is connected on prod yet — the first real connect (via VPN) and first
+  Direct Post are the outstanding proof. Update this line once a live post is confirmed.
 
 Design + the audit that drove it: [docs/superpowers/specs/2026-10-28-tiktok-video-posting-design.md](docs/superpowers/specs/2026-10-28-tiktok-video-posting-design.md).
 The pre-2026-10-28 provider could neither connect nor publish: TikTok's v2 SUCCESS body carries
