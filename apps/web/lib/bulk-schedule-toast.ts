@@ -2,6 +2,7 @@ export type BulkScheduleResult = {
   scheduled: number;
   skippedStories?: number;
   skippedPending?: number;
+  skippedTikTok?: number;
 };
 
 /**
@@ -11,6 +12,7 @@ export type BulkScheduleResult = {
 export function bulkScheduleToast(result: BulkScheduleResult): { title: string; description: string } {
   const skippedStories = result.skippedStories ?? 0;
   const skippedPending = result.skippedPending ?? 0;
+  const skippedTikTok = result.skippedTikTok ?? 0;
 
   let description =
     result.scheduled > 0 ? `${result.scheduled} post(s) scheduled successfully.` : "No posts were scheduled.";
@@ -23,6 +25,13 @@ export function bulkScheduleToast(result: BulkScheduleResult): { title: string; 
   // super-text burn still in flight.
   if (skippedPending > 0) {
     description += ` ${skippedPending} post(s) were skipped — unique captions or super text are still being prepared, or need your attention on the post page.`;
+  }
+
+  // A TikTok post needs its per-channel settings and exactly one video
+  // (2026-10-28); the server will not arm it otherwise. No screen can add
+  // TikTok settings to an existing post, so point to where they are chosen.
+  if (skippedTikTok > 0) {
+    description += ` ${skippedTikTok} TikTok post(s) were skipped — they're missing TikTok settings or a single video. Create them in Content Studio to post them to TikTok.`;
   }
 
   return { title: result.scheduled > 0 ? "Scheduled" : "Nothing scheduled", description };

@@ -205,6 +205,24 @@ describe("runCaptionFanout", () => {
     expect(generateText).toHaveBeenCalledTimes(1);
   });
 
+  it("never writes an AI caption for a TikTok target — it keeps the shared caption the user saw (2026-10-28)", async () => {
+    const { prisma, state } = statefulPrisma(pendingFanoutPost([target("t1", "BLUESKY"), target("t2", "TIKTOK")]));
+    const generateText = vi.fn(async (_prompt: string) => '[{"index":0,"caption":"Fresh unique caption"}]');
+    const result = await runCaptionFanout({ postId: "post-1", organizationId: "org-1" }, { prisma: prisma as any, generateText, charLimitFor });
+    expect(generateText.mock.calls[0]![0]).not.toContain("chan-t2");
+    expect(state.post.targets.find((t) => t.id === "t2")!.contentOverride).toBeNull();
+    expect(result).toMatchObject({ generated: 1, flipped: true });
+  });
+
+  it("a TikTok-only post makes no AI call and is NOT held — it publishes the shared caption", async () => {
+    const { prisma, state } = statefulPrisma(pendingFanoutPost([target("t1", "TIKTOK"), target("t2", "TIKTOK")]));
+    const generateText = vi.fn(async () => "[]");
+    const result = await runCaptionFanout({ postId: "post-1", organizationId: "org-1" }, { prisma: prisma as any, generateText, charLimitFor });
+    expect(generateText).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ generated: 0, flipped: true });
+    expect(state.post.status).toBe("SCHEDULED");
+  });
+
   it("HOLD: when no channel gets a caption, the post stays a DRAFT and is NOT published", async () => {
     // Was "SAFETY VALVE: generation failure still flips DRAFT→SCHEDULED". Owner
     // decision 2026-09-28: total failure holds instead of publishing the shared

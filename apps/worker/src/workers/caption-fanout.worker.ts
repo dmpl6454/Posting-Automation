@@ -34,6 +34,8 @@ import { QUEUE_NAMES, createRedisConnection, type CaptionFanoutJobData } from "@
 export const CAPTION_CHUNK_SIZE = 10;
 
 /** Fallback when a platform has no known char limit (Instagram's 2200). */
+/** Platforms whose targets never get an AI-written caption (see the pending filter). */
+export const CAPTION_FANOUT_EXCLUDED_PLATFORMS: ReadonlySet<string> = new Set(["TIKTOK"]);
 const DEFAULT_CHAR_LIMIT = 2200;
 
 type FanoutTarget = {
@@ -396,7 +398,13 @@ export async function runCaptionFanout(
   const targets: FanoutTarget[] = post.targets ?? [];
   // Idempotency: a re-run (BullMQ retry) never regenerates a caption that was
   // already written — only NULL-override targets are pending.
-  const pending = targets.filter((t) => t.contentOverride == null);
+  // TikTok is never given an AI caption (2026-10-28): its Content Sharing
+  // Guidelines require the user to have seen and be able to edit the exact text
+  // that is posted, and this one is written after they click Publish. A TikTok
+  // target publishes the shared caption they wrote.
+  const pending = targets.filter(
+    (t) => t.contentOverride == null && !CAPTION_FANOUT_EXCLUDED_PLATFORMS.has(t.channel.platform)
+  );
   let generated = 0;
   let degraded = false;
   let outOfCredit = false;

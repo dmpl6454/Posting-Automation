@@ -726,8 +726,9 @@ function getDefaultScopes(platform: string): string[] {
     // TikTok Content Posting API. `video.publish` = Direct Post (what publishPost
     // uses via PULL_FROM_URL); `video.upload` = upload-to-drafts; `user.info.basic`
     // backs getProfile (/v2/user/info/). The provider joins these with "," (TikTok's
-    // required separator). Until the app's Content Posting API audit is approved,
-    // TikTok runs as an unaudited client: test users only + posts forced SELF_ONLY.
+    // required separator). The app's Content Posting API (Direct Post) is AUDITED
+    // (owner, 2026-10-28), so public posts are allowed. Changing this list forces
+    // every connected TikTok account to reconnect — which from India needs a VPN.
     TIKTOK: ["user.info.basic", "video.publish", "video.upload"],
     YOUTUBE: [
       "https://www.googleapis.com/auth/youtube.upload",

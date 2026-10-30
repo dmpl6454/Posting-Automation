@@ -29,6 +29,15 @@ import {
  * unique). The caller decides how to surface `degraded`.
  */
 
+/**
+ * Platforms whose targets always keep the user's OWN burn (variant 0), never an
+ * AI-written line (2026-10-28). TikTok's Content Sharing Guidelines require the
+ * user to have seen exactly what is posted; an AI line burned into the video was
+ * never in the Compose preview. Same rule as the caption fan-out's
+ * CAPTION_FANOUT_EXCLUDED_PLATFORMS.
+ */
+export const PER_CHANNEL_SUPER_TEXT_EXCLUDED_PLATFORMS: ReadonlySet<string> = new Set(["TIKTOK"]);
+
 export interface PerChannelTarget {
   id: string;
   channel: { name: string | null; username: string | null; platform: string };
@@ -97,7 +106,9 @@ export async function runPerChannelSuperText(
 ): Promise<PerChannelOutcome> {
   const log = deps.log ?? ((m: string) => console.log(m));
   const state: PerChannelState = { ...(input.state ?? {}) };
-  const targets = await deps.loadTargets();
+  // Excluded platforms are left out entirely: they are never assigned a variant,
+  // so they publish the shared burn, and their names never reach the prompt.
+  const targets = (await deps.loadTargets()).filter((t) => !PER_CHANNEL_SUPER_TEXT_EXCLUDED_PLATFORMS.has(t.channel.platform));
   const base = { targets: targets.length, burned: 0, unique: 0, onBase: 0, fallback: 0 };
   if (targets.length <= 1) {
     return { ...base, onBase: targets.length, degraded: false, state };

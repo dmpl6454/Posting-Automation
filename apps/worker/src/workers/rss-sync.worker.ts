@@ -4,6 +4,7 @@ import { QUEUE_NAMES, type RssSyncJobData, createRedisConnection } from "@postau
 import { parseRssItems, type RssItem } from "@postautomation/ai/src/utils/rss-parser";
 import { resolveOrgAuthor } from "../lib/system-user";
 import { userHostFetch } from "@postautomation/social";
+import { withoutTikTokChannels } from "../lib/unattended-tiktok";
 
 async function generatePostFromEntry(
   entry: { title: string; summary: string },
@@ -118,6 +119,18 @@ export function createRssSyncWorker() {
             take: 10, // Process at most 10 at a time
           });
 
+          // Never a TikTok target from an unattended feed — see unattended-tiktok.ts.
+          const targetChannelRows = await prisma.channel.findMany({
+            where: { id: { in: feed.targetChannels } },
+            select: { id: true, platform: true },
+          });
+          const rssTargets = withoutTikTokChannels(feed.targetChannels, targetChannelRows);
+          if (rssTargets.droppedTikTok > 0) {
+            console.warn(
+              `[RssSync] Feed ${feed.name}: skipping ${rssTargets.droppedTikTok} TikTok channel(s) — TikTok posts are made in Content Studio`
+            );
+          }
+
           let authorId: string;
           try {
             authorId = await resolveOrgAuthor(organizationId);
@@ -146,7 +159,7 @@ export function createRssSyncWorker() {
                   aiProvider: provider,
                   aiPrompt: `RSS auto-post from: ${entry.title}`,
                   targets: {
-                    create: feed.targetChannels.map((channelId) => ({
+                    create: rssTargets.ids.map((channelId) => ({
                       channelId,
                       status: "DRAFT" as const,
                     })),

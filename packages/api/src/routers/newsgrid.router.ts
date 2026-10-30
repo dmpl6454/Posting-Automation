@@ -415,12 +415,21 @@ Requirements:
       const channelIds = [...new Set(input.payloads.map((p) => p.channelId))];
       const ownedChannels = await ctx.prisma.channel.findMany({
         where: { id: { in: channelIds }, organizationId: ctx.organizationId },
-        select: { id: true },
+        select: { id: true, platform: true },
       });
       if (ownedChannels.length !== channelIds.length) {
         const ownedSet = new Set(ownedChannels.map((c) => c.id));
         const invalid = channelIds.filter((id) => !ownedSet.has(id));
         throw new TRPCError({ code: "FORBIDDEN", message: `Channels not in this organization: ${invalid.join(", ")}` });
+      }
+      // A news card is an IMAGE, and a TikTok post needs a video plus the
+      // creator's own choices (who can see it), which only Compose collects.
+      // A TikTok target here could only fail at publish.
+      if (ownedChannels.some((c) => c.platform === "TIKTOK")) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "TikTok posts are made in Content Studio, with a video and the creator's own settings — remove the TikTok channels.",
+        });
       }
 
       const created: string[] = [];

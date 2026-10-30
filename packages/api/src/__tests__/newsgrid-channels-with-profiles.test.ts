@@ -114,3 +114,18 @@ describe("newsgrid.channelsWithProfiles", () => {
     expect(res.map((c) => c.metadata)).toEqual([{}, {}]);
   });
 });
+
+describe("newsgrid.bulkPublish — TikTok (2026-10-28)", () => {
+  it("refuses a TikTok channel before creating anything: a news card is an image, and TikTok needs a video plus the creator's own settings", async () => {
+    channelFindMany.mockResolvedValueOnce([{ id: "ch-tt", platform: "TIKTOK" }]);
+    const create = vi.fn();
+    (prismaMock as any).post = { create };
+    await expect(
+      caller().bulkPublish({
+        headline: "h",
+        payloads: [{ channelId: "ch-tt", caption: "c", hashtags: [], cta: "", scheduleTime: null }],
+      })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST", message: expect.stringMatching(/TikTok/) });
+    expect(create).not.toHaveBeenCalled();
+  });
+});

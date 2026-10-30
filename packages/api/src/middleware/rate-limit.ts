@@ -185,3 +185,15 @@ export const commentDraftRateLimiter = createRateLimiter({ windowMs: 60_000, max
  */
 export const messageReadRateLimiter = createRateLimiter({ windowMs: 60_000, max: 90 });
 export const messageSendRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
+
+/**
+ * TikTok creator_info (2026-10-28). TikTok allows 20 creator_info calls a minute
+ * PER TOKEN, and the publish worker spends the same budget (TikTok requires a
+ * fresh creator_info before every post) — so the binding limit is the 15/min
+ * per TikTok ACCOUNT across every user and org, which leaves headroom for
+ * publishing. The per-user limit only stops one client hammering the API: it
+ * was 20, so an agency selecting more than 20 TikTok accounts in Compose (one
+ * query each) was refused for the rest and the whole post was blocked.
+ */
+export const tiktokCreatorInfoRateLimiter = createRateLimiter({ windowMs: 60_000, max: 200 });
+export const tiktokCreatorInfoAccountLimiter = createRateLimiter({ windowMs: 60_000, max: 15 });

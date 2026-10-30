@@ -7,6 +7,7 @@ import { parseVideoReadyEvent, isVideoErrorEvent, finalizeRunningSteps } from "~
 import { stripBareUrls } from "~/lib/strip-bare-urls";
 import { shouldBlockMediaLessPublish } from "~/lib/repurpose-media-guard";
 import { shouldClassifyStyleRefOnBlur } from "~/lib/style-ref-classify";
+import { excludeTikTokChannels, TIKTOK_POSTS_IN_COMPOSE_TEXT } from "~/lib/tiktok-post";
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { trpc } from "~/lib/trpc/client";
@@ -550,7 +551,12 @@ export function RepurposeTab() {
   const [selectedChannelIds, setSelectedChannelIds] = useState<string[]>([]);
   const [channelSearch, setChannelSearch] = useState("");
   const [publishingState, setPublishingState] = useState<"idle" | "publishing" | "done">("idle");
-  const filteredChannels = activeChannels.filter((c: any) =>
+  // "Create Drafts" sends no TikTok settings (privacy, interactions,
+  // disclosure), and only Compose can choose them — a TikTok draft made here
+  // could never be posted. So TikTok channels are not offered as targets.
+  const draftableChannels = excludeTikTokChannels(activeChannels);
+  const hasTikTokChannels = draftableChannels.length < activeChannels.length;
+  const filteredChannels = draftableChannels.filter((c: any) =>
     !channelSearch || c.name?.toLowerCase().includes(channelSearch.toLowerCase()) || c.username?.toLowerCase().includes(channelSearch.toLowerCase()) || c.platform?.toLowerCase().includes(channelSearch.toLowerCase())
   );
 
@@ -2070,7 +2076,7 @@ export function RepurposeTab() {
           </div>
 
           {/* Publish to Channels */}
-          {activeChannels.length > 0 && (
+          {draftableChannels.length > 0 && (
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <Label className="text-[11.5px] font-medium leading-none text-muted-foreground">Publish to Channels</Label>
@@ -2080,15 +2086,15 @@ export function RepurposeTab() {
                   </span>
                   <button
                     onClick={() => setSelectedChannelIds(
-                      selectedChannelIds.length === activeChannels.length ? [] : activeChannels.map((c: any) => c.id)
+                      selectedChannelIds.length === draftableChannels.length ? [] : draftableChannels.map((c: any) => c.id)
                     )}
                     className="text-[11px] leading-none text-gold hover:underline"
                   >
-                    {selectedChannelIds.length === activeChannels.length ? "Deselect All" : "Select All"}
+                    {selectedChannelIds.length === draftableChannels.length ? "Deselect All" : "Select All"}
                   </button>
                 </div>
               </div>
-              {activeChannels.length > 5 && (
+              {draftableChannels.length > 5 && (
                 <Input
                   placeholder="Search channels..."
                   value={channelSearch}
@@ -2130,6 +2136,11 @@ export function RepurposeTab() {
                 )}
               </div>
             </div>
+          )}
+          {hasTikTokChannels && (
+            <p className="text-[11px] leading-snug text-muted-foreground" data-testid="repurpose-tiktok-note">
+              {TIKTOK_POSTS_IN_COMPOSE_TEXT}
+            </p>
           )}
 
           {/* AI Text Provider — governs captions/headline/hook ONLY. Images are

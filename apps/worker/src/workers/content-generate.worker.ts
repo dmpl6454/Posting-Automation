@@ -8,6 +8,7 @@ import {
 } from "@postautomation/queue";
 import { resolveOrgAuthor } from "../lib/system-user";
 import { deriveRunStatus } from "./lib/run-status";
+import { autopilotSkipReason } from "./autopilot-platforms";
 import {
   generateContent,
   suggestHashtags,
@@ -247,12 +248,14 @@ export function createContentGenerateWorker() {
 
         let createdTargets = 0;
         for (const channel of channels) {
-          // Autopilot generates still images only, never video. YouTube requires a
-          // video file to publish, so an image-only YouTube target always fails at
-          // publish time. Skip it until autopilot can produce video.
-          if (channel.platform === "YOUTUBE") {
+          // Autopilot generates still images only, never video, with nobody at the
+          // keyboard: YouTube and TikTok targets would always fail at publish time
+          // (and TikTok needs the creator's own visibility choice). See
+          // autopilot-platforms.ts.
+          const skipReason = autopilotSkipReason(channel.platform);
+          if (skipReason) {
             console.warn(
-              `[ContentGenerate] Skipping YOUTUBE channel ${channel.id} — autopilot produces images, not video`
+              `[ContentGenerate] Skipping ${channel.platform} channel ${channel.id} — ${skipReason}`
             );
             continue;
           }
@@ -274,7 +277,7 @@ export function createContentGenerateWorker() {
         // schedule job for an unpublishable post.
         if (createdTargets === 0) {
           const reason =
-            "No publishable channels: autopilot produces images, but the agent's only channels need video (e.g. YouTube). Add an image-capable channel or enable video generation.";
+            "No publishable channels: autopilot produces images, but the agent's only channels need video (e.g. YouTube or TikTok). Add an image-capable channel or enable video generation.";
           console.warn(
             `[ContentGenerate] Agent ${agent.id} produced a post with no publishable channels; marking FAILED. ${reason}`,
           );

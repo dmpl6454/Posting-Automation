@@ -292,6 +292,10 @@ services:
       REDDIT_CLIENT_SECRET: ${REDDIT_CLIENT_SECRET}
       TIKTOK_CLIENT_ID: ${TIKTOK_CLIENT_ID}
       TIKTOK_CLIENT_SECRET: ${TIKTOK_CLIENT_SECRET}
+      # TikTok RESEARCH API (social listening + brand sync). Needs a separately
+      # approved research client; the keys above are the Content Posting app's,
+      # so leave this unset (OFF). Fail-CLOSED in code (=== "true").
+      TIKTOK_RESEARCH_ENABLED: ${TIKTOK_RESEARCH_ENABLED}
       PINTEREST_CLIENT_ID: ${PINTEREST_CLIENT_ID}
       PINTEREST_CLIENT_SECRET: ${PINTEREST_CLIENT_SECRET}
       FAST2SMS_API_KEY: ${FAST2SMS_API_KEY}

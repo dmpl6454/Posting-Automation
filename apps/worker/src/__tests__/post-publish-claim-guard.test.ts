@@ -123,6 +123,14 @@ const h = vi.hoisted(() => {
         return s.channel;
       }),
       update: vi.fn(async () => ({})),
+      // The race-safe token refresh (lib/channel-token-refresh.ts, 2026-10-28)
+      // re-reads the row and writes under an optimistic lock.
+      findUnique: vi.fn(async () => {
+        if (s.channelError) throw s.channelError;
+        const c = s.channel as any;
+        return c ? { accessToken: c.accessToken, refreshToken: c.refreshToken, tokenExpiresAt: c.tokenExpiresAt } : null;
+      }),
+      updateMany: vi.fn(async () => ({ count: 1 })),
     },
     post: {
       findUnique: vi.fn(async () => ({ scheduledAt: null, createdById: null })),
@@ -201,7 +209,13 @@ vi.mock("@postautomation/social", async (importOriginal) => {
 
 import { UnrecoverableError } from "bullmq";
 import { createPostPublishWorker } from "../workers/post-publish.worker";
-import { ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE, OPTIMIZE_WAIT_MESSAGE } from "../lib/publish-recovery";
+import {
+  ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE,
+  OPTIMIZE_WAIT_MESSAGE,
+  TIKTOK_PROCESSING_WAIT_MESSAGE,
+  TIKTOK_PROCESSING_CEILING_MS,
+} from "../lib/publish-recovery";
+import { TikTokStillProcessingError, PublishRefusedError } from "@postautomation/social";
 import { awaitBackgroundTasks, pendingBackgroundTaskCount } from "../lib/background-tasks";
 
 const { s, rows, tick, prisma, queue } = h;
@@ -648,7 +662,7 @@ describe("dead token fails fast instead of retrying into a false ambiguity", () 
     expect(rows.get("t1")!.status).toBe("FAILED");
   });
 
-  it("refresh SUCCEEDED but the re-publish failed → unchanged plain Error", async () => {
+  it("refresh SUCCEEDED but the re-publish failed → that error itself, still plain (BullMQ may retry)", async () => {
     const publishPost = vi.fn(async () => {
       throw new Error(IG_PUBLISH_190);
     });
@@ -661,8 +675,15 @@ describe("dead token fails fast instead of retrying into a false ambiguity", () 
     const err = await runExpectingError(makeJob());
 
     expect(err).not.toBeInstanceOf(UnrecoverableError);
+    expect(err.message).toBe(IG_PUBLISH_190);
+    // The re-publish's own words (2026-10-28) — no longer "refresh failed", which
+    // was false: the refresh worked.
+    expect(rows.get("t1")!.errorMessage).toBe(IG_PUBLISH_190);
     expect(publishPost).toHaveBeenCalledTimes(2);
-    expect(prisma.channel.update).toHaveBeenCalledTimes(1);
+    // Persisted once — through the optimistic-lock write since 2026-10-28
+    // (lib/channel-token-refresh.ts), not a plain channel.update.
+    expect(prisma.channel.updateMany).toHaveBeenCalledTimes(1);
+    expect(prisma.channel.update).not.toHaveBeenCalled();
   });
 
   it("no refresh possible → judged on the ORIGINAL publish error", async () => {
@@ -972,6 +993,321 @@ describe("channel-routed platforms publish where the CHANNEL says (2026-10-01)",
     const [tokens, payload] = publishPost.mock.calls[0]!;
     expect(Object.keys(tokens)).toEqual(["accessToken", "refreshToken"]);
     expect(Object.keys(payload).sort()).toEqual(["content", "mediaTypes", "mediaUrls", "metadata", "onCheckpoint", "onProgress"]);
+  });
+});
+
+describe("TikTok provider metadata (2026-10-28)", () => {
+  // The per-channel settings contract (packages/social/src/utils/tiktok-posting.ts):
+  // the server writes Post.metadata.tiktokByChannel; the worker hands the
+  // provider ONLY this target's block as metadata.tiktok, plus the creator's
+  // handle (for the post URL) and the probed video length (for the
+  // max_video_post_duration_sec check).
+  const MINE = {
+    privacyLevel: "FOLLOWER_OF_CREATOR",
+    allowComment: true,
+    allowDuet: false,
+    allowStitch: false,
+    brandOrganic: false,
+    brandContent: false,
+    isAigc: true,
+  };
+  const OTHER = { ...MINE, privacyLevel: "PUBLIC_TO_EVERYONE", allowDuet: true };
+
+  function video(over: Record<string, unknown> = {}) {
+    return {
+      media: {
+        id: "v1",
+        url: "https://cdn.example.com/v.mp4",
+        fileType: "video/mp4",
+        fileSize: 50 * 1024 * 1024,
+        duration: 43,
+        metadata: { optimize: { status: "skipped", probe: { videoCodec: "h264", width: 1080, height: 1920, durationSec: 42.5, fps: 30 } } },
+        ...over,
+      },
+    };
+  }
+
+  function seedTikTok() {
+    const publishPost = vi.fn(async (..._a: any[]): Promise<any> => ({
+      platformPostId: "7300000000000000001",
+      url: "https://www.tiktok.com/@channel/video/7300000000000000001",
+    }));
+    s.provider = realProvider("TIKTOK", { publishPost, findExistingPost: undefined });
+    seedChannel("TIKTOK");
+    s.channel.metadata = { openId: "open-1" };
+    seedPost([video()]);
+    s.post.metadata = {
+      tiktokByChannel: { ch1: MINE, ch2: OTHER },
+      // A stray client copy / YouTube's title must never stand in for this channel's choice.
+      tiktok: { privacyLevel: "PUBLIC_TO_EVERYONE", allowComment: true },
+      title: "yt title",
+    };
+    return publishPost;
+  }
+  const tiktokJob = () => makeJob({ data: { ...makeJob().data, platform: "TIKTOK" } });
+
+  it("passes only THIS channel's settings, the @handle and the probed duration — channel metadata still last", async () => {
+    const publishPost = seedTikTok();
+    seedTarget("t1");
+
+    await s.processor!(tiktokJob());
+
+    expect(publishPost).toHaveBeenCalledTimes(1);
+    const [, payload] = publishPost.mock.calls[0]!;
+    expect(payload.metadata.tiktok).toEqual(MINE);
+    expect(payload.metadata.channelUsername).toBe("channel");
+    expect(payload.metadata.videoDurationSec).toBe(42.5);
+    // Other channels' blocks are not this provider's business.
+    expect("tiktokByChannel" in payload.metadata).toBe(false);
+    expect(payload.metadata.openId).toBe("open-1");
+    expect(payload.metadata.title).toBe("yt title"); // the rest of the post metadata is untouched
+    expect(rows.get("t1")).toMatchObject({ status: "PUBLISHED", publishedId: "7300000000000000001" });
+  });
+
+  it("no settings for this channel ⇒ no `tiktok` key at all (a stray top-level copy is dropped), so the provider refuses", async () => {
+    const publishPost = seedTikTok();
+    s.post.metadata = { tiktokByChannel: { ch2: OTHER }, tiktok: { privacyLevel: "PUBLIC_TO_EVERYONE" } };
+    seedTarget("t1");
+
+    await s.processor!(tiktokJob());
+
+    const [, payload] = publishPost.mock.calls[0]!;
+    expect("tiktok" in payload.metadata).toBe(false);
+    expect("tiktokByChannel" in payload.metadata).toBe(false);
+  });
+
+  it("a malformed block for this channel (no valid privacy level) is treated as no settings", async () => {
+    const publishPost = seedTikTok();
+    s.post.metadata = { tiktokByChannel: { ch1: { ...MINE, privacyLevel: "EVERYONE_PLEASE" } } };
+    seedTarget("t1");
+    await s.processor!(tiktokJob());
+    expect("tiktok" in publishPost.mock.calls[0]![1].metadata).toBe(false);
+  });
+
+  it("no probe yet ⇒ falls back to the Media duration column; neither ⇒ no videoDurationSec key", async () => {
+    let publishPost = seedTikTok();
+    seedPost([video({ metadata: { optimize: { status: "pending" } } })]);
+    s.post.metadata = { tiktokByChannel: { ch1: MINE } };
+    seedTarget("t1");
+    await s.processor!(tiktokJob());
+    expect(publishPost.mock.calls[0]![1].metadata.videoDurationSec).toBe(43);
+
+    rows.clear();
+    publishPost = seedTikTok();
+    seedPost([video({ metadata: null, duration: null })]);
+    s.post.metadata = { tiktokByChannel: { ch1: MINE } };
+    seedTarget("t1");
+    await s.processor!(tiktokJob());
+    expect("videoDurationSec" in publishPost.mock.calls[0]![1].metadata).toBe(false);
+  });
+
+  it("a channel without a username gets no channelUsername key", async () => {
+    const publishPost = seedTikTok();
+    s.channel.username = null;
+    seedTarget("t1");
+    await s.processor!(tiktokJob());
+    expect("channelUsername" in publishPost.mock.calls[0]![1].metadata).toBe(false);
+  });
+
+  it("the channel row's own metadata still wins on a key collision (kept last)", async () => {
+    const publishPost = seedTikTok();
+    s.channel.metadata = { openId: "open-1", channelUsername: "from-channel-row" };
+    seedTarget("t1");
+    await s.processor!(tiktokJob());
+    expect(publishPost.mock.calls[0]![1].metadata.channelUsername).toBe("from-channel-row");
+  });
+
+  it.each(["INSTAGRAM", "YOUTUBE"])(
+    "%s metadata is byte-identical: post + target + channel, nothing added or removed",
+    async (platform) => {
+      const publishPost = vi.fn(async (..._a: any[]) => ({ platformPostId: "p-1", url: "https://example.com/p/1" }));
+      s.provider = realProvider(platform, { publishPost });
+      seedChannel(platform);
+      seedPost([video()]);
+      const postMeta = { tiktokByChannel: { ch1: MINE }, tiktok: { privacyLevel: "SELF_ONLY" }, title: "yt title" };
+      s.post.metadata = postMeta;
+      seedTarget("t1", { metadata: { keep: 1 } });
+
+      await s.processor!(makeJob({ data: { ...makeJob().data, platform } }));
+
+      const [, payload] = publishPost.mock.calls[0]!;
+      expect(payload.metadata).toEqual({ ...postMeta, keep: 1, igUserId: "ig1" });
+      expect(Object.keys(payload.metadata)).toEqual(["tiktokByChannel", "tiktok", "title", "keep", "igUserId"]);
+    }
+  );
+
+  it("a retry sees the publish_id checkpoint from PostTarget.metadata; onCheckpoint persists it; success stores result.metadata", async () => {
+    const checkpoint = { publishId: "v_pub_file~v2.123", createdAt: "2026-10-28T10:00:00.000Z", source: "PULL_FROM_URL" };
+    const publishPost = seedTikTok();
+    publishPost.mockImplementationOnce(async (_t: any, payload: any) => {
+      // The provider resumes from the checkpoint it finds in its metadata…
+      expect(payload.metadata.tiktokPublish).toEqual(checkpoint);
+      // …and a fresh init checkpoints through onCheckpoint (row AND in-memory).
+      await payload.onCheckpoint({ tiktokPublish: { ...checkpoint, publishId: "v_pub_url~v2.456" } });
+      expect(payload.metadata.tiktokPublish.publishId).toBe("v_pub_url~v2.456");
+      expect(rows.get("t1")!.metadata.tiktokPublish.publishId).toBe("v_pub_url~v2.456");
+      expect(rows.get("t1")!.metadata.keep).toBe(1); // merged, not replaced
+      return {
+        platformPostId: "7300000000000000001",
+        url: "https://www.tiktok.com/@channel/video/7300000000000000001",
+        metadata: { publishId: "v_pub_url~v2.456", postId: "7300000000000000001" },
+      };
+    });
+    seedTarget("t1", { metadata: { tiktokPublish: checkpoint, keep: 1 } });
+
+    await s.processor!(tiktokJob());
+
+    expect(publishPost).toHaveBeenCalledTimes(1);
+    expect(rows.get("t1")).toMatchObject({
+      status: "PUBLISHED",
+      publishedId: "7300000000000000001",
+      metadata: { publishId: "v_pub_url~v2.456", postId: "7300000000000000001" },
+    });
+  });
+
+  it("end to end: a 'still processing' attempt leaves its checkpoint for the BullMQ retry, which resumes instead of re-initing", async () => {
+    const cp = { publishId: "v_pub_url~v2.789", createdAt: "2026-10-28T10:00:00.000Z", source: "PULL_FROM_URL" };
+    const STILL_PROCESSING = "TikTok is still processing this video. It will be checked again shortly.";
+    const publishPost = seedTikTok();
+    publishPost
+      .mockImplementationOnce(async (_t: any, payload: any) => {
+        expect(payload.metadata.tiktokPublish).toBeUndefined(); // first attempt: nothing to resume
+        await payload.onCheckpoint({ tiktokPublish: cp });
+        throw new Error(STILL_PROCESSING);
+      })
+      .mockImplementationOnce(async (_t: any, payload: any) => {
+        expect(payload.metadata.tiktokPublish).toEqual(cp); // the retry resumes THIS publish
+        expect(payload.metadata.tiktok).toEqual(MINE);
+        return { platformPostId: "7300000000000000002", url: "https://www.tiktok.com/@channel/video/7300000000000000002", metadata: { publishId: cp.publishId } };
+      });
+    seedTarget("t1");
+
+    const err = await runExpectingError(tiktokJob());
+    expect(err).not.toBeInstanceOf(UnrecoverableError); // retryable — BullMQ tries again
+    expect(rows.get("t1")).toMatchObject({ status: "FAILED", errorMessage: STILL_PROCESSING, ambiguousAt: null });
+    // The FAILED write does not touch metadata: the checkpoint survives for the retry.
+    expect(rows.get("t1")!.metadata).toEqual({ tiktokPublish: cp });
+    await s.handlers.failed!({ ...tiktokJob(), attemptsMade: 1 }, err);
+    await awaitBackgroundTasks(1_000);
+    expect(rows.get("t1")!.metadata).toEqual({ tiktokPublish: cp });
+
+    await s.processor!(makeJob({ attemptsMade: 1, data: { ...makeJob().data, platform: "TIKTOK" } }));
+
+    expect(publishPost).toHaveBeenCalledTimes(2);
+    expect(rows.get("t1")).toMatchObject({ status: "PUBLISHED", publishedId: "7300000000000000002", errorMessage: null });
+  });
+
+  it("TikTok still processing ⇒ the claim is released and a re-check of the SAME publish is queued; no FAILED, no attempt spent", async () => {
+    const cp = { publishId: "v_pub_url~v2.wait", createdAt: new Date().toISOString(), source: "PULL_FROM_URL" };
+    const publishPost = seedTikTok();
+    publishPost.mockImplementationOnce(async (_t: any, payload: any) => {
+      await payload.onCheckpoint({ tiktokPublish: cp });
+      throw new TikTokStillProcessingError(cp.publishId, cp.createdAt);
+    });
+    seedTarget("t1");
+
+    await s.processor!(tiktokJob()); // resolves: handled, not a job failure
+
+    expect(rows.get("t1")).toMatchObject({ status: "SCHEDULED", errorMessage: TIKTOK_PROCESSING_WAIT_MESSAGE, ambiguousAt: null });
+    expect(rows.get("t1")!.metadata).toEqual({ tiktokPublish: cp });
+    const [name, data, opts] = queue.postPublishQueue.add.mock.calls.at(-1)! as any[];
+    expect(name).toMatch(/^retry-tiktokwait-t1-/);
+    expect(data).toEqual(tiktokJob().data);
+    expect(opts.delay).toBeGreaterThanOrEqual(90_000);
+    expect(opts.priority).toBe(10);
+
+    // The re-check resumes from the checkpoint and adopts the publish.
+    publishPost.mockImplementationOnce(async (_t: any, payload: any) => {
+      expect(payload.metadata.tiktokPublish).toEqual(cp);
+      return { platformPostId: "7300000000000000003", url: "https://www.tiktok.com/@channel/video/7300000000000000003", metadata: {} };
+    });
+    await s.processor!(tiktokJob());
+    expect(rows.get("t1")).toMatchObject({ status: "PUBLISHED", publishedId: "7300000000000000003" });
+  });
+
+  it("TikTok still processing past the ceiling ⇒ parked for a human ('may still go live'), never FAILED-and-retryable", async () => {
+    const createdAt = new Date(Date.now() - TIKTOK_PROCESSING_CEILING_MS - 60_000).toISOString();
+    const publishPost = seedTikTok();
+    publishPost.mockImplementationOnce(async () => {
+      throw new TikTokStillProcessingError("v_pub_url~v2.old", createdAt);
+    });
+    seedTarget("t1", { metadata: { tiktokPublish: { publishId: "v_pub_url~v2.old", createdAt, source: "PULL_FROM_URL" } } });
+    const addsBefore = queue.postPublishQueue.add.mock.calls.length;
+
+    const err = await runExpectingError(tiktokJob());
+
+    expect(err).toBeInstanceOf(UnrecoverableError);
+    expect(rows.get("t1")!.ambiguousAt).toBeInstanceOf(Date);
+    expect(rows.get("t1")!.errorMessage).toMatch(/may still go live/);
+    expect(queue.postPublishQueue.add.mock.calls.length).toBe(addsBefore);
+  });
+
+  it("a checkpoint in client-writable POST metadata never reaches the provider (only the target's own does)", async () => {
+    const publishPost = seedTikTok();
+    s.post.metadata = {
+      tiktokByChannel: { ch1: MINE },
+      tiktokPublish: { publishId: "v_pub_url~v2.forged", createdAt: "2026-10-01T00:00:00.000Z", source: "PULL_FROM_URL" },
+      videoDurationSec: 1,
+    };
+    seedTarget("t1");
+    await s.processor!(tiktokJob());
+    const md = publishPost.mock.calls[0]![1].metadata;
+    expect("tiktokPublish" in md).toBe(false);
+    expect(md.videoDurationSec).toBe(42.5); // the probe's, not the client's
+  });
+
+  it("a TikTok caption over 2,200 is REFUSED before anything is sent — never cut (a cut drops the #ad disclosure)", async () => {
+    const publishPost = seedTikTok();
+    s.post.content = "x".repeat(2300) + " #ad";
+    seedTarget("t1");
+    const err = await runExpectingError(tiktokJob());
+    expect(err).toBeInstanceOf(UnrecoverableError);
+    expect(err.message).toBe("Validation failed: Content exceeds 2200 character limit for TikTok");
+    expect(publishPost).not.toHaveBeenCalled();
+    expect(rows.get("t1")).toMatchObject({ status: "FAILED", errorMessage: err.message });
+  });
+
+  it("a refusal from the re-publish AFTER a successful token refresh stays terminal, with its own message", async () => {
+    // TikTok token expired mid-poll → refresh worked → the resumed publish
+    // reports FAILED file_format_check_failed (terminal). It used to be wrapped
+    // as a retryable "Token expired and refresh failed … Reconnect".
+    const refused = new PublishRefusedError("TikTok couldn't publish this video (file_format_check_failed).", {
+      reason: "rejected",
+      platform: "TIKTOK",
+    });
+    const publishPost = seedTikTok();
+    publishPost
+      .mockImplementationOnce(async () => {
+        throw new Error("TikTok access token expired.");
+      })
+      .mockImplementationOnce(async () => {
+        throw refused;
+      });
+    s.provider.refreshAccessToken = vi.fn(async () => ({ accessToken: "tok2", refreshToken: "rt2", expiresAt: new Date(Date.now() + 86_400_000) }));
+    s.creds = { clientId: "ck", clientSecret: "cs" };
+    seedTarget("t1");
+
+    const err = await runExpectingError(tiktokJob());
+
+    expect(err).toBe(refused);
+    expect(err.name).toBe("UnrecoverableError");
+    expect(rows.get("t1")).toMatchObject({ status: "FAILED", errorMessage: refused.message });
+    expect(publishPost).toHaveBeenCalledTimes(2);
+  });
+
+  it("a failed checkpoint write aborts the publish — it is never swallowed", async () => {
+    const publishPost = seedTikTok();
+    publishPost.mockImplementationOnce(async (_t: any, payload: any) => {
+      await payload.onCheckpoint({ tiktokPublish: { publishId: "v_pub_url~v2.9", createdAt: "2026-10-28T10:00:00.000Z", source: "PULL_FROM_URL" } });
+      return { platformPostId: "never", url: null };
+    });
+    seedTarget("t1");
+    s.failUpdate = (data) => !!(data.metadata && (data.metadata as any).tiktokPublish);
+
+    const err = await runExpectingError(tiktokJob());
+
+    expect(err.message).toBe("db write failed");
+    expect(rows.get("t1")!.publishedId).toBeNull();
   });
 });
 

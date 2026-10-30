@@ -60,4 +60,16 @@ describe("BulkTab uses it (source lock)", () => {
     expect(handler).toMatch(/toast\(\s*bulkScheduleToast\(\s*result\s*\)\s*\)/);
     expect(handler).not.toMatch(/scheduled successfully/);
   });
+
+  it("names TikTok posts it skipped (2026-10-28)", () => {
+    const t = bulkScheduleToast({ scheduled: 1, skippedTikTok: 2 });
+    expect(t.description).toContain(
+      "2 TikTok post(s) were skipped — they're missing TikTok settings or a single video. Create them in Content Studio to post them to TikTok."
+    );
+    expect(bulkScheduleToast({ scheduled: 0, skippedTikTok: 1 }).title).toBe("Nothing scheduled");
+  });
+
+  it("never sends the user to 'open them' — no screen can add TikTok settings to an existing post", () => {
+    expect(bulkScheduleToast({ scheduled: 0, skippedTikTok: 3 }).description).not.toMatch(/open them|choose who can see/i);
+  });
 });

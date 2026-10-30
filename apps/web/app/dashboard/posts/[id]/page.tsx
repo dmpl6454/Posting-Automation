@@ -18,6 +18,21 @@ import { Separator } from "~/components/ui/separator";
 import { Skeleton } from "~/components/ui/skeleton";
 import { useToast } from "~/hooks/use-toast";
 import { firstCommentLine } from "~/lib/first-comment";
+import {
+  tiktokPublishingLabel,
+  TIKTOK_PROCESSING_NOTICE,
+  TIKTOK_ADD_IN_COMPOSE_TEXT,
+  armableTikTokTargets,
+  storedTikTokConsentLine,
+  tiktokPostingAsLine,
+  excludeTikTokChannels,
+} from "~/lib/tiktok-post";
+
+// Platform names whose casing first-letter capitalisation gets wrong.
+const PLATFORM_LINK_NAMES: Record<string, string> = { TIKTOK: "TikTok", YOUTUBE: "YouTube", LINKEDIN: "LinkedIn" };
+function platformLinkName(platform: string): string {
+  return PLATFORM_LINK_NAMES[platform] ?? platform.charAt(0) + platform.slice(1).toLowerCase();
+}
 import { CommentThread } from "~/components/comments/comment-thread";
 import {
   ArrowLeft,
@@ -167,11 +182,40 @@ export default function PostDetailPage() {
   // the server refuses anything else, so don't offer a button that can only fail.
   const articleMeta = (post?.metadata as { wordpressArticle?: { title?: string; status?: string } } | null)?.wordpressArticle;
   const isArticlePost = typeof articleMeta?.title === "string";
-  const addableChannels = (allChannels ?? []).filter(
+  const addableCandidates = (allChannels ?? []).filter(
     (c: any) =>
       !targetedChannelIds.has(c.id) &&
       (!isStoryPost || c.platform === "INSTAGRAM" || c.platform === "FACEBOOK") &&
       (!isArticlePost || c.platform === "WORDPRESS")
+  );
+  // No TikTok "Add": a TikTok target needs its TikTok settings (privacy,
+  // interactions, disclosure), which only Compose can choose — added here it
+  // fails on a scheduled post and can never be armed on a draft.
+  const addableChannels = excludeTikTokChannels(addableCandidates);
+  const tiktokNotAddableHere = addableCandidates.length > addableChannels.length;
+
+  // TikTok's Content Sharing Guidelines: the creator's nickname and the consent
+  // line on the screen where the user posts. This page posts EXISTING TikTok
+  // targets (Publish now / Retry / Schedule) with the settings chosen in
+  // Compose and stored on the post — so the line follows those settings.
+  const armableTikTok = armableTikTokTargets((post?.targets ?? []) as any[]);
+  const armableTikTokTargetIds = new Set(armableTikTok.map((t: any) => t.id as string));
+  const armableTikTokChannelIds = Array.from(new Set(armableTikTok.map((t: any) => t.channelId as string)));
+  const tiktokCreatorQueries = trpc.useQueries((t) =>
+    armableTikTokChannelIds.map((channelId) =>
+      t.tiktok.creatorInfo({ channelId }, { staleTime: 60_000, retry: false })
+    )
+  );
+  // The nickname is omitted when creator_info could not be read.
+  const tiktokNicknameByChannel: Record<string, string | null> = {};
+  armableTikTokChannelIds.forEach((channelId, i) => {
+    tiktokNicknameByChannel[channelId] = tiktokCreatorQueries[i]?.data?.creator?.nickname ?? null;
+  });
+  const tiktokPostingLines = Array.from(
+    new Set(armableTikTokChannelIds.map((channelId) => tiktokPostingAsLine(tiktokNicknameByChannel[channelId])))
+  );
+  const tiktokPostConsent = storedTikTokConsentLine(
+    armableTikTok.map((t: any) => ({ postMetadata: post?.metadata, channelId: t.channelId as string }))
   );
 
   const handleAddChannel = (channelId: string) => {
@@ -699,6 +743,15 @@ export default function PostDetailPage() {
                     )}
                   </div>
                   </div>
+                  {/* TikTok guideline: nickname + consent next to this row's
+                      Publish/Retry, from the settings stored on the post. */}
+                  {armableTikTokTargetIds.has(target.id) && (
+                    <p className="text-[11px] text-muted-foreground" data-testid="post-tiktok-target-consent">
+                      {tiktokPostingAsLine(tiktokNicknameByChannel[target.channelId])}
+                      {" · "}
+                      {storedTikTokConsentLine([{ postMetadata: post.metadata, channelId: target.channelId }])}
+                    </p>
+                  )}
                   {/* Per-channel super text (2026-10-02): this channel publishes its
                       own burned video with the line AI wrote for it. */}
                   {(() => {
@@ -854,11 +907,15 @@ export default function PostDetailPage() {
                   {/* Upload progress bar — live via SSE; falls back to DB-polled value */}
                   {target.status === "PUBLISHING" && (() => {
                     const pct = liveProgress[target.id] ?? target.uploadProgress;
+                    // TikTok pulls/receives the video, then processes it — which
+                    // can take minutes after the transfer (TikTok's guideline asks
+                    // us to say so).
+                    const isTikTok = target.channel.platform === "TIKTOK";
                     if (pct != null) {
                       return (
                         <div className="space-y-1">
                           <div className="flex items-center justify-between text-xs text-muted-foreground">
-                            <span>Uploading…</span>
+                            <span>{isTikTok ? tiktokPublishingLabel(pct) : "Uploading…"}</span>
                             <span>{pct}%</span>
                           </div>
                           <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
@@ -867,15 +924,19 @@ export default function PostDetailPage() {
                               style={{ width: `${pct}%` }}
                             />
                           </div>
+                          {isTikTok && pct >= 100 ? (
+                            <p className="text-[11px] text-muted-foreground">{TIKTOK_PROCESSING_NOTICE}</p>
+                          ) : null}
                         </div>
                       );
                     }
                     return (
                       <div className="space-y-1">
-                        <div className="text-xs text-muted-foreground">Publishing…</div>
+                        <div className="text-xs text-muted-foreground">{isTikTok ? tiktokPublishingLabel(null) : "Publishing…"}</div>
                         <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
                           <div className="h-full w-full rounded-full bg-primary/40 animate-pulse" />
                         </div>
+                        {isTikTok ? <p className="text-[11px] text-muted-foreground">{TIKTOK_PROCESSING_NOTICE}</p> : null}
                       </div>
                     );
                   })()}
@@ -967,6 +1028,11 @@ export default function PostDetailPage() {
                   ))}
                 </div>
               </div>
+            )}
+            {isEditable && tiktokNotAddableHere && (
+              <p className="text-xs text-muted-foreground" data-testid="post-tiktok-add-hint">
+                {TIKTOK_ADD_IN_COMPOSE_TEXT}
+              </p>
             )}
           </div>
         </CardContent>
@@ -1111,6 +1177,17 @@ export default function PostDetailPage() {
 
       {/* Actions */}
       <Separator />
+      {/* TikTok guideline: the creator's nickname and the consent line where
+          the user posts — shown while Publish now / Retry / Schedule would
+          send a TikTok target. */}
+      {tiktokPostConsent && (
+        <div className="space-y-0.5 text-xs text-muted-foreground sm:text-right" data-testid="post-tiktok-consent">
+          {tiktokPostingLines.map((line) => (
+            <p key={line}>{line}</p>
+          ))}
+          <p>{tiktokPostConsent}</p>
+        </div>
+      )}
       <div className="flex flex-wrap items-center justify-between gap-3 pb-8">
         <div>
           {/* Delete — available for DRAFT, SCHEDULED, FAILED, CANCELLED */}
@@ -1218,7 +1295,7 @@ export default function PostDetailPage() {
                 <Button key={target.id} variant="outline" asChild>
                   <a href={target.publishedUrl!} target="_blank" rel="noopener noreferrer">
                     <ExternalLink className="mr-2 h-4 w-4" />
-                    View on {target.channel.platform.charAt(0) + target.channel.platform.slice(1).toLowerCase()}
+                    View on {platformLinkName(target.channel.platform)}
                   </a>
                 </Button>
               ))}

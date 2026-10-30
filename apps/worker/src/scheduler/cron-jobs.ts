@@ -33,7 +33,7 @@ import {
 } from "@postautomation/social";
 import { runCelebrityDetectors } from "../workers/celebrity-detect.worker";
 import { createRedisConnection, enqueueScheduledPublishJobs, excludeExpiredStoriesWhere, shouldReconcileCheckpoints } from "@postautomation/queue";
-import { HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE } from "../lib/publish-recovery";
+import { HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE, TIKTOK_PROCESSING_WAIT_MESSAGE } from "../lib/publish-recovery";
 import { runPageSubscriptionBackfill } from "../lib/page-subscription-backfill";
 
 /**
@@ -332,10 +332,15 @@ export async function scheduleTokenRefreshes() {
   });
 
   for (const channel of expiringChannels) {
+    // ⚠️ removeOnFail: true is load-bearing (2026-10-28). The fixed jobId dedupes
+    // overlapping cron runs, but the queue default KEEPS a failed job, and BullMQ
+    // silently ignores an add whose jobId still exists — so one refresh that
+    // exhausted its attempts (a short provider outage) used to stop background
+    // refresh for that channel forever. TikTok access tokens live 24 hours.
     await tokenRefreshQueue.add(
       `refresh-${channel.id}`,
       { channelId: channel.id, platform: channel.platform },
-      { jobId: `refresh-${channel.id}`, removeOnComplete: true }
+      { jobId: `refresh-${channel.id}`, removeOnComplete: true, removeOnFail: true }
     );
   }
 
@@ -1294,7 +1299,9 @@ export async function watchdogPublishingPosts() {
         t.status !== "PUBLISHED" && t.status !== "FAILED" && t.status !== "CANCELLED" &&
         (new Date(t.updatedAt) >= activeThreshold ||
           (t.status === "SCHEDULED" &&
-            (t.errorMessage === HEAVY_SLOT_WAIT_MESSAGE || t.errorMessage === OPTIMIZE_WAIT_MESSAGE)))
+            (t.errorMessage === HEAVY_SLOT_WAIT_MESSAGE ||
+              t.errorMessage === OPTIMIZE_WAIT_MESSAGE ||
+              t.errorMessage === TIKTOK_PROCESSING_WAIT_MESSAGE)))
     );
     const pastHardCeiling = new Date(post.updatedAt) < hardReapThreshold;
     if (hasActiveUpload && !pastHardCeiling) {

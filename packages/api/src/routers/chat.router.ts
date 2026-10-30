@@ -11,6 +11,7 @@ import { uploadBase64ToS3, isS3Configured } from "../lib/s3";
 import { mediaRequiredBlock } from "../lib/media-required";
 import { fetchChannelStatRows } from "./analytics.router";
 import { effectiveChannelUnavailable } from "../lib/platform-metrics";
+import { TIKTOK_CHAT_REFUSAL_MESSAGE } from "../lib/tiktok-post";
 
 /**
  * Throws unless every channelId belongs to the given org.
@@ -38,6 +39,34 @@ export async function assertChannelsOwned(
       code: "FORBIDDEN",
       message: "One or more selected channels do not belong to your workspace.",
     });
+  }
+}
+
+/**
+ * Throws when any of these channels is a TikTok account (2026-10-28).
+ *
+ * TikTok's Content Sharing Guidelines require the USER to choose who can see
+ * each post — there is no default — and to see TikTok's consent line before
+ * posting. An LLM-emitted chat action has neither, so it must never create a
+ * TikTok post; Content Studio is where those choices are made. Org-scoped, so a
+ * foreign id is never revealed (ownership is checked separately).
+ *
+ * ⚠️ Filters `platform === "TIKTOK"` in the result as well as in the query, so
+ * a row that is not TikTok can never trip it.
+ */
+export async function assertNoTikTokTargets(
+  prisma: PrismaClient,
+  organizationId: string,
+  channelIds: string[]
+): Promise<void> {
+  const ids = [...new Set((channelIds || []).filter(Boolean))];
+  if (ids.length === 0) return;
+  const tiktok = await prisma.channel.findMany({
+    where: { id: { in: ids }, organizationId, platform: "TIKTOK" },
+    select: { id: true, platform: true },
+  });
+  if (tiktok.some((c) => c.platform === "TIKTOK")) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: TIKTOK_CHAT_REFUSAL_MESSAGE });
   }
 }
 
@@ -479,6 +508,7 @@ export const chatRouter = createRouter({
           const p = input.payload as any;
           requireText(p.content, "content");
           await assertChannelsOwned(ctx.prisma, ctx.organizationId, p.channelIds || []);
+          await assertNoTikTokTargets(ctx.prisma, ctx.organizationId, p.channelIds || []);
           const mediaIds: string[] = Array.isArray(p.mediaIds) ? p.mediaIds : [];
           await assertMediaOwned(ctx.prisma, ctx.organizationId, mediaIds);
           // Block a media-less IG/FB schedule only when AI is OFF (default true →
@@ -559,6 +589,14 @@ export const chatRouter = createRouter({
             throw new TRPCError({ code: "BAD_REQUEST", message: "No posts provided" });
           }
 
+          // TikTok is refused for EVERY item before ANY post is created, so a
+          // TikTok item late in the list cannot leave the earlier ones half-done.
+          await assertNoTikTokTargets(
+            ctx.prisma,
+            ctx.organizationId,
+            posts.flatMap((item: any) => (Array.isArray(item?.channelIds) ? item.channelIds : []))
+          );
+
           const createdPosts = [];
           for (const item of posts) {
             requireText(item.content, "content");
@@ -620,6 +658,7 @@ export const chatRouter = createRouter({
           const p = input.payload as any;
           requireText(p.content, "content");
           await assertChannelsOwned(ctx.prisma, ctx.organizationId, p.channelIds || []);
+          await assertNoTikTokTargets(ctx.prisma, ctx.organizationId, p.channelIds || []);
           const mediaIds: string[] = Array.isArray(p.mediaIds) ? p.mediaIds : [];
           await assertMediaOwned(ctx.prisma, ctx.organizationId, mediaIds);
           // publish_now goes LIVE immediately — block a media-less IG/FB post when

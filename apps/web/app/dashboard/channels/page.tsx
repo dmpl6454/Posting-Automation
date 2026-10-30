@@ -41,6 +41,7 @@ import { PlatformIcon } from "~/components/icons/platform-icons";
 import { ChannelAvatar } from "~/components/channel-avatar";
 import { windowChannels } from "~/lib/channel-list-window";
 import { platformCounts, filterByPlatform, chunkIds } from "~/lib/channel-platform-filter";
+import { TIKTOK_CONNECT_NOTICE } from "~/lib/tiktok-post";
 
 type PlatformAuthInfo = {
   platform: string;
@@ -97,16 +98,29 @@ const OAUTH_ERROR_MESSAGES: Record<string, string> = {
   oauth_failed: "Sign-in to the platform failed. Please try again.",
   missing_params:
     "The platform did not return required parameters. Please try again.",
-  auth_session_mismatch:
-    "Your session expired during sign-in. Please sign in again and retry.",
-  auth_unauthenticated:
-    "You were signed out during the OAuth flow. Please sign in and try again.",
-  auth_org_mismatch:
-    "You switched organisations during the flow. Please retry from the original workspace.",
+  // The codes below are exactly what /api/oauth/callback emits (locked by
+  // channels-connect-contract.test.ts, which reads them from the route). The
+  // auth_* ones come from its session check.
+  auth_not_authenticated:
+    "You were signed out of PostAutomation during sign-in. Sign in again and retry the connection.",
+  auth_user_mismatch:
+    "A different PostAutomation user is signed in on this browser than the one who started the connection. Sign in as that user, or start the connection again.",
+  auth_not_a_member:
+    "You're not a member of the workspace this connection was started from. Switch to your workspace and try again.",
+  oauth_provider_error:
+    "The sign-in was cancelled or refused on the platform's page. Try again and approve the requested access.",
+  missing_state:
+    "The platform did not return the connection details. Please try again.",
+  state_expired:
+    "The connection took too long and expired. Please start it again.",
+  invalid_state:
+    "The connection link was invalid or already used. Please start it again.",
   twitter_request_token_failed:
     "Twitter rejected the initial request. Check that your TWITTER_CLIENT_ID / TWITTER_CLIENT_SECRET are valid.",
   fb_no_pages:
     "No Facebook Page was selected. PostAutomation posts to Pages, not personal profiles. When reconnecting, click “Edit settings” (or “Edit access”) in the Facebook dialog and tick a Page you manage. If you don’t have one yet, create a Facebook Page first, then reconnect.",
+  tiktok_publish_scope_missing:
+    "TikTok connected without permission to post videos. Connect again and leave “Post content to TikTok” ticked on TikTok's permission screen.",
   ig_no_business_account:
     "No Instagram Business account found. Convert your Instagram account to Professional/Business and link it to a Facebook Page you manage, then reconnect (click “Edit settings” in the Facebook dialog and tick the Page).",
 };
@@ -126,8 +140,10 @@ function OAuthCallbackToaster({ onConnected }: { onConnected: () => void }) {
     const errorCode = searchParams.get("error");
     const successCode = searchParams.get("success");
     const platform = searchParams.get("platform");
+    // The display name ("TikTok", "YouTube", "LinkedIn"), not first-letter
+    // capitalisation of the URL param ("Tiktok").
     const platformLabel = platform
-      ? platform.charAt(0).toUpperCase() + platform.slice(1)
+      ? PLATFORM_DISPLAY[platform.toUpperCase()]?.name ?? platform.charAt(0).toUpperCase() + platform.slice(1)
       : "Channel";
 
     if (errorCode) {
@@ -479,6 +495,9 @@ export default function ChannelsPage() {
     useState<PlatformAuthInfo | null>(null);
   const [setupDialogPlatform, setSetupDialogPlatform] =
     useState<PlatformAuthInfo | null>(null);
+  // TikTok's sign-in page redirects India to an "unavailable" page with no way
+  // back, so the connect is preceded by a notice (Continue / Cancel).
+  const [tiktokNoticeOpen, setTiktokNoticeOpen] = useState(false);
   const [tokenFormValues, setTokenFormValues] = useState<Record<string, string>>({});
 
   // Telegram-only: detected chat list + which one is selected.
@@ -526,10 +545,17 @@ export default function ChannelsPage() {
     }
   };
 
-  const handleConnect = async (platform: string) => {
+  const needsTikTokNotice = (platform: string, opts: { tiktokNoticeAccepted?: boolean }) =>
+    platform === "TIKTOK" && !opts.tiktokNoticeAccepted;
+
+  const handleConnect = async (platform: string, opts: { tiktokNoticeAccepted?: boolean } = {}) => {
     const info = authInfoByPlatform.get(platform);
     if (!info) {
       // platformAuthInfo hasn't loaded yet — fall back to the OAuth flow
+      if (needsTikTokNotice(platform, opts)) {
+        setTiktokNoticeOpen(true);
+        return;
+      }
       try {
         const result = await getOAuthUrl.mutateAsync({ platform });
         window.location.href = result.url;
@@ -553,6 +579,11 @@ export default function ChannelsPage() {
     if (!info.configured) {
       // OAuth platform without env vars set — show setup-required dialog instead of failing silently.
       setSetupDialogPlatform(info);
+      return;
+    }
+
+    if (needsTikTokNotice(platform, opts)) {
+      setTiktokNoticeOpen(true);
       return;
     }
 
@@ -1597,6 +1628,37 @@ export default function ChannelsPage() {
               </DialogFooter>
             </>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* ── TikTok pre-connect notice ───────────────────────────────────── */}
+      <Dialog
+        open={tiktokNoticeOpen}
+        onOpenChange={(open) => {
+          if (!open) setTiktokNoticeOpen(false);
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <PlatformIcon platform="TIKTOK" size="sm" />
+              Connect TikTok
+            </DialogTitle>
+            <DialogDescription>{TIKTOK_CONNECT_NOTICE}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTiktokNoticeOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                setTiktokNoticeOpen(false);
+                void handleConnect("TIKTOK", { tiktokNoticeAccepted: true });
+              }}
+            >
+              Continue
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

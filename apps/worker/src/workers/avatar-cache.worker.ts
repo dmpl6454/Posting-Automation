@@ -31,8 +31,12 @@ const FETCH_TIMEOUT_MS = 8_000;
  * the fresh profile picture. FACEBOOK/INSTAGRAM are handled separately (the
  * channel is a Page / IG Business account, not the token's user), and LinkedIn
  * org pages (platformId `org-…`) are excluded below for the same reason.
+ *
+ * TIKTOK (2026-10-28): its avatar URL lives TWO HOURS (creator_avatar_url's
+ * documented TTL), so re-downloading the stored URL fails for any channel the
+ * connect-time job missed; getProfile mints a fresh one.
  */
-const PROFILE_PLATFORMS = new Set(["TWITTER", "YOUTUBE", "THREADS", "LINKEDIN", "BLUESKY", "MASTODON"]);
+const PROFILE_PLATFORMS = new Set(["TWITTER", "YOUTUBE", "THREADS", "LINKEDIN", "BLUESKY", "MASTODON", "TIKTOK"]);
 
 function extFromMime(mimeType: string): string {
   const map: Record<string, string> = {

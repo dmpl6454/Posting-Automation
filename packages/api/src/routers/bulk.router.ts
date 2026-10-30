@@ -14,6 +14,7 @@ import { prisma } from "@postautomation/db";
 import { TRPCError } from "@trpc/server";
 import Papa from "papaparse";
 import { isStoryModeMetadata } from "../lib/instagram-story";
+import { hasTikTokChannel, storedTikTokByChannel, validateTikTokPost } from "../lib/tiktok-post";
 // By FILE, not the package root: the root also builds every BullMQ queue
 // (Redis connections) at module load, which this router has never needed.
 import { pendingPublishGates } from "@postautomation/queue/src/publish-gates";
@@ -70,11 +71,25 @@ export const bulkRouter = createRouter({
       let scheduled = 0;
       let skippedStories = 0;
       let skippedPending = 0;
+      let skippedTikTok = 0;
 
       for (const item of input.items) {
         const post = await prisma.post.findFirst({
           where: { id: item.postId, organizationId },
-          include: { _count: { select: { mediaAttachments: true } } },
+          include: {
+            _count: { select: { mediaAttachments: true } },
+            // TikTok check (below): which targets are TikTok, and the media
+            // types — platform + name only, never a token.
+            targets: {
+              select: {
+                channelId: true,
+                status: true,
+                ambiguousAt: true,
+                channel: { select: { platform: true, name: true } },
+              },
+            },
+            mediaAttachments: { select: { media: { select: { fileType: true } } } },
+          },
         });
         if (!post) continue;
 
@@ -105,6 +120,32 @@ export const bulkRouter = createRouter({
           continue;
         }
 
+        // TikTok (2026-10-28): a TikTok draft may be saved without the user's
+        // privacy choice or its video (TikTok's guidelines forbid a default, so
+        // nothing downstream can fill either in). Arming one would flip it to
+        // SCHEDULED and fail minutes later after the toast said "scheduled".
+        // Only targets this flip can arm are checked. Skipped and COUNTED.
+        const armable = (post.targets ?? []).filter(
+          (t) => (t.status === "DRAFT" || t.status === "FAILED" || t.status === "SCHEDULED") && t.ambiguousAt == null
+        );
+        const tiktokChannels = armable.map((t) => ({
+          id: t.channelId,
+          platform: (t.channel?.platform as string | undefined) ?? "",
+          name: t.channel?.name ?? null,
+        }));
+        if (
+          hasTikTokChannel(tiktokChannels) &&
+          validateTikTokPost({
+            channels: tiktokChannels,
+            byChannel: storedTikTokByChannel(post.metadata),
+            media: (post.mediaAttachments ?? []).map((a) => ({ fileType: a.media?.fileType })),
+            scheduling: true,
+          })
+        ) {
+          skippedTikTok++;
+          continue;
+        }
+
         await prisma.post.update({
           where: { id: item.postId },
           data: {
@@ -129,7 +170,7 @@ export const bulkRouter = createRouter({
         scheduled++;
       }
 
-      return { scheduled, skippedStories, skippedPending };
+      return { scheduled, skippedStories, skippedPending, skippedTikTok };
     }),
 
   /**
@@ -301,8 +342,19 @@ export const bulkRouter = createRouter({
           id: { in: input.channelIds },
           organizationId,
         },
-        select: { id: true },
+        select: { id: true, platform: true },
       });
+      // A CSV row is text only, and a TikTok post needs one video plus the
+      // creator's own choices (who can see it) — which only Compose collects.
+      // A TikTok target created here could only fail at publish, after the
+      // import had reported it imported.
+      if (channels.some((c) => c.platform === "TIKTOK")) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "TikTok posts can't be imported from CSV — create them in Content Studio, where you add the video and choose who can see it.",
+        });
+      }
       const validChannelIds = channels.map((c) => c.id);
       if (validChannelIds.length === 0) {
         throw new TRPCError({

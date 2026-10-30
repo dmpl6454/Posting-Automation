@@ -208,3 +208,86 @@ describe("planOptimizeGate", () => {
     ).toEqual({ action: "proceed" });
   });
 });
+
+describe("choosePublishUrl — TikTok (2026-10-28)", () => {
+  // TikTok takes H.264/H.265/VP8/VP9, 23–60fps, 360–4096px, up to 4GB — so a
+  // phone or camera export usually publishes as the ORIGINAL (full quality, like
+  // Facebook). The rendition is used only when the stored probe proves the
+  // original is out of that spec AND a rendition exists.
+  const R = "https://s3/opt.mp4";
+  const done = (probe: Record<string, unknown>) => ({ optimize: { status: "done", url: R, probe } });
+  const pick = (metadata: unknown, fileSize = 200_000_000, fileType = "video/mp4") =>
+    choosePublishUrl("TIKTOK", { url: "o", fileType, fileSize, metadata });
+
+  it("keeps the original for every codec TikTok accepts, even when a rendition exists", () => {
+    for (const videoCodec of ["h264", "hevc", "vp8", "vp9"]) {
+      expect(pick(done({ videoCodec, fps: 30, width: 2160, height: 3840 }))).toBe("o");
+    }
+    // 4K at 60fps is in spec for TikTok (Instagram would get the rendition).
+    expect(pick(done({ videoCodec: "h264", fps: 60, width: 3840, height: 2160 }))).toBe("o");
+    expect(pick(done({ videoCodec: "h264", fps: 59.94, width: 4096, height: 2160 }))).toBe("o");
+    // PCM audio says nothing about TikTok's video spec — not a reason to downgrade.
+    expect(pick(done({ videoCodec: "h264", audioCodec: "pcm_s16be", fps: 30, width: 1080, height: 1920 }))).toBe("o");
+  });
+
+  it("uses the rendition when the probe shows the original is out of TikTok's spec", () => {
+    expect(pick(done({ videoCodec: "prores", fps: 30, width: 1920, height: 1080 }))).toBe(R);
+    expect(pick(done({ videoCodec: "h264", fps: 120, width: 1920, height: 1080 }))).toBe(R);
+    expect(pick(done({ videoCodec: "hevc", fps: 30, width: 5760, height: 3240 }))).toBe(R);
+    expect(pick(done({ videoCodec: "h264", fps: 30, width: 1080, height: 1920 }), 4 * GB + 1)).toBe(R);
+  });
+
+  it("keeps the original when there is no rendition or no probe — it never guesses", () => {
+    expect(pick({ optimize: { status: "processing", probe: { videoCodec: "prores" } } })).toBe("o");
+    expect(pick({ optimize: { status: "failed", probe: { videoCodec: "prores" } } })).toBe("o");
+    expect(pick({ optimize: { status: "done", url: R } })).toBe("o");
+    expect(pick(null)).toBe("o");
+    expect(pick(undefined)).toBe("o");
+  });
+
+  it("never touches an image", () => {
+    expect(pick(done({ videoCodec: "prores" }), 1000, "image/jpeg")).toBe("o");
+  });
+});
+
+describe("planOptimizeGate — TikTok waits on a rendition only above TikTok's own 4 GB limit", () => {
+  const base = { id: "m1", url: "o", fileType: "video/mp4" };
+  const now = Date.parse("2026-10-28T12:00:00Z");
+  it.each([
+    ["a 3.5GB original with no optimization", undefined],
+    ["a pending optimization", { optimize: { status: "processing", enqueuedAt: new Date(now - 60_000).toISOString() } }],
+    ["a failed optimization", { optimize: { status: "failed", reasons: ["video codec prores"] } }],
+    ["a long-stale optimization", { optimize: { status: "processing", enqueuedAt: new Date(now - 3 * 3600_000).toISOString() } }],
+  ])("%s → proceed", (_label, metadata) => {
+    expect(
+      planOptimizeGate({ platform: "TIKTOK", media: [{ ...base, fileSize: 3.5 * GB, metadata }], now })
+    ).toEqual({ action: "proceed" });
+  });
+});
+
+describe("planOptimizeGate — a TikTok original over 4,000,000,000 bytes", () => {
+  // Uploads are capped at 4 GiB (4,294,967,296) but TikTok's "4 GB" is decimal:
+  // an original in between was sent and refused AFTER init, costing one of the
+  // creator's ~15 daily posts.
+  const base = { id: "m1", url: "o", fileType: "video/mp4", fileSize: 4_100_000_000 };
+  const now = Date.parse("2026-10-28T12:00:00Z");
+  it("waits for the rendition", () => {
+    expect(planOptimizeGate({ platform: "TIKTOK", media: [{ ...base, metadata: { optimize: { status: "processing", enqueuedAt: new Date(now - 60_000).toISOString() } } }], now })).toEqual({
+      action: "wait",
+      mediaId: "m1",
+    });
+  });
+  it("proceeds once the rendition exists (choosePublishUrl then sends it)", () => {
+    const metadata = { optimize: { status: "done", url: "r" } };
+    expect(planOptimizeGate({ platform: "TIKTOK", media: [{ ...base, metadata }], now })).toEqual({ action: "proceed" });
+    expect(choosePublishUrl("TIKTOK", { ...base, metadata })).toBe("r");
+  });
+  it("fails with a TikTok-worded message when the rendition failed", () => {
+    const out = planOptimizeGate({ platform: "TIKTOK", media: [{ ...base, metadata: { optimize: { status: "failed", error: "x" } } }], now });
+    expect(out.action).toBe("fail");
+    expect((out as { message: string }).message).toMatch(/TikTok/);
+  });
+  it("exactly 4,000,000,000 bytes still goes as-is", () => {
+    expect(planOptimizeGate({ platform: "TIKTOK", media: [{ ...base, fileSize: 4_000_000_000 }], now })).toEqual({ action: "proceed" });
+  });
+});
