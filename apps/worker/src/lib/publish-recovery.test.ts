@@ -12,6 +12,8 @@ import {
   ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE,
   countOtherActiveJobsForTarget,
   formatPublishTiming,
+  planRateLimitRequeue,
+  rateLimitGiveUpMessage,
 } from "./publish-recovery";
 
 describe("shouldReapPublishing", () => {
@@ -433,5 +435,91 @@ describe("classifyError routes Meta THROTTLES to the rate-limit re-queue", () =>
 
   it("keeps our own pre-publish verdict out of the rate-limit branch", () => {
     expect(classifyError("Validation failed: Too many media attachments. Instagram allows max 10.")).toBe("unknown");
+  });
+});
+
+describe("planRateLimitRequeue — the backoff climbs and then STOPS (2026-10-30)", () => {
+  // Every rate-limit re-queue is a brand-new BullMQ job, so job.attemptsMade was
+  // always 0: Instagram retried every 2 min and Facebook every 30 min, forever.
+  // Measured on prod: 13 Instagram targets x ~15 tries in 30 min (code 4 /
+  // 2207051 "action is blocked"), and 8 Facebook targets x 73 tries over 11 days
+  // (code 368 / 1404132). The count now rides in the job data.
+  const MIN = 60_000;
+
+  function chain(platform: string): Array<number | "give_up"> {
+    const out: Array<number | "give_up"> = [];
+    let n: number | undefined = undefined;
+    for (let i = 0; i < 20; i++) {
+      const plan = planRateLimitRequeue(platform, n);
+      if (plan.action === "give_up") {
+        out.push("give_up");
+        return out;
+      }
+      out.push(plan.delayMs / MIN);
+      n = plan.requeues;
+    }
+    throw new Error("never gave up");
+  }
+
+  it("Instagram (and every non-Facebook platform): 2, 4, 8, 10, 10, 10 min, then gives up", () => {
+    expect(chain("INSTAGRAM")).toEqual([2, 4, 8, 10, 10, 10, "give_up"]);
+    expect(chain("TWITTER")).toEqual([2, 4, 8, 10, 10, 10, "give_up"]);
+  });
+
+  it("Facebook: 30 min, 2 h, 6 h, then gives up (the ~8.5h chain the watchdog already assumes)", () => {
+    expect(chain("FACEBOOK")).toEqual([30, 120, 360, "give_up"]);
+  });
+
+  it("each re-queue carries the next count forward", () => {
+    expect(planRateLimitRequeue("INSTAGRAM", 2)).toEqual({ action: "requeue", delayMs: 8 * MIN, requeues: 3 });
+    expect(planRateLimitRequeue("FACEBOOK", 1)).toEqual({ action: "requeue", delayMs: 120 * MIN, requeues: 2 });
+  });
+
+  it("a job with no count (queued before this change, or a user's Retry) starts from the beginning", () => {
+    for (const legacy of [undefined, null, -1, 1.5, "3", Number.NaN]) {
+      expect(planRateLimitRequeue("INSTAGRAM", legacy)).toEqual({ action: "requeue", delayMs: 2 * MIN, requeues: 1 });
+    }
+  });
+
+  it("reports how many refused attempts the chain made when it gives up", () => {
+    expect(planRateLimitRequeue("INSTAGRAM", 6)).toEqual({ action: "give_up", attempts: 7 });
+    expect(planRateLimitRequeue("FACEBOOK", 3)).toEqual({ action: "give_up", attempts: 4 });
+    expect(planRateLimitRequeue("FACEBOOK", 99)).toEqual({ action: "give_up", attempts: 100 });
+  });
+});
+
+describe("rateLimitGiveUpMessage", () => {
+  // Verbatim production bodies (2026-10-28/29).
+  const IG_BLOCKED =
+    'Instagram publish failed: {"error":{"message":"Application request limit reached","type":"OAuthException",' +
+    '"is_transient":false,"code":4,"error_subcode":2207051,"error_user_title":"action is blocked","error_user_msg":' +
+    '"We restrict certain activity to protect our community. Tell us if you think we made a mistake.","fbtrace_id":"A8r3vMuN6q2noRGoCtQJlvX"}}';
+  const FB_BLOCKED =
+    'Facebook multi-photo post failed: {"error":{"message":"You\'re temporarily blocked from using this feature because ' +
+    'you shared something that isn\'t allowed on Facebook. Learn more.","type":"OAuthException","code":368,"error_data":' +
+    '{"sentry_block_data":"AetgFJTn94","help_center_id":0,"is_silent":false},"error_subcode":1404132,"error_user_msg":"",' +
+    '"fbtrace_id":"AvsmUEU833tt8d_qjhnbLYI"}}';
+
+  it("names the platform, the platform's own reason and the attempt count — never raw JSON", () => {
+    const msg = rateLimitGiveUpMessage("INSTAGRAM", 7, IG_BLOCKED);
+    expect(msg).toBe(
+      'Instagram refused this post 7 times ("Application request limit reached — action is blocked"), so automatic ' +
+        "retries have stopped. It was not published. Wait for the restriction to lift, then use Retry on the post page."
+    );
+    expect(msg).not.toContain("{");
+  });
+
+  it("Facebook's policy block", () => {
+    const msg = rateLimitGiveUpMessage("FACEBOOK", 4, FB_BLOCKED);
+    expect(msg).toContain("Facebook refused this post 4 times");
+    expect(msg).toContain("You're temporarily blocked from using this feature");
+    expect(msg).not.toContain("sentry_block_data");
+  });
+
+  it("a non-JSON throttle message still yields a clean sentence", () => {
+    expect(rateLimitGiveUpMessage("TWITTER", 7, "429 Too Many Requests")).toBe(
+      "X refused this post 7 times (rate limit), so automatic retries have stopped. It was not published. " +
+        "Wait for the restriction to lift, then use Retry on the post page."
+    );
   });
 });

@@ -13,6 +13,13 @@ export interface PostPublishJobData {
    * newsgrid jobs leave this unset and are never guarded.
    */
   enqueuedFor?: number;
+  /**
+   * How many times this target's publish has been re-queued after the platform
+   * refused it with a rate limit or temporary block (2026-10-30). Each re-queue
+   * is a NEW BullMQ job, so job.attemptsMade cannot count them — without this
+   * the backoff never climbed and the retries never stopped. Absent = 0.
+   */
+  rateLimitRequeues?: number;
 }
 
 export interface TokenRefreshJobData {
