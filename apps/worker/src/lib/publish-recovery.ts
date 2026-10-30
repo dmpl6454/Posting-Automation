@@ -716,3 +716,46 @@ export function planHeavyDefer(opts: {
   const rand = opts.rand ?? Math.random;
   return { delayMs: 45_000 + Math.floor(rand() * 45_000) };
 }
+
+/**
+ * Rate-limit re-queue plan (2026-10-30). The count rides in the job data because
+ * every re-queue is a new BullMQ job (attemptsMade is always 0 there).
+ * Facebook: 30 min, 2 h, 6 h. Everyone else: 2, 4, 8, 10, 10, 10 min. Then stop.
+ */
+const FB_RATE_LIMIT_BACKOFFS_MS = [30 * 60_000, 2 * 60 * 60_000, 6 * 60 * 60_000];
+const MAX_RATE_LIMIT_REQUEUES = 6;
+
+export function planRateLimitRequeue(
+  platform: string,
+  requeuesSoFar: unknown
+): { action: "requeue"; delayMs: number; requeues: number } | { action: "give_up"; attempts: number } {
+  const n = typeof requeuesSoFar === "number" && Number.isInteger(requeuesSoFar) && requeuesSoFar >= 0 ? requeuesSoFar : 0;
+  if (platform === "FACEBOOK") {
+    const delayMs = FB_RATE_LIMIT_BACKOFFS_MS[n];
+    return delayMs === undefined ? { action: "give_up", attempts: n + 1 } : { action: "requeue", delayMs, requeues: n + 1 };
+  }
+  if (n >= MAX_RATE_LIMIT_REQUEUES) return { action: "give_up", attempts: n + 1 };
+  return { action: "requeue", delayMs: Math.min(120_000 * Math.pow(2, n), 600_000), requeues: n + 1 };
+}
+
+const PLATFORM_LABEL: Record<string, string> = {
+  INSTAGRAM: "Instagram", FACEBOOK: "Facebook", TWITTER: "X", LINKEDIN: "LinkedIn", YOUTUBE: "YouTube",
+  TIKTOK: "TikTok", THREADS: "Threads", PINTEREST: "Pinterest", REDDIT: "Reddit",
+};
+
+/** The FAILED reason once the chain gives up: platform, its own reason, count — never raw JSON. */
+export function rateLimitGiveUpMessage(platform: string, attempts: number, errMsg: string): string {
+  const label = PLATFORM_LABEL[platform] ?? platform.charAt(0) + platform.slice(1).toLowerCase();
+  let reason = "rate limit";
+  const start = errMsg.indexOf("{");
+  if (start >= 0) {
+    try {
+      const e = JSON.parse(errMsg.slice(start))?.error;
+      const parts = [e?.message, e?.error_user_title].filter((x) => typeof x === "string" && x.trim());
+      if (parts.length) reason = `"${parts.join(" — ").slice(0, 200)}"`;
+    } catch {
+      // not JSON — keep the generic reason
+    }
+  }
+  return `${label} refused this post ${attempts} times (${reason}), so automatic retries have stopped. It was not published. Wait for the restriction to lift, then use Retry on the post page.`;
+}

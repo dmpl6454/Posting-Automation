@@ -777,6 +777,77 @@ describe("defers release the claim BEFORE re-queueing", () => {
   });
 });
 
+describe("rate-limit re-queues climb and then STOP (2026-10-30)", () => {
+  // Each re-queue is a brand-new BullMQ job, so attemptsMade is always 0 and the
+  // backoff used to stay at its first step forever: on 2026-10-29 thirteen
+  // Instagram targets were retried every 2 min (~15 times each) until someone
+  // paused the channels, and eight Facebook targets had been retried every
+  // 30 min for 11 days. Each run below is a FRESH job built from the data the
+  // previous run re-queued — exactly what BullMQ hands the processor.
+  const IG_ACTION_BLOCKED =
+    'Instagram publish failed: {"error":{"message":"Application request limit reached","type":"OAuthException",' +
+    '"is_transient":false,"code":4,"error_subcode":2207051,"error_user_title":"action is blocked","error_user_msg":' +
+    '"We restrict certain activity to protect our community. Tell us if you think we made a mistake.","fbtrace_id":"A8r3vMuN6q2noRGoCtQJlvX"}}';
+  const FB_POLICY_BLOCK =
+    'Facebook multi-photo post failed: {"error":{"message":"You\'re temporarily blocked from using this feature because ' +
+    'you shared something that isn\'t allowed on Facebook. Learn more.","type":"OAuthException","code":368,"error_data":' +
+    '{"sentry_block_data":"AetgFJTn94","help_center_id":0,"is_silent":false},"error_subcode":1404132,"error_user_msg":"",' +
+    '"fbtrace_id":"AvsmUEU833tt8d_qjhnbLYI"}}';
+
+  async function runChain(platform: string, error: string, requeues: number) {
+    const publishPost = vi.fn(async () => {
+      throw new Error(error);
+    });
+    s.provider = realProvider(platform, { publishPost });
+    seedChannel(platform);
+    seedTarget("t1");
+    let job = makeJob({ data: { ...makeJob().data, platform } });
+    const delaysMin: number[] = [];
+    for (let i = 0; i < requeues; i++) {
+      await expect(s.processor!(job)).resolves.toBeUndefined();
+      expect(rows.get("t1")).toMatchObject({ status: "SCHEDULED" });
+      const [, data, opts] = queue.postPublishQueue.add.mock.calls.at(-1) as any[];
+      expect(data).toMatchObject({ postTargetId: "t1", platform, rateLimitRequeues: i + 1 });
+      delaysMin.push(opts.delay / 60_000);
+      job = makeJob({ id: `job-requeue-${i}`, data, attemptsMade: 0 });
+    }
+    return { publishPost, job, delaysMin };
+  }
+
+  it("Instagram 'action is blocked': 2, 4, 8, 10, 10, 10 min, then the target fails ONCE with the real reason", async () => {
+    const { publishPost, job, delaysMin } = await runChain("INSTAGRAM", IG_ACTION_BLOCKED, 6);
+    expect(delaysMin).toEqual([2, 4, 8, 10, 10, 10]);
+
+    const err = await runExpectingError(job);
+    expect(err).toBeInstanceOf(UnrecoverableError);
+    expect(err.message).toContain('Instagram refused this post 7 times ("Application request limit reached — action is blocked")');
+    expect(rows.get("t1")).toMatchObject({ status: "FAILED", errorMessage: err.message, ambiguousAt: null });
+    expect(queue.postPublishQueue.add).toHaveBeenCalledTimes(6);
+    expect(publishPost).toHaveBeenCalledTimes(7);
+
+    // The failed listener keeps the actionable reason (not "Will retry automatically").
+    await s.handlers.failed!({ ...job, attemptsMade: 1 }, err);
+    expect(rows.get("t1")).toMatchObject({ status: "FAILED", errorMessage: err.message });
+  });
+
+  it("Facebook policy block (368): 30 min, 2 h, 6 h, then fails — no more 30-minute loop", async () => {
+    const { publishPost, job, delaysMin } = await runChain("FACEBOOK", FB_POLICY_BLOCK, 3);
+    expect(delaysMin).toEqual([30, 120, 360]);
+
+    const err = await runExpectingError(job);
+    expect(err).toBeInstanceOf(UnrecoverableError);
+    expect(err.message).toContain("Facebook refused this post 4 times");
+    expect(rows.get("t1")).toMatchObject({ status: "FAILED", errorMessage: err.message });
+    expect(queue.postPublishQueue.add).toHaveBeenCalledTimes(3);
+    expect(publishPost).toHaveBeenCalledTimes(4);
+  });
+
+  it("a job queued before this change (no count) starts the chain at its first step", async () => {
+    const { delaysMin } = await runChain("INSTAGRAM", IG_ACTION_BLOCKED, 1);
+    expect(delaysMin).toEqual([2]);
+  });
+});
+
 describe("pre-claim guard: a post moved to Draft/Cancelled never publishes", () => {
   // Review follow-up 2026-10-01. The stale-schedule guard only runs for jobs
   // carrying enqueuedFor; newsgrid/agent/publishNow/chat jobs and their

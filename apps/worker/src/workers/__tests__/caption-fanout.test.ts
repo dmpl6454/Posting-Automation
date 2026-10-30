@@ -184,8 +184,11 @@ describe("runCaptionFanout", () => {
     expect(generateText).toHaveBeenCalledTimes(1);
     // Prompt describes ONLY the pending target — the pre-written one is skipped.
     const prompt = generateText.mock.calls[0]![0];
-    expect(prompt).toContain("chan-t1");
-    expect(prompt).not.toContain("chan-t2");
+    expect(prompt).toContain("0. platform=BLUESKY");
+    expect(prompt).not.toContain("platform=TWITTER");
+    // Channel names / handles never reach the model (it addressed pages by name).
+    expect(prompt).not.toContain("chan-t1");
+    expect(prompt).not.toContain("handle_t1");
     // Override written; post + targets flipped to SCHEDULED; flag cleared.
     expect(state.post.targets.find((t) => t.id === "t1")!.contentOverride).toBe("Fresh unique caption");
     expect(state.post.targets.find((t) => t.id === "t2")!.contentOverride).toBe("already written");
@@ -713,15 +716,24 @@ describe("post-publish worker content precedence (wiring lock)", () => {
 });
 
 describe("buildCaptionPrompt", () => {
-  it("names every channel with platform + handle + char limit and demands distinct captions", () => {
+  it("lists every channel with platform + char limit and demands distinct captions", () => {
     const prompt = buildCaptionPrompt("Base content here", [
-      { index: 0, platform: "TWITTER", channelName: "News X", username: "newsx", charLimit: 25000 },
-      { index: 1, platform: "BLUESKY", channelName: "News B", username: null, charLimit: 300 },
+      { index: 0, platform: "TWITTER", charLimit: 25000 },
+      { index: 1, platform: "BLUESKY", charLimit: 300 },
     ]);
     expect(prompt).toContain("Base content here");
-    expect(prompt).toContain('0. platform=TWITTER, channel="News X" (@newsx), max 25000 characters');
-    expect(prompt).toContain('1. platform=BLUESKY, channel="News B", max 300 characters');
+    expect(prompt).toContain("0. platform=TWITTER, max 25000 characters");
+    expect(prompt).toContain("1. platform=BLUESKY, max 300 characters");
     expect(prompt).toMatch(/DISTINCT/);
     expect(prompt).toMatch(/hashtags may repeat/);
+  });
+
+  it("forbids naming the page and never sends channel names or handles", () => {
+    const prompt = buildCaptionPrompt("Base content here", [
+      { index: 0, platform: "INSTAGRAM", charLimit: 2200 },
+    ]);
+    expect(prompt).toMatch(/NEVER mention, address or refer to the channel/);
+    expect(prompt).not.toMatch(/channel="/);
+    expect(prompt).not.toMatch(/\(@/);
   });
 });

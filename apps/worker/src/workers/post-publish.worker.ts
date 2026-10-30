@@ -16,7 +16,7 @@ import { planFacebookAnalyticsId, earlyVideoSyncDelayMs } from "../lib/fb-video-
 import { addLocalClaim, releaseLocalClaim, localClaimCount } from "../lib/local-claims";
 import { trackBackgroundTask } from "../lib/background-tasks";
 import { buildPublishTokens, publishIdempotencyKey } from "../lib/publish-tokens";
-import { markTargetFailed, markTargetAmbiguous, buildPublishClaimWhere, routePublishError, shouldPreflightReconcile, buildPublishNotifications, mediaRequiredReason, isSeedNoise, decidePreClaimSkip, isHeavyPublish, planHeavyDefer, HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE, TIKTOK_PROCESSING_WAIT_MESSAGE, planTikTokProcessingWait, classifyError, isDefiniteAuthFailure, releaseClaimAfterPrePublishError, decideClaimMiss, countOtherActiveJobsForTarget, ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE, formatPublishTiming, type PublishJobState } from "../lib/publish-recovery";
+import { markTargetFailed, markTargetAmbiguous, buildPublishClaimWhere, routePublishError, shouldPreflightReconcile, buildPublishNotifications, mediaRequiredReason, isSeedNoise, decidePreClaimSkip, isHeavyPublish, planHeavyDefer, HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE, TIKTOK_PROCESSING_WAIT_MESSAGE, planTikTokProcessingWait, classifyError, isDefiniteAuthFailure, releaseClaimAfterPrePublishError, decideClaimMiss, countOtherActiveJobsForTarget, ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE, formatPublishTiming, planRateLimitRequeue, rateLimitGiveUpMessage, type PublishJobState } from "../lib/publish-recovery";
 import { collectPerTargetMediaIds, substitutePerTargetMedia } from "../lib/per-target-media";
 import { PRIORITY_RETRY, mediaOptimizeQueue, atAgeWindowsForFormat } from "@postautomation/queue";
 import { planOptimizeGate, choosePublishUrl, isCurrentRendition } from "../lib/media-optimize";
@@ -1224,21 +1224,21 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
         console.log(`[PostPublish] Error classified as: ${errType}`);
 
         if (errType === "rate_limit") {
-          // Facebook error 368 (spam throttle) can last hours — use a much longer
-          // backoff for FB. Other platforms use 2min→5min→10min.
-          let delayMs: number;
-          if (platform === "FACEBOOK") {
-            // 30min → 2h → 6h — FB spam blocks don't clear in seconds
-            const fbBackoffs = [30 * 60_000, 2 * 60 * 60_000, 6 * 60 * 60_000];
-            delayMs = fbBackoffs[Math.min(job.attemptsMade, fbBackoffs.length - 1)] ?? 6 * 60 * 60_000;
-          } else {
-            // 2min → 5min → 10min for other platforms
-            delayMs = Math.min(120_000 * Math.pow(2, job.attemptsMade), 600_000);
+          // The count rides in the job data: each re-queue is a NEW job, so
+          // job.attemptsMade was always 0 and the chain never climbed or stopped
+          // (2026-10-29: Instagram retried every 2 min, Facebook every 30 min for 11 days).
+          const plan = planRateLimitRequeue(platform, job.data.rateLimitRequeues);
+          if (plan.action === "give_up") {
+            const reason = rateLimitGiveUpMessage(platform, plan.attempts, errMsg);
+            console.warn(`[PostPublish] target ${postTargetId}: ${platform} refused ${plan.attempts} attempts — giving up`);
+            await markTargetFailed(prisma, postTargetId, reason);
+            throw new UnrecoverableError(reason);
           }
+          const delayMs = plan.delayMs;
           console.log(`[PostPublish] Rate-limited (${platform}) — re-queuing with ${Math.round(delayMs / 60_000)}min delay`);
           await postPublishQueue.add(
             `retry-ratelimit-${postTargetId}-${Date.now()}`,
-            job.data,
+            { ...job.data, rateLimitRequeues: plan.requeues },
             // PRIORITY_RETRY: when the delay expires this re-queue yields to
             // fresh interactive + bulk work (@postautomation/queue publish-priority).
             { delay: delayMs, priority: PRIORITY_RETRY, attempts: 3, backoff: { type: "exponential", delay: 60_000 } }
