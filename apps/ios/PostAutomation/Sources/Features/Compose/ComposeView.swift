@@ -1,8 +1,10 @@
 import SwiftUI
 
-/// Compose tab — write a caption, pick channels, save as draft or schedule.
-/// Calls `post.create`; the server enforces "scheduling needs ≥1 channel" with a
-/// friendly message, and rejects past dates (60s clock-skew allowance).
+/// Compose tab — write a caption, attach photos or a video, pick channels, save
+/// as draft or schedule. Calls `post.create`; the server enforces "scheduling
+/// needs ≥1 channel" with a friendly message, and rejects past dates (60s
+/// clock-skew allowance). Media is uploaded the moment it is picked (see
+/// `AttachmentStore`), so submit only ever sends finished `Media.id`s.
 struct ComposeView: View {
     @Environment(SessionStore.self) private var session
     @State private var content = ""
@@ -13,12 +15,23 @@ struct ComposeView: View {
     @State private var submitting = false
     @State private var error: String?
     @State private var successMessage: String?
+    @State private var store = AttachmentStore()
+    /// Workspace the channel list was loaded for. Re-showing the tab must not
+    /// refetch; switching workspaces must (the `.task(id:)` pattern every tab
+    /// shares — see `SessionStore.activeOrganizationId`).
+    @State private var loadedForOrg: String?
 
     private var activeChannels: [Channel] { channels.filter(\.isActive) }
     private var canSubmit: Bool {
         !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         && !submitting
         && (!schedule || !selected.isEmpty)
+        && !store.isBusy
+        && !store.hasFailures
+    }
+    private var submitTitle: String {
+        if store.isBusy { return "Uploading…" }
+        return schedule ? "Schedule" : "Save Draft"
     }
 
     var body: some View {
@@ -32,6 +45,25 @@ struct ComposeView: View {
                         Spacer()
                         Text("\(content.count) characters").font(.caption).foregroundStyle(.secondary)
                     }
+                }
+
+                Section {
+                    if !store.attachments.isEmpty || store.importingCount > 0 {
+                        AttachmentStrip(store: store)
+                    }
+                    AttachmentPickerButton(store: store)
+                    if let message = store.ruleMessage {
+                        Text(message).font(.footnote).foregroundStyle(.orange)
+                            .accessibilityIdentifier("compose.mediaRule")
+                    }
+                    if let failure = store.failureMessage {
+                        Text(failure).font(.footnote).foregroundStyle(.red)
+                            .accessibilityIdentifier("compose.mediaError")
+                    }
+                } header: {
+                    Text("Media")
+                } footer: {
+                    Text("Up to 10 photos, or one video. Uploads start right away.")
                 }
 
                 Section {
@@ -92,13 +124,42 @@ struct ComposeView: View {
             .navigationTitle("Compose")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(schedule ? "Schedule" : "Save Draft") { Task { await submit() } }
+                    Button(submitTitle) { Task { await submit() } }
                         .disabled(!canSubmit)
                         .fontWeight(.semibold)
+                        .accessibilityIdentifier("compose.submit")
                 }
             }
             .overlay { if submitting { ProgressView().controlSize(.large) } }
-            .task { if channels.isEmpty { await loadChannels() } }
+            // Non-blocking pill while media is still uploading: the form stays
+            // usable (the strip shows per-tile progress), the submit button is
+            // what's held back.
+            .overlay(alignment: .bottom) {
+                if store.isBusy && !submitting {
+                    Label("Uploading…", systemImage: "arrow.up.circle")
+                        .font(.footnote.weight(.semibold))
+                        .padding(.horizontal, 14).padding(.vertical, 8)
+                        .background(.thinMaterial, in: Capsule())
+                        .padding(.bottom, 12)
+                        .allowsHitTesting(false)
+                        .accessibilityIdentifier("compose.uploading")
+                }
+            }
+            .onAppear {
+                store.onUnauthorized = { await session.handleUnauthorized() }
+            }
+            .task(id: session.activeOrganizationId) {
+                if loadedForOrg != session.activeOrganizationId {
+                    loadedForOrg = session.activeOrganizationId
+                    // Per-workspace state goes first: channel ids belong to the
+                    // old workspace, and so do uploaded Media rows (post.create
+                    // runs assertMediaOwned against the active org).
+                    selected = []
+                    channels = []
+                    store.reset()
+                    await loadChannels()
+                }
+            }
         }
     }
 
@@ -117,10 +178,14 @@ struct ComposeView: View {
         error = nil
         successMessage = nil
         defer { submitting = false }
+        // canSubmit guarantees nothing is queued/uploading/failed, so this list
+        // is complete and in display order.
+        let mediaIds = store.uploadedMediaIds
         let input = CreatePostInput(
             content: content.trimmingCharacters(in: .whitespacesAndNewlines),
             channelIds: Array(selected),
-            scheduledAt: schedule ? TRPCClient.isoWithFraction.string(from: scheduledAt) : nil
+            scheduledAt: schedule ? TRPCClient.isoWithFraction.string(from: scheduledAt) : nil,
+            mediaIds: mediaIds.isEmpty ? nil : mediaIds
         )
         do {
             let created: CreatedPost = try await TRPCClient.shared.mutate("post.create", input: input)
@@ -131,6 +196,7 @@ struct ComposeView: View {
             content = ""
             selected = []
             schedule = false
+            store.reset()
         } catch let e as APIError where e.isUnauthorized {
             await session.handleUnauthorized()
         } catch {

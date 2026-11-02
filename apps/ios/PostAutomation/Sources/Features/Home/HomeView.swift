@@ -1,12 +1,25 @@
 import SwiftUI
 
 /// Home tab — the four lifetime stat cards from `analytics.dashboardStats`,
-/// each with the server's 6-point cumulative sparkline.
+/// each with the server's 6-point cumulative sparkline, plus the bell that
+/// leads to the in-app notifications list.
+///
+/// Stats are loaded once per WORKSPACE (the shared `.task(id:)` pattern): coming
+/// back to the tab never refetches, switching workspaces always does. The unread
+/// count, by contrast, is re-read every time Home appears — the worker writes
+/// publish outcomes while the user is elsewhere, and the bell is the only thing
+/// on this screen that would otherwise go stale.
 struct HomeView: View {
     @Environment(SessionStore.self) private var session
     @State private var stats: DashboardStats?
     @State private var error: String?
     @State private var loading = false
+    /// Workspace the stats were loaded for — see the doc comment above.
+    @State private var loadedForOrg: String?
+
+    private var unreadLabel: String {
+        "Notifications, \(session.unreadNotifications) unread"
+    }
 
     var body: some View {
         NavigationStack {
@@ -38,8 +51,33 @@ struct HomeView: View {
                 .padding()
             }
             .navigationTitle("PostAutomation")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink {
+                        NotificationsView()
+                    } label: {
+                        // `bell.badge.fill` renders its badge red in multicolor mode;
+                        // the plain `bell` has no multicolor layers, so the mode is
+                        // a no-op for it.
+                        Image(systemName: session.unreadNotifications > 0 ? "bell.badge.fill" : "bell")
+                            .symbolRenderingMode(.multicolor)
+                    }
+                    .accessibilityIdentifier("home.notifications")
+                    .accessibilityLabel(unreadLabel)
+                }
+            }
             .refreshable { await load() }
-            .task { if stats == nil { await load() } }
+            .task(id: session.activeOrganizationId) {
+                if loadedForOrg != session.activeOrganizationId {
+                    loadedForOrg = session.activeOrganizationId
+                    // The cards on screen belong to the previous workspace; show
+                    // the spinner rather than another org's numbers while loading.
+                    stats = nil
+                    error = nil
+                    await load()
+                }
+                await session.refreshUnreadCount()
+            }
         }
     }
 
