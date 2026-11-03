@@ -66,6 +66,8 @@ import {
   FB_COMMENT_POST_GONE_MESSAGE,
   FB_COMMENT_REPLY_FAILED_MESSAGE,
   FB_COMMENT_REPLY_UNCONFIRMED_MESSAGE,
+  FB_COMMENT_CREATE_FAILED_MESSAGE,
+  FB_COMMENT_CREATE_UNCONFIRMED_MESSAGE,
   FB_COMMENT_THROTTLED_MESSAGE,
   FB_COMMENT_TOKEN_INVALID_MESSAGE,
   isFbCommentPermissionError,
@@ -2034,12 +2036,40 @@ export class FacebookProvider extends SocialProvider {
     message: string,
     pageId?: string | null
   ): Promise<{ id: string }> {
+    // 🔴 encodeURIComponent is LOAD-BEARING: commentId is client-supplied.
+    // The router's GRAPH_OBJECT_ID_RE is the first layer, createFbComment the second.
+    return this.createFbComment(commentId, message, tokens, pageId, "reply");
+  }
+
+  /**
+   * A NEW top-level comment on one of the Page's own posts, as the Page
+   * (2026-11-03) — the automatic first comments and the inbox's "Comment on
+   * this post" box. `objectId` is the stored publishedId (a `{page}_{post}` id
+   * or a bare video id — both nodes carry /comments), never client input.
+   * Same "may already be posted" semantics as a reply.
+   */
+  async commentOnPost(
+    tokens: OAuthTokens,
+    objectId: string,
+    message: string,
+    pageId?: string | null
+  ): Promise<{ id: string }> {
+    if (!/^\d+(_\d+)?$/.test(objectId)) throw new Error(FB_COMMENT_CREATE_FAILED_MESSAGE);
+    return this.createFbComment(objectId, message, tokens, pageId, "comment");
+  }
+
+  private async createFbComment(
+    objectId: string,
+    message: string,
+    tokens: OAuthTokens,
+    pageId: string | null | undefined,
+    kind: "reply" | "comment"
+  ): Promise<{ id: string }> {
+    const unconfirmed = kind === "reply" ? FB_COMMENT_REPLY_UNCONFIRMED_MESSAGE : FB_COMMENT_CREATE_UNCONFIRMED_MESSAGE;
     let res: Response;
     try {
-      // 🔴 encodeURIComponent is LOAD-BEARING: commentId is client-supplied.
-      // The router's GRAPH_OBJECT_ID_RE is the first layer, this the second.
       res = await this.graphFetch(
-        `${this.graphBaseUrl}/${this.apiVersion}/${encodeURIComponent(commentId)}/comments`,
+        `${this.graphBaseUrl}/${this.apiVersion}/${encodeURIComponent(objectId)}/comments`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -2050,30 +2080,30 @@ export class FacebookProvider extends SocialProvider {
         INTERACTIVE_WRITE_GRAPH_OPTS
       );
     } catch (err: any) {
-      console.error(`[Facebook] comment reply request did not complete:`, err?.message ?? err);
-      throw new Error(FB_COMMENT_REPLY_UNCONFIRMED_MESSAGE);
+      console.error(`[Facebook] comment ${kind} request did not complete:`, err?.message ?? err);
+      throw new Error(unconfirmed);
     }
     const data: any = await res.json().catch(() => null);
 
     if (!res.ok) {
       if (res.status >= 500) {
         console.error(
-          `[Facebook] comment reply outcome unknown (HTTP ${res.status}):`,
+          `[Facebook] comment ${kind} outcome unknown (HTTP ${res.status}):`,
           data === null ? "unreadable response body" : JSON.stringify(data)
         );
-        throw new Error(FB_COMMENT_REPLY_UNCONFIRMED_MESSAGE);
+        throw new Error(unconfirmed);
       }
       // A 4xx can still leave the outcome unknown: Meta's `is_transient` flag
       // or code 2 (the 2026-08-18 duplicate-post shape). Throttles are
       // definite refusals and are excluded inside the helper.
       if (isIndeterminateReplyError(data)) {
-        console.error(`[Facebook] comment reply outcome unknown (HTTP ${res.status}, transient):`, JSON.stringify(data));
-        throw new Error(FB_COMMENT_REPLY_UNCONFIRMED_MESSAGE);
+        console.error(`[Facebook] comment ${kind} outcome unknown (HTTP ${res.status}, transient):`, JSON.stringify(data));
+        throw new Error(unconfirmed);
       }
-      throw this.commentError(data, res.status, "reply");
+      throw this.commentError(data, res.status, kind);
     }
     if (data === null || !data.id) {
-      throw new Error(FB_COMMENT_REPLY_UNCONFIRMED_MESSAGE);
+      throw new Error(unconfirmed);
     }
     return { id: String(data.id) };
   }
@@ -2155,13 +2185,14 @@ export class FacebookProvider extends SocialProvider {
     }
   }
 
-  private commentError(body: any, status: number, op: "list" | "reply" | "action"): Error {
+  private commentError(body: any, status: number, op: "list" | "reply" | "comment" | "action"): Error {
     const err = body?.error;
     if (isFbTokenInvalidError(err)) return new Error(FB_COMMENT_TOKEN_INVALID_MESSAGE);
     if (isFbCommentPermissionError(err)) return new Error(FB_COMMENT_PERMISSION_DENIED_MESSAGE);
     // #100/33 on the list call means the POST is gone; on reply, the comment.
     if (isCommentObjectGoneError(err)) {
-      return new Error(op === "list" ? FB_COMMENT_POST_GONE_MESSAGE : COMMENT_OBJECT_GONE_MESSAGE);
+      // On "comment" the object is the post itself.
+      return new Error(op === "list" || op === "comment" ? FB_COMMENT_POST_GONE_MESSAGE : COMMENT_OBJECT_GONE_MESSAGE);
     }
     if (isFbCommentThrottleError(err)) return new Error(FB_COMMENT_THROTTLED_MESSAGE);
     console.error(
@@ -2169,7 +2200,13 @@ export class FacebookProvider extends SocialProvider {
       body === null ? "unreadable response body" : JSON.stringify(body)
     );
     return new Error(
-      op === "list" ? FB_COMMENT_LIST_FAILED_MESSAGE : op === "reply" ? FB_COMMENT_REPLY_FAILED_MESSAGE : FB_COMMENT_ACTION_FAILED_MESSAGE
+      op === "list"
+        ? FB_COMMENT_LIST_FAILED_MESSAGE
+        : op === "reply"
+          ? FB_COMMENT_REPLY_FAILED_MESSAGE
+          : op === "comment"
+            ? FB_COMMENT_CREATE_FAILED_MESSAGE
+            : FB_COMMENT_ACTION_FAILED_MESSAGE
     );
   }
 

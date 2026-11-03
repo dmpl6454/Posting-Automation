@@ -25,6 +25,7 @@ import { createExternalPostSyncWorker } from "./workers/external-post-sync.worke
 import { createCaptionFanoutWorker } from "./workers/caption-fanout.worker";
 import { createMediaOptimizeWorker } from "./workers/media-optimize.worker";
 import { createSuperTextWorker } from "./workers/super-text.worker";
+import { createFirstCommentWorker } from "./workers/first-comment.worker";
 import { startCronJobs } from "./scheduler/cron-jobs";
 import { registerWorker, markWorkerStopped, startHealthServer } from "./lib/health";
 import { createGracefulShutdown, readActiveJobCount, resolveShutdownTimeoutMs } from "./lib/shutdown";
@@ -54,6 +55,7 @@ registerWorker("repurpose-video");
 registerWorker("avatar-cache");
 registerWorker("caption-fanout");
 registerWorker("super-text");
+registerWorker("first-comment");
 
 // Start workers
 const postPublishWorker = createPostPublishWorker();
@@ -79,6 +81,7 @@ const captionFanoutWorker = createCaptionFanoutWorker();
 const mediaOptimizeWorker = createMediaOptimizeWorker();
 const superTextWorker = createSuperTextWorker();
 const externalPostSyncWorker = createExternalPostSyncWorker();
+const firstCommentWorker = createFirstCommentWorker();
 
 // Start cron jobs — leader-gated for future multi-worker scale-out: the
 // setInterval crons must run in EXACTLY ONE container or every scheduled
@@ -118,6 +121,7 @@ console.log("  - Avatar Cache Worker");
 console.log("  - Caption Fanout Worker");
 console.log("  - Super Text Worker");
 console.log("  - External Post Sync Worker");
+console.log("  - First Comment Worker");
 console.log("  - Cron Jobs (token refresh: 30min, analytics: 6hr, agent runs: 1min, cleanup: 1hr, pipeline: 15min)");
 
 // Graceful shutdown — BOUNDED DRAIN (2026-09-16).
@@ -165,6 +169,7 @@ const shutdown = createGracefulShutdown({
     markWorkerStopped("avatar-cache");
     markWorkerStopped("caption-fanout");
     markWorkerStopped("super-text");
+    markWorkerStopped("first-comment");
   },
   closeWorkers: () => {
     // ⚠️ LONG-RUNNING workers stop fetching but are NOT waited for. A
@@ -200,6 +205,8 @@ const shutdown = createGracefulShutdown({
       externalPostSyncWorker.close(),
       captionFanoutWorker.close(),
       superTextWorker.close(),
+      // Drained: a run is a few seconds, and stopping mid-way leaves it `posting`.
+      firstCommentWorker.close(),
     ]);
   },
   closeHealthServer: () => healthServer.close(),

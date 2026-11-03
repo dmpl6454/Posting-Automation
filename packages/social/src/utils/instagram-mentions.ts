@@ -149,23 +149,5 @@ export function readInstagramFirstComment(metadata: unknown): InstagramFirstComm
   return { text };
 }
 
-/** Per-target outcome of the first comment (PostTarget.metadata.firstComment). */
-export type FirstCommentStatus = "posted" | "failed" | "unconfirmed" | "skipped";
-export interface FirstCommentRecord {
-  status: FirstCommentStatus;
-  commentId?: string;
-  error?: string;
-  at: string;
-}
-
-export function readFirstCommentRecord(metadata: unknown): FirstCommentRecord | null {
-  const raw = (metadata as any)?.firstComment;
-  if (!raw || typeof raw !== "object") return null;
-  if (!["posted", "failed", "unconfirmed", "skipped"].includes(raw.status)) return null;
-  return {
-    status: raw.status,
-    commentId: typeof raw.commentId === "string" ? raw.commentId : undefined,
-    error: typeof raw.error === "string" ? raw.error : undefined,
-    at: typeof raw.at === "string" ? raw.at : "",
-  };
-}
+/** The per-target outcome record now lives in first-comments.ts (several comments, Facebook, delay). */
+export { readFirstCommentRecord, type FirstCommentRecord, type FirstCommentStatus } from "./first-comments";

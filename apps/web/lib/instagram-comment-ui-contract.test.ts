@@ -12,22 +12,24 @@ describe("Compose first comment", () => {
     expect(src.match(/\.\.\.firstCommentPayload\(\)/g)?.length).toBe(2);
   });
 
-  it("is never sent for a story or an article, or without an Instagram channel", () => {
-    const fn = src.slice(src.indexOf("function firstCommentPayload"), src.indexOf("function firstCommentPayload") + 500);
-    expect(fn).toMatch(/isStoryMode \|\| isArticleMode/);
-    expect(fn).toMatch(/ch\.platform === "INSTAGRAM"/);
+  it("is never sent for a story or an article, or without an Instagram or Facebook channel", () => {
+    const fn = src.slice(src.indexOf("function firstCommentPayload"), src.indexOf("function firstCommentPayload") + 700);
+    expect(fn).toMatch(/isStoryMode,\s*isArticleMode/);
+    expect(fn).toMatch(/ch\.platform === "INSTAGRAM" \|\| ch\.platform === "FACEBOOK"/);
+    expect(fn).toMatch(/buildFirstCommentsPayload\(/);
   });
 
-  it("is cleared after a successful create", () => {
-    expect(src).toMatch(/setFirstComment\(""\)/);
+  it("is cleared after a successful create, delay included", () => {
+    expect(src).toMatch(/setFirstComments\(\[""\]\)/);
+    expect(src).toMatch(/setFirstCommentDelay\(0\)/);
   });
 });
 
 describe("Comment thread: new top-level comment", () => {
   const src = readSourceWithoutComments("apps/web/components/comments/comment-thread.tsx");
 
-  it("is Instagram-only and uses comment.create", () => {
-    expect(src).toMatch(/knownPlatform === "INSTAGRAM" && first && \(/);
+  it("is offered on Instagram and Facebook and uses comment.create", () => {
+    expect(src).toMatch(/\(knownPlatform === "INSTAGRAM" \|\| knownPlatform === "FACEBOOK"\) && first && \(/);
     expect(src).toMatch(/trpc\.comment\.create\.useMutation/);
   });
 

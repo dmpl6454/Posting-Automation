@@ -325,14 +325,10 @@ export function createExternalPostSyncWorker() {
           const resolved = await provider.resolveVideoPostId(listing.tokens, t.publishedId!, platformId);
           if (!resolved) continue;
           t.resolvedPostId = resolved;
-          // Persist so the call is never repeated for this target.
-          const row = targets.find((x) => x.id === t.id);
-          await prisma.postTarget.update({
-            where: { id: t.id },
-            data: {
-              metadata: { ...((row?.metadata as any) ?? {}), resolvedPostId: resolved },
-            },
-          }).catch(() => undefined);
+          // Persist so the call is never repeated for this target. Atomic jsonb
+          // merge — the row read above may be stale (see analytics-sync.worker).
+          const patch = JSON.stringify({ resolvedPostId: resolved });
+          await prisma.$executeRaw`UPDATE "PostTarget" SET "metadata" = COALESCE("metadata", '{}'::jsonb) || ${patch}::jsonb WHERE "id" = ${t.id}`.catch(() => undefined);
         }
       }
 

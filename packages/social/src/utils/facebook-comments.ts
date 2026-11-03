@@ -217,3 +217,9 @@ export const FB_COMMENT_REPLY_FAILED_MESSAGE =
 
 export const FB_COMMENT_REPLY_UNCONFIRMED_MESSAGE =
   "Facebook accepted the reply but did not confirm it. Refresh the comments before replying again — it may already be posted.";
+
+/** A new top-level comment on the Page's own post (2026-11-03). Must contain "may already be posted". */
+export const FB_COMMENT_CREATE_UNCONFIRMED_MESSAGE =
+  "Facebook accepted the comment but did not confirm it. Refresh the comments before posting again — it may already be posted.";
+export const FB_COMMENT_CREATE_FAILED_MESSAGE =
+  "Facebook couldn't post that comment right now. Please try again in a moment.";

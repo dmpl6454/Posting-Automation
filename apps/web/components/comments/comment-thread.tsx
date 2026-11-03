@@ -970,7 +970,7 @@ export function CommentThread({
         </div>
       )}
 
-      {knownPlatform === "INSTAGRAM" && first && (
+      {(knownPlatform === "INSTAGRAM" || knownPlatform === "FACEBOOK") && first && (
         <div className="space-y-1.5 rounded-md border p-2.5" data-testid="new-comment">
           <label htmlFor={`new-comment-${targetId}`} className="text-xs font-medium">
             Comment on this post as {accountName}

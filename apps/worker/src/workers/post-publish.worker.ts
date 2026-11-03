@@ -1,4 +1,5 @@
-import { postFirstComment, type FirstCommentDeps } from "../lib/first-comment";
+import { postFirstComment } from "../lib/first-comment";
+import { postCommentViaProvider, channelPageId } from "../lib/first-comment-poster";
 import { refreshChannelToken, prismaChannelTokenRefreshDeps } from "../lib/channel-token-refresh";
 import { Worker, type Job, UnrecoverableError } from "bullmq";
 import { prisma } from "@postautomation/db";
@@ -18,7 +19,8 @@ import { trackBackgroundTask } from "../lib/background-tasks";
 import { buildPublishTokens, publishIdempotencyKey } from "../lib/publish-tokens";
 import { markTargetFailed, markTargetAmbiguous, buildPublishClaimWhere, routePublishError, shouldPreflightReconcile, buildPublishNotifications, mediaRequiredReason, isSeedNoise, decidePreClaimSkip, isHeavyPublish, planHeavyDefer, HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE, TIKTOK_PROCESSING_WAIT_MESSAGE, planTikTokProcessingWait, classifyError, isDefiniteAuthFailure, releaseClaimAfterPrePublishError, decideClaimMiss, countOtherActiveJobsForTarget, ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE, formatPublishTiming, planRateLimitRequeue, rateLimitGiveUpMessage, type PublishJobState } from "../lib/publish-recovery";
 import { collectPerTargetMediaIds, substitutePerTargetMedia } from "../lib/per-target-media";
-import { PRIORITY_RETRY, mediaOptimizeQueue, atAgeWindowsForFormat } from "@postautomation/queue";
+import { PRIORITY_RETRY, mediaOptimizeQueue, atAgeWindowsForFormat, firstCommentQueue } from "@postautomation/queue";
+import { firstCommentJobId } from "@postautomation/social";
 import { planOptimizeGate, choosePublishUrl, isCurrentRendition } from "../lib/media-optimize";
 import { buildSnapshotMetadata } from "../lib/snapshot-metadata";
 import { tiktokProviderMetadata, tiktokInheritedMetadata } from "../lib/tiktok-publish-metadata";
@@ -1430,13 +1432,20 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
         return result;
       }
 
-      // 4-ig. The automatic first comment (Instagram, not stories). Never throws —
-      // the post is already live; see lib/first-comment.ts.
+      // 4-ig. The automatic first comments (Instagram + Facebook, not stories),
+      // now or after the post's delay. Never throws — the post is already live;
+      // see lib/first-comment.ts.
       await postFirstComment(
         {
           prisma,
-          commentOnMedia: (t, mediaId, message) =>
-            (provider as unknown as { commentOnMedia: FirstCommentDeps["commentOnMedia"] }).commentOnMedia(t, mediaId, message),
+          comment: postCommentViaProvider,
+          enqueueDelayed: async (targetId, delayMs) => {
+            await firstCommentQueue.add(
+              "first-comment",
+              { postTargetId: targetId },
+              { jobId: firstCommentJobId(targetId), delay: delayMs }
+            );
+          },
         },
         {
           platform,
@@ -1446,6 +1455,7 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
           targetMetadata: updatedTarget.metadata,
           mediaId: result.platformPostId,
           tokens,
+          pageId: channelPageId(channel),
         }
       );
 
