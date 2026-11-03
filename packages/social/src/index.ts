@@ -167,14 +167,27 @@ export {
   parseMentionWebhook,
   mentionDedupKey,
   readInstagramFirstComment,
-  readFirstCommentRecord,
   safeInstagramPermalink,
   type InstagramMentionEvent,
   type InstagramMentionDetails,
   type InstagramFirstComment,
+} from "./utils/instagram-mentions";
+// Several first comments, Facebook Pages, optional delay (2026-11-03).
+export {
+  FIRST_COMMENT_TEXT_MAX,
+  FIRST_COMMENTS_MAX,
+  FIRST_COMMENT_DELAY_MAX_MINUTES,
+  FIRST_COMMENT_PLATFORMS,
+  readFirstCommentsPlan,
+  readFirstCommentRecord,
+  summarizeFirstComments,
+  firstCommentJobId,
+  type FirstCommentsPlan,
   type FirstCommentRecord,
   type FirstCommentStatus,
-} from "./utils/instagram-mentions";
+  type FirstCommentItemRecord,
+  type FirstCommentItemStatus,
+} from "./utils/first-comments";
 export {
   ensurePageSubscribed,
   listLinkedPages,

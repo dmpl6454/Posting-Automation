@@ -6,6 +6,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const commentOnMedia = vi.fn();
+const commentOnPost = vi.fn();
 const replyToMention = vi.fn();
 const getMentionDetails = vi.fn();
 const createAuditLog = vi.fn(async (_input: any) => {});
@@ -16,7 +17,7 @@ vi.mock("@postautomation/social", async (importOriginal) => {
     ...actual,
     fetchMetaTokenWindow: vi.fn(async () => null),
     resolveMetaCredentials: vi.fn(() => ({ appId: "APP", clientId: "APP", clientSecret: "SECRET", legacy: true })),
-    getSocialProvider: vi.fn(() => ({ commentOnMedia, replyToMention, getMentionDetails })),
+    getSocialProvider: vi.fn(() => ({ commentOnMedia, commentOnPost, replyToMention, getMentionDetails })),
   };
 });
 vi.mock("../lib/audit", async (importOriginal) => {
@@ -122,10 +123,18 @@ describe("comment.create", () => {
     expect(createAuditLog).toHaveBeenCalledWith(expect.objectContaining({ action: "comment.created" }));
   });
 
-  it("refuses Facebook targets, stories, and other orgs' posts", async () => {
-    await expect(build({ channel: { platform: "FACEBOOK" } }).caller.create({ targetId: "t-1", message: "x" })).rejects.toThrow(
-      /Instagram posts only/
-    );
+  it("comments on a Facebook post as the Page (2026-11-03)", async () => {
+    commentOnPost.mockResolvedValue({ id: "222_9" });
+    const { caller } = build({
+      channel: { platform: "FACEBOOK", platformId: "111", metadata: { pageId: "111" } },
+      target: { publishedId: "111_222" },
+    });
+    await expect(caller.create({ targetId: "t-1", message: "Link in bio" })).resolves.toEqual({ id: "222_9", platform: "FACEBOOK" });
+    expect(commentOnPost).toHaveBeenCalledWith(expect.objectContaining({ accessToken: "DECRYPTED" }), "111_222", "Link in bio", "111");
+    expect(commentOnMedia).not.toHaveBeenCalled();
+  });
+
+  it("refuses stories and other orgs' posts", async () => {
     await expect(build({ target: { format: "STORY" } }).caller.create({ targetId: "t-1", message: "x" })).rejects.toThrow(/stories/);
     await expect(
       build({ target: { post: { organizationId: "other" } } }).caller.create({ targetId: "t-1", message: "x" })

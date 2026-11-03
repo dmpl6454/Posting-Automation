@@ -3592,7 +3592,35 @@ Instagram's API only lets an account comment on media it OWNS, plus reply where 
   client passthrough). [first-comment.ts](apps/worker/src/lib/first-comment.ts) runs right after the target is
   marked PUBLISHED: Instagram only, never a story, once per target, **never throws** (a throw would re-publish
   the post), outcome on `PostTarget.metadata.firstComment` via atomic jsonb merge. Do not move it before the
-  PUBLISHED write.
+  PUBLISHED write. **Extended 2026-11-03 — see the next bullet.**
+- **First comments v2 (2026-11-03)**: up to **5** comments posted **in order**, on Instagram **and Facebook
+  Pages** (as the Page, `FacebookProvider.commentOnPost` → `POST /{publishedId}/comments`; a bare video id works
+  too), **optionally delayed 0–1440 min**. Marker `Post.metadata.firstComments = { comments, delayMinutes }`,
+  written only via [first-comments-input.ts](packages/api/src/lib/first-comments-input.ts); read by
+  `readFirstCommentsPlan` ([first-comments.ts](packages/social/src/utils/first-comments.ts)), which still
+  honours the legacy `instagramFirstComment` (Instagram-only, immediate). The inbox "Comment on this post" box
+  now works on Facebook too.
+  - 🔴 **Once per target is an ATOMIC SQL CLAIM**, not a read-then-write: immediate = *no record → `posting`*;
+    delayed = publish worker writes *no record → `scheduled` (+`dueAt`)* and queues `first-comment`
+    (`fcomment:{targetId}:v1`, **attempts: 1**), whose job claims *`scheduled` → `posting`*. Only the claim
+    winner posts — verified against real Postgres with two concurrent runs. Never replace it with a check of
+    the record followed by a separate write.
+  - The first comment that doesn't post **stops the run**; the rest are `skipped` (an unknown outcome may be
+    live; posting the next ones would scramble the order). Multi-comment records add `posted/total/items`;
+    a single comment keeps the exact 2026-10-17 shape.
+  - `runFirstCommentSweep` (cron, 10 min): an overdue `scheduled` record (> 5 min) is re-queued under a
+    BUCKETED id `fcomment:{id}:r{bucket}` (a failed job's id would otherwise dedupe the re-queue forever);
+    > 48 h overdue ⇒ abandoned as `failed`; a `posting` record > 30 min old ⇒ **`unconfirmed`, never re-posted**.
+  - The delayed job re-reads the channel DIRECTLY (decrypts the token) and abandons with a clear reason if the
+    target is no longer PUBLISHED or the channel was paused/disconnected.
+  - 🔴 **Never rewrite the whole `PostTarget.metadata` column after publish.** `firstComment` is now written
+    up to 24 h later, so a worker that read the row earlier and writes `{ ...old, x }` back restores a stale
+    `scheduled` record — and the sweep posts the comments AGAIN (review catch: the FB `resolvedPostId`
+    writers in analytics-sync and external-post-sync; both now use the atomic `||` merge, source-locked).
+  - A client still sending only the old `firstComment` input keeps the Instagram-only legacy marker (that
+    user was told Facebook doesn't get it).
+  - Facebook needs `pages_manage_engagement` (890 of 1,163 FB channels with a recorded grant held it on
+    2026-11-03); Instagram needs `instagram_manage_comments` (371 of 372). Without it the record says why.
 - **Mentions**: discovered ONLY via the IG `mentions` webhook (no list endpoint; Meta stores nothing).
   [instagram-mention-store.ts](packages/api/src/lib/instagram-mention-store.ts) writes `InstagramMention` rows
   (one per channel, `@@unique([channelId, dedupKey])` on a NEW table) BEFORE any Graph call, scoped to the

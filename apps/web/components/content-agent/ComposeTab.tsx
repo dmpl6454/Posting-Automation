@@ -26,6 +26,7 @@ import { Badge } from "~/components/ui/badge";
 import { Separator } from "~/components/ui/separator";
 import { Switch } from "~/components/ui/switch";
 import { buildCaptionOverridesPayload, sanitizeRestoredCaptionOverrides } from "~/lib/caption-overrides-payload";
+import { buildFirstCommentsPayload, FIRST_COMMENTS_MAX, FIRST_COMMENT_TEXT_MAX, FIRST_COMMENT_DELAY_OPTIONS } from "~/lib/first-comment";
 import { useToast } from "~/hooks/use-toast";
 import {
   Sparkles,
@@ -229,10 +230,12 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   // compose field.
   const [campaignLabel, setCampaignLabel] = useState("");
   const [customCaptions, setCustomCaptions] = useState(false);
-  // Automatic first comment on every Instagram target, posted right after the
-  // post goes live (2026-10-17). Sent only when an Instagram channel is
-  // selected and never for a story or an article — see firstCommentPayload.
-  const [firstComment, setFirstComment] = useState("");
+  // Automatic first comments on every Instagram and Facebook target, posted
+  // after the post goes live (2026-10-17; several, Facebook and a delay since
+  // 2026-11-03). Sent only when an Instagram or Facebook channel is selected
+  // and never for a story or an article — see firstCommentPayload.
+  const [firstComments, setFirstComments] = useState<string[]>([""]);
+  const [firstCommentDelay, setFirstCommentDelay] = useState(0);
   const [captionOverrides, setCaptionOverrides] = useState<Record<string, string>>({});
   const [isGenerating, setIsGenerating] = useState(false);
   const [postMedia, setPostMedia] = useState<{ url: string; mediaId?: string; file?: File; uploading?: boolean; progress?: number; superText?: SuperTextConfig; thumbnail?: { mediaId: string; url: string }; thumbnailUploading?: boolean }[]>([]);
@@ -813,7 +816,8 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
       setUniqueCaptions(false);
       setCustomCaptions(false);
       setCaptionOverrides({});
-      setFirstComment("");
+      setFirstComments([""]);
+      setFirstCommentDelay(0);
       setPostMedia([]);
       // Mentions are per-story. Carrying them over would silently re-tag the
       // previous story's people on the next one.
@@ -1553,14 +1557,18 @@ ${content}`;
 
   const charCount = content.length;
 
-  /** `{ firstComment }` for post.create, or nothing (no IG channel, story, article, blank). */
-  function firstCommentPayload(): { firstComment?: string } {
-    const text = firstComment.trim();
-    if (!text || isStoryMode || isArticleMode) return {};
-    const hasInstagram = (channels ?? []).some(
-      (ch: any) => selectedChannels.includes(ch.id) && ch.platform === "INSTAGRAM"
+  /** First comments for post.create, or nothing (no IG/FB channel, story, article, all blank). */
+  function firstCommentPayload(): { firstComments?: string[]; firstCommentDelayMinutes?: number } {
+    const hasCommentChannel = (channels ?? []).some(
+      (ch: any) => selectedChannels.includes(ch.id) && (ch.platform === "INSTAGRAM" || ch.platform === "FACEBOOK")
     );
-    return hasInstagram ? { firstComment: text } : {};
+    return buildFirstCommentsPayload({
+      comments: firstComments,
+      delayMinutes: firstCommentDelay,
+      hasCommentChannel,
+      isStoryMode,
+      isArticleMode,
+    });
   }
 
   /** `{ tiktok: { byChannel } }` for post.create, or nothing (no TikTok channel / nothing chosen yet). */
@@ -3084,28 +3092,83 @@ ${content}`;
             </Card>
           )}
 
-          {/* Automatic first comment (2026-10-17) — Instagram only, never for a
-              story or an article. */}
-          {!isStoryMode && !isArticleMode && selectedPlatforms.includes("instagram") && (
+          {/* Automatic first comments (2026-10-17; several, Facebook Pages and a
+              delay since 2026-11-03) — never for a story or an article. */}
+          {!isStoryMode &&
+            !isArticleMode &&
+            (selectedPlatforms.includes("instagram") || selectedPlatforms.includes("facebook")) && (
             <Card data-testid="first-comment-card">
               <CardHeader className="pb-3">
-                <CardTitle>First comment</CardTitle>
+                <CardTitle>First comments</CardTitle>
                 <CardDescription>
-                  Posted on each Instagram post as your account right after it goes live — handy for hashtags or a link note.
-                  Leave blank for none.
+                  Posted on each Instagram and Facebook post as your account or Page after it goes live — handy for
+                  hashtags, a link or a question. Up to {FIRST_COMMENTS_MAX}, posted in order. Leave blank for none.
                 </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-1.5">
-                <Textarea
-                  id="first-comment"
-                  value={firstComment}
-                  maxLength={2200}
-                  rows={2}
-                  placeholder="#hashtags #go #here"
-                  onChange={(e) => setFirstComment(e.target.value)}
-                />
+              <CardContent className="space-y-3">
+                {firstComments.map((text, i) => (
+                  <div key={i} className="space-y-1">
+                    <div className="flex items-start gap-2">
+                      <Textarea
+                        id={i === 0 ? "first-comment" : `first-comment-${i + 1}`}
+                        aria-label={`First comment ${i + 1}`}
+                        value={text}
+                        maxLength={FIRST_COMMENT_TEXT_MAX}
+                        rows={2}
+                        placeholder={i === 0 ? "#hashtags #go #here" : "Another comment"}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setFirstComments((prev) => prev.map((c, j) => (j === i ? v : c)));
+                        }}
+                      />
+                      {firstComments.length > 1 && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="shrink-0"
+                          aria-label={`Remove comment ${i + 1}`}
+                          onClick={() => setFirstComments((prev) => prev.filter((_, j) => j !== i))}
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {text.length.toLocaleString()}/{FIRST_COMMENT_TEXT_MAX.toLocaleString()}
+                    </p>
+                  </div>
+                ))}
+                <div className="flex flex-wrap items-center gap-3">
+                  {firstComments.length < FIRST_COMMENTS_MAX && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setFirstComments((prev) => [...prev, ""])}
+                    >
+                      Add another comment
+                    </Button>
+                  )}
+                  <label className="flex items-center gap-2 text-sm">
+                    <span className="text-muted-foreground">Post</span>
+                    <select
+                      aria-label="When to post the first comments"
+                      className="rounded border border-border bg-background px-2 py-1.5 text-sm"
+                      value={firstCommentDelay}
+                      onChange={(e) => setFirstCommentDelay(Number(e.target.value))}
+                    >
+                      {FIRST_COMMENT_DELAY_OPTIONS.map((o) => (
+                        <option key={o.minutes} value={o.minutes}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
                 <p className="text-xs text-muted-foreground">
-                  {firstComment.length.toLocaleString()}/2,200 · Instagram only. Facebook and other channels don&apos;t get it.
+                  Instagram and Facebook only — other channels don&apos;t get them. The delay counts from when each post
+                  goes live.
                 </p>
               </CardContent>
             </Card>

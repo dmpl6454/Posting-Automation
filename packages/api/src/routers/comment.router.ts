@@ -855,7 +855,7 @@ export const commentRouter = createRouter({
 
   /**
    * A NEW top-level comment on our own Instagram post, as the account
-   * (2026-10-17). The media id comes from OUR PostTarget row — the client only
+   * (2026-10-17) — and on our own Facebook post, as the Page (2026-11-03). The media id comes from OUR PostTarget row — the client only
    * names the target. Same permission and the same "may already be posted"
    * semantics as a reply: creating a comment is not idempotent.
    */
@@ -868,9 +868,6 @@ export const commentRouter = createRouter({
     )
     .mutation(async ({ ctx, input }) => {
       const t = await resolvePublishedCommentTarget(ctx.prisma as any, ctx.organizationId, input.targetId);
-      if (t.platform !== "INSTAGRAM") {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Adding a new comment is available for Instagram posts only." });
-      }
       enforcePageBudget(commentPageReplyLimiter, t.platform, t.account.platformId);
 
       const audit = (metadata: Record<string, unknown>) =>
@@ -885,7 +882,15 @@ export const commentRouter = createRouter({
 
       let result: { id: string };
       try {
-        result = await (getSocialProvider("INSTAGRAM") as InstagramProvider).commentOnMedia(t.tokens, t.objectId, input.message);
+        result =
+          t.platform === "FACEBOOK"
+            ? await (getSocialProvider("FACEBOOK") as FacebookProvider).commentOnPost(
+                t.tokens,
+                t.objectId,
+                input.message,
+                t.account.platformId
+              )
+            : await (getSocialProvider("INSTAGRAM") as InstagramProvider).commentOnMedia(t.tokens, t.objectId, input.message);
       } catch (err: any) {
         if (isPermissionMessage(err?.message)) void refreshGrantedScopes(ctx.prisma, t);
         if (isUnconfirmedMessage(err?.message)) await audit({ outcome: "unconfirmed" });

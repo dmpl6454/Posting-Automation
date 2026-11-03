@@ -68,16 +68,12 @@ export function createAnalyticsSyncWorker() {
             );
             if (resolved) {
               analyticsId = resolved;
-              // Persist so this call never repeats. Merge, never overwrite: the
-              // metadata carries other keys the publish path owns.
-              const base =
-                target?.metadata && typeof target.metadata === "object" && !Array.isArray(target.metadata)
-                  ? (target.metadata as Record<string, unknown>)
-                  : {};
-              await prisma.postTarget.update({
-                where: { id: postTargetId },
-                data: { metadata: { ...base, resolvedPostId: resolved } as any },
-              });
+              // Persist so this call never repeats. ATOMIC jsonb merge, never a
+              // rewrite of the column read above: the delayed first-comment job
+              // writes metadata.firstComment while this Graph call is in flight,
+              // and restoring a stale `scheduled` record would re-post the comments.
+              const patch = JSON.stringify({ resolvedPostId: resolved });
+              await prisma.$executeRaw`UPDATE "PostTarget" SET "metadata" = COALESCE("metadata", '{}'::jsonb) || ${patch}::jsonb WHERE "id" = ${postTargetId}`;
               console.log(`[AnalyticsSync] Resolved FB video ${platformPostId} → post ${resolved} (persisted)`);
             } else {
               // Null means the video no longer exists. Leave the bare id so the

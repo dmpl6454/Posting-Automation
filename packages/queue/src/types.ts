@@ -181,6 +181,11 @@ export interface AvatarCacheJobData {
   channelId: string;
 }
 
+/** Post the delayed automatic first comments on one published target (2026-11-03). */
+export interface FirstCommentJobData {
+  postTargetId: string;
+}
+
 /**
  * PR-5 (per-channel unique captions): generate one DISTINCT AI caption per
  * pending PostTarget (written to PostTarget.contentOverride), then flip the

@@ -1,6 +1,6 @@
 import { Queue, type DefaultJobOptions } from "bullmq";
 import { redisConnection } from "./connection";
-import type { PostPublishJobData, TokenRefreshJobData, AnalyticsSyncJobData, MediaProcessJobData, WebhookDeliveryJobData, RssSyncJobData, NotificationSendJobData, AgentRunJobData, TrendDiscoverJobData, TrendScoreJobData, ContentGenerateJobData, AutopilotScheduleJobData, ListeningSyncJobData, SentimentAnalysisJobData, CampaignAnalyticsSyncJobData, BrandContentSyncJobData, OutreachSendJobData, OutreachPollJobData, RepurposeVideoJobData, AvatarCacheJobData, CaptionFanoutJobData, MediaOptimizeJobData, SuperTextBurnJobData, ExternalPostSyncJobData } from "./types";
+import type { PostPublishJobData, TokenRefreshJobData, AnalyticsSyncJobData, MediaProcessJobData, WebhookDeliveryJobData, RssSyncJobData, NotificationSendJobData, AgentRunJobData, TrendDiscoverJobData, TrendScoreJobData, ContentGenerateJobData, AutopilotScheduleJobData, ListeningSyncJobData, SentimentAnalysisJobData, CampaignAnalyticsSyncJobData, BrandContentSyncJobData, OutreachSendJobData, OutreachPollJobData, RepurposeVideoJobData, AvatarCacheJobData, CaptionFanoutJobData, MediaOptimizeJobData, SuperTextBurnJobData, ExternalPostSyncJobData, FirstCommentJobData } from "./types";
 
 /** Default retry config: 3 attempts with exponential backoff (30s base) */
 const DEFAULT_JOB_OPTS: DefaultJobOptions = {
@@ -43,6 +43,8 @@ export const QUEUE_NAMES = {
   SUPER_TEXT: "super-text",
   /** Ingests posts that exist ON the platform, incl. ones not published through us. */
   EXTERNAL_POST_SYNC: "external-post-sync",
+  /** Delayed automatic first comments (2026-11-03). */
+  FIRST_COMMENT: "first-comment",
 } as const;
 
 export const postPublishQueue = createQueue<PostPublishJobData>(QUEUE_NAMES.POST_PUBLISH);
@@ -69,3 +71,10 @@ export const captionFanoutQueue = createQueue<CaptionFanoutJobData>(QUEUE_NAMES.
 export const mediaOptimizeQueue = createQueue<MediaOptimizeJobData>(QUEUE_NAMES.MEDIA_OPTIMIZE);
 export const superTextQueue = createQueue<SuperTextBurnJobData>(QUEUE_NAMES.SUPER_TEXT);
 export const externalPostSyncQueue = createQueue<ExternalPostSyncJobData>(QUEUE_NAMES.EXTERNAL_POST_SYNC);
+// ⚠️ ONE attempt, never a retry: creating a comment is not idempotent. The
+// atomic claim in apps/worker/src/lib/first-comment.ts is the real guard; this
+// keeps a failed run from even trying.
+export const firstCommentQueue = new Queue<FirstCommentJobData>(QUEUE_NAMES.FIRST_COMMENT, {
+  connection: redisConnection,
+  defaultJobOptions: { attempts: 1, removeOnComplete: { count: 500 }, removeOnFail: { count: 1000 } },
+});

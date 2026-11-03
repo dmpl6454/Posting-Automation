@@ -1,5 +1,5 @@
 import { prisma } from "@postautomation/db";
-import { tokenRefreshQueue, analyticsSyncQueue, agentRunQueue, trendDiscoverQueue, listeningSyncQueue, campaignAnalyticsSyncQueue, brandContentSyncQueue, outreachPollQueue, rssSyncQueue, avatarCacheQueue, externalPostSyncQueue, externalPostFloor, insightsIncludeExternalPosts, listeningSyncJobId, LISTENING_SYNC_INTERVAL_MS } from "@postautomation/queue";
+import { tokenRefreshQueue, analyticsSyncQueue, agentRunQueue, trendDiscoverQueue, listeningSyncQueue, campaignAnalyticsSyncQueue, brandContentSyncQueue, outreachPollQueue, rssSyncQueue, avatarCacheQueue, externalPostSyncQueue, firstCommentQueue, externalPostFloor, insightsIncludeExternalPosts, listeningSyncJobId, LISTENING_SYNC_INTERVAL_MS } from "@postautomation/queue";
 import { groupIntoAccounts, selectShard } from "../lib/external-sync-accounts";
 import { planFbAnalyticsRun } from "../lib/fb-analytics-budget";
 import {
@@ -35,6 +35,7 @@ import { runCelebrityDetectors } from "../workers/celebrity-detect.worker";
 import { createRedisConnection, enqueueScheduledPublishJobs, excludeExpiredStoriesWhere, shouldReconcileCheckpoints } from "@postautomation/queue";
 import { HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE, TIKTOK_PROCESSING_WAIT_MESSAGE } from "../lib/publish-recovery";
 import { runPageSubscriptionBackfill } from "../lib/page-subscription-backfill";
+import { sweepFirstComments } from "../lib/first-comment";
 
 /**
  * Purge AnalyticsSnapshot rows whose PostTarget no longer exists.
@@ -1650,6 +1651,24 @@ async function readYouTubeCommentThreads(accessToken: string, videoId: string): 
   });
   return { status: res.status, body: await res.json().catch(() => null) };
 }
+/**
+ * Delayed first comments (2026-11-03): re-queue overdue `scheduled` runs whose
+ * job was lost, and mark runs interrupted mid-way as unconfirmed. See
+ * sweepFirstComments in lib/first-comment.ts.
+ */
+export async function runFirstCommentSweep(): Promise<void> {
+  try {
+    await sweepFirstComments({
+      prisma,
+      requeue: async (targetId, jobId) => {
+        await firstCommentQueue.add("first-comment", { postTargetId: targetId }, { jobId });
+      },
+    });
+  } catch (err: any) {
+    console.error("[FirstComment] sweep failed:", err?.message ?? err);
+  }
+}
+
 export async function runCommentAutomationSweep(): Promise<void> {
   if (!isCommentAutomationEnabled()) return;
   if (commentSweepRunning) {
@@ -1884,6 +1903,10 @@ export function startCronJobs() {
   // warmup keeps its first Graph reads clear of the boot-time crons above.
   setInterval(runCommentAutomationSweep, COMMENT_SWEEP_INTERVAL_MS);
   setTimeout(runCommentAutomationSweep, 7 * 60 * 1000);
+
+  // Delayed first comments: re-queue lost runs, close out interrupted ones.
+  setInterval(runFirstCommentSweep, 10 * 60 * 1000);
+  setTimeout(runFirstCommentSweep, 3 * 60 * 1000);
 
   console.log("[Cron]   - Auto-healer: every 10 min");
   console.log("[Cron]   - Comment automation sweep: every 15 min");

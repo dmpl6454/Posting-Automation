@@ -84,9 +84,13 @@ export function carriedTargetState(
   };
 }
 
-/** Instagram's comment ceiling (IG_COMMENT_MAX_LENGTH in @postautomation/social). */
+/** Instagram's comment ceiling (FIRST_COMMENT_TEXT_MAX in @postautomation/social). */
 const FIRST_COMMENT_MAX = 2200;
+/** FIRST_COMMENTS_MAX / FIRST_COMMENT_DELAY_MAX_MINUTES in @postautomation/social. */
+const FIRST_COMMENTS_COUNT_MAX = 5;
+const FIRST_COMMENT_DELAY_MAX = 1440;
 import { gatesBlockingManualPublish } from "../lib/publish-gate-scope";
+import { firstCommentMetadata } from "../lib/first-comments-input";
 
 /**
  * PR-5: load a PostTarget with its parent post's org and require it to belong
@@ -267,7 +271,21 @@ export const postRouter = createRouter({
         // Automatic first comment on every Instagram target, posted by the
         // publish worker right after the post goes live (2026-10-17). Stored as
         // `metadata.instagramFirstComment`; ignored for stories and articles.
+        // Kept for older clients (Instagram only); `firstComments` wins when both are sent.
         firstComment: z.string().trim().max(FIRST_COMMENT_MAX, "The first comment can be at most 2,200 characters.").optional(),
+        // 2026-11-03: up to five comments, on Instagram AND Facebook Page
+        // targets, optionally after a delay (minutes, max one day). Stored as
+        // `metadata.firstComments = { comments, delayMinutes }`.
+        firstComments: z
+          .array(z.string().trim().min(1, "A first comment can't be empty.").max(FIRST_COMMENT_MAX, "Each first comment can be at most 2,200 characters."))
+          .max(FIRST_COMMENTS_COUNT_MAX, "You can add at most 5 first comments.")
+          .optional(),
+        firstCommentDelayMinutes: z
+          .number()
+          .int()
+          .min(0)
+          .max(FIRST_COMMENT_DELAY_MAX, "The first comment delay can be at most 24 hours.")
+          .optional(),
         // TikTok (2026-10-28): the user's choices per TikTok channel — who can
         // see it, comments/Duet/Stitch, commercial-content disclosure, AI label.
         // Stored as `metadata.tiktokByChannel` for TikTok channels this post
@@ -613,8 +631,9 @@ export const postRouter = createRouter({
               instagramStory: _rawStory,
               // Same rule for the article marker: only the `article` input writes it.
               wordpressArticle: _rawArticle,
-              // Only the `firstComment` input writes this marker.
+              // Only the `firstComment(s)` inputs write these markers.
               instagramFirstComment: _rawFirstComment,
+              firstComments: _rawFirstComments,
               // TikTok choices come ONLY from the `tiktok` input, validated and
               // restricted to this post's TikTok channels. A raw client copy —
               // or the old top-level `privacyLevel` the provider used to read
@@ -638,7 +657,7 @@ export const postRouter = createRouter({
             if (videoThumbnail) out.videoThumbnail = videoThumbnail;
             if (isStory) out.instagramStory = { mentions: storyMentions };
             if (storedArticle) out.wordpressArticle = storedArticle;
-            if (input.firstComment && !isStory && !isArticle) out.instagramFirstComment = { text: input.firstComment };
+            Object.assign(out, firstCommentMetadata({ ...input, isStory, isArticle }));
             if (captionFanout.enabled) {
               out.captionFanout = {
                 requested: true,
