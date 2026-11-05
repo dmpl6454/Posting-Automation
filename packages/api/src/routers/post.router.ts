@@ -3,6 +3,7 @@ import { TIKTOK_CHECKPOINT_KEY, TIKTOK_TITLE_MAX } from "@postautomation/social/
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
 import { PUBLIC_CHANNEL_SELECT } from "../lib/public-channel";
+import { requestPlatformDeletion } from "../lib/platform-delete-request";
 import { postPublishQueue, captionFanoutQueue, superTextQueue, enqueueScheduledPublishJobs, buildPublishNowJobId, pendingPublishGates } from "@postautomation/queue";
 import { superTextMapSchema } from "@postautomation/super-text";
 import { planSuperText, superTextJobId, type SuperTextPlan } from "../lib/super-text";
@@ -1216,6 +1217,28 @@ export const postRouter = createRouter({
       }).catch(() => {});
 
       return { success: true };
+    }),
+
+  /**
+   * Delete the LIVE post from Facebook / Instagram (2026-11-05) — only what
+   * PostAutomation published. Optional `targetIds` limits it to some channels.
+   * Queues one background job per channel and returns what was queued; the
+   * result per channel appears on the post (metadata.platformDelete).
+   */
+  deleteFromPlatforms: orgProcedure
+    .input(z.object({ postId: z.string(), targetIds: z.array(z.string()).min(1).max(1000).optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const post = await ctx.prisma.post.findFirst({
+        where: { id: input.postId, organizationId: ctx.organizationId },
+        select: { id: true },
+      });
+      if (!post) throw new TRPCError({ code: "NOT_FOUND" });
+      return requestPlatformDeletion(ctx.prisma, {
+        organizationId: ctx.organizationId,
+        userId: (ctx.session.user as any)?.id ?? null,
+        postIds: [post.id],
+        targetIds: input.targetIds,
+      });
     }),
 
   /**

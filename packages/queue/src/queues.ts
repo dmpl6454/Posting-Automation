@@ -1,6 +1,6 @@
 import { Queue, type DefaultJobOptions } from "bullmq";
 import { redisConnection } from "./connection";
-import type { PostPublishJobData, TokenRefreshJobData, AnalyticsSyncJobData, MediaProcessJobData, WebhookDeliveryJobData, RssSyncJobData, NotificationSendJobData, AgentRunJobData, TrendDiscoverJobData, TrendScoreJobData, ContentGenerateJobData, AutopilotScheduleJobData, ListeningSyncJobData, SentimentAnalysisJobData, CampaignAnalyticsSyncJobData, BrandContentSyncJobData, OutreachSendJobData, OutreachPollJobData, RepurposeVideoJobData, AvatarCacheJobData, CaptionFanoutJobData, MediaOptimizeJobData, SuperTextBurnJobData, ExternalPostSyncJobData, FirstCommentJobData } from "./types";
+import type { PostPublishJobData, TokenRefreshJobData, AnalyticsSyncJobData, MediaProcessJobData, WebhookDeliveryJobData, RssSyncJobData, NotificationSendJobData, AgentRunJobData, TrendDiscoverJobData, TrendScoreJobData, ContentGenerateJobData, AutopilotScheduleJobData, ListeningSyncJobData, SentimentAnalysisJobData, CampaignAnalyticsSyncJobData, BrandContentSyncJobData, OutreachSendJobData, OutreachPollJobData, RepurposeVideoJobData, AvatarCacheJobData, CaptionFanoutJobData, MediaOptimizeJobData, SuperTextBurnJobData, ExternalPostSyncJobData, FirstCommentJobData, PlatformDeleteJobData } from "./types";
 
 /** Default retry config: 3 attempts with exponential backoff (30s base) */
 const DEFAULT_JOB_OPTS: DefaultJobOptions = {
@@ -45,6 +45,8 @@ export const QUEUE_NAMES = {
   EXTERNAL_POST_SYNC: "external-post-sync",
   /** Delayed automatic first comments (2026-11-03). */
   FIRST_COMMENT: "first-comment",
+  /** Delete a published post from Facebook / Instagram (2026-11-05). */
+  PLATFORM_DELETE: "platform-delete",
 } as const;
 
 export const postPublishQueue = createQueue<PostPublishJobData>(QUEUE_NAMES.POST_PUBLISH);
@@ -77,4 +79,16 @@ export const externalPostSyncQueue = createQueue<ExternalPostSyncJobData>(QUEUE_
 export const firstCommentQueue = new Queue<FirstCommentJobData>(QUEUE_NAMES.FIRST_COMMENT, {
   connection: redisConnection,
   defaultJobOptions: { attempts: 1, removeOnComplete: { count: 500 }, removeOnFail: { count: 1000 } },
+});
+
+// Deleting is idempotent, so a retry can never duplicate anything: an unknown
+// outcome (network, 5xx, throttle) is simply asked again, with a backoff.
+export const platformDeleteQueue = new Queue<PlatformDeleteJobData>(QUEUE_NAMES.PLATFORM_DELETE, {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: 3,
+    backoff: { type: "exponential", delay: 30_000 },
+    removeOnComplete: { count: 1000 },
+    removeOnFail: { count: 1000 },
+  },
 });

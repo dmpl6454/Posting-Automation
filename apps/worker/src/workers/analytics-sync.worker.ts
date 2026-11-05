@@ -15,6 +15,21 @@ export function createAnalyticsSyncWorker() {
       const { postTargetId, channelId, platform, platformPostId, windowTag, capturedLate } = job.data;
       console.log(`[AnalyticsSync] Processing job ${job.id} for target ${postTargetId}${windowTag ? ` (at-age checkpoint ${windowTag})` : ""}`);
 
+      // 0. Deleted from the platform through PostAutomation (2026-11-05): an
+      // at-age checkpoint queued at publish time would otherwise ask Meta about
+      // a post that no longer exists, record a failed capture, and flag the
+      // channel. Keep the last clean numbers instead.
+      {
+        const gone = await prisma.postTarget.findUnique({
+          where: { id: postTargetId },
+          select: { platformDeletedAt: true },
+        });
+        if (gone?.platformDeletedAt) {
+          console.log(`[AnalyticsSync] target ${postTargetId} was deleted from ${platform} — skipping`);
+          return null;
+        }
+      }
+
       // 1. Get channel tokens
       const channel = await prisma.channel.findUniqueOrThrow({
         where: { id: channelId },

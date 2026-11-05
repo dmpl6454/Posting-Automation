@@ -20,6 +20,7 @@ import { hasTikTokChannel, storedTikTokByChannel, validateTikTokPost } from "../
 import { pendingPublishGates } from "@postautomation/queue/src/publish-gates";
 import { checkUsageLimit } from "../middleware/plan-limit.middleware";
 import { gatesBlockingManualPublish } from "../lib/publish-gate-scope";
+import { requestPlatformDeletion } from "../lib/platform-delete-request";
 
 /**
  * Security audit 2026-09-28: csvImport had no cap on row count and never
@@ -196,6 +197,25 @@ export const bulkRouter = createRouter({
       });
 
       return { deleted: result.count };
+    }),
+
+  /**
+   * Delete the LIVE posts from Facebook / Instagram for up to 100 posts
+   * (2026-11-05). Only targets PostAutomation published; the posts stay in
+   * PostAutomation with their history. See lib/platform-delete-request.ts.
+   */
+  deleteFromPlatforms: orgProcedure
+    .input(z.object({ postIds: z.array(z.string()).min(1).max(100) }))
+    .mutation(async ({ ctx, input }) => {
+      const organizationId = ctx.organizationId as string;
+      if (!organizationId) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Organization ID required" });
+      }
+      return requestPlatformDeletion(prisma, {
+        organizationId,
+        userId: (ctx.session.user as any)?.id ?? null,
+        postIds: input.postIds,
+      });
     }),
 
   /**

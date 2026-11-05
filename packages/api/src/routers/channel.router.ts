@@ -721,7 +721,14 @@ function getDefaultScopes(platform: string): string[] {
     // token. A private reply to an Instagram commenter needs only the already-
     // approved comment scopes (instagram_basic + instagram_manage_comments +
     // pages_read_engagement). Verified on both apps' live login dialog first.
-    INSTAGRAM: ["public_profile", "pages_show_list", "pages_read_engagement", "instagram_basic", "instagram_content_publish", "business_management", "instagram_manage_insights", "instagram_manage_comments", "pages_read_user_content", "instagram_manage_engagement", "instagram_manage_messages", "pages_manage_metadata"],
+    //
+    // `instagram_manage_contents` (2026-11-05): DELETING media this account
+    // published (DELETE /{ig-media-id}, Graph changelog 2025-12-03). Verified a
+    // recognised scope on BOTH apps' live login dialog (302; a bogus scope 500s)
+    // before being added. Same "requested ≠ granted" pattern: the delete worker
+    // checks the GRANTED scopes and names the missing permission instead of
+    // calling. Do not drop it without removing "Delete from Instagram".
+    INSTAGRAM: ["public_profile", "pages_show_list", "pages_read_engagement", "instagram_basic", "instagram_content_publish", "business_management", "instagram_manage_insights", "instagram_manage_comments", "pages_read_user_content", "instagram_manage_engagement", "instagram_manage_messages", "pages_manage_metadata", "instagram_manage_contents"],
     REDDIT: ["submit", "identity", "read"],
     // TikTok Content Posting API. `video.publish` = Direct Post (what publishPost
     // uses via PULL_FROM_URL); `video.upload` = upload-to-drafts; `user.info.basic`

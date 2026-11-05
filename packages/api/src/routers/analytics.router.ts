@@ -1622,6 +1622,7 @@ export const analyticsRouter = createRouter({
       where: {
         status: "PUBLISHED",
         publishedId: { not: null },
+        platformDeletedAt: null,
         publishedAt: { gte: since },
         // A story's insights are gone 24h after publish, and a FACEBOOK story has
         // no published insights path at all. Without this, one "Sync Now" click

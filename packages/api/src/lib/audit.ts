@@ -38,6 +38,8 @@ export const AUDIT_ACTIONS = {
   POST_CREATED: "post.created",
   POST_UPDATED: "post.updated",
   POST_DELETED: "post.deleted",
+  // Asked to delete the LIVE post from Facebook / Instagram (2026-11-05).
+  POST_PLATFORM_DELETE_REQUESTED: "post.platform_delete_requested",
   POST_PUBLISHED: "post.published",
   POST_SCHEDULED: "post.scheduled",
 

@@ -80,4 +80,12 @@ describe("Meta insights scopes", () => {
       expect.arrayContaining(["instagram_basic", "instagram_content_publish", "business_management"])
     );
   });
+
+  it("INSTAGRAM requests instagram_manage_contents (Delete from Instagram, 2026-11-05)", () => {
+    // DELETE /{ig-media-id} needs instagram_basic + instagram_manage_contents.
+    // Facebook deletes ride on pages_manage_posts, already requested.
+    expect(getDefaultScopes("INSTAGRAM")).toEqual(expect.arrayContaining(["instagram_basic", "instagram_manage_contents"]));
+    expect(getDefaultScopes("FACEBOOK")).toContain("pages_manage_posts");
+    expect(getDefaultScopes("FACEBOOK")).not.toContain("instagram_manage_contents");
+  });
 });
