@@ -186,6 +186,11 @@ export interface FirstCommentJobData {
   postTargetId: string;
 }
 
+/** Delete one published target's post from Facebook / Instagram (2026-11-05). */
+export interface PlatformDeleteJobData {
+  postTargetId: string;
+}
+
 /**
  * PR-5 (per-channel unique captions): generate one DISTINCT AI caption per
  * pending PostTarget (written to PostTarget.contentOverride), then flip the

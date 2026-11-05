@@ -20,11 +20,16 @@ export async function runFirstCommentJob(postTargetId: string): Promise<void> {
       status: true,
       format: true,
       publishedId: true,
+      platformDeletedAt: true,
       channelId: true,
       post: { select: { metadata: true } },
     },
   });
   if (!target) return;
+  if (target.platformDeletedAt) {
+    await abandonScheduledFirstComment(prisma, target.id, "The post was deleted from the platform, so the first comments weren't posted.");
+    return;
+  }
   if (target.status !== "PUBLISHED" || !target.publishedId) {
     await abandonScheduledFirstComment(prisma, target.id, "The post is no longer published, so the first comments weren't posted.");
     return;

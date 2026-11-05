@@ -181,7 +181,8 @@ describe("post page", () => {
     expect(postPage).toMatch(/\{TIKTOK_PROCESSING_NOTICE\}/);
   });
   it("the View links render only when the target has a publishedUrl", () => {
-    expect(postPage).toMatch(/\{target\.publishedUrl && \(\s*<a\s+href=\{target\.publishedUrl\}/);
+    // `&& !target.platformDeletedAt` (2026-11-05): a post deleted from the platform has no page to open.
+    expect(postPage).toMatch(/\{target\.publishedUrl && (!target\.platformDeletedAt && )?\(\s*<a\s+href=\{target\.publishedUrl\}/);
     expect(postPage).toMatch(/\.filter\(\(t: any\) => t\.publishedUrl\)/);
   });
   it("the View-on button names TikTok correctly", () => {

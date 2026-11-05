@@ -18,6 +18,15 @@ import { Separator } from "~/components/ui/separator";
 import { Skeleton } from "~/components/ui/skeleton";
 import { useToast } from "~/hooks/use-toast";
 import { firstCommentLine } from "~/lib/first-comment";
+import { ConfirmDialog } from "~/components/ui/confirm-dialog";
+import {
+  targetDeleteState,
+  canRequestDelete,
+  postDeleteSummary,
+  targetDeleteLine,
+  deleteRequestToast,
+  platformName,
+} from "~/lib/platform-delete-view";
 import {
   tiktokPublishingLabel,
   TIKTOK_PROCESSING_NOTICE,
@@ -107,7 +116,10 @@ export default function PostDetailPage() {
     {
       refetchInterval: (query) => {
         const data = (query as any).state?.data;
-        return isPublishing(data) ? 2000 : isPendingCaptionFanout(data) ? 5000 : false;
+        if (isPublishing(data)) return 2000;
+        // Delete-from-platform requests run in the background (2026-11-05).
+        if (data?.targets && postDeleteSummary(data.targets).inProgress > 0) return 3000;
+        return isPendingCaptionFanout(data) ? 5000 : false;
       },
     }
   );
@@ -380,6 +392,21 @@ export default function PostDetailPage() {
       scheduledAt: scheduledAt ? new Date(scheduledAt).toISOString() : null,
     });
   };
+
+  // Delete the LIVE post from Facebook / Instagram (2026-11-05).
+  const [pendingPlatformDelete, setPendingPlatformDelete] = useState<
+    { targetIds?: string[]; label: string; count: number } | null
+  >(null);
+  const deleteFromPlatforms = trpc.post.deleteFromPlatforms.useMutation({
+    onSuccess: (summary) => {
+      toast(deleteRequestToast(summary));
+      setPendingPlatformDelete(null);
+      refetch();
+    },
+    onError: (err) => {
+      toast({ title: "Couldn't start the delete", description: humanizeError(err), variant: "destructive" });
+    },
+  });
 
   const handleDelete = () => {
     if (confirm("Are you sure you want to delete this post? This action cannot be undone.")) {
@@ -692,7 +719,9 @@ export default function PostDetailPage() {
                     >
                       {target.ambiguousAt
                         ? "Needs check"
-                        : target.status.charAt(0) + target.status.slice(1).toLowerCase()}
+                        : target.platformDeletedAt
+                          ? "Deleted from platform"
+                          : target.status.charAt(0) + target.status.slice(1).toLowerCase()}
                     </Badge>
                     {target.ambiguousAt && (
                       <Button
@@ -730,7 +759,7 @@ export default function PostDetailPage() {
                         <span className="ml-1">{target.status === "FAILED" ? "Retry" : "Publish"}</span>
                       </Button>
                     )}
-                    {target.publishedUrl && (
+                    {target.publishedUrl && !target.platformDeletedAt && (
                       <a
                         href={target.publishedUrl}
                         target="_blank"
@@ -743,6 +772,46 @@ export default function PostDetailPage() {
                     )}
                   </div>
                   </div>
+                  {(() => {
+                    const del = targetDeleteState(target);
+                    const line = targetDeleteLine(del, target.channel.platform);
+                    if (!line && !canRequestDelete(del)) return null;
+                    return (
+                      <div className="flex flex-wrap items-center gap-2" data-testid="platform-delete-row">
+                        {line && (
+                          <p
+                            className={
+                              line.tone === "ok"
+                                ? "text-xs text-emerald-600 dark:text-emerald-400"
+                                : line.tone === "warn"
+                                  ? "text-xs text-amber-700 dark:text-amber-400"
+                                  : line.tone === "error"
+                                    ? "text-xs text-red-600"
+                                    : "flex items-center gap-1 text-xs text-muted-foreground"
+                            }
+                          >
+                            {del.kind === "in_progress" && <Loader2 className="mr-1 inline h-3 w-3 animate-spin" />}
+                            {line.text}
+                          </p>
+                        )}
+                        {canRequestDelete(del) && (
+                          <button
+                            type="button"
+                            className="text-left text-xs text-muted-foreground hover:text-destructive hover:underline"
+                            onClick={() =>
+                              setPendingPlatformDelete({
+                                targetIds: [target.id],
+                                label: `${platformName(target.channel.platform)} (${target.channel.name})`,
+                                count: 1,
+                              })
+                            }
+                          >
+                            {del.kind === "eligible" ? "Delete from" : "Try deleting from"} {platformName(target.channel.platform)}
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })()}
                   {/* TikTok guideline: nickname + consent next to this row's
                       Publish/Retry, from the settings stored on the post. */}
                   {armableTikTokTargetIds.has(target.id) && (
@@ -853,6 +922,7 @@ export default function PostDetailPage() {
                   {(target.channel.platform === "INSTAGRAM" || target.channel.platform === "FACEBOOK") &&
                     target.status === "PUBLISHED" &&
                     target.publishedId &&
+                    !target.platformDeletedAt &&
                     // A story has no comments edge and expires in 24h — offering
                     // the affordance there can only produce a confusing error.
                     target.format !== "STORY" && (
@@ -1206,6 +1276,47 @@ export default function PostDetailPage() {
               Delete
             </Button>
           )}
+          {(() => {
+            const sum = postDeleteSummary(post.targets);
+            if (sum.requestable === 0) return null;
+            return (
+              <Button
+                variant="outline"
+                className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                onClick={() =>
+                  setPendingPlatformDelete({ label: sum.platformsLabel, count: sum.requestable })
+                }
+                disabled={deleteFromPlatforms.isPending}
+                data-testid="delete-from-platforms"
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                Delete from {sum.platformsLabel}
+                {sum.requestable > 1 ? ` (${sum.requestable})` : ""}
+              </Button>
+            );
+          })()}
+          <ConfirmDialog
+            open={pendingPlatformDelete !== null}
+            onOpenChange={(open) => {
+              if (!open) setPendingPlatformDelete(null);
+            }}
+            title={
+              pendingPlatformDelete
+                ? `Delete from ${pendingPlatformDelete.label}?`
+                : "Delete from the platform?"
+            }
+            description={
+              pendingPlatformDelete
+                ? `This removes the live post${pendingPlatformDelete.count > 1 ? ` from ${pendingPlatformDelete.count} channels` : ""} on ${pendingPlatformDelete.label}, including its likes and comments. It can't be undone. The post and its history stay in PostAutomation.`
+                : ""
+            }
+            confirmLabel="Delete from platform"
+            isPending={deleteFromPlatforms.isPending}
+            onConfirm={() => {
+              if (!pendingPlatformDelete) return;
+              deleteFromPlatforms.mutate({ postId, targetIds: pendingPlatformDelete.targetIds });
+            }}
+          />
         </div>
 
         {/* flex-wrap: at 360-414px the Save/Schedule/Publish cluster must wrap
@@ -1291,6 +1402,8 @@ export default function PostDetailPage() {
           {post.status === "PUBLISHED" &&
             post.targets
               .filter((t: any) => t.publishedUrl)
+              // A post deleted from the platform has no live page to open.
+              .filter((t: any) => !t.platformDeletedAt)
               .map((target: any) => (
                 <Button key={target.id} variant="outline" asChild>
                   <a href={target.publishedUrl!} target="_blank" rel="noopener noreferrer">

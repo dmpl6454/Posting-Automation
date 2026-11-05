@@ -189,6 +189,7 @@ export async function resolvePublishedCommentTarget(
       // resolvedPostId (FB videos: the feed-post id analytics-sync recorded) —
       // one more valid prefix for this post's comment ids.
       metadata: true,
+      platformDeletedAt: true,
       post: { select: { organizationId: true } },
     },
   });
@@ -199,6 +200,12 @@ export async function resolvePublishedCommentTarget(
     throw new TRPCError({
       code: "BAD_REQUEST",
       message: "Comments are only available once this channel's post has published.",
+    });
+  }
+  if (target.platformDeletedAt) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "This post was deleted from the platform through PostAutomation, so it has no comments to show.",
     });
   }
 
@@ -615,6 +622,7 @@ export const commentRouter = createRouter({
         post: { organizationId: ctx.organizationId },
         status: "PUBLISHED",
         publishedId: { not: null },
+          platformDeletedAt: null,
         OR: NOT_A_STORY,
       },
       _count: { _all: true },
@@ -670,6 +678,7 @@ export const commentRouter = createRouter({
           post: { organizationId: ctx.organizationId },
           status: "PUBLISHED",
           publishedId: { not: null },
+          platformDeletedAt: null,
           OR: NOT_A_STORY,
         },
         orderBy: [{ publishedAt: "desc" }, { id: "desc" }],
@@ -1429,6 +1438,7 @@ export const commentRouter = createRouter({
           post: { organizationId: ctx.organizationId },
           status: "PUBLISHED",
           publishedId: { not: null },
+          platformDeletedAt: null,
           publishedAt: { gte: since },
           OR: NOT_A_STORY,
           ...(input.channelId ? { channelId: input.channelId } : {}),

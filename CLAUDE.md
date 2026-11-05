@@ -1191,6 +1191,55 @@ setting, and a mention from someone they do not follow arriving as a MESSAGE REQ
 to claim "Instagram notifies them" — that promise was removed 2026-09-16; no Meta source supports
 it. Do not re-add it.
 
+## 🗑️ DELETE FROM FACEBOOK / INSTAGRAM (2026-11-05) — read before touching platform-delete or `PostTarget.platformDeletedAt`
+
+Owner: "build facebook and instagram post delete which is posted from post automation". Deletes the LIVE
+post for targets PostAutomation published — never anything posted directly on the platform.
+
+- **UI:** post page → per channel "Delete from Instagram/Facebook" + a "Delete from Facebook/Instagram (N)"
+  button for the whole post; Content Studio → Posts list → tick posts (only rows with a published FB/IG
+  channel get a checkbox) → "Delete from Facebook/Instagram". Both behind a confirm dialog. Both poll while
+  a request runs. A deleted channel shows "Deleted from platform", its View link and comments are hidden.
+- **Graph (docs re-checked 2026-11-05):** Facebook `DELETE /{page_post}` (composite) or `/{video-id}` (a
+  video publish stores the bare Video id) with the Page token — `pages_manage_posts`, already approved.
+  Instagram `DELETE /{ig-media-id}` with the user token — added by Meta **2025-12-03**, needs
+  **`instagram_manage_contents`** (NEW, requested since this change, **needs App Review**; app-role
+  accounts get it on reconnect). Supports feed, reels, stories, whole carousels; NOT ads or a single
+  carousel item (subcode 2207073). The scope was verified recognised on BOTH apps' live login dialog
+  (302; a bogus scope 500s) before being added — **never add a scope without that check**.
+- **Flow:** `post.deleteFromPlatforms({postId, targetIds?})` / `bulk.deleteFromPlatforms({postIds ≤100})` →
+  [platform-delete-request.ts](packages/api/src/lib/platform-delete-request.ts): org-scoped through the
+  PARENT post, ≤1000 targets per request, atomic claim (`claimTargetsForPlatformDelete`), one job per
+  target on the `platform-delete` queue (jobId `pdelete:{targetId}:{requestMs}`, spaced 1.5s) →
+  [platform-delete.worker.ts](apps/worker/src/workers/platform-delete.worker.ts) (concurrency 2) →
+  [lib/platform-delete.ts](apps/worker/src/lib/platform-delete.ts) → provider `deletePublishedPost`
+  (never throws) → [utils/platform-delete.ts](packages/social/src/utils/platform-delete.ts) classifier.
+- **State:** `PostTarget.metadata.platformDelete = {status queued|deleting|deleted|not_found|failed, requestedAt,
+  requestedBy, message, finishedAt}` via ATOMIC jsonb merge only
+  ([platform-delete-state.ts](packages/queue/src/platform-delete-state.ts)); a confirmed delete also sets
+  **`PostTarget.platformDeletedAt`** (new nullable column). **Status stays PUBLISHED** so history and
+  Insights are kept. A queued/deleting record older than 30 min is treated as lost and can be asked again.
+- **Deleting is idempotent**, so unknown outcomes (network, 5xx, throttle codes 1/2/4/17/32/341/368/613,
+  is_transient) are retried by BullMQ (3 attempts, 30s exponential) and only the final attempt records a
+  failure. The FB provider calls graphFetch with `retries: 0` — the worker owns retries.
+- 🔴 **`#100/33` is NOT "deleted"** — Meta uses it for "doesn't exist" AND "can't be loaded due to missing
+  permissions". It becomes `not_found` (amber, retryable) and never sets `platformDeletedAt`.
+- The worker checks the channel's recorded `grantedScopes` first and names the missing permission without
+  calling Meta. An IG story with `storyMediaUnresolved` (only its container id is stored) is refused.
+- **Skipped once deleted:** every analytics pass (6-hourly, long-tail, FB budget pass, at-age reconcile,
+  Sync Now) filters `platformDeletedAt: null`, and analytics-sync returns early for an already-queued
+  at-age job; delayed first comments are abandoned; the Comments inbox hides the post.
+- Tests: [platform-delete.test.ts](packages/social/src/__tests__/platform-delete.test.ts),
+  [platform-delete.test.ts](apps/worker/src/lib/platform-delete.test.ts),
+  [platform-delete-request.test.ts](packages/api/src/__tests__/platform-delete-request.test.ts),
+  [platform-delete-view.test.ts](apps/web/lib/platform-delete-view.test.ts), and the **real-Postgres**
+  [platform-delete-state.e2e.test.ts](packages/api/src/__tests__/platform-delete-state.e2e.test.ts)
+  (`LIVE_E2E=1`; verified 2026-11-05 on Postgres 16: claim scope, stale re-claim, sibling metadata kept,
+  platformDeletedAt stamped in UTC).
+- ⏳ **Not yet proven live:** no real Graph delete has been run from prod. Facebook should work for any
+  channel whose token is valid; Instagram only for accounts reconnected by an app-role user until Meta
+  approves `instagram_manage_contents`. Update this line after the first real delete.
+
 ## 📊 STORY INSIGHTS — Insights → Stories tab (2026-11-05) — read before touching story analytics
 
 Owner ask: "add feature for story posted insight". **Insights → Stories** (`?tab=stories`,

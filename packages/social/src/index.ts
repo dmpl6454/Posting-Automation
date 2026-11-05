@@ -265,3 +265,18 @@ export {
   parseStoryNavigationBreakdown,
   parseStoryProfileMetrics,
 } from "./utils/instagram-story-insights";
+export {
+  PLATFORM_DELETE_PLATFORMS,
+  PLATFORM_DELETE_SCOPES,
+  PLATFORM_DELETE_RETRY_MESSAGE,
+  isPlatformDeletePlatform,
+  platformDeleteCapability,
+  platformDeleteMissingScopeMessage,
+  classifyPlatformDeleteResponse,
+} from "./utils/platform-delete";
+export type {
+  PlatformDeletePlatform,
+  PlatformDeleteCapability,
+  PlatformDeleteOutcome,
+  PlatformDeleteRefusal,
+} from "./utils/platform-delete";

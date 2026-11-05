@@ -74,6 +74,7 @@ import {
   worstDegradation,
 } from "../utils/meta-insight-diagnosis";
 import { fetchT } from "../utils/fetch-timeout";
+import { classifyPlatformDeleteResponse, type PlatformDeleteOutcome } from "../utils/platform-delete";
 import {
   STORY_NAVIGATION_BREAKDOWN,
   STORY_PROFILE_METRICS,
@@ -790,17 +791,35 @@ export class InstagramProvider extends SocialProvider {
   }
 
   async deletePost(tokens: OAuthTokens, platformPostId: string): Promise<void> {
-    // Instagram Graph API does not natively support deleting posts via the API.
-    // Attempt the deletion; this may fail depending on permissions.
-    const res = await fetch(
-      `${this.graphBaseUrl}/${this.apiVersion}/${platformPostId}?access_token=${tokens.accessToken}`,
-      { method: "DELETE" }
-    );
+    const outcome = await this.deletePublishedPost(tokens, platformPostId);
+    if (outcome.kind !== "deleted") throw new Error(outcome.message);
+  }
 
-    if (!res.ok) {
-      const data: any = await res.json();
-      throw new Error(`Instagram delete failed: ${JSON.stringify(data)}`);
+  /**
+   * Deletes media this account published: `DELETE /{ig-media-id}` with the
+   * Facebook USER token (Instagram API with Facebook Login only). Never throws —
+   * see utils/platform-delete.ts for what each outcome means.
+   */
+  async deletePublishedPost(tokens: OAuthTokens, mediaId: string): Promise<PlatformDeleteOutcome> {
+    if (!/^\d+$/.test(mediaId)) {
+      return { kind: "refused", reason: "other", message: "This post has no Instagram media id to delete." };
     }
+    let res: Response;
+    try {
+      res = await fetchT(
+        `${this.graphBaseUrl}/${this.apiVersion}/${encodeURIComponent(mediaId)}?access_token=${encodeURIComponent(tokens.accessToken)}`,
+        { method: "DELETE" }
+      );
+    } catch (err: any) {
+      console.error(`[Instagram] delete request did not complete:`, err?.message ?? err);
+      return classifyPlatformDeleteResponse("INSTAGRAM", 0, null);
+    }
+    const body: unknown = await res.json().catch(() => null);
+    const outcome = classifyPlatformDeleteResponse("INSTAGRAM", res.status, body);
+    if (outcome.kind !== "deleted") {
+      console.error(`[Instagram] delete ${mediaId} → ${outcome.kind} (HTTP ${res.status}):`, body === null ? "unreadable" : JSON.stringify(body));
+    }
+    return outcome;
   }
 
   async getProfile(tokens: OAuthTokens): Promise<SocialProfile> {

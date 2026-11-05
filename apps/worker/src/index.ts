@@ -26,6 +26,7 @@ import { createCaptionFanoutWorker } from "./workers/caption-fanout.worker";
 import { createMediaOptimizeWorker } from "./workers/media-optimize.worker";
 import { createSuperTextWorker } from "./workers/super-text.worker";
 import { createFirstCommentWorker } from "./workers/first-comment.worker";
+import { createPlatformDeleteWorker } from "./workers/platform-delete.worker";
 import { startCronJobs } from "./scheduler/cron-jobs";
 import { registerWorker, markWorkerStopped, startHealthServer } from "./lib/health";
 import { createGracefulShutdown, readActiveJobCount, resolveShutdownTimeoutMs } from "./lib/shutdown";
@@ -82,6 +83,7 @@ const mediaOptimizeWorker = createMediaOptimizeWorker();
 const superTextWorker = createSuperTextWorker();
 const externalPostSyncWorker = createExternalPostSyncWorker();
 const firstCommentWorker = createFirstCommentWorker();
+const platformDeleteWorker = createPlatformDeleteWorker();
 
 // Start cron jobs — leader-gated for future multi-worker scale-out: the
 // setInterval crons must run in EXACTLY ONE container or every scheduled
@@ -207,6 +209,9 @@ const shutdown = createGracefulShutdown({
       superTextWorker.close(),
       // Drained: a run is a few seconds, and stopping mid-way leaves it `posting`.
       firstCommentWorker.close(),
+      // Drained: a delete is one Graph call; stopping mid-way leaves it "deleting"
+      // until the request goes stale (30 min) and can be asked again.
+      platformDeleteWorker.close(),
     ]);
   },
   closeHealthServer: () => healthServer.close(),

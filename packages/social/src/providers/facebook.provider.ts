@@ -20,6 +20,7 @@ import {
   worstDegradation,
 } from "../utils/meta-insight-diagnosis";
 import { recordFbDeprecationFromResponse } from "../utils/fb-deprecation-cache";
+import { classifyPlatformDeleteResponse, type PlatformDeleteOutcome } from "../utils/platform-delete";
 import { fetchT } from "../utils/fetch-timeout";
 import {
   AmbiguousPublishError,
@@ -717,15 +718,41 @@ export class FacebookProvider extends SocialProvider {
   }
 
   async deletePost(tokens: OAuthTokens, platformPostId: string): Promise<void> {
-    const res = await this.graphFetch(
-      `${this.graphBaseUrl}/${this.apiVersion}/${platformPostId}?access_token=${tokens.accessToken}`,
-      { method: "DELETE" }
-    );
+    const outcome = await this.deletePublishedPost(tokens, platformPostId);
+    if (outcome.kind !== "deleted") throw new Error(outcome.message);
+  }
 
-    if (!res.ok) {
-      const data: any = await res.json();
-      throw new Error(`Facebook delete failed: ${JSON.stringify(data)}`);
+  /**
+   * Deletes a Page post this app published: `DELETE /{page_post}` for a
+   * composite `{pageId}_{postId}`, or `DELETE /{video-id}` for a video publish
+   * (which stores the bare Video-node id). Page token. Never throws — see
+   * utils/platform-delete.ts. Goes through graphFetch for the shared usage
+   * pacing, with NO internal retries and a short sleep cap: the worker owns
+   * retrying, and a delete must not hold a slot behind a long throttle sleep.
+   */
+  async deletePublishedPost(tokens: OAuthTokens, postId: string): Promise<PlatformDeleteOutcome> {
+    if (!/^\d+(_\d+)?$/.test(postId)) {
+      return { kind: "refused", reason: "other", message: "This post has no Facebook post id to delete." };
     }
+    const pageId = postId.includes("_") ? postId.split("_")[0] : undefined;
+    let res: Response;
+    try {
+      res = await this.graphFetch(
+        `${this.graphBaseUrl}/${this.apiVersion}/${encodeURIComponent(postId)}?access_token=${encodeURIComponent(tokens.accessToken)}`,
+        { method: "DELETE" },
+        pageId,
+        { retries: 0, maxSleepMs: 5_000, timeoutMs: 25_000 }
+      );
+    } catch (err: any) {
+      console.error(`[Facebook] delete request did not complete:`, err?.message ?? err);
+      return classifyPlatformDeleteResponse("FACEBOOK", 0, null);
+    }
+    const body: unknown = await res.json().catch(() => null);
+    const outcome = classifyPlatformDeleteResponse("FACEBOOK", res.status, body);
+    if (outcome.kind !== "deleted") {
+      console.error(`[Facebook] delete ${postId} → ${outcome.kind} (HTTP ${res.status}):`, body === null ? "unreadable" : JSON.stringify(body));
+    }
+    return outcome;
   }
 
   async getProfile(tokens: OAuthTokens): Promise<SocialProfile> {

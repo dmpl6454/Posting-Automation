@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { trpc } from "~/lib/trpc/client";
 import { Card, CardContent } from "~/components/ui/card";
@@ -23,7 +23,10 @@ import {
   AlertCircle,
   Archive,
   ArchiveRestore,
+  Trash2,
 } from "lucide-react";
+import { ConfirmDialog } from "~/components/ui/confirm-dialog";
+import { postDeleteSummary, deleteRequestToast } from "~/lib/platform-delete-view";
 import { format } from "date-fns";
 import { toast } from "~/hooks/use-toast";
 import { humanizeError } from "~/lib/errors";
@@ -55,11 +58,51 @@ export function PostsTab({ onSwitchTab }: PostsTabProps) {
   const [statusFilter, setStatusFilter] = useState<string | undefined>();
   const [showArchived, setShowArchived] = useState(false);
   const [sort, setSort] = useState<SortOption>("newest");
-  const { data, isLoading } = trpc.post.list.useQuery({
-    status: statusFilter as any,
-    limit: 20,
-    archived: showArchived,
-    sort,
+  const { data, isLoading } = trpc.post.list.useQuery(
+    {
+      status: statusFilter as any,
+      limit: 20,
+      archived: showArchived,
+      sort,
+    },
+    {
+      // Poll while a delete-from-platform request is running (2026-11-05).
+      refetchInterval: (query) => {
+        const posts = ((query as any).state?.data?.posts ?? []) as any[];
+        return posts.some((p) => postDeleteSummary(p.targets ?? []).inProgress > 0) ? 4000 : false;
+      },
+    }
+  );
+
+  // Bulk "Delete from Facebook / Instagram" (2026-11-05). Only posts with a
+  // published Facebook/Instagram channel can be selected.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
+  const deletable = useMemo(() => {
+    const m = new Map<string, ReturnType<typeof postDeleteSummary>>();
+    for (const p of (data?.posts ?? []) as any[]) m.set(p.id, postDeleteSummary(p.targets ?? []));
+    return m;
+  }, [data?.posts]);
+  const selectableIds = [...deletable.entries()].filter(([, s]) => s.requestable > 0).map(([id]) => id);
+  const selectedIds = [...selected].filter((id) => (deletable.get(id)?.requestable ?? 0) > 0);
+  const selectedChannelCount = selectedIds.reduce((n, id) => n + (deletable.get(id)?.requestable ?? 0), 0);
+  const toggleSelected = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const bulkDeleteMut = trpc.bulk.deleteFromPlatforms.useMutation({
+    onSuccess: (summary) => {
+      toast(deleteRequestToast(summary));
+      setSelected(new Set());
+      setConfirmBulkDelete(false);
+      utils.post.list.invalidate();
+    },
+    onError: (err) => {
+      toast({ title: "Couldn't start the delete", description: humanizeError(err), variant: "destructive" });
+    },
   });
 
   const archiveMut = trpc.post.archive.useMutation({
@@ -112,6 +155,7 @@ export function PostsTab({ onSwitchTab }: PostsTabProps) {
               onClick={() => {
                 setShowArchived(false);
                 setStatusFilter(status === "All" ? undefined : status);
+                setSelected(new Set());
               }}
               className={`whitespace-nowrap rounded-[8px] border px-3 py-[7px] text-[11.5px] leading-none transition-all ${
                 isActive
@@ -130,6 +174,7 @@ export function PostsTab({ onSwitchTab }: PostsTabProps) {
           onClick={() => {
             setShowArchived(true);
             setStatusFilter(undefined);
+            setSelected(new Set());
           }}
           className={`flex items-center gap-1.5 whitespace-nowrap rounded-[8px] border px-3 py-[7px] text-[11.5px] leading-none transition-all ${
             showArchived
@@ -153,6 +198,62 @@ export function PostsTab({ onSwitchTab }: PostsTabProps) {
           </Select>
         </div>
       </div>
+
+      {/* Bulk delete from Facebook / Instagram (2026-11-05) */}
+      {selectableIds.length > 0 && (
+        <div
+          className="flex flex-wrap items-center gap-2 rounded-[10px] border border-border bg-surface1 px-3 py-2 text-[12px]"
+          data-testid="bulk-platform-delete-bar"
+        >
+          {selectedIds.length === 0 ? (
+            <>
+              <span className="text-muted-foreground">
+                Tick posts to delete them from Facebook and Instagram.
+              </span>
+              <button
+                type="button"
+                className="ml-auto text-[12px] font-medium text-muted-foreground hover:text-foreground"
+                onClick={() => setSelected(new Set(selectableIds))}
+              >
+                Select all on this page ({selectableIds.length})
+              </button>
+            </>
+          ) : (
+            <>
+              <span className="font-semibold">
+                {selectedIds.length} post{selectedIds.length === 1 ? "" : "s"} selected
+              </span>
+              <span className="text-muted-foreground">
+                · {selectedChannelCount} channel{selectedChannelCount === 1 ? "" : "s"}
+              </span>
+              <div className="ml-auto flex items-center gap-2">
+                <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>
+                  Clear
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                  onClick={() => setConfirmBulkDelete(true)}
+                  disabled={bulkDeleteMut.isPending}
+                >
+                  <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                  Delete from Facebook/Instagram
+                </Button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+      <ConfirmDialog
+        open={confirmBulkDelete}
+        onOpenChange={setConfirmBulkDelete}
+        title={`Delete ${selectedIds.length} post${selectedIds.length === 1 ? "" : "s"} from Facebook/Instagram?`}
+        description={`This removes the live posts from ${selectedChannelCount} channel${selectedChannelCount === 1 ? "" : "s"}, including their likes and comments. It can't be undone. The posts and their history stay in PostAutomation. Other platforms are not touched.`}
+        confirmLabel="Delete from platforms"
+        isPending={bulkDeleteMut.isPending}
+        onConfirm={() => bulkDeleteMut.mutate({ postIds: selectedIds })}
+      />
 
       {/* Posts list */}
       {isLoading ? (
@@ -192,6 +293,7 @@ export function PostsTab({ onSwitchTab }: PostsTabProps) {
           {data?.posts.map((post: any) => {
             const config = statusConfig[post.status] ?? statusConfig.DRAFT!;
             const StatusIcon = config!.icon;
+            const del = deletable.get(post.id);
             return (
               /* One flat row instead of a nested Card: 32px status tile tinted
                  by state, 13px title, a single muted meta line, and a compact
@@ -203,6 +305,18 @@ export function PostsTab({ onSwitchTab }: PostsTabProps) {
                 onClick={() => router.push(`/dashboard/posts/${post.id}`)}
                 className="group flex cursor-pointer items-center gap-3 rounded-[12px] border border-border bg-card px-4 py-3 transition-colors hover:border-border2 hover:bg-hover"
               >
+                {del && del.requestable > 0 ? (
+                  <input
+                    type="checkbox"
+                    aria-label="Select for deleting from Facebook/Instagram"
+                    className="h-4 w-4 shrink-0 cursor-pointer accent-[hsl(var(--destructive))]"
+                    checked={selected.has(post.id)}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={() => toggleSelected(post.id)}
+                  />
+                ) : selectableIds.length > 0 ? (
+                  <span className="h-4 w-4 shrink-0" aria-hidden />
+                ) : null}
                 <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px] bg-tile">
                   <StatusIcon className={`h-[14px] w-[14px] ${config.tone}`} />
                 </div>
@@ -230,6 +344,15 @@ export function PostsTab({ onSwitchTab }: PostsTabProps) {
                     )}
                   </p>
                 </div>
+                {del && del.inProgress > 0 ? (
+                  <span className="flex shrink-0 items-center gap-1 whitespace-nowrap text-[10.5px] text-muted-foreground">
+                    <Loader2 className="h-3 w-3 animate-spin" /> Deleting
+                  </span>
+                ) : del && del.deleted > 0 ? (
+                  <span className="shrink-0 whitespace-nowrap rounded-[6px] bg-red-500/15 px-2 py-[3px] text-[10px] font-semibold uppercase leading-[1.4] tracking-[0.06em] text-red-400">
+                    {del.requestable > 0 ? `${del.deleted} deleted from platform` : "Deleted from platform"}
+                  </span>
+                ) : null}
                 <span
                   className={`shrink-0 whitespace-nowrap rounded-[6px] px-2 py-[3px] text-[10px] font-semibold uppercase leading-[1.4] tracking-[0.06em] ${config.pill}`}
                 >

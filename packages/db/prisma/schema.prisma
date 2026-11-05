@@ -556,6 +556,11 @@ model PostTarget {
   ambiguousAt     DateTime?
   /// Operator-facing explanation shown beside the ambiguous badge.
   ambiguousReason String?   @db.Text
+  /// Set when the post was DELETED FROM THE PLATFORM (Facebook/Instagram) through
+  /// PostAutomation (2026-11-05). The target keeps status PUBLISHED so its history
+  /// and Insights stay; analytics passes skip it. Progress of a delete request
+  /// lives in metadata.platformDelete. NULL on every pre-existing row.
+  platformDeletedAt DateTime?
 
   post    Post    @relation(fields: [postId], references: [id], onDelete: Cascade)
   channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)

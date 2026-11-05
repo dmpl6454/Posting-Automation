@@ -366,6 +366,8 @@ export async function scheduleAnalyticsSync() {
     where: {
       status: "PUBLISHED",
       publishedId: { not: null },
+      // Deleted from the platform through PostAutomation — nothing left to measure.
+      platformDeletedAt: null,
       publishedAt: { gte: sevenDaysAgo },
       // An Instagram story is gone 24h after publish, and so are its insights —
       // measuring it after that is wasted quota that also manufactures failures.
@@ -428,6 +430,8 @@ export async function scheduleLongTailAnalyticsSync() {
     where: {
       status: "PUBLISHED",
       publishedId: { not: null },
+      // Deleted from the platform through PostAutomation — nothing left to measure.
+      platformDeletedAt: null,
       publishedAt: { gte: ninetyDaysAgo, lt: sevenDaysAgo },
       // Every story in a 7–90 day window has expired, so this excludes them all —
       // stated through the same shared fragment so the two passes cannot drift.
@@ -563,6 +567,8 @@ export async function scheduleFacebookAnalyticsSync() {
        AND pt.status::text = 'PUBLISHED'
        AND pt."publishedId" IS NOT NULL
        AND pt."publishedAt" IS NOT NULL
+       -- Deleted from the platform through PostAutomation (2026-11-05).
+       AND pt."platformDeletedAt" IS NULL
        -- A Facebook story is gone in 24h and has no published insights path, so
        -- re-measuring it is guaranteed-failing spend that also starves this
        -- pass's never-measured reserve (it can never get a snapshot, so it stays
@@ -669,6 +675,8 @@ export async function reconcileAtAgeCheckpoints() {
     where: {
       status: "PUBLISHED",
       publishedId: { not: null },
+      // Deleted from the platform through PostAutomation — nothing left to measure.
+      platformDeletedAt: null,
       publishedAt: { gte: floor, lte: ceiling },
       channel: { isActive: true },
     },
