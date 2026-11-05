@@ -101,3 +101,23 @@ describe("shouldWriteSnapshot", () => {
     });
   });
 });
+
+describe("shouldWriteSnapshot — story extras (2026-11-05)", () => {
+  const nums = { impressions: 10, clicks: 0, likes: 0, shares: 0, comments: 0, reach: 8, views: 10 };
+
+  it("writes when only a story metric moved", () => {
+    expect(
+      shouldWriteSnapshot({ ...nums, story: { exits: 3, replies: 1 } }, { ...nums, metadata: { story: { exits: 2, replies: 1 } } }, false)
+    ).toBe(true);
+  });
+
+  it("skips when story metrics are unchanged", () => {
+    expect(
+      shouldWriteSnapshot({ ...nums, story: { exits: 2 } }, { ...nums, metadata: { story: { exits: 2 } } }, false)
+    ).toBe(false);
+  });
+
+  it("non-story captures are unaffected (no story on either side)", () => {
+    expect(shouldWriteSnapshot({ ...nums }, { ...nums, metadata: {} }, false)).toBe(false);
+  });
+});

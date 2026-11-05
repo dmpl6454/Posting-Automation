@@ -1191,6 +1191,42 @@ setting, and a mention from someone they do not follow arriving as a MESSAGE REQ
 to claim "Instagram notifies them" — that promise was removed 2026-09-16; no Meta source supports
 it. Do not re-add it.
 
+## 📊 STORY INSIGHTS — Insights → Stories tab (2026-11-05) — read before touching story analytics
+
+Owner ask: "add feature for story posted insight". **Insights → Stories** (`?tab=stories`,
+[StoriesTab.tsx](apps/web/components/analytics/StoriesTab.tsx)) lists every story published through
+PostAutomation (last 24h/7d/30d/90d, Instagram/Facebook filter) with views, reach, replies, shares,
+taps forward/back, exits, next-story swipes, profile visits, follows and link clicks, plus a
+"Refresh live stories" button (`analytics.triggerSync({days:2})`) and a CSV export (`toCsv`).
+
+- **Capture** ([instagram-story-insights.ts](packages/social/src/utils/instagram-story-insights.ts)):
+  `replies`/`navigation`/`total_interactions` were already in the STORY metric set and were being
+  DROPPED; they now ride on `SocialAnalytics.story`. Two extra best-effort calls run ONLY for a STORY
+  and ONLY after the core set succeeded: `metric=navigation&breakdown=story_navigation_action_type`
+  (tap_forward/tap_back/tap_exit/swipe_forward — Meta documents upper case, returns lower case) and
+  `metric=profile_visits,follows,link_clicks`. ⚠️ Never merge either into the core call: /insights is
+  all-or-nothing, and Meta warns a breakdown mixed with an unsupported metric is "An unknown error".
+  A failed extra costs only itself (never throws, never degrades). `#10 "Not enough viewers"`
+  (under 5 viewers) sets `story.notEnoughViewers` — a quiet story, not a broken channel.
+- **Storage:** `AnalyticsSnapshot.metadata.story` via `buildSnapshotMetadata` (an empty object is
+  dropped so non-story rows stay byte-identical). `shouldWriteSnapshot` also writes when ONLY the
+  story numbers moved — otherwise rising exits on flat views would never be saved.
+- **API:** `analytics.storyInsights({days, platform?})` (orgProcedure, scoped via
+  `post.organizationId`; newest 500 rows with the true `total` + `truncated`). Pure rules in
+  [story-insights.ts](packages/api/src/lib/story-insights.ts): newest CLEAN snapshot (same
+  clean-first rule as Reports), unreported metric ⇒ `null`, statuses `measured | pending |
+  low_viewers | reconnect | not_available` (every Facebook story — Meta has no per-story metrics),
+  `final` when the 23h `windowTag:"24h"` checkpoint exists. Thumbnails: an image's url or a
+  video's `thumbnailUrl` only — never a video file into `<img>`.
+- Stories published before this shipped have views/reach/shares but no taps/exits/profile numbers
+  (those render "—"). Capture cadence is unchanged: publish snapshot, the 6-hourly pass while live,
+  and the 23h checkpoint; nothing can be read after 24h.
+- Tests: [instagram-story-insights.test.ts](packages/social/src/__tests__/instagram-story-insights.test.ts),
+  the extras block in [instagram-story-analytics.test.ts](packages/social/src/__tests__/instagram-story-analytics.test.ts),
+  [story-insights.test.ts](packages/api/src/__tests__/story-insights.test.ts),
+  [story-insights-view.test.ts](apps/web/lib/story-insights-view.test.ts), plus story cases in the
+  snapshot-dedup / snapshot-metadata suites.
+
 ## 📖 FACEBOOK Page stories + the 9:16 STORY CANVAS (2026-09-16) — read before touching story media or the FB publish path
 
 Two owner reports, one change: Instagram stories were **cropped on phones** (caption cut off at

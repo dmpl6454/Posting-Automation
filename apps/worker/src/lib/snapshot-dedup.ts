@@ -79,7 +79,11 @@ function availabilityChanged(next: AvailabilityMap, stored: AvailabilityMap): bo
 }
 
 export function shouldWriteSnapshot(
-  next: Partial<SnapshotMetrics> & { metricsAvailable?: Record<string, boolean> },
+  next: Partial<SnapshotMetrics> & {
+    metricsAvailable?: Record<string, boolean>;
+    /** Instagram STORY extras (SocialAnalytics.story); undefined elsewhere. */
+    story?: Record<string, unknown>;
+  },
   latest: (Partial<SnapshotMetrics> & { metadata?: unknown }) | null | undefined,
   hasWindowTag: boolean
 ): boolean {
@@ -95,5 +99,24 @@ export function shouldWriteSnapshot(
   // (e.g. the owner reconnected and a metric flipped unavailable → available).
   // Without this the UI would keep showing "—" for a real, captured 0.
   if (availabilityChanged(next.metricsAvailable, storedAvailability(latest.metadata))) return true;
+  // Story-only numbers (replies, taps, exits, profile actions) live in
+  // metadata.story, not in the six columns above. Without this a story whose
+  // views stayed flat while its exits climbed would never be re-saved.
+  if (storyChanged(next.story, latest.metadata)) return true;
+  return false;
+}
+
+/** Compares a capture's story metrics with the ones stored on the latest snapshot. */
+function storyChanged(next: Record<string, unknown> | undefined, storedMetadata: unknown): boolean {
+  const stored =
+    storedMetadata && typeof storedMetadata === "object" && !Array.isArray(storedMetadata)
+      ? ((storedMetadata as Record<string, unknown>).story as Record<string, unknown> | undefined)
+      : undefined;
+  if (!next && !stored) return false;
+  if (!next || !stored || typeof stored !== "object") return true;
+  const keys = new Set([...Object.keys(next), ...Object.keys(stored)]);
+  for (const k of keys) {
+    if (next[k] !== stored[k]) return true;
+  }
   return false;
 }

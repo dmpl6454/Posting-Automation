@@ -259,3 +259,9 @@ export {
   type TikTokPostSettings,
   type TikTokPublishState,
 } from "./utils/tiktok-posting";
+export {
+  type StoryMetrics,
+  isNotEnoughViewersError,
+  parseStoryNavigationBreakdown,
+  parseStoryProfileMetrics,
+} from "./utils/instagram-story-insights";

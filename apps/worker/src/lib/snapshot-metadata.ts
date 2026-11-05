@@ -19,6 +19,8 @@ export interface SnapshotMetaInput {
   totalWatchTimeMs?: number;
   /** Why this capture came back short (missing scope / dead token). */
   degraded?: { reason: string; missingScopes?: string[]; detail?: string };
+  /** Instagram STORY extras: replies, taps, exits, profile actions, low-viewer flag. */
+  story?: Record<string, unknown>;
 }
 
 export function buildSnapshotMetadata(
@@ -35,6 +37,7 @@ export function buildSnapshotMetadata(
   if (a.avgWatchTimeMs != null) extra.avgWatchTimeMs = a.avgWatchTimeMs;
   if (a.totalWatchTimeMs != null) extra.totalWatchTimeMs = a.totalWatchTimeMs;
   if (a.degraded != null) extra.degraded = a.degraded;
+  if (a.story != null && Object.keys(a.story).length > 0) extra.story = a.story;
   if (windowTag) extra.windowTag = windowTag;
   if (capturedLate) extra.capturedLate = true;
   return Object.keys(extra).length > 0 ? extra : undefined;

@@ -25,6 +25,14 @@ import { evaluateChannelInsightsStatus, summarizeChannelStatuses } from "../lib/
 import { toCsv } from "../lib/report-csv";
 import { reportFileScope } from "../lib/report-file-scope";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
+import {
+  buildStoryInsightRow,
+  summarizeStoryInsights,
+  type StorySnapshotInput,
+} from "../lib/story-insights";
+
+/** Newest stories returned by analytics.storyInsights (the true total rides beside it). */
+const STORY_INSIGHTS_LIMIT = 500;
 
 /**
  * Emailed reports go to an ARBITRARY recipient — rate-limited (5/hour/user)
@@ -1853,6 +1861,112 @@ export const analyticsRouter = createRouter({
    * one fetchPostReportRows applies (reportWindowBoundary + the current/at_age
    * comparison), so a listed post always has rows and an unlisted one never does.
    */
+  /**
+   * Story insights (2026-11-05): every story published THROUGH PostAutomation in
+   * the last `days` days, one row per channel, built from its newest clean
+   * analytics snapshot. Instagram reports views, reach, shares, replies, taps
+   * forward/back, exits, next-story swipes, profile visits, follows and link
+   * clicks; Facebook Page stories have no per-story insights (rows say so).
+   *
+   * Org-scoped through the parent post. Newest STORY_INSIGHTS_LIMIT rows; the
+   * true `total` is returned beside them so a cap never reads as a count.
+   */
+  storyInsights: orgProcedure
+    .input(
+      z
+        .object({
+          days: z.number().int().min(1).max(90).default(7),
+          platform: z.enum(["INSTAGRAM", "FACEBOOK"]).optional(),
+        })
+        .optional()
+    )
+    .query(async ({ ctx, input }) => {
+      const now = new Date();
+      const since = new Date(now.getTime() - (input?.days ?? 7) * 24 * 60 * 60 * 1000);
+      const where = {
+        format: "STORY" as const,
+        status: "PUBLISHED" as const,
+        publishedAt: { gte: since },
+        post: { organizationId: ctx.organizationId },
+        channel: input?.platform
+          ? { platform: input.platform }
+          : { platform: { in: ["INSTAGRAM", "FACEBOOK"] as Array<"INSTAGRAM" | "FACEBOOK"> } },
+      };
+      const [total, targets] = await Promise.all([
+        ctx.prisma.postTarget.count({ where }),
+        ctx.prisma.postTarget.findMany({
+          where,
+          orderBy: { publishedAt: "desc" },
+          take: STORY_INSIGHTS_LIMIT,
+          select: {
+            id: true,
+            postId: true,
+            publishedAt: true,
+            publishedUrl: true,
+            channel: { select: { id: true, name: true, username: true, avatar: true, platform: true } },
+            post: {
+              select: {
+                content: true,
+                mediaAttachments: {
+                  orderBy: { order: "asc" },
+                  take: 1,
+                  select: { media: { select: { url: true, fileType: true, thumbnailUrl: true } } },
+                },
+              },
+            },
+          },
+        }),
+      ]);
+
+      const ids = targets.map((t) => t.id);
+      const snapshots = ids.length
+        ? await ctx.prisma.analyticsSnapshot.findMany({
+            where: { postTargetId: { in: ids } },
+            select: { postTargetId: true, views: true, reach: true, shares: true, impressions: true, snapshotAt: true, metadata: true },
+          })
+        : [];
+      const byTarget = new Map<string, StorySnapshotInput[]>();
+      for (const s of snapshots) {
+        const list = byTarget.get(s.postTargetId) ?? [];
+        list.push(s);
+        byTarget.set(s.postTargetId, list);
+      }
+
+      const rows = targets.map((t) => {
+        const media = t.post.mediaAttachments[0]?.media;
+        const isVideo = !!media && media.fileType.startsWith("video/");
+        // An <img> must only ever receive an IMAGE url: a video's own file is
+        // never offered as a thumbnail (the WebKit memory rule in CLAUDE.md).
+        const thumbnailUrl = media ? (isVideo ? media.thumbnailUrl ?? null : media.url) : null;
+        return buildStoryInsightRow(
+          {
+            targetId: t.id,
+            postId: t.postId,
+            platform: t.channel.platform,
+            channelId: t.channel.id,
+            channelName: t.channel.name,
+            channelHandle: t.channel.username ?? null,
+            channelAvatar: t.channel.avatar ?? null,
+            publishedAt: t.publishedAt ?? now,
+            url: t.publishedUrl ?? null,
+            note: t.post.content.slice(0, 120),
+            thumbnailUrl,
+            isVideo,
+          },
+          byTarget.get(t.id) ?? [],
+          now
+        );
+      });
+
+      return {
+        rows,
+        totals: summarizeStoryInsights(rows),
+        total,
+        truncated: total > rows.length,
+        days: input?.days ?? 7,
+      };
+    }),
+
   reportPosts: orgProcedure
     .input(
       z.object({
