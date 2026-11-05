@@ -4,6 +4,7 @@ import { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { ReportsTab } from "~/components/analytics/ReportsTab";
+import { StoriesTab } from "~/components/analytics/StoriesTab";
 import { PlatformPerformanceRadar } from "~/components/analytics/PlatformPerformanceRadar";
 import { ChannelAvatar } from "~/components/channel-avatar";
 import { trpc } from "~/lib/trpc/client";
@@ -1420,16 +1421,18 @@ function InsightsAnalyticsView() {
   );
 }
 
+type InsightsTab = "insights" | "reports" | "stories";
+
 /**
- * ?tab= deep-link reader (routing contract: emit ?tab=insights|reports).
+ * ?tab= deep-link reader (routing contract: emit ?tab=insights|reports|stories).
  * Lives in its own Suspense-wrapped child so useSearchParams() doesn't opt the
  * whole page out of static generation (same pattern as OAuthCallbackToaster).
  */
-function InsightsTabDeepLink({ onTab }: { onTab: (t: "insights" | "reports") => void }) {
+function InsightsTabDeepLink({ onTab }: { onTab: (t: InsightsTab) => void }) {
   const searchParams = useSearchParams();
   useEffect(() => {
     const t = searchParams.get("tab");
-    if (t === "reports" || t === "insights") onTab(t);
+    if (t === "reports" || t === "insights" || t === "stories") onTab(t);
   }, [searchParams, onTab]);
   return null;
 }
@@ -1441,7 +1444,7 @@ function InsightsTabDeepLink({ onTab }: { onTab: (t: "insights" | "reports") => 
  *     windows with CSV export (see components/analytics/ReportsTab).
  */
 export default function InsightsPage() {
-  const [tab, setTab] = useState<"insights" | "reports">("insights");
+  const [tab, setTab] = useState<InsightsTab>("insights");
 
   return (
     <div className="space-y-6">
@@ -1457,6 +1460,7 @@ export default function InsightsPage() {
         {([
           { id: "insights", label: "Insights" },
           { id: "reports", label: "Reports" },
+          { id: "stories", label: "Stories" },
         ] as const).map((t) => (
           <button
             key={t.id}
@@ -1472,7 +1476,7 @@ export default function InsightsPage() {
         ))}
       </div>
 
-      {tab === "insights" ? <InsightsAnalyticsView /> : <ReportsTab />}
+      {tab === "insights" ? <InsightsAnalyticsView /> : tab === "reports" ? <ReportsTab /> : <StoriesTab />}
     </div>
   );
 }

@@ -120,3 +120,109 @@ describe("diagnoseMetaError — a quiet story is not a broken channel", () => {
     expect(d?.missingScopes).toContain("pages_read_user_content");
   });
 });
+
+describe("Instagram STORY extras — taps, exits, profile actions (2026-11-05)", () => {
+  const storyMedia = { id: "S1", like_count: 0, comments_count: 0, media_product_type: "STORY" };
+  // Verbatim shape of Meta's documented breakdown response (values come back lower case).
+  const navBreakdown = {
+    data: [
+      {
+        name: "navigation",
+        period: "lifetime",
+        total_value: {
+          value: 31,
+          breakdowns: [
+            {
+              dimension_keys: ["story_navigation_action_type"],
+              results: [
+                { dimension_values: ["tap_forward"], value: 20 },
+                { dimension_values: ["tap_back"], value: 3 },
+                { dimension_values: ["tap_exit"], value: 6 },
+                { dimension_values: ["swipe_forward"], value: 2 },
+              ],
+            },
+          ],
+        },
+      },
+    ],
+  };
+
+  it("keeps replies/navigation and adds the breakdown + profile metrics from two separate calls", async () => {
+    const calls = mockGraph((url) => {
+      if (url.includes("breakdown=story_navigation_action_type")) return { ok: true, body: navBreakdown };
+      if (url.includes("metric=profile_visits")) {
+        return { ok: true, body: insightsBody({ profile_visits: 4, follows: 1, link_clicks: 2 }) };
+      }
+      if (url.includes("/insights")) {
+        return { ok: true, body: insightsBody({ reach: 12, views: 20, shares: 1, total_interactions: 5, replies: 2, navigation: 31 }) };
+      }
+      return { ok: true, body: storyMedia };
+    });
+
+    const a = await new InstagramProvider().getPostAnalytics(tokens, "S1");
+
+    expect(a?.story).toEqual({
+      replies: 2,
+      navigation: 31,
+      totalInteractions: 5,
+      tapsForward: 20,
+      tapsBack: 3,
+      exits: 6,
+      swipeForward: 2,
+      profileVisits: 4,
+      follows: 1,
+      linkClicks: 2,
+    });
+    // The breakdown is NEVER mixed into the core metric call (Meta warns that
+    // combining a breakdown with an unsupported metric is an unknown error).
+    const core = calls.filter((c) => c.url.includes("/insights"))[0]!.url;
+    expect(core).not.toContain("breakdown");
+    expect(core).not.toContain("profile_visits");
+    // The core numbers are unchanged.
+    expect(a?.views).toBe(20);
+    expect(a?.reach).toBe(12);
+  });
+
+  it("a failing extra costs only that extra — never the core numbers, never a throw", async () => {
+    mockGraph((url) => {
+      if (url.includes("breakdown=")) return { ok: false, body: { error: { code: 1, message: "An unknown error has occurred." } } };
+      if (url.includes("metric=profile_visits")) return { ok: false, body: { error: { code: 100, message: "(#100) bad metric" } } };
+      if (url.includes("/insights")) return { ok: true, body: insightsBody({ reach: 9, views: 11, shares: 0, replies: 0, navigation: 4 }) };
+      return { ok: true, body: storyMedia };
+    });
+
+    const a = await new InstagramProvider().getPostAnalytics(tokens, "S1");
+    expect(a?.views).toBe(11);
+    expect(a?.story).toEqual({ replies: 0, navigation: 4 });
+    expect(a?.degraded).toBeUndefined();
+  });
+
+  it("flags 'not enough viewers' and makes no extra calls after the core set failed", async () => {
+    const calls = mockGraph((url) => {
+      if (url.includes("/insights")) {
+        return { ok: false, body: { error: { code: 10, message: "(#10) Not enough viewers for the media to show insights" } } };
+      }
+      return { ok: true, body: storyMedia };
+    });
+
+    const a = await new InstagramProvider().getPostAnalytics(tokens, "S1");
+    expect(a?.story).toEqual({ notEnoughViewers: true });
+    // STORY set → reach rung. No breakdown / profile reads on a story Meta just refused.
+    expect(calls.filter((c) => c.url.includes("/insights"))).toHaveLength(2);
+    // A quiet story is not a broken channel.
+    expect(a?.degraded).toBeUndefined();
+  });
+
+  it("FEED and REELS captures carry no story field (byte-identical to before)", async () => {
+    for (const productType of ["FEED", "REELS"]) {
+      const calls = mockGraph((url) => {
+        if (url.includes("/insights")) return { ok: true, body: insightsBody({ reach: 5, views: 9, saved: 1, shares: 0, likes: 2, comments: 1, total_interactions: 3 }) };
+        return { ok: true, body: { id: "X", like_count: 2, comments_count: 1, media_product_type: productType } };
+      });
+      const a = await new InstagramProvider().getPostAnalytics(tokens, "X");
+      expect(a).not.toHaveProperty("story");
+      expect(calls.filter((c) => c.url.includes("/insights"))).toHaveLength(1);
+      vi.unstubAllGlobals();
+    }
+  });
+});

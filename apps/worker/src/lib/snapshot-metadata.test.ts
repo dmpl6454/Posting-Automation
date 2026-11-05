@@ -30,3 +30,14 @@ describe("buildSnapshotMetadata", () => {
     expect(md).toEqual({ likeKind: "upvotes", reachIsDistinct: false });
   });
 });
+
+describe("buildSnapshotMetadata — story extras (2026-11-05)", () => {
+  it("stores the story object when present", () => {
+    expect(buildSnapshotMetadata({ story: { replies: 2, exits: 1 } }, undefined, false)).toEqual({ story: { replies: 2, exits: 1 } });
+  });
+
+  it("drops an empty story object, keeping the no-metadata path byte-identical", () => {
+    expect(buildSnapshotMetadata({ story: {} }, undefined, false)).toBeUndefined();
+    expect(buildSnapshotMetadata({}, undefined, false)).toBeUndefined();
+  });
+});

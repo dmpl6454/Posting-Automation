@@ -1,3 +1,4 @@
+import type { StoryMetrics } from "../utils/instagram-story-insights";
 export interface SocialPostPayload {
   content: string;
   mediaUrls?: string[];
@@ -200,6 +201,13 @@ export interface SocialAnalytics {
   totalWatchTimeMs?: number;
   /** Present only when the capture was degraded — see AnalyticsDegradation. */
   degraded?: AnalyticsDegradation;
+  /**
+   * Instagram STORY captures only: replies, taps forward/back, exits, next-story
+   * swipes, profile visits, follows, link clicks, and the "not enough viewers"
+   * flag. Undefined for every other media type, so their captures are
+   * byte-identical. A key is present only when Meta returned it.
+   */
+  story?: StoryMetrics;
 }
 
 export interface OAuthTokens {

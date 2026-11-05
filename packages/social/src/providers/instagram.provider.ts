@@ -75,6 +75,15 @@ import {
 } from "../utils/meta-insight-diagnosis";
 import { fetchT } from "../utils/fetch-timeout";
 import {
+  STORY_NAVIGATION_BREAKDOWN,
+  STORY_PROFILE_METRICS,
+  hasStoryMetrics,
+  isNotEnoughViewersError,
+  parseStoryNavigationBreakdown,
+  parseStoryProfileMetrics,
+  type StoryMetrics,
+} from "../utils/instagram-story-insights";
+import {
   AmbiguousPublishError,
   isIndeterminatePublishError,
 } from "../utils/ambiguous-publish";
@@ -1038,6 +1047,8 @@ export class InstagramProvider extends SocialProvider {
     /** Metric names Meta actually RETURNED — the basis for honest availability. */
     const present = new Set<string>();
     let degraded: AnalyticsDegradation | undefined;
+    /** Meta answered #10 "Not enough viewers" (a story under 5 viewers). */
+    let notEnoughViewers = false;
 
     const readInsights = async (metricParam: string): Promise<boolean> => {
       const res = await fetch(
@@ -1045,6 +1056,7 @@ export class InstagramProvider extends SocialProvider {
       );
       const data: any = await res.json();
       if (!res.ok) {
+        if (isNotEnoughViewersError(data?.error)) notEnoughViewers = true;
         console.warn(`[Instagram] insights (${metricParam}) failed for ${platformPostId}: ${JSON.stringify(data)}`);
         // Only permission/token problems are actionable; an unsupported-metric
         // #100 is a set-shape problem the ladder below handles itself.
@@ -1075,7 +1087,8 @@ export class InstagramProvider extends SocialProvider {
     // NEVER cost us the base metrics if Meta rejects it for some media type.
     // Descends only on failure, so the happy path stays a single call.
     const isStoryMedia = productType === "STORY";
-    if (!(await readInsights(preferredSet))) {
+    const preferredOk = await readInsights(preferredSet);
+    if (!preferredOk) {
       // ⚠️ A STORY skips the BASE_SET rung. BASE_SET carries `saved,likes,comments`,
       // which Meta supports for FEED/REELS ONLY — for a story that call is a
       // guaranteed #100, so the rung can only ever cost a wasted round-trip on a
@@ -1099,6 +1112,24 @@ export class InstagramProvider extends SocialProvider {
     // denominator and every historical row keep working byte-identically. The
     // capability map declares INSTAGRAM impressions unavailable, so the UI never
     // shows the same number twice under two names.
+    // STORY extras (2026-11-05): replies/navigation/total_interactions were
+    // already requested by the STORY set and then dropped; taps/exits and the
+    // profile metrics come from two best-effort calls made ONLY after the core
+    // set succeeded (a story that failed it — dead token, under 5 viewers —
+    // would fail these too). See utils/instagram-story-insights.ts.
+    let story: StoryMetrics | undefined;
+    if (isStoryMedia) {
+      story = {};
+      if (present.has("replies")) story.replies = metrics.replies;
+      if (present.has("navigation")) story.navigation = metrics.navigation;
+      if (present.has("total_interactions")) story.totalInteractions = metrics.total_interactions;
+      if (preferredOk) {
+        Object.assign(story, await this.readStoryExtra(tokens, platformPostId, `metric=navigation&breakdown=${STORY_NAVIGATION_BREAKDOWN}`, parseStoryNavigationBreakdown));
+        Object.assign(story, await this.readStoryExtra(tokens, platformPostId, `metric=${STORY_PROFILE_METRICS}`, parseStoryProfileMetrics));
+      }
+      if (notEnoughViewers) story.notEnoughViewers = true;
+    }
+
     const views = metrics.views ?? 0;
     const impressions = views;
     const totalEngagement = metrics.total_interactions ?? likes + comments;
@@ -1160,7 +1191,34 @@ export class InstagramProvider extends SocialProvider {
         ...(isStoryMedia ? { likes: false, comments: false, saved: false } : {}),
       },
       ...(degraded ? { degraded } : {}),
+      ...(hasStoryMetrics(story) ? { story } : {}),
     };
+  }
+
+  /**
+   * One best-effort STORY insights read. Never throws and never degrades the
+   * capture: a failure here costs only the extra numbers it would have added.
+   */
+  private async readStoryExtra(
+    tokens: OAuthTokens,
+    mediaId: string,
+    query: string,
+    parse: (body: unknown) => Partial<StoryMetrics>
+  ): Promise<Partial<StoryMetrics>> {
+    try {
+      const res = await fetchT(
+        `${this.graphBaseUrl}/${this.apiVersion}/${mediaId}/insights?${query}&access_token=${tokens.accessToken}`
+      );
+      const body: any = await res.json().catch(() => null);
+      if (!res.ok) {
+        console.warn(`[Instagram] story insights (${query.split("&")[0]}) failed for ${mediaId}: ${JSON.stringify(body?.error ?? body)}`);
+        return {};
+      }
+      return parse(body);
+    } catch (e) {
+      console.warn(`[Instagram] story insights (${query.split("&")[0]}) errored for ${mediaId}: ${(e as Error)?.message}`);
+      return {};
+    }
   }
 
   /**
