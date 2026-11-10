@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
-import { avatarCacheQueue } from "@postautomation/queue";
+import { avatarCacheQueue, readPublishSessionDead } from "@postautomation/queue";
 import {
   getSocialProvider,
   getSupportedPlatforms,
@@ -63,6 +63,9 @@ export const channelRouter = createRouter({
         // Read for insightsHealth only — deliberately NOT forwarded to the client
         // raw (it carries provider internals like igUserId / orgId / instance).
         metadata: true,
+        // Read only to match the dead-session record to the CURRENT token
+        // (fingerprint compare). Never forwarded.
+        accessToken: true,
       },
     });
     // Additive field: whether this channel's stored token still lets the platform
@@ -70,9 +73,12 @@ export const channelRouter = createRouter({
     // it already observes (see apps/worker/src/lib/channel-insights-health.ts),
     // so it costs no extra API calls here. Drives the "Reconnect" affordance —
     // otherwise a dead token is silently indistinguishable from zero engagement.
-    return channels.map(({ metadata, ...c }) => ({
+    return channels.map(({ metadata, accessToken, ...c }) => ({
       ...c,
       insightsHealth: evaluateChannelInsightsStatus(metadata),
+      // Meta ended this token's session (error 190, e.g. subcode 460): posts to
+      // it fail without calling Meta until the channel is reconnected.
+      publishBlocked: readPublishSessionDead(metadata, accessToken, c.platform) !== null,
     }));
   }),
 

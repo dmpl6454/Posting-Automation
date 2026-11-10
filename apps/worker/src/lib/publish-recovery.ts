@@ -738,6 +738,63 @@ export function planRateLimitRequeue(
   return { action: "requeue", delayMs: Math.min(120_000 * Math.pow(2, n), 600_000), requeues: n + 1 };
 }
 
+/**
+ * Rate-limit WAIT marker (2026-11-10). The publish worker writes
+ * `${RATE_LIMIT_WAIT_PREFIX} Nmin` on a target it re-queued after a rate limit.
+ * The re-queue is a delayed BullMQ job; if that job is lost (a Redis restart, a
+ * removed job, a deploy that dropped it) the target sits SCHEDULED under a
+ * PUBLISHING/FAILED post forever — the reconciliation cron only re-arms posts
+ * that are themselves SCHEDULED. Measured: 7 targets from 19 Oct stuck that way.
+ */
+export const RATE_LIMIT_WAIT_PREFIX = "Rate-limited, retrying in";
+
+/** Grace after the planned retry time before a wait counts as lost. */
+export const RATE_LIMIT_ORPHAN_GRACE_MS = 30 * 60_000;
+
+export function rateLimitWaitMessage(delayMs: number): string {
+  return `${RATE_LIMIT_WAIT_PREFIX} ${Math.round(delayMs / 60_000)}min`;
+}
+
+/** Minutes promised by a wait marker, or null when the text is not one. */
+export function rateLimitWaitMinutes(errorMessage: string | null | undefined): number | null {
+  if (!errorMessage || !errorMessage.startsWith(RATE_LIMIT_WAIT_PREFIX)) return null;
+  const m = /^Rate-limited, retrying in (\d+)min$/.exec(errorMessage.trim());
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * Is this SCHEDULED target a rate-limit wait whose retry job is gone?
+ *
+ * Needs BOTH: the promised retry time plus a grace has passed, AND no queued,
+ * delayed or running publish job names the target. A rate limit is a refusal
+ * (routePublishError already sent unknown outcomes to "Needs check"), so nothing
+ * was published and FAILED — not ambiguous — is the truth.
+ */
+export function isOrphanedRateLimitWait(
+  target: { status: string; errorMessage: string | null; updatedAt: Date },
+  now: Date,
+  queuedTargetIds: ReadonlySet<string>,
+  targetId: string
+): boolean {
+  if (target.status !== "SCHEDULED") return false;
+  const minutes = rateLimitWaitMinutes(target.errorMessage);
+  if (minutes === null) return false;
+  const dueAt = new Date(target.updatedAt).getTime() + minutes * 60_000 + RATE_LIMIT_ORPHAN_GRACE_MS;
+  if (now.getTime() < dueAt) return false;
+  return !queuedTargetIds.has(targetId);
+}
+
+export function rateLimitRetryLostMessage(platform: string | null | undefined): string {
+  const p = platform ?? "";
+  const label = PLATFORM_LABEL_FOR_LOST[p] ?? (p ? p.charAt(0) + p.slice(1).toLowerCase() : "The platform");
+  return `${label} rate-limited this post and its automatic retry was lost, so it was not published. Use Retry on the post page.`;
+}
+
+const PLATFORM_LABEL_FOR_LOST: Record<string, string> = {
+  INSTAGRAM: "Instagram", FACEBOOK: "Facebook", TWITTER: "X", LINKEDIN: "LinkedIn", YOUTUBE: "YouTube",
+  TIKTOK: "TikTok", THREADS: "Threads", PINTEREST: "Pinterest", REDDIT: "Reddit",
+};
+
 const PLATFORM_LABEL: Record<string, string> = {
   INSTAGRAM: "Instagram", FACEBOOK: "Facebook", TWITTER: "X", LINKEDIN: "LinkedIn", YOUTUBE: "YouTube",
   TIKTOK: "TikTok", THREADS: "Threads", PINTEREST: "Pinterest", REDDIT: "Reddit",

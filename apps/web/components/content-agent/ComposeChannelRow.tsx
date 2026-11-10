@@ -24,6 +24,8 @@ export interface ComposeChannelRowChannel {
   username?: string | null;
   avatar?: string | null;
   platform: string;
+  /** Meta ended this channel's session — posts fail until it is reconnected. */
+  publishBlocked?: boolean;
 }
 
 export const ComposeChannelRow = memo(function ComposeChannelRow({
@@ -67,6 +69,15 @@ export const ComposeChannelRow = memo(function ComposeChannelRow({
       <Badge variant="outline" className="shrink-0 text-[9px]">
         {channel.platform}
       </Badge>
+      {channel.publishBlocked && (
+        <Badge
+          variant="outline"
+          className="shrink-0 border-red-500/50 px-1 py-0 text-[9px] text-red-600 dark:text-red-400"
+          title="This channel's session ended. Posts to it will fail until you reconnect it on the Channels page."
+        >
+          Reconnect
+        </Badge>
+      )}
       {isRecent && (
         <Badge variant="secondary" className="shrink-0 px-1 py-0 text-[9px]">
           Recent

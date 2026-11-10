@@ -28,7 +28,10 @@ const h = vi.hoisted(() => ({
   queue: {
     contentGenerateQueue: { add: vi.fn(async () => ({})) },
     autopilotScheduleQueue: { add: vi.fn(async () => ({})) },
-    postPublishQueue: { getActive: vi.fn(async (): Promise<any[]> => []) },
+    postPublishQueue: {
+      getActive: vi.fn(async (): Promise<any[]> => []),
+      getJobs: vi.fn(async (_types?: any): Promise<any[]> => []),
+    },
   },
   redisDown: false,
 }));
@@ -60,7 +63,7 @@ vi.mock("ioredis", () => ({
   },
 }));
 
-import { runAutoHealer, reapStuckPublishingTargets } from "../auto-healer.worker";
+import { runAutoHealer, reapStuckPublishingTargets, failOrphanedRateLimitTargets } from "../auto-healer.worker";
 import { ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE } from "../../lib/publish-recovery";
 import { addLocalClaim, releaseLocalClaim } from "../../lib/local-claims";
 
@@ -75,6 +78,7 @@ beforeEach(() => {
   h.prisma.postTarget.findMany.mockResolvedValue([]);
   h.prisma.postTarget.updateMany.mockResolvedValue({ count: 1 });
   h.queue.postPublishQueue.getActive.mockResolvedValue([]);
+  h.queue.postPublishQueue.getJobs.mockResolvedValue([]);
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -191,7 +195,10 @@ describe("runAutoHealer step 5 scheduling", () => {
     const result = await runAutoHealer();
 
     expect(result.retried).toBe(1);
-    expect(h.prisma.postTarget.findMany).toHaveBeenCalledTimes(1);
+    // The reaper's PUBLISHING read runs once (the lost-rate-limit sweep makes its
+    // own SCHEDULED read since 2026-11-10).
+    const reaperReads = h.prisma.postTarget.findMany.mock.calls.filter((c: any[]) => c[0]?.where?.status === "PUBLISHING");
+    expect(reaperReads).toHaveLength(1);
     expect(h.prisma.postTarget.updateMany).toHaveBeenCalledTimes(1);
   });
 
@@ -202,5 +209,56 @@ describe("runAutoHealer step 5 scheduling", () => {
 
     expect(h.prisma.autopilotPost.findMany).not.toHaveBeenCalled();
     expect(h.prisma.postTarget.findMany).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("lost rate-limit retries are failed so the user can Retry (2026-11-10)", () => {
+  const waiting = (id: string, minutesAgoN: number, msg = "Rate-limited, retrying in 30min") => ({
+    id,
+    status: "SCHEDULED",
+    errorMessage: msg,
+    updatedAt: minutesAgo(minutesAgoN),
+    channel: { platform: "FACEBOOK" },
+  });
+
+  it("fails an overdue wait that no queued job names, conditionally on the row being unchanged", async () => {
+    const t = waiting("t1", 30 + 31);
+    h.prisma.postTarget.findMany.mockResolvedValue([t]);
+    expect(await failOrphanedRateLimitTargets(NOW)).toBe(1);
+    expect(h.prisma.postTarget.updateMany).toHaveBeenCalledWith({
+      where: { id: "t1", status: "SCHEDULED", errorMessage: t.errorMessage, updatedAt: t.updatedAt },
+      data: {
+        status: "FAILED",
+        errorMessage: "Facebook rate-limited this post and its automatic retry was lost, so it was not published. Use Retry on the post page.",
+      },
+    });
+  });
+
+  it("leaves a wait whose retry job is still queued or delayed", async () => {
+    h.prisma.postTarget.findMany.mockResolvedValue([waiting("t1", 600)]);
+    h.queue.postPublishQueue.getJobs.mockResolvedValue([{ data: { postTargetId: "t1" } }]);
+    expect(await failOrphanedRateLimitTargets(NOW)).toBe(0);
+    expect(h.prisma.postTarget.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("leaves a wait that is not yet overdue, without reading the queue", async () => {
+    h.prisma.postTarget.findMany.mockResolvedValue([waiting("t1", 10)]);
+    expect(await failOrphanedRateLimitTargets(NOW)).toBe(0);
+    expect(h.queue.postPublishQueue.getJobs).not.toHaveBeenCalled();
+  });
+
+  it("does nothing when the queue cannot be read", async () => {
+    h.prisma.postTarget.findMany.mockResolvedValue([waiting("t1", 600)]);
+    h.queue.postPublishQueue.getJobs.mockRejectedValue(new Error("redis down"));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(await failOrphanedRateLimitTargets(NOW)).toBe(0);
+    expect(h.prisma.postTarget.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("only reads targets carrying the rate-limit wait marker", async () => {
+    await failOrphanedRateLimitTargets(NOW);
+    const args = h.prisma.postTarget.findMany.mock.calls.at(-1)![0];
+    expect(args.where).toEqual({ status: "SCHEDULED", errorMessage: { startsWith: "Rate-limited, retrying in" } });
   });
 });

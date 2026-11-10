@@ -42,3 +42,12 @@ export {
   updatePlatformDeleteRecord,
 } from "./platform-delete-state";
 export type { PlatformDeleteStatus, PlatformDeleteRecord } from "./platform-delete-state";
+export {
+  PUBLISH_SESSION_DEAD_KEY,
+  DEAD_SESSION_PLATFORMS,
+  tokenFingerprint,
+  buildPublishSessionDeadRecord,
+  readPublishSessionDead,
+  deadSessionPublishMessage,
+} from "./publish-session-dead";
+export type { PublishSessionDeadRecord } from "./publish-session-dead";

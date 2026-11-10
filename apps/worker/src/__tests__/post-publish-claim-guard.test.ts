@@ -81,6 +81,7 @@ const h = vi.hoisted(() => {
   }
 
   const prisma = {
+    $executeRaw: vi.fn(async () => 1),
     postTarget: {
       updateMany: vi.fn(async ({ where, data }: { where: Row; data: Row }) => {
         const row = rows.get(where.id);
@@ -188,7 +189,9 @@ vi.mock("@postautomation/db", () => ({
   isEncrypted: () => false,
 }));
 
-vi.mock("@postautomation/queue", () => ({
+vi.mock("@postautomation/queue", async () => ({
+  // The real dead-session helpers (pure; no Redis) — 2026-11-10.
+  ...(await import("../../../../packages/queue/src/publish-session-dead")),
   QUEUE_NAMES: { POST_PUBLISH: "post-publish" },
   PRIORITY_RETRY: 10,
   createRedisConnection: () => ({}),
@@ -208,6 +211,7 @@ vi.mock("@postautomation/social", async (importOriginal) => {
 });
 
 import { UnrecoverableError } from "bullmq";
+import { buildPublishSessionDeadRecord, deadSessionPublishMessage, tokenFingerprint } from "../../../../packages/queue/src/publish-session-dead";
 import { createPostPublishWorker } from "../workers/post-publish.worker";
 import {
   ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE,
@@ -601,6 +605,53 @@ describe("claim-miss orphan handling — park, never auto-republish", () => {
     // The local claim was released: a genuine orphan on the same target is parked again.
     seedTarget("t1", { status: "PUBLISHING" });
     expectParked(await runExpectingError(makeJob()));
+  });
+});
+
+describe("a dead Meta session is remembered on the channel (2026-11-10)", () => {
+  it("a definite 190 records the session as dead, keyed to the token that failed", async () => {
+    s.provider = realProvider("INSTAGRAM", {
+      publishPost: vi.fn(async () => {
+        throw new Error(IG_PUBLISH_190);
+      }),
+      refreshAccessToken: vi.fn(async () => {
+        throw new Error(IG_DEAD_SESSION);
+      }),
+    });
+    seedTarget("t1");
+    await runExpectingError(makeJob());
+    const call = (prisma.$executeRaw as any).mock.calls.at(-1);
+    expect(call).toBeTruthy();
+    const values = call.slice(1);
+    expect(values).toContain("publishSessionDead");
+    const record = JSON.parse(values.find((v: unknown) => typeof v === "string" && v.startsWith("{")));
+    expect(record.fingerprint).toBe(tokenFingerprint("tok"));
+    expect(JSON.stringify(record)).not.toContain('"tok"');
+  });
+
+  it("later posts to that channel fail at once, without calling the platform", async () => {
+    const publishPost = vi.fn(async () => ({ publishedId: "x", url: "https://x" }));
+    s.provider = realProvider("INSTAGRAM", { publishPost });
+    seedTarget("t1");
+    s.channel.metadata = { igUserId: "ig1", publishSessionDead: buildPublishSessionDeadRecord("tok", "INSTAGRAM", "190/460") };
+
+    const err = await runExpectingError(makeJob());
+
+    expect(err).toBeInstanceOf(UnrecoverableError);
+    expect(err.message).toBe(deadSessionPublishMessage("INSTAGRAM"));
+    expect(rows.get("t1")).toMatchObject({ status: "FAILED", errorMessage: err.message, ambiguousAt: null });
+    expect(publishPost).not.toHaveBeenCalled();
+  });
+
+  it("a record for an OLDER token (the channel was reconnected) is ignored", async () => {
+    const publishPost = vi.fn(async () => ({ publishedId: "x", url: "https://x" }));
+    s.provider = realProvider("INSTAGRAM", { publishPost });
+    seedTarget("t1");
+    s.channel.metadata = { igUserId: "ig1", publishSessionDead: buildPublishSessionDeadRecord("old-token", "INSTAGRAM", "190/460") };
+
+    try { await s.processor!(makeJob()); } catch { /* later steps are stubbed; only the platform call matters here */ }
+
+    expect(publishPost).toHaveBeenCalledTimes(1);
   });
 });
 

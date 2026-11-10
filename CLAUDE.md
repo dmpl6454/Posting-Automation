@@ -1229,6 +1229,40 @@ already prepares a second worker), Redis caching (the `lib/cache.ts` helper exis
 only where a measured slow endpoint warrants it), WebP/AVIF thumbnails for the Media grid (grids show
 the originals; needs a resize step), OpenTelemetry / real-user monitoring — now covered by Sentry (see the Sentry section).
 
+## 🔧 Publish fixes 2026-11-10 — 5s Meta spacing, lost rate-limit retries, dead Meta sessions
+
+Owner approved three changes the same day:
+
+- **Facebook/Instagram stagger 10s → 5s** (`STAGGER_META_MS` in
+  [publish-stagger.ts](packages/queue/src/publish-stagger.ts)). THREADS and X stay 10s. The
+  `PUBLISH_STAGGER_<PLATFORM>_MS` env override still wins. Backstops are unchanged: graphFetch's
+  usage-aware pacing and the rate-limit re-queue. If Meta throttles start appearing (`#4`, `368`), set
+  `PUBLISH_STAGGER_FACEBOOK_MS=10000` / `_INSTAGRAM_MS` on BOTH web and worker. No code change needed.
+- **Lost rate-limit retries are failed automatically.** A rate-limited target sits SCHEDULED with
+  `rateLimitWaitMessage()` ("Rate-limited, retrying in Nmin") while its delayed job waits. If that job is
+  lost, nothing ever touched the target again (7 such targets from 19 Oct). `failOrphanedRateLimitTargets`
+  ([auto-healer.worker.ts](apps/worker/src/workers/auto-healer.worker.ts)) runs every auto-heal cycle.
+  It acts only past the promised retry time + 30 min AND when no waiting/delayed/prioritized/active
+  publish job names the target; if the queue can't be read, it does nothing. The write is conditional
+  on the row being unchanged, and the result is FAILED (not "Needs check") because a rate limit is a
+  refusal. ⚠️ Keep the worker writing the marker through `rateLimitWaitMessage`, or the sweep stops
+  matching.
+- **A dead Meta session stops further posts to that channel.** On a definite auth failure (190, e.g.
+  460) that no refresh could fix, the publish worker writes `Channel.metadata.publishSessionDead =
+  {at, fingerprint, platform, reason}` ([publish-session-dead.ts](packages/queue/src/publish-session-dead.ts),
+  [dead-session.ts](apps/worker/src/lib/dead-session.ts)). It is an atomic jsonb merge; the token is
+  never stored, only a sha256 fingerprint. Every later publish to that channel fails at guard 3c
+  BEFORE any platform call, with "…ended this channel's session … Reconnect". `channel.list` returns
+  `publishBlocked`, which shows a red "Reconnect to post" badge on the Channels page and "Reconnect" in
+  Compose. A reconnect stores a new token, so the fingerprint stops matching (and the OAuth upsert
+  also replaces metadata). FACEBOOK/INSTAGRAM only.
+- Verified on a real Postgres 16: sibling metadata kept, record matches only the current token, raw
+  token absent, the lost-retry sweep fails an overdue target. Tests:
+  [publish-session-dead.test.ts](packages/queue/src/__tests__/publish-session-dead.test.ts),
+  [rate-limit-orphan.test.ts](apps/worker/src/lib/rate-limit-orphan.test.ts), plus new blocks in
+  `post-publish-claim-guard.test.ts` and `auto-healer-reaper.test.ts`. Both guard tests fail with the
+  fix disabled.
+
 ## 🚨 Sentry error tracking (2026-11-10) — read before touching instrumentation*.ts, sentry-scrub or worker failure hooks
 
 Off until `SENTRY_DSN` is set (`.env.prod`, web AND worker are plumbed in compose). With no DSN nothing loads:
