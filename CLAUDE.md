@@ -1191,6 +1191,45 @@ setting, and a mention from someone they do not follow arriving as a MESSAGE REQ
 to claim "Instagram notifies them" — that promise was removed 2026-09-16; no Meta source supports
 it. Do not re-add it.
 
+## ⚡ Speed pass (2026-11-10) — what was changed, and what was already in place
+
+Owner sent a 31-item "make the app fast" checklist. Each item was checked against the code first;
+most were already in place. Changed in this pass (all measured or proven):
+
+- **Content Studio code split** ([content-agent/page.tsx](apps/web/app/dashboard/content-agent/page.tsx)):
+  Create (Content/Image), Repurpose, Bulk and Calendar load via `next/dynamic` with a skeleton.
+  Compose (forceMounted, holds uploads) and the Posts list stay static. First Load JS 398 → 360 kB.
+  ⚠️ The next ~120 KB is the base64 super-text fonts: `@postautomation/super-text` constants embed
+  them and Compose imports the package for its zod schema. Splitting that touches the golden-gated
+  burn path, so it was deliberately NOT done here.
+- **Compose channel picker** rows are a memoized [ComposeChannelRow](apps/web/components/content-agent/ComposeChannelRow.tsx)
+  with a stable `toggleChannel` callback and a `Set` lookup: typing a caption no longer rebuilds
+  ~500 rows. Rows carry `content-visibility:auto` so off-screen rows skip layout/paint.
+- [app/dashboard/loading.tsx](apps/web/app/dashboard/loading.tsx): route-level skeleton inside the
+  dashboard layout, shown the moment a navigation starts.
+- `loading="lazy" decoding="async"` on the grids that hold many images (media picker, editor
+  uploads/templates, message attachments). Avatars and the Media page already had it.
+- **`analytics.platformBreakdown`** is a `groupBy` count + one channel lookup instead of loading every
+  published target (all columns, incl. metadata JSON) to count in JS. Same answer, proven by
+  [platform-breakdown.e2e.test.ts](packages/api/src/__tests__/platform-breakdown.e2e.test.ts) on real
+  Postgres against both the old and new code.
+- **Indexes:** `PostTarget(channelId,status)` (the unique index leads with postId; Postgres never
+  indexes FKs), `PostTarget(status,publishedAt)` (analytics passes), `Post(organizationId,createdAt)`
+  (Posts list sort), `PostMedia(mediaId)`. Additive; `db push` applies them without a data-loss prompt.
+
+Already in place (do not re-do): skeletons on 51 screens, React Query dedupe (staleTime 5s, no
+refetch on focus), BullMQ for all slow work, gzip + 1-year immutable `_next/static` caching in nginx,
+self-hosted Inter via next/font (one variable file, latin), `fetchT` timeouts on platform calls,
+streamed Super Agent replies, paginated post/media/comment/monitoring lists, debounced server-side
+searches (other search boxes filter in the browser), web/worker on the same box as Postgres.
+
+**Not done — need an owner decision or data first:** CDN (DNS change; static files already cache a
+year), Brotli (stock nginx:alpine has no module; gzip is on), load balancing (one box; `CRON_LEADER`
+already prepares a second worker), Redis caching (the `lib/cache.ts` helper exists, unused — add it
+only where a measured slow endpoint warrants it), WebP/AVIF thumbnails for the Media grid (grids show
+the originals; needs a resize step), OpenTelemetry / real-user monitoring (`SENTRY_DSN` is plumbed in
+compose but **no Sentry SDK is installed** — nothing reads it).
+
 ## 🗑️ DELETE FROM FACEBOOK / INSTAGRAM (2026-11-05) — read before touching platform-delete or `PostTarget.platformDeletedAt`
 
 Owner: "build facebook and instagram post delete which is posted from post automation". Deletes the LIVE

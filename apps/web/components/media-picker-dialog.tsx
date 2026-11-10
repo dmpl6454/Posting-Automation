@@ -178,6 +178,8 @@ export function MediaPickerDialog({
                     <img
                       src={item.thumbnailUrl || item.url}
                       alt={item.fileName}
+                      loading="lazy"
+                      decoding="async"
                       className="absolute inset-0 h-full w-full object-cover"
                     />
                   )}

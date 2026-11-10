@@ -88,6 +88,8 @@ export function UploadsPanel({ canvas }: UploadsPanelProps) {
               <img
                 src={media.thumbnailUrl || media.url}
                 alt={media.fileName}
+                loading="lazy"
+                decoding="async"
                 className="h-full w-full object-cover"
               />
             </button>

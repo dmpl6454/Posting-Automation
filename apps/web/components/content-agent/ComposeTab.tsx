@@ -51,6 +51,7 @@ import { PostPreviewSwitcher } from "~/components/previews";
 import { MediaPickerDialog } from "~/components/media-picker-dialog";
 import { ImageGenerationPanel } from "~/components/content-agent/ImageGenerationPanel";
 import { ChannelAvatar } from "~/components/channel-avatar";
+import { ComposeChannelRow } from "~/components/content-agent/ComposeChannelRow";
 import { PlatformIcon } from "~/components/icons/platform-icons";
 import {
   platformCounts,
@@ -207,6 +208,11 @@ export function ComposeTab({ initialContent, initialImage, initialImageMediaId, 
   const { toast } = useToast();
   const [content, setContent] = useState(initialContent || "");
   const [selectedChannels, setSelectedChannels] = useState<string[]>([]);
+  // Stable across renders so the memoized ComposeChannelRow skips re-rendering
+  // while the user types a caption (2026-11-10).
+  const toggleChannel = useCallback((id: string) => {
+    setSelectedChannels((prev) => (prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]));
+  }, []);
   const [scheduledAt, setScheduledAt] = useState("");
   // The Schedule button opens the picker when no usable time is set yet.
   const [schedulePickerOpen, setSchedulePickerOpen] = useState(false);
@@ -2616,6 +2622,8 @@ ${content}`;
                   {/* Dropdown results — always visible when section is active */}
                   {(channelDropdownOpen || channels?.length) && (() => {
                     const recentSet = new Set(recentlyUsedIds || []);
+                    // O(1) lookups for ~500 rows instead of an array scan per row.
+                    const selectedSet = new Set(selectedChannels);
                     // Platform filter is applied BEFORE the text search, so the
                     // visible list (and therefore Select all) can never include a
                     // channel from a platform the user filtered out.
@@ -2688,46 +2696,15 @@ ${content}`;
                                 : "No channels found"}
                           </p>
                         ) : (
-                          sorted.map((channel: any) => {
-                            const isSelected = selectedChannels.includes(channel.id);
-                            const isRecent = recentSet.has(channel.id);
-                            return (
-                              <button
-                                key={channel.id}
-                                type="button"
-                                onClick={() => {
-                                  if (isSelected) {
-                                    setSelectedChannels(prev => prev.filter(i => i !== channel.id));
-                                  } else {
-                                    setSelectedChannels(prev => [...prev, channel.id]);
-                                  }
-                                }}
-                                className={`flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm transition-colors hover:bg-muted/50 ${
-                                  isSelected ? "bg-primary/5" : ""
-                                }`}
-                              >
-                                <div className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
-                                  isSelected ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/30"
-                                }`}>
-                                  {isSelected && <Check className="h-3 w-3" />}
-                                </div>
-                                <ChannelAvatar
-                                  avatar={channel.avatar}
-                                  name={channel.name}
-                                  className="h-6 w-6 shrink-0"
-                                  fallbackClassName="text-[9px]"
-                                />
-                                <div className="min-w-0 flex-1">
-                                  <p className="truncate text-sm font-medium leading-tight">{channel.name}</p>
-                                  {channel.username && (
-                                    <p className="truncate text-xs leading-tight text-muted-foreground">@{channel.username}</p>
-                                  )}
-                                </div>
-                                <Badge variant="outline" className="shrink-0 text-[9px]">{channel.platform}</Badge>
-                                {isRecent && <Badge variant="secondary" className="shrink-0 text-[9px] px-1 py-0">Recent</Badge>}
-                              </button>
-                            );
-                          })
+                          sorted.map((channel: any) => (
+                            <ComposeChannelRow
+                              key={channel.id}
+                              channel={channel}
+                              isSelected={selectedSet.has(channel.id)}
+                              isRecent={recentSet.has(channel.id)}
+                              onToggle={toggleChannel}
+                            />
+                          ))
                         )}
                       </div>
                       </>
