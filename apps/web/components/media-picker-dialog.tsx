@@ -1,5 +1,6 @@
 "use client";
 
+import { mediaThumbSrc } from "~/lib/media-thumb";
 import { useState, useDeferredValue } from "react";
 import { trpc } from "~/lib/trpc/client";
 import { withPosterHint } from "~/lib/video-poster";
@@ -159,7 +160,25 @@ export function MediaPickerDialog({
                       : "border-transparent hover:border-muted-foreground/30"
                   }`}
                 >
-                  {isVideo ? (
+                  {isVideo && mediaThumbSrc(item) ? (
+                    <div className="absolute inset-0 bg-black">
+                      <img
+                        src={mediaThumbSrc(item)!}
+                        alt={item.fileName}
+                        loading="lazy"
+                        decoding="async"
+                        className="h-full w-full object-cover"
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).style.display = "none";
+                        }}
+                      />
+                      <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                        <div className="rounded-full bg-black/50 p-1.5">
+                          <Film className="h-4 w-4 text-white" />
+                        </div>
+                      </div>
+                    </div>
+                  ) : isVideo ? (
                     <div className="absolute inset-0 bg-black">
                       <video
                         src={withPosterHint(item.url)}
@@ -176,11 +195,15 @@ export function MediaPickerDialog({
                     </div>
                   ) : (
                     <img
-                      src={item.thumbnailUrl || item.url}
+                      src={mediaThumbSrc(item) ?? item.url}
                       alt={item.fileName}
                       loading="lazy"
                       decoding="async"
                       className="absolute inset-0 h-full w-full object-cover"
+                      onError={(e) => {
+                        const img = e.target as HTMLImageElement;
+                        if (img.src !== item.url) img.src = item.url;
+                      }}
                     />
                   )}
                   {selectedId === item.id && (

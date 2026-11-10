@@ -3,6 +3,7 @@ import { auth } from "~/lib/auth";
 import { prisma } from "@postautomation/db";
 import { resolveActiveOrganizationId } from "~/lib/upload-org";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { enqueueMediaThumbnail } from "@postautomation/queue";
 
 export const dynamic = "force-dynamic";
 // Small-file upload route (videos ≤64MB — larger ones go browser→S3 multipart)
@@ -122,6 +123,9 @@ export async function POST(req: Request) {
       ...(category !== "general" ? { category } : {}),
     },
   });
+
+  // Media-grid WebP thumbnail (never awaited, never throws).
+  void enqueueMediaThumbnail(media.id, organizationId);
 
   return NextResponse.json({
     id: media.id,

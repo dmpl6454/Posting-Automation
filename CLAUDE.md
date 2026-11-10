@@ -1225,9 +1225,58 @@ searches (other search boxes filter in the browser), web/worker on the same box 
 
 **Not done — need an owner decision or data first:** CDN (DNS change; static files already cache a
 year), Brotli (stock nginx:alpine has no module; gzip is on), load balancing (one box; `CRON_LEADER`
-already prepares a second worker), Redis caching (the `lib/cache.ts` helper exists, unused — add it
-only where a measured slow endpoint warrants it), WebP/AVIF thumbnails for the Media grid (grids show
-the originals; needs a resize step), OpenTelemetry / real-user monitoring — now covered by Sentry (see the Sentry section).
+already prepares a second worker), OpenTelemetry / real-user monitoring — now covered by Sentry (see the Sentry section).
+Redis caching and WebP thumbnails were built the same day — next section.
+
+## 🖼️ WebP Media thumbnails + ⚡ Redis Insights cache (2026-11-10) — read before touching media-process, Media.thumbnailUrl, lib/cache.ts or analytics procedures
+
+### WebP thumbnails
+- Every image/video Media row gets ONE 512px WebP (`orgs/{org}/media/{id}/thumb_512_v1.webp`, q72),
+  stored in **`Media.thumbnailUrl`**. Images: sharp `.rotate()` (EXIF) + cover crop, first frame of
+  animations, never upscaled (a smaller image stays its size; the grid's object-cover crops it).
+  Videos: one ffmpeg frame (input seek at 1s, then 0.2s for short clips, under `nice`) → same WebP.
+  SVG and images over 60 MB are skipped. Code: [media-thumbnail.ts](apps/worker/src/lib/media-thumbnail.ts),
+  the `thumbnail` op of [media-process.worker.ts](apps/worker/src/workers/media-process.worker.ts)
+  (concurrency 3 → 2).
+- **Outcome on `Media.metadata.thumbnail = {status: done|skipped|failed, at, …}`** via atomic jsonb merge
+  (media-optimize writes the same column). Failed is written only on the final attempt.
+- **Queued two ways, one job id `thumb:{mediaId}:v1`** ([media-thumbnail-jobs.ts](packages/queue/src/media-thumbnail-jobs.ts)):
+  immediately from `upload.complete`, `/api/upload` and image.router (best-effort, never fails an
+  upload); and by `scheduleMediaThumbnails` (worker cron, every 5 min, newest first, 40 per run) for
+  every other creation path and the existing library. It selects rows with no current thumbnail whose
+  status is not failed/skipped. Bump `THUMB_VERSION` to regenerate everything.
+  Env: `MEDIA_THUMBNAILS_ENABLED=false` (kill switch), `MEDIA_THUMBNAIL_BATCH`.
+- **UI:** Media page, media picker and editor uploads use `mediaThumbSrc()` ([media-thumb.ts](apps/web/lib/media-thumb.ts)):
+  an http(s), non-video URL or null — never a video file in `<img>`. A video WITH a thumbnail renders
+  an `<img>` + film badge instead of a `<video preload=metadata>` per tile; without one, the old video
+  tile. Lightbox and publishing still use the original. Publishing never reads `Media.thumbnailUrl`
+  (custom covers are `metadata.videoThumbnail`).
+- Consumers that already used `thumbnailUrl ?? (video ? null : url)` (comments inbox, story insights,
+  chat) now show a frame for videos too.
+
+### Redis Insights cache
+- [lib/cache.ts](packages/api/src/lib/cache.ts) + [cached-procedure.ts](packages/api/src/lib/cached-procedure.ts).
+  **`cachedOrgProcedure`** = orgProcedure + a tRPC middleware that serves the result from Redis for
+  **120 s**. Used on analytics `overview, engagement, dashboardStats, platformBreakdown, postsOverTime,
+  perChannelStats, groupStats, postReports, storyInsights, reportPosts` (wiring locked in
+  [insights-cache.test.ts](packages/api/src/__tests__/insights-cache.test.ts)). NOT on insightsHealth,
+  postMetrics, recentActivity, campaignLabels, platformsInWindow, or any mutation.
+- ⚠️ Only for READ-ONLY queries whose output depends on the org + input alone, never on the calling
+  user. Key = `cache:analytics:{ctx.organizationId}:{version}:{tRPC path}:{sha1(raw input)}`.
+- **Invalidation by per-org version** (`cache:analytics-ver:{org}`, [analytics-cache.ts](packages/queue/src/analytics-cache.ts)):
+  bumped by the worker after a target is PUBLISHED and after every analytics snapshot write
+  ([insights-cache-bump.ts](apps/worker/src/lib/insights-cache-bump.ts)), by Sync Now, and by
+  **`insightsInvalidatingOrgProcedure`** mutations (channel connectWithToken/disconnect/bulkDisconnect/
+  toggleActive, every channelGroup write, post create/update/delete, bulk delete/csvImport).
+  Other changes show within 120 s.
+- **Never in the way:** its own ioredis client (`commandTimeout` 250 ms, no offline queue, 1 retry —
+  NOT the BullMQ connection, whose `maxRetriesPerRequest: null` would hang a request). Waits at most
+  300 ms for the first connection (else the first requests after a restart always missed and a bump
+  could be lost); after a failed wait it does not wait again for 10 s, so a Redis outage costs
+  one 300 ms request, then nothing. Errors are never cached; results > 512 KB are not cached (Redis is
+  `noeviction` and shared with BullMQ). superjson, so Dates/BigInt come back typed.
+  Verified against a real redis-server: cold-start hit, TTL 120, bump recomputes, Redis down → falls through.
+- Kill switch `ANALYTICS_CACHE_ENABLED=false` (web). Off under vitest unless a test sets it to "true".
 
 ## 🔧 Publish fixes 2026-11-10 — 5s Meta spacing, lost rate-limit retries, dead Meta sessions
 

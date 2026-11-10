@@ -7,6 +7,7 @@ import { shouldWriteSnapshot } from "../lib/snapshot-dedup";
 import { deriveInsightsHealth, mergeInsightsHealth } from "../lib/channel-insights-health";
 import { shouldWriteDegradedSnapshot } from "../lib/degraded-capture-guard";
 import { planFacebookAnalyticsId } from "../lib/fb-video-post-id";
+import { bumpInsightsCache } from "../lib/insights-cache-bump";
 
 export function createAnalyticsSyncWorker() {
   const worker = new Worker<AnalyticsSyncJobData>(
@@ -248,6 +249,8 @@ export function createAnalyticsSyncWorker() {
       });
 
       console.log(`[AnalyticsSync] Saved analytics snapshot ${snapshot.id} for target ${postTargetId}`);
+      // New numbers: drop the org's cached Insights (web container).
+      bumpInsightsCache(channel.organizationId);
       return snapshot;
     },
     {

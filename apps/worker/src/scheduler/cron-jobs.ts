@@ -36,6 +36,8 @@ import { createRedisConnection, enqueueScheduledPublishJobs, excludeExpiredStori
 import { HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE, TIKTOK_PROCESSING_WAIT_MESSAGE } from "../lib/publish-recovery";
 import { runPageSubscriptionBackfill } from "../lib/page-subscription-backfill";
 import { sweepFirstComments } from "../lib/first-comment";
+import { mediaProcessQueue, mediaThumbnailJobId, MEDIA_THUMBNAIL_JOB_OPTS } from "@postautomation/queue";
+import { THUMB_EDGE, THUMB_VERSION } from "../lib/media-thumbnail";
 
 /**
  * Purge AnalyticsSnapshot rows whose PostTarget no longer exists.
@@ -887,6 +889,42 @@ export async function triggerAutopilotPipeline() {
  * expire — IG/FB signed URLs die in days). Run daily; the per-day jobId
  * dedupes re-enqueues within the same UTC day.
  */
+/**
+ * Media-grid WebP thumbnails (2026-11-10): find image/video Media rows that have
+ * no current thumbnail and no recorded outcome, newest first, and queue them.
+ * Covers every Media creation path (uploads enqueue immediately; repurpose,
+ * super-text, AI images, agents and the pre-existing library rely on this).
+ *
+ * Small batches on purpose: sharp/ffmpeg share the 4-core box with publishing.
+ * Kill switch: MEDIA_THUMBNAILS_ENABLED=false. Batch: MEDIA_THUMBNAIL_BATCH (default 40).
+ */
+export async function scheduleMediaThumbnails() {
+  if (process.env.MEDIA_THUMBNAILS_ENABLED === "false") return;
+  const batch = Math.min(Math.max(Number(process.env.MEDIA_THUMBNAIL_BATCH) || 40, 1), 500);
+  const currentSuffix = `%thumb_${THUMB_EDGE}_v${THUMB_VERSION}.webp`;
+  try {
+    const rows = await prisma.$queryRaw<Array<{ id: string; organizationId: string }>>`
+      SELECT "id", "organizationId" FROM "Media"
+      WHERE ("fileType" LIKE 'image/%' OR "fileType" LIKE 'video/%')
+        AND ("thumbnailUrl" IS NULL OR "thumbnailUrl" NOT LIKE ${currentSuffix})
+        AND COALESCE("metadata"->'thumbnail'->>'status', '') NOT IN ('failed', 'skipped')
+      ORDER BY "createdAt" DESC
+      LIMIT ${batch}
+    `;
+    if (rows.length === 0) return;
+    await mediaProcessQueue.addBulk(
+      rows.map((r) => ({
+        name: `media-thumbnail-${r.id}`,
+        data: { mediaId: r.id, organizationId: r.organizationId, operation: "thumbnail" as const },
+        opts: { ...MEDIA_THUMBNAIL_JOB_OPTS, jobId: mediaThumbnailJobId(r.id) },
+      }))
+    );
+    console.log(`[Cron] Queued ${rows.length} media thumbnail jobs`);
+  } catch (err) {
+    console.warn("[Cron] media thumbnail sweep failed:", (err as Error).message);
+  }
+}
+
 export async function scheduleAvatarCache() {
   const activeChannels = await prisma.channel.findMany({
     where: { isActive: true },
@@ -1851,6 +1889,10 @@ export function startCronJobs() {
   setTimeout(runCelebrityDetectors, 5 * 60 * 1000); // Start after 5 min warmup
 
   // Avatar re-cache daily (per-day jobId dedupes within the same UTC day)
+  // Media-grid WebP thumbnails: small batch every 5 minutes.
+  setInterval(scheduleMediaThumbnails, 5 * 60 * 1000);
+  setTimeout(scheduleMediaThumbnails, 6 * 60 * 1000); // after 6 min warmup
+
   setInterval(scheduleAvatarCache, 24 * 60 * 60 * 1000);
   setTimeout(scheduleAvatarCache, 4 * 60 * 1000); // Start after 4 min warmup
 

@@ -1,5 +1,6 @@
 "use client";
 
+import { mediaThumbSrc } from "~/lib/media-thumb";
 import { useRef } from "react";
 import { Canvas, FabricImage } from "fabric";
 import { trpc } from "~/lib/trpc/client";
@@ -86,7 +87,7 @@ export function UploadsPanel({ canvas }: UploadsPanelProps) {
               className="group relative aspect-square overflow-hidden rounded-md border transition-all hover:ring-2 hover:ring-primary"
             >
               <img
-                src={media.thumbnailUrl || media.url}
+                src={mediaThumbSrc(media) ?? media.url}
                 alt={media.fileName}
                 loading="lazy"
                 decoding="async"

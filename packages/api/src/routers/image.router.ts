@@ -11,7 +11,7 @@ import { createRateLimitMiddleware } from "../middleware/rate-limit.middleware";
 import { aiRateLimiter } from "../middleware/rate-limit";
 import { uploadBase64ToS3 } from "../lib/s3";
 import { sniffImageMime, IMAGE_EXTENSIONS } from "../lib/media-content-type";
-import { mediaProcessQueue } from "@postautomation/queue";
+import { enqueueMediaThumbnail } from "@postautomation/queue";
 import { enforcePlanLimit } from "../middleware/plan-limit.middleware";
 import { toFriendlyAIError } from "../lib/ai-errors";
 
@@ -216,16 +216,8 @@ export const imageRouter = createRouter({
         },
       });
 
-      // Enqueue a background job to generate a thumbnail
-      await mediaProcessQueue.add(
-        `media-thumbnail-${media.id}`,
-        {
-          mediaId: media.id,
-          organizationId: ctx.organizationId,
-          operation: "thumbnail",
-        },
-        { attempts: 3, backoff: { type: "exponential", delay: 2000 } }
-      );
+      // Media-grid WebP thumbnail (best-effort; the worker sweep covers misses).
+      await enqueueMediaThumbnail(media.id, ctx.organizationId);
 
       return {
         id: media.id,

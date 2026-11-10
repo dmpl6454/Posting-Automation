@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
+import { cachedOrgProcedure } from "../lib/cached-procedure";
+import { invalidateOrgAnalyticsCache } from "../lib/cache";
 import { analyticsSyncQueue, externalPostSyncQueue, excludeUnmeasurableStoriesWhere } from "@postautomation/queue";
 import { groupChannelsIntoAccounts } from "../lib/sync-accounts";
 import { externalPostFloor, externalPostFloorLabel } from "../lib/external-post-floor";
@@ -796,7 +798,7 @@ async function fetchPostReportRows(
 }
 
 export const analyticsRouter = createRouter({
-  overview: orgProcedure
+  overview: cachedOrgProcedure
     .input(
       z.object({
         from: z.string().datetime().optional(),
@@ -879,7 +881,7 @@ export const analyticsRouter = createRouter({
     }),
 
   /** Aggregated engagement metrics across all published posts */
-  engagement: orgProcedure
+  engagement: cachedOrgProcedure
     .input(
       z.object({
         from: z.string().datetime().optional(),
@@ -1029,7 +1031,7 @@ export const analyticsRouter = createRouter({
     }),
 
   /** Dashboard stats: all-time counts for the org */
-  dashboardStats: orgProcedure.query(async ({ ctx }) => {
+  dashboardStats: cachedOrgProcedure.query(async ({ ctx }) => {
     const [totalPosts, connectedChannels, publishedCount, aiGeneratedCount] =
       await Promise.all([
         ctx.prisma.post.count({
@@ -1151,7 +1153,7 @@ export const analyticsRouter = createRouter({
    * the UI's qualifiers are gated on the server's `includesDirectPosts` rather than
    * deleted, so re-enabling the population restores the disclosure with it.
    */
-  platformBreakdown: orgProcedure
+  platformBreakdown: cachedOrgProcedure
     .input(
       z
         .object({
@@ -1265,7 +1267,7 @@ export const analyticsRouter = createRouter({
    * the note there for why it deliberately disagrees with Channel Performance and
    * why the UI must keep saying so.
    */
-  postsOverTime: orgProcedure
+  postsOverTime: cachedOrgProcedure
     .input(
       z.object({
         from: z.string().datetime().optional(),
@@ -1324,7 +1326,7 @@ export const analyticsRouter = createRouter({
     }),
 
   /** Per-channel aggregated stats */
-  perChannelStats: orgProcedure
+  perChannelStats: cachedOrgProcedure
     .input(
       z.object({
         from: z.string().datetime().optional(),
@@ -1540,7 +1542,7 @@ export const analyticsRouter = createRouter({
    * packages/api/src/lib/group-stats.ts). Channels in multiple groups count in
    * each; channels in none land in an "Ungrouped" bucket. USER-role readable.
    */
-  groupStats: orgProcedure
+  groupStats: cachedOrgProcedure
     .input(
       z.object({
         from: z.string().datetime().optional(),
@@ -1627,6 +1629,8 @@ export const analyticsRouter = createRouter({
         .optional()
     )
     .mutation(async ({ ctx, input }) => {
+    // Sync Now: drop this org's cached Insights so the next read is fresh.
+    invalidateOrgAnalyticsCache(ctx.organizationId);
     const since = new Date(Date.now() - (input?.days ?? 30) * 24 * 60 * 60 * 1000);
 
     const publishedTargets = await ctx.prisma.postTarget.findMany({
@@ -1780,7 +1784,7 @@ export const analyticsRouter = createRouter({
    * video). Twitter metrics are 0 on the free API tier; Instagram never exposes
    * clicks.
    */
-  postReports: orgProcedure
+  postReports: cachedOrgProcedure
     .input(
       z.object({
         window: z.enum(["24h", "7d", "15d", "30d"]),
@@ -1883,7 +1887,7 @@ export const analyticsRouter = createRouter({
    * Org-scoped through the parent post. Newest STORY_INSIGHTS_LIMIT rows; the
    * true `total` is returned beside them so a cap never reads as a count.
    */
-  storyInsights: orgProcedure
+  storyInsights: cachedOrgProcedure
     .input(
       z
         .object({
@@ -1979,7 +1983,7 @@ export const analyticsRouter = createRouter({
       };
     }),
 
-  reportPosts: orgProcedure
+  reportPosts: cachedOrgProcedure
     .input(
       z.object({
         window: z.enum(["24h", "7d", "15d", "30d"]),

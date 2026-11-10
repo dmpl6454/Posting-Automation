@@ -10,7 +10,7 @@ import {
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { createRouter, orgProcedure } from "../trpc";
-import { mediaOptimizeQueue } from "@postautomation/queue";
+import { enqueueMediaThumbnail, mediaOptimizeQueue } from "@postautomation/queue";
 import { getS3Client, getS3PresignClient, BUCKET, getPublicUrl } from "../lib/s3";
 
 const MAX_IMAGE_SIZE = 50 * 1024 * 1024;          // 50MB
@@ -226,6 +226,8 @@ export const uploadRouter = createRouter({
           )
           .catch((e) => console.warn("[upload] media-optimize enqueue failed:", e));
       }
+      // Media-grid WebP thumbnail (never awaited, never throws).
+      void enqueueMediaThumbnail(media.id, ctx.organizationId);
 
       return {
         id: media.id,

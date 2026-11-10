@@ -2,6 +2,7 @@ import { z } from "zod";
 import { TIKTOK_CHECKPOINT_KEY, TIKTOK_TITLE_MAX } from "@postautomation/social/src/utils/tiktok-posting";
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
+import { insightsInvalidatingOrgProcedure } from "../lib/cached-procedure";
 import { PUBLIC_CHANNEL_SELECT } from "../lib/public-channel";
 import { requestPlatformDeletion } from "../lib/platform-delete-request";
 import { postPublishQueue, captionFanoutQueue, superTextQueue, enqueueScheduledPublishJobs, buildPublishNowJobId, pendingPublishGates } from "@postautomation/queue";
@@ -215,7 +216,7 @@ export const postRouter = createRouter({
       return post;
     }),
 
-  create: orgProcedure
+  create: insightsInvalidatingOrgProcedure
     .input(
       z.object({
         // ⚠️ Not `.min(1)`. An Instagram STORY displays no caption, so its note is
@@ -855,7 +856,7 @@ export const postRouter = createRouter({
       return { id: updated.id, contentOverride: updated.contentOverride };
     }),
 
-  update: orgProcedure
+  update: insightsInvalidatingOrgProcedure
     .input(
       z.object({
         id: z.string(),
@@ -1198,7 +1199,7 @@ export const postRouter = createRouter({
       return updatedPost;
     }),
 
-  delete: orgProcedure
+  delete: insightsInvalidatingOrgProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const post = await ctx.prisma.post.findFirst({
