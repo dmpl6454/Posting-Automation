@@ -62,7 +62,7 @@ describe("fetchPostReportRows — the post filter", () => {
   it("derives the window boundary from the ONE shared helper the post picker also uses", () => {
     expect(body).toContain("const boundary = reportWindowBoundary(window);");
     expect(src).toMatch(/function reportWindowBoundary\(window: ReportWindow\): Date \{/);
-    const reportPosts = src.slice(src.indexOf("reportPosts: orgProcedure"), src.indexOf("emailReport:"));
+    const reportPosts = src.slice(src.indexOf("reportPosts: cachedOrgProcedure"), src.indexOf("emailReport:"));
     expect(reportPosts).toContain("const boundary = reportWindowBoundary(input.window);");
     // Same current/at_age comparison as publishedAtFilter (>= vs <=).
     expect(reportPosts).toContain('input.mode === "current" ? { gte: boundary } : { lte: boundary }');
@@ -71,7 +71,7 @@ describe("fetchPostReportRows — the post filter", () => {
 
 describe("postReports / emailReport thread postId through, and the email CSV matches the download", () => {
   it("both procedures accept postId and pass it as the LAST argument", () => {
-    const postReports = src.slice(src.indexOf("postReports: orgProcedure"), src.indexOf("campaignLabels:"));
+    const postReports = src.slice(src.indexOf("postReports: cachedOrgProcedure"), src.indexOf("campaignLabels:"));
     const emailReport = src.slice(src.indexOf("emailReport: emailReportRateLimited"));
     for (const proc of [postReports, emailReport]) {
       expect(proc).toContain("postId: z.string().optional()");
@@ -80,7 +80,7 @@ describe("postReports / emailReport thread postId through, and the email CSV mat
   });
 
   it("reportPosts is org-scoped and lists only posts with a PUBLISHED target in the window", () => {
-    const reportPosts = src.slice(src.indexOf("reportPosts: orgProcedure"), src.indexOf("emailReport:"));
+    const reportPosts = src.slice(src.indexOf("reportPosts: cachedOrgProcedure"), src.indexOf("emailReport:"));
     expect(reportPosts).toContain("organizationId: ctx.organizationId,");
     expect(reportPosts).toContain('targets: { some: { status: "PUBLISHED", publishedAt } }');
     // The channel count shown in the picker is the PUBLISHED-in-window count,

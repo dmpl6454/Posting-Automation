@@ -9,6 +9,7 @@
 // strong as the membership check that produced that id.
 import { z } from "zod";
 import { createRouter, orgProcedure } from "../trpc";
+import { insightsInvalidatingOrgProcedure } from "../lib/cached-procedure";
 import { PUBLIC_CHANNEL_SELECT } from "../lib/public-channel";
 import { prisma } from "@postautomation/db";
 import { TRPCError } from "@trpc/server";
@@ -177,7 +178,7 @@ export const bulkRouter = createRouter({
   /**
    * Delete multiple posts that belong to the organization.
    */
-  bulkDelete: orgProcedure
+  bulkDelete: insightsInvalidatingOrgProcedure
     .input(
       z.object({
         postIds: z.array(z.string()).min(1).max(100),
@@ -291,7 +292,7 @@ export const bulkRouter = createRouter({
    * Creates Post records and links them to specified channels via PostTarget.
    * Fix #28: uses papaparse for robust multi-line quoted field handling.
    */
-  csvImport: orgProcedure
+  csvImport: insightsInvalidatingOrgProcedure
     .input(
       z.object({
         csvData: z.string().min(1),

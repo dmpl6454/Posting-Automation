@@ -82,7 +82,7 @@ describe("fetchPostReportRows applies it to both arms too", () => {
 
 describe("procedure wiring", () => {
   it("groupStats accepts platform and DELIBERATELY ignores it", () => {
-    const start = src.indexOf("groupStats: orgProcedure");
+    const start = src.indexOf("groupStats: cachedOrgProcedure");
     const body = src.slice(start, start + 3000);
     expect(body).toMatch(/ACCEPTED AND DELIBERATELY IGNORED/);
     // A ChannelGroup may span platforms, so a filtered group is not that group.
@@ -90,7 +90,7 @@ describe("procedure wiring", () => {
   });
 
   it("perChannelStats narrows the CHANNEL list with the same predicate", () => {
-    const start = src.indexOf("perChannelStats: orgProcedure");
+    const start = src.indexOf("perChannelStats: cachedOrgProcedure");
     const body = src.slice(start, start + 3000);
     // Filtering the stat rows but not the channel list would render empty rows
     // for the other platforms rather than removing them.
@@ -110,7 +110,9 @@ describe("procedure wiring", () => {
 
   it("every platform-aware procedure stays orgProcedure (USER-readable)", () => {
     for (const name of ["engagement", "perChannelStats", "groupStats", "platformsInWindow"]) {
-      expect(src).toMatch(new RegExp(`${name}: orgProcedure`));
+      // cachedOrgProcedure (2026-11-10) is orgProcedure + a Redis read cache —
+      // still USER-readable; it adds no role gate.
+      expect(src).toMatch(new RegExp(`${name}: (orgProcedure|cachedOrgProcedure)`));
     }
   });
 });

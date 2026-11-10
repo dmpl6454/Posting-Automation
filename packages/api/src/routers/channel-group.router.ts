@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
+import { insightsInvalidatingOrgProcedure } from "../lib/cached-procedure";
 
 export const channelGroupRouter = createRouter({
   list: orgProcedure.query(async ({ ctx }) => {
@@ -15,7 +16,7 @@ export const channelGroupRouter = createRouter({
     });
   }),
 
-  create: orgProcedure
+  create: insightsInvalidatingOrgProcedure
     .input(z.object({ name: z.string().min(1).max(50), color: z.string().optional() }))
     .mutation(async ({ ctx, input }) => {
       // Fix #20: include channels in return so the UI doesn't dereference undefined
@@ -33,7 +34,7 @@ export const channelGroupRouter = createRouter({
       });
     }),
 
-  update: orgProcedure
+  update: insightsInvalidatingOrgProcedure
     .input(z.object({ id: z.string(), name: z.string().min(1).max(50).optional(), color: z.string().optional() }))
     .mutation(async ({ ctx, input }) => {
       const group = await ctx.prisma.channelGroup.findFirst({
@@ -46,7 +47,7 @@ export const channelGroupRouter = createRouter({
       });
     }),
 
-  delete: orgProcedure
+  delete: insightsInvalidatingOrgProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const group = await ctx.prisma.channelGroup.findFirst({
@@ -57,7 +58,7 @@ export const channelGroupRouter = createRouter({
       return { success: true };
     }),
 
-  addChannel: orgProcedure
+  addChannel: insightsInvalidatingOrgProcedure
     .input(z.object({ groupId: z.string(), channelId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const group = await ctx.prisma.channelGroup.findFirst({
@@ -91,7 +92,7 @@ export const channelGroupRouter = createRouter({
    * re-adding an existing member (or removing a non-member) is a harmless
    * no-op rather than an error.
    */
-  setChannels: orgProcedure
+  setChannels: insightsInvalidatingOrgProcedure
     .input(
       z.object({
         groupId: z.string(),
@@ -147,7 +148,7 @@ export const channelGroupRouter = createRouter({
       return { group: updated, changed };
     }),
 
-  removeChannel: orgProcedure
+  removeChannel: insightsInvalidatingOrgProcedure
     .input(z.object({ groupId: z.string(), channelId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const group = await ctx.prisma.channelGroup.findFirst({

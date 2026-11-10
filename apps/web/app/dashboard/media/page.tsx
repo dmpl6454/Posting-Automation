@@ -1,5 +1,6 @@
 "use client";
 
+import { mediaThumbSrc } from "~/lib/media-thumb";
 import { useRef, useState, useCallback, useEffect } from "react";
 import { trpc } from "~/lib/trpc/client";
 import { Card, CardContent } from "~/components/ui/card";
@@ -270,7 +271,26 @@ export default function MediaPage() {
                   className="relative aspect-square w-full cursor-pointer overflow-hidden bg-muted"
                   onClick={() => setSelectedMedia(media)}
                 >
-                  {media.fileType.startsWith("video/") ? (
+                  {media.fileType.startsWith("video/") && mediaThumbSrc(media) ? (
+                    // Still frame made by the worker: no <video> element per tile.
+                    <div className="absolute inset-0 bg-black">
+                      <img
+                        src={mediaThumbSrc(media)!}
+                        alt={media.fileName}
+                        loading="lazy"
+                        decoding="async"
+                        className="h-full w-full object-cover"
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).style.display = "none";
+                        }}
+                      />
+                      <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                        <div className="rounded-full bg-black/50 p-1.5">
+                          <Film className="h-4 w-4 text-white" />
+                        </div>
+                      </div>
+                    </div>
+                  ) : media.fileType.startsWith("video/") ? (
                     <div className="absolute inset-0 bg-black">
                       <video
                         src={withPosterHint(media.url)}
@@ -290,9 +310,10 @@ export default function MediaPage() {
                     </div>
                   ) : (
                     <img
-                      src={media.url}
+                      src={mediaThumbSrc(media) ?? media.url}
                       alt={media.fileName}
                       loading="lazy"
+                      decoding="async"
                       className="absolute inset-0 h-full w-full object-cover"
                       onError={(e) => {
                         const img = e.target as HTMLImageElement;

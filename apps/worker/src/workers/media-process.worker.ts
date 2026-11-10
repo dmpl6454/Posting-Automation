@@ -3,6 +3,13 @@ import { prisma } from "@postautomation/db";
 import { QUEUE_NAMES, type MediaProcessJobData, createRedisConnection } from "@postautomation/queue";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import sharp from "sharp";
+import {
+  grabVideoFrame,
+  planThumbnail,
+  renderThumbnailWebp,
+  thumbnailKey,
+  THUMB_MAX_IMAGE_BYTES,
+} from "../lib/media-thumbnail";
 
 const s3 = new S3Client({
   region: process.env.S3_REGION || process.env.AWS_REGION || "us-east-1",
@@ -17,12 +24,17 @@ const s3 = new S3Client({
 const S3_BUCKET = process.env.S3_BUCKET || "postautomation-media";
 const S3_BASE_URL = process.env.S3_PUBLIC_URL || process.env.S3_BASE_URL || `https://${S3_BUCKET}.s3.amazonaws.com`;
 
-async function downloadMedia(url: string): Promise<Buffer> {
+async function downloadMedia(url: string, maxBytes?: number): Promise<Buffer> {
   const response = await fetch(url, {
     signal: AbortSignal.timeout(60_000), // 60s timeout for large files
   });
   if (!response.ok) {
     throw new Error(`Failed to download media: HTTP ${response.status}`);
+  }
+  const declared = Number(response.headers.get("content-length") || 0);
+  if (maxBytes && declared > maxBytes) {
+    await response.body?.cancel().catch(() => {});
+    throw new Error(`Media too large for processing (${declared} bytes)`);
   }
   const arrayBuffer = await response.arrayBuffer();
   return Buffer.from(arrayBuffer);
@@ -66,20 +78,34 @@ function generateS3Key(
   return `orgs/${organizationId}/media/${mediaId}/${suffix}.${ext}`;
 }
 
-async function processThumbnail(
-  imageBuffer: Buffer,
-  media: { id: string; fileType: string; organizationId: string }
-): Promise<{ thumbnailUrl: string; width: number; height: number }> {
-  const thumbnail = await sharp(imageBuffer)
-    .resize(400, 400, { fit: "cover", position: "centre" })
-    .toBuffer();
+/** Atomic jsonb merge of metadata.thumbnail — never rewrites the whole column (media-optimize writes it too). */
+async function recordThumbnailState(mediaId: string, state: Record<string, unknown>): Promise<void> {
+  try {
+    await prisma.$executeRaw`
+      UPDATE "Media"
+      SET "metadata" = COALESCE("metadata", '{}'::jsonb) || jsonb_build_object('thumbnail', ${JSON.stringify(state)}::jsonb)
+      WHERE "id" = ${mediaId}
+    `;
+  } catch (err) {
+    console.warn(`[MediaProcess] could not record thumbnail state for ${mediaId}:`, (err as Error).message);
+  }
+}
 
-  const ext = media.fileType.includes("png") ? "png" : "jpg";
-  const key = generateS3Key(media.organizationId, media.id, "thumb_400x400", ext);
-  const contentType = getContentType(ext);
-  const thumbnailUrl = await uploadToS3(thumbnail, key, contentType);
-
-  return { thumbnailUrl, width: 400, height: 400 };
+/** WebP thumbnail (images: the file; videos: one frame). Null = nothing to make. */
+async function processThumbnail(media: {
+  id: string;
+  url: string;
+  fileType: string;
+  fileSize: bigint;
+  organizationId: string;
+}): Promise<{ thumbnailUrl: string } | { skipped: string }> {
+  const plan = planThumbnail(media);
+  if (plan.kind === "skip") return { skipped: plan.reason };
+  const source =
+    plan.kind === "video" ? await grabVideoFrame(media.url) : await downloadMedia(media.url, THUMB_MAX_IMAGE_BYTES);
+  const webp = await renderThumbnailWebp(source);
+  const thumbnailUrl = await uploadToS3(webp, thumbnailKey(media.organizationId, media.id), "image/webp");
+  return { thumbnailUrl };
 }
 
 async function processResize(
@@ -143,29 +169,42 @@ export function createMediaProcessWorker() {
         where: { id: mediaId },
       });
 
-      // 2. Download the original media file
-      console.log(`[MediaProcess] Downloading media from ${media.url}`);
-      const imageBuffer = await downloadMedia(media.url);
-      console.log(`[MediaProcess] Downloaded ${imageBuffer.length} bytes`);
-
       const mediaInfo = {
         id: media.id,
         fileType: media.fileType,
         organizationId,
       };
 
+      if (operation === "thumbnail") {
+        try {
+          const result = await processThumbnail({ ...media, organizationId: media.organizationId });
+          if ("skipped" in result) {
+            await recordThumbnailState(mediaId, { status: "skipped", reason: result.skipped, at: new Date().toISOString() });
+            return result;
+          }
+          await prisma.media.update({ where: { id: mediaId }, data: { thumbnailUrl: result.thumbnailUrl } });
+          await recordThumbnailState(mediaId, { status: "done", at: new Date().toISOString() });
+          return result;
+        } catch (err) {
+          // Only the final attempt marks it failed — the sweep never re-queues a failed one.
+          if (job.attemptsMade + 1 >= (job.opts.attempts ?? 1)) {
+            await recordThumbnailState(mediaId, {
+              status: "failed",
+              error: (err as Error).message.slice(0, 200),
+              at: new Date().toISOString(),
+            });
+          }
+          throw err;
+        }
+      }
+
+      // 2. Download the original media file
+      console.log(`[MediaProcess] Downloading media from ${media.url}`);
+      const imageBuffer = await downloadMedia(media.url);
+      console.log(`[MediaProcess] Downloaded ${imageBuffer.length} bytes`);
+
       // 3. Process based on operation type
       switch (operation) {
-        case "thumbnail": {
-          const result = await processThumbnail(imageBuffer, mediaInfo);
-          await prisma.media.update({
-            where: { id: mediaId },
-            data: { thumbnailUrl: result.thumbnailUrl },
-          });
-          console.log(`[MediaProcess] Thumbnail created for ${mediaId}: ${result.thumbnailUrl}`);
-          return result;
-        }
-
         case "resize": {
           const result = await processResize(imageBuffer, mediaInfo);
           await prisma.media.update({
@@ -199,7 +238,9 @@ export function createMediaProcessWorker() {
     },
     {
       connection: createRedisConnection(),
-      concurrency: 3, // Limit concurrency — media processing is CPU/memory intensive
+      // 2 (was 3): the thumbnail sweep backfills existing media through this
+      // worker, and sharp/ffmpeg share the 4-core box with publishing.
+      concurrency: 2,
       removeOnComplete: { count: 500 },
       removeOnFail: { count: 2000 },
     }

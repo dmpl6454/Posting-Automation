@@ -32,7 +32,7 @@ describe("channel disconnect is a SOFT delete", () => {
   it("disconnect stamps disconnectedAt, deactivates, and clears the tokens", () => {
     // Clearing tokens matters: a channel the user disconnected must not keep
     // usable platform credentials at rest.
-    const block = src.slice(src.indexOf("disconnect: orgProcedure"), src.indexOf("bulkDisconnect:"));
+    const block = src.slice(src.indexOf("disconnect: insightsInvalidatingOrgProcedure"), src.indexOf("bulkDisconnect:"));
     expect(block).toMatch(/disconnectedAt: new Date\(\)/);
     expect(block).toMatch(/isActive: false/);
     expect(block).toMatch(/accessToken: DISCONNECTED_TOKEN/);
@@ -40,7 +40,7 @@ describe("channel disconnect is a SOFT delete", () => {
   });
 
   it("bulkDisconnect applies the same treatment and skips already-disconnected rows", () => {
-    const block = src.slice(src.indexOf("bulkDisconnect: orgProcedure"), src.indexOf("toggleActive:"));
+    const block = src.slice(src.indexOf("bulkDisconnect: insightsInvalidatingOrgProcedure"), src.indexOf("toggleActive:"));
     expect(block).toMatch(/updateMany/);
     expect(block).toMatch(/disconnectedAt: new Date\(\)/);
     expect(block).toMatch(/accessToken: DISCONNECTED_TOKEN/);

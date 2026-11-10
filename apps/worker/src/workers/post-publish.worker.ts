@@ -9,6 +9,7 @@ import {
   isTikTokStillProcessingError,
   resolvePlatformCredentials,
 } from "@postautomation/social";
+import { bumpInsightsCache } from "../lib/insights-cache-bump";
 import { QUEUE_NAMES, postPublishQueue, analyticsSyncQueue, type PostPublishJobData, createRedisConnection, readPublishSessionDead, deadSessionPublishMessage } from "@postautomation/queue";
 import { recordDeadSession } from "../lib/dead-session";
 import IORedis from "ioredis";
@@ -1479,6 +1480,8 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
 
       // 4a. In-app notification for org owners/admins (best-effort, never fails publish)
       await notifyPublishOutcome(postTarget.post.organizationId, postTarget.postId, postTargetId, platform, "PUBLISHED");
+      // Insights counts changed: drop the org's cached Insights (web container).
+      bumpInsightsCache(postTarget.post.organizationId);
 
       // 4b. Fetch & save initial analytics snapshot (best-effort)
       if (result.platformPostId) {

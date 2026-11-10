@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, orgProcedure } from "../trpc";
+import { insightsInvalidatingOrgProcedure } from "../lib/cached-procedure";
 import { avatarCacheQueue, readPublishSessionDead } from "@postautomation/queue";
 import {
   getSocialProvider,
@@ -423,7 +424,7 @@ export const channelRouter = createRouter({
    * Validates the credentials by calling the platform's own API, then
    * upserts the Channel row. No OAuth redirect — the dialog stays in-app.
    */
-  connectWithToken: orgProcedure
+  connectWithToken: insightsInvalidatingOrgProcedure
     .input(
       z.object({
         platform: z.enum(TOKEN_PLATFORMS as readonly [string, ...string[]]),
@@ -501,7 +502,7 @@ export const channelRouter = createRouter({
       return toPublicChannel(channel);
     }),
 
-  disconnect: orgProcedure
+  disconnect: insightsInvalidatingOrgProcedure
     .input(z.object({ channelId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const channel = await ctx.prisma.channel.findFirst({
@@ -537,7 +538,7 @@ export const channelRouter = createRouter({
       return { success: true };
     }),
 
-  bulkDisconnect: orgProcedure
+  bulkDisconnect: insightsInvalidatingOrgProcedure
     .input(z.object({ channelIds: z.array(z.string()).min(1).max(100) }))
     .mutation(async ({ ctx, input }) => {
       // Fetch the to-be-disconnected channels scoped to the org (audit + count)
@@ -577,7 +578,7 @@ export const channelRouter = createRouter({
       return { deleted: result.count };
     }),
 
-  toggleActive: orgProcedure
+  toggleActive: insightsInvalidatingOrgProcedure
     .input(z.object({ channelId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const channel = await ctx.prisma.channel.findFirst({

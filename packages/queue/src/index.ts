@@ -51,3 +51,5 @@ export {
   deadSessionPublishMessage,
 } from "./publish-session-dead";
 export type { PublishSessionDeadRecord } from "./publish-session-dead";
+export { mediaThumbnailJobId, enqueueMediaThumbnail, MEDIA_THUMBNAIL_JOB_OPTS } from "./media-thumbnail-jobs";
+export { analyticsCacheVersionKey, bumpAnalyticsCacheVersion, ANALYTICS_CACHE_VERSION_TTL_S } from "./analytics-cache";
