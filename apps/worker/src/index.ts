@@ -2,6 +2,7 @@
 import dns from "node:dns";
 dns.setDefaultResultOrder("ipv4first");
 
+import { initWorkerSentry, reportJobFailure, reportProcessError, flushSentry } from "./lib/sentry";
 import { createPostPublishWorker } from "./workers/post-publish.worker";
 import { createTokenRefreshWorker } from "./workers/token-refresh.worker";
 import { createAnalyticsSyncWorker } from "./workers/analytics-sync.worker";
@@ -84,6 +85,20 @@ const superTextWorker = createSuperTextWorker();
 const externalPostSyncWorker = createExternalPostSyncWorker();
 const firstCommentWorker = createFirstCommentWorker();
 const platformDeleteWorker = createPlatformDeleteWorker();
+
+// Error reporting (2026-11-10): off unless SENTRY_DSN is set. Each worker gets
+// one extra "failed" listener that reports only a job's FINAL failure.
+initWorkerSentry();
+for (const w of [
+  postPublishWorker, tokenRefreshWorker, analyticsSyncWorker, webhookDeliveryWorker, mediaProcessWorker,
+  rssSyncWorker, agentRunWorker, trendDiscoverWorker, trendScoreWorker, contentGenerateWorker,
+  autopilotScheduleWorker, listeningSyncWorker, sentimentAnalysisWorker, campaignAnalyticsSyncWorker,
+  brandContentSyncWorker, outreachSendWorker, outreachPollWorker, repurposeVideoWorker, avatarCacheWorker,
+  captionFanoutWorker, mediaOptimizeWorker, superTextWorker, externalPostSyncWorker, firstCommentWorker,
+  platformDeleteWorker,
+]) {
+  (w as any).on("failed", (job: any, err: unknown) => reportJobFailure((w as any).name ?? "unknown", job, err));
+}
 
 // Start cron jobs — leader-gated for future multi-worker scale-out: the
 // setInterval crons must run in EXACTLY ONE container or every scheduled
@@ -215,7 +230,8 @@ const shutdown = createGracefulShutdown({
     ]);
   },
   closeHealthServer: () => healthServer.close(),
-  exit: (code) => process.exit(code),
+  // Send any queued Sentry events before exiting (bounded, never blocks exit).
+  exit: (code) => void flushSentry(2000).finally(() => process.exit(code)),
 });
 
 process.on("SIGINT", () => void shutdown("SIGINT"));
@@ -224,7 +240,9 @@ process.on("SIGTERM", () => void shutdown("SIGTERM"));
 // Prevent orphan job errors or transient failures from killing the whole process
 process.on("unhandledRejection", (reason: any, promise) => {
   console.error("[Worker] Unhandled rejection (process kept alive):", reason?.message ?? reason);
+  reportProcessError(reason);
 });
 process.on("uncaughtException", (err) => {
   console.error("[Worker] Uncaught exception (process kept alive):", err?.message ?? err);
+  reportProcessError(err);
 });

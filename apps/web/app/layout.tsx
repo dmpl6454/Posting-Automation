@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
+import { SentryLazyInit } from "~/components/sentry-lazy-init";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -88,7 +89,11 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" suppressHydrationWarning className={inter.variable}>
-      <body className="font-sans">{children}</body>
+      <body className="font-sans">
+        {children}
+        {/* Error + real-user speed monitoring; loads after the page, only when SENTRY_DSN is set. */}
+        <SentryLazyInit />
+      </body>
     </html>
   );
 }

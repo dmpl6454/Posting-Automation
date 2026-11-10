@@ -1227,8 +1227,39 @@ searches (other search boxes filter in the browser), web/worker on the same box 
 year), Brotli (stock nginx:alpine has no module; gzip is on), load balancing (one box; `CRON_LEADER`
 already prepares a second worker), Redis caching (the `lib/cache.ts` helper exists, unused — add it
 only where a measured slow endpoint warrants it), WebP/AVIF thumbnails for the Media grid (grids show
-the originals; needs a resize step), OpenTelemetry / real-user monitoring (`SENTRY_DSN` is plumbed in
-compose but **no Sentry SDK is installed** — nothing reads it).
+the originals; needs a resize step), OpenTelemetry / real-user monitoring — now covered by Sentry (see the Sentry section).
+
+## 🚨 Sentry error tracking (2026-11-10) — read before touching instrumentation*.ts, sentry-scrub or worker failure hooks
+
+Off until `SENTRY_DSN` is set (`.env.prod`, web AND worker are plumbed in compose). With no DSN nothing loads:
+the browser never downloads the Sentry chunk and the server never imports `@sentry/node`.
+
+- **Packages: `@sentry/node` (server) + `@sentry/browser` (client), NOT `@sentry/nextjs`.** `@sentry/nextjs`
+  peers on `next`, which made pnpm create a SECOND `next`/`next-auth` variant (two copies of next-auth =
+  broken sessions). Check `pnpm-lock.yaml` still has one `next@14.2.35` variant after any Sentry upgrade.
+- **Server:** `instrumentation.ts` (needs `experimental.instrumentationHook`) imports
+  `instrumentation-node.ts` ONLY inside `if (process.env.NEXT_RUNTIME === "nodejs")` — the file is also
+  compiled for edge, and an early return does not strip the import (build fails on `diagnostics_channel`).
+  The default `OnUncaughtException`/`OnUnhandledRejection` integrations are removed (they can exit the process).
+  tRPC route: each request is a `trpc <procedures>` transaction; only `INTERNAL_SERVER_ERROR` is reported,
+  tagged `trpc.path` + `org`, user = id only.
+- **Browser:** static pages cannot read runtime env, so `SentryLazyInit` fetches `/api/client-config` after
+  idle, then lazy-imports `@sentry/browser` with `browserTracingIntegration` (page loads + Web Vitals = the RUM).
+  `global-error.tsx` reports too.
+- **Worker:** `initWorkerSentry()` in `apps/worker/src/lib/sentry.ts`; every worker's `failed` event reports
+  ONLY on the final attempt or an `UnrecoverableError` (`shouldReportJobFailure`) — a retry that later
+  succeeds is not an error. Process-level errors report; shutdown flushes (2s) before exit. No tracing (rate 0).
+- **🔴 Nothing secret may leave the box.** ONE scrubber, `packages/queue/src/sentry-scrub.ts` (dependency-free,
+  deep-imported by the browser), runs in `beforeSend`/`beforeSendTransaction`/`beforeBreadcrumb` everywhere:
+  secret-named keys at any depth, `access_token=`/`client_secret`/Bearer/OAuth values, OAuth `code`/`state`
+  ONLY in query strings (so Meta's `"code":190` stays readable), known key shapes (EAA…, sk-…, enc:v1:…);
+  request cookies/headers/body dropped; user reduced to id. `sendDefaultPii: false`. No lookbehind regex
+  (old Safari cannot parse one). Tests: sentry-scrub.test.ts, apps/worker/src/lib/sentry.test.ts.
+- Env: `SENTRY_DSN`, `SENTRY_ENVIRONMENT` (default production), `SENTRY_TRACES_SAMPLE_RATE` (web, default 0.1).
+  Release = `NEXT_PUBLIC_COMMIT_HASH`. **Source maps are NOT uploaded** (needs `SENTRY_AUTH_TOKEN` + a build
+  step), so browser stack traces are minified.
+- Verified locally against a fake Sentry endpoint: worker final failures arrive scrubbed, retryable ones do
+  not; `next start` sends tRPC transactions, a `/login` pageload with LCP/TTFB, and scrubbed errors.
 
 ## 🗑️ DELETE FROM FACEBOOK / INSTAGRAM (2026-11-05) — read before touching platform-delete or `PostTarget.platformDeletedAt`
 

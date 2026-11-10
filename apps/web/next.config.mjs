@@ -68,7 +68,12 @@ const nextConfig = {
     "@postautomation/auth",
   ],
   experimental: {
-    serverComponentsExternalPackages: ["@prisma/client", "prisma", "puppeteer", "puppeteer-core", "ioredis"],
+    // Runs instrumentation.ts at server start (Sentry, 2026-11-10). Next 14
+    // still gates the hook behind this flag.
+    instrumentationHook: true,
+    // @sentry/node is OpenTelemetry + require-in-the-middle, which must load
+    // from node_modules rather than be bundled.
+    serverComponentsExternalPackages: ["@prisma/client", "prisma", "puppeteer", "puppeteer-core", "ioredis", "@sentry/node", "@sentry/opentelemetry", "@opentelemetry/instrumentation", "require-in-the-middle", "import-in-the-middle"],
     serverActions: {
       bodySizeLimit: "500mb",
     },
