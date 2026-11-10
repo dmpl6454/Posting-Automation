@@ -53,7 +53,14 @@ ENV NEXTAUTH_SECRET="build-time-placeholder"
 ENV NEXTAUTH_URL="http://localhost:3000"
 ENV SKIP_ENV_VALIDATION=1
 RUN pnpm --filter @postautomation/db db:generate
+# Sentry source maps (2026-11-10): deploy.sh sets SENTRY_SOURCEMAPS=1 only when
+# SENTRY_AUTH_TOKEN is configured. The build then emits hidden maps and the prepare
+# script stamps debug ids and moves the maps OUT of .next (never served). The
+# upload runs later from deploy.sh; no token is ever passed into this build.
+ARG SENTRY_SOURCEMAPS=
+ENV SENTRY_SOURCEMAPS=${SENTRY_SOURCEMAPS}
 RUN pnpm --filter @postautomation/web build
+RUN if [ "$SENTRY_SOURCEMAPS" = "1" ]; then sh scripts/sentry-sourcemaps-prepare.sh; fi
 
 ENV NODE_ENV=production
 EXPOSE 3000

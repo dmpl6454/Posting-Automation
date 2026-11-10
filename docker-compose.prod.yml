@@ -103,6 +103,8 @@ services:
         BRANCH: ${BRANCH:-main}
         COMMIT_MSG: ${COMMIT_MSG:-}
         APP_VERSION: ${APP_VERSION:-}
+        # "1" only when deploy.sh found SENTRY_AUTH_TOKEN (see Dockerfile.web).
+        SENTRY_SOURCEMAPS: ${SENTRY_SOURCEMAPS:-}
     restart: unless-stopped
     expose:
       - "3000"
