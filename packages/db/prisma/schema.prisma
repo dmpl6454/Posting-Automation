@@ -521,6 +521,8 @@ model Post {
   @@index([organizationId, scheduledAt])
   @@index([status, scheduledAt])
   @@index([organizationId, campaignLabel])
+  // 2026-11-10: the Posts list's default sort (newest first per workspace).
+  @@index([organizationId, createdAt])
 }
 
 model PostTarget {
@@ -571,6 +573,12 @@ model PostTarget {
 
   @@unique([postId, channelId])
   @@index([status, postId])
+  // 2026-11-10: "this channel's published posts" (Comments inbox, Insights
+  // joins, channel cascades) — the unique index above leads with postId and
+  // cannot serve a channelId lookup; Postgres never indexes FKs on its own.
+  @@index([channelId, status])
+  // Every analytics pass scans PUBLISHED targets by publishedAt range.
+  @@index([status, publishedAt])
 }
 
 enum PostStatus {
@@ -642,6 +650,8 @@ model PostMedia {
 
   @@unique([postId, mediaId])
   @@index([postId])
+  // 2026-11-10: repointing an attachment to a processed/burned video by mediaId.
+  @@index([mediaId])
 }
 
 model PostTag {

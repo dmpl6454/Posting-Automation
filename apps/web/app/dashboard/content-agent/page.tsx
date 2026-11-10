@@ -12,13 +12,27 @@ import {
   Palette,
 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "~/components/ui/tabs";
-import { GenerateTab } from "~/components/content-agent/GenerateTab";
-import { RepurposeTab } from "~/components/content-agent/RepurposeTab";
-import { ImageTab } from "~/components/content-agent/ImageTab";
+import dynamic from "next/dynamic";
 import { PostsTab } from "~/components/content-agent/PostsTab";
 import { ComposeTab } from "~/components/content-agent/ComposeTab";
-import { CalendarTab } from "~/components/content-agent/CalendarTab";
-import { BulkTab } from "~/components/content-agent/BulkTab";
+import { Skeleton } from "~/components/ui/skeleton";
+
+// Code split (2026-11-10). Compose (the default tab, forceMounted so uploads
+// survive) and the Posts list are on screen at first paint and stay static.
+// Every other tab is downloaded only when it is opened — Repurpose alone is
+// ~3,000 lines, and it was shipped to everyone who opened Content Studio.
+const TabSkeleton = () => (
+  <div className="space-y-3" aria-busy="true">
+    <Skeleton className="h-10 w-full rounded-lg" />
+    <Skeleton className="h-40 w-full rounded-xl" />
+    <Skeleton className="h-24 w-full rounded-xl" />
+  </div>
+);
+const GenerateTab = dynamic(() => import("~/components/content-agent/GenerateTab").then((m) => m.GenerateTab), { loading: TabSkeleton });
+const ImageTab = dynamic(() => import("~/components/content-agent/ImageTab").then((m) => m.ImageTab), { loading: TabSkeleton });
+const RepurposeTab = dynamic(() => import("~/components/content-agent/RepurposeTab").then((m) => m.RepurposeTab), { loading: TabSkeleton });
+const BulkTab = dynamic(() => import("~/components/content-agent/BulkTab").then((m) => m.BulkTab), { loading: TabSkeleton });
+const CalendarTab = dynamic(() => import("~/components/content-agent/CalendarTab").then((m) => m.CalendarTab), { loading: TabSkeleton });
 import { Button } from "~/components/ui/button";
 import { parseCreatePostMediaIds, parseCsvList } from "~/lib/repurpose-create-post-params";
 

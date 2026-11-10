@@ -1167,7 +1167,12 @@ export const analyticsRouter = createRouter({
       const from = input?.from ? new Date(input.from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
       const to = input?.to ? new Date(input.to) : new Date();
 
-      const targets = await ctx.prisma.postTarget.findMany({
+      // Counted in the database (2026-11-10). This used to load EVERY published
+      // target row in the range — all columns, including metadata JSON and the
+      // per-channel caption — just to count them per platform in JavaScript.
+      // Now: one grouped count per channel, then the platform of those channels.
+      const perChannel = await ctx.prisma.postTarget.groupBy({
+        by: ["channelId"],
         where: {
           post: {
             organizationId: ctx.organizationId,
@@ -1178,15 +1183,21 @@ export const analyticsRouter = createRouter({
           },
           status: "PUBLISHED",
         },
-        include: {
-          channel: { select: { platform: true } },
-        },
+        _count: { _all: true },
       });
 
       const breakdown: Record<string, number> = {};
-      for (const t of targets) {
-        const platform = t.channel.platform;
-        breakdown[platform] = (breakdown[platform] ?? 0) + 1;
+      if (perChannel.length > 0) {
+        const channels = await ctx.prisma.channel.findMany({
+          where: { id: { in: perChannel.map((r) => r.channelId) } },
+          select: { id: true, platform: true },
+        });
+        const platformOf = new Map(channels.map((c) => [c.id, c.platform as string]));
+        for (const r of perChannel) {
+          const platform = platformOf.get(r.channelId);
+          if (!platform) continue;
+          breakdown[platform] = (breakdown[platform] ?? 0) + r._count._all;
+        }
       }
 
       return Object.entries(breakdown)

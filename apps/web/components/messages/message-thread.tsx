@@ -134,7 +134,7 @@ export function MessageThread({
                     // Only ever an IMAGE url (the parser never puts a video file here).
                     <a key={i} href={a.url ?? a.previewUrl} target="_blank" rel="noopener noreferrer" className="block">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={a.previewUrl} alt={a.name ?? a.kind} className="max-h-48 rounded" />
+                      <img src={a.previewUrl} alt={a.name ?? a.kind} loading="lazy" decoding="async" className="max-h-48 rounded" />
                     </a>
                   ) : (
                     <a

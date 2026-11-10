@@ -107,7 +107,7 @@ export function TemplatePanel({
             >
               <div className="aspect-square overflow-hidden bg-muted">
                 {tmpl.thumbnail ? (
-                  <img src={tmpl.thumbnail} alt={tmpl.name} className="h-full w-full object-cover" />
+                  <img src={tmpl.thumbnail} alt={tmpl.name} loading="lazy" decoding="async" className="h-full w-full object-cover" />
                 ) : (
                   <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
                     No preview
