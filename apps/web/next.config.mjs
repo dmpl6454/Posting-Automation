@@ -78,9 +78,16 @@ const nextConfig = {
       bodySizeLimit: "500mb",
     },
   },
-  webpack: (config, { isServer }) => {
+  webpack: (config, { isServer, dev }) => {
     if (isServer) {
       config.externals = [...(config.externals || []), "puppeteer", "puppeteer-core"];
+    }
+    // Source maps for Sentry, only when the deploy asks for them (a Sentry auth
+    // token is configured). "hidden" = the .js files carry no sourceMappingURL,
+    // so browsers never ask for a map; scripts/sentry-sourcemaps-prepare.sh moves
+    // the maps out of .next so they are never served.
+    if (!dev && process.env.SENTRY_SOURCEMAPS === "1") {
+      config.devtool = "hidden-source-map";
     }
     return config;
   },

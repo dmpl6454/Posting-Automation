@@ -1256,8 +1256,19 @@ the browser never downloads the Sentry chunk and the server never imports `@sent
   request cookies/headers/body dropped; user reduced to id. `sendDefaultPii: false`. No lookbehind regex
   (old Safari cannot parse one). Tests: sentry-scrub.test.ts, apps/worker/src/lib/sentry.test.ts.
 - Env: `SENTRY_DSN`, `SENTRY_ENVIRONMENT` (default production), `SENTRY_TRACES_SAMPLE_RATE` (web, default 0.1).
-  Release = `NEXT_PUBLIC_COMMIT_HASH`. **Source maps are NOT uploaded** (needs `SENTRY_AUTH_TOKEN` + a build
-  step), so browser stack traces are minified.
+  Release = `NEXT_PUBLIC_COMMIT_HASH` (= deploy.sh's short `COMMIT_HASH`).
+- **Source maps (added same day):** only when `.env.prod` has `SENTRY_AUTH_TOKEN` (+ `SENTRY_ORG`,
+  `SENTRY_PROJECT`, optional `SENTRY_URL`). deploy.sh reads those keys itself (`env_file_value`, never
+  sourced or echoed) and sets the build arg `SENTRY_SOURCEMAPS=1` → next.config sets webpack
+  `devtool: "hidden-source-map"` (no `sourceMappingURL` in the js) → Dockerfile.web runs
+  [sentry-sourcemaps-prepare.sh](scripts/sentry-sourcemaps-prepare.sh): `sentry-cli sourcemaps inject`
+  (debug ids into .next/static + .next/server) then MOVES every `.map` out of `.next` to
+  `/app/sentry-sourcemaps` — 🔴 a map left under .next/static is served publicly at /_next/static (verified:
+  404 after the move). After the build, `upload_sentry_sourcemaps` uploads from a throwaway
+  `docker compose run --rm web` with the token passed by env NAME, so it never enters an image layer or
+  the runtime container (not in the web `environment:` allowlist). Upload failure is a warning, never a
+  failed deploy (log: /tmp/sentry-sourcemaps-upload.log on the box). Rollback builds skip maps. Adds ~50MB
+  to the web image. No token ⇒ the build is unchanged.
 - Verified locally against a fake Sentry endpoint: worker final failures arrive scrubbed, retryable ones do
   not; `next start` sends tRPC transactions, a `/login` pageload with LCP/TTFB, and scrubbed errors.
 

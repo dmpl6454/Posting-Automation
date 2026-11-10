@@ -152,6 +152,46 @@ get_version_info() {
   fi
 }
 
+# ── Sentry source maps (2026-11-10) ─────────────────────────────
+# Reads ONE key from the env file without sourcing it (the file is not shell-safe
+# and we do not want every secret in this shell). Never echoed.
+env_file_value() {
+  { grep -E "^$1=" "$ENV_FILE" 2>/dev/null || true; } | tail -n 1 | cut -d= -f2- | sed -e 's/^["'\'']//' -e 's/["'\'']$//'
+}
+
+# Turns source maps on for the web build only when an auth token is configured.
+sentry_sourcemaps_setup() {
+  if [ -n "$(env_file_value SENTRY_AUTH_TOKEN)" ]; then
+    SENTRY_SOURCEMAPS=1
+    log "Sentry source maps: on"
+  else
+    SENTRY_SOURCEMAPS=
+  fi
+  export SENTRY_SOURCEMAPS
+}
+
+# Uploads the maps the web image prepared (/app/sentry-sourcemaps) from a
+# throwaway container, so the token never enters an image layer. Best-effort:
+# a failed upload only means minified stack traces, never a failed deploy.
+upload_sentry_sourcemaps() {
+  [ "${SENTRY_SOURCEMAPS:-}" = "1" ] || return 0
+  log "Uploading source maps to Sentry (release ${COMMIT_HASH})..."
+  (
+    SENTRY_AUTH_TOKEN="$(env_file_value SENTRY_AUTH_TOKEN)"
+    SENTRY_ORG="$(env_file_value SENTRY_ORG)"
+    SENTRY_PROJECT="$(env_file_value SENTRY_PROJECT)"
+    SENTRY_URL="$(env_file_value SENTRY_URL)"
+    export SENTRY_AUTH_TOKEN SENTRY_ORG SENTRY_PROJECT SENTRY_URL
+    [ -n "$SENTRY_URL" ] || unset SENTRY_URL
+    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" run --rm --no-deps -T \
+      -e SENTRY_AUTH_TOKEN -e SENTRY_ORG -e SENTRY_PROJECT -e SENTRY_URL \
+      --entrypoint sh web -c \
+      "/app/apps/web/node_modules/.bin/sentry-cli sourcemaps upload --release '${COMMIT_HASH}' /app/sentry-sourcemaps"
+  ) >/tmp/sentry-sourcemaps-upload.log 2>&1 \
+    && success "Source maps uploaded" \
+    || warn "Source map upload failed (non-fatal) — see /tmp/sentry-sourcemaps-upload.log"
+}
+
 # ── Tag deployment in git ────────────────────────────────────────
 tag_deployment() {
   local tag="deploy-v${APP_VERSION}-$(date +%Y%m%d%H%M%S)"
@@ -275,6 +315,7 @@ cmd_deploy() {
 
   log "Deploying version v${APP_VERSION} (${COMMIT_HASH})..."
   log "Commit: ${COMMIT_MSG}"
+  sentry_sourcemaps_setup
 
   check_nginx_conf
 
@@ -286,6 +327,7 @@ cmd_deploy() {
   # Build new images
   log "Building Docker images..."
   docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" build web worker migrate
+  upload_sentry_sourcemaps
 
   # Run migrations
   log "Running database migrations..."
