@@ -14,11 +14,12 @@
     "@postautomation/db": "workspace:*",
     "@postautomation/queue": "workspace:*",
     "@postautomation/social": "workspace:*",
+    "@postautomation/super-text": "workspace:*",
+    "@sentry/node": "9.47.2",
     "bullmq": "^5.34.0",
     "ioredis": "^5.4.0",
     "nodemailer": "^7.0.7",
-    "sharp": "^0.33.0",
-    "@postautomation/super-text": "workspace:*"
+    "sharp": "^0.33.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

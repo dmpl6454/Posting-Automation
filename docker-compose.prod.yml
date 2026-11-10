@@ -156,8 +156,12 @@ services:
       SMTP_USER: ${SMTP_USER}
       SMTP_PASS: ${SMTP_PASS}
       SMTP_FROM: ${SMTP_FROM:-noreply@postautomation.co.in}
-      NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN}
-      SENTRY_DSN: ${SENTRY_DSN}
+      # Sentry (2026-11-10): ONE key turns on server + browser reporting; the
+      # browser reads it at runtime from /api/client-config. Empty = off.
+      NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
+      SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-}
       AUTH_GOOGLE_ID: ${AUTH_GOOGLE_ID}
       AUTH_GOOGLE_SECRET: ${AUTH_GOOGLE_SECRET}
       AUTH_GITHUB_ID: ${AUTH_GITHUB_ID}
@@ -417,6 +421,9 @@ services:
       # encode it needs was the main source of IG video fan-out latency.
       # Fail-CLOSED in code (=== "true").
       VIDEO_WATERMARK_ENABLED: ${VIDEO_WATERMARK_ENABLED:-false}
+      # Sentry (2026-11-10): reports a job's FINAL failure only. Empty = off.
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
       # MASTER kill switch for ALL IG/FB video re-encoding, including the story
       # 9:16 canvas. Fail-OPEN in code (!== "false"): anything but "false" keeps
       # re-encoding available, so the default is spelled out as true here.

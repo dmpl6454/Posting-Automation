@@ -5,14 +5,13 @@ import { Button } from "~/components/ui/button";
 
 export default function GlobalError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
   useEffect(() => {
-    // Sentry capture - only runs if @sentry/nextjs is installed
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const Sentry = require("@sentry/nextjs");
-      Sentry.captureException(error);
-    } catch {
-      console.error("Unhandled error:", error);
-    }
+    // Reported only if Sentry was started (SentryLazyInit, when SENTRY_DSN is
+    // set); otherwise captureException is a no-op. Loaded lazily so the SDK is
+    // never part of this page's bundle.
+    console.error("Unhandled error:", error);
+    import("@sentry/browser")
+      .then((Sentry) => Sentry.captureException(error))
+      .catch(() => {});
   }, [error]);
 
   return (
