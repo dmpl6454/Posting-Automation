@@ -33,8 +33,8 @@ describe("buildScheduledPublishJobs", () => {
       postId: "p1", organizationId: "o1",
       scheduledAt: new Date(T0 + 90_000), targets, now: T0,
     });
-    // fb#0 and tg#0 land exactly at the scheduled time; fb#1 waits its 10s stagger.
-    expect(jobs.map((j) => j.opts.delay)).toEqual([90_000, 90_000, 100_000]);
+    // fb#0 and tg#0 land exactly at the scheduled time; fb#1 waits its 5s stagger.
+    expect(jobs.map((j) => j.opts.delay)).toEqual([90_000, 90_000, 95_000]);
   });
 
   it("clamps an overdue schedule to delay 0 (cron reconciliation path)", () => {
@@ -42,7 +42,7 @@ describe("buildScheduledPublishJobs", () => {
       postId: "p1", organizationId: "o1",
       scheduledAt: new Date(T0 - 45_000), targets, now: T0,
     });
-    expect(jobs.map((j) => j.opts.delay)).toEqual([0, 0, 10_000]);
+    expect(jobs.map((j) => j.opts.delay)).toEqual([0, 0, 5_000]);
   });
 
   it("stamps enqueuedFor with the scheduledAt epoch and rides the bulk lane", () => {

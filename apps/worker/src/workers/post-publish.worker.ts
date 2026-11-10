@@ -9,7 +9,8 @@ import {
   isTikTokStillProcessingError,
   resolvePlatformCredentials,
 } from "@postautomation/social";
-import { QUEUE_NAMES, postPublishQueue, analyticsSyncQueue, type PostPublishJobData, createRedisConnection } from "@postautomation/queue";
+import { QUEUE_NAMES, postPublishQueue, analyticsSyncQueue, type PostPublishJobData, createRedisConnection, readPublishSessionDead, deadSessionPublishMessage } from "@postautomation/queue";
+import { recordDeadSession } from "../lib/dead-session";
 import IORedis from "ioredis";
 import { buildPublishEmail, buildPublishReportCsv, buildPublishReportFilename } from "../lib/publish-email";
 import { publishReportFingerprint, claimPublishReport, releasePublishReport } from "../lib/publish-report-dedupe";
@@ -17,7 +18,7 @@ import { planFacebookAnalyticsId, earlyVideoSyncDelayMs } from "../lib/fb-video-
 import { addLocalClaim, releaseLocalClaim, localClaimCount } from "../lib/local-claims";
 import { trackBackgroundTask } from "../lib/background-tasks";
 import { buildPublishTokens, publishIdempotencyKey } from "../lib/publish-tokens";
-import { markTargetFailed, markTargetAmbiguous, buildPublishClaimWhere, routePublishError, shouldPreflightReconcile, buildPublishNotifications, mediaRequiredReason, isSeedNoise, decidePreClaimSkip, isHeavyPublish, planHeavyDefer, HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE, TIKTOK_PROCESSING_WAIT_MESSAGE, planTikTokProcessingWait, classifyError, isDefiniteAuthFailure, releaseClaimAfterPrePublishError, decideClaimMiss, countOtherActiveJobsForTarget, ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE, formatPublishTiming, planRateLimitRequeue, rateLimitGiveUpMessage, type PublishJobState } from "../lib/publish-recovery";
+import { markTargetFailed, markTargetAmbiguous, buildPublishClaimWhere, routePublishError, shouldPreflightReconcile, buildPublishNotifications, mediaRequiredReason, isSeedNoise, decidePreClaimSkip, isHeavyPublish, planHeavyDefer, HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE, TIKTOK_PROCESSING_WAIT_MESSAGE, planTikTokProcessingWait, classifyError, isDefiniteAuthFailure, releaseClaimAfterPrePublishError, decideClaimMiss, countOtherActiveJobsForTarget, ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE, formatPublishTiming, planRateLimitRequeue, rateLimitGiveUpMessage, rateLimitWaitMessage, type PublishJobState } from "../lib/publish-recovery";
 import { collectPerTargetMediaIds, substitutePerTargetMedia } from "../lib/per-target-media";
 import { PRIORITY_RETRY, mediaOptimizeQueue, atAgeWindowsForFormat, firstCommentQueue } from "@postautomation/queue";
 import { firstCommentJobId } from "@postautomation/social";
@@ -495,6 +496,19 @@ export function createPostPublishWorker() {
           data: { status: "FAILED", errorMessage: "Channel is inactive. Re-enable it in the Channels page to publish." },
         });
         return;
+      }
+
+      // 3c. Guard: a Meta session already known to be dead (2026-11-10). A
+      // previous publish got error 190 (e.g. subcode 460 "session has been
+      // invalidated") on THIS token and no refresh could fix it, so calling
+      // Meta again can only fail the same way. Fail now, before any platform
+      // call — FAILED is the truth (nothing is sent) — and say "reconnect".
+      // The record names the token, so a reconnect clears it automatically.
+      if (readPublishSessionDead(channel.metadata, channel.accessToken, platform)) {
+        const reason = deadSessionPublishMessage(platform);
+        console.warn(`[PostPublish] target ${postTargetId}: ${platform} channel ${channelId} has a dead session — not calling the platform`);
+        await markTargetFailed(prisma, postTargetId, reason);
+        throw new UnrecoverableError(reason);
       }
 
       // 3. Get provider and check token expiry
@@ -1248,7 +1262,7 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
           // Mark as SCHEDULED (not FAILED) so the UI shows it's pending
           await prisma.postTarget.update({
             where: { id: postTargetId },
-            data: { status: "SCHEDULED", errorMessage: `Rate-limited, retrying in ${Math.round(delayMs / 60_000)}min` },
+            data: { status: "SCHEDULED", errorMessage: rateLimitWaitMessage(delayMs) },
           });
           return; // Don't throw — this is handled
         }
@@ -1344,6 +1358,10 @@ Visually stunning design with bold modern typography, vibrant colors, dramatic i
               (refreshAttempted && isDefiniteAuthFailure(refreshRetryErr?.message));
             if (!refreshSucceeded && definitelyDead) {
               console.warn(`[PostPublish] target ${postTargetId}: ${platform} credential is dead — failing without retry (reconnect required)`);
+              // Remember it on the channel so the NEXT posts to it fail at once
+              // with a reconnect message instead of calling Meta again
+              // (Facebook/Instagram only; never throws).
+              await recordDeadSession(prisma, channelId, accessToken, platform, errMsg);
               throw new UnrecoverableError(tokenErrMsg);
             }
             throw new Error(tokenErrMsg);

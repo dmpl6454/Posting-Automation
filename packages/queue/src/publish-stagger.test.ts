@@ -30,11 +30,11 @@ describe("computePublishDelays", () => {
     const delays = computePublishDelays([
       { platform: "FACEBOOK" }, // fb #0
       { platform: "TELEGRAM" }, // tg #0
-      { platform: "FACEBOOK" }, // fb #1 → 10s
+      { platform: "FACEBOOK" }, // fb #1 → 5s
       { platform: "TELEGRAM" }, // tg #1 → 2s
-      { platform: "FACEBOOK" }, // fb #2 → 20s
+      { platform: "FACEBOOK" }, // fb #2 → 10s
     ]);
-    expect(delays).toEqual([0, 0, 10_000, 2_000, 20_000]);
+    expect(delays).toEqual([0, 0, 5_000, 2_000, 10_000]);
   });
 
   it("a 60-channel post spread across platforms no longer tails out ~10 minutes", () => {
@@ -43,12 +43,19 @@ describe("computePublishDelays", () => {
     const platforms = ["FACEBOOK", "INSTAGRAM", "TWITTER", "LINKEDIN", "TELEGRAM", "DISCORD"];
     const targets = Array.from({ length: 60 }, (_, i) => ({ platform: platforms[i % 6]! }));
     const delays = computePublishDelays(targets);
-    expect(Math.max(...delays)).toBe(9 * 10_000); // 90s, was 590s
+    expect(Math.max(...delays)).toBe(9 * 10_000); // 90s (X keeps 10s), was 590s
   });
 
-  it("keeps the full 10s spacing for same-platform bursts (Meta/X shared-app quota)", () => {
-    const targets = Array.from({ length: 5 }, () => ({ platform: "FACEBOOK" }));
-    expect(computePublishDelays(targets)).toEqual([0, 10_000, 20_000, 30_000, 40_000]);
+  it("spaces Facebook/Instagram bursts 5s apart (owner decision 2026-11-10)", () => {
+    for (const p of ["FACEBOOK", "INSTAGRAM"]) {
+      const targets = Array.from({ length: 5 }, () => ({ platform: p }));
+      expect(computePublishDelays(targets)).toEqual([0, 5_000, 10_000, 15_000, 20_000]);
+    }
+  });
+
+  it("keeps the full 10s spacing for X and Threads bursts", () => {
+    const targets = Array.from({ length: 3 }, () => ({ platform: "TWITTER" }));
+    expect(computePublishDelays(targets)).toEqual([0, 10_000, 20_000]);
   });
 
   it("falls back to the default stagger for unknown platforms", () => {
@@ -64,9 +71,11 @@ describe("computePublishDelays", () => {
   });
 
   it("locks the strict tier for platforms with shared-app quotas", () => {
-    for (const p of ["FACEBOOK", "INSTAGRAM", "THREADS", "TWITTER"]) {
+    for (const p of ["THREADS", "TWITTER"]) {
       expect(PLATFORM_STAGGER_MS[p]).toBe(10_000);
     }
+    expect(PLATFORM_STAGGER_MS.FACEBOOK).toBe(5_000);
+    expect(PLATFORM_STAGGER_MS.INSTAGRAM).toBe(5_000);
   });
 });
 
@@ -90,20 +99,20 @@ describe("PUBLISH_STAGGER_<PLATFORM>_MS override", () => {
   });
 
   it("applies ONLY to the named platform", () => {
-    const env = { PUBLISH_STAGGER_INSTAGRAM_MS: "5000" };
+    const env = { PUBLISH_STAGGER_INSTAGRAM_MS: "3000" };
     const delays = computePublishDelays(
       [
         { platform: "INSTAGRAM" }, // ig #0
         { platform: "FACEBOOK" }, //  fb #0
-        { platform: "INSTAGRAM" }, // ig #1 → 5s (override)
-        { platform: "FACEBOOK" }, //  fb #1 → 10s (table default, untouched)
-        { platform: "INSTAGRAM" }, // ig #2 → 10s
+        { platform: "INSTAGRAM" }, // ig #1 → 3s (override)
+        { platform: "FACEBOOK" }, //  fb #1 → 5s (table default, untouched)
+        { platform: "INSTAGRAM" }, // ig #2 → 6s
         { platform: "THREADS" }, //   th #0
         { platform: "THREADS" }, //   th #1 → 10s (shares the Meta tier, NOT the IG override)
       ],
       env
     );
-    expect(delays).toEqual([0, 0, 5_000, 10_000, 10_000, 0, 10_000]);
+    expect(delays).toEqual([0, 0, 3_000, 5_000, 6_000, 0, 10_000]);
   });
 
   it("keeps the first target of every platform at delay 0 under overrides", () => {
@@ -133,8 +142,8 @@ describe("PUBLISH_STAGGER_<PLATFORM>_MS override", () => {
     ["+5000", "explicit sign"],
   ])("falls back to the table default for %j (%s)", (raw) => {
     const env = { PUBLISH_STAGGER_INSTAGRAM_MS: raw };
-    expect(resolvePlatformStaggerMs("INSTAGRAM", env)).toBe(10_000);
-    expect(computePublishDelays(five("INSTAGRAM", 3), env)).toEqual([0, 10_000, 20_000]);
+    expect(resolvePlatformStaggerMs("INSTAGRAM", env)).toBe(5_000);
+    expect(computePublishDelays(five("INSTAGRAM", 3), env)).toEqual([0, 5_000, 10_000]);
   });
 
   it("clamps \"0\" UP to the floor — same-platform targets never share an instant", () => {
@@ -180,11 +189,11 @@ describe("PUBLISH_STAGGER_<PLATFORM>_MS override", () => {
 
     it("computePublishDelays(targets) picks the override up at CALL time", () => {
       delete process.env[KEY];
-      expect(computePublishDelays(five("INSTAGRAM", 2))).toEqual([0, 10_000]);
+      expect(computePublishDelays(five("INSTAGRAM", 2))).toEqual([0, 5_000]);
       process.env[KEY] = "4000";
       expect(computePublishDelays(five("INSTAGRAM", 2))).toEqual([0, 4_000]);
       process.env[KEY] = "";
-      expect(computePublishDelays(five("INSTAGRAM", 2))).toEqual([0, 10_000]);
+      expect(computePublishDelays(five("INSTAGRAM", 2))).toEqual([0, 5_000]);
     });
 
     it("buildScheduledPublishJobs (web save-time + worker cron) spaces by the override, jobIds unchanged", () => {
@@ -203,11 +212,11 @@ describe("PUBLISH_STAGGER_<PLATFORM>_MS override", () => {
       };
       delete process.env[KEY];
       const before = buildScheduledPublishJobs(args);
-      process.env[KEY] = "5000";
+      process.env[KEY] = "2000";
       const after = buildScheduledPublishJobs(args);
 
-      expect(before.map((j) => j.opts.delay)).toEqual([60_000, 60_000, 70_000, 70_000]);
-      expect(after.map((j) => j.opts.delay)).toEqual([60_000, 60_000, 65_000, 70_000]);
+      expect(before.map((j) => j.opts.delay)).toEqual([60_000, 60_000, 65_000, 65_000]);
+      expect(after.map((j) => j.opts.delay)).toEqual([60_000, 60_000, 62_000, 65_000]);
       // The delay is NOT part of the id: if web and worker ever disagree on the
       // spacing, BullMQ still dedupes and the first producer's delay wins.
       expect(after.map((j) => j.opts.jobId)).toEqual(before.map((j) => j.opts.jobId));

@@ -14,7 +14,10 @@
  * spaced by that platform's stagger interval.
  *
  * Stagger intervals reflect whose quota concurrent posting actually stresses:
- *  - Meta platforms (FACEBOOK/INSTAGRAM/THREADS) — 10s. This is an OWNER-POLICY
+ *  - FACEBOOK/INSTAGRAM — 5s (owner decision 2026-11-10; was 10s). A ~53-channel
+ *    fan-out tailed out ~9 minutes on the 10s spacing alone. Usage-aware pacing
+ *    in graphFetch and the rate-limit re-queue still back off if Meta pushes back.
+ *  - THREADS — 10s, the original Meta tier. That 10s was an OWNER-POLICY
  *    default, not a documented Meta limit. Meta's published limits are
  *    per-ACCOUNT / per-PAGE (the Business Use Case rate limits on
  *    developers.facebook.com → Graph API → rate limiting, and the per-account
@@ -50,14 +53,16 @@
 
 /** Shared-app platforms where concurrent posting risks hours-long throttles. */
 const STAGGER_STRICT_MS = 10_000;
+/** Facebook Pages + Instagram accounts (owner decision 2026-11-10: 10s → 5s). */
+const STAGGER_META_MS = 5_000;
 /** OAuth platforms with per-app limits but generous windows. */
 const STAGGER_NORMAL_MS = 5_000;
 /** Token-based platforms — limits are per bot/webhook/account. */
 const STAGGER_LIGHT_MS = 2_000;
 
 export const PLATFORM_STAGGER_MS: Record<string, number> = {
-  FACEBOOK: STAGGER_STRICT_MS,
-  INSTAGRAM: STAGGER_STRICT_MS,
+  FACEBOOK: STAGGER_META_MS,
+  INSTAGRAM: STAGGER_META_MS,
   THREADS: STAGGER_STRICT_MS,
   TWITTER: STAGGER_STRICT_MS,
   LINKEDIN: STAGGER_NORMAL_MS,

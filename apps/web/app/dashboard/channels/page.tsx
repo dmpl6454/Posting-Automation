@@ -946,6 +946,19 @@ export default function ChannelsPage() {
                               : "Insights off"}
                           </Badge>
                         )}
+                        {/* Meta ended this channel's session (error 190, e.g.
+                            460 after a password change): posts to it now fail at
+                            once without calling Meta, until it is reconnected. */}
+                        {channel.publishBlocked && (
+                          <Badge
+                            variant="outline"
+                            className="shrink-0 gap-1 border-red-500/50 bg-red-500/10 text-[10px] text-red-700 dark:text-red-400"
+                            title="Facebook/Instagram ended this channel's session (usually a password change or a security check). Posts to it fail until you reconnect it."
+                          >
+                            <AlertTriangle className="h-2.5 w-2.5" />
+                            Reconnect to post
+                          </Badge>
+                        )}
                         {/* Meta's 90-day data-access window closing. Distinct from
                             "Insights off": metrics still work TODAY, but will stop
                             on a known date unless reconnected — and no background

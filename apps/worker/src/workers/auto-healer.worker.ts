@@ -6,7 +6,7 @@ import {
 } from "@postautomation/queue";
 import { S3Client, HeadBucketCommand } from "@aws-sdk/client-s3";
 import IORedis from "ioredis";
-import { shouldReapPublishing, decideReap, ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE } from "../lib/publish-recovery";
+import { shouldReapPublishing, decideReap, ORPHANED_CLAIM_UNKNOWN_OUTCOME_MESSAGE, RATE_LIMIT_WAIT_PREFIX, isOrphanedRateLimitWait, rateLimitRetryLostMessage } from "../lib/publish-recovery";
 import { localClaimCount } from "../lib/local-claims";
 
 // ---------------------------------------------------------------------------
@@ -207,6 +207,7 @@ export async function runAutoHealer(): Promise<HealerResult> {
     // skip it on nearly every cycle (2026-09-16). Steps 3-4 keep their old
     // behaviour and are still skipped here.
     await reapStuckPublishingTargets();
+    await failOrphanedRateLimitTargets();
     return result;
   }
 
@@ -307,6 +308,8 @@ export async function runAutoHealer(): Promise<HealerResult> {
 
   // 5. Reap stuck PUBLISHING post targets.
   await reapStuckPublishingTargets();
+  // 6. Fail rate-limit waits whose retry job was lost (2026-11-10).
+  await failOrphanedRateLimitTargets();
 
   return result;
 }
@@ -408,6 +411,61 @@ export async function reapStuckPublishingTargets(now: Date = new Date()): Promis
     } catch {}
   }
   return reaped;
+}
+
+/**
+ * Lost rate-limit retries (owner decision 2026-11-10).
+ *
+ * A target re-queued after a rate limit sits SCHEDULED with a
+ * "Rate-limited, retrying in Nmin" marker while its delayed job waits. When
+ * that job is lost, nothing ever touches the target again (the reconciliation
+ * cron only re-arms SCHEDULED posts, and the post is PUBLISHING or already
+ * FAILED). These are failed with a clear message so the user can Retry.
+ *
+ * Safety:
+ *   - only targets past their promised retry time + 30 min grace;
+ *   - only when NO waiting/delayed/prioritized/active publish job names the
+ *     target — and nothing at all if the queue cannot be read;
+ *   - FAILED, not "Needs check": a rate limit is a refusal, nothing was posted;
+ *   - the write is conditional on the row being unchanged since the read.
+ */
+export async function failOrphanedRateLimitTargets(now: Date = new Date()): Promise<number> {
+  const candidates = await prisma.postTarget.findMany({
+    where: { status: "SCHEDULED", errorMessage: { startsWith: RATE_LIMIT_WAIT_PREFIX } },
+    select: { id: true, status: true, errorMessage: true, updatedAt: true, channel: { select: { platform: true } } },
+    orderBy: { updatedAt: "asc" },
+    take: REAP_BATCH_SIZE,
+  });
+  // Cheap pre-filter on time alone; the queue is read only when something is overdue.
+  const overdue = candidates.filter((t) => isOrphanedRateLimitWait(t, now, new Set(), t.id));
+  if (overdue.length === 0) return 0;
+
+  let queued: Set<string>;
+  try {
+    const jobs = await postPublishQueue.getJobs(["waiting", "delayed", "prioritized", "active", "paused", "waiting-children"]);
+    queued = new Set(
+      jobs
+        .map((j) => (j?.data as { postTargetId?: unknown } | undefined)?.postTargetId)
+        .filter((id): id is string => typeof id === "string")
+    );
+  } catch (err: any) {
+    console.warn(`[AutoHealer] could not read publish jobs — skipping lost rate-limit retries this cycle: ${err?.message ?? err}`);
+    return 0;
+  }
+
+  let failed = 0;
+  for (const t of overdue) {
+    if (!isOrphanedRateLimitWait(t, now, queued, t.id) || localClaimCount(t.id) > 0) continue;
+    try {
+      const res = await prisma.postTarget.updateMany({
+        where: { id: t.id, status: "SCHEDULED", errorMessage: t.errorMessage, updatedAt: t.updatedAt },
+        data: { status: "FAILED", errorMessage: rateLimitRetryLostMessage(t.channel?.platform) },
+      });
+      failed += res.count;
+    } catch {}
+  }
+  if (failed > 0) console.log(`[AutoHealer] Failed ${failed} target(s) whose rate-limit retry was lost`);
+  return failed;
 }
 
 // ---------------------------------------------------------------------------
