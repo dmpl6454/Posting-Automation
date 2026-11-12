@@ -207,6 +207,8 @@ Filter to one workspace: `pnpm --filter @postautomation/web <cmd>`
     ```
     Smoke-testing a library function inside the image is NOT sufficient — it exercises a different resolution path than the worker entrypoint. **Boot the actual worker.**
 
+    **✅ `.dockerignore` now excludes `**/node_modules` (2026-11-12).** The trap above bit for real in production: the SERVER checkout had its own `node_modules` folders from a manual install on 2026-04-13, and every build's `COPY packages/` / `COPY . .` copied them over the freshly installed ones. The 2026-11-10 Sentry lockfile change gave `@langchain/core` a new install directory name (its optional `@opentelemetry/*` peers were now present), the stale `packages/ai/node_modules/@langchain/core` symlink pointed at the old name, and **the worker crash-looped on `Cannot find module '@langchain/core/output_parsers'` from 2026-11-10 ~17:58 UTC for ~33 hours (1,848 restarts) — nothing published.** The web image survived only by luck of resolution order. Never delete the `.dockerignore` entry; it is test-locked in [dockerignore.test.ts](apps/worker/src/__tests__/dockerignore.test.ts). **After any deploy, check `docker ps` shows the worker `Up`, not `Restarting`** — the deploy workflow went green while the worker was dead.
+
 ## Authentication
 
 NextAuth v5 beta (`next-auth@^5.0.0-beta.25`), PrismaAdapter, JWT sessions (30 days).
