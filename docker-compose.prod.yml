@@ -158,6 +158,10 @@ services:
       SMTP_USER: ${SMTP_USER}
       SMTP_PASS: ${SMTP_PASS}
       SMTP_FROM: ${SMTP_FROM:-noreply@postautomation.co.in}
+      # "Posts are not publishing" email (2026-11-12): super admins + this
+      # comma list. PUBLISHING_ALERTS_ENABLED=false turns the watcher off.
+      PUBLISHING_ALERT_EMAIL: ${PUBLISHING_ALERT_EMAIL:-}
+      PUBLISHING_ALERTS_ENABLED: ${PUBLISHING_ALERTS_ENABLED:-}
       # Sentry (2026-11-10): ONE key turns on server + browser reporting; the
       # browser reads it at runtime from /api/client-config. Empty = off.
       NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}

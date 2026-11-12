@@ -5,6 +5,7 @@ import { Sidebar } from "~/components/layout/sidebar";
 import { Header } from "~/components/layout/header";
 import { ActivityPanel, type ActivityCounts } from "~/components/layout/activity-panel";
 import { ActiveTaskBar } from "~/components/layout/active-task-bar";
+import { PublishingStatusBanner } from "~/components/layout/publishing-status-banner";
 
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -26,6 +27,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           activityOpen={activityOpen}
           activityCounts={activityCounts}
         />
+        <PublishingStatusBanner />
         <ActiveTaskBar />
         <div className="flex flex-1 overflow-hidden">
           <main className="relative flex flex-1 flex-col overflow-y-auto">

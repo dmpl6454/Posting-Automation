@@ -38,6 +38,10 @@ WORKER_STOP_TIMEOUT=300
 # before it answers: run 293 was marked failed by ONE check made 30 s after the
 # restart, while the site answered normally moments later.
 HEALTH_WAIT_SECONDS="${HEALTH_WAIT_SECONDS:-90}"
+# How long a freshly started worker gets to prove it is publishing (2026-11-12):
+# running, never restarted, and its scheduled-post scan has written the
+# publishing heartbeat SINCE it started. See verify_worker below.
+WORKER_VERIFY_SECONDS="${WORKER_VERIFY_SECONDS:-180}"
 
 # Colors
 RED='\033[0;31m'
@@ -299,6 +303,110 @@ check_nginx_conf() {
   NGINX_CONF_CHANGED=true
 }
 
+# ── Worker gate + automatic worker rollback (2026-11-12) ─────────
+# 2026-11-10: a deploy shipped a worker that crash-looped at boot
+# (`Cannot find module '@langchain/core/output_parsers'`). The deploy went
+# green, the website answered, and NOTHING published for ~33 hours. The
+# website health check cannot see the worker, so the worker gets its own:
+#   1. before the build, the RUNNING worker's image is tagged `:rollback`
+#      (only if that worker is healthy — a broken one is no rollback target);
+#   2. after the restart, verify_worker requires the new container to be
+#      running with zero restarts AND to have written the publishing heartbeat
+#      (packages/queue/src/publishing-health.ts) after it started;
+#   3. if it does not within WORKER_VERIFY_SECONDS, the old image is put back
+#      and the worker recreated from it — publishing continues on the previous
+#      build — and the deploy FAILS so the red run is impossible to miss.
+# Migrations have already run at that point; they are additive by convention,
+# exactly as during any normal rolling restart.
+WORKER_IMAGE_REF=""
+WORKER_ROLLBACK_IMAGE=""
+
+worker_cid() {
+  { docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" ps -q worker 2>/dev/null || true; } | head -n 1
+}
+
+save_worker_rollback_image() {
+  local cid state restarts img
+  cid="$(worker_cid)"
+  if [ -z "$cid" ]; then warn "No running worker — no worker rollback image saved"; return 0; fi
+  state="$(docker inspect -f '{{.State.Status}}' "$cid" 2>/dev/null || true)"
+  restarts="$(docker inspect -f '{{.RestartCount}}' "$cid" 2>/dev/null || echo 1)"
+  WORKER_IMAGE_REF="$(docker inspect -f '{{.Config.Image}}' "$cid" 2>/dev/null || true)"
+  img="$(docker inspect -f '{{.Image}}' "$cid" 2>/dev/null || true)"
+  if [ "$state" != "running" ] || [ "$restarts" != "0" ] || [ -z "$img" ] || [ -z "$WORKER_IMAGE_REF" ]; then
+    warn "Current worker is not healthy (state=${state:-?}, restarts=${restarts}) — it is not a rollback target"
+    return 0
+  fi
+  WORKER_ROLLBACK_IMAGE="${WORKER_IMAGE_REF%%:*}:rollback"
+  if docker tag "$img" "$WORKER_ROLLBACK_IMAGE"; then
+    log "Saved current worker image as ${WORKER_ROLLBACK_IMAGE}"
+  else
+    WORKER_ROLLBACK_IMAGE=""
+    warn "Could not tag the current worker image — automatic worker rollback unavailable"
+  fi
+}
+
+# Epoch ms of the last completed scheduled-post scan, or empty.
+read_publish_heartbeat() {
+  local pw
+  pw="$(env_file_value REDIS_PASSWORD)"
+  docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T -e REDISCLI_AUTH="$pw" redis \
+    redis-cli --no-auth-warning GET health:publish-scan 2>/dev/null | tr -dc '0-9' || true
+}
+
+# 0 = the current worker container is publishing; 1 = it is not.
+verify_worker() {
+  local deadline=$((SECONDS + WORKER_VERIFY_SECONDS)) cid state restarts started started_ms hb
+  local need_heartbeat=true
+  if [ "$(env_file_value CRON_LEADER)" = "false" ]; then need_heartbeat=false; fi
+  log "Verifying the worker is publishing (up to ${WORKER_VERIFY_SECONDS}s)..."
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    cid="$(worker_cid)"
+    if [ -n "$cid" ]; then
+      state="$(docker inspect -f '{{.State.Status}}' "$cid" 2>/dev/null || true)"
+      restarts="$(docker inspect -f '{{.RestartCount}}' "$cid" 2>/dev/null || echo 0)"
+      if [ "$state" = "restarting" ] || [ "$state" = "exited" ] || [ "$state" = "dead" ] || [ "${restarts:-0}" != "0" ]; then
+        warn "Worker is ${state} (restarts=${restarts})"
+        return 1
+      fi
+      if [ "$state" = "running" ]; then
+        if [ "$need_heartbeat" = false ]; then
+          success "Worker is running (CRON_LEADER=false — heartbeat not checked)"
+          return 0
+        fi
+        started="$(docker inspect -f '{{.State.StartedAt}}' "$cid" 2>/dev/null || true)"
+        started_ms=$(( $(date -d "$started" +%s 2>/dev/null || echo 0) * 1000 ))
+        hb="$(read_publish_heartbeat)"
+        if [ -n "$hb" ] && [ "$started_ms" -gt 0 ] && [ "$hb" -ge "$started_ms" ]; then
+          success "Worker is running and publishing (scheduled-post scan completed)"
+          return 0
+        fi
+      fi
+    fi
+    sleep 5
+  done
+  warn "Worker did not report a completed publishing scan within ${WORKER_VERIFY_SECONDS}s"
+  return 1
+}
+
+gate_worker() {
+  if verify_worker; then return 0; fi
+  local cid
+  cid="$(worker_cid)"
+  warn "The new worker is NOT publishing. Its last log lines:"
+  [ -n "$cid" ] && docker logs --tail 60 "$cid" 2>&1 || true
+  if [ -z "$WORKER_ROLLBACK_IMAGE" ]; then
+    error "Worker is not publishing and there is no rollback image. Fix it now: docker logs postautomation-worker-1 --tail 100"
+  fi
+  warn "Rolling the WORKER back to the previous build (${WORKER_ROLLBACK_IMAGE})..."
+  docker tag "$WORKER_ROLLBACK_IMAGE" "$WORKER_IMAGE_REF"
+  docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --no-deps --no-build --force-recreate --timeout "$WORKER_STOP_TIMEOUT" worker
+  if verify_worker; then
+    error "Deploy FAILED: the new worker could not publish, so the previous worker build was restored and publishing continues. The website runs the new build. See the log lines above."
+  fi
+  error "Deploy FAILED and the worker rollback is ALSO not publishing. Act now: docker logs postautomation-worker-1 --tail 100"
+}
+
 restart_nginx() {
   if [ "$NGINX_CONF_CHANGED" = true ]; then
     log "Recreating nginx to load the new nginx.conf..."
@@ -324,6 +432,8 @@ cmd_deploy() {
   docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" \
     images --format json 2>/dev/null | jq -r '.[].Tag' > .last-deploy-tags 2>/dev/null || true
 
+  save_worker_rollback_image
+
   # Build new images
   log "Building Docker images..."
   docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" build web worker migrate
@@ -339,6 +449,7 @@ cmd_deploy() {
   sleep 5
   docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --no-deps --timeout "$WORKER_STOP_TIMEOUT" worker
   restart_nginx
+  gate_worker
 
   # Cap Docker build-cache / stale-image growth. Every deploy leaves the previous
   # images' layers and the full builder cache behind; measured 2026-08-31 these had
@@ -428,6 +539,12 @@ cmd_status() {
   else
     error "Website appears DOWN (no healthy answer within ${HEALTH_WAIT_SECONDS}s)"
   fi
+
+  # Publishing (2026-11-12): the website being up says nothing about the worker.
+  log "Publishing:"
+  local pub
+  pub="$(curl -s --max-time 10 "https://${DOMAIN}/api/health/publishing" 2>/dev/null || true)"
+  echo "  ${pub:-no answer}"
 
   # Disk usage
   echo ""
@@ -526,6 +643,7 @@ cmd_rollback() {
 
   # Rebuild and deploy
   log "Rebuilding from ${target_commit}..."
+  save_worker_rollback_image
   docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" build web worker migrate
   docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" --profile migration run --rm migrate
 
@@ -535,8 +653,9 @@ cmd_rollback() {
   docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --no-deps --timeout "$WORKER_STOP_TIMEOUT" worker
   restart_nginx
 
-  # Go back to main branch
+  # Go back to main branch BEFORE the gate: gate_worker exits on failure.
   git checkout main 2>/dev/null || true
+  gate_worker
 
   success "Rollback complete to ${target_commit}. Check status with: ./scripts/deploy.sh status"
 }

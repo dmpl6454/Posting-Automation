@@ -32,7 +32,7 @@ import {
   type TwitterProvider as CommentTwitterProvider,
 } from "@postautomation/social";
 import { runCelebrityDetectors } from "../workers/celebrity-detect.worker";
-import { createRedisConnection, enqueueScheduledPublishJobs, excludeExpiredStoriesWhere, shouldReconcileCheckpoints } from "@postautomation/queue";
+import { createRedisConnection, enqueueScheduledPublishJobs, recordPublishHeartbeat, redisConnection, excludeExpiredStoriesWhere, shouldReconcileCheckpoints } from "@postautomation/queue";
 import { HEAVY_SLOT_WAIT_MESSAGE, OPTIMIZE_WAIT_MESSAGE, TIKTOK_PROCESSING_WAIT_MESSAGE } from "../lib/publish-recovery";
 import { runPageSubscriptionBackfill } from "../lib/page-subscription-backfill";
 import { sweepFirstComments } from "../lib/first-comment";
@@ -1278,6 +1278,11 @@ export async function publishScheduledPosts() {
     if (queued > 0) {
       console.log(`[Cron:Scheduler] Queued ${queued} publish jobs for ${postCount} scheduled posts`);
     }
+    // Publishing heartbeat (2026-11-12): written ONLY after a scan completes,
+    // so a worker that is down, crash-looping or cut off from the database
+    // stops writing it. Web's /api/health/publishing, the deploy gate and the
+    // alert email all read it. Fire-and-forget; never throws.
+    recordPublishHeartbeat(redisConnection);
   } finally {
     publishScanRunning = false;
   }

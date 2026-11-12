@@ -53,3 +53,13 @@ export {
 export type { PublishSessionDeadRecord } from "./publish-session-dead";
 export { mediaThumbnailJobId, enqueueMediaThumbnail, MEDIA_THUMBNAIL_JOB_OPTS } from "./media-thumbnail-jobs";
 export { analyticsCacheVersionKey, bumpAnalyticsCacheVersion, ANALYTICS_CACHE_VERSION_TTL_S } from "./analytics-cache";
+export {
+  PUBLISH_HEARTBEAT_KEY,
+  PUBLISH_HEARTBEAT_TTL_S,
+  HEARTBEAT_STALE_MS,
+  OVERDUE_GRACE_MS,
+  recordPublishHeartbeat,
+  parseHeartbeat,
+  evaluatePublishingHealth,
+} from "./publishing-health";
+export type { PublishingHealth, PublishingHealthStatus, PublishingHealthInput } from "./publishing-health";
