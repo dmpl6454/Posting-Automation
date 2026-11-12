@@ -1,0 +1,11 @@
+# Never copy a node_modules folder from the build machine into an image.
+#
+# Every Dockerfile installs its own dependencies with `pnpm install` and then
+# copies source with `COPY packages/ ...` / `COPY . .`. Without this file those
+# COPY steps also copied the server checkout's own node_modules (left over from
+# a manual install on 2026-04-13) ON TOP of the freshly installed ones. When the
+# 2026-11-10 lockfile change renamed the @langchain/core install directory, the
+# stale symlinks pointed at a directory that no longer existed and the worker
+# crash-looped on "Cannot find module '@langchain/core/output_parsers'" for
+# ~33 hours. See CLAUDE.md, production quirk #10.
+**/node_modules
