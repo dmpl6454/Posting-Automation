@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const enqueueMock = vi.fn();
 const findManyMock = vi.fn();
+const heartbeatMock = vi.fn();
 const updateMock = vi.fn();
 
 vi.mock("@postautomation/db", () => ({
@@ -14,6 +15,8 @@ vi.mock("@postautomation/db", () => ({
 }));
 vi.mock("@postautomation/queue", () => ({
   enqueueScheduledPublishJobs: (...a: any[]) => enqueueMock(...a),
+  recordPublishHeartbeat: (...a: any[]) => heartbeatMock(...a),
+  redisConnection: {},
   postPublishQueue: {}, rssSyncQueue: {}, tokenRefreshQueue: {}, analyticsSyncQueue: {},
   agentRunQueue: {}, trendDiscoverQueue: {}, listeningSyncQueue: {},
   campaignAnalyticsSyncQueue: {}, brandContentSyncQueue: {}, outreachPollQueue: {},
@@ -41,11 +44,24 @@ beforeEach(() => {
   enqueueMock.mockReset();
   enqueueMock.mockImplementation(async (args: any) => args.targets.length);
   findManyMock.mockReset();
+  heartbeatMock.mockReset();
   updateMock.mockReset();
   updateMock.mockResolvedValue({});
 });
 
 describe("publishScheduledPosts", () => {
+  it("writes the publishing heartbeat after a completed scan, even an empty one", async () => {
+    findManyMock.mockResolvedValue([]);
+    await publishScheduledPosts();
+    expect(heartbeatMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT write the heartbeat when the scan fails (the health check must see it)", async () => {
+    findManyMock.mockRejectedValueOnce(new Error("db down"));
+    await expect(publishScheduledPosts()).rejects.toThrow("db down");
+    expect(heartbeatMock).not.toHaveBeenCalled();
+  });
+
   it("reconciliation-enqueues each due post via the shared helper (deterministic ids), then flips it to PUBLISHING", async () => {
     const scheduledAt = new Date("2026-07-20T04:59:40Z");
     findManyMock.mockResolvedValueOnce([duePost("p1", ["FACEBOOK", "TELEGRAM"], scheduledAt)]);

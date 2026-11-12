@@ -6,7 +6,8 @@
  */
 export async function register() {
   if (process.env.NEXT_RUNTIME === "nodejs") {
-    const { startServerSentry } = await import("./instrumentation-node");
+    const { startServerSentry, startPublishingWatch } = await import("./instrumentation-node");
     await startServerSentry();
+    await startPublishingWatch();
   }
 }

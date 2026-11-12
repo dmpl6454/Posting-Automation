@@ -207,7 +207,7 @@ Filter to one workspace: `pnpm --filter @postautomation/web <cmd>`
     ```
     Smoke-testing a library function inside the image is NOT sufficient — it exercises a different resolution path than the worker entrypoint. **Boot the actual worker.**
 
-    **✅ `.dockerignore` now excludes `**/node_modules` (2026-11-12).** The trap above bit for real in production: the SERVER checkout had its own `node_modules` folders from a manual install on 2026-04-13, and every build's `COPY packages/` / `COPY . .` copied them over the freshly installed ones. The 2026-11-10 Sentry lockfile change gave `@langchain/core` a new install directory name (its optional `@opentelemetry/*` peers were now present), the stale `packages/ai/node_modules/@langchain/core` symlink pointed at the old name, and **the worker crash-looped on `Cannot find module '@langchain/core/output_parsers'` from 2026-11-10 ~17:58 UTC for ~33 hours (1,848 restarts) — nothing published.** The web image survived only by luck of resolution order. Never delete the `.dockerignore` entry; it is test-locked in [dockerignore.test.ts](apps/worker/src/__tests__/dockerignore.test.ts). **After any deploy, check `docker ps` shows the worker `Up`, not `Restarting`** — the deploy workflow went green while the worker was dead.
+    **✅ `.dockerignore` now excludes `**/node_modules` (2026-11-12).** The trap above bit for real in production: the SERVER checkout had its own `node_modules` folders from a manual install on 2026-04-13, and every build's `COPY packages/` / `COPY . .` copied them over the freshly installed ones. The 2026-11-10 Sentry lockfile change gave `@langchain/core` a new install directory name (its optional `@opentelemetry/*` peers were now present), the stale `packages/ai/node_modules/@langchain/core` symlink pointed at the old name, and **the worker crash-looped on `Cannot find module '@langchain/core/output_parsers'` from 2026-11-10 ~17:58 UTC for ~33 hours (1,848 restarts) — nothing published.** The web image survived only by luck of resolution order. Never delete the `.dockerignore` entry; it is test-locked in [dockerignore.test.ts](apps/worker/src/__tests__/dockerignore.test.ts). **After any deploy, check `docker ps` shows the worker `Up`, not `Restarting`** — the deploy workflow went green while the worker was dead. **Since 2026-11-12 the deploy checks this itself** (`gate_worker` in deploy.sh) and rolls the worker back automatically — see "Publishing never stops silently" below.
 
 ## Authentication
 
@@ -1313,6 +1313,59 @@ Owner approved three changes the same day:
   [rate-limit-orphan.test.ts](apps/worker/src/lib/rate-limit-orphan.test.ts), plus new blocks in
   `post-publish-claim-guard.test.ts` and `auto-healer-reaper.test.ts`. Both guard tests fail with the
   fix disabled.
+
+## 🛟 Publishing never stops silently (2026-11-12) — read before touching deploy.sh's worker steps, the scheduled-post scan or /api/health/publishing
+
+Owner ask after the 2026-11-10 incident (worker crash-looped ~33 h, 1,848 restarts, nothing published,
+deploy green, website up, nobody told): "build robust where posting never fails". A post can still fail
+on the platform's side (expired token, Meta refusal) — those were already surfaced per target. What
+was missing was any signal that the **worker as a whole** had stopped. Four layers now cover it:
+
+- **Heartbeat** ([publishing-health.ts](packages/queue/src/publishing-health.ts)): `publishScheduledPosts`
+  writes `health:publish-scan` (epoch ms, 1 h TTL) **only after a scan completes** — inside the `try`,
+  after the batch loop, never in `finally`. A dead, crash-looping or DB-less worker stops writing it.
+  Verdict `evaluatePublishingHealth`: `down` = no heartbeat for 3 min / none / Redis unreadable;
+  `delayed` = a post still SCHEDULED >10 min past its time; `unknown` = neither Redis nor DB readable.
+  ⚠️ The heartbeat comes from the cron LEADER: with `CRON_LEADER=false` on every worker it never
+  updates. Keep exactly one leader.
+- **`GET /api/health/publishing`** (web; [publishing-health.ts](packages/api/src/lib/publishing-health.ts)):
+  200 only when `ok`, else 503. Counts only, no user data. Reads are time-boxed at 2 s (the shared queue
+  connection uses `maxRetriesPerRequest: null`, so an unbounded await hangs exactly when Redis is down);
+  one verdict cached 30 s and shared by concurrent callers.
+- **Deploy gate + automatic WORKER rollback** (scripts/deploy.sh): `save_worker_rollback_image` tags the
+  RUNNING worker's image `<name>:rollback` before the build (only if it is running with 0 restarts — a
+  broken worker is no rollback target); after the restart `gate_worker` → `verify_worker` requires the
+  new container running, **RestartCount 0**, and a heartbeat **newer than the container's StartedAt**,
+  within `WORKER_VERIFY_SECONDS` (180). On failure: prints 60 log lines, re-tags the rollback image to
+  the compose image name, `up -d --no-deps --no-build --force-recreate` worker, re-verifies, and **fails
+  the deploy either way** (red run). The website keeps the new build; migrations already ran (additive
+  by convention). The Redis password reaches redis-cli via `REDISCLI_AUTH`, never argv. `cmd_rollback`
+  is gated too. Exercised against a fake `docker` for: healthy, crash loop → rollback, running without
+  a fresh heartbeat → rollback, no rollback image, `CRON_LEADER=false`. ⚠️ `update` runs the deploy.sh
+  that was on disk before its own `git pull`, so the gate first applies on the deploy AFTER the one
+  that ships it.
+- **Alert email from the WEB process** ([publishing-alerts.ts](packages/api/src/lib/publishing-alerts.ts),
+  started in [instrumentation-node.ts](apps/web/instrumentation-node.ts)): checks every 5 min (first at
+  3 min), emails after **2 bad checks in a row** (a deploy blip never emails), repeats every 6 h while
+  bad, one "resumed" email after. Recipients: every super admin + `PUBLISHING_ALERT_EMAIL` (comma list).
+  State in memory on purpose (Redis may be the broken part). Off in dev, during `next build`
+  (`NEXT_PHASE`), and with `PUBLISHING_ALERTS_ENABLED=false`. Both keys plumbed for web in compose.
+- **Outside check**: [.github/workflows/publishing-monitor.yml](.github/workflows/publishing-monitor.yml)
+  curls the endpoint every 15 min (two tries 60 s apart) and fails → GitHub emails. Catches the case
+  where the web server itself is down. GitHub's schedule is best-effort and pauses after 60 days of
+  no repo activity.
+- **Banner for every user** ([publishing-status-banner.tsx](apps/web/components/layout/publishing-status-banner.tsx),
+  rules in [publishing-banner.ts](apps/web/lib/publishing-banner.ts)): amber strip under the header when
+  `down`/`delayed` ("your scheduled posts are safe and will go out automatically"); nothing for
+  `unknown`, a failed fetch, or a non-JSON (nginx) answer. Polls once a minute while visible.
+- Posts scheduled during an outage still publish automatically when the worker returns (the 30 s scan
+  picks up every SCHEDULED post whose time has passed). There is deliberately **no "too late, skip"
+  rule** yet — that is an owner decision (2026-11-11: 11 IG targets were held by hand instead).
+- Tests: [publishing-health.test.ts](packages/queue/src/__tests__/publishing-health.test.ts),
+  [publishing-health.test.ts](packages/api/src/__tests__/publishing-health.test.ts) (verdict reads,
+  hung-Redis timeout, alert state machine), [publishing-banner.test.ts](apps/web/lib/publishing-banner.test.ts),
+  [publishing-gate.test.ts](apps/worker/src/__tests__/publishing-gate.test.ts) (source locks on the deploy
+  gate and heartbeat placement), plus heartbeat cases in `publish-cron.test.ts`.
 
 ## 🚨 Sentry error tracking (2026-11-10) — read before touching instrumentation*.ts, sentry-scrub or worker failure hooks
 

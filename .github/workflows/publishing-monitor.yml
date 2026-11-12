@@ -1,0 +1,39 @@
+name: Publishing monitor
+
+# Fails (and GitHub emails) when posts are not being published (2026-11-12).
+# On 2026-11-10 the worker crash-looped for ~33 hours while the website and the
+# deploy workflow both looked healthy. /api/health/publishing answers 503 when
+# the worker's scheduled-post scan has not run for 3 minutes, or a scheduled
+# post sits more than 10 minutes past its time.
+#
+# GitHub runs scheduled workflows on a best-effort basis (often a few minutes
+# late) — this is the outside check; the web server's own alert email is the
+# fast one. GitHub pauses schedules after 60 days without repository activity.
+
+on:
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: publishing-monitor
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check publishing health
+        run: |
+          # Two tries a minute apart, so one slow answer during a deploy does not page anyone.
+          for attempt in 1 2; do
+            code=$(curl -s -o body.json -w '%{http_code}' --max-time 20 https://postautomation.co.in/api/health/publishing || echo 000)
+            echo "attempt ${attempt}: HTTP ${code}"
+            cat body.json 2>/dev/null || true
+            echo
+            if [ "$code" = "200" ]; then exit 0; fi
+            [ "$attempt" = 1 ] && sleep 60
+          done
+          echo "::error::Posts are not publishing (HTTP ${code}). On the server: docker ps; docker logs postautomation-worker-1 --tail 100"
+          exit 1
