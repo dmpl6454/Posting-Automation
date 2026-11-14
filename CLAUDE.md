@@ -140,9 +140,22 @@ and calls the same tRPC procedures the web app does. Full detail:
     `xcodebuild test` reused a STALE UI-test binary twice — delete
     `build/Build/Products/Debug-iphonesimulator/PostAutomationUITests-Runner.app`
     and the `PostAutomationUITests.build` intermediates before re-running.
+- **Posts parity (2026-11-14, Phase 3):** post page loads fresh via `post.getById`
+  ([PostDetailView.swift](apps/ios/PostAutomation/Sources/Features/Posts/PostDetailView.swift)):
+  edit caption/schedule/campaign (`post.update` — only CHANGED keys are sent, and
+  clearing a schedule/label sends an explicit `null`, see `UpdatePostInput`),
+  cancel schedule, publish all / retry per channel, **"Needs check" channels are
+  never offered Retry** (only "It didn't publish" → `clearPublishAmbiguity`),
+  per-channel caption (`updateTargetContent`), delete from Facebook/Instagram,
+  archive/unarchive, delete; Posts list gets sort + Archived + swipe-archive and
+  a month **Calendar** (≤5 pages of 100, says when it stopped short). Rules are
+  ported from the web into the pure `PostRules` (unit-tested). New `PostTarget` /
+  `Post` fields decode with `try?` so a server change can't empty the list.
+  `UITests/PostsUITests` (live, run alone) edits/archives/unarchives ONLY the
+  "UITest draft"; retry, publish and platform-delete are NOT exercised live.
 - Not yet built: Google sign-in, org switcher (data is already loaded), push
-  notifications for publish results, and web-parity Phases 3–8 (post detail /
-  calendar, Insights, Comments & Messages inboxes, media library, AI, admin tools).
+  notifications for publish results, and web-parity Phases 4–8 (Insights,
+  Comments & Messages inboxes, media library, AI, admin tools).
 
 ## Local setup
 
