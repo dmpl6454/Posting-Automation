@@ -153,9 +153,24 @@ and calls the same tRPC procedures the web app does. Full detail:
   `Post` fields decode with `try?` so a server change can't empty the list.
   `UITests/PostsUITests` (live, run alone) edits/archives/unarchives ONLY the
   "UITest draft"; retry, publish and platform-delete are NOT exercised live.
+- **Insights parity (2026-11-14, Phase 4):** an **Insights** tab (range 7/30/90 d
+  as UTC day boundaries like the web, platform filter, channel-health banner,
+  overview, engagement tiles limited to `reportableMetrics`, channel performance)
+  and **More → Reports** (`postReports` window/mode/platform/campaign, share CSV,
+  email to me). The web's honesty rules are ported into the pure `InsightsRules`:
+  **"—" = not reported / not captured, a captured 0 stays 0** (`unavailable`,
+  `hasSnapshot`, `reachIsDistinct`), the engagement-rate cell (nil ⇒ "—", basis
+  "(1/10)", low-base, rate_impossible), Reactions/Saves/Upvotes labels,
+  "Reach (summed)" on aggregates, empty states, CSV formula-injection guard.
+  Tab bar is now Home · Posts · Compose · Insights · **More** (Channels, Reports,
+  Account — later inboxes go here); `MaybeNavigationStack` stops pushed screens
+  from nesting a second NavigationStack. `UITests/InsightsUITests` is READ-ONLY
+  (never Sync now / Email). Live-checked: FB rows showing "—" had no snapshot;
+  an IG row's Likes "—" matched a capture declaring likes unavailable.
 - Not yet built: Google sign-in, org switcher (data is already loaded), push
-  notifications for publish results, and web-parity Phases 4–8 (Insights,
-  Comments & Messages inboxes, media library, AI, admin tools).
+  notifications for publish results, and web-parity Phases 5–8 (Comments &
+  Messages inboxes, media library, AI, admin tools). Story insights and group
+  stats from the web Insights page are not in the app yet.
 
 ## Local setup
 
