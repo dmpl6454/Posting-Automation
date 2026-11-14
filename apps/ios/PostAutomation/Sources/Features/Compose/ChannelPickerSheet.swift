@@ -7,8 +7,13 @@ import SwiftUI
 struct ChannelPickerSheet: View {
     let channels: [Channel]
     @Binding var selected: Set<String>
+    /// Quick-select pills for channel groups (off when editing a group itself).
+    var showGroups = true
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
+    @State private var groups: [ChannelGroup] = []
+
+    private var available: Set<String> { Set(channels.map(\.id)) }
 
     private var filtered: [Channel] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
@@ -22,7 +27,19 @@ struct ChannelPickerSheet: View {
 
     var body: some View {
         NavigationStack {
-            List(filtered) { ch in
+            List {
+                if showGroups && query.isEmpty, !groups.isEmpty {
+                    Section("Groups") {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(groups) { g in groupPill(g) }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                }
+                Section {
+                ForEach(filtered) { ch in
                 Button {
                     if selected.contains(ch.id) { selected.remove(ch.id) } else { selected.insert(ch.id) }
                 } label: {
@@ -42,8 +59,16 @@ struct ChannelPickerSheet: View {
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(selected.contains(ch.id) ? .isSelected : [])
                 .accessibilityIdentifier("compose.channel")
+                }
+                }
             }
             .listStyle(.plain)
+            .task {
+                guard showGroups else { return }
+                let all: [ChannelGroup] = (try? await TRPCClient.shared.query("channelGroup.list")) ?? []
+                // A group with no active member in this list can't select anything.
+                groups = all.filter { !LibraryRules.selectableMembers($0, available: available).isEmpty }
+            }
             .overlay {
                 if filtered.isEmpty { ContentUnavailableView.search(text: query) }
             }
@@ -64,6 +89,30 @@ struct ChannelPickerSheet: View {
                 }
             }
         }
+    }
+}
+
+extension ChannelPickerSheet {
+    /// Tap: select every active member; tap again when all are selected: clear them.
+    fileprivate func groupPill(_ g: ChannelGroup) -> some View {
+        let ids = LibraryRules.selectableMembers(g, available: available)
+        let chosen = ids.filter { selected.contains($0) }.count
+        let all = chosen == ids.count
+        return Button {
+            if all { selected.subtract(ids) } else { selected.formUnion(ids) }
+        } label: {
+            HStack(spacing: 6) {
+                Circle().fill(Color(hex: g.color) ?? .accentColor).frame(width: 8, height: 8)
+                Text(g.name).lineLimit(1)
+                Text(chosen > 0 && !all ? "\(chosen)/\(ids.count)" : "\(ids.count)").foregroundStyle(.secondary)
+            }
+            .font(.subheadline)
+            .padding(.horizontal, 12).padding(.vertical, 6)
+            .background(all ? Color.accentColor.opacity(0.18) : Color(.secondarySystemBackground), in: Capsule())
+            .overlay(Capsule().stroke(all ? Color.accentColor : .clear))
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("compose.group")
     }
 }
 

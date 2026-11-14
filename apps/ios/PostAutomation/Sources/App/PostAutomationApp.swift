@@ -41,6 +41,7 @@ struct RootView: View {
 }
 
 struct RootTabView: View {
+    @Environment(SessionStore.self) private var session
     var body: some View {
         TabView {
             HomeView()
@@ -54,6 +55,9 @@ struct RootTabView: View {
             MoreView()
                 .tabItem { Label("More", systemImage: "ellipsis.circle") }
         }
+        // A workspace switch rebuilds every tab, so nothing from the previous
+        // workspace stays on screen.
+        .id(session.activeOrganization?.id ?? "none")
     }
 }
 
@@ -63,6 +67,11 @@ struct MoreView: View {
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    NavigationLink { NotificationsView() } label: { Label("Notifications", systemImage: "bell") }
+                    NavigationLink { MediaLibraryView() } label: { Label("Media library", systemImage: "photo.on.rectangle") }
+                    NavigationLink { ChannelGroupsView() } label: { Label("Channel groups", systemImage: "square.stack.3d.up") }
+                }
                 Section {
                     NavigationLink { CommentsInboxView() } label: { Label("Comments", systemImage: "bubble.left.and.bubble.right") }
                     NavigationLink { MentionsView() } label: { Label("Mentions", systemImage: "at") }
@@ -107,19 +116,28 @@ struct AccountView: View {
                         if let role = user.appRole { LabeledContent("Access", value: role.capitalized) }
                     }
                     if !user.memberships.isEmpty {
-                        Section("Workspaces") {
+                        Section {
                             ForEach(user.memberships, id: \.organization.id) { m in
-                                HStack {
-                                    VStack(alignment: .leading) {
-                                        Text(m.organization.name)
-                                        Text(m.role.capitalized).font(.caption).foregroundStyle(.secondary)
-                                    }
-                                    Spacer()
-                                    if m.organization.id == user.defaultOrganization?.id {
-                                        Image(systemName: "checkmark").foregroundStyle(.tint)
+                                Button {
+                                    session.switchOrganization(to: m.organization)
+                                } label: {
+                                    HStack {
+                                        VStack(alignment: .leading) {
+                                            Text(m.organization.name).foregroundStyle(.primary)
+                                            Text(m.role.capitalized).font(.caption).foregroundStyle(.secondary)
+                                        }
+                                        Spacer()
+                                        if m.organization.id == session.activeOrganization?.id {
+                                            Image(systemName: "checkmark").foregroundStyle(.tint)
+                                        }
                                     }
                                 }
+                                .accessibilityIdentifier("workspace.\(m.organization.name)")
                             }
+                        } header: {
+                            Text("Workspaces")
+                        } footer: {
+                            if user.memberships.count > 1 { Text("Tap a workspace to switch. Every tab reloads with its posts, channels and insights.") }
                         }
                     }
                 }
