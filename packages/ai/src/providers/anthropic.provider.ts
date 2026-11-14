@@ -42,6 +42,14 @@ export function getAnthropicModel(temperature = 0.7) {
     // Pass an explicit valid value (matches ChatOpenAI's own topP default of 1).
     // topP: undefined / null do NOT work — both collapse back to -1 via `?? -1`.
     topP: 1,
+    // ⚠️ …but claude-sonnet-4-6 (and later) now REFUSE temperature + top_p
+    // together: 400 "`temperature` and `top_p` cannot both be specified for this
+    // model" (2026-11-14 — every Anthropic call failed, while the org had credit).
+    // invocationKwargs is spread LAST into the request params, so top_p:undefined
+    // overrides the topP above and JSON drops the key: only temperature is sent.
+    // Keep topP:1 too — without it the -1 sentinel would still reach this spread.
+    // Verified against the prod key: without this line 400, with it 200.
+    invocationKwargs: { top_p: undefined },
     onFailedAttempt: aiFailedAttemptHandler,
     // Spread only when set, so a workspace-scoped key keeps the exact old ctor args.
     ...(workspaceHeaders ? { clientOptions: { defaultHeaders: workspaceHeaders } } : {}),

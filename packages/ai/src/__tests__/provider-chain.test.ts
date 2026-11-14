@@ -83,6 +83,17 @@ describe("getAnthropicModel default model id", () => {
     expect((model as unknown as { topP?: number }).topP).toBe(1);
     expect((model as unknown as { topP?: number }).topP).not.toBe(-1);
   });
+
+  // Regression (2026-11-14): claude-sonnet-4-6 now refuses temperature AND
+  // top_p in one request, which killed every Anthropic call in prod. The wire
+  // request must carry temperature only.
+  it("sends temperature but never top_p", () => {
+    vi.stubEnv("ANTHROPIC_MODEL", "");
+    const model = getAnthropicModel(0.4);
+    const wire = JSON.parse(JSON.stringify(model.invocationParams({} as never)));
+    expect(wire.temperature).toBe(0.4);
+    expect("top_p" in wire).toBe(false);
+  });
 });
 
 // An account-level key (sk-ant-usr-…) is refused by Anthropic unless every
