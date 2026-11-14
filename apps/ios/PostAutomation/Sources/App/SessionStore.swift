@@ -20,7 +20,20 @@ final class SessionStore {
         self.client = client
     }
 
-    var currentOrganizationName: String? { user?.defaultOrganization?.name }
+    /// The workspace every call is scoped to (sent as x-organization-id).
+    /// Remembered between launches; falls back to the server's default.
+    private(set) var activeOrganization: Organization?
+    var currentOrganizationName: String? { activeOrganization?.name ?? user?.defaultOrganization?.name }
+    static let activeOrgKey = "activeOrganizationId"
+
+    /// Switch workspace. Views key on `activeOrganization?.id`, so every tab
+    /// reloads with the new workspace's data.
+    func switchOrganization(to org: Organization) {
+        guard user?.memberships.contains(where: { $0.organization.id == org.id }) == true else { return }
+        activeOrganization = org
+        client.organizationId = org.id
+        UserDefaults.standard.set(org.id, forKey: Self.activeOrgKey)
+    }
 
     /// On launch: if a session cookie survived from a previous run, validate it
     /// against `user.me`; otherwise go straight to the login screen.
@@ -47,6 +60,8 @@ final class SessionStore {
     func signOut() async {
         await auth.signOut()
         client.organizationId = nil
+        activeOrganization = nil
+        UserDefaults.standard.removeObject(forKey: Self.activeOrgKey)
         user = nil
         state = .signedOut
     }
@@ -66,7 +81,11 @@ final class SessionStore {
         guard let me else { throw APIError.invalidResponse }
         user = me
         // Pin the org explicitly so every call is unambiguous even if the
-        // server-side default ordering ever changes.
-        client.organizationId = me.defaultOrganization?.id
+        // server-side default ordering ever changes. A remembered workspace the
+        // user no longer belongs to is ignored.
+        activeOrganization = LibraryRules.activeOrganization(
+            remembered: UserDefaults.standard.string(forKey: Self.activeOrgKey), memberships: me.memberships
+        )
+        client.organizationId = activeOrganization?.id
     }
 }

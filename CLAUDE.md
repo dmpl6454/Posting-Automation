@@ -182,9 +182,25 @@ and calls the same tRPC procedures the web app does. Full detail:
   in this session. `UITests/InboxUITests` is READ-ONLY (never replies/likes/sends);
   writes are NOT exercised live. Automation rules, sentiment, private replies and
   AI-suggested replies stay on the web for now.
-- Not yet built: Google sign-in, org switcher (data is already loaded), push
-  notifications for publish results, and web-parity Phases 6–8 (media library,
-  channel groups, workspace switcher; AI; admin tools). Story insights and group
+- **Library, groups, workspaces, notifications (2026-11-14, Phase 6)** under More:
+  **Media library** (`media.list` paged 40, all/photos/videos + debounced search,
+  upload via the same `AttachmentPreparer` + presigned multipart `MediaUploader`
+  as Compose, `media.delete` behind a confirm; videos play the optimize rendition
+  when `metadata.optimize.status == "done"`, and a video file is NEVER handed to
+  `AsyncImage` — the web's OOM rule), **Channel groups** (`channelGroup.*`: create,
+  rename, delete, members via `setChannels` add/remove from `LibraryRules.groupDiff`,
+  chunked ≤500) with **group pills in the Compose channel picker** (active members
+  present in the list only — `selectableMembers`), **Notifications**
+  (`notification.list/markRead/markAllRead`; a `/dashboard/posts/<id>` link opens
+  the post). **Workspace switcher**: Account → Workspaces rows call
+  `SessionStore.switchOrganization`, which accepts only a real membership, sets
+  `x-organization-id` and remembers it (`activeOrganizationId` in UserDefaults; a
+  workspace the user has left falls back to the server default). `RootTabView` is
+  keyed `.id(activeOrganization.id)` so every tab rebuilds — no data from the
+  previous workspace stays on screen. `UITests/LibraryUITests` is READ-ONLY.
+- Not yet built: Google sign-in, push
+  notifications for publish results, and web-parity Phases 7–8 (AI features;
+  admin tools). Story insights and group
   stats from the web Insights page are not in the app yet.
 
 ## Local setup
