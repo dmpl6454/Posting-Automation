@@ -121,9 +121,28 @@ and calls the same tRPC procedures the web app does. Full detail:
   CI would put that traffic on production.
 - **`--reset-session` launch argument** clears cookies at startup so UI tests
   always begin signed out regardless of a persisted session from manual use.
-- Not yet built: Google sign-in, media attachments in Compose (needs the
-  presigned-multipart flow), org switcher (data is already loaded), push
-  notifications for publish results.
+- **Compose parity (2026-11-14, web-parity Phases 1–2):** photo/video posting
+  via the SAME presigned multipart flow as the web ([MediaUploader.swift](apps/ios/PostAutomation/Sources/Core/MediaUploader.swift):
+  `upload.initiate` → `signPart` → PUT → `upload.complete`; photos re-encoded to
+  JPEG because iPhone HEIC is refused), Draft / Publish now / Schedule, Post or
+  Story mode, first comments (≤5, delay), per-channel captions, TikTok settings
+  from `tiktok.creatorInfo` (TikTok's guideline rules), YouTube title/visibility,
+  video cover (fitted ≤2 MB), campaign label. The request is built by the pure
+  `ComposeRules` ([ComposePayload.swift](apps/ios/PostAutomation/Sources/Features/Compose/ComposePayload.swift),
+  unit-tested); unused features add no keys. No server changes.
+  - Channels are picked in a **sheet** (plain List + system search), not inline:
+    with ~500 channels a search field inside the Form swallowed the first tap on
+    a result while the keyboard was up.
+  - **`UITests/ComposeDraftUITests` drives the real screen against the LIVE API
+    and saves a DRAFT** (never publishes); it needs a signed-in simulator and
+    must run ALONE (`-only-testing:PostAutomationUITests/ComposeDraftUITests`),
+    because `LoginUITests` launches with `--reset-session`. ⚠️ Incremental
+    `xcodebuild test` reused a STALE UI-test binary twice — delete
+    `build/Build/Products/Debug-iphonesimulator/PostAutomationUITests-Runner.app`
+    and the `PostAutomationUITests.build` intermediates before re-running.
+- Not yet built: Google sign-in, org switcher (data is already loaded), push
+  notifications for publish results, and web-parity Phases 3–8 (post detail /
+  calendar, Insights, Comments & Messages inboxes, media library, AI, admin tools).
 
 ## Local setup
 
