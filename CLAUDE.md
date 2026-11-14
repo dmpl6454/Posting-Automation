@@ -167,9 +167,24 @@ and calls the same tRPC procedures the web app does. Full detail:
   from nesting a second NavigationStack. `UITests/InsightsUITests` is READ-ONLY
   (never Sync now / Email). Live-checked: FB rows showing "—" had no snapshot;
   an IG row's Likes "—" matched a capture declaring likes unavailable.
+- **Inboxes (2026-11-14, Phase 5)** under More: **Comments** (`comment.accounts`
+  → `comment.posts` → `comment.list`; comment on the post, reply, like/unlike,
+  hide/unhide, delete behind a confirm, edit the Page's own FB comment, like the
+  IG post), **Mentions** (`comment.mentions`, reply — a second reply sends
+  `again:true` — dismiss/restore) and **Messages** (`message.accounts` →
+  `conversations` → `thread` → `send`, respecting `windowOpen`). Rules ported into
+  the pure `InboxRules`: `classify` mirrors the web's classifyReplyFailure (**an
+  unknown outcome — "may already be posted", a 5xx, or no structured answer — is
+  UNCONFIRMED: refresh the thread and relabel the button "…again anyway", never
+  auto-retry**), `apply` mirrors applyModeration (IG like count from the server's
+  re-read; `likeCount` key absent ⇒ FB ±1), Graph `+0000` timestamps, IG "name
+  hidden". `likedByAccount` is null on IG, so "Liked" is shown only for likes made
+  in this session. `UITests/InboxUITests` is READ-ONLY (never replies/likes/sends);
+  writes are NOT exercised live. Automation rules, sentiment, private replies and
+  AI-suggested replies stay on the web for now.
 - Not yet built: Google sign-in, org switcher (data is already loaded), push
-  notifications for publish results, and web-parity Phases 5–8 (Comments &
-  Messages inboxes, media library, AI, admin tools). Story insights and group
+  notifications for publish results, and web-parity Phases 6–8 (media library,
+  channel groups, workspace switcher; AI; admin tools). Story insights and group
   stats from the web Insights page are not in the app yet.
 
 ## Local setup
