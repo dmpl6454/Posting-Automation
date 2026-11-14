@@ -174,6 +174,8 @@ struct CreatePostInput: Encodable {
     let channelIds: [String]
     /// ISO 8601 string; omit for a draft.
     let scheduledAt: String?
+    /// Media rows from `upload.complete`, in display order; omitted when none.
+    var mediaIds: [String]? = nil
 }
 
 /// `post.create` returns the created Post; we only rely on `id`/`status` so a

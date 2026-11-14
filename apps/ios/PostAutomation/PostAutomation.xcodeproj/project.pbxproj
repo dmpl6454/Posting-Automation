@@ -9,10 +9,12 @@
 /* Begin PBXBuildFile section */
 		0549C19EA201F26B16BB9CEF /* TRPCClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C575C3B99D0CCBE40B4AFB8C /* TRPCClientTests.swift */; };
 		24AED4969CD76D9057762215 /* TRPCClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8E4E8D01FD26A63F8F941BE /* TRPCClient.swift */; };
+		2805853BE16A50131F1DF4EF /* MediaUploader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 110308E9F1DB14DAAF1986E0 /* MediaUploader.swift */; };
 		3D14B8D9BD52E93F49FEAAD6 /* ComposeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F299A69FF530BC344C35326 /* ComposeView.swift */; };
 		3FA46FDB589C6611BFBFDF4D /* LoginUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 508F07865518EC5587FA9E2E /* LoginUITests.swift */; };
 		4469FC953A0761801F7F2686 /* User.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B09A76AE65CB9144FF2C7CC /* User.swift */; };
 		4E3F23AC854D99B5F72D4835 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = F086111A5C52B8C7D9E6B76F /* Models.swift */; };
+		66D43C3C14A0B83E7DCB3FDD /* ComposeAttachments.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E2122B7FA211A4CE11BE0CB /* ComposeAttachments.swift */; };
 		6CD0697678047FD51A1A8831 /* ChannelsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B35098634D11F1A762EE4D1 /* ChannelsView.swift */; };
 		82A4A708E5378757585DE20E /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70C202BC29787754F7D50EE8 /* LoginView.swift */; };
 		8AD2DBC3D95B92D300DED87D /* AuthService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09E782AD54F8C026B1B1325C /* AuthService.swift */; };
@@ -22,6 +24,7 @@
 		DF8DD1AEFE9AE5EEAD6989DD /* SessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BF4E1B8CA96F826D2A9FD9D /* SessionStore.swift */; };
 		E90B1AFD00BD65D3D7C48BC3 /* AuthServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A111730978488A86D2FAD59 /* AuthServiceTests.swift */; };
 		F1F88DD2CEB8F7B0594584D6 /* APIConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96F3382F86DEAD9DDF43EDF2 /* APIConfig.swift */; };
+		FB532219A92AB5F28488C026 /* MediaUploadPlanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1F82EA369B5B72AD4D8201C /* MediaUploadPlanTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -44,12 +47,14 @@
 /* Begin PBXFileReference section */
 		02332F8FC478FC4F8E9D6D5B /* PostAutomationTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = PostAutomationTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		09E782AD54F8C026B1B1325C /* AuthService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthService.swift; sourceTree = "<group>"; };
+		110308E9F1DB14DAAF1986E0 /* MediaUploader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaUploader.swift; sourceTree = "<group>"; };
 		126BFEBDA5D90695C8259526 /* PostAutomation.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = PostAutomation.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1B44B1CCCC41E9BA8CE91DB7 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
 		4A111730978488A86D2FAD59 /* AuthServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthServiceTests.swift; sourceTree = "<group>"; };
 		4BF4E1B8CA96F826D2A9FD9D /* SessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStore.swift; sourceTree = "<group>"; };
 		508F07865518EC5587FA9E2E /* LoginUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginUITests.swift; sourceTree = "<group>"; };
 		5B35098634D11F1A762EE4D1 /* ChannelsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChannelsView.swift; sourceTree = "<group>"; };
+		5E2122B7FA211A4CE11BE0CB /* ComposeAttachments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposeAttachments.swift; sourceTree = "<group>"; };
 		70C202BC29787754F7D50EE8 /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
 		7B09A76AE65CB9144FF2C7CC /* User.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = User.swift; sourceTree = "<group>"; };
 		8F299A69FF530BC344C35326 /* ComposeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposeView.swift; sourceTree = "<group>"; };
@@ -58,6 +63,7 @@
 		96F3382F86DEAD9DDF43EDF2 /* APIConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIConfig.swift; sourceTree = "<group>"; };
 		C04EB41B11CD3C2D5DF1111D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		C575C3B99D0CCBE40B4AFB8C /* TRPCClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TRPCClientTests.swift; sourceTree = "<group>"; };
+		D1F82EA369B5B72AD4D8201C /* MediaUploadPlanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaUploadPlanTests.swift; sourceTree = "<group>"; };
 		D8E4E8D01FD26A63F8F941BE /* TRPCClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TRPCClient.swift; sourceTree = "<group>"; };
 		F086111A5C52B8C7D9E6B76F /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		FAF761EA2B67AE804B2F5E91 /* PostsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PostsView.swift; sourceTree = "<group>"; };
@@ -88,6 +94,7 @@
 			children = (
 				96F3382F86DEAD9DDF43EDF2 /* APIConfig.swift */,
 				09E782AD54F8C026B1B1325C /* AuthService.swift */,
+				110308E9F1DB14DAAF1986E0 /* MediaUploader.swift */,
 				D8E4E8D01FD26A63F8F941BE /* TRPCClient.swift */,
 			);
 			path = Core;
@@ -113,6 +120,7 @@
 			isa = PBXGroup;
 			children = (
 				4A111730978488A86D2FAD59 /* AuthServiceTests.swift */,
+				D1F82EA369B5B72AD4D8201C /* MediaUploadPlanTests.swift */,
 				C575C3B99D0CCBE40B4AFB8C /* TRPCClientTests.swift */,
 			);
 			path = Tests;
@@ -179,6 +187,7 @@
 		FA34A265AEEF13596E9DFB0B /* Compose */ = {
 			isa = PBXGroup;
 			children = (
+				5E2122B7FA211A4CE11BE0CB /* ComposeAttachments.swift */,
 				8F299A69FF530BC344C35326 /* ComposeView.swift */,
 			);
 			path = Compose;
@@ -290,6 +299,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				E90B1AFD00BD65D3D7C48BC3 /* AuthServiceTests.swift in Sources */,
+				FB532219A92AB5F28488C026 /* MediaUploadPlanTests.swift in Sources */,
 				0549C19EA201F26B16BB9CEF /* TRPCClientTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -301,9 +311,11 @@
 				F1F88DD2CEB8F7B0594584D6 /* APIConfig.swift in Sources */,
 				8AD2DBC3D95B92D300DED87D /* AuthService.swift in Sources */,
 				6CD0697678047FD51A1A8831 /* ChannelsView.swift in Sources */,
+				66D43C3C14A0B83E7DCB3FDD /* ComposeAttachments.swift in Sources */,
 				3D14B8D9BD52E93F49FEAAD6 /* ComposeView.swift in Sources */,
 				9BA09188897B9488276BC575 /* HomeView.swift in Sources */,
 				82A4A708E5378757585DE20E /* LoginView.swift in Sources */,
+				2805853BE16A50131F1DF4EF /* MediaUploader.swift in Sources */,
 				4E3F23AC854D99B5F72D4835 /* Models.swift in Sources */,
 				BFD4477B70B65D041F8FBAA2 /* PostAutomationApp.swift in Sources */,
 				8E4F13F31F4023066BA443EC /* PostsView.swift in Sources */,
