@@ -3906,11 +3906,20 @@ Instagram's API only lets an account comment on media it OWNS, plus reply where 
   now works on Facebook too.
   - ✅ **LIVE in production since 2026-11-03** (PR #253, `3a288cd`; pre-deploy dump
     `/root/backups/predeploy-pr253-20261103T071859Z.dump`, copy in `~/Backups/PostAutomation/predeploy/`). The
-    worker boots the `first-comment` queue worker. ⚠️ **Not yet exercised by a real post:** as of 2026-11-14
-    zero posts carry `metadata.firstComments` and the worker has logged no `[FirstComment]` line. Before relying
-    on it, publish one FB Page post and one IG post with two comments and a 1-minute delay, then confirm the
-    post page goes "will be posted at …" → "All 2 first comments posted" (SQL:
-    `metadata->'firstComment'->>'status'` on the targets).
+    worker boots the `first-comment` queue worker.
+  - ✅ **FACEBOOK VERIFIED LIVE 2026-11-14** on the Dashmani Media page (DASHMANI workspace): a text post
+    (target `fctest20261114tgt2`, [post](https://www.facebook.com/180475845709106/posts/1170863761973385))
+    published 06:16:39 UTC, the 1-minute delay held (`scheduled` → `posting` at 06:17:39), and both comments
+    posted AS THE PAGE in order at 06:17:39 and 06:17:43. Read back from Graph `/{post}/comments` — they match
+    the stored record (`posted 2/2`, both comment ids). The post was left up on purpose.
+  - ⏳ **INSTAGRAM not yet verified live.** The test account `priyanshu123321123` is `needs_reconnect`;
+    reconnect it (or pick another account) and run the same check: two comments, 1-minute delay, then read
+    `metadata->'firstComment'` and the media's comments back.
+  - ⚠️ **A stored `insightsHealth: ok` does NOT prove a token works** — the first test targeted "Demo Test"
+    (health `ok`) and failed at publish with `190/460` (session invalidated). Before a live test, probe the
+    token read-only (`GET /me` with the decrypted Page token via a tsx script in `/app/packages/api`). On
+    2026-11-14 Demo Test was dead in all three workspaces; Dashmani Media / Dashmani / Digital Sukoon in
+    DASHMANI were valid with `pages_manage_engagement`.
   - 🔴 **Once per target is an ATOMIC SQL CLAIM**, not a read-then-write: immediate = *no record → `posting`*;
     delayed = publish worker writes *no record → `scheduled` (+`dueAt`)* and queues `first-comment`
     (`fcomment:{targetId}:v1`, **attempts: 1**), whose job claims *`scheduled` → `posting`*. Only the claim
