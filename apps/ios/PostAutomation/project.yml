@@ -52,10 +52,15 @@ targets:
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
         ITSAppUsesNonExemptEncryption: false
+        UIRequiresFullScreen: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: co.in.postautomation.ios
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # iPhone-only. Must be set on the TARGET: xcodegen's iOS app default
+        # (1,2) overrides the project-level value, and an iPad-capable portrait
+        # app is rejected at upload (90474, iPad multitasking).
+        TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: "NO"
         SWIFT_EMIT_LOC_STRINGS: "YES"
 
