@@ -228,7 +228,19 @@ and calls the same tRPC procedures the web app does. Full detail:
   a single 1024×1024 universal icon made from `apps/web/public/logo.png`, flattened
   onto white. **It must stay OPAQUE** — App Store Connect rejects an icon with an
   alpha channel. Wired via `ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon` in project.yml.
-- Not yet built: Google sign-in, push
+- **Signing / TestFlight (2026-11-14):** team `DYA37GDBH3` (Apple ID
+  sudhanshu@digitalsukoon.com), bundle ID `co.in.postautomation.ios` registered
+  (`APA9D32RD7`). This Mac has NO Xcode account, so everything goes through the
+  **App Store Connect API key** `5H3Q9WGAY3` (App Manager role; issuer
+  `3d0ed003-579d-4923-b655-aa8555f8e052`; file in
+  `~/.appstoreconnect/private_keys/`, never in the repo). ⚠️ App Manager can NOT use
+  cloud signing ("Cloud signing permission error"), so distribution is **manual**:
+  an `Apple Distribution` certificate (`QARVVS6QTS`, expires 2027-11-14) whose private
+  key lives only in this Mac's login keychain (+ `~/.appstoreconnect/signing/`), and
+  the `PostAutomation App Store` profile. The team's OTHER distribution certificate
+  belongs to Expo (its key is on Expo's servers) — leave it alone. Build: archive with
+  `-allowProvisioningUpdates -authenticationKey{Path,ID,IssuerID}`, export with
+  `signingStyle manual` + that profile. `build-device/` is gitignored.
   notifications for publish results. Story insights and group
   stats from the web Insights page are not in the app yet.
 

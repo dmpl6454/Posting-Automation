@@ -27,11 +27,12 @@ settings:
     SWIFT_VERSION: "5.0"
     IPHONEOS_DEPLOYMENT_TARGET: "17.0"
     TARGETED_DEVICE_FAMILY: "1"
-    # Simulator-only for now; no team/identity needed. Set DEVELOPMENT_TEAM and
-    # drop these when building for a physical device or TestFlight.
-    CODE_SIGN_IDENTITY: ""
-    CODE_SIGNING_REQUIRED: "NO"
-    CODE_SIGNING_ALLOWED: "NO"
+    # Apple Developer team (sudhanshu@digitalsukoon.com). Automatic signing:
+    # Xcode / an App Store Connect API key manages the certificate + profiles.
+    # Simulator builds and tests still pass CODE_SIGNING_ALLOWED=NO on the
+    # command line, so they need no account.
+    DEVELOPMENT_TEAM: DYA37GDBH3
+    CODE_SIGN_STYLE: Automatic
 
 targets:
   PostAutomation:
@@ -51,10 +52,15 @@ targets:
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
         ITSAppUsesNonExemptEncryption: false
+        UIRequiresFullScreen: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: co.in.postautomation.ios
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # iPhone-only. Must be set on the TARGET: xcodegen's iOS app default
+        # (1,2) overrides the project-level value, and an iPad-capable portrait
+        # app is rejected at upload (90474, iPad multitasking).
+        TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: "NO"
         SWIFT_EMIT_LOC_STRINGS: "YES"
 
