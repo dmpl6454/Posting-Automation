@@ -224,6 +224,10 @@ and calls the same tRPC procedures the web app does. Full detail:
   `monitor.resolveAll` over the whole filter, not the loaded page) and **Audit log**.
   Impersonation, deleting users/orgs and agent/channel/media admin stay on the web.
   `UITests/AdminUITests` is READ-ONLY and skips unless signed in as a super admin.
+- **App icon** (2026-11-14): `Sources/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png`,
+  a single 1024×1024 universal icon made from `apps/web/public/logo.png`, flattened
+  onto white. **It must stay OPAQUE** — App Store Connect rejects an icon with an
+  alpha channel. Wired via `ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon` in project.yml.
 - Not yet built: Google sign-in, push
   notifications for publish results. Story insights and group
   stats from the web Insights page are not in the app yet.
