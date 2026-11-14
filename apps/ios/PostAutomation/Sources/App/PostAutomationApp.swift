@@ -63,6 +63,11 @@ struct MoreView: View {
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    NavigationLink { CommentsInboxView() } label: { Label("Comments", systemImage: "bubble.left.and.bubble.right") }
+                    NavigationLink { MentionsView() } label: { Label("Mentions", systemImage: "at") }
+                    NavigationLink { MessagesView() } label: { Label("Messages", systemImage: "envelope") }
+                }
                 NavigationLink { ChannelsView(embedded: true) } label: {
                     Label("Channels", systemImage: "antenna.radiowaves.left.and.right")
                 }
