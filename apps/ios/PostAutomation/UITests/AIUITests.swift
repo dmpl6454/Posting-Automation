@@ -51,10 +51,18 @@ final class AIUITests: XCTestCase {
 
         // Clean up the test chat.
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        let thread = app.buttons.matching(identifier: "agent.thread").element(matching: NSPredicate(format: "label BEGINSWITH 'UITest'"))
-        XCTAssertTrue(thread.waitForExistence(timeout: 15))
-        thread.swipeLeft()
-        app.buttons["Delete"].tap()
-        XCTAssertTrue(thread.waitForNonExistence(timeout: 15))
+        // Deletes every UITest chat, including any a failed earlier run left.
+        let tests = app.buttons.matching(identifier: "agent.thread").matching(NSPredicate(format: "label BEGINSWITH 'UITest'"))
+        XCTAssertTrue(tests.firstMatch.waitForExistence(timeout: 15))
+        var guardCount = 0
+        while tests.count > 0 && guardCount < 10 {
+            let before = tests.count
+            tests.firstMatch.swipeLeft()
+            app.buttons["Delete"].tap()
+            let gone = NSPredicate(format: "count < %d", before)
+            _ = XCTWaiter.wait(for: [expectation(for: gone, evaluatedWith: tests)], timeout: 15)
+            guardCount += 1
+        }
+        XCTAssertEqual(tests.count, 0, "test chats left behind")
     }
 }
