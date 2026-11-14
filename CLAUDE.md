@@ -3912,9 +3912,17 @@ Instagram's API only lets an account comment on media it OWNS, plus reply where 
     published 06:16:39 UTC, the 1-minute delay held (`scheduled` → `posting` at 06:17:39), and both comments
     posted AS THE PAGE in order at 06:17:39 and 06:17:43. Read back from Graph `/{post}/comments` — they match
     the stored record (`posted 2/2`, both comment ids). The post was left up on purpose.
-  - ⏳ **INSTAGRAM not yet verified live.** The test account `priyanshu123321123` is `needs_reconnect`;
-    reconnect it (or pick another account) and run the same check: two comments, 1-minute delay, then read
-    `metadata->'firstComment'` and the media's comments back.
+  - ✅ **INSTAGRAM VERIFIED LIVE 2026-11-14** on `digitalsukoonn` (DASHMANI workspace): an image post
+    (target `fctest20261114tgt3`, [post](https://www.instagram.com/p/DftkHdMFKu1/), a plain 1080×1080 "Test
+    post" card) published 06:29:29 UTC, the 1-minute delay held, and both comments posted as the account in
+    order at 06:30:29 and 06:30:32. Read back from Graph `/{media}/comments` — they match the stored record
+    (`posted 2/2`). Left up; the app cannot delete Instagram posts. `priyanshu123321123` was dead (`190/460`) in
+    every workspace that day, so digitalsukoonn was the only usable IG account.
+  - **How these live tests were run** (repeatable): insert a `Post` (`SCHEDULED`, `scheduledAt = now()` UTC,
+    `metadata.firstComments`) + `PostTarget` (`SCHEDULED`) + `PostMedia` straight into prod Postgres; the 30s
+    reconciliation cron publishes it through the normal worker path. For an image, render one with sharp in the
+    worker container and `mc cp` it into `postautomation-media/{orgId}/…` in the MinIO container, then add a
+    `Media` row with the public `https://postautomation.co.in/media/…` URL.
   - ⚠️ **A stored `insightsHealth: ok` does NOT prove a token works** — the first test targeted "Demo Test"
     (health `ok`) and failed at publish with `190/460` (session invalidated). Before a live test, probe the
     token read-only (`GET /me` with the decrypted Page token via a tsx script in `/app/packages/api`). On
