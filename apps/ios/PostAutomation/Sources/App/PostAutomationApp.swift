@@ -64,9 +64,15 @@ struct RootTabView: View {
 /// The fifth tab: everything that doesn't fit in the tab bar. Later phases
 /// (Comments, Messages, Media…) add their rows here.
 struct MoreView: View {
+    @Environment(SessionStore.self) private var session
     var body: some View {
         NavigationStack {
             List {
+                if session.user?.isSuperAdmin == true {
+                    Section {
+                        NavigationLink { AdminHomeView() } label: { Label("Admin", systemImage: "shield.lefthalf.filled") }
+                    } footer: { Text("Super admins only.") }
+                }
                 Section {
                     NavigationLink { SuperAgentView() } label: { Label("Super Agent", systemImage: "sparkles") }
                     NavigationLink { RepurposeView() } label: { Label("Repurpose a link", systemImage: "link") }

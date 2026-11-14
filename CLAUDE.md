@@ -211,8 +211,21 @@ and calls the same tRPC procedures the web app does. Full detail:
   `executedActionId` markers so a re-tap can't make a second live post. AI calls use
   `mutate(..., long: true)` — a separate URLSession with a ~590 s timeout (the
   default session gives up after 30 s of silence; nginx allows 600 s for repurpose).
+- **Admin (2026-11-14, Phase 8):** More → **Admin**, shown only when
+  `user.me.isSuperAdmin` (every call is `superAdminProcedure`; the server is the
+  real gate). Overview (`admin.overview.stats` + `monitor.stats`), **Users** (search,
+  access role via `setAppRole`, make/remove super admin, ban/unban — you can't
+  change your own super-admin/ban status from the phone; both are server-side
+  **toggles**, so after any outcome the app RE-READS the user instead of retrying),
+  **Organizations** (plan, Meta app for new connections — `metaAppId: null` is sent
+  explicitly to restore the default), **Queues** (counts + failed jobs, retry/delete
+  behind confirms; a publish-queue retry warns it re-runs the publish), **Error
+  monitoring** (unresolved list, swipe to resolve, "Resolve all" uses
+  `monitor.resolveAll` over the whole filter, not the loaded page) and **Audit log**.
+  Impersonation, deleting users/orgs and agent/channel/media admin stay on the web.
+  `UITests/AdminUITests` is READ-ONLY and skips unless signed in as a super admin.
 - Not yet built: Google sign-in, push
-  notifications for publish results, and web-parity Phase 8 (admin tools). Story insights and group
+  notifications for publish results. Story insights and group
   stats from the web Insights page are not in the app yet.
 
 ## Local setup
