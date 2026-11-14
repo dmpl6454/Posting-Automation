@@ -198,9 +198,21 @@ and calls the same tRPC procedures the web app does. Full detail:
   workspace the user has left falls back to the server default). `RootTabView` is
   keyed `.id(activeOrganization.id)` so every tab rebuilds — no data from the
   previous workspace stays on screen. `UITests/LibraryUITests` is READ-ONLY.
+- **AI (2026-11-14, Phase 7):** Compose **Write with AI** sheet (`ai.generateContent`
+  / `optimizeContent` / `suggestHashtags`; nothing applied until "Use"), More →
+  **Repurpose a link** (`repurpose.repurposeFromUrl`, photo + carousel only — reels
+  and AI video stay on the web; "Save as draft" sends the web's Create Drafts
+  request: first channel's caption + every platform caption as `contentVariants`,
+  blocked for IG/FB when no image was made) and More → **Super Agent** (threads via
+  `chat.*`; the reply streams from `POST /api/chat/stream` (SSE, not tRPC) through
+  `TRPCClient.streamChat`). **Agent actions never auto-run**: each needs a tap plus a
+  confirm (publish_now warns it can't be undone), `clientActionId` = the server's
+  `idempotencyKey` (else message id), and "Done" is re-seeded from the persisted
+  `executedActionId` markers so a re-tap can't make a second live post. AI calls use
+  `mutate(..., long: true)` — a separate URLSession with a ~590 s timeout (the
+  default session gives up after 30 s of silence; nginx allows 600 s for repurpose).
 - Not yet built: Google sign-in, push
-  notifications for publish results, and web-parity Phases 7–8 (AI features;
-  admin tools). Story insights and group
+  notifications for publish results, and web-parity Phase 8 (admin tools). Story insights and group
   stats from the web Insights page are not in the app yet.
 
 ## Local setup

@@ -68,6 +68,10 @@ struct MoreView: View {
         NavigationStack {
             List {
                 Section {
+                    NavigationLink { SuperAgentView() } label: { Label("Super Agent", systemImage: "sparkles") }
+                    NavigationLink { RepurposeView() } label: { Label("Repurpose a link", systemImage: "link") }
+                }
+                Section {
                     NavigationLink { NotificationsView() } label: { Label("Notifications", systemImage: "bell") }
                     NavigationLink { MediaLibraryView() } label: { Label("Media library", systemImage: "photo.on.rectangle") }
                     NavigationLink { ChannelGroupsView() } label: { Label("Channel groups", systemImage: "square.stack.3d.up") }

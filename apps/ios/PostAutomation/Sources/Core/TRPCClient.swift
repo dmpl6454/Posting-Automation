@@ -95,6 +95,9 @@ final class TRPCClient {
 
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
+    /// For AI work that can run for minutes (repurpose renders, chat replies):
+    /// the default session gives up after 30 s of silence.
+    private let longSession: URLSession
 
     init(baseURL: URL = APIConfig.baseURL, session: URLSession? = nil) {
         self.baseURL = baseURL
@@ -109,6 +112,15 @@ final class TRPCClient {
             cfg.waitsForConnectivity = true
             self.session = URLSession(configuration: cfg)
         }
+
+        let longCfg = URLSessionConfiguration.default
+        longCfg.httpCookieStorage = HTTPCookieStorage.shared
+        longCfg.httpCookieAcceptPolicy = .always
+        longCfg.httpShouldSetCookies = true
+        // Just under nginx's 600 s for /api/trpc/repurpose.*.
+        longCfg.timeoutIntervalForRequest = 590
+        longCfg.timeoutIntervalForResource = 600
+        self.longSession = session ?? URLSession(configuration: longCfg)
 
         let d = JSONDecoder()
         d.dateDecodingStrategy = .custom(TRPCClient.decodeDate)
@@ -142,14 +154,51 @@ final class TRPCClient {
         return try await perform(req)
     }
 
-    /// POST mutation with a JSON body (superjson-wrapped).
-    func mutate<Input: Encodable, Output: Decodable>(_ path: String, input: Input) async throws -> Output {
+    /// POST mutation with a JSON body (superjson-wrapped). `long` allows up to
+    /// ~10 minutes for AI generation.
+    func mutate<Input: Encodable, Output: Decodable>(_ path: String, input: Input, long: Bool = false) async throws -> Output {
         var req = URLRequest(url: baseURL.appendingPathComponent("\(APIConfig.trpcPath)/\(path)"))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try encoder.encode(SuperJSONInput(json: input))
         applyCommonHeaders(&req)
+        if long {
+            req.timeoutInterval = 590
+            let (data, response) = try await longSession.data(for: req)
+            guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+            return try TRPCClient.decodeResponse(data: data, status: http.statusCode, decoder: decoder)
+        }
         return try await perform(req)
+    }
+
+    /// The Super Agent reply: `POST /api/chat/stream` (Server-Sent Events, not
+    /// tRPC). Yields each `data:` event as it arrives.
+    func streamChat(threadId: String) -> AsyncThrowingStream<ChatStreamEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    var req = URLRequest(url: baseURL.appendingPathComponent("api/chat/stream"))
+                    req.httpMethod = "POST"
+                    req.timeoutInterval = 590
+                    req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    req.httpBody = try JSONSerialization.data(withJSONObject: ["threadId": threadId])
+                    applyCommonHeaders(&req)
+                    req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                    let (bytes, response) = try await longSession.bytes(for: req)
+                    guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+                    guard (200..<300).contains(http.statusCode) else {
+                        throw APIError.http(status: http.statusCode, body: "")
+                    }
+                    for try await line in bytes.lines {
+                        if let event = ChatStreamEvent.parse(line: line) { continuation.yield(event) }
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
     }
 
     // MARK: Internals

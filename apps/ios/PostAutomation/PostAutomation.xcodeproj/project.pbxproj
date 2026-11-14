@@ -9,17 +9,20 @@
 /* Begin PBXBuildFile section */
 		0549C19EA201F26B16BB9CEF /* TRPCClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C575C3B99D0CCBE40B4AFB8C /* TRPCClientTests.swift */; };
 		0AFEB150FDF474CBBAC7440F /* InsightsModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED0ED8343C94497B13899F51 /* InsightsModels.swift */; };
+		0BE0B574BF60E76B51A7DE18 /* RepurposeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89B10D42B3350DA094145EC5 /* RepurposeView.swift */; };
 		0BF6DBD054CA3FF30490E5FB /* InsightsRules.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90B89603B4F55F09B235211B /* InsightsRules.swift */; };
 		0DF07D640903DBCDBD415A3E /* InsightsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7726358C3A9AF65DC47DE681 /* InsightsUITests.swift */; };
 		0F99C7734933355069B06630 /* MentionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E697F37B58F7B0EC99507E2A /* MentionsView.swift */; };
 		0FB219E70C07C4B8750BD088 /* InboxRules.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70678DDB1BCB457239F74C78 /* InboxRules.swift */; };
 		0FD065731382FFDEC8FEDA41 /* TikTokSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A64FACF60559AE822C16864 /* TikTokSettingsView.swift */; };
 		13363B719E8770634157145E /* ChannelGroupsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6360DC950DAB0C0A316EE42A /* ChannelGroupsView.swift */; };
+		1412F42A7E6DCE9ABC3B25D6 /* CreateWithAISheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = C699B3E35E39EFCBAA2A5863 /* CreateWithAISheet.swift */; };
 		17053671B37222BB96DE208B /* ChannelPickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F9B1E58861573BE53F557D5 /* ChannelPickerSheet.swift */; };
 		243400739BCA05F3380520BD /* PostsCalendarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8759AAB3CA5AB225E86AAAED /* PostsCalendarView.swift */; };
 		2454641AB14C3B07FECEC2ED /* CommentsInboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B26FC6CD7C4AAAE93C20A20C /* CommentsInboxView.swift */; };
 		24AED4969CD76D9057762215 /* TRPCClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8E4E8D01FD26A63F8F941BE /* TRPCClient.swift */; };
 		2805853BE16A50131F1DF4EF /* MediaUploader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 110308E9F1DB14DAAF1986E0 /* MediaUploader.swift */; };
+		285B3AF531AC6478E3079991 /* AIRulesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0385E6A8D6155A4DC8D2629D /* AIRulesTests.swift */; };
 		325CDD7196B0F1DB125D9FD7 /* InsightsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07416AE1047378517C4CBC8C /* InsightsView.swift */; };
 		3D14B8D9BD52E93F49FEAAD6 /* ComposeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F299A69FF530BC344C35326 /* ComposeView.swift */; };
 		3FA46FDB589C6611BFBFDF4D /* LoginUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 508F07865518EC5587FA9E2E /* LoginUITests.swift */; };
@@ -30,8 +33,11 @@
 		638AD265ABB8BA61FA05614F /* InboxRulesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21EBD623662C844A180779D9 /* InboxRulesTests.swift */; };
 		66D43C3C14A0B83E7DCB3FDD /* ComposeAttachments.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E2122B7FA211A4CE11BE0CB /* ComposeAttachments.swift */; };
 		6CD0697678047FD51A1A8831 /* ChannelsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B35098634D11F1A762EE4D1 /* ChannelsView.swift */; };
+		70F3F15F818D909425401428 /* AIModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = C37EC3D9C642FCE18C040C65 /* AIModels.swift */; };
 		7513427A6C1213D6B20474A3 /* PostDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F947F1AA384B14FBFEDAB28C /* PostDetailView.swift */; };
 		7AA03F05980DD4B55753ED0B /* MediaLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4E465DE89282AA2C0A7A346 /* MediaLibraryView.swift */; };
+		7FC54036BF865CC002E07267 /* SuperAgentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D91AB0227BB14C99107BC651 /* SuperAgentView.swift */; };
+		80141DD464EF7451A684F1E1 /* AIUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABA78959E6214C81BC8D6202 /* AIUITests.swift */; };
 		82A4A708E5378757585DE20E /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70C202BC29787754F7D50EE8 /* LoginView.swift */; };
 		849A85382D859E510814CD80 /* InboxUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 783F6EBFD658E9274DAF3551 /* InboxUITests.swift */; };
 		8735F41D136E7E55C914D6AF /* LibraryModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B415414C255093E30B0E795F /* LibraryModels.swift */; };
@@ -78,6 +84,7 @@
 /* Begin PBXFileReference section */
 		000B4EA1BEEAC77201A62B83 /* MessagesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessagesView.swift; sourceTree = "<group>"; };
 		02332F8FC478FC4F8E9D6D5B /* PostAutomationTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = PostAutomationTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		0385E6A8D6155A4DC8D2629D /* AIRulesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIRulesTests.swift; sourceTree = "<group>"; };
 		07416AE1047378517C4CBC8C /* InsightsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InsightsView.swift; sourceTree = "<group>"; };
 		09E782AD54F8C026B1B1325C /* AuthService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthService.swift; sourceTree = "<group>"; };
 		0A64FACF60559AE822C16864 /* TikTokSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TikTokSettingsView.swift; sourceTree = "<group>"; };
@@ -106,6 +113,7 @@
 		7E254ADBA813DD2AD3AA7A9A /* PostRules.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PostRules.swift; sourceTree = "<group>"; };
 		8759AAB3CA5AB225E86AAAED /* PostsCalendarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PostsCalendarView.swift; sourceTree = "<group>"; };
 		87E1D8BEE4970AC86FCC98F2 /* NotificationsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationsView.swift; sourceTree = "<group>"; };
+		89B10D42B3350DA094145EC5 /* RepurposeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepurposeView.swift; sourceTree = "<group>"; };
 		8F299A69FF530BC344C35326 /* ComposeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposeView.swift; sourceTree = "<group>"; };
 		90B89603B4F55F09B235211B /* InsightsRules.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InsightsRules.swift; sourceTree = "<group>"; };
 		91432D70C7F52CAE8786C9D3 /* PostAutomationUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = PostAutomationUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -115,14 +123,18 @@
 		9B7D0D23373C8CE870FD9B34 /* PostRulesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PostRulesTests.swift; sourceTree = "<group>"; };
 		A5E1969942D8123AE26E78EB /* ReportsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportsView.swift; sourceTree = "<group>"; };
 		AA7AE2C94AEC24A1B40037B1 /* InboxModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InboxModels.swift; sourceTree = "<group>"; };
+		ABA78959E6214C81BC8D6202 /* AIUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIUITests.swift; sourceTree = "<group>"; };
 		AF69FF8DF4DCE4FFF7EAD621 /* ComposePayloadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposePayloadTests.swift; sourceTree = "<group>"; };
 		B26FC6CD7C4AAAE93C20A20C /* CommentsInboxView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommentsInboxView.swift; sourceTree = "<group>"; };
 		B415414C255093E30B0E795F /* LibraryModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryModels.swift; sourceTree = "<group>"; };
 		C04EB41B11CD3C2D5DF1111D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		C37EC3D9C642FCE18C040C65 /* AIModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIModels.swift; sourceTree = "<group>"; };
 		C4E465DE89282AA2C0A7A346 /* MediaLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaLibraryView.swift; sourceTree = "<group>"; };
 		C575C3B99D0CCBE40B4AFB8C /* TRPCClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TRPCClientTests.swift; sourceTree = "<group>"; };
+		C699B3E35E39EFCBAA2A5863 /* CreateWithAISheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateWithAISheet.swift; sourceTree = "<group>"; };
 		D1F82EA369B5B72AD4D8201C /* MediaUploadPlanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaUploadPlanTests.swift; sourceTree = "<group>"; };
 		D8E4E8D01FD26A63F8F941BE /* TRPCClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TRPCClient.swift; sourceTree = "<group>"; };
+		D91AB0227BB14C99107BC651 /* SuperAgentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SuperAgentView.swift; sourceTree = "<group>"; };
 		E697F37B58F7B0EC99507E2A /* MentionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MentionsView.swift; sourceTree = "<group>"; };
 		EB30C36205B1EEA77AF12768 /* EditPostSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditPostSheets.swift; sourceTree = "<group>"; };
 		ED0ED8343C94497B13899F51 /* InsightsModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InsightsModels.swift; sourceTree = "<group>"; };
@@ -132,6 +144,17 @@
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
+		04474CA43B006BA8F016816A /* AI */ = {
+			isa = PBXGroup;
+			children = (
+				C37EC3D9C642FCE18C040C65 /* AIModels.swift */,
+				C699B3E35E39EFCBAA2A5863 /* CreateWithAISheet.swift */,
+				89B10D42B3350DA094145EC5 /* RepurposeView.swift */,
+				D91AB0227BB14C99107BC651 /* SuperAgentView.swift */,
+			);
+			path = AI;
+			sourceTree = "<group>";
+		};
 		08DD3984810BFB438DFC3430 = {
 			isa = PBXGroup;
 			children = (
@@ -178,6 +201,7 @@
 		389BB9473434EE7B58C1BEBA /* UITests */ = {
 			isa = PBXGroup;
 			children = (
+				ABA78959E6214C81BC8D6202 /* AIUITests.swift */,
 				1A006BF02EF8515775E98169 /* ComposeDraftUITests.swift */,
 				783F6EBFD658E9274DAF3551 /* InboxUITests.swift */,
 				7726358C3A9AF65DC47DE681 /* InsightsUITests.swift */,
@@ -210,6 +234,7 @@
 		507CCA0FDB8346B32CCABE22 /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+				0385E6A8D6155A4DC8D2629D /* AIRulesTests.swift */,
 				4A111730978488A86D2FAD59 /* AuthServiceTests.swift */,
 				AF69FF8DF4DCE4FFF7EAD621 /* ComposePayloadTests.swift */,
 				21EBD623662C844A180779D9 /* InboxRulesTests.swift */,
@@ -249,6 +274,7 @@
 		9D4B206BAA88295E19291997 /* Features */ = {
 			isa = PBXGroup;
 			children = (
+				04474CA43B006BA8F016816A /* AI */,
 				E3469C74EBCD3D1A58820C2C /* Channels */,
 				FA34A265AEEF13596E9DFB0B /* Compose */,
 				A177494058BB4B8B96E7D1E1 /* Home */,
@@ -415,6 +441,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				285B3AF531AC6478E3079991 /* AIRulesTests.swift in Sources */,
 				E90B1AFD00BD65D3D7C48BC3 /* AuthServiceTests.swift in Sources */,
 				C3B7298ACE260C3E656B1279 /* ComposePayloadTests.swift in Sources */,
 				638AD265ABB8BA61FA05614F /* InboxRulesTests.swift in Sources */,
@@ -430,6 +457,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				70F3F15F818D909425401428 /* AIModels.swift in Sources */,
 				F1F88DD2CEB8F7B0594584D6 /* APIConfig.swift in Sources */,
 				8AD2DBC3D95B92D300DED87D /* AuthService.swift in Sources */,
 				13363B719E8770634157145E /* ChannelGroupsView.swift in Sources */,
@@ -440,6 +468,7 @@
 				66D43C3C14A0B83E7DCB3FDD /* ComposeAttachments.swift in Sources */,
 				E5424D17E449093EC502BBE8 /* ComposePayload.swift in Sources */,
 				3D14B8D9BD52E93F49FEAAD6 /* ComposeView.swift in Sources */,
+				1412F42A7E6DCE9ABC3B25D6 /* CreateWithAISheet.swift in Sources */,
 				5ECE1984AA37764298F2050A /* EditPostSheets.swift in Sources */,
 				9BA09188897B9488276BC575 /* HomeView.swift in Sources */,
 				9F9314D98CE2DED3E9E47ABE /* InboxModels.swift in Sources */,
@@ -461,7 +490,9 @@
 				243400739BCA05F3380520BD /* PostsCalendarView.swift in Sources */,
 				8E4F13F31F4023066BA443EC /* PostsView.swift in Sources */,
 				B29C42F2974A7558AB2427A4 /* ReportsView.swift in Sources */,
+				0BE0B574BF60E76B51A7DE18 /* RepurposeView.swift in Sources */,
 				DF8DD1AEFE9AE5EEAD6989DD /* SessionStore.swift in Sources */,
+				7FC54036BF865CC002E07267 /* SuperAgentView.swift in Sources */,
 				24AED4969CD76D9057762215 /* TRPCClient.swift in Sources */,
 				0FD065731382FFDEC8FEDA41 /* TikTokSettingsView.swift in Sources */,
 				4469FC953A0761801F7F2686 /* User.swift in Sources */,
@@ -472,6 +503,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				80141DD464EF7451A684F1E1 /* AIUITests.swift in Sources */,
 				AADBB34BDAA918C2BC7FA380 /* ComposeDraftUITests.swift in Sources */,
 				849A85382D859E510814CD80 /* InboxUITests.swift in Sources */,
 				0DF07D640903DBCDBD415A3E /* InsightsUITests.swift in Sources */,
