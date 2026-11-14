@@ -91,6 +91,32 @@ enum AttachmentPreparer {
         return (url, "photo-\(Int(Date().timeIntervalSince1970)).jpg", "image/jpeg", .image, image.preparingThumbnail(of: CGSize(width: 240, height: 240)) ?? image)
     }
 
+    /// Video covers must be ≤ 2 MB (YouTube's limit, which the server also
+    /// enforces) — same fitting as the web: long edge ≤ 1920, then a JPEG
+    /// quality ladder until it fits. An image that already fits is untouched.
+    static let coverMaxBytes = 2 * 1024 * 1024
+
+    static func fitCover(_ url: URL) throws {
+        let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+        if let size = (attrs[.size] as? NSNumber)?.intValue, size <= coverMaxBytes { return }
+        guard let image = UIImage(contentsOfFile: url.path) else { throw UploadError.emptyFile }
+        let longEdge = max(image.size.width, image.size.height)
+        let scale = min(1, 1920 / longEdge)
+        let target = CGSize(width: (image.size.width * scale).rounded(), height: (image.size.height * scale).rounded())
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let resized = UIGraphicsImageRenderer(size: target, format: format).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: target))
+        }
+        for quality in [0.85, 0.75, 0.65, 0.5, 0.35] as [CGFloat] {
+            if let data = resized.jpegData(compressionQuality: quality), data.count <= coverMaxBytes {
+                try data.write(to: url)
+                return
+            }
+        }
+        throw UploadError.partFailed(1, "the cover image is too large even after shrinking it")
+    }
+
     static func videoThumbnail(_ url: URL) async -> UIImage? {
         let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
         generator.appliesPreferredTrackTransform = true

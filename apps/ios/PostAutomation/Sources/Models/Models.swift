@@ -176,6 +176,15 @@ struct CreatePostInput: Encodable {
     let scheduledAt: String?
     /// Media rows from `upload.complete`, in display order; omitted when none.
     var mediaIds: [String]? = nil
+    // Everything below is omitted from the JSON when nil (synthesized
+    // Encodable uses encodeIfPresent), so an unused feature changes nothing.
+    var story: StoryInput? = nil
+    var firstComments: [String]? = nil
+    var firstCommentDelayMinutes: Int? = nil
+    var captionOverrides: [String: String]? = nil
+    var campaignLabel: String? = nil
+    var tiktok: TikTokInput? = nil
+    var metadata: PostMetadataInput? = nil
 }
 
 /// `post.create` returns the created Post; we only rely on `id`/`status` so a
