@@ -20,13 +20,18 @@ final class LoginUITests: XCTestCase {
         app.launch()
     }
 
-    func testLoginScreenAppearsWithDisabledSubmit() {
+    /// The button is never silently disabled: an empty tap explains what's
+    /// missing (no network call). A grey button with no reason was reported as
+    /// "can't tap Sign In" on a real iPhone, where AutoFill can leave the
+    /// password binding empty.
+    func testEmptySubmitExplainsWhatsMissing() {
         let email = app.textFields["login.email"]
         XCTAssertTrue(email.waitForExistence(timeout: 10), "Login screen should appear when signed out")
         XCTAssertTrue(app.secureTextFields["login.password"].exists)
         let submit = app.buttons["login.submit"]
-        XCTAssertTrue(submit.exists)
-        XCTAssertFalse(submit.isEnabled, "Sign In must be disabled until both fields are filled")
+        XCTAssertTrue(submit.isEnabled, "Sign In must always be tappable")
+        submit.tap()
+        XCTAssertTrue(app.staticTexts["Enter your email address."].waitForExistence(timeout: 5))
     }
 
     func testWrongCredentialsShowInlineError() {
@@ -40,7 +45,7 @@ final class LoginUITests: XCTestCase {
         password.typeText("definitely-not-a-real-password")
 
         let submit = app.buttons["login.submit"]
-        XCTAssertTrue(submit.isEnabled, "Sign In should enable once both fields are filled")
+        XCTAssertTrue(submit.isEnabled)
         submit.tap()
 
         // Network round-trip to production: allow generous time.
