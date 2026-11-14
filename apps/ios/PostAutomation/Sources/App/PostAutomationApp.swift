@@ -49,20 +49,51 @@ struct RootTabView: View {
                 .tabItem { Label("Posts", systemImage: "doc.text") }
             ComposeView()
                 .tabItem { Label("Compose", systemImage: "square.and.pencil") }
-            ChannelsView()
-                .tabItem { Label("Channels", systemImage: "antenna.radiowaves.left.and.right") }
-            AccountView()
-                .tabItem { Label("Account", systemImage: "person.crop.circle") }
+            InsightsView()
+                .tabItem { Label("Insights", systemImage: "chart.bar") }
+            MoreView()
+                .tabItem { Label("More", systemImage: "ellipsis.circle") }
         }
     }
 }
 
+/// The fifth tab: everything that doesn't fit in the tab bar. Later phases
+/// (Comments, Messages, Media…) add their rows here.
+struct MoreView: View {
+    var body: some View {
+        NavigationStack {
+            List {
+                NavigationLink { ChannelsView(embedded: true) } label: {
+                    Label("Channels", systemImage: "antenna.radiowaves.left.and.right")
+                }
+                NavigationLink { ReportsView() } label: {
+                    Label("Reports", systemImage: "tablecells")
+                }
+                NavigationLink { AccountView(embedded: true) } label: {
+                    Label("Account", systemImage: "person.crop.circle")
+                }
+            }
+            .navigationTitle("More")
+        }
+    }
+}
+
+/// A NavigationStack unless the view is pushed inside someone else's.
+struct MaybeNavigationStack<Content: View>: View {
+    let embedded: Bool
+    @ViewBuilder let content: () -> Content
+    var body: some View {
+        if embedded { content() } else { NavigationStack { content() } }
+    }
+}
+
 struct AccountView: View {
+    var embedded = false
     @Environment(SessionStore.self) private var session
     @State private var signingOut = false
 
     var body: some View {
-        NavigationStack {
+        MaybeNavigationStack(embedded: embedded) {
             List {
                 if let user = session.user {
                     Section("Signed in as") {

@@ -3,6 +3,8 @@ import SwiftUI
 /// Channels tab — `channel.list`, grouped by platform, with the insights-health
 /// "Reconnect" affordance the web app shows.
 struct ChannelsView: View {
+    /// Pushed from the More tab: use its NavigationStack instead of our own.
+    var embedded = false
     @Environment(SessionStore.self) private var session
     @State private var channels: [Channel] = []
     @State private var loading = false
@@ -14,7 +16,7 @@ struct ChannelsView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        MaybeNavigationStack(embedded: embedded) {
             Group {
                 if channels.isEmpty && loading {
                     ProgressView("Loading channels…")
