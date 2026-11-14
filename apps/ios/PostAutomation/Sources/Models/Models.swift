@@ -134,8 +134,85 @@ struct PostTarget: Decodable, Identifiable, Hashable {
     let errorMessage: String?
     let publishedAt: Date?
     let channel: Channel
+    // Phase 3 (2026-11-14). All optional: an older server or a renamed field
+    // must never make post.list undecodable for an installed app.
+    var publishedId: String? = nil
+    /// Set when the platform never confirmed the publish — it may be live, so
+    /// it must NOT be retried blindly ("Needs check").
+    var ambiguousAt: Date? = nil
+    var ambiguousReason: String? = nil
+    var platformDeletedAt: Date? = nil
+    var retryCount: Int? = nil
+    var contentOverride: String? = nil
+    var format: String? = nil
+    var metadata: TargetMetadata? = nil
 
     var publishedURL: URL? { publishedUrl.flatMap(URL.init(string:)) }
+    var needsCheck: Bool { ambiguousAt != nil }
+
+    enum CodingKeys: String, CodingKey {
+        case id, status, publishedUrl, errorMessage, publishedAt, channel
+        case publishedId, ambiguousAt, ambiguousReason, platformDeletedAt, retryCount, contentOverride, format, metadata
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        status = try c.decode(PostStatus.self, forKey: .status)
+        publishedUrl = try c.decodeIfPresent(String.self, forKey: .publishedUrl)
+        errorMessage = try c.decodeIfPresent(String.self, forKey: .errorMessage)
+        publishedAt = try? c.decodeIfPresent(Date.self, forKey: .publishedAt)
+        channel = try c.decode(Channel.self, forKey: .channel)
+        publishedId = try? c.decodeIfPresent(String.self, forKey: .publishedId)
+        ambiguousAt = try? c.decodeIfPresent(Date.self, forKey: .ambiguousAt)
+        ambiguousReason = try? c.decodeIfPresent(String.self, forKey: .ambiguousReason)
+        platformDeletedAt = try? c.decodeIfPresent(Date.self, forKey: .platformDeletedAt)
+        retryCount = try? c.decodeIfPresent(Int.self, forKey: .retryCount)
+        contentOverride = try? c.decodeIfPresent(String.self, forKey: .contentOverride)
+        format = try? c.decodeIfPresent(String.self, forKey: .format)
+        metadata = try? c.decodeIfPresent(TargetMetadata.self, forKey: .metadata)
+    }
+}
+
+/// The two parts of PostTarget.metadata (Prisma Json) the app shows. Each part
+/// decodes on its own; anything else in the column is ignored.
+struct TargetMetadata: Decodable, Hashable {
+    struct PlatformDelete: Decodable, Hashable {
+        var status: String?
+        var message: String?
+        var requestedAt: String?
+        var finishedAt: String?
+    }
+    struct FirstComment: Decodable, Hashable {
+        var status: String?
+        var error: String?
+        var dueAt: String?
+        var posted: Int?
+        var total: Int?
+    }
+    var platformDelete: PlatformDelete?
+    var firstComment: FirstComment?
+
+    enum CodingKeys: String, CodingKey { case platformDelete, firstComment }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        platformDelete = try? c.decodeIfPresent(PlatformDelete.self, forKey: .platformDelete)
+        firstComment = try? c.decodeIfPresent(FirstComment.self, forKey: .firstComment)
+    }
+    init(platformDelete: PlatformDelete? = nil, firstComment: FirstComment? = nil) {
+        self.platformDelete = platformDelete
+        self.firstComment = firstComment
+    }
+}
+
+struct PostMediaAttachment: Decodable, Hashable {
+    struct MediaRef: Decodable, Hashable {
+        let id: String
+        let url: String
+        let fileType: String
+    }
+    let media: MediaRef
+    var isVideo: Bool { media.fileType.hasPrefix("video/") }
 }
 
 struct Post: Decodable, Identifiable, Hashable {
@@ -149,9 +226,34 @@ struct Post: Decodable, Identifiable, Hashable {
     let createdAt: Date
     let updatedAt: Date
     let targets: [PostTarget]
+    var campaignLabel: String? = nil
+    var mediaAttachments: [PostMediaAttachment]? = nil
 
     /// Best "when" for display: published > scheduled > created.
     var displayDate: Date { publishedAt ?? scheduledAt ?? createdAt }
+    /// The web's rule: only drafts and scheduled posts can be edited.
+    var isEditable: Bool { status == .DRAFT || status == .SCHEDULED }
+
+    enum CodingKeys: String, CodingKey {
+        case id, content, status, scheduledAt, publishedAt, archivedAt, aiGenerated, createdAt, updatedAt, targets
+        case campaignLabel, mediaAttachments
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        content = try c.decode(String.self, forKey: .content)
+        status = try c.decode(PostStatus.self, forKey: .status)
+        scheduledAt = try c.decodeIfPresent(Date.self, forKey: .scheduledAt)
+        publishedAt = try c.decodeIfPresent(Date.self, forKey: .publishedAt)
+        archivedAt = try c.decodeIfPresent(Date.self, forKey: .archivedAt)
+        aiGenerated = try c.decode(Bool.self, forKey: .aiGenerated)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        updatedAt = try c.decode(Date.self, forKey: .updatedAt)
+        targets = try c.decode([PostTarget].self, forKey: .targets)
+        campaignLabel = try? c.decodeIfPresent(String.self, forKey: .campaignLabel)
+        mediaAttachments = try? c.decodeIfPresent([PostMediaAttachment].self, forKey: .mediaAttachments)
+    }
 }
 
 struct PostListPage: Decodable {
