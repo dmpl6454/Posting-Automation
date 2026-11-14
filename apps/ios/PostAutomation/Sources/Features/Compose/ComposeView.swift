@@ -31,6 +31,7 @@ struct ComposeView: View {
     @State private var successMessage: String?
     @State private var confirmPublish = false
     @State private var showChannelPicker = false
+    @State private var showAI = false
 
     // Media
     @State private var pickerItems: [PhotosPickerItem] = []
@@ -202,6 +203,9 @@ struct ComposeView: View {
             .sheet(isPresented: $showChannelPicker) {
                 ChannelPickerSheet(channels: activeChannels, selected: $selected)
             }
+            .sheet(isPresented: $showAI) {
+                CreateWithAISheet(current: content, platforms: selectedChannels.map(\.platform.raw)) { content = $0 }
+            }
             .task { if channels.isEmpty { await loadChannels() } }
             .onChange(of: mode) { _, newMode in
                 // Hidden channels must not stay selected.
@@ -219,6 +223,12 @@ struct ComposeView: View {
                 .accessibilityLabel(mode == .story ? "Story note" : "Post caption")
                 .accessibilityIdentifier("compose.caption")
             HStack {
+                if mode == .post {
+                    Button { showAI = true } label: { Label("Write with AI", systemImage: "sparkles") }
+                        .font(.caption.weight(.semibold))
+                        .buttonStyle(.borderless)
+                        .accessibilityIdentifier("compose.ai")
+                }
                 Spacer()
                 Text("\(content.count) characters").font(.caption).foregroundStyle(.secondary)
             }

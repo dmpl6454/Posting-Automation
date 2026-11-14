@@ -198,9 +198,34 @@ and calls the same tRPC procedures the web app does. Full detail:
   workspace the user has left falls back to the server default). `RootTabView` is
   keyed `.id(activeOrganization.id)` so every tab rebuilds — no data from the
   previous workspace stays on screen. `UITests/LibraryUITests` is READ-ONLY.
+- **AI (2026-11-14, Phase 7):** Compose **Write with AI** sheet (`ai.generateContent`
+  / `optimizeContent` / `suggestHashtags`; nothing applied until "Use"), More →
+  **Repurpose a link** (`repurpose.repurposeFromUrl`, photo + carousel only — reels
+  and AI video stay on the web; "Save as draft" sends the web's Create Drafts
+  request: first channel's caption + every platform caption as `contentVariants`,
+  blocked for IG/FB when no image was made) and More → **Super Agent** (threads via
+  `chat.*`; the reply streams from `POST /api/chat/stream` (SSE, not tRPC) through
+  `TRPCClient.streamChat`). **Agent actions never auto-run**: each needs a tap plus a
+  confirm (publish_now warns it can't be undone), `clientActionId` = the server's
+  `idempotencyKey` (else message id), and "Done" is re-seeded from the persisted
+  `executedActionId` markers so a re-tap can't make a second live post. AI calls use
+  `mutate(..., long: true)` — a separate URLSession with a ~590 s timeout (the
+  default session gives up after 30 s of silence; nginx allows 600 s for repurpose).
+- **Admin (2026-11-14, Phase 8):** More → **Admin**, shown only when
+  `user.me.isSuperAdmin` (every call is `superAdminProcedure`; the server is the
+  real gate). Overview (`admin.overview.stats` + `monitor.stats`), **Users** (search,
+  access role via `setAppRole`, make/remove super admin, ban/unban — you can't
+  change your own super-admin/ban status from the phone; both are server-side
+  **toggles**, so after any outcome the app RE-READS the user instead of retrying),
+  **Organizations** (plan, Meta app for new connections — `metaAppId: null` is sent
+  explicitly to restore the default), **Queues** (counts + failed jobs, retry/delete
+  behind confirms; a publish-queue retry warns it re-runs the publish), **Error
+  monitoring** (unresolved list, swipe to resolve, "Resolve all" uses
+  `monitor.resolveAll` over the whole filter, not the loaded page) and **Audit log**.
+  Impersonation, deleting users/orgs and agent/channel/media admin stay on the web.
+  `UITests/AdminUITests` is READ-ONLY and skips unless signed in as a super admin.
 - Not yet built: Google sign-in, push
-  notifications for publish results, and web-parity Phases 7–8 (AI features;
-  admin tools). Story insights and group
+  notifications for publish results. Story insights and group
   stats from the web Insights page are not in the app yet.
 
 ## Local setup
