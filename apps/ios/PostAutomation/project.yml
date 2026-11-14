@@ -27,11 +27,12 @@ settings:
     SWIFT_VERSION: "5.0"
     IPHONEOS_DEPLOYMENT_TARGET: "17.0"
     TARGETED_DEVICE_FAMILY: "1"
-    # Simulator-only for now; no team/identity needed. Set DEVELOPMENT_TEAM and
-    # drop these when building for a physical device or TestFlight.
-    CODE_SIGN_IDENTITY: ""
-    CODE_SIGNING_REQUIRED: "NO"
-    CODE_SIGNING_ALLOWED: "NO"
+    # Apple Developer team (sudhanshu@digitalsukoon.com). Automatic signing:
+    # Xcode / an App Store Connect API key manages the certificate + profiles.
+    # Simulator builds and tests still pass CODE_SIGNING_ALLOWED=NO on the
+    # command line, so they need no account.
+    DEVELOPMENT_TEAM: DYA37GDBH3
+    CODE_SIGN_STYLE: Automatic
 
 targets:
   PostAutomation:
