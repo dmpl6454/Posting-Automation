@@ -30,6 +30,7 @@ struct ComposeView: View {
     @State private var error: String?
     @State private var successMessage: String?
     @State private var confirmPublish = false
+    @State private var showChannelPicker = false
 
     // Media
     @State private var pickerItems: [PhotosPickerItem] = []
@@ -169,8 +170,16 @@ struct ComposeView: View {
                     Section { Label(successMessage, systemImage: "checkmark.circle.fill").foregroundStyle(.green) }
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Compose")
             .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") {
+                        // Whichever field is active — a shared focus flag is unreliable across many fields.
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                    }
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(buttonTitle) {
                         if when == .now { confirmPublish = true } else { Task { await submit() } }
@@ -189,6 +198,10 @@ struct ComposeView: View {
                 Text("It goes live right away.")
             }
             .overlay { if submitting { ProgressView().controlSize(.large) } }
+            // At screen level: a sheet attached to content inside a Form didn't open.
+            .sheet(isPresented: $showChannelPicker) {
+                ChannelPickerSheet(channels: activeChannels, selected: $selected)
+            }
             .task { if channels.isEmpty { await loadChannels() } }
             .onChange(of: mode) { _, newMode in
                 // Hidden channels must not stay selected.
@@ -204,6 +217,7 @@ struct ComposeView: View {
             TextEditor(text: $content)
                 .frame(minHeight: 120)
                 .accessibilityLabel(mode == .story ? "Story note" : "Post caption")
+                .accessibilityIdentifier("compose.caption")
             HStack {
                 Spacer()
                 Text("\(content.count) characters").font(.caption).foregroundStyle(.secondary)
@@ -257,24 +271,22 @@ struct ComposeView: View {
                 Text(mode == .story ? "No Instagram or Facebook channels connected." : "No active channels. Connect one from the web dashboard.")
                     .font(.footnote).foregroundStyle(.secondary)
             } else {
-                ForEach(activeChannels) { ch in
-                    Button {
-                        if selected.contains(ch.id) { selected.remove(ch.id) } else { selected.insert(ch.id) }
-                    } label: {
-                        HStack(spacing: 12) {
-                            ChannelAvatar(channel: ch)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(ch.name).foregroundStyle(.primary).lineLimit(1)
-                                Text(ch.platform.displayName).font(.caption).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Image(systemName: selected.contains(ch.id) ? "checkmark.circle.fill" : "circle")
-                                .foregroundStyle(selected.contains(ch.id) ? Color.accentColor : .secondary)
-                                .imageScale(.large)
+                ForEach(selectedChannels) { ch in
+                    HStack(spacing: 12) {
+                        ChannelAvatar(channel: ch)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(ch.name).lineLimit(1)
+                            Text(ch.platform.displayName).font(.caption).foregroundStyle(.secondary)
                         }
                     }
-                    .buttonStyle(.plain)
+                    .swipeActions { Button("Remove", role: .destructive) { selected.remove(ch.id) } }
                 }
+                Button {
+                    showChannelPicker = true
+                } label: {
+                    Label(selected.isEmpty ? "Choose channels" : "Change channels", systemImage: "plus.circle")
+                }
+                .accessibilityIdentifier("compose.chooseChannels")
             }
         } header: {
             HStack {
@@ -282,6 +294,8 @@ struct ComposeView: View {
                 Spacer()
                 if !selected.isEmpty { Text("\(selectedChannels.count) selected").font(.caption) }
             }
+        } footer: {
+            if !selectedChannels.isEmpty { Text("Swipe a channel left to remove it.") }
         }
     }
 
