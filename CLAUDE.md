@@ -3904,6 +3904,13 @@ Instagram's API only lets an account comment on media it OWNS, plus reply where 
   `readFirstCommentsPlan` ([first-comments.ts](packages/social/src/utils/first-comments.ts)), which still
   honours the legacy `instagramFirstComment` (Instagram-only, immediate). The inbox "Comment on this post" box
   now works on Facebook too.
+  - ✅ **LIVE in production since 2026-11-03** (PR #253, `3a288cd`; pre-deploy dump
+    `/root/backups/predeploy-pr253-20261103T071859Z.dump`, copy in `~/Backups/PostAutomation/predeploy/`). The
+    worker boots the `first-comment` queue worker. ⚠️ **Not yet exercised by a real post:** as of 2026-11-14
+    zero posts carry `metadata.firstComments` and the worker has logged no `[FirstComment]` line. Before relying
+    on it, publish one FB Page post and one IG post with two comments and a 1-minute delay, then confirm the
+    post page goes "will be posted at …" → "All 2 first comments posted" (SQL:
+    `metadata->'firstComment'->>'status'` on the targets).
   - 🔴 **Once per target is an ATOMIC SQL CLAIM**, not a read-then-write: immediate = *no record → `posting`*;
     delayed = publish worker writes *no record → `scheduled` (+`dueAt`)* and queues `first-comment`
     (`fcomment:{targetId}:v1`, **attempts: 1**), whose job claims *`scheduled` → `posting`*. Only the claim
