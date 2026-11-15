@@ -45,7 +45,7 @@ targets:
       properties:
         CFBundleDisplayName: PostAutomation
         CFBundleShortVersionString: "1.0"
-        CFBundleVersion: "3"
+        CFBundleVersion: "4"
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
