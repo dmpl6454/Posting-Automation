@@ -241,6 +241,27 @@ and calls the same tRPC procedures the web app does. Full detail:
   belongs to Expo (its key is on Expo's servers) — leave it alone. Build: archive with
   `-allowProvisioningUpdates -authenticationKey{Path,ID,IssuerID}`, export with
   `signingStyle manual` + that profile. `build-device/` is gitignored.
+- **Account deletion (2026-11-15, App Store 5.1.1(v))** — `user.deleteAccount`
+  (password when the account has one + literal `confirm: "DELETE"`), surfaced in iOS
+  Account → Delete Account and web Settings (the /data-deletion page already promised
+  it there). Refused while impersonating (the swap in protectedProcedure sets
+  `ctx.isImpersonating` from the signed cookie — tested through that real path), for
+  super admins, and for the sole OWNER of a workspace with other members ("transfer
+  ownership first"). Immediately: soft-deletes + wipes the User (email →
+  `deleted-<id>@deleted.invalid`, so the address can sign up again), deletes its
+  memberships/sessions/OAuth links; in SOLO workspaces disconnects every channel
+  (`DISCONNECTED_TOKEN`) and cancels SCHEDULED posts+targets so nothing publishes.
+  ⚠️ **Operator duty:** solo workspaces' posts/media must be purged within 30 days
+  (the promise on /data-deletion) — the `user.account_deleted` audit entry's
+  `metadata.purgeOrganizationIds` lists them. Not automated yet.
+  Test: [user-delete-account.test.ts](packages/api/src/__tests__/user-delete-account.test.ts).
+- **App Store listing (2026-11-15):** app `6834765794` "Post Automation", version 1.0;
+  metadata/categories (Business + Social Networking)/age rating (16+ override)/content
+  rights (third-party) set via the API; copyright Digital Sukoon Private Limited. App
+  Review demo account `appreview@postautomation.co.in` (workspace "Demo Coffee Co.";
+  password only in `~/.appstoreconnect/app-review-demo-account.txt` on the build Mac).
+  App Privacy can only be filled in by an Admin in the web UI.
+- Not yet built: Google sign-in, push
   notifications for publish results. Story insights and group
   stats from the web Insights page are not in the app yet.
 
