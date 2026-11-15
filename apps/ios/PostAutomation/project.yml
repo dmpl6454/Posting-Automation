@@ -44,8 +44,8 @@ targets:
       path: Sources/Info.plist
       properties:
         CFBundleDisplayName: PostAutomation
-        CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "2"
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "3"
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait

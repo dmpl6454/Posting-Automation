@@ -160,6 +160,14 @@ struct AccountView: View {
                     }
                     .disabled(signingOut)
                 }
+                if session.user?.isSuperAdmin != true {
+                    Section {
+                        NavigationLink { DeleteAccountView() } label: {
+                            Text("Delete Account").foregroundStyle(.red)
+                        }
+                        .accessibilityIdentifier("account.delete")
+                    }
+                }
                 Section {
                     LabeledContent("API", value: APIConfig.baseURL.host ?? "")
                     LabeledContent("Version", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—")

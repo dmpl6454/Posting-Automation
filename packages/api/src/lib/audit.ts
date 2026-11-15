@@ -115,6 +115,7 @@ export const AUDIT_ACTIONS = {
 
   // User profile / settings
   USER_PROFILE_UPDATED: "user.profile_updated",
+  USER_ACCOUNT_DELETED: "user.account_deleted",
   USER_PASSWORD_CHANGED: "user.password_changed",
   USER_PHONE_ADDED: "user.phone_added",
   USER_PHONE_REMOVED: "user.phone_removed",

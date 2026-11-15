@@ -13,7 +13,7 @@ import { sendEmail } from "../lib/email";
 import { phoneChangedEmail } from "../lib/email-templates";
 import { createAuditLog, AUDIT_ACTIONS } from "../lib/audit";
 import { PUBLIC_USER_SELECT } from "../lib/user-select";
-import { verifyAndConsumePhoneOtp, PHONE_OTP_PURPOSE } from "@postautomation/db";
+import { verifyAndConsumePhoneOtp, PHONE_OTP_PURPOSE, DISCONNECTED_TOKEN } from "@postautomation/db";
 
 export const userRouter = createRouter({
   me: protectedProcedure.query(async ({ ctx }) => {
@@ -127,6 +127,109 @@ export const userRouter = createRouter({
       });
 
       return { success: true };
+    }),
+
+  /**
+   * Self-service account deletion (App Store guideline 5.1.1(v), and the
+   * promise on /data-deletion). Takes effect IMMEDIATELY for the account:
+   *   - the User row is soft-deleted and its personal data wiped (email is
+   *     replaced, so the address can sign up again), every session and OAuth
+   *     link removed — the jwt callback already rejects a deletedAt user;
+   *   - in workspaces where the user is the ONLY member: every channel is
+   *     disconnected (tokens destroyed) and every SCHEDULED post cancelled, so
+   *     nothing publishes after deletion. Those workspaces' posts and media are
+   *     purged by an operator within 30 days (`user.account_deleted` audit
+   *     entries list them) — a single cascading delete across 25+ relations
+   *     is not something to run from a request handler;
+   *   - in shared workspaces the user's membership is removed. Refused while
+   *     the user is the only OWNER of a workspace that has other members.
+   * Refused for super admins and while impersonating.
+   */
+  deleteAccount: protectedProcedure
+    .input(z.object({ password: z.string().optional(), confirm: z.literal("DELETE") }))
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.isImpersonating) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Stop impersonating before deleting an account." });
+      }
+      const userId = (ctx.session.user as any).id as string;
+      const user = await ctx.prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+          password: true,
+          isSuperAdmin: true,
+          deletedAt: true,
+          memberships: {
+            select: {
+              role: true,
+              organizationId: true,
+              organization: {
+                select: { name: true, members: { select: { userId: true, role: true } } },
+              },
+            },
+          },
+        },
+      });
+      if (!user || user.deletedAt) throw new TRPCError({ code: "NOT_FOUND", message: "Account not found" });
+      if (user.isSuperAdmin) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Super admin accounts can't be deleted from the app." });
+      }
+      if (user.password) {
+        if (!input.password || !(await bcrypt.compare(input.password, user.password))) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Password is incorrect" });
+        }
+      }
+
+      const plan = planAccountDeletion(userId, user.memberships);
+      if (plan.blockedBy.length > 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Transfer ownership of ${plan.blockedBy.join(", ")} to another member first — it has other members who still use it.`,
+        });
+      }
+
+      const now = new Date();
+      await ctx.prisma.$transaction(async (tx: any) => {
+        if (plan.soloOrgIds.length > 0) {
+          await tx.channel.updateMany({
+            where: { organizationId: { in: plan.soloOrgIds }, disconnectedAt: null },
+            data: { isActive: false, disconnectedAt: now, accessToken: DISCONNECTED_TOKEN, refreshToken: null },
+          });
+          await tx.postTarget.updateMany({
+            where: { post: { organizationId: { in: plan.soloOrgIds } }, status: "SCHEDULED" },
+            data: { status: "CANCELLED" },
+          });
+          await tx.post.updateMany({
+            where: { organizationId: { in: plan.soloOrgIds }, status: "SCHEDULED" },
+            data: { status: "CANCELLED" },
+          });
+        }
+        await tx.organizationMember.deleteMany({ where: { userId } });
+        await tx.session.deleteMany({ where: { userId } });
+        await tx.account.deleteMany({ where: { userId } });
+        await tx.user.update({
+          where: { id: userId },
+          data: {
+            deletedAt: now,
+            email: `deleted-${userId}@deleted.invalid`,
+            name: null,
+            image: null,
+            password: null,
+            phone: null,
+            phoneVerified: null,
+          },
+          select: { id: true },
+        });
+      });
+
+      createAuditLog({
+        userId,
+        action: AUDIT_ACTIONS.USER_ACCOUNT_DELETED,
+        entityType: "User",
+        entityId: userId,
+        metadata: { purgeOrganizationIds: plan.soloOrgIds, leftOrganizationIds: plan.leftOrgIds },
+      }).catch(() => {});
+
+      return { success: true, workspacesClosed: plan.soloOrgIds.length };
     }),
 
   // 🔒 Rate limited (security audit 2026-09-28): sends a real SMS to any number.
@@ -355,3 +458,28 @@ export const userRouter = createRouter({
       return org;
     }),
 });
+
+/**
+ * Pure: which workspaces an account deletion closes, leaves, or is blocked by.
+ * A workspace is "solo" when the user is its only member. A shared workspace
+ * blocks deletion when the user is its only OWNER (it would be left ownerless).
+ */
+export function planAccountDeletion(
+  userId: string,
+  memberships: Array<{
+    role: string;
+    organizationId: string;
+    organization: { name: string; members: Array<{ userId: string; role: string }> };
+  }>,
+): { soloOrgIds: string[]; leftOrgIds: string[]; blockedBy: string[] } {
+  const soloOrgIds: string[] = [];
+  const leftOrgIds: string[] = [];
+  const blockedBy: string[] = [];
+  for (const m of memberships) {
+    const others = m.organization.members.filter((x) => x.userId !== userId);
+    if (others.length === 0) soloOrgIds.push(m.organizationId);
+    else if (m.role === "OWNER" && !others.some((x) => x.role === "OWNER")) blockedBy.push(m.organization.name);
+    else leftOrgIds.push(m.organizationId);
+  }
+  return { soloOrgIds, leftOrgIds, blockedBy };
+}

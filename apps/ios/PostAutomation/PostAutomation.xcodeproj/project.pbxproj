@@ -42,6 +42,7 @@
 		7AA03F05980DD4B55753ED0B /* MediaLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4E465DE89282AA2C0A7A346 /* MediaLibraryView.swift */; };
 		7FC54036BF865CC002E07267 /* SuperAgentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D91AB0227BB14C99107BC651 /* SuperAgentView.swift */; };
 		80141DD464EF7451A684F1E1 /* AIUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABA78959E6214C81BC8D6202 /* AIUITests.swift */; };
+		821565D06495AE824FCAAE27 /* DeleteAccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23D8D85B77824501C876A22F /* DeleteAccountView.swift */; };
 		82A4A708E5378757585DE20E /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70C202BC29787754F7D50EE8 /* LoginView.swift */; };
 		849A85382D859E510814CD80 /* InboxUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 783F6EBFD658E9274DAF3551 /* InboxUITests.swift */; };
 		8735F41D136E7E55C914D6AF /* LibraryModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B415414C255093E30B0E795F /* LibraryModels.swift */; };
@@ -101,6 +102,7 @@
 		1B467D7D2571350BE93C12F5 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		1E9D3B4BB41C44604A44CE27 /* ComposePayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposePayload.swift; sourceTree = "<group>"; };
 		21EBD623662C844A180779D9 /* InboxRulesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InboxRulesTests.swift; sourceTree = "<group>"; };
+		23D8D85B77824501C876A22F /* DeleteAccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeleteAccountView.swift; sourceTree = "<group>"; };
 		2B76D3B6CE32E7146CA6EF15 /* InsightsRulesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InsightsRulesTests.swift; sourceTree = "<group>"; };
 		30FE81505BBB7381EF945859 /* AdminRulesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdminRulesTests.swift; sourceTree = "<group>"; };
 		336EFFB7D3B5C86A6E4874F8 /* CommentThreadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommentThreadView.swift; sourceTree = "<group>"; };
@@ -239,6 +241,7 @@
 		4C371053B97B2EB232C6FAD2 /* Login */ = {
 			isa = PBXGroup;
 			children = (
+				23D8D85B77824501C876A22F /* DeleteAccountView.swift */,
 				70C202BC29787754F7D50EE8 /* LoginView.swift */,
 			);
 			path = Login;
@@ -521,6 +524,7 @@
 				E5424D17E449093EC502BBE8 /* ComposePayload.swift in Sources */,
 				3D14B8D9BD52E93F49FEAAD6 /* ComposeView.swift in Sources */,
 				1412F42A7E6DCE9ABC3B25D6 /* CreateWithAISheet.swift in Sources */,
+				821565D06495AE824FCAAE27 /* DeleteAccountView.swift in Sources */,
 				5ECE1984AA37764298F2050A /* EditPostSheets.swift in Sources */,
 				9BA09188897B9488276BC575 /* HomeView.swift in Sources */,
 				9F9314D98CE2DED3E9E47ABE /* InboxModels.swift in Sources */,

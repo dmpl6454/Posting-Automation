@@ -34,6 +34,7 @@ import {
   Sparkles, Video, ImageIcon, MessageSquare
 } from "lucide-react";
 import Link from "next/link";
+import { DeleteAccountCard } from "~/components/settings/delete-account-card";
 
 /**
  * Design: a section label with the hairline rule running out to the RIGHT of
@@ -800,6 +801,9 @@ export default function SettingsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* ── Delete account (App Store 5.1.1(v); /data-deletion promises it) ── */}
+      {user && <DeleteAccountCard hasPassword={!!userAny?.hasPassword} />}
     </div>
   );
 }
