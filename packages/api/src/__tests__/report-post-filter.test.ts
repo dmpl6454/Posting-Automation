@@ -26,8 +26,23 @@ function fnBody(name: string): string {
 describe("fetchPostReportRows — the post filter", () => {
   const body = fnBody("fetchPostReportRows");
 
-  it("takes postId as the LAST optional argument, after campaign", () => {
-    expect(body).toMatch(/campaign\?: string,[\s\S]*?postId\?: string\n\): Promise<PostReportRow\[\]>/);
+  it("takes postId after campaign; only the Excel page cursor (2026-11-23) comes after it", () => {
+    expect(body).toMatch(/campaign\?: string,[\s\S]*?postId\?: string,[\s\S]*?cursor\?: ReportCursor\n\): Promise<PostReportRow\[\]>/);
+  });
+
+  it("pushes the cursor params unconditionally and AFTER postId, so every earlier $N keeps its meaning", () => {
+    const postPush = body.indexOf("params.push(postId ?? null);");
+    const cursorPush = body.indexOf("params.push(cursor ? new Date(cursor.publishedAt) : null);");
+    const cursorIdPush = body.indexOf("params.push(cursor?.targetId ?? null);");
+    expect(cursorPush).toBeGreaterThan(postPush);
+    expect(cursorIdPush).toBeGreaterThan(cursorPush);
+    for (const at of [cursorPush, cursorIdPush]) {
+      const line = body.slice(body.lastIndexOf("\n", at) + 1, at + 20);
+      expect(line.trim().startsWith("params.push")).toBe(true);
+    }
+    // Interpolated unconditionally (a NULL cursor is a no-op in SQL).
+    expect(body).toContain("${cursorFilter}");
+    expect(body).toContain("$${cursorAtIdx}::timestamptz IS NULL");
   });
 
   it("pushes the param unconditionally and AFTER campaign, so $1..$campaign keep their meaning", () => {
@@ -70,13 +85,12 @@ describe("fetchPostReportRows — the post filter", () => {
 });
 
 describe("postReports / emailReport thread postId through, and the email CSV matches the download", () => {
-  it("both procedures accept postId and pass it as the LAST argument", () => {
+  it("both procedures accept postId and pass it in place (postReports then adds only the page cursor)", () => {
     const postReports = src.slice(src.indexOf("postReports: cachedOrgProcedure"), src.indexOf("campaignLabels:"));
     const emailReport = src.slice(src.indexOf("emailReport: emailReportRateLimited"));
-    for (const proc of [postReports, emailReport]) {
-      expect(proc).toContain("postId: z.string().optional()");
-      expect(proc).toMatch(/input\.platform,\s*input\.campaign,\s*input\.postId\s*\)/);
-    }
+    for (const proc of [postReports, emailReport]) expect(proc).toContain("postId: z.string().optional()");
+    expect(postReports).toMatch(/input\.platform,\s*input\.campaign,\s*input\.postId,\s*input\.cursor\s*\)/);
+    expect(emailReport).toMatch(/input\.platform,\s*input\.campaign,\s*input\.postId\s*\)/);
   });
 
   it("reportPosts is org-scoped and lists only posts with a PUBLISHED target in the window", () => {

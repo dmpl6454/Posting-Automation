@@ -345,7 +345,7 @@ export async function fetchChannelStatRows(
   }));
 }
 
-type ReportWindow = "24h" | "7d" | "15d" | "30d";
+type ReportWindow = "24h" | "7d" | "15d" | "30d" | "all";
 type ReportMode = "current" | "at_age";
 
 export interface PostReportRow {
@@ -553,8 +553,25 @@ export function gatePostReportRow(r: PostReportRow): PostReportRow {
  * table would then filter out, or hide one it shows.
  */
 function reportWindowBoundary(window: ReportWindow): Date {
+  // "all" (2026-11-23, owner: an Excel of every post sent through
+  // PostAutomation) — the epoch, so `publishedAt >= $2` keeps every row.
+  // Only valid with mode "current" (enforced at the procedure input): an
+  // at-age report needs a checkpoint window, and "all" is not one.
+  if (window === "all") return new Date(0);
   const hours = { "24h": 24, "7d": 168, "15d": 360, "30d": 720 }[window];
   return new Date(Date.now() - hours * 3_600_000);
+}
+
+/**
+ * Keyset page cursor for the Excel export (2026-11-23). The last row of the
+ * previous page; the next page is every row strictly AFTER it in the export
+ * order (publishedAt DESC, targetId DESC). The id breaks ties, so a page
+ * boundary that falls inside a run of identical timestamps neither drops nor
+ * repeats a row.
+ */
+export interface ReportCursor {
+  publishedAt: string;
+  targetId: string;
 }
 
 /**
@@ -580,7 +597,9 @@ async function fetchPostReportRows(
    * owner calls a campaign, and most posts carry no campaignLabel, so the label
    * filter alone could not isolate one. Undefined ⇒ every post (unchanged).
    */
-  postId?: string
+  postId?: string,
+  /** Optional keyset cursor (Excel export pages). Undefined ⇒ first page (unchanged). */
+  cursor?: ReportCursor
 ): Promise<PostReportRow[]> {
   const boundary = reportWindowBoundary(window);
 
@@ -659,6 +678,22 @@ async function fetchPostReportRows(
   const postIdx = params.length;
   const postFilterApp = `AND ($${postIdx}::text IS NULL OR p.id = $${postIdx})`;
   const postFilterExt = `AND $${postIdx}::text IS NULL`;
+
+  // Optional page cursor. Same contract as the filters above: pushed AND
+  // interpolated UNCONDITIONALLY, appended AFTER post so no earlier placeholder
+  // moves (renumbering would rescope the query to another organization). It is
+  // applied to the OUTER combined set, so both union arms page together.
+  params.push(cursor ? new Date(cursor.publishedAt) : null);
+  const cursorAtIdx = params.length;
+  params.push(cursor?.targetId ?? null);
+  const cursorIdIdx = params.length;
+  // ⚠️ publishedAt is `timestamp WITHOUT time zone` holding UTC (Prisma's
+  // storage). Comparing it to a timestamptz makes Postgres convert through the
+  // SESSION time zone, so on a non-UTC server the cursor lands hours off and a
+  // page repeats forever (caught by report-all-time-paging.e2e on an IST box).
+  // `AT TIME ZONE 'UTC'` turns the cursor into the same UTC wall-clock value.
+  const cursorFilter = `WHERE ($${cursorAtIdx}::timestamptz IS NULL
+       OR ("publishedAt", "targetId") < (($${cursorAtIdx}::timestamptz AT TIME ZONE 'UTC'), $${cursorIdIdx}::text))`;
 
   // Platform-native posts (not published through us) are unioned in ONLY when the
   // population switch is on AND the mode is "current".
@@ -787,7 +822,8 @@ async function fetchPostReportRows(
        ${postFilterApp}
      ${externalUnion}
      ) combined
-     ORDER BY "publishedAt" DESC
+     ${cursorFilter}
+     ORDER BY "publishedAt" DESC, "targetId" DESC
      LIMIT $${limitIdx}`,
     ...params
   );
@@ -1787,11 +1823,13 @@ export const analyticsRouter = createRouter({
   postReports: cachedOrgProcedure
     .input(
       z.object({
-        window: z.enum(["24h", "7d", "15d", "30d"]),
+        window: z.enum(["24h", "7d", "15d", "30d", "all"]),
         mode: z.enum(["current", "at_age"]).default("current"),
         // 1001 so the export can fetch EXPORT_LIMIT(1000)+1 to detect truncation
         // (distinguish "exactly 1000, complete" from ">1000, truncated").
-        limit: z.number().min(1).max(1001).default(500),
+        // 2001: the Excel export's page size (REPORT_PAGE_SIZE 2000) + 1 to
+        // know whether another page exists.
+        limit: z.number().min(1).max(2001).default(500),
         /**
          * Optional per-platform view. MUST be applied server-side: this query is
          * capped by `limit`, so a client-side filter would hide a platform whose
@@ -1802,6 +1840,15 @@ export const analyticsRouter = createRouter({
         campaign: z.string().optional(),
         /** Optional single-post view (one fan-out = one report). Same reasoning. */
         postId: z.string().optional(),
+        /** Excel export page cursor: the previous page's last row. */
+        cursor: z
+          .object({ publishedAt: z.string().datetime(), targetId: z.string().min(1).max(64) })
+          .optional(),
+      })
+      // "all" has no at-age meaning (a checkpoint needs a window).
+      .refine((v) => !(v.window === "all" && v.mode === "at_age"), {
+        message: "All time is only available for current metrics",
+        path: ["window"],
       })
     )
     .query(async ({ ctx, input }) => {
@@ -1813,7 +1860,8 @@ export const analyticsRouter = createRouter({
         input.limit,
         input.platform,
         input.campaign,
-        input.postId
+        input.postId,
+        input.cursor
       );
 
       return {
@@ -1986,7 +2034,8 @@ export const analyticsRouter = createRouter({
   reportPosts: cachedOrgProcedure
     .input(
       z.object({
-        window: z.enum(["24h", "7d", "15d", "30d"]),
+        // "all" so the post picker works when Reports is set to All time.
+        window: z.enum(["24h", "7d", "15d", "30d", "all"]),
         mode: z.enum(["current", "at_age"]).default("current"),
       })
     )

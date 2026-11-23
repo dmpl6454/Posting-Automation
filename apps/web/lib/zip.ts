@@ -41,6 +41,58 @@ function dosDateTime(d: Date): { time: number; date: number } {
 
 export function buildZip(entries: ZipEntry[], now: Date = new Date()): Uint8Array {
   const enc = new TextEncoder();
+  return assemble(
+    entries.map((e) => {
+      const data = typeof e.data === "string" ? enc.encode(e.data) : e.data;
+      return { name: e.name, raw: data, stored: data, method: 0 };
+    }),
+    now
+  );
+}
+
+/**
+ * DEFLATE-compressed variant (2026-11-23) for the Excel export, whose XML for
+ * a large workspace runs to tens of MB but compresses ~10x. Uses the browser's
+ * native `CompressionStream("deflate-raw")` (no dependency); where that is
+ * missing, or an entry doesn't shrink, the entry is STORED — still a valid ZIP.
+ * `buildZip` above is untouched, so the per-campaign bundle is byte-identical.
+ */
+export async function buildZipCompressed(entries: ZipEntry[], now: Date = new Date()): Promise<Uint8Array> {
+  const enc = new TextEncoder();
+  const parts: Part[] = [];
+  for (const e of entries) {
+    const raw = typeof e.data === "string" ? enc.encode(e.data) : e.data;
+    const deflated = await deflateRaw(raw);
+    parts.push(
+      deflated && deflated.length < raw.length
+        ? { name: e.name, raw, stored: deflated, method: 8 }
+        : { name: e.name, raw, stored: raw, method: 0 }
+    );
+  }
+  return assemble(parts, now);
+}
+
+async function deflateRaw(data: Uint8Array): Promise<Uint8Array | null> {
+  if (typeof CompressionStream === "undefined") return null;
+  try {
+    const stream = new Blob([data as BlobPart]).stream().pipeThrough(new CompressionStream("deflate-raw" as CompressionFormat));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  } catch {
+    return null;
+  }
+}
+
+/** One archive entry: `raw` is the original bytes (CRC + uncompressed size), `stored` what is written. */
+interface Part {
+  name: string;
+  raw: Uint8Array;
+  stored: Uint8Array;
+  method: 0 | 8;
+}
+
+function assemble(parts: Part[], now: Date): Uint8Array {
+  const enc = new TextEncoder();
+  const entries = parts;
   const { time, date } = dosDateTime(now);
   const locals: Uint8Array[] = [];
   const centrals: Uint8Array[] = [];
@@ -48,20 +100,20 @@ export function buildZip(entries: ZipEntry[], now: Date = new Date()): Uint8Arra
 
   for (const e of entries) {
     const name = enc.encode(e.name);
-    const data = typeof e.data === "string" ? enc.encode(e.data) : e.data;
-    const crc = crc32(data);
+    const data = e.stored;
+    const crc = crc32(e.raw);
 
     const local = new Uint8Array(30 + name.length + data.length);
     const lv = new DataView(local.buffer);
     lv.setUint32(0, 0x04034b50, true); // local file header signature
     lv.setUint16(4, 20, true); // version needed
     lv.setUint16(6, 0x0800, true); // flags: UTF-8 names
-    lv.setUint16(8, 0, true); // method: store
+    lv.setUint16(8, e.method, true); // method: 0 store, 8 deflate
     lv.setUint16(10, time, true);
     lv.setUint16(12, date, true);
     lv.setUint32(14, crc, true);
-    lv.setUint32(18, data.length, true);
-    lv.setUint32(22, data.length, true);
+    lv.setUint32(18, data.length, true); // compressed size
+    lv.setUint32(22, e.raw.length, true); // uncompressed size
     lv.setUint16(26, name.length, true);
     lv.setUint16(28, 0, true); // extra length
     local.set(name, 30);
@@ -74,12 +126,12 @@ export function buildZip(entries: ZipEntry[], now: Date = new Date()): Uint8Arra
     cv.setUint16(4, 20, true); // version made by
     cv.setUint16(6, 20, true); // version needed
     cv.setUint16(8, 0x0800, true);
-    cv.setUint16(10, 0, true);
+    cv.setUint16(10, e.method, true);
     cv.setUint16(12, time, true);
     cv.setUint16(14, date, true);
     cv.setUint32(16, crc, true);
     cv.setUint32(20, data.length, true);
-    cv.setUint32(24, data.length, true);
+    cv.setUint32(24, e.raw.length, true);
     cv.setUint16(28, name.length, true);
     cv.setUint16(30, 0, true); // extra
     cv.setUint16(32, 0, true); // comment
