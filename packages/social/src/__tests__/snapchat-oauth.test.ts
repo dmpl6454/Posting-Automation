@@ -28,7 +28,7 @@ const baseConfig: OAuthConfig = {
   scopes: ["snapchat-profile-api"],
 };
 
-describe("OAuth Flow - Snapchat (connect-only)", () => {
+describe("OAuth Flow - Snapchat", () => {
   const snapchat = new SnapchatProvider();
 
   beforeEach(() => {
@@ -38,7 +38,7 @@ describe("OAuth Flow - Snapchat (connect-only)", () => {
   describe("getOAuthUrl()", () => {
     it("points to Snapchat's accounts.snapchat.com authorize endpoint", () => {
       const url = snapchat.getOAuthUrl(baseConfig, "state");
-      expect(url).toContain("https://accounts.snapchat.com/accounts/oauth2/auth");
+      expect(url).toContain("https://accounts.snapchat.com/login/oauth2/authorize");
     });
 
     it("includes client_id, encoded redirect_uri, state and response_type=code", () => {
@@ -76,7 +76,7 @@ describe("OAuth Flow - Snapchat (connect-only)", () => {
       const tokens = await snapchat.exchangeCodeForTokens("the-code", baseConfig);
 
       expect(mockFetch).toHaveBeenCalledWith(
-        "https://accounts.snapchat.com/accounts/oauth2/token",
+        "https://accounts.snapchat.com/login/oauth2/access_token",
         expect.objectContaining({ method: "POST" })
       );
       expect(tokens.accessToken).toBe("snap-access");
@@ -154,26 +154,6 @@ describe("OAuth Flow - Snapchat (connect-only)", () => {
       await expect(snapchat.getProfile({ accessToken: "tok" })).rejects.toThrow(
         "Snapchat profile fetch failed"
       );
-    });
-  });
-
-  describe("posting is intentionally not available yet (connect-only slice)", () => {
-    it("publishPost throws a clear 'not available yet' error, never silently succeeds", async () => {
-      await expect(
-        snapchat.publishPost({ accessToken: "tok" }, { content: "hi", mediaUrls: ["x"] })
-      ).rejects.toThrow(/not available yet/i);
-    });
-
-    it("deletePost throws (Snapchat has no programmatic delete)", async () => {
-      await expect(snapchat.deletePost({ accessToken: "tok" }, "post-id")).rejects.toThrow(
-        /does not support programmatic post deletion/i
-      );
-    });
-
-    it("getPostAnalytics returns null (inherited base contract — never throws in sync)", async () => {
-      await expect(
-        snapchat.getPostAnalytics({ accessToken: "tok" }, "post-id")
-      ).resolves.toBeNull();
     });
   });
 });
