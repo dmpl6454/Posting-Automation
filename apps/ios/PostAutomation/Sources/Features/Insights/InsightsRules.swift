@@ -175,4 +175,67 @@ enum InsightsRules {
         }
         return lines.joined(separator: "\r\n") + "\r\n"
     }
+
+    // MARK: Excel export (2026-11-23)
+
+    /// Rows per page fetched for the Excel export (the server allows this + 1).
+    static let reportPageSize = 2000
+    /// Hard stop for one file — far under Excel's 1,048,576-row sheet limit.
+    static let xlsxMaxRows = 100_000
+
+    struct ReportCursor: Encodable, Equatable {
+        var publishedAt: String
+        var targetId: String
+    }
+
+    /// Keyset paging for a page fetched with `limit = pageSize + 1`: the rows to
+    /// keep, and the cursor for the next page (nil when this was the last one).
+    /// Same contract as the web's nextReportCursor — the server orders by
+    /// (publishedAt DESC, targetId DESC), so the last kept row is the cursor.
+    static func nextReportCursor(_ page: [ReportRow], pageSize: Int = reportPageSize) -> (rows: [ReportRow], cursor: ReportCursor?) {
+        let rows = Array(page.prefix(pageSize))
+        guard page.count > pageSize, let last = rows.last, let at = last.publishedAt else { return (rows, nil) }
+        return (rows, ReportCursor(publishedAt: TRPCClient.isoWithFraction.string(from: at), targetId: last.targetId))
+    }
+
+    /// The Excel columns: the CSV's columns, typed, plus the handle — dates are
+    /// real dates, counts real numbers, the post URL a clickable link.
+    static func reportXlsxColumns(metrics: [MetricKey]) -> [XlsxWriter.Column] {
+        [
+            .init(header: "Post", kind: .text, width: 50),
+            .init(header: "Channel", kind: .text, width: 24),
+            .init(header: "Handle", kind: .text, width: 20),
+            .init(header: "Platform", kind: .text, width: 12),
+            .init(header: "Published (UTC)", kind: .date, width: 18),
+            .init(header: "Campaign", kind: .text, width: 18),
+            .init(header: "Post URL", kind: .link, width: 48),
+        ]
+        + metrics.map { XlsxWriter.Column(header: metricLabel($0, aggregate: false), kind: .number, width: 12) }
+        + [
+            .init(header: "Engagement %", kind: .percent, width: 13),
+            .init(header: "Captured (UTC)", kind: .date, width: 20),
+        ]
+    }
+
+    static func reportXlsxRow(_ r: ReportRow, metrics: [MetricKey]) -> [XlsxWriter.Cell] {
+        func text(_ s: String?) -> XlsxWriter.Cell { s.map { .text($0) } ?? .empty }
+        func date(_ d: Date?) -> XlsxWriter.Cell { d.map { .date($0) } ?? .empty }
+        var cells: [XlsxWriter.Cell] = [
+            text(r.contentPreview), text(r.channelName), text(r.channelUsername.map { "@" + $0 }),
+            text(Platform(raw: r.platform).displayName), date(r.publishedAt), text(r.campaignLabel), text(r.publishedUrl),
+        ]
+        // nil ⇒ empty cell ("—" in the app); a real 0 stays 0.
+        cells += metrics.map { m in (r.values[m] ?? nil).map { .number(Double($0)) } ?? .empty }
+        cells.append(r.engagementRate.map { .number($0) } ?? .empty)
+        cells.append(date(r.snapshotAt))
+        return cells
+    }
+
+    static func reportXlsx(_ rows: [ReportRow], metrics: [MetricKey]) -> Data {
+        XlsxWriter.build(
+            sheetName: "Report",
+            columns: reportXlsxColumns(metrics: metrics),
+            rows: rows.map { reportXlsxRow($0, metrics: metrics) }
+        )
+    }
 }

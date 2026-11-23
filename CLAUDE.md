@@ -261,6 +261,14 @@ and calls the same tRPC procedures the web app does. Full detail:
   Review demo account `appreview@postautomation.co.in` (workspace "Demo Coffee Co.";
   password only in `~/.appstoreconnect/app-review-demo-account.txt` on the build Mac).
   App Privacy can only be filled in by an Admin in the web UI.
+- **Reports → Export Excel (2026-11-23)** mirrors the web export: same keyset
+  paging (`limit 2001` + `cursor`, `InsightsRules.nextReportCursor`), an
+  "All" window (current metrics only; switching to "At that age" falls back to
+  30d; Email is disabled for All — the server caps it at 30 days). The .xlsx is
+  written by [XlsxWriter.swift](apps/ios/PostAutomation/Sources/Core/XlsxWriter.swift),
+  a port of `apps/web/lib/xlsx.ts` (inline strings, never formulas; links only
+  for safe http(s) URLs) with its own ZIP + CRC32 (`NSData.compressed(.zlib)` =
+  raw DEFLATE). Tested by `XlsxWriterTests`, which unzips the output.
 - Not yet built: Google sign-in, push
   notifications for publish results. Story insights and group
   stats from the web Insights page are not in the app yet.
