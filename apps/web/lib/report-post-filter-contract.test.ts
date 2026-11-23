@@ -74,7 +74,29 @@ describe("Download per campaign (ZIP bundle)", () => {
     expect(tab).toMatch(
       /utils\.analytics\.postReports\.fetch\(\{[\s\S]*?platform: platformFilter,\s*campaign: campaignFilter,\s*postId: postFilter,\s*window: win,\s*mode,\s*limit: EXPORT_LIMIT \+ 1,/
     );
-    expect(tab.match(/utils\.analytics\.postReports\.fetch\(/g)).toHaveLength(1);
+    // Two fetches since 2026-11-23: the shared CSV/ZIP one above, and Export
+    // Excel's paged one below. Both must carry every on-screen filter.
+    expect(tab.match(/utils\.analytics\.postReports\.fetch\(/g)).toHaveLength(2);
+  });
+});
+
+describe("Export Excel (2026-11-23)", () => {
+  it("pages with every on-screen filter, the page size and the keyset cursor", () => {
+    expect(tab).toMatch(
+      /utils\.analytics\.postReports\.fetch\(\{[\s\S]*?platform: platformFilter,\s*campaign: campaignFilter,\s*postId: postFilter,\s*window: win,\s*mode,\s*limit: REPORT_PAGE_SIZE \+ 1,\s*\.\.\.\(cursor \? \{ cursor \} : \{\}\),/
+    );
+  });
+
+  it("uses the SAME column builder as the CSV, then the Excel writer", () => {
+    expect(tab.match(/const buildExportColumns = /g)).toHaveLength(1);
+    expect(tab).toContain("const { header, toRow } = buildExportColumns(all, inExport);");
+    expect(tab).toContain('buildXlsx("Report", reportXlsxColumns(header), all.map(toRow))');
+    expect(tab).toContain('data-testid="report-export-excel"');
+  });
+
+  it("email can never be sent for All time (its server input stops at 30 days)", () => {
+    expect(tab).toContain('if (!to || emailReport.isPending || win === "all") return;');
+    expect(tab).toContain('disabled={!rows.length || win === "all"}');
   });
 
   it("the bundle is built from the shared header/toRow and downloaded as a ZIP", () => {

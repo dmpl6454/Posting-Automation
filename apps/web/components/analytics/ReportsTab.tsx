@@ -18,15 +18,17 @@ import {
 } from "~/components/ui/dialog";
 import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
-import { Download, ExternalLink, FileArchive, Filter, Info, Loader2, Mail, X } from "lucide-react";
+import { Download, ExternalLink, FileArchive, FileSpreadsheet, Filter, Info, Loader2, Mail, X } from "lucide-react";
 import { toCsv, downloadCsv } from "~/lib/csv";
 import { reportFileScope } from "~/lib/report-file-scope";
 import { buildReportBundle } from "~/lib/report-bundle";
 import { buildZip, downloadZip } from "~/lib/zip";
+import { buildXlsx, downloadXlsx } from "~/lib/xlsx";
+import { reportXlsxColumns, nextReportCursor, REPORT_PAGE_SIZE, XLSX_MAX_ROWS } from "~/lib/report-xlsx";
 import { useToast } from "~/hooks/use-toast";
 import { humanizeError } from "~/lib/errors";
 
-type ReportWindow = "24h" | "7d" | "15d" | "30d";
+type ReportWindow = "24h" | "7d" | "15d" | "30d" | "all";
 type ReportMode = "current" | "at_age";
 
 const WINDOWS: { value: ReportWindow; label: string }[] = [
@@ -34,6 +36,9 @@ const WINDOWS: { value: ReportWindow; label: string }[] = [
   { value: "7d", label: "7 days" },
   { value: "15d", label: "15 days" },
   { value: "30d", label: "30 days" },
+  // Every post ever sent through PostAutomation (2026-11-23). "Current metrics"
+  // only — an at-age report needs a checkpoint window.
+  { value: "all", label: "All time" },
 ];
 
 /** UTC "YYYY-MM-DD HH:mm" — analytics invariant: all report dates are UTC. */
@@ -122,6 +127,8 @@ export function ReportsTab() {
   const [win, setWin] = useState<ReportWindow>("7d");
   const [mode, setMode] = useState<ReportMode>("current");
   const [exporting, setExporting] = useState(false);
+  // Excel export progress: rows fetched so far (null = idle).
+  const [excelRows, setExcelRows] = useState<number | null>(null);
   const [bundling, setBundling] = useState(false);
   const [emailOpen, setEmailOpen] = useState(false);
   const [recipient, setRecipient] = useState("");
@@ -228,7 +235,8 @@ export function ReportsTab() {
 
   const onSendEmail = () => {
     const to = recipient.trim();
-    if (!to || emailReport.isPending) return;
+    // Email covers up to 30 days (its button is disabled for "All time").
+    if (!to || emailReport.isPending || win === "all") return;
     // ⚠️ campaign too — an email covering a DIFFERENT population than the table
     // on screen is the exact drift this file has already seen twice.
     emailReport.mutate({ to, window: win, mode, platform: platformFilter, campaign: campaignFilter, postId: postFilter });
@@ -263,6 +271,16 @@ export function ReportsTab() {
     const fetched = full?.rows ?? rows;
     const truncated = fetched.length > EXPORT_LIMIT;
     const exportRows = fetched.slice(0, EXPORT_LIMIT);
+    const { header, toRow } = buildExportColumns(exportRows, inCsv);
+    return { exportRows, truncated, header, toRow, date: new Date().toISOString().slice(0, 10) };
+  };
+
+  /**
+   * The export column builder, shared by the CSV, the per-campaign ZIP and the
+   * Excel file — one builder, so the three can never disagree about which
+   * columns exist or in what order.
+   */
+  const buildExportColumns = (exportRows: typeof rows, inCsv: (key: string) => boolean) => {
     // Metric columns, filtered to what is actually reportable, so the header
     // and every row stay index-aligned.
     type ExportRow = (typeof exportRows)[number];
@@ -303,7 +321,63 @@ export function ReportsTab() {
       ...(includeEng ? [r.engagementRate] : []),
       r.snapshotAt ? new Date(r.snapshotAt).toISOString() : "",
     ];
-    return { exportRows, truncated, header, toRow, date: new Date().toISOString().slice(0, 10) };
+    return { header, toRow };
+  };
+
+  /**
+   * "Export Excel" (2026-11-23, owner: an Excel insight report with the link
+   * of every post sent through PostAutomation). Same filters and columns as
+   * Export CSV, but fetched in keyset pages of REPORT_PAGE_SIZE so an all-time
+   * export of a large workspace (37k+ rows) never asks the server for one huge
+   * response. Stops at XLSX_MAX_ROWS and says so in the file name.
+   */
+  const onExportExcel = async () => {
+    if (!rows.length || excelRows !== null) return;
+    setExcelRows(0);
+    try {
+      const all: typeof rows = [];
+      const reportable = new Set<string>();
+      let cursor: { publishedAt: string; targetId: string } | undefined;
+      let truncated = false;
+      for (;;) {
+        const page = await utils.analytics.postReports.fetch({
+          platform: platformFilter,
+          campaign: campaignFilter,
+          postId: postFilter,
+          window: win,
+          mode,
+          limit: REPORT_PAGE_SIZE + 1,
+          ...(cursor ? { cursor } : {}),
+        });
+        for (const m of page.reportableMetrics ?? []) reportable.add(m);
+        const next = nextReportCursor(page.rows);
+        all.push(...next.rows);
+        setExcelRows(all.length);
+        if (all.length >= XLSX_MAX_ROWS) {
+          truncated = !!next.cursor || all.length > XLSX_MAX_ROWS;
+          all.length = Math.min(all.length, XLSX_MAX_ROWS);
+          break;
+        }
+        if (!next.cursor) break;
+        cursor = next.cursor;
+      }
+      const inExport = (key: string) => reportable.size === 0 || reportable.has(key);
+      const { header, toRow } = buildExportColumns(all, inExport);
+      const bytes = await buildXlsx("Report", reportXlsxColumns(header), all.map(toRow));
+      const scope = reportFileScope({ campaign: campaignFilter, postId: postFilter });
+      const date = new Date().toISOString().slice(0, 10);
+      downloadXlsx(`postautomation-report-${scope}${win}-${mode}-${date}${truncated ? "-truncated" : ""}.xlsx`, bytes);
+      toast({
+        title: "Excel report ready",
+        description: `${all.length.toLocaleString()} row${all.length === 1 ? "" : "s"}${
+          truncated ? ` (stopped at ${XLSX_MAX_ROWS.toLocaleString()})` : ""
+        }.`,
+      });
+    } catch (err) {
+      toast({ title: "Excel export failed", description: humanizeError(err), variant: "destructive" });
+    } finally {
+      setExcelRows(null);
+    }
   };
 
   const onExport = async () => {
@@ -430,7 +504,8 @@ export function ReportsTab() {
               size="sm"
               variant="outline"
               onClick={() => setEmailOpen(true)}
-              disabled={!rows.length}
+              disabled={!rows.length || win === "all"}
+              title={win === "all" ? "Email covers up to 30 days. Use Export Excel for all time." : undefined}
             >
               <Mail className="mr-1.5 h-3.5 w-3.5" />
               Email report
@@ -442,6 +517,21 @@ export function ReportsTab() {
                 <Download className="mr-1.5 h-3.5 w-3.5" />
               )}
               Export CSV
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={onExportExcel}
+              disabled={!rows.length || excelRows !== null}
+              data-testid="report-export-excel"
+              title="Excel workbook with clickable post links. Same rows and columns as Export CSV."
+            >
+              {excelRows !== null ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <FileSpreadsheet className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              {excelRows !== null ? `Fetching ${excelRows.toLocaleString()}…` : "Export Excel"}
             </Button>
             <Button
               size="sm"
@@ -463,7 +553,7 @@ export function ReportsTab() {
 
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex rounded-lg border p-0.5">
-            {WINDOWS.map((w) => (
+            {WINDOWS.filter((w) => mode === "current" || w.value !== "all").map((w) => (
               <button
                 key={w.value}
                 onClick={() => setWin(w.value)}
@@ -485,7 +575,10 @@ export function ReportsTab() {
               Current metrics
             </button>
             <button
-              onClick={() => setMode("at_age")}
+              onClick={() => {
+                setMode("at_age");
+                if (win === "all") setWin("30d");
+              }}
               title="Shows posts old enough to have reached this age (published at least one window ago), with metrics as they stood exactly 24h/7d/15d/30d after publish. At-age data accrues for posts published after 2026-07-17 — older posts show —."
               className={`rounded-md px-3 py-2 [@media(hover:hover)]:py-1 text-xs font-medium transition-colors ${
                 mode === "at_age" ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"
