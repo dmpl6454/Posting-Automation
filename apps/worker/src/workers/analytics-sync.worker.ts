@@ -45,7 +45,10 @@ export function createAnalyticsSyncWorker() {
         // precedent): LinkedIn Page channels carry { orgId } here, which
         // getPostAnalytics needs for organizationalEntityShareStatistics
         // (impressions/clicks/shares — member posts have no analytics API).
-        metadata: (channel.metadata ?? undefined) as Record<string, unknown> | undefined,
+        metadata: (platform === "SNAPCHAT"
+          ? // Snapchat stats paths need the Public Profile id (= platformId).
+            { ...((channel.metadata as object) ?? {}), snapProfileId: channel.platformId }
+          : (channel.metadata ?? undefined)) as Record<string, unknown> | undefined,
       };
 
       // 2a. FACEBOOK VIDEO/REEL: resolve the bare Video-node id to a composite

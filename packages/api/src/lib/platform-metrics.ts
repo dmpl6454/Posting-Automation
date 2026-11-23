@@ -80,10 +80,14 @@ const CAPS: Record<string, PlatformMetricCapabilities> = {
     reachIsDistinct: false,
     unavailable: ["reach", "comments", "shares", "views"],
   },
+  // Spotlight stats (Public Profile API, 2026-11-23): SPOTLIGHT_VIEWS → views,
+  // SPOTLIGHT_UNIQUES → reach, SPOTLIGHT_FAVORITES → likes, SPOTLIGHT_SHARES →
+  // shares. No impressions, clicks or comment counts. Per-capture
+  // metricsAvailable still wins (the scraper fallback reports less).
   SNAPCHAT: {
     likeKind: "likes",
-    reachIsDistinct: false,
-    unavailable: ["reach", "clicks", "likes", "views"],
+    reachIsDistinct: true,
+    unavailable: ["impressions", "clicks", "comments"],
   },
 };
 

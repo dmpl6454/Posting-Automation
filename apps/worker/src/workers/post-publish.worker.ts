@@ -755,6 +755,12 @@ export function createPostPublishWorker() {
               })),
             })
           : {}),
+        // Snapchat (2026-11-23): the Public Profile id (= channel.platformId) is the
+        // {profile_id} in every posting path, and the @handle builds the Story
+        // link. Gated on the platform so every other payload is byte-identical.
+        ...(platform === "SNAPCHAT"
+          ? { snapProfileId: channel.platformId, ...(channel.username ? { channelUsername: channel.username } : {}) }
+          : {}),
         ...channelMetadata, // pageId/igUserId/logo_path MUST win — kept last
       };
 
