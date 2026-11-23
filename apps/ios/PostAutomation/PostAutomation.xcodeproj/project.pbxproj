@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		00C9F7100C6793C32EF760D4 /* XlsxWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A783C75DA53C77AE12E584B2 /* XlsxWriter.swift */; };
 		0549C19EA201F26B16BB9CEF /* TRPCClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C575C3B99D0CCBE40B4AFB8C /* TRPCClientTests.swift */; };
 		0AFEB150FDF474CBBAC7440F /* InsightsModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED0ED8343C94497B13899F51 /* InsightsModels.swift */; };
 		0BE0B574BF60E76B51A7DE18 /* RepurposeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89B10D42B3350DA094145EC5 /* RepurposeView.swift */; };
@@ -32,6 +33,7 @@
 		4469FC953A0761801F7F2686 /* User.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B09A76AE65CB9144FF2C7CC /* User.swift */; };
 		462604161F9F8AE0DC25950B /* MessagesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000B4EA1BEEAC77201A62B83 /* MessagesView.swift */; };
 		4E3F23AC854D99B5F72D4835 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = F086111A5C52B8C7D9E6B76F /* Models.swift */; };
+		5DFC48EB0B9312E9828B2466 /* XlsxWriterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 755E023D02DFEF8BAE98E8E0 /* XlsxWriterTests.swift */; };
 		5ECE1984AA37764298F2050A /* EditPostSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB30C36205B1EEA77AF12768 /* EditPostSheets.swift */; };
 		638AD265ABB8BA61FA05614F /* InboxRulesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21EBD623662C844A180779D9 /* InboxRulesTests.swift */; };
 		66171DBDE6BB521D82C7671D /* AdminViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8EE5B7E3337B0272E44F0AF /* AdminViews.swift */; };
@@ -116,6 +118,7 @@
 		70678DDB1BCB457239F74C78 /* InboxRules.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InboxRules.swift; sourceTree = "<group>"; };
 		70C202BC29787754F7D50EE8 /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
 		740B5CA21636812F1293FAA4 /* PostsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PostsUITests.swift; sourceTree = "<group>"; };
+		755E023D02DFEF8BAE98E8E0 /* XlsxWriterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XlsxWriterTests.swift; sourceTree = "<group>"; };
 		7726358C3A9AF65DC47DE681 /* InsightsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InsightsUITests.swift; sourceTree = "<group>"; };
 		78322CF54462E0EB587A10D8 /* AdminModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdminModels.swift; sourceTree = "<group>"; };
 		783F6EBFD658E9274DAF3551 /* InboxUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InboxUITests.swift; sourceTree = "<group>"; };
@@ -133,6 +136,7 @@
 		96F3382F86DEAD9DDF43EDF2 /* APIConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIConfig.swift; sourceTree = "<group>"; };
 		9B7D0D23373C8CE870FD9B34 /* PostRulesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PostRulesTests.swift; sourceTree = "<group>"; };
 		A5E1969942D8123AE26E78EB /* ReportsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportsView.swift; sourceTree = "<group>"; };
+		A783C75DA53C77AE12E584B2 /* XlsxWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XlsxWriter.swift; sourceTree = "<group>"; };
 		AA7AE2C94AEC24A1B40037B1 /* InboxModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InboxModels.swift; sourceTree = "<group>"; };
 		ABA78959E6214C81BC8D6202 /* AIUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIUITests.swift; sourceTree = "<group>"; };
 		AF69FF8DF4DCE4FFF7EAD621 /* ComposePayloadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposePayloadTests.swift; sourceTree = "<group>"; };
@@ -208,6 +212,7 @@
 				09E782AD54F8C026B1B1325C /* AuthService.swift */,
 				110308E9F1DB14DAAF1986E0 /* MediaUploader.swift */,
 				D8E4E8D01FD26A63F8F941BE /* TRPCClient.swift */,
+				A783C75DA53C77AE12E584B2 /* XlsxWriter.swift */,
 			);
 			path = Core;
 			sourceTree = "<group>";
@@ -261,6 +266,7 @@
 				D1F82EA369B5B72AD4D8201C /* MediaUploadPlanTests.swift */,
 				9B7D0D23373C8CE870FD9B34 /* PostRulesTests.swift */,
 				C575C3B99D0CCBE40B4AFB8C /* TRPCClientTests.swift */,
+				755E023D02DFEF8BAE98E8E0 /* XlsxWriterTests.swift */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -503,6 +509,7 @@
 				FB532219A92AB5F28488C026 /* MediaUploadPlanTests.swift in Sources */,
 				CAB32929B952409CAAFE6D9E /* PostRulesTests.swift in Sources */,
 				0549C19EA201F26B16BB9CEF /* TRPCClientTests.swift in Sources */,
+				5DFC48EB0B9312E9828B2466 /* XlsxWriterTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -552,6 +559,7 @@
 				24AED4969CD76D9057762215 /* TRPCClient.swift in Sources */,
 				0FD065731382FFDEC8FEDA41 /* TikTokSettingsView.swift in Sources */,
 				4469FC953A0761801F7F2686 /* User.swift in Sources */,
+				00C9F7100C6793C32EF760D4 /* XlsxWriter.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

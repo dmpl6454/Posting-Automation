@@ -3,7 +3,8 @@ import SwiftUI
 /// Insights → Reports — every post on every channel over a window, the web's
 /// ReportsTab: window (24h/7d/15d/30d), "now" vs "at that age" numbers,
 /// platform and campaign filters (applied by the server, so the cap can't hide
-/// rows), a CSV to share, and "Email me this report".
+/// rows), a CSV to share, an Excel file with every row ("All time" too), and
+/// "Email me this report".
 struct ReportsView: View {
     @Environment(SessionStore.self) private var session
     @State private var window = "7d"
@@ -17,6 +18,9 @@ struct ReportsView: View {
     @State private var emailing = false
     @State private var error: String?
     @State private var notice: (title: String, detail: String)?
+    /// Excel export progress: rows fetched so far (nil = idle).
+    @State private var excelRows: Int?
+    @State private var excelFile: SharedFile?
 
     static let limit = 500
     private var metrics: [MetricKey] { InsightsRules.visibleMetrics(report?.reportableMetrics) }
@@ -26,6 +30,9 @@ struct ReportsView: View {
             Section {
                 Picker("Window", selection: $window) {
                     Text("24h").tag("24h"); Text("7d").tag("7d"); Text("15d").tag("15d"); Text("30d").tag("30d")
+                    // Every post ever sent through PostAutomation — current numbers only
+                    // (an "at that age" report needs a checkpoint window).
+                    if mode == "current" { Text("All").tag("all") }
                 }
                 .pickerStyle(.segmented)
                 Picker("Numbers", selection: $mode) {
@@ -46,7 +53,9 @@ struct ReportsView: View {
                 }
             } footer: {
                 Text(mode == "current"
-                     ? "Posts published in the last \(window), with their latest numbers."
+                     ? (window == "all"
+                        ? "Every post sent through PostAutomation, with its latest numbers."
+                        : "Posts published in the last \(window), with their latest numbers.")
                      : "Posts at least \(window) old, with the numbers captured when they were \(window) old. Posts from before mid-July 2026 have none.")
             }
 
@@ -60,7 +69,7 @@ struct ReportsView: View {
                     ForEach(report.rows) { row in reportRow(row) }
                 } header: {
                     Text("\(report.rows.count.formatted()) row\(report.rows.count == 1 ? "" : "s")"
-                         + (report.rows.count >= Self.limit ? " (first \(Self.limit) — download the CSV on the web for more)" : ""))
+                         + (report.rows.count >= Self.limit ? " (first \(Self.limit) — Export Excel has every row)" : ""))
                 } footer: {
                     if !report.rows.isEmpty { Text("Each row is one post on one channel. “—” means not reported or not captured yet.") }
                 }
@@ -72,14 +81,24 @@ struct ReportsView: View {
             if let report, !report.rows.isEmpty {
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
+                        Button { Task { await exportExcel() } } label: {
+                            Label("Export Excel", systemImage: "tablecells")
+                        }
+                        .disabled(excelRows != nil)
                         ShareLink(item: csvFile(report), preview: SharePreview("Insights report \(window)")) {
                             Label("Share CSV", systemImage: "square.and.arrow.up")
                         }
                         Button { Task { await email() } } label: {
                             Label("Email to \(session.user?.email ?? "me")", systemImage: "envelope")
                         }
-                        .disabled(emailing || session.user == nil)
-                    } label: { Image(systemName: "square.and.arrow.up") }
+                        .disabled(emailing || session.user == nil || window == "all")
+                    } label: {
+                        if let n = excelRows {
+                            HStack(spacing: 4) { ProgressView(); Text(n.formatted()).font(.caption) }
+                        } else {
+                            Image(systemName: "square.and.arrow.up")
+                        }
+                    }
                     .accessibilityLabel("Export report")
                 }
             }
@@ -87,10 +106,14 @@ struct ReportsView: View {
         .refreshable { await load() }
         .task { if report == nil { await loadFilters(); await load() } }
         .onChange(of: window) { _, _ in Task { await load() } }
-        .onChange(of: mode) { _, _ in Task { await load() } }
+        .onChange(of: mode) { _, m in
+            // "All" has no at-age meaning; fall back to 30 days (the window change reloads).
+            if m == "at_age" && window == "all" { window = "30d" } else { Task { await load() } }
+        }
         .onChange(of: platform) { _, _ in Task { await load() } }
         .onChange(of: campaign) { _, _ in Task { await load() } }
         .overlay { if loading && report == nil { ProgressView() } }
+        .sheet(item: $excelFile) { ActivityView(items: [$0.url]) }
         .alert(notice?.title ?? "", isPresented: Binding(get: { notice != nil }, set: { if !$0 { notice = nil } })) {
             Button("OK", role: .cancel) {}
         } message: { Text(notice?.detail ?? "") }
@@ -133,6 +156,7 @@ struct ReportsView: View {
         let limit: Int
         var platform: String?
         var campaign: String?
+        var cursor: InsightsRules.ReportCursor?
     }
     private struct EmailInput: Encodable {
         let to: String
@@ -170,6 +194,54 @@ struct ReportsView: View {
         return url
     }
 
+    /// Every row for the current filters, fetched in keyset pages so a large
+    /// all-time export never asks the server for one huge response — the same
+    /// paging as the web's Export Excel. Stops at xlsxMaxRows and says so.
+    private func exportExcel() async {
+        guard excelRows == nil else { return }
+        excelRows = 0
+        defer { excelRows = nil }
+        do {
+            var all: [ReportRow] = []
+            var reportable = Set<MetricKey>()
+            var cursor: InsightsRules.ReportCursor?
+            var truncated = false
+            while true {
+                let page: ReportsResponse = try await TRPCClient.shared.query(
+                    "analytics.postReports",
+                    input: ReportInput(window: window, mode: mode, limit: InsightsRules.reportPageSize + 1,
+                                       platform: platform, campaign: campaign, cursor: cursor)
+                )
+                page.reportableMetrics?.forEach { reportable.insert($0) }
+                let next = InsightsRules.nextReportCursor(page.rows)
+                all += next.rows
+                excelRows = all.count
+                if all.count >= InsightsRules.xlsxMaxRows {
+                    truncated = next.cursor != nil || all.count > InsightsRules.xlsxMaxRows
+                    all = Array(all.prefix(InsightsRules.xlsxMaxRows))
+                    break
+                }
+                guard let c = next.cursor else { break }
+                cursor = c
+            }
+            let cols = InsightsRules.visibleMetrics(reportable.isEmpty ? nil : MetricKey.allCases.filter(reportable.contains))
+            let rows = all
+            let data = await Task.detached(priority: .userInitiated) { InsightsRules.reportXlsx(rows, metrics: cols) }.value
+            let date = TRPCClient.isoWithFraction.string(from: Date()).prefix(10)
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("postautomation-report-\(window)-\(mode)-\(date)\(truncated ? "-truncated" : "").xlsx")
+            try data.write(to: url, options: .atomic)
+            excelFile = SharedFile(url: url)
+            if truncated {
+                notice = ("Report trimmed", "The file has the newest \(InsightsRules.xlsxMaxRows.formatted()) rows.")
+            }
+        } catch let e as APIError where e.isUnauthorized {
+            await session.handleUnauthorized()
+        } catch {
+            notice = ("Excel export failed", error.localizedDescription)
+        }
+    }
+
     private func email() async {
         guard let to = session.user?.email else { return }
         emailing = true
@@ -183,4 +255,20 @@ struct ReportsView: View {
             notice = ("Couldn't email the report", error.localizedDescription)
         }
     }
+}
+
+/// A file handed to the share sheet.
+struct SharedFile: Identifiable {
+    let url: URL
+    var id: String { url.path }
+}
+
+/// UIKit's share sheet — the file only exists after the export finishes, so a
+/// ShareLink (which needs its item up front) can't be used here.
+struct ActivityView: UIViewControllerRepresentable {
+    let items: [Any]
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+    func updateUIViewController(_ vc: UIActivityViewController, context: Context) {}
 }
