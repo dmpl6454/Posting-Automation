@@ -1525,6 +1525,9 @@ ${content}`;
         // sending it keeps a stale REEL/SHORT out of the story payload entirely.
         ...(!isStoryMode && !isArticleMode && Object.keys(formatByChannelId).length > 0 && { formatByChannelId }),
         ...(isStoryMode && { story: { mentions: effectiveStoryMentions } }),
+        // Tags on an Instagram feed post / reel (2026-11-24). Same list as the
+        // story tags; sent only in Post mode with an Instagram channel selected.
+        ...(!isStoryMode && !isArticleMode && effectiveStoryMentions.length > 0 && { instagramTags: effectiveStoryMentions }),
         // Article mode: title/excerpt/status/taxonomy. Its PRESENCE makes the
         // post an article server-side (WordPress-only channels enforced there too).
         ...(isArticleMode && { article: buildArticlePayload(article, selectedChannels) }),
@@ -2722,12 +2725,17 @@ ${content}`;
               sticker parameter, so a tag cannot be delivered to a Facebook
               story. Hidden entirely for a Facebook-only selection rather than
               shown and silently ignored. */}
-          {isStoryMode && selectedPlatforms.includes("instagram") && (
+          {/* 2026-11-24: also in Post mode, for Instagram feed posts and reels.
+              The same list is used; Meta takes `user_tags` on photo, reel and
+              story containers. Never for articles (WordPress only). */}
+          {!isArticleMode && selectedPlatforms.includes("instagram") && (
             <Card>
               <CardHeader className="pb-3">
                 <CardTitle>Tag people</CardTitle>
                 <CardDescription>
-                  Mention public Instagram accounts. Instagram only — Facebook&apos;s story API has no tagging.
+                  {isStoryMode
+                    ? "Mention public Instagram accounts. Instagram only — Facebook\u2019s story API has no tagging."
+                    : "Tag public Instagram accounts on this Instagram post or reel. On a carousel the tags go on the first photo. Other platforms don\u2019t receive tags."}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-2">
@@ -2780,7 +2788,9 @@ ${content}`;
                     <span className="min-w-0 text-destructive">{storyMentionError}</span>
                   ) : (
                     <span className="min-w-0 text-muted-foreground">
-                      Added as mentions, without a sticker. Instagram decides whether the account is notified.
+                      {isStoryMode
+                        ? "Added as mentions, without a sticker. Instagram decides whether the account is notified."
+                        : "Shown as tags on the photo or reel. Instagram decides whether the account is notified."}
                     </span>
                   )}
                   <span className="flex-none tabular-nums text-muted-foreground">
@@ -3239,6 +3249,7 @@ ${content}`;
                     // "never post a normal post to this channel" rule this mode
                     // exists to keep.
                     ...(isStoryMode && { story: { mentions: effectiveStoryMentions } }),
+                    ...(!isStoryMode && !isArticleMode && effectiveStoryMentions.length > 0 && { instagramTags: effectiveStoryMentions }),
                     // The draft carries the article marker too, or scheduling it
                     // later would publish the Markdown body as a plain post.
                     ...(isArticleMode && { article: buildArticlePayload(article, selectedChannels) }),

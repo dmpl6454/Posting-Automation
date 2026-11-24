@@ -241,7 +241,16 @@ describe("facebook stories (2026-09-16)", () => {
   it("shows the Tag people card ONLY when an Instagram channel is selected", () => {
     // Meta's Page Stories API documents no tag parameter at all, so on a
     // Facebook-only selection the card is hidden rather than silently ignored.
-    expect(compose).toMatch(/\{isStoryMode && selectedPlatforms\.includes\("instagram"\) && \(/);
+    // 2026-11-24: the card also serves Post mode (feed posts and reels), so the
+    // gate is "not an article" + an Instagram channel selected.
+    expect(compose).toMatch(/\{!isArticleMode && selectedPlatforms\.includes\("instagram"\) && \(/);
+  });
+
+  it("sends post/reel tags as instagramTags, only in Post mode, on both submit paths", () => {
+    const sends = compose.match(
+      /\.\.\.\(!isStoryMode && !isArticleMode && effectiveStoryMentions\.length > 0 && \{ instagramTags: effectiveStoryMentions \}\)/g
+    );
+    expect(sends?.length).toBe(2);
   });
 
   it("does not promise that Instagram notifies tagged accounts", () => {
