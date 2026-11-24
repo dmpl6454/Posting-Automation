@@ -265,6 +265,11 @@ export const postRouter = createRouter({
         // Instagram, exactly one media is required to publish, and the mentions
         // become `user_tags` on the STORIES container.
         story: storyInputSchema.optional(),
+        // People to tag on an Instagram FEED post or REEL (2026-11-24). Stored as
+        // `metadata.instagramUserTags = { usernames }` and sent as `user_tags` on
+        // the media container. Ignored for stories (they use `story.mentions`)
+        // and articles. Same username rules and 20-tag cap as story mentions.
+        instagramTags: z.array(z.string().max(64)).max(50).optional(),
         // WordPress Article mode (2026-10-04). Its PRESENCE makes this an
         // article: WordPress-only channels, a title, the body (`content`) as
         // Markdown, plus excerpt / status / taxonomy — stored under
@@ -357,6 +362,25 @@ export const postRouter = createRouter({
           });
         }
         storyMentions = norm.mentions;
+      }
+      let postUserTags: string[] = [];
+      if (input.instagramTags && !isStory && !isArticle) {
+        const norm = normalizeStoryMentions(input.instagramTags);
+        if (norm.invalid.length > 0) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              `These aren't valid Instagram usernames: ${norm.invalid.join(", ")}. ` +
+              `Use letters, numbers, dots or underscores (max 30 characters).`,
+          });
+        }
+        if (norm.dropped > 0) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `You can tag up to 20 people on a post — remove ${norm.dropped}.`,
+          });
+        }
+        postUserTags = norm.mentions;
       }
 
       // Reject past scheduled dates (allow up to 60s in the past for clock skew)
@@ -631,6 +655,8 @@ export const postRouter = createRouter({
               // validation) while still being treated as a story downstream. The
               // only writer is the `story` input below.
               instagramStory: _rawStory,
+              // Tags come ONLY from the validated `instagramTags` input.
+              instagramUserTags: _rawUserTags,
               // Same rule for the article marker: only the `article` input writes it.
               wordpressArticle: _rawArticle,
               // Only the `firstComment(s)` inputs write these markers.
@@ -658,6 +684,7 @@ export const postRouter = createRouter({
             if (tiktokByChannel) out.tiktokByChannel = tiktokByChannel;
             if (videoThumbnail) out.videoThumbnail = videoThumbnail;
             if (isStory) out.instagramStory = { mentions: storyMentions };
+            if (postUserTags.length > 0) out.instagramUserTags = { usernames: postUserTags };
             if (storedArticle) out.wordpressArticle = storedArticle;
             Object.assign(out, firstCommentMetadata({ ...input, isStory, isArticle }));
             if (captionFanout.enabled) {

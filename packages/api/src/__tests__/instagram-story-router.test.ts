@@ -166,3 +166,15 @@ describe("bulk.bulkSchedule — a story without exactly one media is skipped, no
     expect(bulkRouter).toMatch(/return \{ scheduled, skippedStories, skippedPending, skippedTikTok \}/);
   });
 });
+
+describe("post.create — tags on Instagram feed posts and reels (2026-11-24)", () => {
+  it("takes tags from the `instagramTags` input only, validated like story mentions", () => {
+    expect(postRouter).toMatch(/instagramTags: z\.array\(z\.string\(\)\.max\(64\)\)\.max\(50\)\.optional\(\)/);
+    expect(postRouter).toMatch(/if \(input\.instagramTags && !isStory && !isArticle\) \{\s*const norm = normalizeStoryMentions\(input\.instagramTags\);/);
+  });
+
+  it("STRIPS a client-supplied instagramUserTags and writes only the validated list", () => {
+    expect(postRouter).toMatch(/instagramUserTags: _rawUserTags/);
+    expect(postRouter).toMatch(/if \(postUserTags\.length > 0\) out\.instagramUserTags = \{ usernames: postUserTags \}/);
+  });
+});

@@ -55,6 +55,12 @@ import {
   isUserTagRejection,
   type StoryMediaKind,
 } from "../utils/instagram-story";
+import {
+  buildImageUserTags,
+  buildReelUserTags,
+  formatTagList,
+  readPostUserTags,
+} from "../utils/instagram-user-tags";
 import type {
   SocialPostPayload,
   SocialPostResult,
@@ -370,7 +376,10 @@ export class InstagramProvider extends SocialProvider {
     }
 
     // Step 1: Create a media container (image_url for images, video_url for videos)
-    const containerParams: Record<string, string> = {
+    //
+    // `unknown` values because `user_tags` (2026-11-24) is a JSON array; every
+    // other value stays a string, so an untagged request is byte-identical.
+    const containerParams: Record<string, unknown> = {
       caption: payload.content,
     };
 
@@ -398,7 +407,26 @@ export class InstagramProvider extends SocialProvider {
       containerParams["image_url"] = mediaUrl;
     }
 
-    const containerId = await this.createMediaContainer(tokens, igUserId, containerParams);
+    // Tagged people (2026-11-24). A reel takes bare usernames; a photo needs a
+    // position per tag ("x/y required for images"). Absent ⇒ no key at all.
+    const userTags = isVideo ? buildReelUserTags(payload.metadata) : buildImageUserTags(payload.metadata);
+    if (userTags) containerParams["user_tags"] = userTags;
+
+    let containerId: string;
+    try {
+      containerId = await this.createMediaContainer(tokens, igUserId, containerParams);
+    } catch (err) {
+      // A private / non-existent tagged account fails container creation. This
+      // is PRE-write (nothing published), so it is duplicate-safe; the remedy
+      // is to remove the tag. Same handling as stories.
+      if (userTags && isUserTagRejection((err as { body?: unknown })?.body)) {
+        throw new Error(
+          `Instagram rejected a tagged account (${formatTagList(readPostUserTags(payload.metadata))}). ` +
+            `Tagged accounts must be public and exist. Remove the tag and try again. Platform error: ${(err as Error).message}`
+        );
+      }
+      throw err;
+    }
 
     // Wait for the container to reach FINISHED before publishing. Instagram
     // processes ALL media asynchronously — not just videos. Publishing an image
@@ -505,7 +533,10 @@ export class InstagramProvider extends SocialProvider {
     // ⚠️ NO cover_url: Meta rejects it on a STORIES container and that fails the
     // WHOLE publish (supportsInstagramCover already refuses STORIES; stories also
     // do not support collaborators or alt_text).
-    const userTags = buildStoryUserTags(payload.metadata);
+    // Story mode carries its own mentions. A story made by the per-channel
+    // Reel/Story picker (Post mode) falls back to the post's tags — x/y are
+    // optional for stories, so the reel shape is valid here.
+    const userTags = buildStoryUserTags(payload.metadata) ?? buildReelUserTags(payload.metadata);
     if (userTags) containerParams["user_tags"] = userTags;
 
     let containerId: string;
@@ -517,7 +548,8 @@ export class InstagramProvider extends SocialProvider {
       // sends the operator looking for a media problem. This is PRE-write, so it
       // is duplicate-safe — the remedy is to drop the tag.
       if (userTags && isUserTagRejection((err as { body?: unknown })?.body)) {
-        const tagged = readStoryMentions(payload.metadata).map((u) => `@${u}`).join(", ");
+        const storyTags = readStoryMentions(payload.metadata);
+        const tagged = formatTagList(storyTags.length > 0 ? storyTags : readPostUserTags(payload.metadata));
         throw new Error(
           `Instagram rejected a tagged account (${tagged}). Tagged accounts must be public and exist. ` +
             `Remove the tag and try again. Platform error: ${(err as Error).message}`
@@ -1670,6 +1702,23 @@ export class InstagramProvider extends SocialProvider {
   ): Promise<SocialPostResult> {
     const mediaUrls = payload.mediaUrls!;
     const mediaTypes = payload.mediaTypes ?? [];
+    const isVideoChild = (i: number) =>
+      (mediaTypes[i] ?? "").startsWith("video/") || /\.(mp4|mov|avi|mkv|webm)(\?|$)/i.test(mediaUrls[i] ?? "");
+
+    // Tagged people (2026-11-24) go on the FIRST PHOTO child: the parent
+    // CAROUSEL container does not take `user_tags`, a photo child is an
+    // ordinary Image container that does, and the docs give video children no
+    // tag shape. Absent tags ⇒ every child request is byte-identical.
+    const imageUserTags = buildImageUserTags(payload.metadata);
+    let tagChildIndex = -1;
+    if (imageUserTags) {
+      tagChildIndex = mediaUrls.findIndex((_, i) => !isVideoChild(i));
+      if (tagChildIndex < 0) {
+        console.warn(
+          `[Instagram] carousel has no photo to carry tags (${formatTagList(readPostUserTags(payload.metadata))}) — publishing without them`
+        );
+      }
+    }
 
     // Step 1: Create individual item containers (children of the carousel)
     // Video children require video_url + media_type=VIDEO and must wait for processing.
@@ -1683,8 +1732,7 @@ export class InstagramProvider extends SocialProvider {
       mediaUrls,
       CAROUSEL_CHILD_CONCURRENCY,
       async (url, i): Promise<string> => {
-        const mime = mediaTypes[i] ?? "";
-        const isChildVideo = mime.startsWith("video/") || /\.(mp4|mov|avi|mkv|webm)(\?|$)/i.test(url);
+        const isChildVideo = isVideoChild(i);
 
         const childParams: Record<string, unknown> = { is_carousel_item: true, access_token: tokens.accessToken };
         if (isChildVideo) {
@@ -1692,6 +1740,7 @@ export class InstagramProvider extends SocialProvider {
           childParams["media_type"] = "VIDEO";
         } else {
           childParams["image_url"] = url;
+          if (i === tagChildIndex && imageUserTags) childParams["user_tags"] = imageUserTags;
         }
 
         const res = await fetch(
@@ -1704,7 +1753,15 @@ export class InstagramProvider extends SocialProvider {
         );
 
         const data: any = await res.json();
-        if (!res.ok) throw new Error(`Instagram carousel item upload failed: ${JSON.stringify(data)}`);
+        if (!res.ok) {
+          if (i === tagChildIndex && isUserTagRejection(data)) {
+            throw new Error(
+              `Instagram rejected a tagged account (${formatTagList(readPostUserTags(payload.metadata))}). ` +
+                `Tagged accounts must be public and exist. Remove the tag and try again. Platform error: ${JSON.stringify(data)}`
+            );
+          }
+          throw new Error(`Instagram carousel item upload failed: ${JSON.stringify(data)}`);
+        }
         const childId: string = data.id;
 
         // Every child container must be FINISHED before the carousel container can
